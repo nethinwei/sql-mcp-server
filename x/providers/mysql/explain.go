@@ -41,7 +41,7 @@ type mysqlExplain struct {
 		} `json:"cost_info"`
 		Table struct {
 			AccessType     string `json:"access_type"`
-			Rows           int64  `json:"rows"`
+			Rows           int64  `json:"rows_examined_per_scan"`
 			UsingFilesort  bool   `json:"using_filesort"`
 			UsingTempTable bool   `json:"using_temporary_table"`
 		} `json:"table"`

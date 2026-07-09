@@ -8,7 +8,7 @@ import (
 
 func TestParseMySQLExplainFullScan(t *testing.T) {
 	t.Parallel()
-	raw := `{"query_block":{"cost_info":{"query_cost":"123.45"},"table":{"access_type":"ALL","rows":100,"using_filesort":false}}}`
+	raw := `{"query_block":{"cost_info":{"query_cost":"123.45"},"table":{"access_type":"ALL","rows_examined_per_scan":100,"using_filesort":false}}}`
 	p, err := parseMySQLExplain([]byte(raw))
 	if err != nil {
 		t.Fatal(err)
