@@ -6,10 +6,13 @@ Data API Builder（DAB）的 SQL MCP Server，支持 PostgreSQL、MySQL、OceanB
 ## 特性
 
 - **关系代数 IR**：查询经方言无关的中间表示渲染为参数化 SQL，杜绝注入；接入新库只需实现 5 个窄接口。
-- **成本门限**：多层级联闸门（defense in depth）——EXPLAIN 仅作可选预筛层，确定性 LIMIT 兜底，按数据库能力差异化装配；超限硬拒绝并返回重写建议。
+- **成本门限**：多层级联闸门（defense in depth）——EXPLAIN 仅作可选预筛层，确定性 LIMIT 兜底，按数据库能力差异化装配；超限硬拒绝并返回重写建议。支持计划基线（`allowTemplates`/`rejectTemplates`）固定已知良好计划、封禁已知坏计划，以及反馈闭环（记录实际行数校准估算）。
 - **安全**：RBAC + 行级安全 + 字段脱敏 + 异步审计。
-- **接口化工具**：七个 DML 工具（describe/read/create/update/delete/execute/aggregate）按配置开关启用，关闭即不注册。
-- **有界并发**：bounded worker pool + 背压 + singleflight + 自适应限流 + 熔断。
+- **接口化工具**：七个 DML 工具（describe/read/create/update/delete/execute/aggregate）按配置开关启用，关闭即不注册；`execute_entity` 支持存储过程调用。
+- **分页**：支持 offset 与 keyset（游标）分页，大表续页用 `WHERE pk > cursor ORDER BY pk LIMIT n` 避免 O(offset) 开销。
+- **有界并发**：bounded worker pool + 背压 + singleflight + 自适应限流（AIMD）+ 熔断。
+- **可观测**：OpenTelemetry span/属性（经 hook 适配，核心不绑后端）+ 健康检查。
+- **密钥管理**：DSN 支持 `${ENV}` / `${file:/path}` 占位符；`SecretResolver` 接口可注入 Vault 等外部 secret manager。
 - **核心零外部依赖**：核心包仅用标准库，外部依赖（go-sdk、driver、yaml、otel）隔离于 `x/`，depguard 强制单向依赖。
 
 ## 安装
@@ -44,8 +47,12 @@ npx -y @modelcontextprotocol/inspector http://localhost:8080/mcp
 
 - `database.driver`：`postgres` | `mysql` | `oceanbase`；`dsn` 支持 `${ENV}` / `${file:/path}` 占位符，缺失即启动失败（fail-fast）。
 - `tools`：按工具开关，`deleteRecord` 默认关闭。
-- `cost`：`softScore`/`hardScore`（0–100 归一化阈值）、`maxRows`（EnforceCap 强制 LIMIT）、`rejectFullScan`、`whitelistPKPoint`。
+- `cost`：`softScore`/`hardScore`（0–100 归一化阈值）、`maxRows`（EnforceCap 强制 LIMIT）、`rejectFullScan`、`whitelistPKPoint`、`allowTemplates`/`rejectTemplates`（计划基线）、`queryTimeout`。
+- `mask.enabled` / `rateLimit.enabled`：脱敏与限流可按需关闭（默认开）。
+- `rateLimit`：`ioPool`/`cpuPool`/`maxInflight`（并发）、`breakerThreshold`/`breakerCooldown`（熔断）、`minConcurrency`/`rttThreshold`（AIMD）、`connMaxIdleTime`（连接空闲）。
+- `audit.queueSize`、`cache.ttl`/`maxSize`。
 - `entities`：暴露的表/视图/存储过程，含别名、主键、字段投影（`exclude`）、脱敏（`mask`）、角色权限、行级策略（`rowPolicies`）。
+- 启动期 introspect 自动发现 schema 并与配置比对，配置引用不存在的实体/字段即 fail-fast。
 
 ## 架构
 
@@ -61,8 +68,10 @@ npx -y @modelcontextprotocol/inspector http://localhost:8080/mcp
 
 ```sh
 make test              # 单元测试（-race）
-make test-integration  # testcontainers 集成测试（需 docker）
+make test-integration  # testcontainers 集成测试：PG/MySQL/OceanBase（需 docker）
+make test-e2e          # 端到端：真实 DB + MCP 客户端 + goleak 泄漏检测
 make lint              # golangci-lint + depguard 边界强制
+make coverage          # 核心包覆盖率（≥80%）
 make ci                # 全套
 ```
 
@@ -70,8 +79,8 @@ make ci                # 全套
 
 ## 状态
 
-核心与三库 provider 已实现，PostgreSQL 端到端（含成本门限真实行为）已通过 testcontainers 集成测试验证。进行中的工作见 `docs/roadmap.md` 的里程碑与 P1/P2 路线图。
+核心与三库 provider 已实现并通过 testcontainers 集成测试（PG/MySQL/OceanBase）与 e2e MCP 客户端测试（含 goleak 泄漏检测）验证。核心包覆盖率 ≥80%，lint 0 issues。进行中的工作见 `docs/roadmap.md` 的里程碑与 P1/P2 路线图。
 
 ## 许可
 
-MIT（见 LICENSE，待添加）。
+MIT，见 [LICENSE](LICENSE)。
