@@ -29,7 +29,7 @@ type DescribeTool struct{}
 
 // Info implements Tool.
 func (DescribeTool) Info() Info {
-	return Info{Name: "describe_entities", Description: "List exposed entities and their fields", ReadOnly: true}
+	return Info{Name: "describe_entities", Description: "List exposed entities and their fields", InputSchema: schemaDescribe, ReadOnly: true}
 }
 
 // Enabled implements Tool.
@@ -71,7 +71,7 @@ func (DescribeTool) Run(_ context.Context, input json.RawMessage, tc Context) (R
 type ReadTool struct{}
 
 func (ReadTool) Info() Info {
-	return Info{Name: "read_records", Description: "Read records from an entity", ReadOnly: true}
+	return Info{Name: "read_records", Description: "Read records from an entity", InputSchema: schemaRead, ReadOnly: true}
 }
 func (ReadTool) Enabled(f config.ToolFlags) bool { return f.ReadRecords }
 func (ReadTool) CostGated()                      {}
@@ -167,7 +167,7 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 type CreateTool struct{}
 
 func (CreateTool) Info() Info {
-	return Info{Name: "create_record", Description: "Create a record in an entity"}
+	return Info{Name: "create_record", Description: "Create a record in an entity", InputSchema: schemaCreate}
 }
 func (CreateTool) Enabled(f config.ToolFlags) bool { return f.CreateRecord }
 func (CreateTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
@@ -221,7 +221,7 @@ func runInsert(ctx context.Context, tc Context, in createInput) (Result, error) 
 type UpdateTool struct{}
 
 func (UpdateTool) Info() Info {
-	return Info{Name: "update_record", Description: "Update records in an entity"}
+	return Info{Name: "update_record", Description: "Update records in an entity", InputSchema: schemaUpdate}
 }
 func (UpdateTool) Enabled(f config.ToolFlags) bool { return f.UpdateRecord }
 func (UpdateTool) CostGated()                      {}
@@ -290,7 +290,7 @@ func runUpdate(ctx context.Context, tc Context, in updateInput) (Result, error) 
 type DeleteTool struct{}
 
 func (DeleteTool) Info() Info {
-	return Info{Name: "delete_record", Description: "Delete records from an entity"}
+	return Info{Name: "delete_record", Description: "Delete records from an entity", InputSchema: schemaDelete}
 }
 func (DeleteTool) Enabled(f config.ToolFlags) bool { return f.DeleteRecord }
 func (DeleteTool) CostGated()                      {}
@@ -355,7 +355,7 @@ func runDelete(ctx context.Context, tc Context, in deleteInput) (Result, error) 
 type ExecuteTool struct{}
 
 func (ExecuteTool) Info() Info {
-	return Info{Name: "execute_entity", Description: "Execute a stored procedure"}
+	return Info{Name: "execute_entity", Description: "Execute a stored procedure", InputSchema: schemaExecute}
 }
 func (ExecuteTool) Enabled(f config.ToolFlags) bool { return f.ExecuteEntity }
 func (ExecuteTool) Run(_ context.Context, _ json.RawMessage, _ Context) (Result, error) {
@@ -368,7 +368,7 @@ func (ExecuteTool) Run(_ context.Context, _ json.RawMessage, _ Context) (Result,
 type AggregateTool struct{}
 
 func (AggregateTool) Info() Info {
-	return Info{Name: "aggregate_records", Description: "Aggregate records of an entity", ReadOnly: true}
+	return Info{Name: "aggregate_records", Description: "Aggregate records of an entity", InputSchema: schemaAggregate, ReadOnly: true}
 }
 func (AggregateTool) Enabled(f config.ToolFlags) bool { return f.AggregateRecords }
 func (AggregateTool) CostGated()                      {}
