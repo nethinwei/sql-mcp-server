@@ -5,5 +5,5 @@
 // the role (invariant I7: effective predicate = user_predicate AND role_filter).
 //
 // Authorization denials are Decision{Allowed:false}, not errors; errors are
-// reserved for authorization-system failures, mirroring fino's policy.Policy.
+// reserved for authorization-system failures.
 package rbac

@@ -1,9 +1,8 @@
 # Contributing to sql-mcp-server
 
 This document records the coding standard and contribution flow. The standard is
-modeled on [fino](https://github.com/nethinwei/fino) and the
-[Google Go Style Guide](https://google.github.io/styleguide/go/). Read it before
-touching a core package.
+based on the [Google Go Style Guide](https://google.github.io/styleguide/go/).
+Read it before touching a core package.
 
 ## Architecture boundary (machine-enforced)
 
