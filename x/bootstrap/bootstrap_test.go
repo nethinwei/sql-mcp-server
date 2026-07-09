@@ -138,7 +138,8 @@ func TestNewProviderUnsupported(t *testing.T) {
 	if _, err := newProvider("oracle", ""); err == nil {
 		t.Fatal("expected error for unsupported driver")
 	}
+	// mysql with an invalid DSN fails fast at ping (still an error).
 	if _, err := newProvider("mysql", ""); err == nil {
-		t.Fatal("mysql provider not yet implemented, expected error")
+		t.Fatal("expected error for invalid mysql dsn")
 	}
 }

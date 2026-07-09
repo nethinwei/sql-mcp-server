@@ -24,6 +24,8 @@ import (
 	"github.com/nethinwei/sql-mcp-server/relalg"
 	"github.com/nethinwei/sql-mcp-server/store"
 	"github.com/nethinwei/sql-mcp-server/tool"
+	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
+	"github.com/nethinwei/sql-mcp-server/x/providers/oceanbase"
 	"github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
 
@@ -177,8 +179,10 @@ func newProvider(driver, dsn string) (Provider, error) {
 	switch driver {
 	case "postgres":
 		return postgres.New(dsn)
-	case "mysql", "oceanbase":
-		return nil, fmt.Errorf("%w: %q not yet implemented", ErrUnsupportedDriver, driver)
+	case "mysql":
+		return mysql.New(dsn)
+	case "oceanbase":
+		return oceanbase.New(dsn)
 	}
 	return nil, fmt.Errorf("%w: %q", ErrUnsupportedDriver, driver)
 }
