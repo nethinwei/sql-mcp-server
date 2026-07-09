@@ -1,4 +1,4 @@
-// Package sqlmcp provides a world-class SQL MCP server: a relationally complete
+// Package sqlmcp provides a SQL MCP server: a relationally complete
 // data access surface for AI agents over PostgreSQL, MySQL, and OceanBase,
 // modeled on Microsoft's Data API Builder SQL MCP Server.
 //

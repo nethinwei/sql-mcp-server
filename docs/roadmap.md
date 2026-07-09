@@ -2,7 +2,7 @@
 
 ## 目标
 
-一款世界级的 SQL MCP server，参考微软 Data API Builder（DAB）的 SQL MCP Server，并在其能力之上新增两个核心特性：
+一款 SQL MCP server，参考微软 Data API Builder（DAB）的 SQL MCP Server，并在其能力之上新增两个核心特性：
 
 1. **成本门限**：读/写查询执行前估算成本，超阈值时硬拒绝并返回结构化错误（含估算值、阈值、重写建议），引导 agent 自行重写后重试。
 2. **接口化能力 + 配置开关**：每个 DML 能力是实现窄接口的组件，通过配置按工具开关（关闭 = 不注册，agent 不可见）。
@@ -24,7 +24,7 @@
 sql-mcp-server/
 ├── doc.go / go.mod / Makefile / README.md / CONTRIBUTING.md
 ├── cmd/sql-mcp-server/main.go     # 应用入口（flag、装配、运行）
-│  ╭── 核心包（绝对洁净：仅标准库 + 互相依赖，depguard 强制）──╮
+│  ╭── 核心包（零外部依赖：仅标准库 + 互相依赖，depguard 强制）──╮
 ├── config/        # 配置模型 + 校验 + ApplyDefaults + Schema
 ├── relalg/        # 关系代数 IR（Scan/Select/Project/Aggregate/Sort/Limit/Distinct/Values/Insert/Update/Delete + Predicate）
 ├── codegen/       # IR → 方言 SQL（按 Capabilities 降级；内联 IsPKPoint 判定与常量折叠）
@@ -54,7 +54,7 @@ sql-mcp-server/
 └── examples/config.example.yaml
 ```
 
-核心包绝对洁净：不 import 任何非标准库（含不 import `x/`）。`database/sql` 是标准库，`store.DB` 由 `*sql.DB` 满足；driver 注册只发生在 `x/providers/*`。`x/` 依赖核心，核心永不依赖 `x/`——依赖单向。
+核心包零外部依赖：不 import 任何非标准库（含不 import `x/`）。`database/sql` 是标准库，`store.DB` 由 `*sql.DB` 满足；driver 注册只发生在 `x/providers/*`。`x/` 依赖核心，核心永不依赖 `x/`——依赖单向。
 
 ## 核心设计
 
@@ -72,7 +72,7 @@ sql-mcp-server/
 
 ### 成本与资源闸门（defense in depth）
 
-EXPLAIN 估算有根本缺陷（不可靠、跨方言不可比、SQLite 无数值），不能把门限全押在它上。世界级方案是**多层级联闸门**：EXPLAIN 仅作"可选预筛层"，按各 DB 能力差异化装配；确定性 LIMIT/timeout 兜底；DB 原生资源治理作底层硬保护；反馈学习让阈值随时间自适应。任一层拦截即安全，单层失效不致命。
+EXPLAIN 估算有根本缺陷（不可靠、跨方言不可比、SQLite 无数值），不能把门限全押在它上。本设计采用**多层级联闸门**：EXPLAIN 仅作"可选预筛层"，按各 DB 能力差异化装配；确定性 LIMIT/timeout 兜底；DB 原生资源治理作底层硬保护；反馈学习让阈值随时间自适应。任一层拦截即安全，单层失效不致命。
 
 层级（按序）：
 1. **StaticRule**（免 EXPLAIN）：白名单（PK 点查 `IsPKPoint`）、黑名单模板、写命中主键校验。
@@ -99,7 +99,7 @@ EXPLAIN 失败降级为 `Plan{ScanUnknown, !StatsFresh}`，由 `RequireKnownScan
 
 ### 服务架构（Go 并发）
 
-`engine` 包：bounded worker pool（IO/CPU 分离）、有界背压队列（Little 定律）、singleflight（防缓存击穿，含 panic recover）、自适应并发（AIMD）、优雅 drain。充分应用 Go 特性：`semaphore`（chan）/`singleflight`（自实现）/`errgroup`/`sync.Pool`/`context.WithCancelCause`/`atomic`/`sync.Map`/pprof/race detector。核心零外部依赖，故 singleflight/semaphore 用标准库自实现。
+`engine` 包：bounded worker pool（IO/CPU 分离）、有界背压队列（Little 定律）、singleflight（防缓存击穿，含 panic recover）、自适应并发（AIMD）、优雅 drain。使用 Go 特性：`semaphore`（chan）/`singleflight`（自实现）/`errgroup`/`sync.Pool`/`context.WithCancelCause`/`atomic`/`sync.Map`/pprof/race detector。核心零外部依赖，故 singleflight/semaphore 用标准库自实现。
 
 ### Go 特性、性能与 GC
 
