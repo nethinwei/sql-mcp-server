@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/nethinwei/sql-mcp-server/config"
@@ -149,5 +150,47 @@ func TestDescribeTool(t *testing.T) {
 	}
 	if res.Content[0]["name"] != "users" {
 		t.Fatalf("got %v", res.Content[0])
+	}
+}
+
+func TestExecuteToolCallsProcedure(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{
+		Name: "sp", Source: "sp", Kind: entity.KindProcedure,
+		Role: entity.RoleAccess{entity.ActionExecute: {"caller"}},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	auth := rbac.NewRoleAuthorizer(reg)
+	called := false
+	db := &store.FakeDB{QueryFn: func(_ context.Context, q string, _ ...any) (store.Rows, error) {
+		called = true
+		if !strings.Contains(q, "CALL") {
+			t.Errorf("expected CALL, got %q", q)
+		}
+		return store.NewFakeRows([]string{"n"}, []any{int64(42)}), nil
+	}}
+	tc := Context{Role: "caller", DB: db, Dialect: dialect.Postgres{}, Registry: reg, Authorizer: auth}
+	in, _ := json.Marshal(executeInput{Entity: "sp", Args: map[string]any{"x": 1}})
+	res, err := ExecuteTool{}.Run(context.Background(), in, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("procedure not called")
+	}
+	if len(res.Content) != 1 || res.Content[0]["n"] != int64(42) {
+		t.Fatalf("got %v", res.Content)
+	}
+}
+
+func TestExecuteToolRejectsNonProcedure(t *testing.T) {
+	t.Parallel()
+	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	auth := rbac.NewRoleAuthorizer(reg)
+	tc := Context{Role: "reader", Dialect: dialect.Postgres{}, Registry: reg, Authorizer: auth}
+	in, _ := json.Marshal(executeInput{Entity: "users"})
+	_, err := ExecuteTool{}.Run(context.Background(), in, tc)
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("got %v, want ErrInvalidInput", err)
 	}
 }

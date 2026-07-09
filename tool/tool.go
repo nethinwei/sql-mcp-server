@@ -67,6 +67,7 @@ type Context struct {
 	Engine     *engine.Engine
 	Hooks      *hook.Hooks
 	Timeout    time.Duration
+	Feedback   cost.FeedbackStore
 }
 
 // Tool is a single DML capability.
@@ -167,6 +168,11 @@ type aggregateInput struct {
 	GroupBy    []string   `json:"groupBy,omitempty"`
 	Aggregates []aggJSON  `json:"aggregates"`
 	Filter     []condJSON `json:"filter,omitempty"`
+}
+
+type executeInput struct {
+	Entity string         `json:"entity"`
+	Args   map[string]any `json:"args,omitempty"`
 }
 
 // ---- helpers ----

@@ -60,6 +60,7 @@ type App struct {
 	Auditor      audit.Auditor
 	Hooks        *hook.Hooks
 	Cache        cache.Cache[[]map[string]any]
+	Feedback     cost.FeedbackStore
 }
 
 // ToolContext builds a per-request tool.Context for the given role.
@@ -76,6 +77,7 @@ func (a *App) ToolContext(role string) tool.Context {
 		Engine:     a.Engine,
 		Hooks:      a.Hooks,
 		Timeout:    a.QueryTimeout,
+		Feedback:   a.Feedback,
 	}
 }
 
@@ -184,12 +186,17 @@ func AssembleWithProvider(cfg *config.Config, prov Provider) (*App, error) {
 	if cfg.Mask.EnabledOrDefault() {
 		msk = mask.NewRuleMasker(nil)
 	}
+	var feedback cost.FeedbackStore = cost.NoopFeedbackStore{}
+	if cfg.Cost.Enabled {
+		feedback = cost.NewMemoryStore()
+	}
 	return &App{
 		Provider:     prov,
 		Dialect:      prov.Dialect(),
 		Registry:     reg,
 		Authorizer:   auth,
 		Masker:       msk,
+		Feedback:     feedback,
 		Gate:         gate,
 		Engine:       eng,
 		Tools:        tools,
@@ -247,7 +254,15 @@ func checkDrift(ctx context.Context, prov Provider, entities []entity.Entity) er
 	if err != nil {
 		return fmt.Errorf("introspect: %w", err)
 	}
-	drift := introspect.DetectDrift(entities, discovered)
+	// Procedures are not discovered as base tables; check drift only for
+	// table/view entities.
+	var tables []entity.Entity
+	for _, e := range entities {
+		if e.Kind != entity.KindProcedure {
+			tables = append(tables, e)
+		}
+	}
+	drift := introspect.DetectDrift(tables, discovered)
 	if len(drift.Missing) > 0 {
 		return fmt.Errorf("schema drift (configured but missing in DB): %v", drift.Missing)
 	}

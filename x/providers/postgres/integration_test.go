@@ -277,3 +277,31 @@ func TestEnforceCapLimitsRows(t *testing.T) {
 		t.Fatalf("EnforceCap should limit to 1 row, got %d", len(res.Content))
 	}
 }
+
+func TestPGExecuteProcedure(t *testing.T) {
+	prov, cleanup := setupPG(t)
+	defer cleanup()
+	ctx := context.Background()
+	_, _ = prov.ExecContext(ctx, "CREATE PROCEDURE noop_proc() LANGUAGE plpgsql AS $$ BEGIN END $$")
+	cfg := &config.Config{
+		Server:   config.ServerConfig{Role: "caller"},
+		Database: config.DatabaseConfig{Driver: "postgres", DSN: "ignored"},
+		Entities: []config.EntityConfig{{
+			Name: "noop_proc", Source: "noop_proc", Kind: "procedure",
+			Roles: config.RoleConfig{Execute: []string{"caller"}},
+		}},
+		Tools: config.DefaultToolFlags(),
+		Cost:  config.CostConfig{Enabled: false},
+	}
+	cfg.ApplyDefaults()
+	app, err := bootstrap.AssembleWithProvider(cfg, prov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc := app.ToolContext("caller")
+	in, _ := json.Marshal(map[string]any{"entity": "noop_proc"})
+	_, err = tool.ExecuteTool{}.Run(ctx, in, tc)
+	if err != nil {
+		t.Fatalf("execute should succeed, got %v", err)
+	}
+}

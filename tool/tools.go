@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/nethinwei/sql-mcp-server/cache"
 	"github.com/nethinwei/sql-mcp-server/codegen"
 	"github.com/nethinwei/sql-mcp-server/config"
+	"github.com/nethinwei/sql-mcp-server/cost"
 	"github.com/nethinwei/sql-mcp-server/entity"
 	"github.com/nethinwei/sql-mcp-server/rbac"
 	"github.com/nethinwei/sql-mcp-server/relalg"
@@ -87,6 +89,7 @@ func (ReadTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Res
 func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 	ctx, cancel := withTimeout(ctx, tc)
 	defer cancel()
+	start := time.Now()
 	res, ok := tc.Registry.Resolve(in.Entity)
 	if !ok {
 		return Result{}, ErrEntityNotFound
@@ -159,6 +162,9 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 	}
 	if tc.Cache != nil {
 		_ = tc.Cache.Set(ctx, key, out)
+	}
+	if tc.Feedback != nil {
+		tc.Feedback.Record(cost.Feedback{Template: compiled.SQL, Rows: int64(len(out)), Duration: time.Since(start)})
 	}
 	return Result{Content: out}, nil
 }
@@ -390,8 +396,58 @@ func (ExecuteTool) Info() Info {
 	return Info{Name: "execute_entity", Description: "Execute a stored procedure", InputSchema: schemaExecute}
 }
 func (ExecuteTool) Enabled(f config.ToolFlags) bool { return f.ExecuteEntity }
-func (ExecuteTool) Run(_ context.Context, _ json.RawMessage, _ Context) (Result, error) {
-	return Result{}, ErrNotImplemented
+func (ExecuteTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
+	var in executeInput
+	if err := json.Unmarshal(input, &in); err != nil {
+		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+	}
+	return runExecute(ctx, tc, in)
+}
+
+func runExecute(ctx context.Context, tc Context, in executeInput) (Result, error) {
+	ctx, cancel := withTimeout(ctx, tc)
+	defer cancel()
+	res, ok := tc.Registry.Resolve(in.Entity)
+	if !ok {
+		return Result{}, ErrEntityNotFound
+	}
+	if res.Entity.Kind != entity.KindProcedure {
+		return Result{}, fmt.Errorf("%w: %q is not a procedure", ErrInvalidInput, in.Entity)
+	}
+	dec, err := tc.Authorizer.Authorize(ctx, rbac.Request{Role: tc.Role, Entity: in.Entity, Action: entity.ActionExecute})
+	if err != nil {
+		return Result{}, err
+	}
+	if !dec.Allowed {
+		return Result{}, ErrUnauthorized
+	}
+	keys := sortedKeys(in.Args)
+	args := make([]any, len(keys))
+	for i, k := range keys {
+		args[i] = in.Args[k]
+	}
+	expr := relalg.Call{Procedure: relalg.RelationRef{Name: res.Entity.Source, Schema: res.Entity.Schema}, Args: args}
+	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(expr)
+	if err != nil {
+		return Result{}, err
+	}
+	rows, err := tc.DB.QueryContext(ctx, compiled.SQL, compiled.Args...)
+	if err != nil {
+		// Procedure may not return a result set; fall back to Exec.
+		r, eerr := tc.DB.ExecContext(ctx, compiled.SQL, compiled.Args...)
+		if eerr != nil {
+			return Result{}, err
+		}
+		return Result{Content: []map[string]any{{"rowsAffected": r.RowsAffected}}}, nil
+	}
+	out := make([]map[string]any, 0)
+	for row, err := range store.Iter(rows) {
+		if err != nil {
+			return Result{}, err
+		}
+		out = append(out, row)
+	}
+	return Result{Content: out}, nil
 }
 
 // ---- aggregate_records ----

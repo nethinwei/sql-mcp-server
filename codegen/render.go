@@ -21,6 +21,8 @@ func (b *builder) render(e relalg.Expr) error {
 		return b.renderUpdate(n)
 	case relalg.Delete:
 		return b.renderDelete(n)
+	case relalg.Call:
+		return b.renderCall(n)
 	default:
 		return fmt.Errorf("%w: %T", ErrUnsupportedExpr, e)
 	}
@@ -333,5 +335,21 @@ func (b *builder) renderDelete(n relalg.Delete) error {
 			return err
 		}
 	}
+	return nil
+}
+
+func (b *builder) renderCall(n relalg.Call) error {
+	b.noteTable(n.Procedure.Name)
+	b.sql.WriteString("CALL ")
+	b.sql.WriteString(b.qtable(n.Procedure))
+	b.sql.WriteString("(")
+	for i, a := range n.Args {
+		if i > 0 {
+			b.sql.WriteString(", ")
+		}
+		b.sql.WriteString(b.placeholder())
+		b.args = append(b.args, a)
+	}
+	b.sql.WriteString(")")
 	return nil
 }

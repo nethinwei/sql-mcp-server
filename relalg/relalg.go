@@ -143,6 +143,12 @@ type Delete struct {
 	Predicate Predicate
 }
 
+// Call invokes a stored procedure with positional arguments.
+type Call struct {
+	Procedure RelationRef
+	Args      []any
+}
+
 // Marker methods seal the Expr interface.
 func (Scan) rel()      {}
 func (Select) rel()    {}
@@ -155,6 +161,7 @@ func (Values) rel()    {}
 func (Insert) rel()    {}
 func (Update) rel()    {}
 func (Delete) rel()    {}
+func (Call) rel()      {}
 
 // Predicate is a parameterized boolean expression tree. Values bind to args at
 // codegen time, never string-interpolated, preventing injection. Sealed.
