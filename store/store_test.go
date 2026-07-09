@@ -101,6 +101,17 @@ func TestFakeTx(t *testing.T) {
 	}
 }
 
+func TestFakeDBBeginTx(t *testing.T) {
+	t.Parallel()
+	db := &FakeDB{BeginFn: func(_ context.Context, _ *TxOptions) (Tx, error) {
+		return &FakeTx{}, nil
+	}}
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil || tx == nil {
+		t.Fatalf("begin: %v %v", tx, err)
+	}
+}
+
 func TestFakeDBLogsCalls(t *testing.T) {
 	t.Parallel()
 	db := &FakeDB{

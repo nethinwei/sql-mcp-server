@@ -9,12 +9,18 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"go.uber.org/goleak"
 
 	"github.com/nethinwei/sql-mcp-server/config"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/mcpserver"
 	pgprov "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
+
+// TestMain verifies no goroutine leaks across the e2e suite.
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 func setupApp(t *testing.T) (*bootstrap.App, func()) {
 	t.Helper()

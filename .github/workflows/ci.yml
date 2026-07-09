@@ -56,7 +56,7 @@ jobs:
         with:
           go-version: "1.25"
           cache: true
-      - name: core coverage (>=78%)
+      - name: core coverage (>=80%)
         run: |
           go test -race -coverprofile=coverage.txt -covermode=atomic \
             ./store ./cost ./tool ./rbac ./relalg ./codegen ./config ./entity \
@@ -64,7 +64,7 @@ jobs:
           pct=$(go tool cover -func=coverage.txt | tail -1 | awk '{print $3}')
           num=${pct%.*}
           echo "core coverage: $pct"
-          if [ "$num" -lt 78 ]; then echo "core coverage $pct below 78%"; exit 1; fi
+          if [ "$num" -lt 80 ]; then echo "core coverage $pct below 80%"; exit 1; fi
       - uses: codecov/codecov-action@v4
         with:
           files: coverage.txt

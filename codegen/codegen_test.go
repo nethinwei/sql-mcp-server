@@ -245,3 +245,41 @@ func TestCompileInvalidOp(t *testing.T) {
 		t.Fatal("expected error for invalid operator")
 	}
 }
+
+func TestCompileSortAndBoolean(t *testing.T) {
+	t.Parallel()
+	r := NewRenderer(dialect.Postgres{})
+	expr := relalg.Sort{
+		OrderBy: []relalg.OrderTerm{{Field: "id", Dir: "desc"}},
+		Input:   relalg.Scan{Relation: relalg.RelationRef{Name: "users"}},
+	}
+	c, err := r.Compile(expr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(c.SQL, "ORDER BY") || !strings.Contains(c.SQL, "DESC") {
+		t.Fatalf("got %q", c.SQL)
+	}
+}
+
+func TestCompileAndOrNotIsNull(t *testing.T) {
+	t.Parallel()
+	r := NewRenderer(dialect.Postgres{})
+	expr := relalg.Select{
+		Predicate: relalg.And{Preds: []relalg.Predicate{
+			relalg.Or{Preds: []relalg.Predicate{
+				relalg.Condition{Field: "id", Op: relalg.OpGt, Value: 0},
+				relalg.Not{P: relalg.IsNull{Field: "x"}},
+			}},
+			relalg.Condition{Field: "id", Op: relalg.OpIsNotNull, Value: nil},
+		}},
+		Input: relalg.Scan{Relation: relalg.RelationRef{Name: "users"}},
+	}
+	c, err := r.Compile(expr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(c.SQL, "AND") || !strings.Contains(c.SQL, "OR") || !strings.Contains(c.SQL, "IS NOT NULL") {
+		t.Fatalf("got %q", c.SQL)
+	}
+}

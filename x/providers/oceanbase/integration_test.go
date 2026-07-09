@@ -201,6 +201,37 @@ func TestOBRLSRowFilterAndMasking(t *testing.T) {
 	}
 }
 
+func TestOBExecuteProcedure(t *testing.T) {
+	prov, cleanup := setupOB(t)
+	defer cleanup()
+	ctx := context.Background()
+	_, _ = prov.ExecContext(ctx, "CREATE PROCEDURE count_users() BEGIN SELECT count(*) AS n FROM test.users; END")
+	cfg := &config.Config{
+		Server:   config.ServerConfig{Role: "caller"},
+		Database: config.DatabaseConfig{Driver: "oceanbase", DSN: "ignored"},
+		Entities: []config.EntityConfig{{
+			Name: "count_users", Source: "count_users", Kind: "procedure",
+			Roles: config.RoleConfig{Execute: []string{"caller"}},
+		}},
+		Tools: config.DefaultToolFlags(),
+		Cost:  config.CostConfig{Enabled: false},
+	}
+	cfg.ApplyDefaults()
+	app, err := bootstrap.AssembleWithProvider(cfg, prov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc := app.ToolContext("caller")
+	in, _ := json.Marshal(map[string]any{"entity": "count_users"})
+	res, err := tool.ExecuteTool{}.Run(ctx, in, tc)
+	if err != nil {
+		t.Fatalf("execute should succeed, got %v", err)
+	}
+	if len(res.Content) != 1 {
+		t.Fatalf("expected 1 row, got %v", res.Content)
+	}
+}
+
 func TestOBUpdateUnsafeWriteAndPK(t *testing.T) {
 	prov, cleanup := setupOB(t)
 	defer cleanup()
