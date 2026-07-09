@@ -79,6 +79,10 @@ func (p *Provider) BeginTx(ctx context.Context, opts *store.TxOptions) (store.Tx
 	return &txAdapter{tx: tx}, nil
 }
 
+// DB returns the underlying connection pool, for configuration by the
+// assembler (e.g. SetMaxOpenConns to bound DB connections).
+func (p *Provider) DB() *sql.DB { return p.db }
+
 // Dialect returns the PostgreSQL dialect.
 func (p *Provider) Dialect() dialect.Dialect { return p.dialect }
 

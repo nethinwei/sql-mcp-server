@@ -1,6 +1,8 @@
 package bootstrap
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"regexp"
@@ -44,19 +46,20 @@ type Provider interface {
 
 // App is the assembled application, ready to serve.
 type App struct {
-	Provider    Provider
-	Dialect     dialect.Dialect
-	Registry    *entity.Registry
-	Authorizer  rbac.Authorizer
-	Masker      mask.Masker
-	Gate        cost.Gate
-	Engine      *engine.Engine
-	Tools       *tool.Registry
-	ToolFlags   config.ToolFlags
-	DefaultRole string
-	Auditor     audit.Auditor
-	Hooks       *hook.Hooks
-	Cache       cache.Cache[[]map[string]any]
+	Provider     Provider
+	Dialect      dialect.Dialect
+	Registry     *entity.Registry
+	Authorizer   rbac.Authorizer
+	Masker       mask.Masker
+	Gate         cost.Gate
+	Engine       *engine.Engine
+	Tools        *tool.Registry
+	ToolFlags    config.ToolFlags
+	DefaultRole  string
+	QueryTimeout time.Duration
+	Auditor      audit.Auditor
+	Hooks        *hook.Hooks
+	Cache        cache.Cache[[]map[string]any]
 }
 
 // ToolContext builds a per-request tool.Context for the given role.
@@ -72,6 +75,7 @@ func (a *App) ToolContext(role string) tool.Context {
 		Cache:      a.Cache,
 		Engine:     a.Engine,
 		Hooks:      a.Hooks,
+		Timeout:    a.QueryTimeout,
 	}
 }
 
@@ -118,8 +122,12 @@ func Assemble(cfg *config.Config) (*App, error) {
 // AssembleWithProvider wires the application using an injected provider (for
 // testing with fakes).
 func AssembleWithProvider(cfg *config.Config, prov Provider) (*App, error) {
+	configurePool(prov, cfg.RateLimit.IOPool)
 	entities, err := configToEntities(cfg.Entities)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkDrift(context.Background(), prov, entities); err != nil {
 		return nil, err
 	}
 	reg, err := entity.NewRegistry(entities)
@@ -160,18 +168,19 @@ func AssembleWithProvider(cfg *config.Config, prov Provider) (*App, error) {
 		cc = cache.NewTTLCache[[]map[string]any](cfg.Cache.TTL)
 	}
 	return &App{
-		Provider:    prov,
-		Dialect:     prov.Dialect(),
-		Registry:    reg,
-		Authorizer:  auth,
-		Masker:      mask.NewRuleMasker(nil),
-		Gate:        gate,
-		Engine:      eng,
-		Tools:       tools,
-		ToolFlags:   cfg.Tools,
-		DefaultRole: cfg.Server.Role,
-		Auditor:     aud,
-		Cache:       cc,
+		Provider:     prov,
+		Dialect:      prov.Dialect(),
+		Registry:     reg,
+		Authorizer:   auth,
+		Masker:       mask.NewRuleMasker(nil),
+		Gate:         gate,
+		Engine:       eng,
+		Tools:        tools,
+		ToolFlags:    cfg.Tools,
+		DefaultRole:  cfg.Server.Role,
+		QueryTimeout: cfg.Cost.QueryTimeout,
+		Auditor:      aud,
+		Cache:        cc,
 	}, nil
 }
 
@@ -185,6 +194,45 @@ func newProvider(driver, dsn string) (Provider, error) {
 		return oceanbase.New(dsn)
 	}
 	return nil, fmt.Errorf("%w: %q", ErrUnsupportedDriver, driver)
+}
+
+// configurePool bounds the DB connection pool to the IO pool size so workers
+// never wait on a connection they already hold a slot for.
+func configurePool(p Provider, maxOpen int) {
+	type dbExposer interface{ DB() *sql.DB }
+	e, ok := p.(dbExposer)
+	if !ok || maxOpen <= 0 {
+		return
+	}
+	db := e.DB()
+	db.SetMaxOpenConns(maxOpen)
+	db.SetMaxIdleConns(maxOpen)
+	db.SetConnMaxIdleTime(5 * time.Minute)
+}
+
+// checkDrift introspects the live schema and fails fast if a configured entity
+// or field is missing from the database. Extra DB columns are not fatal.
+func checkDrift(ctx context.Context, prov Provider, entities []entity.Entity) error {
+	if prov.Introspector() == nil {
+		return nil
+	}
+	schemas := make([]string, 0)
+	seen := make(map[string]bool)
+	for _, e := range entities {
+		if e.Schema != "" && !seen[e.Schema] {
+			seen[e.Schema] = true
+			schemas = append(schemas, e.Schema)
+		}
+	}
+	discovered, err := prov.Introspector().Discover(ctx, schemas)
+	if err != nil {
+		return fmt.Errorf("introspect: %w", err)
+	}
+	drift := introspect.DetectDrift(entities, discovered)
+	if len(drift.Missing) > 0 {
+		return fmt.Errorf("schema drift (configured but missing in DB): %v", drift.Missing)
+	}
+	return nil
 }
 
 // toThreshold maps config.CostConfig to cost.Threshold.

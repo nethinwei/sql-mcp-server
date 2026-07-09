@@ -85,6 +85,8 @@ func (ReadTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Res
 }
 
 func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
+	ctx, cancel := withTimeout(ctx, tc)
+	defer cancel()
 	res, ok := tc.Registry.Resolve(in.Entity)
 	if !ok {
 		return Result{}, ErrEntityNotFound
@@ -179,6 +181,8 @@ func (CreateTool) Run(ctx context.Context, input json.RawMessage, tc Context) (R
 }
 
 func runInsert(ctx context.Context, tc Context, in createInput) (Result, error) {
+	ctx, cancel := withTimeout(ctx, tc)
+	defer cancel()
 	res, ok := tc.Registry.Resolve(in.Entity)
 	if !ok {
 		return Result{}, ErrEntityNotFound
@@ -204,6 +208,30 @@ func runInsert(ctx context.Context, tc Context, in createInput) (Result, error) 
 	)
 	if err != nil {
 		return Result{}, err
+	}
+	// Dialects with RETURNING (PostgreSQL/OceanBase) read the generated key
+	// directly; others fall back to LastInsertId.
+	if tc.Dialect.Capabilities().Returning && len(res.Entity.PrimaryKey()) > 0 {
+		rows, err := tc.DB.QueryContext(ctx, compiled.SQL, compiled.Args...)
+		if err != nil {
+			return Result{}, err
+		}
+		var row map[string]any
+		for r, err := range store.Iter(rows) {
+			if err != nil {
+				return Result{}, err
+			}
+			row = r
+			break
+		}
+		if tc.Cache != nil {
+			_ = tc.Cache.Invalidate(in.Entity)
+		}
+		if row == nil {
+			return Result{Content: []map[string]any{{"rowsAffected": int64(0)}}}, nil
+		}
+		row["rowsAffected"] = int64(1)
+		return Result{Content: []map[string]any{row}}, nil
 	}
 	r, err := tc.DB.ExecContext(ctx, compiled.SQL, compiled.Args...)
 	if err != nil {
@@ -234,6 +262,8 @@ func (UpdateTool) Run(ctx context.Context, input json.RawMessage, tc Context) (R
 }
 
 func runUpdate(ctx context.Context, tc Context, in updateInput) (Result, error) {
+	ctx, cancel := withTimeout(ctx, tc)
+	defer cancel()
 	res, ok := tc.Registry.Resolve(in.Entity)
 	if !ok {
 		return Result{}, ErrEntityNotFound
@@ -303,6 +333,8 @@ func (DeleteTool) Run(ctx context.Context, input json.RawMessage, tc Context) (R
 }
 
 func runDelete(ctx context.Context, tc Context, in deleteInput) (Result, error) {
+	ctx, cancel := withTimeout(ctx, tc)
+	defer cancel()
 	res, ok := tc.Registry.Resolve(in.Entity)
 	if !ok {
 		return Result{}, ErrEntityNotFound
@@ -381,6 +413,8 @@ func (AggregateTool) Run(ctx context.Context, input json.RawMessage, tc Context)
 }
 
 func runAggregate(ctx context.Context, tc Context, in aggregateInput) (Result, error) {
+	ctx, cancel := withTimeout(ctx, tc)
+	defer cancel()
 	res, ok := tc.Registry.Resolve(in.Entity)
 	if !ok {
 		return Result{}, ErrEntityNotFound

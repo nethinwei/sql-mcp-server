@@ -109,7 +109,7 @@ func TestCreateTool(t *testing.T) {
 	db := &store.FakeDB{ExecFn: func(_ context.Context, _ string, _ ...any) (store.Result, error) {
 		return store.Result{RowsAffected: 1, LastInsertID: 42}, nil
 	}}
-	tc := Context{Role: "writer", DB: db, Dialect: dialect.Postgres{}, Registry: reg, Authorizer: auth}
+	tc := Context{Role: "writer", DB: db, Dialect: dialect.MySQL{}, Registry: reg, Authorizer: auth}
 	in, _ := json.Marshal(createInput{Entity: "users", Values: map[string]any{"email": "bob@x.com"}})
 	res, err := CreateTool{}.Run(context.Background(), in, tc)
 	if err != nil {

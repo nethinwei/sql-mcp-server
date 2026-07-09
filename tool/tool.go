@@ -239,3 +239,12 @@ func sortedKeys(m map[string]any) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// withTimeout returns a context bounded by tc.Timeout, or ctx unchanged when
+// no timeout is configured. The cancel func is always non-nil.
+func withTimeout(ctx context.Context, tc Context) (context.Context, context.CancelFunc) {
+	if tc.Timeout > 0 {
+		return context.WithTimeout(ctx, tc.Timeout)
+	}
+	return ctx, func() {}
+}
