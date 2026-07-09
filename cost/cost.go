@@ -112,6 +112,8 @@ type Threshold struct {
 	WhitelistPKPoint  bool
 	RequireKnownScan  bool
 	RequireFreshStats bool
+	AllowTemplates    []string
+	RejectTemplates   []string
 }
 
 // Decision is a layer's verdict. Allow+!Soft continues to the next layer;
@@ -193,7 +195,7 @@ func (g *ChainGate) Check(ctx context.Context, c codegen.Compiled) (Decision, er
 // always; Estimate only when the dialect's estimates are trustworthy; EnforceCap
 // when a row cap is configured. RuntimeGuard/DBNative run at execution time.
 func NewGateFromCapabilities(caps dialect.Capabilities, ex Explainer, th Threshold, feedback FeedbackStore) *ChainGate {
-	layers := []Layer{StaticRule{PKWhitelist: th.WhitelistPKPoint}}
+	layers := []Layer{StaticRule{PKWhitelist: th.WhitelistPKPoint, AllowTemplates: th.AllowTemplates, RejectTemplates: th.RejectTemplates}}
 	if caps.ExplainCost && caps.ExplainAccurate && ex != nil {
 		layers = append(layers, Estimate{Explainer: ex, Threshold: th, Feedback: feedback})
 	}

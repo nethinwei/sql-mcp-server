@@ -9,8 +9,12 @@ import (
 
 // StaticRule applies whitelist/blacklist checks without EXPLAIN. A primary-key
 // point lookup (when WhitelistPKPoint is set) bypasses the rest of the chain.
+// AllowTemplates bypass EXPLAIN for known-good queries; RejectTemplates hard
+// reject known-bad queries (plan baselines).
 type StaticRule struct {
-	PKWhitelist bool
+	PKWhitelist     bool
+	AllowTemplates  []string
+	RejectTemplates []string
 }
 
 // Name implements Layer.
@@ -21,6 +25,16 @@ func (s StaticRule) Check(_ context.Context, c codegen.Compiled) (Decision, erro
 	if s.PKWhitelist && c.IsPKPoint {
 		p := Plan{ScanType: ScanPoint, StatsFresh: true}
 		return Decision{Allow: true, Bypass: true, Plan: &p, Score: ptrScore(ScorePlan(p))}, nil
+	}
+	for _, t := range s.RejectTemplates {
+		if c.SQL == t {
+			return Decision{Allow: false, Hints: []string{"query matches a rejected template"}}, nil
+		}
+	}
+	for _, t := range s.AllowTemplates {
+		if c.SQL == t {
+			return Decision{Allow: true, Bypass: true}, nil
+		}
 	}
 	return Decision{Allow: true}, nil
 }

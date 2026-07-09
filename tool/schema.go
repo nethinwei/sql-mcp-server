@@ -10,7 +10,7 @@ import "encoding/json"
 var schemaDescribe = json.RawMessage(`{"type":"object","properties":{"entity":{"type":"string","description":"Entity name; omit to list all entities"}}}`)
 
 // schemaRead describes read_records input.
-var schemaRead = json.RawMessage(`{"type":"object","properties":{"entity":{"type":"string"},"fields":{"type":"array","items":{"type":"string"}},"filter":{"type":"array","items":{"type":"object","properties":{"field":{"type":"string"},"op":{"type":"string","enum":["eq","ne","gt","gte","lt","lte","in","not_in","like","is_null","is_not_null"]},"value":{"description":"Value (array for in/not_in; omitted for is_null/is_not_null)"}},"required":["field","op"]}},"limit":{"type":"integer","minimum":1},"offset":{"type":"integer","minimum":0}},"required":["entity"]}`)
+var schemaRead = json.RawMessage(`{"type":"object","properties":{"entity":{"type":"string"},"fields":{"type":"array","items":{"type":"string"}},"filter":{"type":"array","items":{"type":"object","properties":{"field":{"type":"string"},"op":{"type":"string","enum":["eq","ne","gt","gte","lt","lte","in","not_in","like","is_null","is_not_null"]},"value":{"description":"Value (array for in/not_in; omitted for is_null/is_not_null)"}},"required":["field","op"]}},"limit":{"type":"integer","minimum":1},"offset":{"type":"integer","minimum":0},"cursor":{"type":"object","description":"Keyset pagination: last row's primary-key column values to resume after"}},"required":["entity"]}`)
 
 // schemaCreate describes create_record input.
 var schemaCreate = json.RawMessage(`{"type":"object","properties":{"entity":{"type":"string"},"values":{"type":"object","description":"Column name to value map"}},"required":["entity","values"]}`)

@@ -109,10 +109,21 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 		return Result{}, ErrUnauthorized
 	}
 	full := andPreds(pred, dec.RowFilter)
+	// Keyset pagination: resume after the last row's primary-key values.
+	if len(in.Cursor) > 0 {
+		for _, pk := range res.Entity.PrimaryKey() {
+			if v, ok := in.Cursor[pk]; ok {
+				full = andPreds(full, relalg.Condition{Field: pk, Op: relalg.OpGt, Value: v})
+			}
+		}
+	}
 	scan := relalg.Scan{Relation: relalg.RelationRef{Name: res.Entity.Source, Schema: res.Entity.Schema}}
 	var input relalg.Expr = scan
 	if full != nil {
 		input = relalg.Select{Input: scan, Predicate: full}
+	}
+	if len(in.Cursor) > 0 && len(res.Entity.PrimaryKey()) > 0 {
+		input = relalg.Sort{Input: input, OrderBy: []relalg.OrderTerm{{Field: res.Entity.PrimaryKey()[0], Dir: "asc"}}}
 	}
 	if len(dec.Fields) > 0 {
 		items := make([]relalg.ProjectItem, len(dec.Fields))
@@ -122,7 +133,7 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 		input = relalg.Project{Input: input, Items: items}
 	}
 	if in.Limit > 0 {
-		input = relalg.Limit{Input: input, Count: in.Limit}
+		input = relalg.Limit{Input: input, Count: in.Limit, Offset: in.Offset}
 	}
 	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(input, codegen.WithPrimaryKey(res.Entity.PrimaryKey()...))
 	if err != nil {

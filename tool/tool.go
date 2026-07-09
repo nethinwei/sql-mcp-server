@@ -141,10 +141,12 @@ type aggJSON struct {
 }
 
 type readInput struct {
-	Entity string     `json:"entity"`
-	Fields []string   `json:"fields,omitempty"`
-	Filter []condJSON `json:"filter,omitempty"`
-	Limit  int64      `json:"limit,omitempty"`
+	Entity string         `json:"entity"`
+	Fields []string       `json:"fields,omitempty"`
+	Filter []condJSON     `json:"filter,omitempty"`
+	Limit  int64          `json:"limit,omitempty"`
+	Offset int64          `json:"offset,omitempty"`
+	Cursor map[string]any `json:"cursor,omitempty"`
 }
 
 type createInput struct {

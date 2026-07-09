@@ -282,6 +282,8 @@ func toThreshold(c config.CostConfig) cost.Threshold {
 		WhitelistPKPoint:  c.WhitelistPKPoint,
 		RequireKnownScan:  c.RequireKnownScan,
 		RequireFreshStats: c.RequireFreshStats,
+		AllowTemplates:    c.AllowTemplates,
+		RejectTemplates:   c.RejectTemplates,
 	}
 }
 

@@ -101,6 +101,29 @@ func TestStaticRulePKWhitelist(t *testing.T) {
 	}
 }
 
+func TestStaticRuleTemplates(t *testing.T) {
+	t.Parallel()
+	sr := StaticRule{
+		AllowTemplates:  []string{"SELECT 1"},
+		RejectTemplates: []string{"SELECT bad"},
+	}
+	// rejected template
+	d, _ := sr.Check(context.Background(), codegen.Compiled{SQL: "SELECT bad"})
+	if d.Allow {
+		t.Fatal("rejected template should deny")
+	}
+	// allowed template bypasses
+	d, _ = sr.Check(context.Background(), codegen.Compiled{SQL: "SELECT 1"})
+	if !d.Allow || !d.Bypass {
+		t.Fatalf("allowed template should bypass, got %+v", d)
+	}
+	// unknown template passes through
+	d, _ = sr.Check(context.Background(), codegen.Compiled{SQL: "SELECT other"})
+	if !d.Allow || d.Bypass {
+		t.Fatalf("unknown template should pass without bypass, got %+v", d)
+	}
+}
+
 func TestChainGateShortCircuits(t *testing.T) {
 	t.Parallel()
 	g := NewGate(

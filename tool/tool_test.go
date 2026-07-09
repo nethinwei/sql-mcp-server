@@ -299,6 +299,27 @@ func TestReadToolEntityNotFound(t *testing.T) {
 	}
 }
 
+func TestReadToolKeyset(t *testing.T) {
+	t.Parallel()
+	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	auth := rbac.NewRoleAuthorizer(reg)
+	db := &store.FakeDB{QueryFn: func(_ context.Context, q string, _ ...any) (store.Rows, error) {
+		if !strings.Contains(q, ">") {
+			t.Errorf("expected keyset '>' in SQL, got %q", q)
+		}
+		return store.NewFakeRows([]string{"id", "email"}, []any{int64(2), "bob@x.com"}), nil
+	}}
+	tc := Context{Role: "reader", DB: db, Dialect: dialect.Postgres{}, Registry: reg, Authorizer: auth}
+	in, _ := json.Marshal(readInput{Entity: "users", Cursor: map[string]any{"id": int64(1)}, Limit: 10})
+	res, err := ReadTool{}.Run(context.Background(), in, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Content) != 1 || res.Content[0]["id"] != int64(2) {
+		t.Fatalf("got %v", res.Content)
+	}
+}
+
 func TestCreateToolUnauthorized(t *testing.T) {
 	t.Parallel()
 	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})

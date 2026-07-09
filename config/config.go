@@ -119,6 +119,8 @@ type CostConfig struct {
 	RequireKnownScan  bool
 	RequireFreshStats bool
 	QueryTimeout      time.Duration
+	AllowTemplates    []string `yaml:"allowTemplates" json:"allowTemplates"`
+	RejectTemplates   []string `yaml:"rejectTemplates" json:"rejectTemplates"`
 }
 
 // CacheConfig configures the read cache.
