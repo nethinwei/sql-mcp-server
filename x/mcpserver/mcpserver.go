@@ -29,10 +29,17 @@ func NewServer(app *bootstrap.App) *mcp.Server {
 
 func registerTool(s *mcp.Server, t tool.Tool, app *bootstrap.App) {
 	info := t.Info()
+	schema := info.InputSchema
+	if len(schema) == 0 {
+		// go-sdk requires an object-typed input schema. Tools that do not yet
+		// declare a detailed schema get a permissive object; parameters are
+		// still validated inside tool.Run. Detailed schemas are P1.
+		schema = json.RawMessage(`{"type":"object"}`)
+	}
 	mt := &mcp.Tool{
 		Name:        info.Name,
 		Description: info.Description,
-		InputSchema: info.InputSchema,
+		InputSchema: schema,
 	}
 	if info.ReadOnly {
 		mt.Annotations = &mcp.ToolAnnotations{ReadOnlyHint: true}
