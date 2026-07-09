@@ -130,11 +130,16 @@ type CacheConfig struct {
 
 // RateLimitConfig configures the engine's concurrency and rate limits.
 type RateLimitConfig struct {
-	Enabled     *bool `yaml:"enabled" json:"enabled"`
-	RPS         float64
-	MaxInflight int
-	IOPool      int
-	CPUPool     int
+	Enabled          *bool `yaml:"enabled" json:"enabled"`
+	RPS              float64
+	MaxInflight      int
+	IOPool           int
+	CPUPool          int
+	MinConcurrency   int           `yaml:"minConcurrency" json:"minConcurrency"`
+	RTTThreshold     time.Duration `yaml:"rttThreshold" json:"rttThreshold"`
+	BreakerThreshold int           `yaml:"breakerThreshold" json:"breakerThreshold"`
+	BreakerCooldown  time.Duration `yaml:"breakerCooldown" json:"breakerCooldown"`
+	ConnMaxIdleTime  time.Duration `yaml:"connMaxIdleTime" json:"connMaxIdleTime"`
 }
 
 // EnabledOrDefault reports whether rate limiting is on; nil means default true.
@@ -160,8 +165,9 @@ func (c MaskConfig) EnabledOrDefault() bool {
 
 // AuditConfig configures the audit sink.
 type AuditConfig struct {
-	Enabled bool
-	Path    string
+	Enabled   bool
+	Path      string
+	QueueSize int `yaml:"queueSize" json:"queueSize"`
 }
 
 // DefaultToolFlags returns the safe default tool set: all tools enabled except
@@ -205,6 +211,21 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.RateLimit.CPUPool == 0 {
 		c.RateLimit.CPUPool = runtime.NumCPU()
+	}
+	if c.RateLimit.MinConcurrency == 0 {
+		c.RateLimit.MinConcurrency = 1
+	}
+	if c.RateLimit.BreakerThreshold == 0 {
+		c.RateLimit.BreakerThreshold = 5
+	}
+	if c.RateLimit.BreakerCooldown == 0 {
+		c.RateLimit.BreakerCooldown = 5 * time.Second
+	}
+	if c.RateLimit.ConnMaxIdleTime == 0 {
+		c.RateLimit.ConnMaxIdleTime = 5 * time.Minute
+	}
+	if c.Audit.QueueSize == 0 {
+		c.Audit.QueueSize = 1024
 	}
 	if c.Cache.Enabled && c.Cache.TTL == 0 {
 		c.Cache.TTL = 30 * time.Second

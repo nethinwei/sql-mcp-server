@@ -122,7 +122,7 @@ func Assemble(cfg *config.Config) (*App, error) {
 // AssembleWithProvider wires the application using an injected provider (for
 // testing with fakes).
 func AssembleWithProvider(cfg *config.Config, prov Provider) (*App, error) {
-	configurePool(prov, cfg.RateLimit.IOPool)
+	configurePool(prov, cfg.RateLimit.IOPool, cfg.RateLimit.ConnMaxIdleTime)
 	entities, err := configToEntities(cfg.Entities)
 	if err != nil {
 		return nil, err
@@ -146,8 +146,8 @@ func AssembleWithProvider(cfg *config.Config, prov Provider) (*App, error) {
 	var limiter *ratelimit.Adaptive
 	var breaker *ratelimit.Breaker
 	if cfg.RateLimit.EnabledOrDefault() {
-		limiter = ratelimit.NewAdaptive(int64(cfg.RateLimit.IOPool), 1, int64(cfg.RateLimit.MaxInflight), 0)
-		breaker = ratelimit.NewBreaker(5, 5*time.Second)
+		limiter = ratelimit.NewAdaptive(int64(cfg.RateLimit.IOPool), int64(cfg.RateLimit.MinConcurrency), int64(cfg.RateLimit.MaxInflight), cfg.RateLimit.RTTThreshold)
+		breaker = ratelimit.NewBreaker(int64(cfg.RateLimit.BreakerThreshold), cfg.RateLimit.BreakerCooldown)
 	}
 	eng, err := engine.New(
 		engine.WithIOPool(cfg.RateLimit.IOPool),
@@ -165,11 +165,11 @@ func AssembleWithProvider(cfg *config.Config, prov Provider) (*App, error) {
 	}
 	var aud audit.Auditor = audit.NoopAuditor{}
 	if cfg.Audit.Enabled && cfg.Audit.Path != "" {
-		aud = audit.NewAsyncAuditor(fileSink(cfg.Audit.Path), 1024)
+		aud = audit.NewAsyncAuditor(fileSink(cfg.Audit.Path), cfg.Audit.QueueSize)
 	}
 	var cc cache.Cache[[]map[string]any] = cache.NoopCache[[]map[string]any]{}
 	if cfg.Cache.Enabled {
-		cc = cache.NewTTLCache[[]map[string]any](cfg.Cache.TTL)
+		cc = cache.NewTTLCache[[]map[string]any](cfg.Cache.TTL, cfg.Cache.MaxSize)
 	}
 	var msk mask.Masker = mask.NoopMasker{}
 	if cfg.Mask.EnabledOrDefault() {
@@ -206,7 +206,7 @@ func newProvider(driver, dsn string) (Provider, error) {
 
 // configurePool bounds the DB connection pool to the IO pool size so workers
 // never wait on a connection they already hold a slot for.
-func configurePool(p Provider, maxOpen int) {
+func configurePool(p Provider, maxOpen int, connMaxIdle time.Duration) {
 	type dbExposer interface{ DB() *sql.DB }
 	e, ok := p.(dbExposer)
 	if !ok || maxOpen <= 0 {
@@ -215,7 +215,9 @@ func configurePool(p Provider, maxOpen int) {
 	db := e.DB()
 	db.SetMaxOpenConns(maxOpen)
 	db.SetMaxIdleConns(maxOpen)
-	db.SetConnMaxIdleTime(5 * time.Minute)
+	if connMaxIdle > 0 {
+		db.SetConnMaxIdleTime(connMaxIdle)
+	}
 }
 
 // checkDrift introspects the live schema and fails fast if a configured entity

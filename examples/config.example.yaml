@@ -37,11 +37,15 @@ cache:
   maxSize: 1000
 
 rateLimit:
-  enabled: true        # set false to disable adaptive limiting/breaker (e.g. tests)
-  rps: 0
-  maxInflight: 256
-  ioPool: 16
-  cpuPool: 8
+  enabled: true            # set false to disable adaptive limiting/breaker (e.g. tests)
+  maxInflight: 256         # backpressure queue cap
+  ioPool: 16               # IO concurrency (also DB MaxOpenConns)
+  cpuPool: 8               # CPU concurrency
+  minConcurrency: 1        # AIMD lower bound
+  rttThreshold: 0s         # latency above which AIMD decreases (0 disables)
+  breakerThreshold: 5      # consecutive failures to open the breaker
+  breakerCooldown: 5s      # breaker open duration
+  connMaxIdleTime: 5m      # DB connection idle timeout
 
 mask:
   enabled: true        # set false to disable field masking
@@ -49,6 +53,7 @@ mask:
 audit:
   enabled: false
   path: ""
+  queueSize: 1024          # async audit queue capacity (drops + counts when full)
 
 entities:
   - name: users
