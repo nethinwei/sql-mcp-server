@@ -31,3 +31,19 @@ func TestFireInvokesCallback(t *testing.T) {
 		t.Fatal("OnError not invoked")
 	}
 }
+
+func TestFireCostGateAndAuthorize(t *testing.T) {
+	t.Parallel()
+	gate := false
+	h := &Hooks{OnCostGate: func(_ context.Context, _ cost.Plan, _ cost.Score, _ string) { gate = true }}
+	h.FireCostGate(context.Background(), cost.Plan{}, cost.Score{}, "allow")
+	if !gate {
+		t.Fatal("OnCostGate not invoked")
+	}
+	auth := false
+	h2 := &Hooks{OnAuthorize: func(_ context.Context, _ rbac.Request, _ rbac.Decision) { auth = true }}
+	h2.FireAuthorize(context.Background(), rbac.Request{}, rbac.Decision{})
+	if !auth {
+		t.Fatal("OnAuthorize not invoked")
+	}
+}

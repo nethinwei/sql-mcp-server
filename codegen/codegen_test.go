@@ -205,3 +205,43 @@ func TestCompileInList(t *testing.T) {
 		t.Fatalf("args = %v", c.Args)
 	}
 }
+
+func TestCompileDistinct(t *testing.T) {
+	t.Parallel()
+	r := NewRenderer(dialect.Postgres{})
+	c, err := r.Compile(relalg.Distinct{Input: relalg.Scan{Relation: relalg.RelationRef{Name: "users"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(c.SQL, "DISTINCT") {
+		t.Fatalf("got %q", c.SQL)
+	}
+}
+
+func TestCompileCall(t *testing.T) {
+	t.Parallel()
+	r := NewRenderer(dialect.Postgres{})
+	c, err := r.Compile(relalg.Call{Procedure: relalg.RelationRef{Name: "sp"}, Args: []any{1, "x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `CALL "sp"($1, $2)`
+	if c.SQL != want {
+		t.Fatalf("got %q, want %q", c.SQL, want)
+	}
+	if len(c.Args) != 2 {
+		t.Fatalf("args = %v", c.Args)
+	}
+}
+
+func TestCompileInvalidOp(t *testing.T) {
+	t.Parallel()
+	r := NewRenderer(dialect.Postgres{})
+	expr := relalg.Select{
+		Predicate: relalg.Condition{Field: "id", Op: "bad", Value: 1},
+		Input:     relalg.Scan{Relation: relalg.RelationRef{Name: "users"}},
+	}
+	if _, err := r.Compile(expr); err == nil {
+		t.Fatal("expected error for invalid operator")
+	}
+}

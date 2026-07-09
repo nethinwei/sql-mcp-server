@@ -30,6 +30,7 @@ func (s StaticRule) Check(_ context.Context, c codegen.Compiled) (Decision, erro
 type Estimate struct {
 	Explainer Explainer
 	Threshold Threshold
+	Feedback  FeedbackStore
 }
 
 // Name implements Layer.
@@ -41,6 +42,12 @@ func (e Estimate) Check(ctx context.Context, c codegen.Compiled) (Decision, erro
 	if err != nil {
 		// Murphy: EXPLAIN failure degrades, never panics.
 		plan = Plan{ScanType: ScanUnknown, StatsFresh: false}
+	}
+	// Calibrate against observed history: trust reality over estimates.
+	if e.Feedback != nil {
+		if avg, ok := e.Feedback.AverageRows(c.SQL); ok && avg > plan.EstimatedRows {
+			plan.EstimatedRows = avg
+		}
 	}
 	score := ScorePlan(plan)
 	th := e.Threshold

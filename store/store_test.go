@@ -67,6 +67,40 @@ func TestFakeRowsScanRequiresNext(t *testing.T) {
 	}
 }
 
+func TestFakeRowsScanValues(t *testing.T) {
+	t.Parallel()
+	r := NewFakeRows([]string{"id", "name"}, []any{int64(1), "alice"})
+	if !r.Next() {
+		t.Fatal("Next false")
+	}
+	var id, name any
+	if err := r.Scan(&id, &name); err != nil {
+		t.Fatal(err)
+	}
+	if id != int64(1) || name != "alice" {
+		t.Fatalf("got %v %v", id, name)
+	}
+	var s string
+	if err := r.Scan(&s); err == nil {
+		t.Fatal("expected error for non-*any scan target")
+	}
+}
+
+func TestFakeTx(t *testing.T) {
+	t.Parallel()
+	tx := &FakeTx{}
+	sp, err := tx.Savepoint(context.Background(), "s1")
+	if err != nil || sp.Name != "s1" {
+		t.Fatalf("savepoint: %v %v", sp, err)
+	}
+	if err := tx.RollbackTo(context.Background(), sp); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil || !tx.Committed {
+		t.Fatal("commit failed")
+	}
+}
+
 func TestFakeDBLogsCalls(t *testing.T) {
 	t.Parallel()
 	db := &FakeDB{

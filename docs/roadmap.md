@@ -138,13 +138,13 @@ EXPLAIN 失败降级为 `Plan{ScanUnknown, !StatsFresh}`，由 `RequireKnownScan
 - ✅ **M3 PostgreSQL provider + 集成测试**：testcontainers 起 PG，EXPLAIN 解析、门限端到端（全表扫描硬拒、PK 点查白名单通过）已验证。
 - ✅ **M4 MySQL + OceanBase provider**：两种 EXPLAIN 解析（含 OceanBase 漂移降级）。
 - ✅ **M6 MCP 适配 + 传输 + schema 自省/漂移**：`x/mcpserver` + cmd + `x/bootstrap` + introspect merge + 漂移检测 + 错误码映射。
-- 🚧 **M5 安全与资源治理**：RLS/审计/脱敏/限流/熔断/取消下推/凭证占位符核心已实现；真实 DB 端到端验证待集成测试扩展。
-- 🚧 **M7 可观测 + 架构硬化 + CI**：CI（lint/unit/coverage/integration/govulncheck）已就位；OTEL span/metrics、`goleak`、PGO、README、e2e job 待补。
+- ✅ **M5 安全与资源治理**：RLS/审计/脱敏/限流/熔断/取消下推/凭证占位符/连接池/查询超时/schema 漂移全实现，三库集成测试验证。
+- 🚧 **M7 可观测 + 架构硬化 + CI**：CI（lint/unit/coverage≥78%核心/integration/e2e/govulncheck）+ OTEL span/属性已就位；`goleak`、PGO 待补。
 
 ## Roadmap
 
 ### P1
-- 执行反馈闭环 / AQE：记录实际行数与耗时，校准 plan cache 估算。
+- 执行反馈闭环 / AQE：基础已落地（FeedbackStore + runRead 记录 + Estimate 校准读侧）；完整 AQE（异常突增拦截、plan cache 自动失效重算）待深化。
 - 计划基线 / 查询模板白名单：已知良好模板免 EXPLAIN 放行，已知坏模板直接拒。
 - 资源管理器：角色/租户级 CPU/并行度/执行时间配额。
 - 关系展开：`Relationship` 嵌套查询（取 user 带出 orders）。

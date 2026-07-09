@@ -192,10 +192,10 @@ func (g *ChainGate) Check(ctx context.Context, c codegen.Compiled) (Decision, er
 // NewGateFromCapabilities assembles the synchronous gate chain: StaticRule
 // always; Estimate only when the dialect's estimates are trustworthy; EnforceCap
 // when a row cap is configured. RuntimeGuard/DBNative run at execution time.
-func NewGateFromCapabilities(caps dialect.Capabilities, ex Explainer, th Threshold) *ChainGate {
+func NewGateFromCapabilities(caps dialect.Capabilities, ex Explainer, th Threshold, feedback FeedbackStore) *ChainGate {
 	layers := []Layer{StaticRule{PKWhitelist: th.WhitelistPKPoint}}
 	if caps.ExplainCost && caps.ExplainAccurate && ex != nil {
-		layers = append(layers, Estimate{Explainer: ex, Threshold: th})
+		layers = append(layers, Estimate{Explainer: ex, Threshold: th, Feedback: feedback})
 	}
 	if th.MaxRows > 0 {
 		layers = append(layers, EnforceCap{HardRows: th.MaxRows})

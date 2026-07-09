@@ -13,6 +13,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/mcpserver"
+	otelhooks "github.com/nethinwei/sql-mcp-server/x/otel"
 )
 
 func main() {
@@ -39,6 +40,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// Wire OpenTelemetry hooks (no-op tracer without a provider; initialize an
+	// exporter in main to export spans).
+	app.Hooks = otelhooks.NewHooks()
 	defer func() { _ = app.Close() }()
 
 	srv := mcpserver.NewServer(app)

@@ -146,12 +146,17 @@ func AssembleWithProvider(cfg *config.Config, prov Provider) (*App, error) {
 		return nil, err
 	}
 	auth := rbac.NewRoleAuthorizer(reg)
+	var feedback cost.FeedbackStore = cost.NoopFeedbackStore{}
+	if cfg.Cost.Enabled {
+		feedback = cost.NewMemoryStore()
+	}
 	var gate cost.Gate
 	if cfg.Cost.Enabled {
 		gate = cost.NewGateFromCapabilities(
 			prov.Dialect().Capabilities(),
 			prov.Explainer(),
 			toThreshold(cfg.Cost),
+			feedback,
 		)
 	}
 	var limiter *ratelimit.Adaptive
@@ -185,10 +190,6 @@ func AssembleWithProvider(cfg *config.Config, prov Provider) (*App, error) {
 	var msk mask.Masker = mask.NoopMasker{}
 	if cfg.Mask.EnabledOrDefault() {
 		msk = mask.NewRuleMasker(nil)
-	}
-	var feedback cost.FeedbackStore = cost.NoopFeedbackStore{}
-	if cfg.Cost.Enabled {
-		feedback = cost.NewMemoryStore()
 	}
 	return &App{
 		Provider:     prov,

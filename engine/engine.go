@@ -49,7 +49,6 @@ func WithBreaker(b *ratelimit.Breaker) Option { return func(c *config) { c.break
 // Engine bounds concurrency and deduplicates concurrent identical requests.
 type Engine struct {
 	iosem    chan struct{}
-	cpusem   chan struct{}
 	inflight chan struct{}
 	sf       singleflight
 	limiter  *ratelimit.Adaptive
@@ -70,7 +69,6 @@ func New(opts ...Option) (*Engine, error) {
 	}
 	return &Engine{
 		iosem:    make(chan struct{}, cfg.io),
-		cpusem:   make(chan struct{}, cfg.cpu),
 		inflight: make(chan struct{}, cfg.inflight),
 		limiter:  cfg.limiter,
 		breaker:  cfg.breaker,

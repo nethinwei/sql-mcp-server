@@ -6,7 +6,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/nethinwei/sql-mcp-server/cache"
 	"github.com/nethinwei/sql-mcp-server/config"
 	"github.com/nethinwei/sql-mcp-server/cost"
 	"github.com/nethinwei/sql-mcp-server/dialect"
@@ -192,5 +194,118 @@ func TestExecuteToolRejectsNonProcedure(t *testing.T) {
 	_, err := ExecuteTool{}.Run(context.Background(), in, tc)
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("got %v, want ErrInvalidInput", err)
+	}
+}
+
+func TestCreateToolReturning(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{
+		Name: "users", Source: "users", Kind: entity.KindTable,
+		Attributes: []entity.Attribute{{Name: "id"}, {Name: "email"}},
+		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
+		Role:       entity.RoleAccess{entity.ActionCreate: {"writer"}},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	auth := rbac.NewRoleAuthorizer(reg)
+	db := &store.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
+		return store.NewFakeRows([]string{"id"}, []any{int64(7)}), nil
+	}}
+	tc := Context{Role: "writer", DB: db, Dialect: dialect.Postgres{}, Registry: reg, Authorizer: auth}
+	in, _ := json.Marshal(createInput{Entity: "users", Values: map[string]any{"email": "a@x.com"}})
+	res, err := CreateTool{}.Run(context.Background(), in, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Content[0]["id"] != int64(7) {
+		t.Fatalf("got %v", res.Content[0])
+	}
+}
+
+func TestAggregateTool(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{
+		Name: "users", Source: "users",
+		Attributes: []entity.Attribute{{Name: "dept"}, {Name: "salary"}},
+		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
+		Role:       entity.RoleAccess{entity.ActionAggregate: {"reader"}},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	auth := rbac.NewRoleAuthorizer(reg)
+	db := &store.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
+		return store.NewFakeRows([]string{"dept", "count"}, []any{"eng", int64(5)}), nil
+	}}
+	tc := Context{Role: "reader", DB: db, Dialect: dialect.Postgres{}, Registry: reg, Authorizer: auth}
+	in, _ := json.Marshal(aggregateInput{Entity: "users", GroupBy: []string{"dept"}, Aggregates: []aggJSON{{Func: "count"}}})
+	res, err := AggregateTool{}.Run(context.Background(), in, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Content) != 1 {
+		t.Fatalf("got %v", res.Content)
+	}
+}
+
+func TestDeleteTool(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{
+		Name: "users", Source: "users",
+		Attributes: []entity.Attribute{{Name: "id"}},
+		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
+		Role:       entity.RoleAccess{entity.ActionDelete: {"admin"}},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	auth := rbac.NewRoleAuthorizer(reg)
+	db := &store.FakeDB{ExecFn: func(_ context.Context, _ string, _ ...any) (store.Result, error) {
+		return store.Result{RowsAffected: 1}, nil
+	}}
+	tc := Context{Role: "admin", DB: db, Dialect: dialect.Postgres{}, Registry: reg, Authorizer: auth}
+	in, _ := json.Marshal(deleteInput{Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: 1}}})
+	res, err := DeleteTool{}.Run(context.Background(), in, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Content[0]["rowsAffected"] != int64(1) {
+		t.Fatalf("got %v", res.Content[0])
+	}
+}
+
+func TestReadToolCacheHit(t *testing.T) {
+	t.Parallel()
+	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	auth := rbac.NewRoleAuthorizer(reg)
+	calls := 0
+	db := &store.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
+		calls++
+		return store.NewFakeRows([]string{"id", "email"}, []any{int64(1), "a@x.com"}), nil
+	}}
+	tc := Context{Role: "reader", DB: db, Dialect: dialect.Postgres{}, Registry: reg, Authorizer: auth,
+		Cache: cache.NewTTLCache[[]map[string]any](time.Minute, 0)}
+	in, _ := json.Marshal(readInput{Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: 1}}})
+	_, _ = ReadTool{}.Run(context.Background(), in, tc)
+	_, _ = ReadTool{}.Run(context.Background(), in, tc)
+	if calls != 1 {
+		t.Fatalf("DB called %d times, want 1 (cache hit)", calls)
+	}
+}
+
+func TestReadToolEntityNotFound(t *testing.T) {
+	t.Parallel()
+	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	tc := Context{Role: "reader", Dialect: dialect.Postgres{}, Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}
+	in, _ := json.Marshal(readInput{Entity: "ghost"})
+	_, err := ReadTool{}.Run(context.Background(), in, tc)
+	if !errors.Is(err, ErrEntityNotFound) {
+		t.Fatalf("got %v, want ErrEntityNotFound", err)
+	}
+}
+
+func TestCreateToolUnauthorized(t *testing.T) {
+	t.Parallel()
+	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	tc := Context{Role: "nobody", Dialect: dialect.Postgres{}, Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}
+	in, _ := json.Marshal(createInput{Entity: "users", Values: map[string]any{"email": "x"}})
+	_, err := CreateTool{}.Run(context.Background(), in, tc)
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("got %v, want ErrUnauthorized", err)
 	}
 }

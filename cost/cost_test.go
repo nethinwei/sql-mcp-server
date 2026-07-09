@@ -144,7 +144,7 @@ func TestNewGateFromCapabilities(t *testing.T) {
 	caps := dialect.Postgres{}.Capabilities()
 	g := NewGateFromCapabilities(caps,
 		FakeExplainer{Plan: Plan{ScanType: ScanIndex, StatsFresh: true}},
-		Threshold{SoftScore: 90, HardScore: 95, MaxRows: 1000})
+		Threshold{SoftScore: 90, HardScore: 95, MaxRows: 1000}, nil)
 	d, _ := g.Check(context.Background(), codegen.Compiled{ReadOnly: true})
 	if !d.Allow {
 		t.Fatalf("expected pass, got %+v", d)
@@ -158,7 +158,7 @@ func TestNewGateFromCapabilitiesSQLiteSkipsEstimate(t *testing.T) {
 	t.Parallel()
 	// SQLite has no ExplainCost, so Estimate must not be assembled.
 	caps := dialect.Capabilities{ExplainCost: false, ExplainAccurate: false}
-	g := NewGateFromCapabilities(caps, nil, Threshold{MaxRows: 100})
+	g := NewGateFromCapabilities(caps, nil, Threshold{MaxRows: 100}, nil)
 	names := []string{}
 	for _, l := range g.Layers() {
 		names = append(names, l.Name())
