@@ -97,3 +97,34 @@ func TestSchemaIsValidJSON(t *testing.T) {
 		t.Fatal("schema is empty")
 	}
 }
+
+func TestMaskEnabledOrDefault(t *testing.T) {
+	t.Parallel()
+	var nilMask MaskConfig
+	if !nilMask.EnabledOrDefault() {
+		t.Error("nil Enabled should default true")
+	}
+	f := false
+	off := MaskConfig{Enabled: &f}
+	if off.EnabledOrDefault() {
+		t.Error("explicit false should be false")
+	}
+	tr := true
+	on := MaskConfig{Enabled: &tr}
+	if !on.EnabledOrDefault() {
+		t.Error("explicit true should be true")
+	}
+}
+
+func TestRateLimitEnabledOrDefault(t *testing.T) {
+	t.Parallel()
+	var nilRL RateLimitConfig
+	if !nilRL.EnabledOrDefault() {
+		t.Error("nil Enabled should default true")
+	}
+	f := false
+	off := RateLimitConfig{Enabled: &f}
+	if off.EnabledOrDefault() {
+		t.Error("explicit false should be false")
+	}
+}

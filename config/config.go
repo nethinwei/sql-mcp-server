@@ -29,6 +29,7 @@ type Config struct {
 	Cost      CostConfig
 	Cache     CacheConfig
 	RateLimit RateLimitConfig
+	Mask      MaskConfig
 	Audit     AuditConfig
 }
 
@@ -129,10 +130,32 @@ type CacheConfig struct {
 
 // RateLimitConfig configures the engine's concurrency and rate limits.
 type RateLimitConfig struct {
+	Enabled     *bool `yaml:"enabled" json:"enabled"`
 	RPS         float64
 	MaxInflight int
 	IOPool      int
 	CPUPool     int
+}
+
+// EnabledOrDefault reports whether rate limiting is on; nil means default true.
+func (c RateLimitConfig) EnabledOrDefault() bool {
+	if c.Enabled != nil {
+		return *c.Enabled
+	}
+	return true
+}
+
+// MaskConfig controls field masking. Enabled defaults to true when unset.
+type MaskConfig struct {
+	Enabled *bool `yaml:"enabled" json:"enabled"`
+}
+
+// EnabledOrDefault reports whether masking is on; nil means default true.
+func (c MaskConfig) EnabledOrDefault() bool {
+	if c.Enabled != nil {
+		return *c.Enabled
+	}
+	return true
 }
 
 // AuditConfig configures the audit sink.

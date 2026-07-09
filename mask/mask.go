@@ -11,6 +11,12 @@ type Masker interface {
 	Mask(rule string, value any) (any, error)
 }
 
+// NoopMasker passes values through unchanged; used when masking is disabled.
+type NoopMasker struct{}
+
+// Mask implements Masker by returning the value unchanged.
+func (NoopMasker) Mask(_ string, value any) (any, error) { return value, nil }
+
 // Rule masks a single value. It returns the masked value; errors are reserved
 // for rule-internal failures (most rules never error).
 type Rule func(value any) (any, error)

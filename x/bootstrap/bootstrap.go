@@ -143,8 +143,12 @@ func AssembleWithProvider(cfg *config.Config, prov Provider) (*App, error) {
 			toThreshold(cfg.Cost),
 		)
 	}
-	limiter := ratelimit.NewAdaptive(int64(cfg.RateLimit.IOPool), 1, int64(cfg.RateLimit.MaxInflight), 0)
-	breaker := ratelimit.NewBreaker(5, 5*time.Second)
+	var limiter *ratelimit.Adaptive
+	var breaker *ratelimit.Breaker
+	if cfg.RateLimit.EnabledOrDefault() {
+		limiter = ratelimit.NewAdaptive(int64(cfg.RateLimit.IOPool), 1, int64(cfg.RateLimit.MaxInflight), 0)
+		breaker = ratelimit.NewBreaker(5, 5*time.Second)
+	}
 	eng, err := engine.New(
 		engine.WithIOPool(cfg.RateLimit.IOPool),
 		engine.WithCPUPool(cfg.RateLimit.CPUPool),
@@ -167,12 +171,16 @@ func AssembleWithProvider(cfg *config.Config, prov Provider) (*App, error) {
 	if cfg.Cache.Enabled {
 		cc = cache.NewTTLCache[[]map[string]any](cfg.Cache.TTL)
 	}
+	var msk mask.Masker = mask.NoopMasker{}
+	if cfg.Mask.EnabledOrDefault() {
+		msk = mask.NewRuleMasker(nil)
+	}
 	return &App{
 		Provider:     prov,
 		Dialect:      prov.Dialect(),
 		Registry:     reg,
 		Authorizer:   auth,
-		Masker:       mask.NewRuleMasker(nil),
+		Masker:       msk,
 		Gate:         gate,
 		Engine:       eng,
 		Tools:        tools,
