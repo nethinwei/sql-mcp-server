@@ -3,6 +3,7 @@ package rbac
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/entity"
 	"github.com/nethinwei/sql-mcp-server/relalg"
@@ -14,6 +15,7 @@ type Request struct {
 	Entity    string
 	Action    entity.Action
 	Fields    []string         // requested fields; nil/empty means all visible
+	Subject   map[string]any   // caller attributes for ${subject.x} row-policy resolution
 	Predicate relalg.Predicate // the request's own filter (for context, not mutated here)
 }
 
@@ -57,7 +59,7 @@ func (a *RoleAuthorizer) Authorize(_ context.Context, req Request) (Decision, er
 	return Decision{
 		Allowed:   true,
 		Fields:    projectFields(res.Attributes, req.Fields),
-		RowFilter: res.Entity.RowPolicies[req.Role],
+		RowFilter: resolveSubject(res.Entity.RowPolicies[req.Role], req.Subject),
 	}, nil
 }
 
@@ -95,4 +97,45 @@ func projectFields(visible []entity.Attribute, requested []string) []string {
 		}
 	}
 	return out
+}
+
+// resolveSubject walks a row-policy predicate and replaces ${subject.attr}
+// placeholder values with the request subject's attribute. A placeholder with
+// no matching attribute resolves to nil, which matches no rows — fail-closed
+// for a missing subject rather than exposing every tenant's data. The row
+// policy is stored immutably; resolveSubject returns fresh nodes.
+func resolveSubject(p relalg.Predicate, subject map[string]any) relalg.Predicate {
+	switch pp := p.(type) {
+	case relalg.Condition:
+		if s, ok := pp.Value.(string); ok {
+			if attr, isPlaceholder := subjectPlaceholder(s); isPlaceholder {
+				pp.Value = subject[attr]
+			}
+		}
+		return pp
+	case relalg.And:
+		out := make([]relalg.Predicate, len(pp.Preds))
+		for i, q := range pp.Preds {
+			out[i] = resolveSubject(q, subject)
+		}
+		return relalg.And{Preds: out}
+	case relalg.Or:
+		out := make([]relalg.Predicate, len(pp.Preds))
+		for i, q := range pp.Preds {
+			out[i] = resolveSubject(q, subject)
+		}
+		return relalg.Or{Preds: out}
+	case relalg.Not:
+		return relalg.Not{P: resolveSubject(pp.P, subject)}
+	}
+	return p
+}
+
+// subjectPlaceholder parses "${subject.attr}" into ("attr", true).
+func subjectPlaceholder(s string) (string, bool) {
+	const prefix, suffix = "${subject.", "}"
+	if strings.HasPrefix(s, prefix) && strings.HasSuffix(s, suffix) {
+		return s[len(prefix) : len(s)-len(suffix)], true
+	}
+	return "", false
 }

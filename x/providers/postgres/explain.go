@@ -45,10 +45,11 @@ func (e pgExplainer) Explain(ctx context.Context, query string, args []any) (cos
 func (e pgExplainer) statsFresh(ctx context.Context, rel string) bool {
 	var last sql.NullTime
 	err := e.db.QueryRowContext(ctx,
-		`SELECT last_analyze FROM pg_stat_user_tables WHERE relname=$1 LIMIT 1`, rel)
+		`SELECT last_analyze FROM pg_stat_user_tables WHERE relname=$1 LIMIT 1`, rel).Scan(&last)
 	if err != nil {
-		// Probe failure: be permissive rather than blocking queries because
-		// the stats view is inaccessible.
+		// Probe failure (including sql.ErrNoRows for a table absent from the
+		// stats view): be permissive rather than blocking queries because the
+		// stats view is inaccessible or the table was never analyzed-tracked.
 		return true
 	}
 	return last.Valid

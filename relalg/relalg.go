@@ -40,9 +40,31 @@ type ProjectItem struct {
 	Alias string
 }
 
-// AggCall is one aggregate in a γ node. Func is count|sum|avg|min|max.
+// AggFunc is a whitelisted aggregate function name. Like Op, a user-supplied
+// value never reaches SQL as a raw function string, preventing injection.
+type AggFunc string
+
+// Whitelisted aggregate functions.
+const (
+	AggCount AggFunc = "count"
+	AggSum   AggFunc = "sum"
+	AggAvg   AggFunc = "avg"
+	AggMin   AggFunc = "min"
+	AggMax   AggFunc = "max"
+)
+
+// Valid reports whether f is a whitelisted aggregate function.
+func (f AggFunc) Valid() bool {
+	switch f {
+	case AggCount, AggSum, AggAvg, AggMin, AggMax:
+		return true
+	}
+	return false
+}
+
+// AggCall is one aggregate in a γ node.
 type AggCall struct {
-	Func     string
+	Func     AggFunc
 	Field    string
 	Distinct bool
 }

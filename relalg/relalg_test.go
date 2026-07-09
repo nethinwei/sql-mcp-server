@@ -20,6 +20,20 @@ func TestOpValid(t *testing.T) {
 	}
 }
 
+func TestAggFuncValid(t *testing.T) {
+	t.Parallel()
+	for _, f := range []AggFunc{AggCount, AggSum, AggAvg, AggMin, AggMax} {
+		if !f.Valid() {
+			t.Errorf("%q should be valid", f)
+		}
+	}
+	for _, f := range []AggFunc{"", "count(*)--", "median", "COUNT"} {
+		if f.Valid() {
+			t.Errorf("%q should be invalid", f)
+		}
+	}
+}
+
 func TestValidatePredicate(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

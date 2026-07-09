@@ -75,11 +75,12 @@ sql-mcp-server/
 EXPLAIN 估算有根本缺陷（不可靠、跨方言不可比、SQLite 无数值），不能把门限全押在它上。本设计采用**多层级联闸门**：EXPLAIN 仅作"可选预筛层"，按各 DB 能力差异化装配；确定性 LIMIT/timeout 兜底；DB 原生资源治理作底层硬保护；反馈学习让阈值随时间自适应。任一层拦截即安全，单层失效不致命。
 
 层级（按序）：
-1. **StaticRule**（免 EXPLAIN）：白名单（PK 点查 `IsPKPoint`）、黑名单模板、写命中主键校验。
-2. **Estimate**（EXPLAIN，可选预筛）：仅当 `ExplainAccurate` 且统计可信时启用；不可信时跳过交下层兜底。
-3. **EnforceCap**（确定性兜底）：读查询注入强制 LIMIT 包裹，保证最坏 N 行；不依赖估算正确性。
-4. **RuntimeGuard**（运行时中断）：执行中按 DB 原生超时/扫描上限中断。
-5. **DBNative**（底层委托）：会话级设 DB 原生资源参数，由 DB 强制执行。
+1. **StaticRule**（免 EXPLAIN）：白名单（PK 点查 `IsPKPoint`）、模板基线（`allowTemplates` 放行 / `rejectTemplates` 拒绝）。
+2. **WriteGuard**（确定性写保护，免 EXPLAIN）：`requirePKForWrite`（默认开）时非主键点写（UPDATE/DELETE）硬拒——不依赖估算，兜底 MySQL/OceanBase 等估算不可信的库。
+3. **Estimate**（EXPLAIN，可选预筛）：仅当 `ExplainAccurate` 且统计可信时启用；计划归一化为 0–100 安全分（越高越安全），低于 `hardScore` 硬拒、`[hardScore, softScore)` 软拒；不可信时跳过交下层兜底。
+4. **EnforceCap**（确定性兜底）：读查询注入强制 LIMIT 包裹，保证最坏 N 行；不依赖估算正确性。
+5. **RuntimeGuard**（运行时中断）：请求 `queryTimeout` 经 context 下推，由 driver 取消查询。
+6. **DBNative**（底层委托）：MySQL/OceanBase 连接注入 `sql_safe_updates`，由 DB 拒绝无键无 LIMIT 的全表写。
 
 按 DB 差异化装配：
 - **PostgreSQL**：Estimate 启用（可信）+ EnforceCap + `statement_timeout`。
@@ -91,9 +92,9 @@ EXPLAIN 失败降级为 `Plan{ScanUnknown, !StatsFresh}`，由 `RequireKnownScan
 
 ### 安全与资源治理
 
-- **行级安全（RLS）**：`Authorizer` 注入角色行级过滤 Predicate，与请求 Predicate AND 叠加。
+- **行级安全（RLS）**：`Authorizer` 注入角色行级过滤 Predicate，与请求 Predicate AND 叠加；策略值支持 `${subject.x}` 占位符，按请求主体属性解析（属性缺失即解析为 NULL，fail-closed）。过滤/写字段经字段级校验，杜绝引用隐藏列的侧信道。
 - **审计**：`Auditor.Record` 异步投递有界队列 + 后台 flusher，满则丢弃计数，绝不阻塞主业务。
-- **脱敏**：`Masker` 字段级 mask（email/phone/idcard/secret）。
+- **脱敏**：`Masker` 字段级 mask（email/phone/idcard/secret），类型无关（数字型敏感值也脱敏）；配置的规则在启动期校验，未知规则 fail-fast。
 - **资源治理**：statement timeout（下推 driver）、连接池（≤ IO 池上限）、查询取消下推（`pg_cancel_backend`/`KILL QUERY`）、限流/并发/熔断由 engine 承载。
 - **凭证管理**：DSN 支持 `${ENV}`/`${file:}` 占位符，缺失 fail-fast。
 
@@ -120,6 +121,8 @@ EXPLAIN 失败降级为 `Plan{ScanUnknown, !StatsFresh}`，由 `RequireKnownScan
 - **I11** context 取消 ⇒ DB 查询取消 + goroutine 回收。
 - **I12** `Auditor.Record` 不阻塞主流程。
 - **I13** `in-flight > 上限 ⇒ ErrOverloaded`，无 goroutine 堆积。
+- **I14** 写操作（UPDATE/DELETE）非 PK 点查时，`requirePKForWrite` 下必被 WriteGuard 拒。
+- **I15** filter/groupBy/set/values 字段 ∈ 实体可见属性（隐藏列不可作谓词或写目标）。
 
 ## 编码规范
 
@@ -139,7 +142,7 @@ EXPLAIN 失败降级为 `Plan{ScanUnknown, !StatsFresh}`，由 `RequireKnownScan
 - ✅ **M4 MySQL + OceanBase provider**：两种 EXPLAIN 解析（含 OceanBase 漂移降级）。
 - ✅ **M6 MCP 适配 + 传输 + schema 自省/漂移**：`x/mcpserver` + cmd + `x/bootstrap` + introspect merge + 漂移检测 + 错误码映射。
 - ✅ **M5 安全与资源治理**：RLS/审计/脱敏/限流/熔断/取消下推/凭证占位符/连接池/查询超时/schema 漂移全实现，三库集成测试验证。
-- 🚧 **M7 可观测 + 架构硬化 + CI**：CI（lint/unit/coverage≥78%核心/integration/e2e/govulncheck）+ OTEL span/属性已就位；`goleak`、PGO 待补。
+- ✅ **M7 可观测 + 架构硬化 + CI**：CI（lint/unit/coverage≥80% 核心/integration/e2e/govulncheck）；OTEL span、异步审计、有界并发（背压/AIMD/熔断/singleflight）经 `tool.RunTool` 统一接入每次工具调用；`goleak` 在 e2e 校验无泄漏。PGO 待补。
 
 ## Roadmap
 
@@ -163,7 +166,7 @@ EXPLAIN 失败降级为 `Plan{ScanUnknown, !StatsFresh}`，由 `RequireKnownScan
 
 ## 关键文件
 
-- `cost/gate.go` + `cost/layers.go` — 多层级联闸门（StaticRule/Estimate/EnforceCap），EXPLAIN 仅作可选预筛层。
+- `cost/cost.go` + `cost/layers.go` — 多层级联闸门（StaticRule/WriteGuard/Estimate/EnforceCap），EXPLAIN 仅作可选预筛层。
 - `tool/tool.go` + `tool/tools.go` — 能力接口 + Registry + Enabled 开关 + 七 DML 工具。
 - `relalg/relalg.go` + `codegen/codegen.go` — 关系代数 IR / 渲染（数学完备性基石）。
 - `rbac/rbac.go` — RBAC + 行级安全 + 字段投影。

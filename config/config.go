@@ -116,11 +116,22 @@ type CostConfig struct {
 	MaxBytes          int64
 	RejectFullScan    bool
 	WhitelistPKPoint  bool
+	RequirePKForWrite *bool `yaml:"requirePKForWrite" json:"requirePKForWrite"`
 	RequireKnownScan  bool
 	RequireFreshStats bool
 	QueryTimeout      time.Duration
 	AllowTemplates    []string `yaml:"allowTemplates" json:"allowTemplates"`
 	RejectTemplates   []string `yaml:"rejectTemplates" json:"rejectTemplates"`
+}
+
+// RequirePKForWriteOrDefault reports whether writes must be primary-key scoped.
+// A nil setting defaults to true (safe): a non-point UPDATE/DELETE is rejected
+// unless explicitly allowed via allowTemplates.
+func (c CostConfig) RequirePKForWriteOrDefault() bool {
+	if c.RequirePKForWrite != nil {
+		return *c.RequirePKForWrite
+	}
+	return true
 }
 
 // CacheConfig configures the read cache.
@@ -200,10 +211,14 @@ func (c *Config) ApplyDefaults() {
 		}
 	}
 	if c.Cost.Enabled && c.Cost.HardScore == 0 && c.Cost.MaxRows == 0 {
-		c.Cost.SoftScore = 40
-		c.Cost.HardScore = 70
+		// Scores are 0-100 where higher is safer; SoftScore >= HardScore.
+		c.Cost.SoftScore = 60
+		c.Cost.HardScore = 40
 		c.Cost.MaxRows = 10000
 		c.Cost.WhitelistPKPoint = true
+	}
+	if c.Cost.Enabled && c.Cost.QueryTimeout == 0 {
+		c.Cost.QueryTimeout = 30 * time.Second
 	}
 	if c.RateLimit.MaxInflight == 0 {
 		c.RateLimit.MaxInflight = 256

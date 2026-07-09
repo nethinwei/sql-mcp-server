@@ -110,6 +110,7 @@ type Threshold struct {
 	MaxBytes          int64
 	RejectFullScan    bool
 	WhitelistPKPoint  bool
+	RequirePKForWrite bool // reject UPDATE/DELETE that is not a PK point write
 	RequireKnownScan  bool
 	RequireFreshStats bool
 	AllowTemplates    []string
@@ -196,6 +197,9 @@ func (g *ChainGate) Check(ctx context.Context, c codegen.Compiled) (Decision, er
 // when a row cap is configured. RuntimeGuard/DBNative run at execution time.
 func NewGateFromCapabilities(caps dialect.Capabilities, ex Explainer, th Threshold, feedback FeedbackStore) *ChainGate {
 	layers := []Layer{StaticRule{PKWhitelist: th.WhitelistPKPoint, AllowTemplates: th.AllowTemplates, RejectTemplates: th.RejectTemplates}}
+	if th.RequirePKForWrite {
+		layers = append(layers, WriteGuard{})
+	}
 	if caps.ExplainCost && caps.ExplainAccurate && ex != nil {
 		layers = append(layers, Estimate{Explainer: ex, Threshold: th, Feedback: feedback})
 	}

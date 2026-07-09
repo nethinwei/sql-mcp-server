@@ -23,11 +23,12 @@ tools:
 
 cost:
   enabled: true
-  softScore: 40            # 0-100; below = pass, [soft,hard) = soft reject (suggest LIMIT)
-  hardScore: 70            # >= hard = hard reject
+  softScore: 60            # 0-100 safety score (higher = safer); >= soft = pass
+  hardScore: 40            # [hard,soft) = soft reject (suggest LIMIT); < hard = hard reject
   maxRows: 10000           # EnforceCap wraps reads in LIMIT maxRows
   rejectFullScan: true
   whitelistPKPoint: true   # PK point lookup skips EXPLAIN
+  requirePKForWrite: true  # reject UPDATE/DELETE not scoped to a primary key (default on)
   requireKnownScan: false
   requireFreshStats: false
 
@@ -72,9 +73,13 @@ entities:
       delete: [admin]
       aggregate: [reader, writer, admin]
     rowPolicies:
+      # ${subject.x} is resolved per-request from the authenticated caller's
+      # attributes (set by a trusted gateway via the X-MCP-Subject header, or
+      # injected through mcpserver.WithSubject). A missing attribute resolves to
+      # NULL and matches no rows (fail-closed).
       reader:
         and:
-          - { op: eq, field: tenant_id, value: "${role.tenant_id}" }
+          - { op: eq, field: tenant_id, value: "${subject.tenant_id}" }
     fields:
       - name: id
         description: "User ID (primary key)"

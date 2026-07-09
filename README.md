@@ -6,12 +6,12 @@ Data API Builder（DAB）的 SQL MCP Server，支持 PostgreSQL、MySQL、OceanB
 ## 特性
 
 - **关系代数 IR**：查询经方言无关的中间表示渲染为参数化 SQL，杜绝注入；接入新库只需实现 5 个窄接口。
-- **成本门限**：多层级联闸门（defense in depth）——EXPLAIN 仅作可选预筛层，确定性 LIMIT 兜底，按数据库能力差异化装配；超限硬拒绝并返回重写建议。支持计划基线（`allowTemplates`/`rejectTemplates`）固定已知良好计划、封禁已知坏计划，以及反馈闭环（记录实际行数校准估算）。
-- **安全**：RBAC + 行级安全 + 字段脱敏 + 异步审计。
+- **成本门限**：多层级联闸门（defense in depth）——静态规则（PK 白名单/模板基线）→ 写主键保护（WriteGuard：非主键点写硬拒）→ EXPLAIN 预筛（仅可信方言启用）→ 确定性 LIMIT 兜底（EnforceCap），再叠加请求超时与 MySQL/OceanBase 原生 `sql_safe_updates`。计划质量归一化为 0–100 安全分（越高越安全），低于阈值软/硬拒并返回重写建议。支持计划基线（`allowTemplates`/`rejectTemplates`）与反馈闭环（记录实际行数校准估算）。
+- **安全**：RBAC（字段级投影 + 过滤/写字段校验，杜绝隐藏列侧信道）+ 行级安全（`${subject.x}` 按请求主体动态过滤，属性缺失即 fail-closed）+ 字段脱敏（类型无关，未知规则启动即报错）+ 每次工具调用异步审计。
 - **接口化工具**：七个 DML 工具（describe/read/create/update/delete/execute/aggregate）按配置开关启用，关闭即不注册；`execute_entity` 支持存储过程调用。
 - **分页**：支持 offset 与 keyset（游标）分页，大表续页用 `WHERE pk > cursor ORDER BY pk LIMIT n` 避免 O(offset) 开销。
-- **有界并发**：bounded worker pool + 背压 + singleflight + 自适应限流（AIMD）+ 熔断。
-- **可观测**：OpenTelemetry span/属性（经 hook 适配，核心不绑后端）+ 健康检查。
+- **有界并发**：所有工具调用经统一编排（`tool.RunTool`）接入 bounded worker pool + 背压（`ErrOverloaded`）+ singleflight 读去重（共享结果）+ 自适应限流（AIMD）+ 熔断。
+- **可观测**：每次工具调用发射 OpenTelemetry span/属性（经 hook 适配，核心不绑后端）+ 健康检查。
 - **密钥管理**：DSN 支持 `${ENV}` / `${file:/path}` 占位符；`SecretResolver` 接口可注入 Vault 等外部 secret manager。
 - **核心零外部依赖**：核心包仅用标准库，外部依赖（go-sdk、driver、yaml、otel）隔离于 `x/`，depguard 强制单向依赖。
 
@@ -47,12 +47,13 @@ npx -y @modelcontextprotocol/inspector http://localhost:8080/mcp
 
 - `database.driver`：`postgres` | `mysql` | `oceanbase`；`dsn` 支持 `${ENV}` / `${file:/path}` 占位符，缺失即启动失败（fail-fast）。
 - `tools`：按工具开关，`deleteRecord` 默认关闭。
-- `cost`：`softScore`/`hardScore`（0–100 归一化阈值）、`maxRows`（EnforceCap 强制 LIMIT）、`rejectFullScan`、`whitelistPKPoint`、`allowTemplates`/`rejectTemplates`（计划基线）、`queryTimeout`。
+- `cost`：`softScore`/`hardScore`（0–100 安全分阈值，越高越安全，需 `softScore ≥ hardScore`；低于 `hardScore` 硬拒，`[hardScore, softScore)` 软拒）、`maxRows`（EnforceCap 强制 LIMIT）、`rejectFullScan`、`whitelistPKPoint`、`requirePKForWrite`（默认开：非主键点写硬拒）、`allowTemplates`/`rejectTemplates`（计划基线）、`queryTimeout`（默认 30s）。
 - `mask.enabled` / `rateLimit.enabled`：脱敏与限流可按需关闭（默认开）。
 - `rateLimit`：`ioPool`/`cpuPool`/`maxInflight`（并发）、`breakerThreshold`/`breakerCooldown`（熔断）、`minConcurrency`/`rttThreshold`（AIMD）、`connMaxIdleTime`（连接空闲）。
 - `audit.queueSize`、`cache.ttl`/`maxSize`。
 - `entities`：暴露的表/视图/存储过程，含别名、主键、字段投影（`exclude`）、脱敏（`mask`）、角色权限、行级策略（`rowPolicies`）。
 - 启动期 introspect 自动发现 schema 并与配置比对，配置引用不存在的实体/字段即 fail-fast。
+- **角色/主体**：stdio 模式用启动 `--role`；HTTP 模式每请求角色与主体属性经 `X-MCP-Role`、`X-MCP-Subject`（JSON）请求头传入，须由可信网关在认证后设置（完整 OAuth 见 roadmap）。
 
 ## 架构
 

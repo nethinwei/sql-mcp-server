@@ -45,8 +45,9 @@ func registerTool(s *mcp.Server, t tool.Tool, app *bootstrap.App) {
 		mt.Annotations = &mcp.ToolAnnotations{ReadOnlyHint: true}
 	}
 	handler := func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		tc := app.ToolContext(app.DefaultRole)
-		res, err := t.Run(ctx, rawArgs(req), tc)
+		role, subject := subjectFromContext(ctx, app.DefaultRole)
+		tc := app.ToolContextForSubject(role, subject)
+		res, err := tool.RunTool(ctx, t, rawArgs(req), tc)
 		if err != nil {
 			return toResult(err)
 		}
@@ -104,11 +105,61 @@ func ServeStdio(ctx context.Context, s *mcp.Server) error {
 	return s.Run(ctx, &mcp.StdioTransport{})
 }
 
+// subjectCtxKey keys the per-request caller identity on a context.
+type subjectCtxKey struct{}
+
+type requestSubject struct {
+	role  string
+	attrs map[string]any
+}
+
+// WithSubject attaches a per-request caller identity (role + attributes) to
+// ctx. A trusted transport or gateway sets it after authenticating the caller;
+// ServeHTTP derives it from request headers. Tool handlers read it to build a
+// role- and tenant-scoped context, so a single process is no longer pinned to
+// one role. Exported so custom transports can inject an authenticated subject.
+func WithSubject(ctx context.Context, role string, attrs map[string]any) context.Context {
+	return context.WithValue(ctx, subjectCtxKey{}, requestSubject{role: role, attrs: attrs})
+}
+
+func subjectFromContext(ctx context.Context, defaultRole string) (string, map[string]any) {
+	if s, ok := ctx.Value(subjectCtxKey{}).(requestSubject); ok {
+		role := s.role
+		if role == "" {
+			role = defaultRole
+		}
+		return role, s.attrs
+	}
+	return defaultRole, nil
+}
+
+// withRequestSubject extracts the caller's role and attributes from request
+// headers onto the request context for tool handlers. Headers MUST be set by a
+// trusted gateway that has already authenticated the caller (full OAuth
+// verification is on the roadmap); never expose this port directly to
+// untrusted clients.
+//
+//	X-MCP-Role:    the caller's role
+//	X-MCP-Subject: optional JSON object of subject attributes (e.g. tenant_id)
+func withRequestSubject(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		role := r.Header.Get("X-MCP-Role")
+		var attrs map[string]any
+		if raw := r.Header.Get("X-MCP-Subject"); raw != "" {
+			_ = json.Unmarshal([]byte(raw), &attrs)
+		}
+		if role != "" || attrs != nil {
+			r = r.WithContext(WithSubject(r.Context(), role, attrs))
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // ServeHTTP runs the server on streamable HTTP at addr, with a /healthz check.
 func ServeHTTP(ctx context.Context, s *mcp.Server, addr string) error {
 	handler := mcp.NewStreamableHTTPHandler(func(_ *http.Request) *mcp.Server { return s }, nil)
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", handler)
+	mux.Handle("/mcp", withRequestSubject(handler))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))

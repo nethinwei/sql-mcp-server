@@ -205,12 +205,16 @@ func TestOBExecuteProcedure(t *testing.T) {
 	prov, cleanup := setupOB(t)
 	defer cleanup()
 	ctx := context.Background()
-	_, _ = prov.ExecContext(ctx, "CREATE PROCEDURE count_users() BEGIN SELECT count(*) AS n FROM test.users; END")
+	// The setup DSN selects no default database, so both the procedure and the
+	// CALL must be schema-qualified (test.count_users).
+	if _, err := prov.ExecContext(ctx, "CREATE PROCEDURE test.count_users() BEGIN SELECT count(*) AS n FROM test.users; END"); err != nil {
+		t.Fatalf("create procedure: %v", err)
+	}
 	cfg := &config.Config{
 		Server:   config.ServerConfig{Role: "caller"},
 		Database: config.DatabaseConfig{Driver: "oceanbase", DSN: "ignored"},
 		Entities: []config.EntityConfig{{
-			Name: "count_users", Source: "count_users", Kind: "procedure",
+			Name: "count_users", Source: "count_users", Schema: "test", Kind: "procedure",
 			Roles: config.RoleConfig{Execute: []string{"caller"}},
 		}},
 		Tools: config.DefaultToolFlags(),

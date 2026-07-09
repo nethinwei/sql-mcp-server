@@ -46,7 +46,7 @@ func TestApplyDefaultsCostThresholds(t *testing.T) {
 	t.Parallel()
 	c := &Config{Database: DatabaseConfig{Driver: "postgres", DSN: "x"}, Cost: CostConfig{Enabled: true}}
 	c.ApplyDefaults()
-	if c.Cost.HardScore != 70 || c.Cost.MaxRows != 10000 {
+	if c.Cost.HardScore != 40 || c.Cost.SoftScore != 60 || c.Cost.MaxRows != 10000 {
 		t.Fatalf("expected default thresholds, got %+v", c.Cost)
 	}
 	if !c.Cost.WhitelistPKPoint {
@@ -126,5 +126,18 @@ func TestRateLimitEnabledOrDefault(t *testing.T) {
 	off := RateLimitConfig{Enabled: &f}
 	if off.EnabledOrDefault() {
 		t.Error("explicit false should be false")
+	}
+}
+
+func TestRequirePKForWriteOrDefault(t *testing.T) {
+	t.Parallel()
+	var c CostConfig
+	if !c.RequirePKForWriteOrDefault() {
+		t.Error("nil requirePKForWrite must default true (safe)")
+	}
+	f := false
+	c.RequirePKForWrite = &f
+	if c.RequirePKForWriteOrDefault() {
+		t.Error("explicit false should disable the PK write requirement")
 	}
 }

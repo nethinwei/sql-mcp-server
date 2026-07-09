@@ -98,8 +98,11 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	if err := validateFields(res, append(filterFields(in.Filter), in.Fields...)...); err != nil {
+		return Result{}, err
+	}
 	dec, err := tc.Authorizer.Authorize(ctx, rbac.Request{
-		Role: tc.Role, Entity: in.Entity, Action: entity.ActionRead,
+		Role: tc.Role, Subject: tc.Subject, Entity: in.Entity, Action: entity.ActionRead,
 		Fields: in.Fields, Predicate: pred,
 	})
 	if err != nil {
@@ -109,21 +112,25 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 		return Result{}, ErrUnauthorized
 	}
 	full := andPreds(pred, dec.RowFilter)
-	// Keyset pagination: resume after the last row's primary-key values.
+	// Keyset pagination: resume strictly after the cursor's key values with a
+	// row-value comparison (composite keys need OR-expansion, not per-column >).
+	var keysetCols []string
 	if len(in.Cursor) > 0 {
-		for _, pk := range res.Entity.PrimaryKey() {
-			if v, ok := in.Cursor[pk]; ok {
-				full = andPreds(full, relalg.Condition{Field: pk, Op: relalg.OpGt, Value: v})
-			}
-		}
+		var ks relalg.Predicate
+		ks, keysetCols = keysetAfter(res.Entity.PrimaryKey(), in.Cursor)
+		full = andPreds(full, ks)
 	}
 	scan := relalg.Scan{Relation: relalg.RelationRef{Name: res.Entity.Source, Schema: res.Entity.Schema}}
 	var input relalg.Expr = scan
 	if full != nil {
 		input = relalg.Select{Input: scan, Predicate: full}
 	}
-	if len(in.Cursor) > 0 && len(res.Entity.PrimaryKey()) > 0 {
-		input = relalg.Sort{Input: input, OrderBy: []relalg.OrderTerm{{Field: res.Entity.PrimaryKey()[0], Dir: "asc"}}}
+	if len(keysetCols) > 0 {
+		order := make([]relalg.OrderTerm, len(keysetCols))
+		for i, c := range keysetCols {
+			order[i] = relalg.OrderTerm{Field: c, Dir: "asc"}
+		}
+		input = relalg.Sort{Input: input, OrderBy: order}
 	}
 	if len(dec.Fields) > 0 {
 		items := make([]relalg.ProjectItem, len(dec.Fields))
@@ -139,6 +146,9 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	// Feedback keys on the pre-rewrite SQL so the Estimate layer (which runs
+	// before EnforceCap wraps a LIMIT) finds the calibration record.
+	planTemplate := compiled.SQL
 	if tc.Gate != nil {
 		gd, err := tc.Gate.Check(ctx, compiled)
 		if err != nil {
@@ -175,7 +185,7 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 		_ = tc.Cache.Set(ctx, key, out)
 	}
 	if tc.Feedback != nil {
-		tc.Feedback.Record(cost.Feedback{Template: compiled.SQL, Rows: int64(len(out)), Duration: time.Since(start)})
+		tc.Feedback.Record(cost.Feedback{Template: planTemplate, Rows: int64(len(out)), Duration: time.Since(start)})
 	}
 	return Result{Content: out}, nil
 }
@@ -204,7 +214,7 @@ func runInsert(ctx context.Context, tc Context, in createInput) (Result, error) 
 	if !ok {
 		return Result{}, ErrEntityNotFound
 	}
-	dec, err := tc.Authorizer.Authorize(ctx, rbac.Request{Role: tc.Role, Entity: in.Entity, Action: entity.ActionCreate})
+	dec, err := tc.Authorizer.Authorize(ctx, rbac.Request{Role: tc.Role, Subject: tc.Subject, Entity: in.Entity, Action: entity.ActionCreate})
 	if err != nil {
 		return Result{}, err
 	}
@@ -212,6 +222,9 @@ func runInsert(ctx context.Context, tc Context, in createInput) (Result, error) 
 		return Result{}, ErrUnauthorized
 	}
 	keys := sortedKeys(in.Values)
+	if err := validateFields(res, keys...); err != nil {
+		return Result{}, err
+	}
 	cols := make([]string, len(keys))
 	tup := make(relalg.Tuple, len(keys))
 	for i, k := range keys {
@@ -289,7 +302,11 @@ func runUpdate(ctx context.Context, tc Context, in updateInput) (Result, error) 
 	if err != nil {
 		return Result{}, err
 	}
-	dec, err := tc.Authorizer.Authorize(ctx, rbac.Request{Role: tc.Role, Entity: in.Entity, Action: entity.ActionUpdate, Predicate: pred})
+	updFields := append(filterFields(in.Filter), sortedKeys(in.Set)...)
+	if err := validateFields(res, updFields...); err != nil {
+		return Result{}, err
+	}
+	dec, err := tc.Authorizer.Authorize(ctx, rbac.Request{Role: tc.Role, Subject: tc.Subject, Entity: in.Entity, Action: entity.ActionUpdate, Predicate: pred})
 	if err != nil {
 		return Result{}, err
 	}
@@ -305,7 +322,10 @@ func runUpdate(ctx context.Context, tc Context, in updateInput) (Result, error) 
 		setItems = append(setItems, relalg.SetItem{Field: k, Value: in.Set[k]})
 	}
 	target := relalg.RelationRef{Name: res.Entity.Source, Schema: res.Entity.Schema}
-	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(relalg.Update{Target: target, Predicate: full, Set: setItems})
+	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(
+		relalg.Update{Target: target, Predicate: full, Set: setItems},
+		codegen.WithPrimaryKey(res.Entity.PrimaryKey()...),
+	)
 	if err != nil {
 		return Result{}, err
 	}
@@ -360,7 +380,10 @@ func runDelete(ctx context.Context, tc Context, in deleteInput) (Result, error) 
 	if err != nil {
 		return Result{}, err
 	}
-	dec, err := tc.Authorizer.Authorize(ctx, rbac.Request{Role: tc.Role, Entity: in.Entity, Action: entity.ActionDelete, Predicate: pred})
+	if err := validateFields(res, filterFields(in.Filter)...); err != nil {
+		return Result{}, err
+	}
+	dec, err := tc.Authorizer.Authorize(ctx, rbac.Request{Role: tc.Role, Subject: tc.Subject, Entity: in.Entity, Action: entity.ActionDelete, Predicate: pred})
 	if err != nil {
 		return Result{}, err
 	}
@@ -372,7 +395,10 @@ func runDelete(ctx context.Context, tc Context, in deleteInput) (Result, error) 
 		return Result{}, ErrUnsafeWrite
 	}
 	target := relalg.RelationRef{Name: res.Entity.Source, Schema: res.Entity.Schema}
-	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(relalg.Delete{Target: target, Predicate: full})
+	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(
+		relalg.Delete{Target: target, Predicate: full},
+		codegen.WithPrimaryKey(res.Entity.PrimaryKey()...),
+	)
 	if err != nil {
 		return Result{}, err
 	}
@@ -425,7 +451,7 @@ func runExecute(ctx context.Context, tc Context, in executeInput) (Result, error
 	if res.Entity.Kind != entity.KindProcedure {
 		return Result{}, fmt.Errorf("%w: %q is not a procedure", ErrInvalidInput, in.Entity)
 	}
-	dec, err := tc.Authorizer.Authorize(ctx, rbac.Request{Role: tc.Role, Entity: in.Entity, Action: entity.ActionExecute})
+	dec, err := tc.Authorizer.Authorize(ctx, rbac.Request{Role: tc.Role, Subject: tc.Subject, Entity: in.Entity, Action: entity.ActionExecute})
 	if err != nil {
 		return Result{}, err
 	}
@@ -490,7 +516,17 @@ func runAggregate(ctx context.Context, tc Context, in aggregateInput) (Result, e
 	if err != nil {
 		return Result{}, err
 	}
-	dec, err := tc.Authorizer.Authorize(ctx, rbac.Request{Role: tc.Role, Entity: in.Entity, Action: entity.ActionAggregate, Predicate: pred})
+	aggFields := filterFields(in.Filter)
+	aggFields = append(aggFields, in.GroupBy...)
+	for _, a := range in.Aggregates {
+		if a.Field != "" {
+			aggFields = append(aggFields, a.Field)
+		}
+	}
+	if err := validateFields(res, aggFields...); err != nil {
+		return Result{}, err
+	}
+	dec, err := tc.Authorizer.Authorize(ctx, rbac.Request{Role: tc.Role, Subject: tc.Subject, Entity: in.Entity, Action: entity.ActionAggregate, Predicate: pred})
 	if err != nil {
 		return Result{}, err
 	}
@@ -505,7 +541,11 @@ func runAggregate(ctx context.Context, tc Context, in aggregateInput) (Result, e
 	}
 	calls := make([]relalg.AggCall, 0, len(in.Aggregates))
 	for _, a := range in.Aggregates {
-		calls = append(calls, relalg.AggCall{Func: a.Func, Field: a.Field})
+		f := relalg.AggFunc(a.Func)
+		if !f.Valid() {
+			return Result{}, fmt.Errorf("%w: aggregate func %q", ErrInvalidInput, a.Func)
+		}
+		calls = append(calls, relalg.AggCall{Func: f, Field: a.Field})
 	}
 	input = relalg.Aggregate{Input: input, GroupBy: in.GroupBy, Aggregates: calls}
 	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(input, codegen.WithPrimaryKey(res.Entity.PrimaryKey()...))

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/audit"
 	"github.com/nethinwei/sql-mcp-server/cache"
 	"github.com/nethinwei/sql-mcp-server/config"
 	"github.com/nethinwei/sql-mcp-server/cost"
@@ -57,6 +58,7 @@ type Result struct {
 // Context carries per-request dependencies (injected, no mutable global state).
 type Context struct {
 	Role       string
+	Subject    map[string]any // caller attributes for row-level ${subject.x} policies
 	DB         store.DB
 	Dialect    dialect.Dialect
 	Registry   *entity.Registry
@@ -65,6 +67,7 @@ type Context struct {
 	Gate       cost.Gate
 	Cache      cache.Cache[[]map[string]any]
 	Engine     *engine.Engine
+	Auditor    audit.Auditor
 	Hooks      *hook.Hooks
 	Timeout    time.Duration
 	Feedback   cost.FeedbackStore
@@ -81,6 +84,59 @@ type Tool interface {
 type CostGated interface {
 	Tool
 	CostGated()
+}
+
+// RunTool executes a tool with the cross-cutting wiring that must apply to
+// every call regardless of transport: lifecycle hooks, bounded concurrency +
+// backpressure + circuit breaking + (for read-only tools) singleflight via the
+// engine, and best-effort audit. Transports (x/mcpserver) call this instead of
+// Tool.Run directly, keeping the wiring in the core where it is unit-testable.
+// A nil Engine/Auditor/Hooks each degrade to a no-op.
+func RunTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Result, error) {
+	name := t.Info().Name
+	ctx = tc.Hooks.FireBeforeTool(ctx, name, input)
+	var res Result
+	var err error
+	if tc.Engine != nil {
+		// Only read-only tools are de-duplicated, and the key includes role and
+		// subject so callers with different row-level scopes never share a
+		// result. Writes and procedure calls use an empty key (no coalescing).
+		key := ""
+		if t.Info().ReadOnly {
+			key = name + "\x00" + tc.Role + "\x00" + fmt.Sprint(tc.Subject) + "\x00" + string(input)
+		}
+		var val any
+		val, err = tc.Engine.Submit(ctx, key, func(ctx context.Context) (any, error) {
+			return t.Run(ctx, input, tc)
+		})
+		if r, ok := val.(Result); ok {
+			res = r
+		}
+	} else {
+		res, err = t.Run(ctx, input, tc)
+	}
+	tc.Hooks.FireAfterTool(ctx, name, res.StructuredResult, err)
+	if err != nil {
+		tc.Hooks.FireOnError(ctx, err)
+	}
+	if tc.Auditor != nil {
+		_ = tc.Auditor.Record(ctx, audit.Event{
+			Time:    time.Now(),
+			Role:    tc.Role,
+			Tool:    name,
+			Input:   input,
+			Allowed: err == nil,
+			Error:   errString(err),
+		})
+	}
+	return res, err
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // Registry holds an immutable set of tools.
@@ -207,6 +263,44 @@ func andPreds(a, b relalg.Predicate) relalg.Predicate {
 	return relalg.And{Preds: []relalg.Predicate{a, b}}
 }
 
+// keysetAfter builds a strict row-value comparison predicate that resumes after
+// the cursor position for keyset pagination, plus the ordered key columns to
+// sort by. For a composite key (a,b) it expands (a,b) > (va,vb) into
+// `a>va OR (a=va AND b>vb)`; a naive `a>va AND b>vb` would skip rows. It uses
+// the longest cursor-provided prefix of pks so ORDER BY matches the predicate.
+func keysetAfter(pks []string, cursor map[string]any) (relalg.Predicate, []string) {
+	var cols []string
+	var vals []any
+	for _, pk := range pks {
+		v, ok := cursor[pk]
+		if !ok {
+			break
+		}
+		cols = append(cols, pk)
+		vals = append(vals, v)
+	}
+	if len(cols) == 0 {
+		return nil, nil
+	}
+	ors := make([]relalg.Predicate, 0, len(cols))
+	for i := range cols {
+		ands := make([]relalg.Predicate, 0, i+1)
+		for j := 0; j < i; j++ {
+			ands = append(ands, relalg.Condition{Field: cols[j], Op: relalg.OpEq, Value: vals[j]})
+		}
+		ands = append(ands, relalg.Condition{Field: cols[i], Op: relalg.OpGt, Value: vals[i]})
+		if len(ands) == 1 {
+			ors = append(ors, ands[0])
+		} else {
+			ors = append(ors, relalg.And{Preds: ands})
+		}
+	}
+	if len(ors) == 1 {
+		return ors[0], cols
+	}
+	return relalg.Or{Preds: ors}, cols
+}
+
 func toExceededError(d cost.Decision) error {
 	p := cost.Plan{}
 	if d.Plan != nil {
@@ -235,8 +329,15 @@ func maskRow(m mask.Masker, attrs []entity.Attribute, row map[string]any) {
 	}
 }
 
+// argsKey builds a collision-resistant cache-key fragment from bound args.
+// fmt.Sprint collides across type/boundary (e.g. ["a b","c"] vs ["a","b c"],
+// or "1" vs 1), which under row-level security could cross-serve rows; JSON
+// preserves string boundaries and the string-vs-number distinction.
 func argsKey(args []any) string {
-	return fmt.Sprint(args)
+	if b, err := json.Marshal(args); err == nil {
+		return string(b)
+	}
+	return fmt.Sprintf("%#v", args)
 }
 
 func sortedKeys(m map[string]any) []string {
@@ -246,6 +347,39 @@ func sortedKeys(m map[string]any) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// filterFields extracts the field names referenced by a filter.
+func filterFields(conds []condJSON) []string {
+	out := make([]string, 0, len(conds))
+	for _, c := range conds {
+		out = append(out, c.Field)
+	}
+	return out
+}
+
+// validateFields rejects any field name that is not a visible attribute of the
+// entity (by name or alias). This closes a side channel where a filter, GROUP
+// BY, or write could reference an excluded/hidden column — e.g. filtering on a
+// masked salary to infer its value. Unknown and excluded fields are treated
+// identically so the error never reveals which columns exist.
+func validateFields(res entity.Resolved, fields ...string) error {
+	if len(fields) == 0 {
+		return nil
+	}
+	allowed := make(map[string]bool, len(res.Attributes)*2)
+	for _, a := range res.Attributes {
+		allowed[a.Name] = true
+		if a.Alias != "" {
+			allowed[a.Alias] = true
+		}
+	}
+	for _, f := range fields {
+		if !allowed[f] {
+			return fmt.Errorf("%w: unknown or inaccessible field %q", ErrInvalidInput, f)
+		}
+	}
+	return nil
 }
 
 // withTimeout returns a context bounded by tc.Timeout, or ctx unchanged when

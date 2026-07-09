@@ -54,3 +54,27 @@ func TestNilValuePasses(t *testing.T) {
 		t.Fatalf("got %v, %v", got, err)
 	}
 }
+
+func TestMaskNumericPhone(t *testing.T) {
+	t.Parallel()
+	m := NewRuleMasker(nil)
+	// A phone stored as an integer must still be masked, not leaked verbatim.
+	got, err := m.Mask("phone", int64(13800138000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "138****8000" {
+		t.Fatalf("numeric phone not masked: %v", got)
+	}
+}
+
+func TestHasReportsKnownRules(t *testing.T) {
+	t.Parallel()
+	m := NewRuleMasker(nil)
+	if !m.Has("email") || !m.Has("secret") {
+		t.Error("built-in rules should be reported present")
+	}
+	if m.Has("nonexistent") {
+		t.Error("unknown rule should be reported absent")
+	}
+}

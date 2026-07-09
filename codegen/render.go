@@ -100,7 +100,11 @@ func (b *builder) renderSelect(e relalg.Expr) error {
 	}
 	switch {
 	case len(ctx.aggregates) > 0 || len(ctx.groupBy) > 0:
-		b.sql.WriteString(b.renderAggregateCols(ctx))
+		cols, err := b.renderAggregateCols(ctx)
+		if err != nil {
+			return err
+		}
+		b.sql.WriteString(cols)
 	case len(ctx.cols) > 0:
 		b.sql.WriteString(b.renderCols(ctx.cols))
 	default:
@@ -169,12 +173,18 @@ func (b *builder) renderFieldList(fields []string) string {
 	return strings.Join(parts, ", ")
 }
 
-func (b *builder) renderAggregateCols(ctx *selectCtx) string {
+func (b *builder) renderAggregateCols(ctx *selectCtx) (string, error) {
 	var parts []string
 	for _, g := range ctx.groupBy {
 		parts = append(parts, b.qident(g))
 	}
 	for _, a := range ctx.aggregates {
+		// Defense in depth: the aggregate function is whitelisted here even
+		// though tool and MCP schema also validate it — a raw function name
+		// must never be interpolated into SQL unchecked.
+		if !a.Func.Valid() {
+			return "", fmt.Errorf("%w: %q", relalg.ErrInvalidAggFunc, a.Func)
+		}
 		field := "*"
 		if a.Field != "" {
 			field = b.qident(a.Field)
@@ -182,9 +192,9 @@ func (b *builder) renderAggregateCols(ctx *selectCtx) string {
 		if a.Distinct {
 			field = "DISTINCT " + field
 		}
-		parts = append(parts, strings.ToUpper(a.Func)+"("+field+")")
+		parts = append(parts, strings.ToUpper(string(a.Func))+"("+field+")")
 	}
-	return strings.Join(parts, ", ")
+	return strings.Join(parts, ", "), nil
 }
 
 func (b *builder) renderPredicate(p relalg.Predicate) error {

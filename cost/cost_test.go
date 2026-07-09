@@ -27,7 +27,7 @@ func TestEstimateHardRejectFullScan(t *testing.T) {
 	t.Parallel()
 	est := Estimate{
 		Explainer: FakeExplainer{Plan: Plan{ScanType: ScanFull, StatsFresh: true}},
-		Threshold: Threshold{RejectFullScan: true, HardScore: 90, SoftScore: 50},
+		Threshold: Threshold{RejectFullScan: true, HardScore: 40, SoftScore: 60},
 	}
 	d, err := est.Check(context.Background(), codegen.Compiled{SQL: "SELECT * FROM t"})
 	if err != nil {
@@ -42,7 +42,7 @@ func TestEstimateSoftReject(t *testing.T) {
 	t.Parallel()
 	est := Estimate{
 		Explainer: FakeExplainer{Plan: Plan{ScanType: ScanSeq, StatsFresh: true}}, // score 60
-		Threshold: Threshold{SoftScore: 50, HardScore: 80},
+		Threshold: Threshold{SoftScore: 70, HardScore: 30},
 	}
 	d, _ := est.Check(context.Background(), codegen.Compiled{})
 	if !d.Soft {
@@ -66,7 +66,7 @@ func TestEstimatePass(t *testing.T) {
 	t.Parallel()
 	est := Estimate{
 		Explainer: FakeExplainer{Plan: Plan{ScanType: ScanIndex, StatsFresh: true}}, // 85
-		Threshold: Threshold{SoftScore: 90, HardScore: 95},
+		Threshold: Threshold{SoftScore: 70, HardScore: 30},
 	}
 	d, _ := est.Check(context.Background(), codegen.Compiled{})
 	if !d.Allow {
@@ -167,7 +167,7 @@ func TestNewGateFromCapabilities(t *testing.T) {
 	caps := dialect.Postgres{}.Capabilities()
 	g := NewGateFromCapabilities(caps,
 		FakeExplainer{Plan: Plan{ScanType: ScanIndex, StatsFresh: true}},
-		Threshold{SoftScore: 90, HardScore: 95, MaxRows: 1000}, nil)
+		Threshold{SoftScore: 70, HardScore: 30, MaxRows: 1000}, nil)
 	d, _ := g.Check(context.Background(), codegen.Compiled{ReadOnly: true})
 	if !d.Allow {
 		t.Fatalf("expected pass, got %+v", d)
@@ -188,5 +188,42 @@ func TestNewGateFromCapabilitiesSQLiteSkipsEstimate(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(names, ","), "estimate") {
 		t.Fatalf("SQLite should not assemble Estimate layer: %v", names)
+	}
+}
+
+func TestWriteGuard(t *testing.T) {
+	t.Parallel()
+	var wg WriteGuard
+	if d, _ := wg.Check(context.Background(), codegen.Compiled{ReadOnly: true}); !d.Allow {
+		t.Fatal("read should pass the write guard")
+	}
+	if d, _ := wg.Check(context.Background(), codegen.Compiled{IsPKPoint: true}); !d.Allow {
+		t.Fatal("PK point write should pass")
+	}
+	d, _ := wg.Check(context.Background(), codegen.Compiled{SQL: "UPDATE t SET x=1 WHERE status='a'"})
+	if d.Allow || len(d.Hints) == 0 {
+		t.Fatalf("non-PK write must be hard-rejected with hints, got %+v", d)
+	}
+}
+
+func TestNewGateFromCapabilitiesWriteGuardMySQL(t *testing.T) {
+	t.Parallel()
+	// MySQL has no trustworthy Estimate; WriteGuard must still block non-PK
+	// writes deterministically.
+	caps := dialect.MySQL{}.Capabilities()
+	g := NewGateFromCapabilities(caps, nil, Threshold{RequirePKForWrite: true, MaxRows: 1000}, nil)
+	d, err := g.Check(context.Background(), codegen.Compiled{SQL: "UPDATE t SET x=1", IsPKPoint: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Allow {
+		t.Fatal("non-PK write must be rejected by WriteGuard on MySQL")
+	}
+	dpk, err := g.Check(context.Background(), codegen.Compiled{SQL: "UPDATE t SET x=1 WHERE id=1", IsPKPoint: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dpk.Allow {
+		t.Fatal("PK point write should pass")
 	}
 }

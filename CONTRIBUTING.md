@@ -153,6 +153,10 @@ Never discard an error with `_` unless a comment explains why.
   goroutines.
 - **I12** `Auditor.Record` never blocks the main flow.
 - **I13** `in-flight > limit => ErrOverloaded`; no goroutine pile-up.
+- **I14** A non-PK-point write (UPDATE/DELETE) is rejected by WriteGuard when
+  `requirePKForWrite` is set.
+- **I15** filter/group-by/set/values field names must be visible entity
+  attributes; a hidden column can be neither a predicate nor a write target.
 
 ## Commit flow
 

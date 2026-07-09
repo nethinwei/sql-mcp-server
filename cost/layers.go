@@ -85,10 +85,14 @@ func (e Estimate) Check(ctx context.Context, c codegen.Compiled) (Decision, erro
 	// Note: MaxRows/MaxBytes do NOT reject here. Estimates can be wrong; the
 	// EnforceCap layer uses MaxRows to wrap reads in a deterministic LIMIT as a
 	// backstop, which is the whole point of defense in depth.
-	if th.HardScore > 0 && score.Value >= th.HardScore {
+	//
+	// Score is 0-100 where HIGHER IS SAFER (ScorePlan: point=100, full scan=20).
+	// A plan scoring below HardScore is a hard reject; below SoftScore is a soft
+	// reject (suggest LIMIT). Callers configure SoftScore >= HardScore.
+	if th.HardScore > 0 && score.Value < th.HardScore {
 		return deny(false)
 	}
-	if th.SoftScore > 0 && score.Value >= th.SoftScore {
+	if th.SoftScore > 0 && score.Value < th.SoftScore {
 		return deny(true)
 	}
 	return Decision{Allow: true, Plan: &plan, Score: ptrScore(score)}, nil
@@ -112,4 +116,29 @@ func (e EnforceCap) Check(_ context.Context, c codegen.Compiled) (Decision, erro
 	rewritten := c
 	rewritten.SQL = "SELECT * FROM (" + c.SQL + ") AS sub LIMIT " + strconv.FormatInt(e.HardRows, 10)
 	return Decision{Allow: true, Rewritten: &rewritten}, nil
+}
+
+// WriteGuard is a deterministic write-safety layer, independent of EXPLAIN. A
+// write (UPDATE/DELETE) whose predicate is not a full primary-key point lookup
+// is hard-rejected. This backstops databases whose row estimates are
+// unreliable (MySQL/OceanBase), where an unbounded WHERE could touch millions
+// of rows. Point writes are already bypassed by StaticRule's PK whitelist;
+// known-good bulk writes can be admitted via AllowTemplates after review.
+type WriteGuard struct{}
+
+// Name implements Layer.
+func (WriteGuard) Name() string { return "write-guard" }
+
+// Check implements Layer.
+func (WriteGuard) Check(_ context.Context, c codegen.Compiled) (Decision, error) {
+	if c.ReadOnly || c.IsPKPoint {
+		return Decision{Allow: true}, nil
+	}
+	return Decision{
+		Allow: false,
+		Hints: []string{
+			"scope the write with a primary-key equality filter (e.g. id = ...)",
+			"or add the exact statement to allowTemplates after review",
+		},
+	}, nil
 }

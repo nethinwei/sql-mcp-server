@@ -173,8 +173,10 @@ func TestRLSRowFilterAndMasking(t *testing.T) {
 		}},
 		Tools: config.DefaultToolFlags(),
 		Cost: config.CostConfig{
-			Enabled: true, SoftScore: 40, HardScore: 70, MaxRows: 10000,
-			WhitelistPKPoint: true,
+			// Score thresholds left disabled (0): this test verifies RLS +
+			// masking, not the score gate. A small table is a Seq Scan (low
+			// safety score) that EnforceCap bounds by MaxRows instead.
+			Enabled: true, MaxRows: 10000, WhitelistPKPoint: true,
 		},
 	}
 	cfg.ApplyDefaults()
@@ -255,10 +257,10 @@ func TestEnforceCapLimitsRows(t *testing.T) {
 			Roles:  config.RoleConfig{Read: []string{"reader"}},
 		}},
 		Tools: config.DefaultToolFlags(),
-		// No RejectFullScan and high score thresholds so Estimate passes; EnforceCap
-		// wraps the query in LIMIT 1 (MaxRows).
+		// Score thresholds disabled (0) so Estimate passes on a Seq Scan;
+		// EnforceCap deterministically wraps the query in LIMIT 1 (MaxRows).
 		Cost: config.CostConfig{
-			Enabled: true, SoftScore: 90, HardScore: 95, MaxRows: 1,
+			Enabled: true, MaxRows: 1,
 		},
 	}
 	cfg.ApplyDefaults()

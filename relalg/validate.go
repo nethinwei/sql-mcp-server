@@ -9,6 +9,10 @@ import (
 // whitelist.
 var ErrInvalidOp = errors.New("relalg: invalid operator")
 
+// ErrInvalidAggFunc is returned when an aggregate uses a function outside the
+// whitelist.
+var ErrInvalidAggFunc = errors.New("relalg: invalid aggregate function")
+
 // ErrUnknownPredicate is returned when ValidatePredicate encounters a predicate
 // type it does not recognize.
 var ErrUnknownPredicate = errors.New("relalg: unknown predicate")

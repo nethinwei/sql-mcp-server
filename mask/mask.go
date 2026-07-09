@@ -51,6 +51,14 @@ func (m *RuleMasker) Mask(rule string, value any) (any, error) {
 	return fn(value)
 }
 
+// Has reports whether a rule name is registered. Assemblers call it to reject a
+// misconfigured mask rule at startup rather than silently leaking plaintext at
+// read time.
+func (m *RuleMasker) Has(name string) bool {
+	_, ok := m.rules[name]
+	return ok
+}
+
 func builtins() map[string]Rule {
 	return map[string]Rule{
 		"email":  maskEmail,
@@ -72,6 +80,23 @@ func asString(v any) (string, bool) {
 	return "", false
 }
 
+// coerceString renders scalars — including numeric IDs stored as int/float — to
+// a string, so a phone or ID card held as a number is still masked rather than
+// leaked verbatim.
+func coerceString(v any) (string, bool) {
+	switch s := v.(type) {
+	case string:
+		return s, true
+	case []byte:
+		return string(s), true
+	case fmt.Stringer:
+		return s.String(), true
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+		return fmt.Sprint(s), true
+	}
+	return "", false
+}
+
 func maskEmail(v any) (any, error) {
 	s, ok := asString(v)
 	if !ok || s == "" {
@@ -88,7 +113,7 @@ func maskEmail(v any) (any, error) {
 }
 
 func maskPhone(v any) (any, error) {
-	s, ok := asString(v)
+	s, ok := coerceString(v)
 	if !ok || len(s) < 8 {
 		return v, nil
 	}
@@ -96,7 +121,7 @@ func maskPhone(v any) (any, error) {
 }
 
 func maskIDCard(v any) (any, error) {
-	s, ok := asString(v)
+	s, ok := coerceString(v)
 	if !ok || len(s) < 8 {
 		return v, nil
 	}

@@ -75,46 +75,60 @@ func New(opts ...Option) (*Engine, error) {
 	}, nil
 }
 
-// Submit schedules fn under backpressure. It returns ErrOverloaded if the
-// in-flight queue is full, ErrCircuitOpen if the breaker is open. Concurrent
-// calls with the same key share a single execution (singleflight). Panics in fn
-// are recovered and returned as errors.
-func (e *Engine) Submit(ctx context.Context, key string, fn func(context.Context) error) error {
+// Submit schedules fn under backpressure and returns fn's result value and
+// error. It returns ErrOverloaded if the in-flight queue is full, ErrCircuitOpen
+// if the breaker is open, ErrRateLimited if concurrency exceeds the adaptive
+// limit. Concurrent calls with the same non-empty key share a single execution
+// (singleflight) and all receive the leader's result. An empty key opts out of
+// de-duplication (writes/unique ops). Panics in fn are recovered as errors.
+func (e *Engine) Submit(ctx context.Context, key string, fn func(context.Context) (any, error)) (any, error) {
 	if e.closed.Load() {
-		return ErrClosed
+		return nil, ErrClosed
 	}
 	if e.breaker != nil {
 		if err := e.breaker.Allow(); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	select {
 	case e.inflight <- struct{}{}:
 	default:
-		return ErrOverloaded
+		return nil, ErrOverloaded
 	}
 	defer func() { <-e.inflight }()
-	return e.sf.Do(key, func() error {
+	exec := func() (any, error) {
+		// AIMD admission: reject fast when concurrency exceeds the adaptive
+		// limit, then bound IO concurrency by the pool semaphore.
+		if e.limiter != nil {
+			if err := e.limiter.Acquire(); err != nil {
+				return nil, err
+			}
+			defer e.limiter.Release()
+		}
 		select {
 		case e.iosem <- struct{}{}:
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
 		defer func() { <-e.iosem }()
 		start := time.Now()
-		err := e.runSafe(ctx, fn)
+		val, err := e.runSafe(ctx, fn)
 		if e.limiter != nil {
 			e.limiter.OnResult(err, time.Since(start))
 		}
 		if e.breaker != nil {
 			e.breaker.Record(err == nil)
 		}
-		return err
-	})
+		return val, err
+	}
+	if key == "" {
+		return exec()
+	}
+	return e.sf.Do(key, exec)
 }
 
 // runSafe recovers panics from fn so a single bad call cannot crash the process.
-func (e *Engine) runSafe(ctx context.Context, fn func(context.Context) error) (err error) {
+func (e *Engine) runSafe(ctx context.Context, fn func(context.Context) (any, error)) (val any, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("engine: panic recovered: %v", r)
@@ -126,7 +140,8 @@ func (e *Engine) runSafe(ctx context.Context, fn func(context.Context) error) (e
 // Close marks the engine closed; subsequent Submit returns ErrClosed.
 func (e *Engine) Close() { e.closed.Store(true) }
 
-// singleflight deduplicates concurrent calls by key using only the standard library.
+// singleflight deduplicates concurrent calls by key using only the standard
+// library. Waiters receive the leader's result value and error.
 type singleflight struct {
 	mu sync.Mutex
 	m  map[string]*call
@@ -134,11 +149,14 @@ type singleflight struct {
 
 type call struct {
 	wg  sync.WaitGroup
+	val any
 	err error
 }
 
-// Do executes fn once for concurrent callers with the same key.
-func (s *singleflight) Do(key string, fn func() error) error {
+// Do executes fn once for concurrent callers with the same key; all callers
+// receive the same result value and error. wg.Done and map cleanup are deferred
+// so a panic in fn cannot deadlock waiters.
+func (s *singleflight) Do(key string, fn func() (any, error)) (any, error) {
 	s.mu.Lock()
 	if s.m == nil {
 		s.m = make(map[string]*call)
@@ -146,16 +164,18 @@ func (s *singleflight) Do(key string, fn func() error) error {
 	if c, ok := s.m[key]; ok {
 		s.mu.Unlock()
 		c.wg.Wait()
-		return c.err
+		return c.val, c.err
 	}
 	c := &call{}
 	c.wg.Add(1)
 	s.m[key] = c
 	s.mu.Unlock()
-	c.err = fn()
-	c.wg.Done()
-	s.mu.Lock()
-	delete(s.m, key)
-	s.mu.Unlock()
-	return c.err
+	defer func() {
+		s.mu.Lock()
+		delete(s.m, key)
+		s.mu.Unlock()
+	}()
+	defer c.wg.Done()
+	c.val, c.err = fn()
+	return c.val, c.err
 }

@@ -168,6 +168,10 @@ func predicateOf(e relalg.Expr) relalg.Predicate {
 			walk(n.Input)
 		case relalg.Aggregate:
 			walk(n.Input)
+		case relalg.Update:
+			preds = append(preds, n.Predicate)
+		case relalg.Delete:
+			preds = append(preds, n.Predicate)
 		}
 	}
 	walk(e)
@@ -185,8 +189,8 @@ func isPKPoint(p relalg.Predicate, pkCols []string) bool {
 	if len(pkCols) == 0 {
 		return false
 	}
-	conds := flattenAnd(p)
-	if len(conds) != len(pkCols) {
+	conds, pure := flattenAnd(p)
+	if !pure || len(conds) != len(pkCols) {
 		return false
 	}
 	seen := make(map[string]bool, len(pkCols))
@@ -203,19 +207,28 @@ func isPKPoint(p relalg.Predicate, pkCols []string) bool {
 	return len(seen) == len(pkCols)
 }
 
-// flattenAnd returns the leaf Conditions of an And-chain (or a single leaf).
-func flattenAnd(p relalg.Predicate) []relalg.Condition {
+// flattenAnd returns the leaf Conditions of an And-chain and whether the
+// predicate is a pure conjunction of Conditions. A predicate containing Or,
+// Not, or IsNull is not pure and can never be a primary-key point lookup, so
+// the caller must treat !pure as "not a PK point" rather than silently
+// dropping those branches (which would let `id=5 OR <expensive>` masquerade
+// as a point read and bypass the cost gate).
+func flattenAnd(p relalg.Predicate) (conds []relalg.Condition, pure bool) {
 	switch pp := p.(type) {
 	case nil:
-		return nil
+		return nil, true
 	case relalg.Condition:
-		return []relalg.Condition{pp}
+		return []relalg.Condition{pp}, true
 	case relalg.And:
 		var out []relalg.Condition
 		for _, q := range pp.Preds {
-			out = append(out, flattenAnd(q)...)
+			cs, ok := flattenAnd(q)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, cs...)
 		}
-		return out
+		return out, true
 	}
-	return nil
+	return nil, false
 }

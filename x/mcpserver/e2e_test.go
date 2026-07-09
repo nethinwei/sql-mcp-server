@@ -54,7 +54,7 @@ func setupApp(t *testing.T) (*bootstrap.App, func()) {
 		}},
 		Tools: config.DefaultToolFlags(),
 		Cost: config.CostConfig{
-			Enabled: true, SoftScore: 40, HardScore: 70, MaxRows: 10000,
+			Enabled: true, SoftScore: 60, HardScore: 40, MaxRows: 10000,
 			RejectFullScan: true, WhitelistPKPoint: true,
 		},
 	}

@@ -84,6 +84,39 @@ func TestAuthorizeFieldProjection(t *testing.T) {
 	}
 }
 
+func TestAuthorizeResolvesSubjectPlaceholder(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{
+		Name: "docs", Source: "docs",
+		Attributes: []entity.Attribute{{Name: "id"}, {Name: "tenant_id"}},
+		Role:       entity.RoleAccess{entity.ActionRead: {"reader"}},
+		RowPolicies: entity.RowPolicies{
+			"reader": relalg.Condition{Field: "tenant_id", Op: relalg.OpEq, Value: "${subject.tenant_id}"},
+		},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	a := NewRoleAuthorizer(reg)
+	dec, err := a.Authorize(context.Background(), Request{
+		Role: "reader", Entity: "docs", Action: entity.ActionRead,
+		Subject: map[string]any{"tenant_id": int64(42)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cond, ok := dec.RowFilter.(relalg.Condition)
+	if !ok {
+		t.Fatalf("row filter type = %T", dec.RowFilter)
+	}
+	if cond.Value != int64(42) {
+		t.Fatalf("placeholder not resolved: %v", cond.Value)
+	}
+	// Missing subject attribute -> nil (fail-closed, matches no rows).
+	dec2, _ := a.Authorize(context.Background(), Request{Role: "reader", Entity: "docs", Action: entity.ActionRead})
+	if c := dec2.RowFilter.(relalg.Condition); c.Value != nil {
+		t.Fatalf("missing subject should resolve to nil, got %v", c.Value)
+	}
+}
+
 func TestAuthorizeAllVisibleWhenNoFields(t *testing.T) {
 	t.Parallel()
 	a := NewRoleAuthorizer(testRegistry(t))

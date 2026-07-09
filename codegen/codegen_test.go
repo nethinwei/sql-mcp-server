@@ -1,6 +1,7 @@
 package codegen
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -281,5 +282,85 @@ func TestCompileAndOrNotIsNull(t *testing.T) {
 	}
 	if !strings.Contains(c.SQL, "AND") || !strings.Contains(c.SQL, "OR") || !strings.Contains(c.SQL, "IS NOT NULL") {
 		t.Fatalf("got %q", c.SQL)
+	}
+}
+
+func TestCompileIsPKPointRejectsOr(t *testing.T) {
+	t.Parallel()
+	r := NewRenderer(dialect.Postgres{})
+	// `id=5 OR name='x'` contains a PK equality but the OR branch can match
+	// arbitrary rows; it must NOT be whitelisted as a point lookup.
+	orExpr := relalg.Select{
+		Predicate: relalg.Or{Preds: []relalg.Predicate{
+			relalg.Condition{Field: "id", Op: relalg.OpEq, Value: 5},
+			relalg.Condition{Field: "name", Op: relalg.OpEq, Value: "x"},
+		}},
+		Input: relalg.Scan{Relation: relalg.RelationRef{Name: "users"}},
+	}
+	c, err := r.Compile(orExpr, WithPrimaryKey("id"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.IsPKPoint {
+		t.Fatal("OR predicate must not be a PK point lookup")
+	}
+	// `id=5 AND (a=1 OR b=2)`: the AND holds a full-PK equality but the nested
+	// OR makes the whole predicate non-point.
+	andOr := relalg.Select{
+		Predicate: relalg.And{Preds: []relalg.Predicate{
+			relalg.Condition{Field: "id", Op: relalg.OpEq, Value: 5},
+			relalg.Or{Preds: []relalg.Predicate{
+				relalg.Condition{Field: "a", Op: relalg.OpEq, Value: 1},
+				relalg.Condition{Field: "b", Op: relalg.OpEq, Value: 2},
+			}},
+		}},
+		Input: relalg.Scan{Relation: relalg.RelationRef{Name: "users"}},
+	}
+	c2, err := r.Compile(andOr, WithPrimaryKey("id"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.IsPKPoint {
+		t.Fatal("AND containing OR must not be a PK point lookup")
+	}
+}
+
+func TestCompileRejectsInvalidAggFunc(t *testing.T) {
+	t.Parallel()
+	r := NewRenderer(dialect.Postgres{})
+	expr := relalg.Aggregate{
+		Aggregates: []relalg.AggCall{{Func: "count(*) FROM t; DROP TABLE t--"}},
+		Input:      relalg.Scan{Relation: relalg.RelationRef{Name: "users"}},
+	}
+	if _, err := r.Compile(expr); !errors.Is(err, relalg.ErrInvalidAggFunc) {
+		t.Fatalf("got %v, want ErrInvalidAggFunc", err)
+	}
+}
+
+func TestCompileWriteIsPKPoint(t *testing.T) {
+	t.Parallel()
+	r := NewRenderer(dialect.Postgres{})
+	upd := relalg.Update{
+		Target:    relalg.RelationRef{Name: "users"},
+		Predicate: relalg.Condition{Field: "id", Op: relalg.OpEq, Value: 1},
+		Set:       []relalg.SetItem{{Field: "email", Value: "x"}},
+	}
+	c, err := r.Compile(upd, WithPrimaryKey("id"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.IsPKPoint {
+		t.Fatal("UPDATE by full PK equality should be IsPKPoint")
+	}
+	del := relalg.Delete{
+		Target:    relalg.RelationRef{Name: "users"},
+		Predicate: relalg.Condition{Field: "status", Op: relalg.OpEq, Value: "a"},
+	}
+	c2, err := r.Compile(del, WithPrimaryKey("id"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.IsPKPoint {
+		t.Fatal("DELETE by a non-PK column must not be IsPKPoint")
 	}
 }

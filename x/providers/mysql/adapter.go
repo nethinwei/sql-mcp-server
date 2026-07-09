@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"regexp"
 
-	_ "github.com/go-sql-driver/mysql" // register the "mysql" driver
+	mysqldriver "github.com/go-sql-driver/mysql"
 
 	"github.com/nethinwei/sql-mcp-server/store"
 )
@@ -20,9 +20,22 @@ type Adapter struct {
 	db *sql.DB
 }
 
-// NewAdapter opens a MySQL-compatible database and pings it (fail-fast).
+// NewAdapter opens a MySQL-compatible database and pings it (fail-fast). It
+// injects sql_safe_updates=1 as a DB-native backstop against full-table
+// UPDATE/DELETE (defense in depth alongside the cost gate's WriteGuard); a DSN
+// that sets sql_safe_updates explicitly is respected.
 func NewAdapter(dsn string) (*Adapter, error) {
-	db, err := sql.Open("mysql", dsn)
+	cfg, err := mysqldriver.ParseDSN(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("mysql: parse dsn: %w", err)
+	}
+	if cfg.Params == nil {
+		cfg.Params = map[string]string{}
+	}
+	if _, ok := cfg.Params["sql_safe_updates"]; !ok {
+		cfg.Params["sql_safe_updates"] = "1"
+	}
+	db, err := sql.Open("mysql", cfg.FormatDSN())
 	if err != nil {
 		return nil, err
 	}

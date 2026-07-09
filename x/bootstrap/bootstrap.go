@@ -75,10 +75,19 @@ func (a *App) ToolContext(role string) tool.Context {
 		Gate:       a.Gate,
 		Cache:      a.Cache,
 		Engine:     a.Engine,
+		Auditor:    a.Auditor,
 		Hooks:      a.Hooks,
 		Timeout:    a.QueryTimeout,
 		Feedback:   a.Feedback,
 	}
+}
+
+// ToolContextForSubject builds a per-request tool.Context for a role plus
+// subject attributes (referenced by row-level ${subject.x} policies).
+func (a *App) ToolContextForSubject(role string, subject map[string]any) tool.Context {
+	tc := a.ToolContext(role)
+	tc.Subject = subject
+	return tc
 }
 
 // Close releases provider and audit resources.
@@ -189,7 +198,11 @@ func AssembleWithProvider(cfg *config.Config, prov Provider) (*App, error) {
 	}
 	var msk mask.Masker = mask.NoopMasker{}
 	if cfg.Mask.EnabledOrDefault() {
-		msk = mask.NewRuleMasker(nil)
+		rm := mask.NewRuleMasker(nil)
+		if err := validateMaskRules(rm, entities); err != nil {
+			return nil, err
+		}
+		msk = rm
 	}
 	return &App{
 		Provider:     prov,
@@ -280,6 +293,7 @@ func toThreshold(c config.CostConfig) cost.Threshold {
 		MaxBytes:          c.MaxBytes,
 		RejectFullScan:    c.RejectFullScan,
 		WhitelistPKPoint:  c.WhitelistPKPoint,
+		RequirePKForWrite: c.RequirePKForWriteOrDefault(),
 		RequireKnownScan:  c.RequireKnownScan,
 		RequireFreshStats: c.RequireFreshStats,
 		AllowTemplates:    c.AllowTemplates,
@@ -363,6 +377,19 @@ func RedactDSN(dsn string) string {
 		return pgPassRe.ReplaceAllString(dsn, "${1}***${2}")
 	}
 	return mysqlPassRe.ReplaceAllString(dsn, "${1}***${2}")
+}
+
+// validateMaskRules fails fast if a configured mask rule is unknown, so a typo
+// never silently leaks plaintext at read time.
+func validateMaskRules(m *mask.RuleMasker, entities []entity.Entity) error {
+	for _, e := range entities {
+		for _, a := range e.Attributes {
+			if a.Mask != "" && !m.Has(a.Mask) {
+				return fmt.Errorf("entity %q field %q: unknown mask rule %q", e.Name, a.Name, a.Mask)
+			}
+		}
+	}
+	return nil
 }
 
 // configToEntities converts config entities to the core entity model.
