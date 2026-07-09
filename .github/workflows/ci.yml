@@ -77,7 +77,7 @@ jobs:
     timeout-minutes: 25
     strategy:
       matrix:
-        db: [postgres, mysql]
+        db: [postgres, mysql, oceanbase]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6

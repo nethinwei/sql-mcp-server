@@ -95,6 +95,8 @@ func (i Introspector) primaryKey(ctx context.Context, schema, table string) ([]e
 		 FROM information_schema.table_constraints tc
 		 JOIN information_schema.key_column_usage kcu
 		   ON tc.constraint_name = kcu.constraint_name
+		  AND tc.table_schema = kcu.table_schema
+		  AND tc.table_name = kcu.table_name
 		 WHERE tc.table_schema=? AND tc.table_name=? AND tc.constraint_type='PRIMARY KEY'
 		 ORDER BY kcu.ordinal_position`, schema, table)
 	if err != nil {
