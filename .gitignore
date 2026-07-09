@@ -1,0 +1,21 @@
+# binaries
+/sql-mcp-server
+/cmd/sql-mcp-server/sql-mcp-server
+/dist/
+
+# test / coverage
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# profiling
+default.pgo
+*.prof
+cpu.pprof
+mem.pprof
+
+# editor / os
+.idea/
+.vscode/
+.DS_Store

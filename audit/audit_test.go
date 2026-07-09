@@ -1,0 +1,68 @@
+package audit
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/nethinwei/sql-mcp-server/cost"
+)
+
+func TestAsyncAuditorRecordsToSink(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var got []Event
+	sink := func(e Event) error {
+		mu.Lock()
+		got = append(got, e)
+		mu.Unlock()
+		return nil
+	}
+	a := NewAsyncAuditor(sink, 8)
+	_ = a.Record(context.Background(), Event{Tool: "read_records", Role: "reader", Cost: &cost.Plan{}})
+	a.Close()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 || got[0].Tool != "read_records" {
+		t.Fatalf("sink got %v", got)
+	}
+}
+
+func TestAsyncAuditorDropsWhenFull(t *testing.T) {
+	t.Parallel()
+	block := make(chan struct{})
+	sink := func(_ Event) error { <-block; return nil } // block flusher
+	a := NewAsyncAuditor(sink, 2)
+	_ = a.Record(context.Background(), Event{Tool: "x"})
+	_ = a.Record(context.Background(), Event{Tool: "x"}) // queue full now
+	// queue full; next records should drop
+	for i := 0; i < 5; i++ {
+		_ = a.Record(context.Background(), Event{Tool: "drop"})
+	}
+	if a.Dropped() == 0 {
+		t.Fatal("expected drops on full queue")
+	}
+	close(block)
+	a.Close()
+}
+
+func TestNoopAuditor(t *testing.T) {
+	t.Parallel()
+	n := NoopAuditor{}
+	if err := n.Record(context.Background(), Event{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecordNonBlocking(t *testing.T) {
+	t.Parallel()
+	a := NewAsyncAuditor(nil, 1)
+	start := time.Now()
+	_ = a.Record(context.Background(), Event{})
+	_ = a.Record(context.Background(), Event{}) // dropped, not blocked
+	if time.Since(start) > 100*time.Millisecond {
+		t.Fatal("Record blocked")
+	}
+	a.Close()
+}

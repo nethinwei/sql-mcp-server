@@ -1,0 +1,66 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - revive
+    - gocritic
+    - misspell
+    - depguard
+  settings:
+    # Core packages must be absolutely clean: stdlib + sibling core packages only.
+    # No external dependencies, no imports from x/. x/ depends on core, never the
+    # reverse. This rule makes the architecture boundary machine-enforced.
+    depguard:
+      rules:
+        core-purity:
+          list-mode: strict
+          files:
+            - "config/**.go"
+            - "relalg/**.go"
+            - "codegen/**.go"
+            - "entity/**.go"
+            - "dialect/**.go"
+            - "store/**.go"
+            - "rbac/**.go"
+            - "mask/**.go"
+            - "cost/**.go"
+            - "audit/**.go"
+            - "tool/**.go"
+            - "cache/**.go"
+            - "hook/**.go"
+            - "ratelimit/**.go"
+            - "engine/**.go"
+            - "introspect/**.go"
+          allow:
+            - $gostd
+            - github.com/nethinwei/sql-mcp-server
+    revive:
+      rules:
+        # Interface contracts are documented at the interface; requiring every
+        # concrete method to repeat a doc comment is noise.
+        - name: exported
+          disabled: true
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [errcheck, gocritic]
+
+formatters:
+  enable:
+    - gofmt
+  settings:
+    gofmt:
+      simplify: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
