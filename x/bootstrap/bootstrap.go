@@ -106,9 +106,18 @@ func Load(path string) (*config.Config, error) {
 	return &cfg, nil
 }
 
-// Assemble opens the provider and wires the application from cfg.
+// Assemble opens the provider and wires the application from cfg, using the
+// default EnvFileResolver for secret placeholders.
 func Assemble(cfg *config.Config) (*App, error) {
-	dsn, err := resolveSecrets(cfg.Database.DSN)
+	return AssembleWithResolver(cfg, EnvFileResolver{})
+}
+
+// AssembleWithResolver resolves secrets with the given resolver, opens the
+// provider, and wires the application. Use a custom resolver to integrate
+// secret managers (Vault, AWS Secrets Manager, etc.) without coupling core to
+// any specific backend.
+func AssembleWithResolver(cfg *config.Config, r SecretResolver) (*App, error) {
+	dsn, err := r.Resolve(cfg.Database.DSN)
 	if err != nil {
 		return nil, err
 	}
@@ -306,6 +315,36 @@ func fileSink(path string) audit.Sink {
 		_, err = f.Write(b)
 		return err
 	}
+}
+
+// SecretResolver resolves ${...} placeholders in a string (e.g. a DSN).
+// EnvFileResolver is the built-in implementation; custom implementations can
+// back this by Vault, AWS Secrets Manager, GCP Secret Manager, etc., without
+// coupling core to any specific backend.
+type SecretResolver interface {
+	Resolve(s string) (string, error)
+}
+
+// EnvFileResolver resolves ${ENV} (environment variables) and ${file:/path}
+// (file contents, e.g. Kubernetes Secret volume mounts).
+type EnvFileResolver struct{}
+
+// Resolve implements SecretResolver.
+func (EnvFileResolver) Resolve(s string) (string, error) { return resolveSecrets(s) }
+
+var (
+	pgPassRe    = regexp.MustCompile(`(://[^:/@]+:)[^@]+(@)`)
+	mysqlPassRe = regexp.MustCompile(`^([^:@]+:)[^@]+(@tcp)`)
+)
+
+// RedactDSN returns dsn with any password replaced by ***, for safe logging.
+// It handles PostgreSQL URI form (scheme://user:pass@host) and MySQL DSN form
+// (user:pass@tcp(host)); DSNs without a password are returned unchanged.
+func RedactDSN(dsn string) string {
+	if pgPassRe.MatchString(dsn) {
+		return pgPassRe.ReplaceAllString(dsn, "${1}***${2}")
+	}
+	return mysqlPassRe.ReplaceAllString(dsn, "${1}***${2}")
 }
 
 // configToEntities converts config entities to the core entity model.

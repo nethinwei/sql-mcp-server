@@ -143,3 +143,35 @@ func TestNewProviderUnsupported(t *testing.T) {
 		t.Fatal("expected error for invalid mysql dsn")
 	}
 }
+
+func TestRedactDSN(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ in, want string }{
+		{"postgres://user:secret@host:5432/db", "postgres://user:***@host:5432/db"},
+		{"postgresql://u:p@h/db", "postgresql://u:***@h/db"},
+		{"user:secret@tcp(127.0.0.1:3306)/db", "user:***@tcp(127.0.0.1:3306)/db"},
+		{"postgres://user@host/db", "postgres://user@host/db"},
+	}
+	for _, c := range cases {
+		if got := RedactDSN(c.in); got != c.want {
+			t.Errorf("RedactDSN(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestEnvFileResolver(t *testing.T) {
+	t.Parallel()
+	os.Setenv("TEST_RES_VAR", "val")
+	defer os.Unsetenv("TEST_RES_VAR")
+	r := EnvFileResolver{}
+	got, err := r.Resolve("x=${TEST_RES_VAR}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "x=val" {
+		t.Fatalf("got %q, want x=val", got)
+	}
+	if _, err := r.Resolve("${MISSING_RES_ZZZ}"); err == nil {
+		t.Fatal("expected error for missing env")
+	}
+}
