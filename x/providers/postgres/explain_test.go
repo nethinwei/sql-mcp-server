@@ -13,8 +13,9 @@ func TestParsePGExplainSeqScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.ScanType != cost.ScanSeq {
-		t.Fatalf("ScanType = %v, want ScanSeq", p.ScanType)
+	// PostgreSQL Seq Scan reads the whole heap -> ScanFull.
+	if p.ScanType != cost.ScanFull {
+		t.Fatalf("ScanType = %v, want ScanFull", p.ScanType)
 	}
 	if p.TotalCost != 123.45 || p.EstimatedRows != 100 {
 		t.Fatalf("got %+v", p)

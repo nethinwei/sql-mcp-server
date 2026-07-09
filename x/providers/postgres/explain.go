@@ -66,15 +66,15 @@ func parsePGExplain(b []byte) (cost.Plan, error) {
 func pgScanType(node string) cost.ScanType {
 	switch {
 	case strings.Contains(node, "Seq Scan"):
-		return cost.ScanSeq
+		// PostgreSQL Seq Scan reads the whole heap: treat as a full scan so
+		// RejectFullScan catches unfiltered queries.
+		return cost.ScanFull
 	case strings.Contains(node, "Index Only Scan"):
 		return cost.ScanIndex
 	case strings.Contains(node, "Index Scan"):
 		return cost.ScanIndex
 	case strings.Contains(node, "Tid Scan"):
 		return cost.ScanPoint
-	case strings.Contains(node, "Full"):
-		return cost.ScanFull
 	}
 	return cost.ScanUnknown
 }
