@@ -153,3 +153,127 @@ func TestCostGateEndToEnd(t *testing.T) {
 		t.Fatalf("expected 1 row, got %v", res.Content)
 	}
 }
+
+func TestRLSRowFilterAndMasking(t *testing.T) {
+	prov, cleanup := setupPG(t)
+	defer cleanup()
+	ctx := context.Background()
+	cfg := &config.Config{
+		Server:   config.ServerConfig{Role: "reader"},
+		Database: config.DatabaseConfig{Driver: "postgres", DSN: "ignored"},
+		Entities: []config.EntityConfig{{
+			Name: "users", Source: "users", Kind: "table", PrimaryKey: []string{"id"},
+			Fields: []config.FieldConfig{
+				{Name: "id"}, {Name: "email", Mask: "email"}, {Name: "tenant_id"},
+			},
+			Roles: config.RoleConfig{Read: []string{"reader"}},
+			RowPolicies: config.RowPolicies{
+				"reader": config.FilterConfig{"op": "eq", "field": "tenant_id", "value": 7},
+			},
+		}},
+		Tools: config.DefaultToolFlags(),
+		Cost: config.CostConfig{
+			Enabled: true, SoftScore: 40, HardScore: 70, MaxRows: 10000,
+			WhitelistPKPoint: true,
+		},
+	}
+	cfg.ApplyDefaults()
+	app, err := bootstrap.AssembleWithProvider(cfg, prov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc := app.ToolContext("reader")
+
+	// Read all: RLS restricts to tenant 7 (alice only); email is masked.
+	in, _ := json.Marshal(map[string]any{"entity": "users"})
+	res, err := tool.ReadTool{}.Run(ctx, in, tc)
+	if err != nil {
+		t.Fatalf("read should pass, got %v", err)
+	}
+	if len(res.Content) != 1 {
+		t.Fatalf("RLS should limit to 1 row (tenant 7), got %d", len(res.Content))
+	}
+	if res.Content[0]["email"] != "a***@x.com" {
+		t.Fatalf("email not masked: %v", res.Content[0]["email"])
+	}
+}
+
+func TestUpdateUnsafeWriteAndPK(t *testing.T) {
+	prov, cleanup := setupPG(t)
+	defer cleanup()
+	ctx := context.Background()
+	cfg := &config.Config{
+		Server:   config.ServerConfig{Role: "writer"},
+		Database: config.DatabaseConfig{Driver: "postgres", DSN: "ignored"},
+		Entities: []config.EntityConfig{{
+			Name: "users", Source: "users", Kind: "table", PrimaryKey: []string{"id"},
+			Fields: []config.FieldConfig{{Name: "id"}, {Name: "email"}},
+			Roles:  config.RoleConfig{Update: []string{"writer"}},
+		}},
+		Tools: config.DefaultToolFlags(),
+		Cost:  config.CostConfig{Enabled: false},
+	}
+	cfg.ApplyDefaults()
+	app, err := bootstrap.AssembleWithProvider(cfg, prov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc := app.ToolContext("writer")
+
+	// No filter -> unsafe write rejected.
+	unsafe, _ := json.Marshal(map[string]any{"entity": "users", "set": map[string]any{"email": "x@x.com"}})
+	_, err = tool.UpdateTool{}.Run(ctx, unsafe, tc)
+	if !errors.Is(err, tool.ErrUnsafeWrite) {
+		t.Fatalf("expected ErrUnsafeWrite, got %v", err)
+	}
+
+	// By PK -> succeeds, one row affected.
+	pkUpd, _ := json.Marshal(map[string]any{
+		"entity": "users",
+		"filter": []map[string]any{{"field": "id", "op": "eq", "value": 1}},
+		"set":    map[string]any{"email": "new@x.com"},
+	})
+	res, err := tool.UpdateTool{}.Run(ctx, pkUpd, tc)
+	if err != nil {
+		t.Fatalf("PK update should succeed, got %v", err)
+	}
+	if res.Content[0]["rowsAffected"] != int64(1) {
+		t.Fatalf("rowsAffected = %v, want 1", res.Content[0]["rowsAffected"])
+	}
+}
+
+func TestEnforceCapLimitsRows(t *testing.T) {
+	prov, cleanup := setupPG(t)
+	defer cleanup()
+	ctx := context.Background()
+	cfg := &config.Config{
+		Server:   config.ServerConfig{Role: "reader"},
+		Database: config.DatabaseConfig{Driver: "postgres", DSN: "ignored"},
+		Entities: []config.EntityConfig{{
+			Name: "users", Source: "users", Kind: "table", PrimaryKey: []string{"id"},
+			Fields: []config.FieldConfig{{Name: "id"}, {Name: "email"}},
+			Roles:  config.RoleConfig{Read: []string{"reader"}},
+		}},
+		Tools: config.DefaultToolFlags(),
+		// No RejectFullScan and high score thresholds so Estimate passes; EnforceCap
+		// wraps the query in LIMIT 1 (MaxRows).
+		Cost: config.CostConfig{
+			Enabled: true, SoftScore: 90, HardScore: 95, MaxRows: 1,
+		},
+	}
+	cfg.ApplyDefaults()
+	app, err := bootstrap.AssembleWithProvider(cfg, prov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc := app.ToolContext("reader")
+
+	in, _ := json.Marshal(map[string]any{"entity": "users"})
+	res, err := tool.ReadTool{}.Run(ctx, in, tc)
+	if err != nil {
+		t.Fatalf("should pass gate and execute, got %v", err)
+	}
+	if len(res.Content) > 1 {
+		t.Fatalf("EnforceCap should limit to 1 row, got %d", len(res.Content))
+	}
+}

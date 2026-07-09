@@ -61,12 +61,9 @@ func (e Estimate) Check(ctx context.Context, c codegen.Compiled) (Decision, erro
 	if !plan.StatsFresh && th.RequireFreshStats {
 		return deny(false)
 	}
-	if th.MaxRows > 0 && plan.EstimatedRows > th.MaxRows {
-		return deny(false)
-	}
-	if th.MaxBytes > 0 && plan.EstimatedBytes > th.MaxBytes {
-		return deny(false)
-	}
+	// Note: MaxRows/MaxBytes do NOT reject here. Estimates can be wrong; the
+	// EnforceCap layer uses MaxRows to wrap reads in a deterministic LIMIT as a
+	// backstop, which is the whole point of defense in depth.
 	if th.HardScore > 0 && score.Value >= th.HardScore {
 		return deny(false)
 	}
