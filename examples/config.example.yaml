@@ -1,0 +1,80 @@
+# SQL MCP Server example configuration.
+version: "1"
+
+server:
+  transport: stdio        # stdio | http
+  addr: ":8080"
+  role: reader            # runtime role; override with --role
+
+database:
+  driver: postgres        # postgres | mysql | oceanbase
+  dsn: "postgres://user:password@localhost:5432/appdb?sslmode=disable"
+  # DSN may use placeholders resolved at startup (fail-fast if missing):
+  #   dsn: "postgres://$$${PGUSER}:${PGPASS}@${PGHOST}:5432/${PGDB}"
+
+tools:
+  describeEntities: true
+  readRecords: true
+  createRecord: true
+  updateRecord: true
+  deleteRecord: false      # safe default: off
+  executeEntity: true
+  aggregateRecords: true
+
+cost:
+  enabled: true
+  softScore: 40            # 0-100; below = pass, [soft,hard) = soft reject (suggest LIMIT)
+  hardScore: 70            # >= hard = hard reject
+  maxRows: 10000           # EnforceCap wraps reads in LIMIT maxRows
+  rejectFullScan: true
+  whitelistPKPoint: true   # PK point lookup skips EXPLAIN
+  requireKnownScan: false
+  requireFreshStats: false
+
+cache:
+  enabled: true
+  ttl: 30s
+  maxSize: 1000
+
+rateLimit:
+  rps: 0
+  maxInflight: 256
+  ioPool: 16
+  cpuPool: 8
+
+audit:
+  enabled: false
+  path: ""
+
+entities:
+  - name: users
+    source: t_user
+    schema: public
+    kind: table
+    description: "Registered users"
+    primaryKey: [id]
+    mcp:
+      dmlTools: true
+      customTool: false
+    roles:
+      read: [reader, writer, admin]
+      create: [writer, admin]
+      update: [writer, admin]
+      delete: [admin]
+      aggregate: [reader, writer, admin]
+    rowPolicies:
+      reader:
+        and:
+          - { op: eq, field: tenant_id, value: "${role.tenant_id}" }
+    fields:
+      - name: id
+        description: "User ID (primary key)"
+      - name: email
+        description: "Email address"
+        mask: email
+      - name: phone
+        exclude: true
+        description: "Phone (sensitive, excluded)"
+      - name: created_at
+        alias: createdAt
+        description: "Registration time"
