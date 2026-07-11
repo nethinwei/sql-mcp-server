@@ -114,6 +114,12 @@ jobs:
         with:
           go-version: "1.25"
           cache: true
+      - name: install actionlint v1.7.12
+        run: |
+          curl -fsSL \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            | tar xz actionlint
+      - run: make workflow-check ACTIONLINT=./actionlint
       - uses: anchore/sbom-action/download-syft@v0.24.0
         with:
           syft-version: v1.46.0
@@ -123,28 +129,17 @@ jobs:
           version: v2.17.0
           args: release --snapshot --clean --skip=publish,sign
       - name: verify checksums and targets
-        run: |
-          cd dist
-          sha256sum --check checksums.txt
-          test "$(ls sql-mcp-server_*_linux_*.tar.gz 2>/dev/null | wc -l)" -eq 2
-          test "$(ls sql-mcp-server_*_darwin_*.tar.gz 2>/dev/null | wc -l)" -eq 2
-          test "$(ls sql-mcp-server_*_windows_*.zip 2>/dev/null | wc -l)" -eq 2
+        run: scripts/release/verify-dist.sh dist
 
   registry-metadata:
     name: registry metadata
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: verify release metadata consistency
-        run: |
-          version=$(jq -r '.version' server.json)
-          test "$version" = "0.1.3"
-          test "$(jq -r '.packages[0].identifier' server.json)" = \
-            "ghcr.io/nethinwei/sql-mcp-server:$version"
       - name: install MCP publisher v1.7.9
         run: |
           curl -fsSLO https://github.com/modelcontextprotocol/registry/releases/download/v1.7.9/mcp-publisher_linux_amd64.tar.gz
           curl -fsSLO https://github.com/modelcontextprotocol/registry/releases/download/v1.7.9/registry_1.7.9_checksums.txt
           sha256sum --check --ignore-missing registry_1.7.9_checksums.txt
           tar xzf mcp-publisher_linux_amd64.tar.gz mcp-publisher
-      - run: ./mcp-publisher validate server.json
+      - run: make release-metadata-check MCP_PUBLISHER=./mcp-publisher RELEASE_VERSION=0.1.3

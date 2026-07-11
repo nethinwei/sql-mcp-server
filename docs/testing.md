@@ -34,6 +34,25 @@ make release-snapshot
 
 snapshot 会生成 6 个目标归档、SHA-256 checksum 和归档 SBOM，但跳过发布与签名。
 
+发布前应运行与 GitHub workflow 共用脚本的本地门禁：
+
+```sh
+# 快速门禁：workflow、跨平台归档、Registry metadata、镜像 SBOM、compose smoke
+make release-preflight-fast RELEASE_VERSION=0.1.3-rc.3
+
+# 完整门禁：额外运行 lint、govulncheck、三库 integration 和 MCP e2e
+make release-preflight RELEASE_VERSION=0.1.3-rc.3
+```
+
+需要预先安装固定版本 GoReleaser、Syft、actionlint 和 `mcp-publisher`，并可使用
+Docker。`scripts/release/` 中的归档、metadata、quickstart 和 attestation
+验证脚本由本地 Make target 与 GitHub Actions 共同调用，避免维护两套命令。
+
+本地无法生成或发布 GitHub OIDC 身份，也不能无副作用模拟 GHCR/Registry 写入。
+因此 keyless Cosign 签名、Artifact Attestations、镜像 push 和 Registry publish
+仍是 tag workflow 专属步骤；其输入结构、发布前校验和发布后验证应尽量复用上述
+脚本。
+
 ## 测试层
 
 - 单元测试：默认 `go test ./...`，核心主要使用手写 fake。

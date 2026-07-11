@@ -18,7 +18,7 @@ jobs:
         with:
           go-version: "1.25"
           cache: true
-      - run: make fmt-check vet test coverage-check
+      - run: make release-quality
 
   integration:
     name: release integration (${{ matrix.db }})
@@ -74,6 +74,8 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: verify release archives
+        run: scripts/release/verify-dist.sh dist
       - name: verify checksum signature
         run: >-
           cosign verify-blob
@@ -121,6 +123,11 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: VERSION=${{ steps.version.outputs.value }}
       - uses: sigstore/cosign-installer@v4.1.2
+      - name: verify MCP Registry image label
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: scripts/release/verify-image-label.sh "$IMAGE@$DIGEST" remote
       - name: sign and verify image
         env:
           IMAGE: ghcr.io/${{ github.repository }}
@@ -165,11 +172,7 @@ jobs:
       - name: run allow and deny smoke
         env:
           SQL_MCP_IMAGE: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-        run: |
-          docker compose -f examples/quickstart/compose.yaml up -d --wait
-          go run ./internal/quickstartsmoke
-      - if: always()
-        run: docker compose -f examples/quickstart/compose.yaml down -v
+        run: scripts/release/quickstart.sh
 
   rc-attestations:
     name: RC provenance trial
@@ -195,10 +198,9 @@ jobs:
         with:
           subject-path: attest/*
       - name: verify provenance
-        run: |
-          for artifact in attest/*; do
-            gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"
-          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/release/verify-attestations.sh attest
 
   registry:
     name: publish MCP Registry metadata
@@ -214,12 +216,11 @@ jobs:
       - name: set release version
         env:
           VERSION: ${{ steps.version.outputs.value }}
-        run: |
-          jq --arg version "$VERSION" \
-            '.version = $version
-             | .packages[].identifier = ("ghcr.io/nethinwei/sql-mcp-server:" + $version)' \
-            server.json > server.tmp
-          mv server.tmp server.json
+        run: >-
+          python3 scripts/release/metadata.py render
+          --version "$VERSION"
+          --file server.json
+          --output server.release.json
       - name: install MCP publisher v1.7.9
         run: |
           curl -fsSLO https://github.com/modelcontextprotocol/registry/releases/download/v1.7.9/mcp-publisher_linux_amd64.tar.gz
@@ -228,9 +229,9 @@ jobs:
           tar xzf mcp-publisher_linux_amd64.tar.gz mcp-publisher
       - name: validate and publish
         run: |
-          ./mcp-publisher validate server.json
+          ./mcp-publisher validate server.release.json
           ./mcp-publisher login github-oidc
-          ./mcp-publisher publish server.json
+          ./mcp-publisher publish server.release.json
       - name: verify discovery
         env:
           VERSION: ${{ steps.version.outputs.value }}

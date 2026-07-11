@@ -17,6 +17,16 @@ sql-mcp-server explain --config config.yaml --entity users
 
 ### 发布产物与完整性验证
 
+创建 RC/GA tag 前先运行：
+
+```sh
+make release-preflight RELEASE_VERSION=0.1.3-rc.3
+```
+
+该命令复用 GitHub workflow 使用的验证脚本，覆盖完整测试、跨平台 snapshot、
+Registry metadata、容器 SBOM 和 quickstart。GitHub OIDC 签名及对 GHCR/Registry
+的实际写入只能在 tag workflow 中完成。
+
 GitHub Release 提供 Linux、macOS、Windows 的 amd64/arm64 归档、`checksums.txt`、
 每个归档的 SPDX JSON SBOM，以及 checksum 的 Sigstore bundle。以 Linux amd64
 为例：

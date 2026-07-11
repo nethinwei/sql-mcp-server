@@ -17,5 +17,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=build /out/sql-mcp-server /usr/local/bin/sql-mcp-server
 
+LABEL io.modelcontextprotocol.server.name="io.github.nethinwei/sql-mcp-server"
+
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/sql-mcp-server"]
