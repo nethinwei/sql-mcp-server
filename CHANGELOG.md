@@ -4,6 +4,9 @@
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本遵循
 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步骤、证据边界与
+版本时点限制在对应 `docs/releases/vX.Y.Z.md` 中维护。
+
 ## Unreleased
 
 ## 0.1.4 - 2026-07-12
@@ -22,6 +25,8 @@
 - 明确 PostgreSQL、MySQL、OceanBase 的共享层、三库 integration 和未独立验证的证据
   边界，避免将核心层测试外推为三库端到端保证。
 
+详见 [`docs/releases/v0.1.4.md`](docs/releases/v0.1.4.md)。
+
 ## 0.1.3 - 2026-07-11
 
 ### Added
@@ -38,6 +43,8 @@
 ### Changed
 
 - OceanBase integration 镜像固定到 4.3.5.6，避免 `latest` 漂移。
+
+详见 [`docs/releases/v0.1.3.md`](docs/releases/v0.1.3.md)。
 
 ## 0.1.2 - 2026-07-11
 
@@ -103,6 +110,8 @@
   不受影响。
 - 热重载会原子更新预算限制并保留 session 用量；事务 `ttl`/`maxOpen` 变化因
   无法安全迁移在途事务而拒绝 reload，需重启生效。
+
+详见 [`docs/releases/v0.1.1.md`](docs/releases/v0.1.1.md)。
 
 ## 0.1.0 - 2026-07-11
 

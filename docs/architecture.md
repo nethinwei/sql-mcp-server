@@ -74,4 +74,5 @@ trusted custom procedure 集合的 reload，要求重启，避免 tools/list 与
 
 安全决策见 [security.md](security.md)，公开配置契约见
 [configuration.md](configuration.md)，可验证约束见
-[invariants.md](invariants.md)。
+[invariants.md](invariants.md)，运行命令、生命周期和升级见
+[operations.md](operations.md)。

@@ -18,11 +18,13 @@ SQL MCP Server 在魔搭选择**仅本地可用/分发展示**。它需要连接
   agents with entity allowlists, field and row policies, masking, cost gates,
   and bounded execution.`
 
-正式提交应指向 `v0.1.4` GA Release，不长期使用 RC 镜像或二进制。
+正式提交应指向[当前 GA Release](releases/README.md)，不长期使用 RC 镜像或
+二进制。
 
 ## 前置配置
 
-1. 下载对应平台的 `v0.1.4` 二进制，将 `sql-mcp-server` 放入 `PATH`。
+1. 从[发布说明索引](releases/README.md)下载当前 GA 对应平台的二进制，将
+   `sql-mcp-server` 放入 `PATH`。
 2. 复制 [`examples/modelscope/config.yaml`](../examples/modelscope/config.yaml)，
    按真实数据库修改 entity、field ACL、row policy、mask 和预算。
 3. 使用数据库低权限账号设置 `DATABASE_DSN`。不要在 Git 仓库或魔搭页面保存真实

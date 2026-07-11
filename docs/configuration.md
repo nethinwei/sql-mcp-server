@@ -20,9 +20,8 @@ schema drift 检查。
   `transactions`：执行控制。
 
 显式 `--transport`/`--addr` 优先于 `server.transport`/`server.addr`；两处均未
-设置时分别回退到 `stdio`/`:8080`。`:8080` 监听所有接口，属于非 loopback；
-HTTP 无 bearer token/mTLS 时会 fail closed 并拒绝启动。热重载不是 YAML 字段，
-通过 `serve --watch` 开启。
+设置时分别回退到 `stdio`/`:8080`。HTTP 默认地址的安全含义和 fail-closed 规则
+见[安全模型](security.md)。热重载不是 YAML 字段，通过 `serve --watch` 开启。
 
 ## Server 与认证
 
@@ -44,9 +43,9 @@ server:
 `token` 是共享 bearer token。只有 DSN 会经过内置 secret resolver，auth 字段
 按字面读取，不能写 `${MCP_TOKEN}` 期待环境变量替换；生产环境应生成受限权限的
 配置文件或由部署系统渲染。`cert` + `key` 开启 TLS，额外设置 `clientCA` 开启
-mTLS；`cert`/`key` 只设置一个会校验失败。信任 identity header 时还必须配置
-mTLS 或 `trustedProxyCIDRs`。非 loopback 的 HTTP 安全规则和约束见
-[security.md](security.md)。
+mTLS；`cert`/`key` 只设置一个会校验失败。`trustProxyHeaders`、
+`trustedProxyCIDRs`、identity header 和非 loopback HTTP 的信任规则统一见
+[安全模型](security.md)。
 
 ## 数据源与实体
 
@@ -125,7 +124,7 @@ procedure 不参与 drift 检查。
 - `aqe.timeout`：独立于主查询的 Go duration，默认 `1s`；启用采样时必须大于 0
   且不超过 `5s`。采样失败只进入 hook/best-effort 审计，不会把成功读取改为失败。
 
-配置启用 `explainAnalyze` 时，任一 datasource 为 MySQL/OceanBase 都会在校验或
+配置启用 `cost.aqe.explainAnalyze` 时，任一 datasource 为 MySQL/OceanBase 都会在校验或
 启动装配阶段 fail-fast；多数据源按实体当前 datasource 选择 sampler，不会回退
 到其他 provider。
 

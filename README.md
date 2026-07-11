@@ -14,8 +14,9 @@ DDL**。
 - **默认拒绝**：安全能力无法证明时 fail closed；
 - **可审计**：配置热重载、异步审计和 OpenTelemetry hook。
 
-安全行为与 Provider 差异以[安全模型](docs/security.md)为准，**不以本页为准**；
-威胁、控制、验证证据与剩余风险见[威胁模型](docs/threat-model.md)。
+运行时安全行为以[安全模型](docs/security.md)为准；Provider 验证边界与证据层级
+以[兼容矩阵](docs/provider-compatibility.md)为准；威胁、控制与剩余风险见
+[威胁模型](docs/threat-model.md)。**不以本页摘要为准。**
 
 ## 五分钟体验
 
@@ -69,7 +70,9 @@ make build
 
 ### 版本与规划
 
-- 已发布变更：[CHANGELOG](CHANGELOG.md)和[发布说明](docs/releases/)；
+- 当前 GA：`v0.1.4`（[发布说明](docs/releases/v0.1.4.md)）；
+- 全版本摘要：[CHANGELOG](CHANGELOG.md)；历史能力与迁移：
+  [发布说明索引](docs/releases/README.md)；
 - 未发布产品规划：[Roadmap](docs/roadmap.md)；
 - 数据库候选：[Provider Roadmap](docs/provider-roadmap.md)。
 

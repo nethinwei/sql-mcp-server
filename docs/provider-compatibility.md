@@ -39,24 +39,16 @@
 
 ## 关键安全差异
 
-- 三种 provider 都只执行由配置实体和关系代数 IR 生成的参数化 SQL，不接受原始
-  SQL。
-- PostgreSQL 估算用于常规 Estimate；MySQL/OceanBase 在 EXPLAIN 失败、未知计划
-  或全表扫描时保守拒绝。
-- 行策略是应用层约束，不是数据库原生 RLS。任何绕过本服务的数据库访问都不受它
-  保护。
-- procedure 体内 SQL 无法由应用证明；三库均要求 `trustedProcedure`、reviewed
-  fingerprint、独立 timeout 与结果上限。
-- `ScanRowCap`、`ResourceManager` 等 capability 表示方言/数据库可用能力，不表示
-  本服务已替 DBA 完成资源治理配置。
+参数化 SQL、成本拒绝、应用层 row policy、procedure 信任边界和数据库资源治理的
+行为定义统一见[安全模型](security.md)。本页只记录各 Provider 的证据状态，不复制
+运行时安全语义。
 
-## v0.1.4 威胁证据边界
+## 证据边界
 
-v0.1.4 的确定性 adversarial corpus、普通测试 seed 回放和 fuzz target 主要证明
-MCP payload、IR validator、codegen 与事务状态机在已覆盖输入下保持核心安全不变量。
-这些证据不能单独证明某个 provider 的真实数据库行为、数据库配置、过程体内部 SQL，
-也不能把“核心层验证”或“未独立验证”提升为“真实数据库验证”。provider 声明仍以
-本页列出的 integration/e2e 证据和固定镜像为边界。
+共享层 corpus 与 fuzz 不能单独证明某个 Provider 的真实数据库行为，也不能把
+“核心层验证”或“未独立验证”提升为“真实数据库验证”。威胁与剩余风险见
+[威胁模型](threat-model.md)，当前发布时点证据见
+[`v0.1.4` 发布说明](releases/v0.1.4.md)。
 
 ## 验证命令
 

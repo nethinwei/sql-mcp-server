@@ -46,8 +46,8 @@ cosign verify \
   ghcr.io/nethinwei/sql-mcp-server@sha256:<digest>
 ```
 
-RC 流程可试运行 GitHub Artifact Attestations，但 v0.1.4 不把 provenance 作为
-发布阻塞项。
+RC 流程可试运行 GitHub Artifact Attestations；当前 release workflow 不把
+provenance 作为发布阻塞项。
 
 ## 启动
 
@@ -80,13 +80,9 @@ dsn: "${DATABASE_DSN}"
 解析后的 DSN；`bootstrap.RedactDSN` 只覆盖常见 PostgreSQL URI 和 MySQL DSN
 密码形式。
 
-启用 `cost.aqe.explainAnalyze` 还会检查每个 datasource 是否提供 sampler。
-v0.1 只有 PostgreSQL 支持；MySQL/OceanBase 会 fail-fast。该选项命中采样率时
-会在实际数据库读取后，用独立 read-only transaction 额外执行一次 SQL 并始终
-rollback；缓存命中不采样。应评估数据库负载，并保持低采样率和短
-`aqe.timeout`。采样超时、volatile function 写入被拒绝等失败不会把原读取改为
-失败，但会进入 error hook 和 best-effort 审计（action 为
-`explain_analyze_sample`）。
+启用 `cost.aqe.explainAnalyze` 时的字段、启动校验和负载约束见
+[配置参考](configuration.md#成本)，执行与失败语义见
+[安全模型](security.md#成本闸门)。
 
 ## 热重载
 

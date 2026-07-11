@@ -24,7 +24,8 @@
 
 ### Adopt
 
-- 将现有 PostgreSQL Compose quickstart 收敛为单一五分钟演示路径；
+- 维持 [`quickstart.md`](../quickstart.md) 为唯一 Demo 事实源，并扩展现有
+  PostgreSQL Compose 演示；
 - 自动或文档化验证六个场景：正常查询、字段拒绝、跨 tenant 拒绝、mask 可返回但
   不可过滤、执行前成本拒绝、Agent 根据结构化错误收窄请求后成功；
 - 为 MCP Inspector、Claude Desktop、Cursor 和 VS Code 提供经过核对的入口；
