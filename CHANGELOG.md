@@ -9,6 +9,8 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+## 0.1.5 - 2026-07-12
+
 ### Added
 
 - 机器可读拒绝契约：业务拒绝在 `structuredContent` 携带稳定 `code`、
@@ -35,6 +37,8 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 - 审计事件新增 `DecisionID` 字段（JSON Lines 兼容追加）。
 - 工具生命周期 hook 现在在预算获取前触发 `BeforeTool`、在 span 结束前记录
   错误，使预算拒绝同样可通过 trace 中的 `decision.id` 定位。
+
+详见 [`docs/releases/v0.1.5.md`](docs/releases/v0.1.5.md)。
 
 ## 0.1.4 - 2026-07-12
 

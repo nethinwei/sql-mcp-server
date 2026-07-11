@@ -1,7 +1,7 @@
 # Roadmap
 
-当前稳定基线为 `v0.1.4`。已发布能力以
-[发布说明](releases/v0.1.4.md)、[CHANGELOG](../CHANGELOG.md)、
+当前稳定基线为 `v0.1.5`。已发布能力以
+[发布说明](releases/v0.1.5.md)、[CHANGELOG](../CHANGELOG.md)、
 [配置参考](configuration.md)和[安全模型](security.md)为准。
 
 本文件只给出未发布成果的顺序和门禁：
@@ -13,9 +13,7 @@
 
 详细文档：
 
-- 当前承诺：[v0.1.5 — Contract + Product Proof](roadmap/committed-v0.1.5.md)
-- 落地计划：[v0.1.5 落地计划](roadmap/execution-v0.1.5.md)
-- 下阶段候选：[v0.1.6（候选）— Observable + Measurable](roadmap/next-v0.1.6.md)
+- 当前承诺：[v0.1.6 — Observable + Measurable](roadmap/committed-v0.1.6.md)
 - 长期方向：[Evidence-Gated Directions](roadmap/directions.md)
 - 衡量方法：[Roadmap Metrics](roadmap/metrics.md)
 - 数据库候选：[Provider Roadmap](provider-roadmap.md)
@@ -39,35 +37,12 @@
 
 ---
 
-## Now — Committed v0.1.5
+## Now — Committed v0.1.6
 
-目标：固定数据面机器契约和真实 HTTP 路径，并把现有能力组合为五分钟产品证明。
+目标：让拒绝、成本、故障和 Agent 效果从“可运行”变为“可解释、可测量”。
+进入门禁（`v0.1.5` 验收完成，拒绝路径可经 `decision ID` 关联）已满足。
 
 关键结果：
-
-- 机器可读拒绝与跨 MCP、审计、trace 的 `decision ID`；
-- 真实 streamable HTTP `/mcp` 授权和事务 e2e；
-- tool schema、错误与 YAML export 的兼容规则；
-- 六场景 Demo、客户端入口和安全证据索引；
-- critical/high threat ID 到测试的可追溯映射。
-
-退出门禁：机器错误稳定解析、HTTP 授权路径等价、export 确定、snapshot 失败语义
-通过设计评审、Demo 可复现、关键威胁均有证据或明确缺口。
-
-完整范围与非目标见
-[v0.1.5 — Contract + Product Proof](roadmap/committed-v0.1.5.md)；工作包
-拆解、依赖顺序和验证方式见
-[v0.1.5 落地计划](roadmap/execution-v0.1.5.md)。
-
----
-
-## Next 1 — Observable + Measurable
-
-进入门禁：`v0.1.5` 验收完成，关键拒绝路径可通过 `decision ID` 关联。
-候选范围的具体化见
-[v0.1.6（候选）— Observable + Measurable](roadmap/next-v0.1.6.md)。
-
-目标结果：
 
 - liveness、snapshot readiness 和数据库 readiness 分离；
 - 最小 metrics、结构化日志和 stdio/HTTP 协议 smoke；
@@ -78,9 +53,12 @@
 退出门禁：telemetry 能解释拒绝和故障；benchmark 与 pilot 有固定环境、评分和
 复现命令；pilot 对下一阶段形成 go/no-go 结论。
 
+完整范围与非目标见
+[v0.1.6 — Observable + Measurable](roadmap/committed-v0.1.6.md)。
+
 ---
 
-## Next 2 — Semantic Metadata
+## Next 1 — Semantic Metadata
 
 进入门禁：可观测基线完成，且 pilot 证明 grain、时间、枚举、单位或 catalog token
 是显著失败来源。
@@ -97,7 +75,7 @@
 
 ---
 
-## Next 3 — Public Eval + Minimum Control Plane
+## Next 2 — Public Eval + Minimum Control Plane
 
 进入门禁：机器错误、可观测基线和 pilot 稳定；至少两个真实客户端可重复集成；
 至少一个真实部署需要 revision、diff 或 simulate。
