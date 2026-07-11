@@ -44,8 +44,8 @@ make release-preflight-fast RELEASE_VERSION=0.1.3-rc.3
 make release-preflight RELEASE_VERSION=0.1.3-rc.3
 ```
 
-需要预先安装固定版本 GoReleaser、Syft、actionlint 和 `mcp-publisher`，并可使用
-Docker。`scripts/release/` 中的归档、metadata、quickstart 和 attestation
+需要预先安装 golangci-lint v2.12.2，以及固定版本 GoReleaser、Syft、actionlint
+和 `mcp-publisher`，并可使用 Docker。`scripts/release/` 中的归档、metadata、quickstart 和 attestation
 验证脚本由本地 Make target 与 GitHub Actions 共同调用，避免维护两套命令。
 
 本地无法生成或发布 GitHub OIDC 身份，也不能无副作用模拟 GHCR/Registry 写入。
