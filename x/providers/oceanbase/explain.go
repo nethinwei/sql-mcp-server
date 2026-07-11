@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nethinwei/sql-mcp-server/cost"
+	"github.com/nethinwei/sql-mcp-server/core/cost"
 )
 
 // obExplainer estimates a plan via EXPLAIN FORMAT=JSON.
@@ -33,6 +33,9 @@ func (e obExplainer) Explain(ctx context.Context, query string, args []any) (cos
 			return cost.Plan{ScanType: cost.ScanUnknown}, nil
 		}
 		sb.WriteString(s)
+	}
+	if err := rows.Err(); err != nil {
+		return cost.Plan{}, err
 	}
 	if sb.Len() == 0 {
 		return cost.Plan{ScanType: cost.ScanUnknown}, nil

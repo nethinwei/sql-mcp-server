@@ -13,41 +13,32 @@ import (
 	"sync"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
-	"github.com/nethinwei/sql-mcp-server/audit"
-	"github.com/nethinwei/sql-mcp-server/budget"
-	"github.com/nethinwei/sql-mcp-server/cache"
-	"github.com/nethinwei/sql-mcp-server/config"
-	"github.com/nethinwei/sql-mcp-server/cost"
-	"github.com/nethinwei/sql-mcp-server/dialect"
-	"github.com/nethinwei/sql-mcp-server/engine"
-	"github.com/nethinwei/sql-mcp-server/entity"
-	"github.com/nethinwei/sql-mcp-server/hook"
-	"github.com/nethinwei/sql-mcp-server/introspect"
-	"github.com/nethinwei/sql-mcp-server/mask"
-	"github.com/nethinwei/sql-mcp-server/ratelimit"
-	"github.com/nethinwei/sql-mcp-server/rbac"
-	"github.com/nethinwei/sql-mcp-server/relalg"
-	"github.com/nethinwei/sql-mcp-server/store"
-	"github.com/nethinwei/sql-mcp-server/tool"
-	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
-	"github.com/nethinwei/sql-mcp-server/x/providers/oceanbase"
-	"github.com/nethinwei/sql-mcp-server/x/providers/postgres"
+	"github.com/nethinwei/sql-mcp-server/core/audit"
+	"github.com/nethinwei/sql-mcp-server/core/budget"
+	"github.com/nethinwei/sql-mcp-server/core/cache"
+	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/cost"
+	"github.com/nethinwei/sql-mcp-server/core/dialect"
+	"github.com/nethinwei/sql-mcp-server/core/engine"
+	"github.com/nethinwei/sql-mcp-server/core/entity"
+	"github.com/nethinwei/sql-mcp-server/core/hook"
+	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	"github.com/nethinwei/sql-mcp-server/core/mask"
+	coreprovider "github.com/nethinwei/sql-mcp-server/core/provider"
+	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
+	"github.com/nethinwei/sql-mcp-server/core/rbac"
+	"github.com/nethinwei/sql-mcp-server/core/relalg"
+	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/tool"
+	"github.com/nethinwei/sql-mcp-server/x/configyaml"
+	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 )
 
 // ErrUnsupportedDriver is returned for a driver with no provider yet.
-var ErrUnsupportedDriver = fmt.Errorf("bootstrap: unsupported driver")
+var ErrUnsupportedDriver = providerregistry.ErrUnsupportedDriver
 
 // Provider aggregates the core interfaces a database adapter must satisfy.
-type Provider interface {
-	store.DB
-	store.TxBeginner
-	Dialect() dialect.Dialect
-	Explainer() cost.Explainer
-	Introspector() introspect.Introspector
-	Close() error
-}
+type Provider = coreprovider.Provider
 
 // App is the assembled application, ready to serve.
 type App struct {
@@ -184,19 +175,16 @@ func (a *App) Close() error {
 
 // Load reads and validates a YAML config file.
 func Load(path string) (*config.Config, error) {
-	b, err := os.ReadFile(path)
+	cfg, err := configyaml.Load(path)
 	if err != nil {
-		return nil, fmt.Errorf("read config: %w", err)
+		return nil, fmt.Errorf("load config: %w", err)
 	}
-	var cfg config.Config
-	if err := yaml.Unmarshal(b, &cfg); err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
+	for name, database := range cfg.Databases {
+		if !providerregistry.IsRegistered(database.Driver) {
+			return nil, fmt.Errorf("%w: %q in database %q", ErrUnsupportedDriver, database.Driver, name)
+		}
 	}
-	cfg.ApplyDefaults()
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	return &cfg, nil
+	return cfg, nil
 }
 
 // ValidateFile parses, defaults, validates, and resolves secrets without
@@ -468,15 +456,7 @@ func closeProviders(providers map[string]Provider) {
 }
 
 func newProvider(driver, dsn string, timeout time.Duration) (Provider, error) {
-	switch driver {
-	case "postgres":
-		return postgres.NewWithTimeout(dsn, timeout)
-	case "mysql":
-		return mysql.NewWithTimeout(dsn, timeout)
-	case "oceanbase":
-		return oceanbase.NewWithTimeout(dsn, timeout)
-	}
-	return nil, fmt.Errorf("%w: %q", ErrUnsupportedDriver, driver)
+	return providerregistry.New(driver, dsn, timeout)
 }
 
 // configurePool bounds the DB connection pool to the IO pool size so workers

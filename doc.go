@@ -3,8 +3,8 @@
 // modeled on Microsoft's Data API Builder SQL MCP Server.
 //
 // Design pillars:
-//   - Relational algebra IR (relalg + codegen) — dialect-neutral, mathematically
-//     complete; new databases plug in via five narrow interfaces.
+//   - Relational algebra IR (core/relalg + core/codegen) — dialect-neutral,
+//     mathematically complete; new databases plug in through core/provider.
 //   - Defense-in-depth cost & resource gate — EXPLAIN is one optional layer,
 //     not a leash; deterministic LIMIT/timeout and DB-native resource limits
 //     backstop unreliable estimates.

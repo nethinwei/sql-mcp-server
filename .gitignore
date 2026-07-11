@@ -21,3 +21,6 @@ mem.pprof
 .idea/
 .vscode/
 .DS_Store
+
+# codegraph index
+.codegraph/

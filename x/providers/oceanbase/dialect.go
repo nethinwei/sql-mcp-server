@@ -1,7 +1,7 @@
 package oceanbase
 
 import (
-	"github.com/nethinwei/sql-mcp-server/dialect"
+	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
 )
 

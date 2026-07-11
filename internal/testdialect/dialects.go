@@ -5,7 +5,7 @@ package testdialect
 import (
 	"strings"
 
-	"github.com/nethinwei/sql-mcp-server/dialect"
+	"github.com/nethinwei/sql-mcp-server/core/dialect"
 )
 
 // Postgres is a PostgreSQL dialect for tests.

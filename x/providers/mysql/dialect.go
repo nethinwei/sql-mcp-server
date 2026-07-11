@@ -3,7 +3,7 @@ package mysql
 import (
 	"strings"
 
-	"github.com/nethinwei/sql-mcp-server/dialect"
+	"github.com/nethinwei/sql-mcp-server/core/dialect"
 )
 
 // Dialect is the MySQL dialect. EXPLAIN estimates are less reliable than

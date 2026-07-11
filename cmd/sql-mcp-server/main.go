@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	_ "github.com/nethinwei/sql-mcp-server/x/providers/all"
 )
 
 func main() {

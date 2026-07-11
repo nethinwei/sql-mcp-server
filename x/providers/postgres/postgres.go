@@ -12,14 +12,22 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 
-	"github.com/nethinwei/sql-mcp-server/cost"
-	"github.com/nethinwei/sql-mcp-server/dialect"
-	"github.com/nethinwei/sql-mcp-server/introspect"
-	"github.com/nethinwei/sql-mcp-server/store"
+	"github.com/nethinwei/sql-mcp-server/core/cost"
+	"github.com/nethinwei/sql-mcp-server/core/dialect"
+	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	"github.com/nethinwei/sql-mcp-server/core/provider"
+	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 )
 
 // ErrPing is returned when the database is unreachable at open time.
 var ErrPing = errors.New("postgres: ping failed")
+
+func init() {
+	providerregistry.Register("postgres", func(dsn string, timeout time.Duration) (provider.Provider, error) {
+		return NewWithTimeout(dsn, timeout)
+	})
+}
 
 // savepointName validates a savepoint name to prevent SQL injection in
 // SAVEPOINT/ROLLBACK TO statements (names are not parameterized in SQL).

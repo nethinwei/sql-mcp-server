@@ -8,9 +8,9 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/nethinwei/sql-mcp-server/cost"
-	"github.com/nethinwei/sql-mcp-server/hook"
-	"github.com/nethinwei/sql-mcp-server/rbac"
+	"github.com/nethinwei/sql-mcp-server/core/cost"
+	"github.com/nethinwei/sql-mcp-server/core/hook"
+	"github.com/nethinwei/sql-mcp-server/core/rbac"
 )
 
 // NewHooks returns hook.Hooks that emit OpenTelemetry spans for tool calls and

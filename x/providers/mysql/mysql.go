@@ -4,10 +4,18 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/nethinwei/sql-mcp-server/cost"
-	"github.com/nethinwei/sql-mcp-server/dialect"
-	"github.com/nethinwei/sql-mcp-server/introspect"
+	"github.com/nethinwei/sql-mcp-server/core/cost"
+	"github.com/nethinwei/sql-mcp-server/core/dialect"
+	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	"github.com/nethinwei/sql-mcp-server/core/provider"
+	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 )
+
+func init() {
+	providerregistry.Register("mysql", func(dsn string, timeout time.Duration) (provider.Provider, error) {
+		return NewWithTimeout(dsn, timeout)
+	})
+}
 
 // Provider adapts a MySQL database to the core interfaces.
 type Provider struct {

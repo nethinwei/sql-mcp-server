@@ -12,7 +12,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"go.uber.org/goleak"
 
-	"github.com/nethinwei/sql-mcp-server/config"
+	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/mcpserver"
 	pgprov "github.com/nethinwei/sql-mcp-server/x/providers/postgres"

@@ -4,15 +4,17 @@
 [`examples/config.example.yaml`](../examples/config.example.yaml)；
 `config.Schema()` 返回供 YAML 编辑器补全和校验使用的 JSON Schema，其中 duration
 按 `30s` 这类 YAML 字符串描述；它不是标准 `encoding/json` 输入契约。加载顺序为
-YAML 解码、默认值、静态校验、secret 解析、provider 连接和 schema drift 检查。
+YAML 解码、默认值、静态校验、driver 注册检查、secret 解析、provider 连接和
+schema drift 检查。
 
 ## 顶层
 
 - `version`：契约版本标记；当前值为字符串 `"1"`，加载器保存但暂不限制其取值。
 - `server`：默认角色及 HTTP 认证材料。
 - `database`：旧式单数据源配置，会迁移为名为 `default` 的数据源。
-- `databases`：名称到 `{driver, dsn}` 的映射；driver 为 `postgres`、`mysql`
-  或 `oceanbase`。必须提供 `database` 或至少一个 `databases` 项。
+- `databases`：名称到 `{driver, dsn}` 的映射；内置 driver 为 `postgres`、
+  `mysql` 和 `oceanbase`，扩展程序可注册其他名称。必须提供 `database` 或至少
+  一个 `databases` 项。
 - `entities`：显式暴露的实体列表；可以为空。
 - `tools`、`cost`、`budget`、`cache`、`rateLimit`、`mask`、`audit`、
   `transactions`：执行控制。
@@ -51,6 +53,7 @@ mTLS 或 `trustedProxyCIDRs`。非 loopback 的 HTTP 安全规则和约束见
 每个 database 需要 `driver` 和非空 `dsn`。DSN 可包含 `${ENV}` 或
 `${file:/path}`，占位符仅在 DSN 中解析。file 路径必须是
 `server.secrets.allowedRoots` 下的绝对路径，且符号链接不能逃逸允许根。
+`validate` 会确认 driver 已注册，但不会因此建立数据库连接。
 
 实体字段：
 

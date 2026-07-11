@@ -3,11 +3,19 @@ package oceanbase
 import (
 	"time"
 
-	"github.com/nethinwei/sql-mcp-server/cost"
-	"github.com/nethinwei/sql-mcp-server/dialect"
-	"github.com/nethinwei/sql-mcp-server/introspect"
+	"github.com/nethinwei/sql-mcp-server/core/cost"
+	"github.com/nethinwei/sql-mcp-server/core/dialect"
+	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	"github.com/nethinwei/sql-mcp-server/core/provider"
+	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
 )
+
+func init() {
+	providerregistry.Register("oceanbase", func(dsn string, timeout time.Duration) (provider.Provider, error) {
+		return NewWithTimeout(dsn, timeout)
+	})
+}
 
 // Provider adapts an OceanBase database to the core interfaces.
 type Provider struct {

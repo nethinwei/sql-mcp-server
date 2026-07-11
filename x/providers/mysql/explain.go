@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nethinwei/sql-mcp-server/cost"
+	"github.com/nethinwei/sql-mcp-server/core/cost"
 )
 
 // mysqlExplainer estimates a plan via EXPLAIN FORMAT=JSON.

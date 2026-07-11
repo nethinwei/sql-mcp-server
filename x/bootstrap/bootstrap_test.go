@@ -8,16 +8,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nethinwei/sql-mcp-server/codegen"
-	"github.com/nethinwei/sql-mcp-server/config"
-	"github.com/nethinwei/sql-mcp-server/cost"
-	"github.com/nethinwei/sql-mcp-server/dialect"
-	"github.com/nethinwei/sql-mcp-server/engine"
-	"github.com/nethinwei/sql-mcp-server/entity"
-	"github.com/nethinwei/sql-mcp-server/introspect"
-	"github.com/nethinwei/sql-mcp-server/relalg"
-	"github.com/nethinwei/sql-mcp-server/store"
-	"github.com/nethinwei/sql-mcp-server/tool"
+	"github.com/nethinwei/sql-mcp-server/core/codegen"
+	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/cost"
+	"github.com/nethinwei/sql-mcp-server/core/dialect"
+	"github.com/nethinwei/sql-mcp-server/core/engine"
+	"github.com/nethinwei/sql-mcp-server/core/entity"
+	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	coreprovider "github.com/nethinwei/sql-mcp-server/core/provider"
+	"github.com/nethinwei/sql-mcp-server/core/relalg"
+	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/tool"
+	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
 	"github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
@@ -146,6 +148,16 @@ entities:
 	}
 }
 
+func TestLoadRejectsUnregisteredDriver(t *testing.T) {
+	path := t.TempDir() + "/config.yaml"
+	if err := os.WriteFile(path, []byte("database: {driver: unregistered, dsn: x}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); !errors.Is(err, ErrUnsupportedDriver) {
+		t.Fatalf("Load() error = %v, want ErrUnsupportedDriver", err)
+	}
+}
+
 func TestConfigToEntities(t *testing.T) {
 	t.Parallel()
 	ecs := []config.EntityConfig{
@@ -242,6 +254,21 @@ func TestNewProviderUnsupported(t *testing.T) {
 	// mysql with an invalid DSN fails fast at ping (still an error).
 	if _, err := newProvider("mysql", "", time.Second); err == nil {
 		t.Fatal("expected error for invalid mysql dsn")
+	}
+}
+
+func TestNewProviderUsesRegistry(t *testing.T) {
+	const driver = "bootstrap-registry-test"
+	want := &fakeProvider{}
+	providerregistry.Register(driver, func(string, time.Duration) (coreprovider.Provider, error) {
+		return want, nil
+	})
+	got, err := newProvider(driver, "ignored", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("newProvider() = %p, want %p", got, want)
 	}
 }
 

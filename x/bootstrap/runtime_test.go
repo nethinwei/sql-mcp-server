@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nethinwei/sql-mcp-server/budget"
-	"github.com/nethinwei/sql-mcp-server/tool"
+	"github.com/nethinwei/sql-mcp-server/core/budget"
+	"github.com/nethinwei/sql-mcp-server/core/tool"
 )
 
 func TestRuntimeReloadDrainsBeforePublishing(t *testing.T) {

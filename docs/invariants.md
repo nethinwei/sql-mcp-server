@@ -6,13 +6,11 @@
 
 ## 依赖边界
 
-- **I1** 核心包只依赖标准库和其他核心包，但 `config` 的 presence-aware YAML
-  解码可直接依赖 `gopkg.in/yaml.v3`。
+- **I1** `core/` 中的包只依赖标准库和其他核心包。
 - **I2** 外部适配层依赖方向为 `x/ -> core`，核心不得 import `x/`。
 
-主要由 `.golangci.yml` depguard 与 CI lint 检查。`yaml.v3` 只在单独的
-`config-yaml-presence` 规则中对 `config` 精确放行，其他核心包仍由
-`core-purity` 规则限制；仓库不宣称绝对“核心零依赖”。
+主要由 `.golangci.yml` 的 `core-purity` depguard 规则与 CI lint 检查。
+YAML presence 解码位于 `x/configyaml`，不会把 `yaml.v3` 引入核心。
 
 ## 查询与授权
 

@@ -11,7 +11,7 @@ import (
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 
-	"github.com/nethinwei/sql-mcp-server/store"
+	"github.com/nethinwei/sql-mcp-server/core/store"
 )
 
 // savepointName validates a savepoint name (not parameterized in SQL).

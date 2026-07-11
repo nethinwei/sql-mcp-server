@@ -16,41 +16,17 @@ linters:
     - misspell
     - depguard
   settings:
-    # Core packages use stdlib + sibling core packages only, except config's
-    # yaml.v3 dependency for presence-aware YAML decoding. No core package may
-    # import x/; x/ depends on core, never the reverse.
+    # Core packages use stdlib + sibling core packages only. No core package
+    # may import x/; x/ depends on core, never the reverse.
     depguard:
       rules:
         core-purity:
           list-mode: strict
           files:
-            - "relalg/**.go"
-            - "codegen/**.go"
-            - "entity/**.go"
-            - "dialect/**.go"
-            - "store/**.go"
-            - "rbac/**.go"
-            - "mask/**.go"
-            - "cost/**.go"
-            - "budget/**.go"
-            - "audit/**.go"
-            - "tool/**.go"
-            - "cache/**.go"
-            - "hook/**.go"
-            - "ratelimit/**.go"
-            - "engine/**.go"
-            - "introspect/**.go"
+            - "core/**.go"
           allow:
             - $gostd
-            - github.com/nethinwei/sql-mcp-server
-        config-yaml-presence:
-          list-mode: strict
-          files:
-            - "config/**.go"
-          allow:
-            - $gostd
-            - github.com/nethinwei/sql-mcp-server
-            - gopkg.in/yaml.v3
+            - github.com/nethinwei/sql-mcp-server/core
     revive:
       rules:
         # Interface contracts are documented at the interface; requiring every

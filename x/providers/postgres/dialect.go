@@ -3,7 +3,7 @@ package postgres
 import (
 	"strings"
 
-	"github.com/nethinwei/sql-mcp-server/dialect"
+	"github.com/nethinwei/sql-mcp-server/core/dialect"
 )
 
 // Dialect is the PostgreSQL dialect.

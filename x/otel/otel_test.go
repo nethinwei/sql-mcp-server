@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/nethinwei/sql-mcp-server/cost"
-	"github.com/nethinwei/sql-mcp-server/rbac"
+	"github.com/nethinwei/sql-mcp-server/core/cost"
+	"github.com/nethinwei/sql-mcp-server/core/rbac"
 )
 
 func TestNewHooksNoPanicWithoutProvider(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"strings"
 
-	"github.com/nethinwei/sql-mcp-server/entity"
+	"github.com/nethinwei/sql-mcp-server/core/entity"
 )
 
 // pgIntrospector discovers entities from information_schema.

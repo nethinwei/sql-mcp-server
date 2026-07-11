@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"strings"
 
-	"github.com/nethinwei/sql-mcp-server/entity"
-	"github.com/nethinwei/sql-mcp-server/introspect"
+	"github.com/nethinwei/sql-mcp-server/core/entity"
+	"github.com/nethinwei/sql-mcp-server/core/introspect"
 )
 
 // Introspector discovers entities from information_schema. Exported so the

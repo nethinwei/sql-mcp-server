@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nethinwei/sql-mcp-server/budget"
+	"github.com/nethinwei/sql-mcp-server/core/budget"
 )
 
 // ErrRuntimeClosed is returned when a closed runtime is used.

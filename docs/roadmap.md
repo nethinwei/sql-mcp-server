@@ -16,8 +16,6 @@
 - 提供稳定的 template fingerprint 发现与审核工作流，避免手工计算或配置精确
   SQL。
 - 补齐可直接部署的 metrics exporter/endpoint 和审计轮转/外部 sink。
-- 评估将 YAML presence 解码移出 core config，消除 depguard 中精确记录的
-  `yaml.v3` 例外。
 - 增加 MCP 官方 conformance、强化并测试现有配置 schema 契约，以及跨 provider
   行为一致性测试；不是首次建立配置契约。
 

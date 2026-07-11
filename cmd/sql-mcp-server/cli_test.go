@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nethinwei/sql-mcp-server/config"
+	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/version"
 )
 

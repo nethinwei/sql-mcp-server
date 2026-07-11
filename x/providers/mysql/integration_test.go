@@ -10,11 +10,11 @@ import (
 
 	tcmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
 
-	"github.com/nethinwei/sql-mcp-server/config"
-	"github.com/nethinwei/sql-mcp-server/cost"
-	"github.com/nethinwei/sql-mcp-server/entity"
-	"github.com/nethinwei/sql-mcp-server/store"
-	"github.com/nethinwei/sql-mcp-server/tool"
+	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/cost"
+	"github.com/nethinwei/sql-mcp-server/core/entity"
+	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/tool"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
 )

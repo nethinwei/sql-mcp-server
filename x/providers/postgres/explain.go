@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nethinwei/sql-mcp-server/codegen"
-	"github.com/nethinwei/sql-mcp-server/cost"
-	"github.com/nethinwei/sql-mcp-server/store"
+	"github.com/nethinwei/sql-mcp-server/core/codegen"
+	"github.com/nethinwei/sql-mcp-server/core/cost"
+	"github.com/nethinwei/sql-mcp-server/core/store"
 )
 
 // ErrAnalyzeRequiresReadOnly protects the provider boundary from executing

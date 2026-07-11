@@ -23,10 +23,20 @@
 
 ## 依赖规则
 
-业务核心不得 import `x/`。数据库 driver、MCP SDK、OpenTelemetry、YAML 等外部
-适配应位于 `x/` 或入口包，依赖方向保持 `x/ -> core`。新增依赖前检查
-`.golangci.yml` 的 depguard；当前 `config` 对 `yaml.v3` 的直接依赖是已知待修
-例外，不要把它扩散到其他核心包。
+业务核心位于 `core/`，不得 import `x/`。数据库 driver、MCP SDK、
+OpenTelemetry、YAML 等外部适配应位于 `x/` 或入口包，依赖方向保持
+`x/ -> core`。新增依赖前检查 `.golangci.yml` 的 depguard。
+
+## 添加数据库
+
+1. 在 `x/providers/<driver>/` 实现 `core/provider.Provider`；按能力可选实现
+   `cost.AnalyzeSampler`。
+2. 在 provider 包的 `init` 中向 `x/providerregistry` 注册工厂。
+3. 在 `x/providers/all/all.go` 增加 blank import，使内置二进制包含该驱动。
+4. 添加方言、EXPLAIN、自省和真实数据库集成测试，并更新配置文档与示例。
+
+新增数据库不得修改 `core/` 或 `x/bootstrap`。能力差异通过核心接口和
+`dialect.Capabilities` 表达，不能根据 driver 名称在核心中分支。
 
 ## 提交流程
 

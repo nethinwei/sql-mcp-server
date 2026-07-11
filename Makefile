@@ -4,8 +4,7 @@ VERSION_PACKAGE := github.com/nethinwei/sql-mcp-server/version.value
 LDFLAGS ?= -X $(VERSION_PACKAGE)=$(VERSION)
 BINARY := sql-mcp-server$(shell $(GO) env GOEXE)
 CORE_COVERAGE_MIN := 80.0
-CORE_PACKAGES := ./store ./cost ./tool ./rbac ./relalg ./codegen ./config \
-	./entity ./dialect ./mask ./cache ./hook ./ratelimit ./engine ./audit ./introspect
+CORE_PACKAGES := ./core/...
 
 .PHONY: fmt fmt-check vet build test test-integration test-e2e lint coverage \
 	coverage-check govulncheck ci ci-local ci-full tidy

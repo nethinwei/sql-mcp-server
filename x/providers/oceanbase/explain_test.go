@@ -3,7 +3,7 @@ package oceanbase
 import (
 	"testing"
 
-	"github.com/nethinwei/sql-mcp-server/cost"
+	"github.com/nethinwei/sql-mcp-server/core/cost"
 )
 
 func TestParseOBExplainRealShape(t *testing.T) {
