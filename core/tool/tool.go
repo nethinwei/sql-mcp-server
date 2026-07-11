@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -320,7 +321,7 @@ func sensitiveFields(toolName string, input json.RawMessage, registry *entity.Re
 	var envelope struct {
 		Entity string `json:"entity"`
 	}
-	if registry == nil || decodeInput(input, &envelope) != nil {
+	if registry == nil || decodeEnvelope(input, &envelope) != nil {
 		return nil
 	}
 	entityName := envelope.Entity
@@ -356,7 +357,7 @@ func transactionFromInput(input json.RawMessage) string {
 	var envelope struct {
 		Transaction string `json:"transaction"`
 	}
-	_ = decodeInput(input, &envelope)
+	_ = decodeEnvelope(input, &envelope)
 	return envelope.Transaction
 }
 
@@ -401,6 +402,22 @@ func filterToPredicate(conds []condJSON) (relalg.Predicate, error) {
 }
 
 func decodeInput(data json.RawMessage, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return errors.New("multiple JSON values")
+		}
+		return err
+	}
+	return nil
+}
+
+func decodeEnvelope(data json.RawMessage, target any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	return decoder.Decode(target)

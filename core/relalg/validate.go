@@ -17,6 +17,10 @@ var ErrInvalidAggFunc = errors.New("relalg: invalid aggregate function")
 // type it does not recognize.
 var ErrUnknownPredicate = errors.New("relalg: unknown predicate")
 
+// ErrInvalidPredicate is returned when a known predicate has an empty or
+// otherwise malformed shape.
+var ErrInvalidPredicate = errors.New("relalg: invalid predicate")
+
 // ErrINCardinality is returned when an IN-list is empty, malformed, or exceeds
 // the configured bound.
 var ErrINCardinality = errors.New("relalg: invalid IN cardinality")
@@ -41,38 +45,60 @@ func ValidatePredicateWithMaxINCardinality(p Predicate, maxIN int) error {
 	case nil:
 		return nil
 	case Condition:
-		if !pp.Op.Valid() {
-			return fmt.Errorf("%w: %q on field %q", ErrInvalidOp, pp.Op, pp.Field)
-		}
-		if pp.Op == OpIn || pp.Op == OpNotIn {
-			values, ok := pp.Value.([]any)
-			if !ok {
-				return fmt.Errorf("%w: IN value must be []any, got %T", ErrINCardinality, pp.Value)
-			}
-			if len(values) == 0 || len(values) > maxIN {
-				return fmt.Errorf("%w: got %d values, maximum %d", ErrINCardinality, len(values), maxIN)
-			}
-		}
-		return nil
+		return validateCondition(pp, maxIN)
 	case And:
-		for _, q := range pp.Preds {
-			if err := ValidatePredicateWithMaxINCardinality(q, maxIN); err != nil {
-				return err
-			}
-		}
-		return nil
+		return validatePredicateList("AND", pp.Preds, maxIN)
 	case Or:
-		for _, q := range pp.Preds {
-			if err := ValidatePredicateWithMaxINCardinality(q, maxIN); err != nil {
-				return err
-			}
-		}
-		return nil
+		return validatePredicateList("OR", pp.Preds, maxIN)
 	case Not:
+		if pp.P == nil {
+			return fmt.Errorf("%w: nil NOT operand", ErrInvalidPredicate)
+		}
 		return ValidatePredicateWithMaxINCardinality(pp.P, maxIN)
 	case IsNull:
+		if pp.Field == "" {
+			return fmt.Errorf("%w: empty field", ErrInvalidPredicate)
+		}
 		return nil
 	default:
 		return fmt.Errorf("%w: %T", ErrUnknownPredicate, p)
 	}
+}
+
+func validateCondition(condition Condition, maxIN int) error {
+	if condition.Field == "" {
+		return fmt.Errorf("%w: empty field", ErrInvalidPredicate)
+	}
+	if !condition.Op.Valid() {
+		return fmt.Errorf("%w: %q on field %q", ErrInvalidOp, condition.Op, condition.Field)
+	}
+	if (condition.Op == OpIsNull || condition.Op == OpIsNotNull) && condition.Value != nil {
+		return fmt.Errorf("%w: %s does not accept a value", ErrInvalidPredicate, condition.Op)
+	}
+	if condition.Op != OpIn && condition.Op != OpNotIn {
+		return nil
+	}
+	values, ok := condition.Value.([]any)
+	if !ok {
+		return fmt.Errorf("%w: IN value must be []any, got %T", ErrINCardinality, condition.Value)
+	}
+	if len(values) == 0 || len(values) > maxIN {
+		return fmt.Errorf("%w: got %d values, maximum %d", ErrINCardinality, len(values), maxIN)
+	}
+	return nil
+}
+
+func validatePredicateList(name string, predicates []Predicate, maxIN int) error {
+	if len(predicates) == 0 {
+		return fmt.Errorf("%w: empty %s", ErrInvalidPredicate, name)
+	}
+	for _, predicate := range predicates {
+		if predicate == nil {
+			return fmt.Errorf("%w: nil %s operand", ErrInvalidPredicate, name)
+		}
+		if err := ValidatePredicateWithMaxINCardinality(predicate, maxIN); err != nil {
+			return err
+		}
+	}
+	return nil
 }

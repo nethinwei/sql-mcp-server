@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -373,6 +374,10 @@ func withRequestSubject(next http.Handler) http.Handler {
 			dec := json.NewDecoder(bytes.NewBufferString(raw))
 			dec.UseNumber()
 			if err := dec.Decode(&attrs); err != nil || attrs == nil {
+				http.Error(w, "invalid X-MCP-Subject: expected a JSON object", http.StatusBadRequest)
+				return
+			}
+			if err := dec.Decode(&struct{}{}); err != io.EOF {
 				http.Error(w, "invalid X-MCP-Subject: expected a JSON object", http.StatusBadRequest)
 				return
 			}

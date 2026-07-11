@@ -1,7 +1,8 @@
 # 安全模型与边界
 
 本文件是安全行为的单一真相源。配置字段见
-[configuration.md](configuration.md)。
+[configuration.md](configuration.md)。稳定 threat ID、攻击分析、测试证据与剩余
+风险记录在 [threat-model.md](threat-model.md)；该账本不改变本文件定义的行为。
 
 ## 信任边界
 

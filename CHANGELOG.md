@@ -6,6 +6,22 @@
 
 ## Unreleased
 
+## 0.1.4 - 2026-07-12
+
+### Added
+
+- 威胁模型与证据账本，覆盖安全资产、信任边界、攻击者假设、critical/high threat ID、
+  控制措施、验证证据、剩余风险和非保证范围。
+- critical/high adversarial corpus、四个定向 fuzz target，以及 CI 中有界、无 Docker
+  的四项 fuzz smoke。
+
+### Security
+
+- 将 MCP payload、IR validator、参数化 SQL codegen 和 transaction state machine
+  的安全属性纳入确定性 seed 回放与持续 fuzz 验证。
+- 明确 PostgreSQL、MySQL、OceanBase 的共享层、三库 integration 和未独立验证的证据
+  边界，避免将核心层测试外推为三库端到端保证。
+
 ## 0.1.3 - 2026-07-11
 
 ### Added

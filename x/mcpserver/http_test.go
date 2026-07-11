@@ -97,17 +97,28 @@ func TestTokenAuth(t *testing.T) {
 	}
 }
 
-func TestLimitBodyRejectsOversized(t *testing.T) {
-	var readErr error
-	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		_, readErr = io.ReadAll(r.Body)
-	})
-	h := limitBody(8, next)
-	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader("0123456789")) // 10 bytes > 8
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if readErr == nil {
-		t.Fatal("expected read error for oversized body, got nil")
+func TestLimitBodyBoundary(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{name: "below limit", body: "1234567"},
+		{name: "at limit", body: "12345678"},
+		{name: "above limit", body: "123456789", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var readErr error
+			next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				_, readErr = io.ReadAll(r.Body)
+			})
+			req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(tc.body))
+			limitBody(8, next).ServeHTTP(httptest.NewRecorder(), req)
+			if (readErr != nil) != tc.wantErr {
+				t.Fatalf("read error = %v, wantErr %v", readErr, tc.wantErr)
+			}
+		})
 	}
 }
 
@@ -217,15 +228,28 @@ func TestWithRequestSubjectOnlyWhenTrusted(t *testing.T) {
 }
 
 func TestWithRequestSubjectRejectsMalformedSubject(t *testing.T) {
-	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Fatal("malformed subject must not reach handler")
-	})
-	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
-	req.Header.Set("X-MCP-Subject", `{bad`)
-	rec := httptest.NewRecorder()
-	withRequestSubject(next).ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("code = %d, want 400", rec.Code)
+	cases := []struct {
+		name    string
+		subject string
+	}{
+		{name: "invalid JSON", subject: `{bad`},
+		{name: "array", subject: `[]`},
+		{name: "null", subject: `null`},
+		{name: "trailing JSON", subject: `{"tenant":7} {}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Fatal("malformed subject must not reach handler")
+			})
+			req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+			req.Header.Set("X-MCP-Subject", tc.subject)
+			rec := httptest.NewRecorder()
+			withRequestSubject(next).ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("code = %d, want 400", rec.Code)
+			}
+		})
 	}
 }
 
@@ -261,6 +285,41 @@ func TestTrustedProxyOnly(t *testing.T) {
 	handler.ServeHTTP(rec, untrusted)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("untrusted code = %d, want 403", rec.Code)
+	}
+}
+
+func TestTrustedProxyRejectsForgedIdentityFromUntrustedSource(t *testing.T) {
+	networks, err := parseTrustedProxyCIDRs([]string{"10.0.0.0/8"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name    string
+		role    string
+		subject string
+	}{
+		{name: "forged role", role: "admin"},
+		{name: "forged subject", subject: `{"tenant":7}`},
+		{name: "forged role and subject", role: "admin", subject: `{"tenant":7}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reached := false
+			next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true })
+			handler := trustedProxyOnly(networks, withRequestSubject(next))
+			req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+			req.RemoteAddr = "192.0.2.1:1234"
+			req.Header.Set("X-MCP-Role", tc.role)
+			req.Header.Set("X-MCP-Subject", tc.subject)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("code = %d, want 403", rec.Code)
+			}
+			if reached {
+				t.Fatal("forged identity reached trusted subject middleware")
+			}
+		})
 	}
 }
 

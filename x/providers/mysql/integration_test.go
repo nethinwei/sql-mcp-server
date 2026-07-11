@@ -155,6 +155,14 @@ func TestMySQLRLSRowFilterAndMasking(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 	_, _ = prov.ExecContext(ctx, "CREATE INDEX idx_users_tenant_id ON users (tenant_id)")
+	app := newMySQLRLSApp(t, prov)
+	assertMySQLMaskedRLS(t, ctx, app)
+	assertMySQLAdversarialRLS(t, ctx, app)
+	assertMySQLQuotedIdentifierRLS(t, ctx, prov)
+}
+
+func newMySQLRLSApp(t *testing.T, prov *mysql.Provider) *bootstrap.App {
+	t.Helper()
 	cfg := &config.Config{
 		Server:   config.ServerConfig{Role: "reader"},
 		Database: config.DatabaseConfig{Driver: "mysql", DSN: "ignored"},
@@ -176,10 +184,13 @@ func TestMySQLRLSRowFilterAndMasking(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tc := app.ToolContext("reader")
+	return app
+}
 
+func assertMySQLMaskedRLS(t *testing.T, ctx context.Context, app *bootstrap.App) {
+	t.Helper()
 	in, _ := json.Marshal(map[string]any{"entity": "users"})
-	res, err := tool.ReadTool{}.Run(ctx, in, tc)
+	res, err := tool.ReadTool{}.Run(ctx, in, app.ToolContext("reader"))
 	if err != nil {
 		t.Fatalf("read should pass, got %v", err)
 	}
@@ -188,6 +199,76 @@ func TestMySQLRLSRowFilterAndMasking(t *testing.T) {
 	}
 	if res.Content[0]["email"] != "a***@x.com" {
 		t.Fatalf("email not masked: %v", res.Content[0]["email"])
+	}
+}
+
+func assertMySQLAdversarialRLS(t *testing.T, ctx context.Context, app *bootstrap.App) {
+	t.Helper()
+	for _, tc := range []struct {
+		name   string
+		filter []map[string]any
+	}{
+		{name: "request other tenant", filter: []map[string]any{{"field": "tenant_id", "op": "eq", "value": 8}}},
+		{name: "negate allowed tenant", filter: []map[string]any{{"field": "tenant_id", "op": "ne", "value": 7}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in, _ := json.Marshal(map[string]any{"entity": "users", "filter": tc.filter})
+			got, err := tool.ReadTool{}.Run(ctx, in, app.ToolContext("reader"))
+			if err != nil {
+				t.Fatalf("adversarial read failed: %v", err)
+			}
+			if len(got.Content) != 0 {
+				t.Fatalf("row policy was weakened: %v", got.Content)
+			}
+		})
+	}
+}
+
+func assertMySQLQuotedIdentifierRLS(t *testing.T, ctx context.Context, prov *mysql.Provider) {
+	t.Helper()
+	if _, err := prov.ExecContext(ctx, "CREATE DATABASE `tenant``edge`"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prov.ExecContext(ctx,
+		"CREATE TABLE `tenant``edge`.`user``records` (id int PRIMARY KEY, tenant_id int)",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prov.ExecContext(ctx,
+		"INSERT INTO `tenant``edge`.`user``records` VALUES (1, 7), (2, 8)",
+	); err != nil {
+		t.Fatal(err)
+	}
+	quotedCfg := &config.Config{
+		Server:   config.ServerConfig{Role: "reader"},
+		Database: config.DatabaseConfig{Driver: "mysql", DSN: "ignored"},
+		Entities: []config.EntityConfig{{
+			Name: "quoted_users", Source: "user`records", Schema: "tenant`edge", Kind: "table",
+			PrimaryKey: []string{"id"},
+			Fields:     []config.FieldConfig{{Name: "id"}, {Name: "tenant_id"}},
+			Roles:      config.RoleConfig{Read: []string{"reader"}},
+			RowPolicies: config.RowPolicies{
+				"reader": config.FilterConfig{"op": "eq", "field": "tenant_id", "value": 7},
+			},
+		}},
+		Tools: config.DefaultToolFlags(),
+		Cost:  config.CostConfig{Enabled: config.Bool(false), MaxRows: 10000},
+	}
+	quotedCfg.ApplyDefaults()
+	quotedApp, err := bootstrap.AssembleWithProvider(quotedCfg, prov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quotedInput, _ := json.Marshal(map[string]any{
+		"entity": "quoted_users",
+		"filter": []map[string]any{{"field": "tenant_id", "op": "eq", "value": 8}},
+	})
+	quotedResult, err := tool.ReadTool{}.Run(ctx, quotedInput, quotedApp.ToolContext("reader"))
+	if err != nil {
+		t.Fatalf("quoted schema/table read failed: %v", err)
+	}
+	if len(quotedResult.Content) != 0 {
+		t.Fatalf("quoted identifier read weakened row policy: %v", quotedResult.Content)
 	}
 }
 

@@ -24,6 +24,9 @@ MCP Registry 仍处于 preview；`server.json` schema 和 publisher 版本固定
 | MySQL | `mysql:8` | MySQL 8.x |
 | OceanBase | `oceanbase/oceanbase-ce:4.3.5.6-106000012026040916` | OceanBase CE 4.3.5.6，MySQL 模式 |
 
-未列出的数据库版本可能可用，但 v0.1.3 不宣称已验证。升级测试镜像必须同时运行
+未列出的数据库版本可能可用，但 v0.1.4 不宣称已验证。升级测试镜像必须同时运行
 对应 provider integration，并更新本页和
 [兼容矩阵](provider-compatibility.md)。
+
+v0.1.4 的 CI/测试继续使用上述 Go 1.26.5 和数据库镜像；新增 fuzz/core 证据不扩大
+数据库兼容范围。

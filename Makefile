@@ -7,7 +7,7 @@ MCP_PUBLISHER ?= mcp-publisher
 PYTHON ?= python3
 SYFT ?= syft
 VERSION ?= dev
-RELEASE_VERSION ?= 0.1.3
+RELEASE_VERSION ?= 0.1.4
 RELEASE_IMAGE ?= sql-mcp-server:release-preflight
 VERSION_PACKAGE := github.com/nethinwei/sql-mcp-server/version.value
 LDFLAGS ?= -X $(VERSION_PACKAGE)=$(VERSION)
@@ -15,7 +15,7 @@ BINARY := sql-mcp-server$(shell $(GO) env GOEXE)
 CORE_COVERAGE_MIN := 80.0
 CORE_PACKAGES := ./core/...
 
-.PHONY: fmt fmt-check vet build test test-integration test-e2e lint coverage \
+.PHONY: fmt fmt-check vet build test test-fuzz-smoke test-integration test-e2e lint coverage \
 	coverage-check govulncheck workflow-check release-check release-quality \
 	release-snapshot release-metadata-check release-image-check release-preflight-fast \
 	release-preflight modelscope-check ci ci-local ci-full tidy
@@ -72,9 +72,16 @@ release-preflight:
 	$(MAKE) ci-full
 	$(MAKE) release-preflight-fast
 
-# Unit tests (core packages, no docker).
+# Unit tests, including fuzz seed corpus replay (no docker).
 test:
 	$(GO) test -race ./...
+
+# Bounded fuzz smoke (four independent invocations, no docker; about 80 seconds total).
+test-fuzz-smoke:
+	$(GO) test ./core/tool -run='^$$' -fuzz='^FuzzToolPayloadDecodeNormalizeFieldGate$$' -fuzztime=20s -timeout=30s
+	$(GO) test ./core/relalg -run='^$$' -fuzz='^FuzzValidatePredicate$$' -fuzztime=20s -timeout=30s
+	$(GO) test ./core/codegen -run='^$$' -fuzz='^FuzzCompileNoInjectionAndQuoting$$' -fuzztime=20s -timeout=30s
+	$(GO) test ./core/tool -run='^$$' -fuzz='^FuzzTransactionStateMachine$$' -fuzztime=20s -timeout=30s
 
 # Integration tests (real DBs via testcontainers; Docker required).
 test-integration:

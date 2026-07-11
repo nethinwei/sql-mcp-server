@@ -177,6 +177,14 @@ func TestRLSRowFilterAndMasking(t *testing.T) {
 	prov, cleanup := setupPG(t)
 	defer cleanup()
 	ctx := context.Background()
+	app := newPGRLSApp(t, prov)
+	assertPGMaskedRLS(t, ctx, app)
+	assertPGAdversarialRLS(t, ctx, app)
+	assertPGQuotedIdentifierRLS(t, ctx, prov)
+}
+
+func newPGRLSApp(t *testing.T, prov *pgprov.Provider) *bootstrap.App {
+	t.Helper()
 	cfg := &config.Config{
 		Server:   config.ServerConfig{Role: "reader"},
 		Database: config.DatabaseConfig{Driver: "postgres", DSN: "ignored"},
@@ -200,11 +208,13 @@ func TestRLSRowFilterAndMasking(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tc := app.ToolContext("reader")
+	return app
+}
 
-	// Read all: RLS restricts to tenant 7 (alice only); email is masked.
+func assertPGMaskedRLS(t *testing.T, ctx context.Context, app *bootstrap.App) {
+	t.Helper()
 	in, _ := json.Marshal(map[string]any{"entity": "users"})
-	res, err := tool.ReadTool{}.Run(ctx, in, tc)
+	res, err := tool.ReadTool{}.Run(ctx, in, app.ToolContext("reader"))
 	if err != nil {
 		t.Fatalf("read should pass, got %v", err)
 	}
@@ -213,6 +223,76 @@ func TestRLSRowFilterAndMasking(t *testing.T) {
 	}
 	if res.Content[0]["email"] != "a***@x.com" {
 		t.Fatalf("email not masked: %v", res.Content[0]["email"])
+	}
+}
+
+func assertPGAdversarialRLS(t *testing.T, ctx context.Context, app *bootstrap.App) {
+	t.Helper()
+	for _, tc := range []struct {
+		name   string
+		filter []map[string]any
+	}{
+		{name: "request other tenant", filter: []map[string]any{{"field": "tenant_id", "op": "eq", "value": 8}}},
+		{name: "negate allowed tenant", filter: []map[string]any{{"field": "tenant_id", "op": "ne", "value": 7}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in, _ := json.Marshal(map[string]any{"entity": "users", "filter": tc.filter})
+			got, err := tool.ReadTool{}.Run(ctx, in, app.ToolContext("reader"))
+			if err != nil {
+				t.Fatalf("adversarial read failed: %v", err)
+			}
+			if len(got.Content) != 0 {
+				t.Fatalf("row policy was weakened: %v", got.Content)
+			}
+		})
+	}
+}
+
+func assertPGQuotedIdentifierRLS(t *testing.T, ctx context.Context, prov *pgprov.Provider) {
+	t.Helper()
+	if _, err := prov.ExecContext(ctx, `CREATE SCHEMA "tenant""edge"`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prov.ExecContext(ctx,
+		`CREATE TABLE "tenant""edge"."user""records" (id integer PRIMARY KEY, tenant_id integer)`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prov.ExecContext(ctx,
+		`INSERT INTO "tenant""edge"."user""records" VALUES (1, 7), (2, 8)`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	quotedCfg := &config.Config{
+		Server:   config.ServerConfig{Role: "reader"},
+		Database: config.DatabaseConfig{Driver: "postgres", DSN: "ignored"},
+		Entities: []config.EntityConfig{{
+			Name: "quoted_users", Source: `user"records`, Schema: `tenant"edge`, Kind: "table",
+			PrimaryKey: []string{"id"},
+			Fields:     []config.FieldConfig{{Name: "id"}, {Name: "tenant_id"}},
+			Roles:      config.RoleConfig{Read: []string{"reader"}},
+			RowPolicies: config.RowPolicies{
+				"reader": config.FilterConfig{"op": "eq", "field": "tenant_id", "value": 7},
+			},
+		}},
+		Tools: config.DefaultToolFlags(),
+		Cost:  config.CostConfig{Enabled: config.Bool(false), MaxRows: 10000},
+	}
+	quotedCfg.ApplyDefaults()
+	quotedApp, err := bootstrap.AssembleWithProvider(quotedCfg, prov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quotedInput, _ := json.Marshal(map[string]any{
+		"entity": "quoted_users",
+		"filter": []map[string]any{{"field": "tenant_id", "op": "eq", "value": 8}},
+	})
+	quotedResult, err := tool.ReadTool{}.Run(ctx, quotedInput, quotedApp.ToolContext("reader"))
+	if err != nil {
+		t.Fatalf("quoted schema/table read failed: %v", err)
+	}
+	if len(quotedResult.Content) != 0 {
+		t.Fatalf("quoted identifier read weakened row policy: %v", quotedResult.Content)
 	}
 }
 

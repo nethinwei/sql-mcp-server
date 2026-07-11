@@ -19,13 +19,73 @@ func TestRuntimeReloadDrainsBeforePublishing(t *testing.T) {
 	runtime := NewRuntimeWithBuilder(oldApp, func(string) (*App, error) {
 		return nextApp, nil
 	})
+	release := acquireRuntimeApp(t, runtime, oldApp)
+	done := startRuntimeReload(runtime)
+	waitForRetiredRuntimeSnapshot(t, runtime)
+	newRequest := startRuntimeAcquire(runtime)
+	assertRuntimeReloadWaitsForLease(t, runtime, oldApp, done, newRequest)
+	release()
+	assertRuntimeReloadPublishedNewApp(t, runtime, nextApp, done, newRequest)
+	if oldProvider.closed != 1 {
+		t.Fatalf("old provider closed %d times", oldProvider.closed)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func acquireRuntimeApp(t *testing.T, runtime *Runtime, want *App) func() {
+	t.Helper()
 	leased, release, err := runtime.Acquire()
-	if err != nil || leased != oldApp {
+	if err != nil || leased != want {
 		t.Fatalf("Acquire = %p, %v", leased, err)
 	}
+	return release
+}
+
+type runtimeAcquireResult struct {
+	app     *App
+	release func()
+	err     error
+}
+
+func startRuntimeReload(runtime *Runtime) chan error {
 	done := make(chan error, 1)
 	go func() { done <- runtime.Reload("ignored") }()
-	time.Sleep(20 * time.Millisecond)
+	return done
+}
+
+func startRuntimeAcquire(runtime *Runtime) chan runtimeAcquireResult {
+	newRequest := make(chan runtimeAcquireResult, 1)
+	go func() {
+		app, release, err := runtime.Acquire()
+		newRequest <- runtimeAcquireResult{app: app, release: release, err: err}
+	}()
+	return newRequest
+}
+
+func waitForRetiredRuntimeSnapshot(t *testing.T, runtime *Runtime) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		snapshot := runtime.current.Load()
+		snapshot.mu.Lock()
+		retired := snapshot.retired
+		snapshot.mu.Unlock()
+		if retired {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("old authorization snapshot was not retired")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func assertRuntimeReloadWaitsForLease(
+	t *testing.T, runtime *Runtime, oldApp *App, done chan error, newRequest chan runtimeAcquireResult,
+) {
+	t.Helper()
 	if runtime.Current() != oldApp {
 		t.Fatal("new app was published before old authorization snapshot drained")
 	}
@@ -34,18 +94,34 @@ func TestRuntimeReloadDrainsBeforePublishing(t *testing.T) {
 		t.Fatalf("reload completed before old lease drained: %v", err)
 	default:
 	}
-	release()
+	select {
+	case got := <-newRequest:
+		if got.release != nil {
+			got.release()
+		}
+		t.Fatalf("new request acquired draining snapshot: app=%p err=%v", got.app, got.err)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func assertRuntimeReloadPublishedNewApp(
+	t *testing.T, runtime *Runtime, nextApp *App, done chan error, newRequest chan runtimeAcquireResult,
+) {
+	t.Helper()
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
+	got := <-newRequest
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	if got.app != nextApp {
+		got.release()
+		t.Fatalf("new request acquired app %p, want tightened snapshot %p", got.app, nextApp)
+	}
+	got.release()
 	if runtime.Current() != nextApp {
 		t.Fatal("new app was not published after drain")
-	}
-	if oldProvider.closed != 1 {
-		t.Fatalf("old provider closed %d times", oldProvider.closed)
-	}
-	if err := runtime.Close(); err != nil {
-		t.Fatal(err)
 	}
 }
 

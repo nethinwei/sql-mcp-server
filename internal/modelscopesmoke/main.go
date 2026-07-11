@@ -120,7 +120,7 @@ func connect(ctx context.Context, server manifestServer, dsn string) (*mcp.Clien
 	binary := envOr("MODELSCOPE_BINARY", "./sql-mcp-server")
 	command := exec.CommandContext(ctx, binary, args...)
 	command.Env = append(os.Environ(), "DATABASE_DSN="+dsn)
-	client := mcp.NewClient(&mcp.Implementation{Name: "modelscope-smoke", Version: "v0.1.3"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "modelscope-smoke", Version: "v0.1.4"}, nil)
 	return client.Connect(ctx, &mcp.CommandTransport{Command: command}, nil)
 }
 

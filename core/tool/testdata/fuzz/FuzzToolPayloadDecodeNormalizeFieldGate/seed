@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"entity\":\"users\",\"filter\":[{\"field\":\"secret\",\"op\":\"eq\",\"value\":\"x\"}]}")

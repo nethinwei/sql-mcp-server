@@ -20,7 +20,7 @@ sql-mcp-server explain --config config.yaml --entity users
 创建 RC/GA tag 前先运行：
 
 ```sh
-make release-preflight RELEASE_VERSION=0.1.3
+make release-preflight RELEASE_VERSION=0.1.4
 ```
 
 该命令复用 GitHub workflow 使用的验证脚本，覆盖完整测试、跨平台 snapshot、
@@ -52,7 +52,7 @@ cosign verify \
   ghcr.io/nethinwei/sql-mcp-server@sha256:<digest>
 ```
 
-RC 流程可试运行 GitHub Artifact Attestations，但 v0.1.3 不把 provenance 作为
+RC 流程可试运行 GitHub Artifact Attestations，但 v0.1.4 不把 provenance 作为
 发布阻塞项。
 
 ## 启动
