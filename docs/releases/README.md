@@ -1,7 +1,7 @@
 # 发布说明索引
 
-当前 GA 为 `v0.1.5`（[发布说明](v0.1.5.md)、
-[GitHub Release](https://github.com/nethinwei/sql-mcp-server/releases/tag/v0.1.5)）。
+当前 GA 为 `v0.1.6`（[发布说明](v0.1.6.md)、
+[GitHub Release](https://github.com/nethinwei/sql-mcp-server/releases/tag/v0.1.6)）。
 
 本目录中的发布说明描述各版本发布时点的能力、迁移和证据状态。当前运行时行为以
 [配置参考](../configuration.md)、[安全模型](../security.md)和
@@ -10,6 +10,9 @@
 
 ## 版本
 
+- [`v0.1.6`](v0.1.6.md)（2026-07-12）：健康分离、最小可观测（metrics/结构化
+  日志/OTLP）、审计事件 schema 定版、协议 smoke 进主 CI、overhead benchmark
+  与 Agent Eval pilot（含 no-go 结论）；
 - [`v0.1.5`](v0.1.5.md)（2026-07-12）：机器可读拒绝契约与 decision ID、真实
   HTTP e2e、确定性 export、六场景产品证明与证据索引；
 - [`v0.1.4`](v0.1.4.md)（2026-07-12）：威胁模型、对抗 corpus、fuzz 与三库

@@ -56,7 +56,7 @@ func connect(ctx context.Context) (*mcp.ClientSession, error) {
 		HTTPClient: httpClient,
 		MaxRetries: -1,
 	}
-	client := mcp.NewClient(&mcp.Implementation{Name: "quickstart-smoke", Version: "v0.1.5"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "quickstart-smoke", Version: "v0.1.6"}, nil)
 
 	var lastErr error
 	for ctx.Err() == nil {

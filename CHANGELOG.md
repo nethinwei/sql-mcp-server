@@ -9,6 +9,8 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+## 0.1.6 - 2026-07-12
+
 ### Added
 
 - 健康分离：`/healthz` 保留为 liveness，新增 `/readyz/snapshot`（配置快照
@@ -27,9 +29,11 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 - 可复现 data-plane overhead benchmark（`make bench-overhead`）：固定
   fixture 下对比直连查询与完整治理路径的 p50/p95/p99，方法与样例见
   [`docs/benchmarks/data-plane-overhead.md`](docs/benchmarks/data-plane-overhead.md)。
-- Agent Eval pilot 框架（`make eval-pilot`）：24 个固定任务、确定性
-  fixture、机械评分与 go/no-go 结论模板，经 OpenAI 兼容端点驱动
-  （见 [`eval/README.md`](eval/README.md)）。
+- Agent Eval pilot 框架（`make eval-pilot`）：24 个固定任务（任务集 v2）、
+  确定性 fixture、机械评分、并行执行与完整 ReAct transcript 记录，经
+  OpenAI 兼容端点驱动（见 [`eval/README.md`](eval/README.md)）；三轮正式
+  运行的书面结论（对语义元数据阶段 no-go）存于
+  [`eval/results/`](eval/results/)。
 
 ### Changed
 
@@ -40,6 +44,8 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   `action`；`durationMs` 为整数毫秒。此前输出为未定版的 Go 字段名
   （`Time`、`Tool` 等），消费该格式的脚本需按
   [`docs/tool-contract.md`](docs/tool-contract.md) 的定版 schema 迁移。
+
+详见 [`docs/releases/v0.1.6.md`](docs/releases/v0.1.6.md)。
 
 ## 0.1.5 - 2026-07-12
 

@@ -1,7 +1,7 @@
 # Roadmap
 
-当前稳定基线为 `v0.1.5`。已发布能力以
-[发布说明](releases/v0.1.5.md)、[CHANGELOG](../CHANGELOG.md)、
+当前稳定基线为 `v0.1.6`。已发布能力以
+[发布说明](releases/v0.1.6.md)、[CHANGELOG](../CHANGELOG.md)、
 [配置参考](configuration.md)和[安全模型](security.md)为准。
 
 本文件只给出未发布成果的顺序和门禁：
@@ -13,7 +13,6 @@
 
 详细文档：
 
-- 当前承诺：[v0.1.6 — Observable + Measurable](roadmap/committed-v0.1.6.md)
 - 长期方向：[Evidence-Gated Directions](roadmap/directions.md)
 - 衡量方法：[Roadmap Metrics](roadmap/metrics.md)
 - 数据库候选：[Provider Roadmap](provider-roadmap.md)
@@ -37,31 +36,28 @@
 
 ---
 
-## Now — Committed v0.1.6
+## Now — 无承诺版本（v0.1.6 已发布，下一承诺待证据）
 
-目标：让拒绝、成本、故障和 Agent 效果从“可运行”变为“可解释、可测量”。
-进入门禁（`v0.1.5` 验收完成，拒绝路径可经 `decision ID` 关联）已满足。
+`v0.1.6`（Observable + Measurable）已完成验收并发布，成果见
+[发布说明](releases/v0.1.6.md)。
 
-关键结果：
+Agent Eval pilot 的结论
+（[2026-07-12 no-go](../eval/results/2026-07-12-deepseek-v4-flash.md)）表明
+语义元数据的进入门禁**未满足**：三轮 24 任务运行中没有失败可归因于 grain、
+时间、枚举、单位或 catalog token 缺失。按本路线图规则，Next 1 不升格；下一个
+`Committed` 由采用侧证据决定，当前候选（不构成承诺）：
 
-- liveness、snapshot readiness 和数据库 readiness 分离；
-- 最小 metrics、结构化日志和 stdio/HTTP 协议 smoke；
-- 审计事件 schema 定版（json tag 命名、拒绝码、entity/action）；
-- 可复现的 p50/p95/p99 data-plane overhead benchmark；
-- 20–30 个固定任务的 Agent Eval pilot。
-
-退出门禁：telemetry 能解释拒绝和故障；benchmark 与 pilot 有固定环境、评分和
-复现命令；pilot 对下一阶段形成 go/no-go 结论。
-
-完整范围与非目标见
-[v0.1.6 — Observable + Measurable](roadmap/committed-v0.1.6.md)。
+- SQLite Provider（按 [Provider Roadmap](provider-roadmap.md) 进入条件，
+  含 capability model 前置重构）；
+- Next 2 的公开 Eval 准备（复用 pilot 框架升级为版本化任务集）。
 
 ---
 
 ## Next 1 — Semantic Metadata
 
 进入门禁：可观测基线完成，且 pilot 证明 grain、时间、枚举、单位或 catalog token
-是显著失败来源。
+是显著失败来源。**2026-07-12 pilot 结论为 no-go，本门禁未满足**；真实大
+schema 或语义歧义负载出现时重新评估。
 
 目标结果：
 
