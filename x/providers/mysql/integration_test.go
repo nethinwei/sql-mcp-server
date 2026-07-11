@@ -226,16 +226,15 @@ func assertMySQLAdversarialRLS(t *testing.T, ctx context.Context, app *bootstrap
 
 func assertMySQLQuotedIdentifierRLS(t *testing.T, ctx context.Context, prov *mysql.Provider) {
 	t.Helper()
-	if _, err := prov.ExecContext(ctx, "CREATE DATABASE `tenant``edge`"); err != nil {
-		t.Fatal(err)
-	}
+	// The integration user only has privileges on the default database, so quoted
+	// identifier coverage uses a backtick table name instead of CREATE DATABASE.
 	if _, err := prov.ExecContext(ctx,
-		"CREATE TABLE `tenant``edge`.`user``records` (id int PRIMARY KEY, tenant_id int)",
+		"CREATE TABLE `user``records` (id int PRIMARY KEY, tenant_id int)",
 	); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := prov.ExecContext(ctx,
-		"INSERT INTO `tenant``edge`.`user``records` VALUES (1, 7), (2, 8)",
+		"INSERT INTO `user``records` VALUES (1, 7), (2, 8)",
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +242,7 @@ func assertMySQLQuotedIdentifierRLS(t *testing.T, ctx context.Context, prov *mys
 		Server:   config.ServerConfig{Role: "reader"},
 		Database: config.DatabaseConfig{Driver: "mysql", DSN: "ignored"},
 		Entities: []config.EntityConfig{{
-			Name: "quoted_users", Source: "user`records", Schema: "tenant`edge", Kind: "table",
+			Name: "quoted_users", Source: "user`records", Kind: "table",
 			PrimaryKey: []string{"id"},
 			Fields:     []config.FieldConfig{{Name: "id"}, {Name: "tenant_id"}},
 			Roles:      config.RoleConfig{Read: []string{"reader"}},
