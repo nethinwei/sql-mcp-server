@@ -12,6 +12,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
+	"github.com/nethinwei/sql-mcp-server/version"
 	pgprov "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
 
@@ -120,7 +121,7 @@ func connect(ctx context.Context, server manifestServer, dsn string) (*mcp.Clien
 	binary := envOr("MODELSCOPE_BINARY", "./sql-mcp-server")
 	command := exec.CommandContext(ctx, binary, args...)
 	command.Env = append(os.Environ(), "DATABASE_DSN="+dsn)
-	client := mcp.NewClient(&mcp.Implementation{Name: "modelscope-smoke", Version: "v0.1.6"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "modelscope-smoke", Version: version.String()}, nil)
 	return client.Connect(ctx, &mcp.CommandTransport{Command: command}, nil)
 }
 

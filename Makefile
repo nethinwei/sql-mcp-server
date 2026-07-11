@@ -23,7 +23,8 @@ CORE_PACKAGES := ./core/...
 .PHONY: fmt fmt-check vet build test test-fuzz-smoke test-integration test-e2e lint coverage \
 	coverage-check govulncheck workflow-check release-check release-quality \
 	release-snapshot release-metadata-check release-image-check release-preflight-fast \
-	release-preflight modelscope-check smoke-protocol bench-overhead eval-pilot ci ci-local ci-full tidy
+	release-preflight release-bump modelscope-check smoke-protocol bench-overhead eval-pilot \
+	ci ci-local ci-full tidy
 
 # Format all Go sources in place (gofmt + 120-column line shortening).
 fmt:
@@ -51,6 +52,11 @@ release-snapshot: release-check
 	PATH="$$(dirname "$$(command -v $(SYFT))"):$$PATH" \
 		$(GORELEASER) release --snapshot --clean --skip=publish,sign
 	scripts/release/verify-dist.sh dist
+
+# Rewrite all pinned version references (server.json, examples, README GA
+# lines) in one idempotent pass; editorial files stay manual.
+release-bump:
+	$(PYTHON) scripts/release/bump.py --version $(RELEASE_VERSION)
 
 release-metadata-check:
 	$(PYTHON) scripts/release/metadata.py render --version $(RELEASE_VERSION) \
