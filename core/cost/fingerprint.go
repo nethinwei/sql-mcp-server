@@ -54,8 +54,11 @@ func ValidateTemplateScopes(datasources, allowTemplates, rejectTemplates []strin
 				continue
 			}
 			return fmt.Errorf(
-				"cost: %s entry %q is legacy bare SQL and is unsafe with multiple datasources; migrate it to fp:v2:<sha256> or prefix it with a datasource, for example %q",
-				templates.name, value, names[0]+":"+value,
+				"cost: %s entry %q is legacy bare SQL and is unsafe with multiple datasources; "+
+					"migrate it to fp:v2:<sha256> or prefix it with a datasource, for example %q",
+				templates.name,
+				value,
+				names[0]+":"+value,
 			)
 		}
 	}
@@ -72,7 +75,12 @@ func hasDatasourceScope(value string, datasources []string) bool {
 	return false
 }
 
-func matchesBaseline(values []string, datasource, dialectName string, c codegen.Compiled, allowLegacyExactSQL bool) bool {
+func matchesBaseline(
+	values []string,
+	datasource, dialectName string,
+	c codegen.Compiled,
+	allowLegacyExactSQL bool,
+) bool {
 	fp := Fingerprint(datasource, dialectName, c)
 	scopedSQL := strings.TrimSpace(datasource) + ":" + c.SQL
 	for _, value := range values {

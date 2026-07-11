@@ -50,7 +50,8 @@ func TestParsePGExplainIndexScan(t *testing.T) {
 
 func TestParsePGExplainSort(t *testing.T) {
 	t.Parallel()
-	raw := `[{"Plan":{"Node Type":"Sort","Total Cost":50,"Plan Rows":10,"Plans":[{"Node Type":"Seq Scan","Relation Name":"users"}]}}]`
+	raw := `[{"Plan":{"Node Type":"Sort","Total Cost":50,"Plan Rows":10,"Plans":[` +
+		`{"Node Type":"Seq Scan","Relation Name":"users"}]}}]`
 	p, root, _ := parsePGExplain([]byte(raw))
 	if !p.HasSort {
 		t.Error("expected HasSort for Sort node")

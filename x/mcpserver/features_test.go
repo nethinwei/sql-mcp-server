@@ -19,6 +19,18 @@ import (
 )
 
 func TestAuthorizedSchemaResourceAndPrompts(t *testing.T) {
+	app := authorizedSchemaTestApp(t)
+	session, ctx, cancel := connectMCPSession(t, app)
+	defer cancel()
+	defer session.Close()
+
+	assertServerVersion(t, session)
+	assertAuthorizedSchemaResource(t, ctx, session)
+	assertAuthorizedSchemaPrompts(t, ctx, session)
+}
+
+func authorizedSchemaTestApp(t *testing.T) *bootstrap.App {
+	t.Helper()
 	registry, err := entity.NewRegistry([]entity.Entity{
 		{
 			Name: "orders", MCP: entity.MCPFlags{DMLTools: true},
@@ -45,25 +57,36 @@ func TestAuthorizedSchemaResourceAndPrompts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := &bootstrap.App{
+	return &bootstrap.App{
 		Registry: registry, Authorizer: rbac.NewRoleAuthorizer(registry),
 		Tools: tools, DefaultRole: "reader",
 	}
+}
+
+func connectMCPSession(t *testing.T, app *bootstrap.App) (*mcp.ClientSession, context.Context, context.CancelFunc) {
+	t.Helper()
 	server := NewServer(app)
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	go func() { _ = server.Run(ctx, serverTransport) }()
 	client := mcp.NewClient(&mcp.Implementation{Name: "test"}, nil)
 	session, err := client.Connect(ctx, clientTransport, nil)
 	if err != nil {
+		cancel()
 		t.Fatal(err)
 	}
-	defer session.Close()
+	return session, ctx, cancel
+}
+
+func assertServerVersion(t *testing.T, session *mcp.ClientSession) {
+	t.Helper()
 	if got := session.InitializeResult().ServerInfo.Version; got != version.String() {
 		t.Fatalf("server version = %q, want %q", got, version.String())
 	}
+}
 
+func assertAuthorizedSchemaResource(t *testing.T, ctx context.Context, session *mcp.ClientSession) {
+	t.Helper()
 	resources, err := session.ListResources(ctx, &mcp.ListResourcesParams{})
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +112,10 @@ func TestAuthorizedSchemaResourceAndPrompts(t *testing.T) {
 	if strings.Contains(text, `"secret"`) || strings.Contains(text, `"admin_only"`) {
 		t.Fatalf("authorized schema leaked inaccessible metadata: %s", text)
 	}
+}
 
+func assertAuthorizedSchemaPrompts(t *testing.T, ctx context.Context, session *mcp.ClientSession) {
+	t.Helper()
 	prompts, err := session.ListPrompts(ctx, &mcp.ListPromptsParams{})
 	if err != nil {
 		t.Fatal(err)

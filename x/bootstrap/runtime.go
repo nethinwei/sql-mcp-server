@@ -109,35 +109,68 @@ func (r *Runtime) Reload(path string) error {
 		return err
 	}
 	old := r.current.Load()
-	oldBudget, oldBudgetOK := old.app.Budget.(*budget.MemoryManager)
-	nextBudget, nextBudgetOK := next.Budget.(*budget.MemoryManager)
-	if old.app.Budget != nil && (!oldBudgetOK || !nextBudgetOK) && next.Budget != old.app.Budget {
+	if err := validateReloadBudget(old.app, next); err != nil {
+		return err
+	}
+	if err := preserveReloadTransactions(old.app, next); err != nil {
+		return err
+	}
+	preserveReloadBudget(old.app, next)
+	return publishReload(r, old, next)
+}
+
+func validateReloadBudget(old, next *App) error {
+	_, oldBudgetOK := old.Budget.(*budget.MemoryManager)
+	_, nextBudgetOK := next.Budget.(*budget.MemoryManager)
+	if old.Budget != nil && (!oldBudgetOK || !nextBudgetOK) && next.Budget != old.Budget {
 		_ = next.Close()
 		return errors.New("bootstrap: budget manager does not support state-preserving reload")
 	}
-	if old.app.Transactions != nil {
-		if next.Transactions == nil {
-			_ = next.Close()
-			return errors.New("bootstrap: transaction configuration cannot be removed by reload")
-		}
-		oldTTL, oldMax := old.app.Transactions.Configuration()
-		nextTTL, nextMax := next.Transactions.Configuration()
-		if oldTTL != nextTTL || oldMax != nextMax {
-			_ = next.Close()
-			return fmt.Errorf("bootstrap: transaction ttl/maxOpen change requires restart (current %s/%d, requested %s/%d)", oldTTL, oldMax, nextTTL, nextMax)
-		}
-		if next.Transactions != old.app.Transactions {
-			next.Transactions.Close()
-		}
-		next.Transactions = old.app.Transactions
+	return nil
+}
+
+func preserveReloadTransactions(old, next *App) error {
+	if old.Transactions == nil {
+		return nil
 	}
-	if old.app.Budget != nil {
-		if oldBudgetOK && nextBudgetOK {
-			roles, tenants := nextBudget.ConfiguredLimits()
-			oldBudget.UpdateLimits(roles, tenants)
-			next.Budget = oldBudget
-		}
+	if next.Transactions == nil {
+		_ = next.Close()
+		return errors.New("bootstrap: transaction configuration cannot be removed by reload")
 	}
+	oldTTL, oldMax := old.Transactions.Configuration()
+	nextTTL, nextMax := next.Transactions.Configuration()
+	if oldTTL != nextTTL || oldMax != nextMax {
+		_ = next.Close()
+		return fmt.Errorf(
+			"bootstrap: transaction ttl/maxOpen change requires restart (current %s/%d, requested %s/%d)",
+			oldTTL,
+			oldMax,
+			nextTTL,
+			nextMax,
+		)
+	}
+	if next.Transactions != old.Transactions {
+		next.Transactions.Close()
+	}
+	next.Transactions = old.Transactions
+	return nil
+}
+
+func preserveReloadBudget(old, next *App) {
+	if old.Budget == nil {
+		return
+	}
+	oldBudget, oldBudgetOK := old.Budget.(*budget.MemoryManager)
+	nextBudget, nextBudgetOK := next.Budget.(*budget.MemoryManager)
+	if !oldBudgetOK || !nextBudgetOK {
+		return
+	}
+	roles, tenants := nextBudget.ConfiguredLimits()
+	oldBudget.UpdateLimits(roles, tenants)
+	next.Budget = oldBudget
+}
+
+func publishReload(r *Runtime, old *appSnapshot, next *App) error {
 	old.mu.Lock()
 	old.retired = true
 	for old.refs > 0 {

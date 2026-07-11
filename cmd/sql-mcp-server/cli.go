@@ -76,27 +76,7 @@ func runServe(ctx context.Context, args []string) error {
 		cfg.Server.Role = *role
 	}
 	resolveServeEndpoint(fs, cfg, transport, addr)
-	immutableServer := cfg.Server
-	immutableTools := cfg.Tools
-	immutableDiscovery := toolDiscoverySignature(cfg.Entities)
-	build := func(path string) (*bootstrap.App, error) {
-		next, err := bootstrap.Load(path)
-		if err != nil {
-			return nil, err
-		}
-		if err := validateHotReloadConfig(immutableServer, immutableTools, next, immutableDiscovery); err != nil {
-			return nil, err
-		}
-		if *role != "" {
-			next.Server.Role = *role
-		}
-		app, err := bootstrap.Assemble(next)
-		if err != nil {
-			return nil, err
-		}
-		app.Hooks = otelhooks.NewHooks()
-		return app, nil
-	}
+	build := serveReloadBuilder(*role, cfg.Server, cfg.Tools, toolDiscoverySignature(cfg.Entities))
 	app, err := bootstrap.Assemble(cfg)
 	if err != nil {
 		return err
@@ -105,33 +85,65 @@ func runServe(ctx context.Context, args []string) error {
 	runtime := bootstrap.NewRuntimeWithBuilder(app, build)
 	defer func() { _ = runtime.Close() }()
 	if *watch {
-		go func() {
-			err := runtime.Watch(ctx, *configPath, *watchInterval, func(err error) {
-				log.Printf("config reload failed; keeping previous snapshot: %v", err)
-			})
-			if err != nil && !errors.Is(err, context.Canceled) {
-				log.Printf("config watcher stopped: %v", err)
-			}
-		}()
+		go serveConfigWatcher(ctx, runtime, *configPath, *watchInterval)
 	}
+	return serveTransport(ctx, runtime, cfg, *transport, *addr)
+}
+
+func serveReloadBuilder(
+	role string,
+	server config.ServerConfig,
+	tools config.ToolFlags,
+	discovery string,
+) func(string) (*bootstrap.App, error) {
+	return func(path string) (*bootstrap.App, error) {
+		next, err := bootstrap.Load(path)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateHotReloadConfig(server, tools, next, discovery); err != nil {
+			return nil, err
+		}
+		if role != "" {
+			next.Server.Role = role
+		}
+		app, err := bootstrap.Assemble(next)
+		if err != nil {
+			return nil, err
+		}
+		app.Hooks = otelhooks.NewHooks()
+		return app, nil
+	}
+}
+
+func serveConfigWatcher(ctx context.Context, runtime *bootstrap.Runtime, path string, interval time.Duration) {
+	err := runtime.Watch(ctx, path, interval, func(err error) {
+		log.Printf("config reload failed; keeping previous snapshot: %v", err)
+	})
+	if err != nil && !errors.Is(err, context.Canceled) {
+		log.Printf("config watcher stopped: %v", err)
+	}
+}
+
+func serveTransport(ctx context.Context, runtime *bootstrap.Runtime, cfg *config.Config, transport, addr string) error {
 	srv := mcpserver.NewRuntimeServer(runtime)
-	switch *transport {
+	switch transport {
 	case "stdio":
-		err = mcpserver.ServeStdio(ctx, srv)
+		err := mcpserver.ServeStdio(ctx, srv)
 		if errors.Is(err, context.Canceled) {
 			return nil
 		}
 		return err
 	case "http":
 		return mcpserver.ServeHTTP(ctx, srv, mcpserver.HTTPConfig{
-			Addr: *addr, Token: cfg.Server.Auth.Token,
+			Addr: addr, Token: cfg.Server.Auth.Token,
 			TrustProxyHeaders: cfg.Server.Auth.TrustProxyHeaders,
 			TrustedProxyCIDRs: cfg.Server.Auth.TrustedProxyCIDRs,
 			TLSCert:           cfg.Server.Auth.TLS.Cert, TLSKey: cfg.Server.Auth.TLS.Key,
 			ClientCA: cfg.Server.Auth.TLS.ClientCA, OnSessionClosed: runtime.RollbackSession,
 		})
 	default:
-		return errors.New("unknown transport: " + *transport)
+		return errors.New("unknown transport: " + transport)
 	}
 }
 
@@ -146,12 +158,19 @@ func resolveServeEndpoint(fs *flag.FlagSet, cfg *config.Config, transport, addr 
 	}
 }
 
-func validateHotReloadConfig(server config.ServerConfig, tools config.ToolFlags, next *config.Config, discovery ...string) error {
+func validateHotReloadConfig(
+	server config.ServerConfig,
+	tools config.ToolFlags,
+	next *config.Config,
+	discovery ...string,
+) error {
 	if next.Server.Transport != server.Transport ||
 		next.Server.Addr != server.Addr ||
 		!reflect.DeepEqual(next.Server.Auth, server.Auth) ||
 		!reflect.DeepEqual(next.Tools, tools) {
-		return errors.New("config reload requires restart for transport, address, auth/TLS/trusted proxy, or tool-set changes")
+		return errors.New(
+			"config reload requires restart for transport, address, auth/TLS/trusted proxy, or tool-set changes",
+		)
 	}
 	if len(discovery) > 0 && toolDiscoverySignature(next.Entities) != discovery[0] {
 		return errors.New("config reload requires restart when custom procedure tools change")
@@ -210,50 +229,64 @@ func runAddEntity(args []string) error {
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return err
 	}
-	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
-		return errors.New("config root must be an object")
+	entities, err := entitiesSequenceNode(&doc)
+	if err != nil {
+		return err
 	}
-	root := doc.Content[0]
-	var entities *yaml.Node
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].Value == "entities" {
-			entities = root.Content[i+1]
-			break
-		}
+	if err := ensureEntityNameAvailable(entities, *name); err != nil {
+		return err
 	}
-	if entities == nil {
-		root.Content = append(root.Content,
-			&yaml.Node{Kind: yaml.ScalarNode, Value: "entities"},
-			&yaml.Node{Kind: yaml.SequenceNode},
-		)
-		entities = root.Content[len(root.Content)-1]
-	}
-	if entities.Kind != yaml.SequenceNode {
-		return errors.New("entities must be a list")
-	}
-	for _, item := range entities.Content {
-		for i := 0; i+1 < len(item.Content); i += 2 {
-			if item.Content[i].Value == "name" && item.Content[i+1].Value == *name {
-				return fmt.Errorf("entity %q already exists", *name)
-			}
-		}
-	}
-	entityNode := &yaml.Node{Kind: yaml.MappingNode}
-	appendYAMLPair(entityNode, "name", *name)
-	appendYAMLPair(entityNode, "source", *source)
-	if *datasource != "default" {
-		appendYAMLPair(entityNode, "datasource", *datasource)
-	}
-	entityNode.Content = append(entityNode.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Value: "fields"},
-		&yaml.Node{Kind: yaml.SequenceNode},
-	)
-	entities.Content = append(entities.Content, entityNode)
+	entities.Content = append(entities.Content, newEntityYAMLNode(*name, *source, *datasource))
 	out, err := yaml.Marshal(&doc)
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(*path, out, 0o600)
+}
+
+func entitiesSequenceNode(doc *yaml.Node) (*yaml.Node, error) {
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil, errors.New("config root must be an object")
+	}
+	root := doc.Content[0]
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "entities" {
+			if root.Content[i+1].Kind != yaml.SequenceNode {
+				return nil, errors.New("entities must be a list")
+			}
+			return root.Content[i+1], nil
+		}
+	}
+	root.Content = append(root.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "entities"},
+		&yaml.Node{Kind: yaml.SequenceNode},
+	)
+	return root.Content[len(root.Content)-1], nil
+}
+
+func ensureEntityNameAvailable(entities *yaml.Node, name string) error {
+	for _, item := range entities.Content {
+		for i := 0; i+1 < len(item.Content); i += 2 {
+			if item.Content[i].Value == "name" && item.Content[i+1].Value == name {
+				return fmt.Errorf("entity %q already exists", name)
+			}
+		}
+	}
+	return nil
+}
+
+func newEntityYAMLNode(name, source, datasource string) *yaml.Node {
+	entityNode := &yaml.Node{Kind: yaml.MappingNode}
+	appendYAMLPair(entityNode, "name", name)
+	appendYAMLPair(entityNode, "source", source)
+	if datasource != "default" {
+		appendYAMLPair(entityNode, "datasource", datasource)
+	}
+	entityNode.Content = append(entityNode.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "fields"},
+		&yaml.Node{Kind: yaml.SequenceNode},
+	)
+	return entityNode
 }
 
 func appendYAMLPair(node *yaml.Node, key, value string) {

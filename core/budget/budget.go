@@ -150,49 +150,80 @@ func (m *MemoryManager) Acquire(ctx context.Context, scope Scope) (Lease, error)
 
 // AcquireWithReservation atomically checks and holds estimated session cost
 // until Complete reconciles it with actual usage.
-func (m *MemoryManager) AcquireWithReservation(ctx context.Context, scope Scope, reservation Reservation) (Lease, error) {
+func (m *MemoryManager) AcquireWithReservation(
+	ctx context.Context,
+	scope Scope,
+	reservation Reservation,
+) (Lease, error) {
 	m.mu.Lock()
 	now := time.Now()
 	m.pruneLocked(now)
 	limits := m.limits(scope)
+	reservation = normalizeReservation(reservation)
+	st, err := m.acquireStateLocked(scope, now)
+	if err != nil {
+		m.mu.Unlock()
+		return nil, err
+	}
+	if err := checkReservationLimits(limits, st, reservation); err != nil {
+		m.mu.Unlock()
+		return nil, err
+	}
+	st.inflight++
+	st.reserved += reservation.Cost
+	st.touched = now
+	m.mu.Unlock()
+	return m.newLease(ctx, scope, limits, reservation.Cost), nil
+}
+
+func normalizeReservation(reservation Reservation) Reservation {
 	if reservation.Cost < 0 {
 		reservation.Cost = 0
 	}
 	if reservation.EstimatedScannedRows < 0 {
 		reservation.EstimatedScannedRows = 0
 	}
+	return reservation
+}
+
+func (m *MemoryManager) acquireStateLocked(scope Scope, now time.Time) (*state, error) {
 	st := m.sessions[scope]
 	if st == nil {
 		if len(m.sessions) >= m.maxStates {
-			m.mu.Unlock()
 			return nil, ErrExceeded
 		}
 		st = &state{touched: now}
 		m.sessions[scope] = st
 	}
+	return st, nil
+}
+
+func checkReservationLimits(limits Limits, st *state, reservation Reservation) error {
 	if limits.MaxConcurrent > 0 && st.inflight >= limits.MaxConcurrent {
-		m.mu.Unlock()
-		return nil, ErrExceeded
+		return ErrExceeded
 	}
 	maxEstimated := limits.MaxEstimatedScannedRows
 	if maxEstimated == 0 {
 		maxEstimated = limits.MaxScannedRows
 	}
 	if maxEstimated > 0 && reservation.EstimatedScannedRows > maxEstimated {
-		m.mu.Unlock()
-		return nil, ErrExceeded
+		return ErrExceeded
 	}
 	if limits.MaxSessionCost > 0 &&
 		(st.cost >= limits.MaxSessionCost ||
 			st.reserved >= limits.MaxSessionCost-st.cost ||
 			reservation.Cost > limits.MaxSessionCost-st.cost-st.reserved) {
-		m.mu.Unlock()
-		return nil, ErrExceeded
+		return ErrExceeded
 	}
-	st.inflight++
-	st.reserved += reservation.Cost
-	st.touched = now
-	m.mu.Unlock()
+	return nil
+}
+
+func (m *MemoryManager) newLease(
+	ctx context.Context,
+	scope Scope,
+	limits Limits,
+	reservedCost int64,
+) Lease {
 	runCtx := ctx
 	cancel := func() {}
 	if limits.MaxExecution > 0 {
@@ -200,8 +231,8 @@ func (m *MemoryManager) AcquireWithReservation(ctx context.Context, scope Scope,
 	}
 	return &lease{
 		manager: m, scope: scope, ctx: runCtx, cancel: cancel, limits: limits,
-		reservedCost: reservation.Cost,
-	}, nil
+		reservedCost: reservedCost,
+	}
 }
 
 func (m *MemoryManager) pruneLocked(now time.Time) {

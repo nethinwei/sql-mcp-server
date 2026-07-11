@@ -5,14 +5,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -120,7 +117,8 @@ func currentTool(app *bootstrap.App, name string) (tool.Tool, bool) {
 		return nil, false
 	}
 	for _, e := range app.Registry.Entities() {
-		if e.Kind == entity.KindProcedure && e.MCP.CustomTool && e.MCP.TrustedProcedure && tool.ProcedureToolName(e.Name) == name {
+		if e.Kind == entity.KindProcedure && e.MCP.CustomTool && e.MCP.TrustedProcedure &&
+			tool.ProcedureToolName(e.Name) == name {
 			return tool.ProcedureTool{Entity: e}, true
 		}
 	}
@@ -159,53 +157,84 @@ func registerSchemaResource(s *mcp.Server, acquire appAcquire) {
 	})
 }
 
-func authorizedSchema(ctx context.Context, app *bootstrap.App, role string, subject map[string]any) (map[string]any, error) {
+func authorizedSchema(
+	ctx context.Context,
+	app *bootstrap.App,
+	role string,
+	subject map[string]any,
+) (map[string]any, error) {
 	entities := make([]map[string]any, 0)
 	for _, e := range app.Registry.Entities() {
-		if e.Kind == entity.KindProcedure || !e.MCP.DMLTools {
-			continue
-		}
-		read, err := app.Authorizer.Authorize(ctx, rbac.Request{
-			Role: role, Subject: subject, Entity: e.Name, Action: entity.ActionRead,
-		})
+		entry, ok, err := authorizedEntity(ctx, app, e, role, subject)
 		if err != nil {
 			return nil, err
 		}
-		aggregate, err := app.Authorizer.Authorize(ctx, rbac.Request{
-			Role: role, Subject: subject, Entity: e.Name, Action: entity.ActionAggregate,
-		})
-		if err != nil {
-			return nil, err
+		if ok {
+			entities = append(entities, entry)
 		}
-		if !read.Allowed && !aggregate.Allowed {
-			continue
-		}
-		fieldNames := read.Fields
-		if !read.Allowed {
-			fieldNames = aggregate.Fields
-		}
-		fields := make([]map[string]any, 0, len(fieldNames))
-		for _, name := range fieldNames {
-			if attr, ok := e.AttributeByName(name); ok {
-				fields = append(fields, map[string]any{
-					"name": attr.Name, "alias": attr.Alias, "type": attr.Domain.Type,
-					"description": attr.Description, "masked": attr.Mask != "",
-				})
-			}
-		}
-		actions := make([]string, 0, 2)
-		if read.Allowed {
-			actions = append(actions, "read")
-		}
-		if aggregate.Allowed {
-			actions = append(actions, "aggregate")
-		}
-		entities = append(entities, map[string]any{
-			"name": e.Name, "description": e.Description, "fields": fields,
-			"actions": actions, "rowScoped": e.RowPolicies[role] != nil,
-		})
 	}
 	return map[string]any{"role": role, "entities": entities}, nil
+}
+
+func authorizedEntity(
+	ctx context.Context,
+	app *bootstrap.App,
+	e entity.Entity,
+	role string,
+	subject map[string]any,
+) (map[string]any, bool, error) {
+	if e.Kind == entity.KindProcedure || !e.MCP.DMLTools {
+		return nil, false, nil
+	}
+	read, err := app.Authorizer.Authorize(ctx, rbac.Request{
+		Role: role, Subject: subject, Entity: e.Name, Action: entity.ActionRead,
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	aggregate, err := app.Authorizer.Authorize(ctx, rbac.Request{
+		Role: role, Subject: subject, Entity: e.Name, Action: entity.ActionAggregate,
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if !read.Allowed && !aggregate.Allowed {
+		return nil, false, nil
+	}
+	fieldNames := read.Fields
+	if !read.Allowed {
+		fieldNames = aggregate.Fields
+	}
+	return map[string]any{
+		"name": e.Name, "description": e.Description,
+		"fields":    authorizedEntityFields(e, fieldNames),
+		"actions":   authorizedEntityActions(read.Allowed, aggregate.Allowed),
+		"rowScoped": e.RowPolicies[role] != nil,
+	}, true, nil
+}
+
+func authorizedEntityFields(e entity.Entity, fieldNames []string) []map[string]any {
+	fields := make([]map[string]any, 0, len(fieldNames))
+	for _, name := range fieldNames {
+		if attr, ok := e.AttributeByName(name); ok {
+			fields = append(fields, map[string]any{
+				"name": attr.Name, "alias": attr.Alias, "type": attr.Domain.Type,
+				"description": attr.Description, "masked": attr.Mask != "",
+			})
+		}
+	}
+	return fields
+}
+
+func authorizedEntityActions(readAllowed, aggregateAllowed bool) []string {
+	actions := make([]string, 0, 2)
+	if readAllowed {
+		actions = append(actions, "read")
+	}
+	if aggregateAllowed {
+		actions = append(actions, "aggregate")
+	}
+	return actions
 }
 
 func registerPrompts(s *mcp.Server) {
@@ -225,12 +254,20 @@ func registerPrompts(s *mcp.Server) {
 			}, nil
 		})
 	}
-	addPrompt("safe_read", "Build a bounded, authorized read_records call", "request",
-		"Use the authorized-schema resource first. Call only read_records, select only visible fields, add the narrowest supported filter, and set a conservative limit. Never invent entities or fields.")
-	addPrompt("safe_aggregate", "Build a bounded, authorized aggregate_records call", "request",
-		"Use the authorized-schema resource first. Call only aggregate_records with visible fields, a narrow filter, and the minimum grouping needed. Do not request raw rows or bypass row scope.")
-	addPrompt("rewrite_query", "Rewrite a rejected request using safety hints", "request",
-		"Rewrite the failed MCP tool input without weakening authorization or cost controls. Preserve intent, narrow filters, reduce fields and limits, and follow returned cost-gate hints. Never switch datasources or use raw SQL.")
+	const (
+		safeReadPrompt = "Use the authorized-schema resource first. Call only read_records, " +
+			"select only visible fields, add the narrowest supported filter, and set a conservative limit. " +
+			"Never invent entities or fields."
+		safeAggregatePrompt = "Use the authorized-schema resource first. Call only aggregate_records " +
+			"with visible fields, a narrow filter, and the minimum grouping needed. " +
+			"Do not request raw rows or bypass row scope."
+		rewriteQueryPrompt = "Rewrite the failed MCP tool input without weakening authorization or cost controls. " +
+			"Preserve intent, narrow filters, reduce fields and limits, and follow returned cost-gate hints. " +
+			"Never switch datasources or use raw SQL."
+	)
+	addPrompt("safe_read", "Build a bounded, authorized read_records call", "request", safeReadPrompt)
+	addPrompt("safe_aggregate", "Build a bounded, authorized aggregate_records call", "request", safeAggregatePrompt)
+	addPrompt("rewrite_query", "Rewrite a rejected request using safety hints", "request", rewriteQueryPrompt)
 }
 
 func rawArgs(req *mcp.CallToolRequest) json.RawMessage {
@@ -403,7 +440,11 @@ func validateHTTPSecurity(c HTTPConfig) error {
 		return errors.New("mcpserver: tls.cert and tls.key must be configured together")
 	}
 	if !isLoopbackAddr(c.Addr) && !c.authConfigured() {
-		return fmt.Errorf("mcpserver: refusing to serve on non-loopback address %q without authentication: set server.auth.token or server.auth.tls.clientCA, or bind to 127.0.0.1", c.Addr)
+		return fmt.Errorf(
+			"mcpserver: refusing to serve on non-loopback address %q without authentication: "+
+				"set server.auth.token or server.auth.tls.clientCA, or bind to 127.0.0.1",
+			c.Addr,
+		)
 	}
 	if c.mtlsEnabled() && !c.tlsEnabled() {
 		return errors.New("mcpserver: mTLS (clientCA) requires a server certificate (tls.cert/tls.key)")
@@ -565,108 +606,4 @@ func bindSessionIdentity(store *sessionIdentityStore, next http.Handler) http.Ha
 			_ = store.bind(strings.TrimSpace(w.Header().Get(sessionIDHeader)), identity)
 		}
 	})
-}
-
-// ServeHTTP runs the server on streamable HTTP with authentication, request
-// hardening (timeouts, header/body caps), a /healthz check, and an optional
-// /metrics endpoint. See HTTPConfig for the security model.
-func ServeHTTP(ctx context.Context, s *mcp.Server, cfg HTTPConfig) error {
-	if err := validateHTTPSecurity(cfg); err != nil {
-		return err
-	}
-	if cfg.ReadHeaderTimeout <= 0 {
-		cfg.ReadHeaderTimeout = 10 * time.Second
-	}
-	if cfg.IdleTimeout <= 0 {
-		cfg.IdleTimeout = 120 * time.Second
-	}
-	if cfg.MaxHeaderBytes <= 0 {
-		cfg.MaxHeaderBytes = 1 << 20 // 1 MiB
-	}
-	if cfg.MaxBodyBytes <= 0 {
-		cfg.MaxBodyBytes = 4 << 20 // 4 MiB
-	}
-	if cfg.SessionTimeout <= 0 {
-		cfg.SessionTimeout = 5 * time.Minute
-	}
-
-	identities := newSessionIdentityStore()
-	eventStore := &sessionEventStore{
-		EventStore: mcp.NewMemoryEventStore(nil), onClosed: cfg.OnSessionClosed, identity: identities,
-	}
-	var mcpHandler http.Handler = mcp.NewStreamableHTTPHandler(
-		func(_ *http.Request) *mcp.Server { return s },
-		&mcp.StreamableHTTPOptions{EventStore: eventStore, SessionTimeout: cfg.SessionTimeout},
-	)
-	mcpHandler = bindSessionIdentity(identities, mcpHandler)
-	// Identity headers are trusted only behind an authenticating gateway.
-	if cfg.TrustProxyHeaders {
-		mcpHandler = withRequestSubject(mcpHandler)
-		if !cfg.mtlsEnabled() {
-			networks, _ := parseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
-			mcpHandler = trustedProxyOnly(networks, mcpHandler)
-		}
-	}
-	mcpHandler = limitBody(cfg.MaxBodyBytes, mcpHandler)
-	if cfg.Token != "" {
-		mcpHandler = tokenAuth(cfg.Token, mcpHandler)
-	}
-
-	mux := http.NewServeMux()
-	mux.Handle("/mcp", mcpHandler)
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
-	if cfg.Metrics != nil {
-		// Metrics carry only aggregate counters, but when a token is configured
-		// (typically an exposed listener) protect /metrics too rather than
-		// leaving it open. /healthz stays open for liveness probes.
-		metricsHandler := cfg.Metrics
-		if cfg.Token != "" {
-			metricsHandler = tokenAuth(cfg.Token, metricsHandler)
-		}
-		mux.Handle("/metrics", metricsHandler)
-	}
-
-	srv := &http.Server{
-		Addr:              cfg.Addr,
-		Handler:           mux,
-		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
-		ReadTimeout:       cfg.ReadTimeout,
-		WriteTimeout:      cfg.WriteTimeout,
-		IdleTimeout:       cfg.IdleTimeout,
-		MaxHeaderBytes:    cfg.MaxHeaderBytes,
-	}
-	if cfg.mtlsEnabled() {
-		pool := x509.NewCertPool()
-		pem, err := os.ReadFile(cfg.ClientCA)
-		if err != nil {
-			return fmt.Errorf("mcpserver: read client CA: %w", err)
-		}
-		if !pool.AppendCertsFromPEM(pem) {
-			return errors.New("mcpserver: client CA file contains no valid certificates")
-		}
-		srv.TLSConfig = &tls.Config{
-			ClientCAs:  pool,
-			ClientAuth: tls.RequireAndVerifyClientCert,
-			MinVersion: tls.VersionTLS12,
-		}
-	}
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-	}()
-	var err error
-	if cfg.tlsEnabled() {
-		err = srv.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey)
-	} else {
-		err = srv.ListenAndServe()
-	}
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
-	return nil
 }

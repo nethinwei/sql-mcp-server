@@ -55,7 +55,11 @@ func TestMemoryStoreBoundsFingerprintKeysFIFO(t *testing.T) {
 }
 
 func TestFingerprintStableAcrossValuesAndSensitiveToTypes(t *testing.T) {
-	a := Fingerprint("primary", "postgres", codegen.Compiled{SQL: " SELECT  *  FROM t WHERE id=$1 ", Args: []any{int64(1)}})
+	a := Fingerprint(
+		"primary",
+		"postgres",
+		codegen.Compiled{SQL: " SELECT  *  FROM t WHERE id=$1 ", Args: []any{int64(1)}},
+	)
 	b := Fingerprint("primary", "postgres", codegen.Compiled{SQL: "SELECT * FROM t WHERE id=$1", Args: []any{int64(2)}})
 	c := Fingerprint("primary", "postgres", codegen.Compiled{SQL: "SELECT * FROM t WHERE id=$1", Args: []any{"2"}})
 	if a != b {
@@ -64,7 +68,11 @@ func TestFingerprintStableAcrossValuesAndSensitiveToTypes(t *testing.T) {
 	if a == c {
 		t.Fatal("parameter types must affect fingerprint")
 	}
-	if a == Fingerprint("replica", "postgres", codegen.Compiled{SQL: "SELECT * FROM t WHERE id=$1", Args: []any{int64(2)}}) {
+	if a == Fingerprint(
+		"replica",
+		"postgres",
+		codegen.Compiled{SQL: "SELECT * FROM t WHERE id=$1", Args: []any{int64(2)}},
+	) {
 		t.Fatal("datasources must not share fingerprints")
 	}
 	if len(a) < len("fp:v2:") || a[:len("fp:v2:")] != "fp:v2:" {

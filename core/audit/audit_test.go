@@ -70,7 +70,9 @@ func TestRecordNonBlocking(t *testing.T) {
 }
 
 func TestRedactInput(t *testing.T) {
-	input := []byte(`{"transaction":"secret-token","filter":[{"field":"email","op":"eq","value":"alice@example.com"}],"values":{"email":"bob@example.com","name":"Bob"}}`)
+	input := []byte(`{"transaction":"secret-token","filter":[` +
+		`{"field":"email","op":"eq","value":"alice@example.com"}],` +
+		`"values":{"email":"bob@example.com","name":"Bob"}}`)
 	got := string(RedactInput(input, map[string]bool{"email": true}))
 	for _, secret := range []string{"secret-token", "alice@example.com", "bob@example.com"} {
 		if strings.Contains(got, secret) {

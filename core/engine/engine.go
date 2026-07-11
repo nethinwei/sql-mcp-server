@@ -121,7 +121,12 @@ func (e *Engine) SubmitCPU(ctx context.Context, key string, fn func(context.Cont
 
 // SubmitClass schedules fn on the selected resource pool. Submit remains the
 // backwards-compatible IO entry point.
-func (e *Engine) SubmitClass(ctx context.Context, class WorkClass, key string, fn func(context.Context) (any, error)) (any, error) {
+func (e *Engine) SubmitClass(
+	ctx context.Context,
+	class WorkClass,
+	key string,
+	fn func(context.Context) (any, error),
+) (any, error) {
 	e.stateMu.Lock()
 	if e.closed {
 		e.stateMu.Unlock()
@@ -146,42 +151,47 @@ func (e *Engine) SubmitClass(ctx context.Context, class WorkClass, key string, f
 		return nil, ErrOverloaded
 	}
 	defer func() { <-e.inflight }()
-	exec := func(runCtx context.Context) (any, error) {
-		// AIMD admission: reject fast when concurrency exceeds the adaptive
-		// limit for IO work, then use the selected resource semaphore.
-		if class == WorkIO && e.limiter != nil {
-			if err := e.limiter.Acquire(); err != nil {
-				return nil, err
-			}
-			defer e.limiter.Release()
-		}
-		sem := e.iosem
-		if class == WorkCPU {
-			sem = e.cpusem
-		}
-		select {
-		case sem <- struct{}{}:
-		case <-runCtx.Done():
-			return nil, runCtx.Err()
-		}
-		defer func() { <-sem }()
-		start := time.Now()
-		val, err := e.runSafe(runCtx, fn)
-		record := err == nil || e.recordFailure == nil || e.recordFailure(err)
-		if record {
-			if e.limiter != nil {
-				e.limiter.OnResult(err, time.Since(start))
-			}
-			if e.breaker != nil {
-				e.breaker.Record(err == nil)
-			}
-		}
-		return val, err
-	}
 	if key == "" {
-		return exec(ctx)
+		return e.execute(ctx, class, fn)
 	}
-	return e.sf.Do(ctx, fmt.Sprintf("%d\x00%s", class, key), &e.executions, exec)
+	return e.sf.Do(ctx, fmt.Sprintf("%d\x00%s", class, key), &e.executions, func(runCtx context.Context) (any, error) {
+		return e.execute(runCtx, class, fn)
+	})
+}
+
+func (e *Engine) execute(
+	ctx context.Context,
+	class WorkClass,
+	fn func(context.Context) (any, error),
+) (any, error) {
+	if class == WorkIO && e.limiter != nil {
+		if err := e.limiter.Acquire(); err != nil {
+			return nil, err
+		}
+		defer e.limiter.Release()
+	}
+	sem := e.iosem
+	if class == WorkCPU {
+		sem = e.cpusem
+	}
+	select {
+	case sem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-sem }()
+	start := time.Now()
+	val, err := e.runSafe(ctx, fn)
+	record := err == nil || e.recordFailure == nil || e.recordFailure(err)
+	if record {
+		if e.limiter != nil {
+			e.limiter.OnResult(err, time.Since(start))
+		}
+		if e.breaker != nil {
+			e.breaker.Record(err == nil)
+		}
+	}
+	return val, err
 }
 
 // runSafe recovers panics from fn so a single bad call cannot crash the process.
@@ -235,7 +245,12 @@ type call struct {
 // Do executes fn once for concurrent callers with the same key; all callers
 // receive the same result value and error. Completion signaling and map cleanup
 // are deferred so a panic in fn cannot deadlock waiters.
-func (s *singleflight) Do(ctx context.Context, key string, executions *sync.WaitGroup, fn func(context.Context) (any, error)) (any, error) {
+func (s *singleflight) Do(
+	ctx context.Context,
+	key string,
+	executions *sync.WaitGroup,
+	fn func(context.Context) (any, error),
+) (any, error) {
 	s.mu.Lock()
 	if s.m == nil {
 		s.m = make(map[string]*call)

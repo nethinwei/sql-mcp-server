@@ -50,67 +50,115 @@ func NewTransactionManager(ttl time.Duration, maxOpen int) *TransactionManager {
 	return &TransactionManager{handles: make(map[string]*transactionHandle), ttl: ttl, maxOpen: maxOpen}
 }
 
-func (m *TransactionManager) Begin(ctx context.Context, beginner store.TxBeginner, session, role string, subject map[string]any, datasource string, opts *store.TxOptions) (string, error) {
+func (m *TransactionManager) Begin(
+	ctx context.Context,
+	beginner store.TxBeginner,
+	session, role string,
+	subject map[string]any,
+	datasource string,
+	opts *store.TxOptions,
+) (string, error) {
 	scope := transactionScope(role, subject)
+	if err := m.checkBeginCapacity(scope); err != nil {
+		return "", err
+	}
+	lifetimeCtx, cancel := beginLifetimeContext(ctx, m.ttl)
+	tx, err := beginTransaction(ctx, lifetimeCtx, cancel, beginner, opts)
+	if err != nil {
+		return "", err
+	}
+	token, err := newTransactionToken()
+	if err != nil {
+		cancel()
+		_ = tx.Rollback()
+		return "", err
+	}
+	handle := &transactionHandle{
+		tx: tx, session: session, role: role, subject: scopeKey("", subject), datasource: datasource,
+		dirty: make(map[string]struct{}), expires: time.Now().Add(m.ttl), cancel: cancel,
+	}
+	if err := m.registerHandle(scope, token, handle, cancel, tx); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+func (m *TransactionManager) checkBeginCapacity(scope string) error {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.closed {
-		m.mu.Unlock()
-		return "", ErrTransactionNotFound
+		return ErrTransactionNotFound
 	}
 	if m.scopeCountLocked(scope) >= m.maxOpen && m.maxOpen > 0 {
-		m.mu.Unlock()
-		return "", ErrTransactionCapacity
+		return ErrTransactionCapacity
 	}
-	m.mu.Unlock()
+	return nil
+}
+
+func beginLifetimeContext(ctx context.Context, ttl time.Duration) (context.Context, context.CancelFunc) {
 	lifetimeCtx := context.WithoutCancel(ctx)
-	var cancel context.CancelFunc
-	if m.ttl > 0 {
-		lifetimeCtx, cancel = context.WithTimeout(lifetimeCtx, m.ttl)
-	} else {
-		lifetimeCtx, cancel = context.WithCancel(lifetimeCtx)
+	if ttl > 0 {
+		return context.WithTimeout(lifetimeCtx, ttl)
 	}
+	return context.WithCancel(lifetimeCtx)
+}
+
+func beginTransaction(
+	ctx context.Context,
+	lifetimeCtx context.Context,
+	cancel context.CancelFunc,
+	beginner store.TxBeginner,
+	opts *store.TxOptions,
+) (store.Tx, error) {
 	stopRequestCancel := context.AfterFunc(ctx, cancel)
 	tx, err := beginner.BeginTx(lifetimeCtx, opts)
 	stopRequestCancel()
 	if err != nil {
 		cancel()
 		if requestErr := ctx.Err(); requestErr != nil {
-			return "", requestErr
+			return nil, requestErr
 		}
-		return "", WrapDBError(err)
+		return nil, WrapDBError(err)
 	}
 	if err := ctx.Err(); err != nil {
 		cancel()
 		_ = tx.Rollback()
-		return "", err
+		return nil, err
 	}
+	return tx, nil
+}
+
+func newTransactionToken() (string, error) {
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
-		cancel()
-		_ = tx.Rollback()
 		return "", err
 	}
-	token := hex.EncodeToString(tokenBytes)
-	handle := &transactionHandle{
-		tx: tx, session: session, role: role, subject: scopeKey("", subject), datasource: datasource,
-		dirty: make(map[string]struct{}), expires: time.Now().Add(m.ttl), cancel: cancel,
-	}
+	return hex.EncodeToString(tokenBytes), nil
+}
+
+func (m *TransactionManager) registerHandle(
+	scope, token string,
+	handle *transactionHandle,
+	cancel context.CancelFunc,
+	tx store.Tx,
+) error {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.closed || m.maxOpen > 0 && m.scopeCountLocked(scope) >= m.maxOpen {
-		m.mu.Unlock()
+		if m.closed {
+			cancel()
+			_ = tx.Rollback()
+			return ErrTransactionNotFound
+		}
 		cancel()
 		_ = tx.Rollback()
-		if m.closed {
-			return "", ErrTransactionNotFound
-		}
-		return "", ErrTransactionCapacity
+		return ErrTransactionCapacity
 	}
 	m.handles[token] = handle
 	if m.ttl > 0 {
 		handle.timer = time.AfterFunc(m.ttl, func() { m.expire(token, handle) })
 	}
-	m.mu.Unlock()
-	return token, nil
+	return nil
 }
 
 func transactionScope(role string, subject map[string]any) string {
@@ -144,7 +192,11 @@ func (m *TransactionManager) expire(token string, handle *transactionHandle) {
 	m.mu.Unlock()
 }
 
-func (m *TransactionManager) lookup(token, session, role string, subject map[string]any, datasource string) (*transactionHandle, error) {
+func (m *TransactionManager) lookup(
+	token, session, role string,
+	subject map[string]any,
+	datasource string,
+) (*transactionHandle, error) {
 	m.mu.Lock()
 	handle := m.handles[token]
 	m.mu.Unlock()
@@ -162,7 +214,11 @@ func (m *TransactionManager) lookup(token, session, role string, subject map[str
 	return handle, nil
 }
 
-func (m *TransactionManager) DB(token, session, role string, subject map[string]any, datasource string) (store.DB, error) {
+func (m *TransactionManager) DB(
+	token, session, role string,
+	subject map[string]any,
+	datasource string,
+) (store.DB, error) {
 	handle, err := m.lookup(token, session, role, subject, datasource)
 	if err != nil {
 		return nil, err
@@ -184,7 +240,12 @@ func (m *TransactionManager) Configuration() (time.Duration, int) {
 	return m.ttl, m.maxOpen
 }
 
-func (m *TransactionManager) finish(ctx context.Context, token, session, role string, subject map[string]any, commit bool) ([]string, error) {
+func (m *TransactionManager) finish(
+	ctx context.Context,
+	token, session, role string,
+	subject map[string]any,
+	commit bool,
+) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -241,7 +302,11 @@ func (m *TransactionManager) CommitWithEntities(token, session, role string, sub
 	return m.finish(context.Background(), token, session, role, subject, true)
 }
 
-func (m *TransactionManager) commitWithEntitiesContext(ctx context.Context, token, session, role string, subject map[string]any) ([]string, error) {
+func (m *TransactionManager) commitWithEntitiesContext(
+	ctx context.Context,
+	token, session, role string,
+	subject map[string]any,
+) ([]string, error) {
 	return m.finish(ctx, token, session, role, subject, true)
 }
 
@@ -250,13 +315,21 @@ func (m *TransactionManager) Rollback(token, session, role string, subject map[s
 	return err
 }
 
-func (m *TransactionManager) rollbackContext(ctx context.Context, token, session, role string, subject map[string]any) error {
+func (m *TransactionManager) rollbackContext(
+	ctx context.Context,
+	token, session, role string,
+	subject map[string]any,
+) error {
 	_, err := m.finish(ctx, token, session, role, subject, false)
 	return err
 }
 
 // MarkDirty records an entity changed inside a transaction.
-func (m *TransactionManager) MarkDirty(token, session, role string, subject map[string]any, datasource, entity string) error {
+func (m *TransactionManager) MarkDirty(
+	token, session, role string,
+	subject map[string]any,
+	datasource, entity string,
+) error {
 	handle, err := m.lookup(token, session, role, subject, datasource)
 	if err != nil {
 		return err
@@ -368,7 +441,11 @@ type CommitTransactionTool struct{}
 type RollbackTransactionTool struct{}
 
 func (BeginTransactionTool) Info() Info {
-	return Info{Name: "begin_transaction", Description: "Begin a bounded explicit transaction", InputSchema: schemaBeginTransaction}
+	return Info{
+		Name:        "begin_transaction",
+		Description: "Begin a bounded explicit transaction",
+		InputSchema: schemaBeginTransaction,
+	}
 }
 func (BeginTransactionTool) Enabled(f config.ToolFlags) bool { return f.BeginTransaction }
 func (BeginTransactionTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
@@ -378,49 +455,87 @@ func (BeginTransactionTool) Run(ctx context.Context, input json.RawMessage, tc C
 	}
 	ctx, cancel := withSpecificTimeout(ctx, timeout)
 	defer cancel()
-	var in struct {
-		Datasource string `json:"datasource"`
-		Isolation  string `json:"isolation"`
-		ReadOnly   *bool  `json:"readOnly"`
-	}
-	if err := decodeInput(input, &in); err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
-	}
-	if in.Datasource == "" {
-		in.Datasource = "default"
-	}
-	beginner := tc.TxBeginners[in.Datasource]
-	if beginner == nil && in.Datasource == "default" && len(tc.TxBeginners) == 1 {
-		for name, candidate := range tc.TxBeginners {
-			in.Datasource, beginner = name, candidate
-		}
-	}
-	if beginner == nil || tc.Transactions == nil {
-		return Result{}, fmt.Errorf("%w: datasource %q", ErrInvalidInput, in.Datasource)
-	}
-	canRead, canWrite, err := transactionPermissions(ctx, tc, in.Datasource)
+	in, err := parseBeginTransactionInput(input)
 	if err != nil {
 		return Result{}, err
 	}
-	if !canRead && !canWrite {
-		return Result{}, ErrUnauthorized
+	beginner, datasource, err := resolveTxBeginner(tc, in.Datasource)
+	if err != nil {
+		return Result{}, err
 	}
-	readOnly := true
-	if in.ReadOnly != nil && !*in.ReadOnly {
-		if !canWrite {
-			return Result{}, ErrUnauthorized
-		}
-		readOnly = false
+	readOnly, err := resolveTransactionReadOnly(ctx, tc, datasource, in.ReadOnly)
+	if err != nil {
+		return Result{}, err
 	}
 	isolation, err := parseIsolation(in.Isolation)
 	if err != nil {
 		return Result{}, err
 	}
-	token, err := tc.Transactions.Begin(ctx, beginner, tc.Session, tc.Role, tc.Subject, in.Datasource, &store.TxOptions{Isolation: isolation, ReadOnly: readOnly})
+	token, err := tc.Transactions.Begin(
+		ctx,
+		beginner,
+		tc.Session,
+		tc.Role,
+		tc.Subject,
+		in.Datasource,
+		&store.TxOptions{Isolation: isolation, ReadOnly: readOnly},
+	)
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{Content: []map[string]any{{"transaction": token, "datasource": in.Datasource}}}, nil
+	return Result{Content: []map[string]any{{"transaction": token, "datasource": datasource}}}, nil
+}
+
+type beginTransactionInput struct {
+	Datasource string `json:"datasource"`
+	Isolation  string `json:"isolation"`
+	ReadOnly   *bool  `json:"readOnly"`
+}
+
+func parseBeginTransactionInput(input json.RawMessage) (beginTransactionInput, error) {
+	var in beginTransactionInput
+	if err := decodeInput(input, &in); err != nil {
+		return beginTransactionInput{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+	}
+	if in.Datasource == "" {
+		in.Datasource = "default"
+	}
+	return in, nil
+}
+
+func resolveTxBeginner(tc Context, datasource string) (store.TxBeginner, string, error) {
+	beginner := tc.TxBeginners[datasource]
+	if beginner == nil && datasource == "default" && len(tc.TxBeginners) == 1 {
+		for name, candidate := range tc.TxBeginners {
+			datasource, beginner = name, candidate
+		}
+	}
+	if beginner == nil || tc.Transactions == nil {
+		return nil, datasource, fmt.Errorf("%w: datasource %q", ErrInvalidInput, datasource)
+	}
+	return beginner, datasource, nil
+}
+
+func resolveTransactionReadOnly(
+	ctx context.Context,
+	tc Context,
+	datasource string,
+	requested *bool,
+) (bool, error) {
+	canRead, canWrite, err := transactionPermissions(ctx, tc, datasource)
+	if err != nil {
+		return false, err
+	}
+	if !canRead && !canWrite {
+		return false, ErrUnauthorized
+	}
+	if requested != nil && !*requested {
+		if !canWrite {
+			return false, ErrUnauthorized
+		}
+		return false, nil
+	}
+	return true, nil
 }
 
 func transactionPermissions(ctx context.Context, tc Context, datasource string) (bool, bool, error) {
@@ -436,7 +551,10 @@ func transactionPermissions(ctx context.Context, tc Context, datasource string) 
 		if source != datasource {
 			continue
 		}
-		for _, action := range []entity.Action{entity.ActionRead, entity.ActionAggregate, entity.ActionCreate, entity.ActionUpdate, entity.ActionDelete, entity.ActionExecute} {
+		for _, action := range []entity.Action{
+			entity.ActionRead, entity.ActionAggregate,
+			entity.ActionCreate, entity.ActionUpdate, entity.ActionDelete, entity.ActionExecute,
+		} {
 			dec, err := authorize(ctx, tc, rbac.Request{
 				Role: tc.Role, Subject: tc.Subject, Entity: e.Name, Action: action,
 			})
@@ -473,7 +591,11 @@ func parseIsolation(value string) (store.IsolationLevel, error) {
 }
 
 func (CommitTransactionTool) Info() Info {
-	return Info{Name: "commit_transaction", Description: "Commit an explicit transaction", InputSchema: transactionTokenSchema}
+	return Info{
+		Name:        "commit_transaction",
+		Description: "Commit an explicit transaction",
+		InputSchema: transactionTokenSchema,
+	}
 }
 func (CommitTransactionTool) Enabled(f config.ToolFlags) bool { return f.CommitTransaction }
 func (CommitTransactionTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
@@ -503,7 +625,11 @@ func (CommitTransactionTool) Run(ctx context.Context, input json.RawMessage, tc 
 }
 
 func (RollbackTransactionTool) Info() Info {
-	return Info{Name: "rollback_transaction", Description: "Rollback an explicit transaction", InputSchema: transactionTokenSchema}
+	return Info{
+		Name:        "rollback_transaction",
+		Description: "Rollback an explicit transaction",
+		InputSchema: transactionTokenSchema,
+	}
 }
 func (RollbackTransactionTool) Enabled(f config.ToolFlags) bool { return f.RollbackTransaction }
 func (RollbackTransactionTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {

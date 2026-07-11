@@ -259,6 +259,24 @@ func TestSingleflightWaiterContextCancellation(t *testing.T) {
 	close(release)
 }
 
+func waitForSingleflightWaiters(t *testing.T, e *Engine, key string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		e.sf.mu.Lock()
+		call := e.sf.m[key]
+		joined := call != nil && call.waiters == want
+		e.sf.mu.Unlock()
+		if joined {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("singleflight %q did not reach %d waiters", key, want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestSingleflightLeaderCancellationDoesNotCancelRemainingWaiter(t *testing.T) {
 	t.Parallel()
 	e, _ := New(WithIOPool(2), WithMaxInflight(4))
@@ -293,20 +311,7 @@ func TestSingleflightLeaderCancellationDoesNotCancelRemainingWaiter(t *testing.T
 			err   error
 		}{value, err}
 	}()
-	deadline := time.Now().Add(time.Second)
-	for {
-		e.sf.mu.Lock()
-		call := e.sf.m["0\x00shared-cancel"]
-		joined := call != nil && call.waiters == 2
-		e.sf.mu.Unlock()
-		if joined {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("waiter did not join shared execution")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	waitForSingleflightWaiters(t, e, "0\x00shared-cancel", 2)
 	cancelLeader()
 	if err := <-leaderDone; !errors.Is(err, context.Canceled) {
 		t.Fatalf("leader error = %v", err)
@@ -369,20 +374,7 @@ func TestSingleflightCancelsExecutionAfterAllWaitersCancel(t *testing.T) {
 		})
 		results <- err
 	}()
-	deadline := time.Now().Add(time.Second)
-	for {
-		e.sf.mu.Lock()
-		call := e.sf.m["0\x00all-cancel"]
-		joined := call != nil && call.waiters == 2
-		e.sf.mu.Unlock()
-		if joined {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("second waiter did not join")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	waitForSingleflightWaiters(t, e, "0\x00all-cancel", 2)
 	cancel1()
 	select {
 	case err := <-executionCanceled:
@@ -454,7 +446,7 @@ func TestDrainWaitsForSingleflightExecutionAfterAllWaitersCancel(t *testing.T) {
 	run := func(ctx context.Context) {
 		_, err := e.Submit(ctx, "detached", func(context.Context) (any, error) {
 			close(started)
-			<-release // deliberately ignores cancellation
+			<-release
 			return nil, nil
 		})
 		results <- err
@@ -462,20 +454,7 @@ func TestDrainWaitsForSingleflightExecutionAfterAllWaitersCancel(t *testing.T) {
 	go run(ctx1)
 	<-started
 	go run(ctx2)
-	deadline := time.Now().Add(time.Second)
-	for {
-		e.sf.mu.Lock()
-		call := e.sf.m["0\x00detached"]
-		joined := call != nil && call.waiters == 2
-		e.sf.mu.Unlock()
-		if joined {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("second waiter did not join")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	waitForSingleflightWaiters(t, e, "0\x00detached", 2)
 	cancel1()
 	cancel2()
 	for i := 0; i < 2; i++ {

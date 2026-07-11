@@ -47,7 +47,9 @@ func TestApplyDefaultsMCP(t *testing.T) {
 func TestApplyDefaultsPreservesJSONAndProgrammaticMCPFalse(t *testing.T) {
 	t.Parallel()
 	var fromJSON Config
-	if err := json.Unmarshal([]byte(`{"database":{"driver":"postgres","dsn":"x"},"entities":[{"name":"hidden","mcp":{"dmlTools":false}}]}`), &fromJSON); err != nil {
+	jsonInput := `{"database":{"driver":"postgres","dsn":"x"},` +
+		`"entities":[{"name":"hidden","mcp":{"dmlTools":false}}]}`
+	if err := json.Unmarshal([]byte(jsonInput), &fromJSON); err != nil {
 		t.Fatal(err)
 	}
 	fromJSON.ApplyDefaults()
@@ -144,12 +146,20 @@ func TestValidate(t *testing.T) {
 		cfg     *Config
 		wantErr error
 	}{
-		{"valid", &Config{Database: DatabaseConfig{Driver: "oceanbase", DSN: "x"}, Entities: []EntityConfig{{Name: "u"}}}, nil},
+		{
+			"valid",
+			&Config{Database: DatabaseConfig{Driver: "oceanbase", DSN: "x"}, Entities: []EntityConfig{{Name: "u"}}},
+			nil,
+		},
 		{"custom driver", &Config{Database: DatabaseConfig{Driver: "oracle", DSN: "x"}}, nil},
 		{"empty driver", &Config{Database: DatabaseConfig{DSN: "x"}}, ErrInvalidDriver},
 		{"malformed driver", &Config{Database: DatabaseConfig{Driver: "Oracle", DSN: "x"}}, ErrInvalidDriver},
 		{"empty dsn", &Config{Database: DatabaseConfig{Driver: "postgres"}}, ErrEmptyDSN},
-		{"empty entity name", &Config{Database: DatabaseConfig{Driver: "postgres", DSN: "x"}, Entities: []EntityConfig{{Name: ""}}}, ErrEmptyEntityName},
+		{
+			"empty entity name",
+			&Config{Database: DatabaseConfig{Driver: "postgres", DSN: "x"}, Entities: []EntityConfig{{Name: ""}}},
+			ErrEmptyEntityName,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -169,14 +179,31 @@ func TestValidate(t *testing.T) {
 
 func TestValidateSecurityConstraints(t *testing.T) {
 	t.Parallel()
-	valid := func() *Config {
-		return &Config{
-			Database: DatabaseConfig{Driver: "postgres", DSN: "x"},
-			Cost:     CostConfig{SoftScore: 60, HardScore: 40},
-			Entities: []EntityConfig{{Name: "users"}},
-		}
+	cases := securityConstraintCases()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validSecurityConfig()
+			tc.mutate(cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
 	}
-	cases := []struct {
+}
+
+func validSecurityConfig() *Config {
+	return &Config{
+		Database: DatabaseConfig{Driver: "postgres", DSN: "x"},
+		Cost:     CostConfig{SoftScore: 60, HardScore: 40},
+		Entities: []EntityConfig{{Name: "users"}},
+	}
+}
+
+func securityConstraintCases() []struct {
+	name   string
+	mutate func(*Config)
+} {
+	return []struct {
 		name   string
 		mutate func(*Config)
 	}{
@@ -210,15 +237,6 @@ func TestValidateSecurityConstraints(t *testing.T) {
 				"reader": {"and": []any{map[string]any{"op": "drop", "field": "id"}}},
 			}
 		}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := valid()
-			tc.mutate(cfg)
-			if err := cfg.Validate(); err == nil {
-				t.Fatal("expected validation error")
-			}
-		})
 	}
 }
 
@@ -279,7 +297,11 @@ func TestSchemaIsValidJSON(t *testing.T) {
 	if !ok {
 		t.Fatal("schema properties are missing")
 	}
-	for _, name := range []string{"server", "database", "databases", "entities", "tools", "cost", "budget", "cache", "rateLimit", "mask", "audit", "transactions"} {
+	schemaProps := []string{
+		"server", "database", "databases", "entities", "tools", "cost", "budget",
+		"cache", "rateLimit", "mask", "audit", "transactions",
+	}
+	for _, name := range schemaProps {
 		if _, ok := properties[name]; !ok {
 			t.Errorf("schema property %q is missing", name)
 		}
@@ -337,9 +359,14 @@ func TestValidateNamedDatabasesAndRelationships(t *testing.T) {
 			"archive": {Driver: "mysql", DSN: "y"},
 		},
 		Entities: []EntityConfig{
-			{Name: "users", DataSource: "primary", Fields: []FieldConfig{{Name: "id"}}, Relationships: []RelationshipConfig{
-				{Name: "orders", Target: "orders", Cardinality: "many", JoinOn: map[string]string{"id": "user_id"}},
-			}},
+			{
+				Name:       "users",
+				DataSource: "primary",
+				Fields:     []FieldConfig{{Name: "id"}},
+				Relationships: []RelationshipConfig{
+					{Name: "orders", Target: "orders", Cardinality: "many", JoinOn: map[string]string{"id": "user_id"}},
+				},
+			},
 			{Name: "orders", DataSource: "primary", Fields: []FieldConfig{{Name: "user_id"}}},
 		},
 	}
@@ -389,7 +416,9 @@ func TestValidateRelationshipShape(t *testing.T) {
 
 func TestAQEJSONTracksExplicitReadOnlyFalse(t *testing.T) {
 	var cfg Config
-	if err := json.Unmarshal([]byte(`{"database":{"driver":"postgres","dsn":"x"},"cost":{"aqe":{"explainAnalyze":true,"readOnly":false,"sampleRate":1,"timeout":1000000000}}}`), &cfg); err != nil {
+	jsonInput := `{"database":{"driver":"postgres","dsn":"x"},"cost":{"aqe":` +
+		`{"explainAnalyze":true,"readOnly":false,"sampleRate":1,"timeout":1000000000}}}`
+	if err := json.Unmarshal([]byte(jsonInput), &cfg); err != nil {
 		t.Fatal(err)
 	}
 	cfg.ApplyDefaults()

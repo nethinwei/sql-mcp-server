@@ -80,14 +80,30 @@ func (d *PreparedDB) statement(ctx context.Context, query string) (*preparedEntr
 
 	stmt, err := preparer.PrepareContext(ctx, query)
 	d.mu.Lock()
+	defer d.mu.Unlock()
 	if err != nil {
-		call.err = err
-		call.complete = true
-		delete(d.preparing, query)
-		close(call.done)
-		d.mu.Unlock()
-		return nil, false, err
+		return d.finishPrepareErrorLocked(query, call, err)
 	}
+	return d.finishPrepareSuccessLocked(query, call, stmt)
+}
+
+func (d *PreparedDB) finishPrepareErrorLocked(
+	query string,
+	call *prepareCall,
+	err error,
+) (*preparedEntry, bool, error) {
+	call.err = err
+	call.complete = true
+	delete(d.preparing, query)
+	close(call.done)
+	return nil, false, err
+}
+
+func (d *PreparedDB) finishPrepareSuccessLocked(
+	query string,
+	call *prepareCall,
+	stmt Prepared,
+) (*preparedEntry, bool, error) {
 	entry := &preparedEntry{stmt: stmt, refs: call.waiters}
 	call.entry = entry
 	call.complete = true
@@ -106,7 +122,6 @@ func (d *PreparedDB) statement(ctx context.Context, query string) (*preparedEntr
 	}
 	delete(d.preparing, query)
 	close(call.done)
-	d.mu.Unlock()
 	return entry, true, nil
 }
 

@@ -57,7 +57,10 @@ func (a *RoleAuthorizer) Authorize(_ context.Context, req Request) (Decision, er
 		return Decision{Allowed: false, Reason: fmt.Sprintf("entity %q not found", req.Entity)}, nil
 	}
 	if !roleAllowed(res.Entity.Role, req.Action, req.Role) {
-		return Decision{Allowed: false, Reason: fmt.Sprintf("role %q not permitted to %s %q", req.Role, req.Action, req.Entity)}, nil
+		return Decision{
+			Allowed: false,
+			Reason:  fmt.Sprintf("role %q not permitted to %s %q", req.Role, req.Action, req.Entity),
+		}, nil
 	}
 	readFields, writeFields := req.ReadFields, req.WriteFields
 	if len(readFields) == 0 && len(writeFields) == 0 {
@@ -73,10 +76,16 @@ func (a *RoleAuthorizer) Authorize(_ context.Context, req Request) (Decision, er
 			return Decision{Allowed: false, Reason: fmt.Sprintf("role %q has no readable fields", req.Role)}, nil
 		}
 		if denied := firstDenied(readFields, acl.Read, res.Attributes); denied != "" {
-			return Decision{Allowed: false, Reason: fmt.Sprintf("field %q is not readable by role %q", denied, req.Role)}, nil
+			return Decision{
+				Allowed: false,
+				Reason:  fmt.Sprintf("field %q is not readable by role %q", denied, req.Role),
+			}, nil
 		}
 		if denied := firstDenied(writeFields, acl.Write, res.Attributes); denied != "" {
-			return Decision{Allowed: false, Reason: fmt.Sprintf("field %q is not writable by role %q", denied, req.Role)}, nil
+			return Decision{
+				Allowed: false,
+				Reason:  fmt.Sprintf("field %q is not writable by role %q", denied, req.Role),
+			}, nil
 		}
 	}
 	return Decision{
@@ -152,7 +161,12 @@ func projectFields(visible []entity.Attribute, requested []string) []string {
 	return out
 }
 
-func projectFieldsForRole(visible []entity.Attribute, requested []string, access entity.FieldAccess, role string) []string {
+func projectFieldsForRole(
+	visible []entity.Attribute,
+	requested []string,
+	access entity.FieldAccess,
+	role string,
+) []string {
 	acl, configured := fieldAccessForRole(access, NormalizeRole(role))
 	if !configured {
 		return projectFields(visible, requested)

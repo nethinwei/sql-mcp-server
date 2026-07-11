@@ -137,7 +137,13 @@ func parsePGExplainAnalyze(b []byte) (cost.Plan, error) {
 	}
 	var arr []pgExplainRow
 	if err := json.Unmarshal(b, &arr); err != nil {
-		return cost.Plan{ScanType: cost.ScanUnknown, Raw: b}, fmt.Errorf("postgres: parse EXPLAIN ANALYZE JSON: %w", err)
+		return cost.Plan{
+				ScanType: cost.ScanUnknown,
+				Raw:      b,
+			}, fmt.Errorf(
+				"postgres: parse EXPLAIN ANALYZE JSON: %w",
+				err,
+			)
 	}
 	if len(arr) == 0 {
 		return cost.Plan{ScanType: cost.ScanUnknown, Raw: b}, errors.New("postgres: empty EXPLAIN ANALYZE plan")

@@ -128,7 +128,10 @@ func TestRuntimeReloadUpdatesBudgetLimitsAndPreservesState(t *testing.T) {
 	if runtime.Current().Budget != oldBudget {
 		t.Fatal("budget state manager was replaced")
 	}
-	if _, err := oldBudget.Acquire(context.Background(), budget.Scope{Role: "reader", Session: "s"}); !errors.Is(err, budget.ErrExceeded) {
+	if _, err := oldBudget.Acquire(context.Background(), budget.Scope{Role: "reader", Session: "s"}); !errors.Is(
+		err,
+		budget.ErrExceeded,
+	) {
 		t.Fatalf("updated budget ignored preserved state: %v", err)
 	}
 	_ = runtime.Close()

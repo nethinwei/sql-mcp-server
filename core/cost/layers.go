@@ -80,17 +80,7 @@ func (e Estimate) Check(ctx context.Context, c codegen.Compiled) (Decision, erro
 	if c.Kind != "" && c.Kind != codegen.KindRead && c.Kind != codegen.KindAggregate {
 		return Decision{Allow: true}, nil
 	}
-	plan, err := e.Explainer.Explain(ctx, c.SQL, c.Args)
-	if err != nil {
-		plan = Plan{ScanType: ScanUnknown, StatsFresh: false}
-	}
-	// Calibrate against observed history: trust reality over estimates.
-	if e.Feedback != nil {
-		key := Fingerprint(e.Threshold.Datasource, e.Threshold.DialectName, c)
-		if stats, ok := e.Feedback.Stats(key); ok && stats.AverageRows > plan.EstimatedRows {
-			plan.EstimatedRows = stats.AverageRows
-		}
-	}
+	plan, err := e.explainPlan(ctx, c)
 	score := ScorePlan(plan)
 	th := e.Threshold
 	deny := func(soft bool) (Decision, error) {
@@ -101,6 +91,30 @@ func (e Estimate) Check(ctx context.Context, c codegen.Compiled) (Decision, erro
 			Hints: Hints(plan, th),
 		}, nil
 	}
+	return e.evaluatePlan(plan, err, score, th, deny)
+}
+
+func (e Estimate) explainPlan(ctx context.Context, c codegen.Compiled) (Plan, error) {
+	plan, err := e.Explainer.Explain(ctx, c.SQL, c.Args)
+	if err != nil {
+		plan = Plan{ScanType: ScanUnknown, StatsFresh: false}
+	}
+	if e.Feedback != nil {
+		key := Fingerprint(e.Threshold.Datasource, e.Threshold.DialectName, c)
+		if stats, ok := e.Feedback.Stats(key); ok && stats.AverageRows > plan.EstimatedRows {
+			plan.EstimatedRows = stats.AverageRows
+		}
+	}
+	return plan, err
+}
+
+func (e Estimate) evaluatePlan(
+	plan Plan,
+	err error,
+	score Score,
+	th Threshold,
+	deny func(bool) (Decision, error),
+) (Decision, error) {
 	if e.FailClosed && (err != nil || plan.ScanType == ScanUnknown) {
 		return deny(false)
 	}
@@ -113,13 +127,6 @@ func (e Estimate) Check(ctx context.Context, c codegen.Compiled) (Decision, erro
 	if !plan.StatsFresh && th.RequireFreshStats {
 		return deny(false)
 	}
-	// Note: MaxRows/MaxBytes do NOT reject here. Estimates can be wrong; the
-	// EnforceCap layer uses MaxRows to wrap reads in a deterministic LIMIT as a
-	// backstop, which is the whole point of defense in depth.
-	//
-	// Score is 0-100 where HIGHER IS SAFER (ScorePlan: point=100, full scan=20).
-	// A plan scoring below HardScore is a hard reject; below SoftScore is a soft
-	// reject (suggest LIMIT). Callers configure SoftScore >= HardScore.
 	if th.HardScore > 0 && score.Value < th.HardScore {
 		return deny(false)
 	}

@@ -94,6 +94,21 @@ func (b *builder) renderSelect(e relalg.Expr) error {
 	if err := b.flatten(e, ctx); err != nil {
 		return err
 	}
+	if err := b.writeSelectClause(ctx); err != nil {
+		return err
+	}
+	b.sql.WriteString(" FROM ")
+	b.sql.WriteString(ctx.from)
+	if err := b.writeWhereClause(ctx); err != nil {
+		return err
+	}
+	b.writeGroupByClause(ctx)
+	b.writeOrderByClause(ctx)
+	b.writeLimitClause(ctx)
+	return nil
+}
+
+func (b *builder) writeSelectClause(ctx *selectCtx) error {
 	b.sql.WriteString("SELECT ")
 	if ctx.distinct {
 		b.sql.WriteString("DISTINCT ")
@@ -110,47 +125,59 @@ func (b *builder) renderSelect(e relalg.Expr) error {
 	default:
 		b.sql.WriteString("*")
 	}
-	b.sql.WriteString(" FROM ")
-	b.sql.WriteString(ctx.from)
-	if len(ctx.wherePreds) > 0 {
-		b.sql.WriteString(" WHERE ")
-		var pred relalg.Predicate
-		if len(ctx.wherePreds) == 1 {
-			pred = ctx.wherePreds[0]
-		} else {
-			pred = relalg.And{Preds: ctx.wherePreds}
-		}
-		if err := b.renderPredicate(pred); err != nil {
-			return err
-		}
-	}
-	if len(ctx.groupBy) > 0 {
-		b.sql.WriteString(" GROUP BY ")
-		b.sql.WriteString(b.renderFieldList(ctx.groupBy))
-	}
-	if len(ctx.order) > 0 {
-		b.sql.WriteString(" ORDER BY ")
-		for i, t := range ctx.order {
-			if i > 0 {
-				b.sql.WriteString(", ")
-			}
-			b.sql.WriteString(b.qident(t.Field))
-			if strings.EqualFold(t.Dir, "desc") {
-				b.sql.WriteString(" DESC")
-			} else {
-				b.sql.WriteString(" ASC")
-			}
-		}
-	}
-	if ctx.hasLimit {
-		b.sql.WriteString(" LIMIT ")
-		b.sql.WriteString(strconv.FormatInt(ctx.limit, 10))
-		if ctx.offset > 0 {
-			b.sql.WriteString(" OFFSET ")
-			b.sql.WriteString(strconv.FormatInt(ctx.offset, 10))
-		}
-	}
 	return nil
+}
+
+func (b *builder) writeWhereClause(ctx *selectCtx) error {
+	if len(ctx.wherePreds) == 0 {
+		return nil
+	}
+	b.sql.WriteString(" WHERE ")
+	var pred relalg.Predicate
+	if len(ctx.wherePreds) == 1 {
+		pred = ctx.wherePreds[0]
+	} else {
+		pred = relalg.And{Preds: ctx.wherePreds}
+	}
+	return b.renderPredicate(pred)
+}
+
+func (b *builder) writeGroupByClause(ctx *selectCtx) {
+	if len(ctx.groupBy) == 0 {
+		return
+	}
+	b.sql.WriteString(" GROUP BY ")
+	b.sql.WriteString(b.renderFieldList(ctx.groupBy))
+}
+
+func (b *builder) writeOrderByClause(ctx *selectCtx) {
+	if len(ctx.order) == 0 {
+		return
+	}
+	b.sql.WriteString(" ORDER BY ")
+	for i, t := range ctx.order {
+		if i > 0 {
+			b.sql.WriteString(", ")
+		}
+		b.sql.WriteString(b.qident(t.Field))
+		if strings.EqualFold(t.Dir, "desc") {
+			b.sql.WriteString(" DESC")
+		} else {
+			b.sql.WriteString(" ASC")
+		}
+	}
+}
+
+func (b *builder) writeLimitClause(ctx *selectCtx) {
+	if !ctx.hasLimit {
+		return
+	}
+	b.sql.WriteString(" LIMIT ")
+	b.sql.WriteString(strconv.FormatInt(ctx.limit, 10))
+	if ctx.offset > 0 {
+		b.sql.WriteString(" OFFSET ")
+		b.sql.WriteString(strconv.FormatInt(ctx.offset, 10))
+	}
 }
 
 func (b *builder) renderCols(items []relalg.ProjectItem) string {

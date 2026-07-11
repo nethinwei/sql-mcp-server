@@ -105,11 +105,13 @@ func TestMemoryManagerUpdateLimitsPreservesSessionState(t *testing.T) {
 	_ = fresh.Complete(Usage{})
 }
 
-func TestMemoryManagerConcurrentReservationsAreAtomic(t *testing.T) {
-	m := New(map[string]Limits{"reader": {MaxSessionCost: 10}}, nil)
-	scope := Scope{Role: "reader", Session: "shared"}
-	const workers = 16
-
+func runConcurrentReservations(
+	t *testing.T,
+	m *MemoryManager,
+	scope Scope,
+	workers int,
+) []Lease {
+	t.Helper()
 	start := make(chan struct{})
 	results := make(chan Lease, workers)
 	var wg sync.WaitGroup
@@ -140,6 +142,14 @@ func TestMemoryManagerConcurrentReservationsAreAtomic(t *testing.T) {
 			acquired = append(acquired, lease)
 		}
 	}
+	return acquired
+}
+
+func TestMemoryManagerConcurrentReservationsAreAtomic(t *testing.T) {
+	m := New(map[string]Limits{"reader": {MaxSessionCost: 10}}, nil)
+	scope := Scope{Role: "reader", Session: "shared"}
+
+	acquired := runConcurrentReservations(t, m, scope, 16)
 	if len(acquired) != 1 {
 		t.Fatalf("acquired reservations = %d, want 1", len(acquired))
 	}

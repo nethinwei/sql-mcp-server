@@ -9,9 +9,9 @@ CORE_PACKAGES := ./core/...
 .PHONY: fmt fmt-check vet build test test-integration test-e2e lint coverage \
 	coverage-check govulncheck ci ci-local ci-full tidy
 
-# Format all Go sources in place.
+# Format all Go sources in place (gofmt + 120-column line shortening).
 fmt:
-	gofmt -w .
+	$(GO) run ./internal/fmtcheck -w
 
 # Fail if any Go source is not gofmt-ed.
 fmt-check:

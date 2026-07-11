@@ -55,6 +55,13 @@ func TestProviderQueryExecExplainIntrospect(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
+	assertPGQueryResults(t, ctx, prov)
+	assertPGExplainPlans(t, ctx, prov)
+	assertPGIntrospectUsers(t, ctx, prov)
+}
+
+func assertPGQueryResults(t *testing.T, ctx context.Context, prov *pgprov.Provider) {
+	t.Helper()
 	rows, err := prov.QueryContext(ctx, "SELECT id, email FROM users ORDER BY id")
 	if err != nil {
 		t.Fatal(err)
@@ -69,8 +76,10 @@ func TestProviderQueryExecExplainIntrospect(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("got %d rows, want 2", len(got))
 	}
+}
 
-	// EXPLAIN: an unfiltered select is a Seq Scan -> ScanFull.
+func assertPGExplainPlans(t *testing.T, ctx context.Context, prov *pgprov.Provider) {
+	t.Helper()
 	plan, err := prov.Explainer().Explain(ctx, "SELECT * FROM users", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -87,8 +96,6 @@ func TestProviderQueryExecExplainIntrospect(t *testing.T) {
 	if analyzed.ActualRows == 0 || analyzed.ExecutionTime <= 0 {
 		t.Fatalf("EXPLAIN ANALYZE plan = %+v", analyzed)
 	}
-
-	// EXPLAIN: a PK point lookup uses the index -> ScanPoint.
 	plan2, err := prov.Explainer().Explain(ctx, "SELECT * FROM users WHERE id = $1", []any{1})
 	if err != nil {
 		t.Fatal(err)
@@ -96,8 +103,10 @@ func TestProviderQueryExecExplainIntrospect(t *testing.T) {
 	if plan2.ScanType != cost.ScanIndex && plan2.ScanType != cost.ScanPoint {
 		t.Fatalf("ScanType = %v, want index/point for PK lookup", plan2.ScanType)
 	}
+}
 
-	// Introspect: discover the users table with a primary key.
+func assertPGIntrospectUsers(t *testing.T, ctx context.Context, prov *pgprov.Provider) {
+	t.Helper()
 	entities, err := prov.Introspector().Discover(ctx, []string{"public"})
 	if err != nil {
 		t.Fatal(err)

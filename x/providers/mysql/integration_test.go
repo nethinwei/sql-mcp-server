@@ -268,7 +268,13 @@ func TestMySQLReadPKWhitelist(t *testing.T) {
 			Roles:  config.RoleConfig{Read: []string{"reader"}},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(true), SoftScore: 40, HardScore: 70, MaxRows: 10000, WhitelistPKPoint: true},
+		Cost: config.CostConfig{
+			Enabled:          config.Bool(true),
+			SoftScore:        40,
+			HardScore:        70,
+			MaxRows:          10000,
+			WhitelistPKPoint: true,
+		},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)

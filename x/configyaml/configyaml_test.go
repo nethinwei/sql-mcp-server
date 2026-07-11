@@ -20,7 +20,9 @@ func TestDecodePreservesToolsAndEntityPresence(t *testing.T) {
 		t.Fatalf("omitted values did not receive defaults: %+v", omitted)
 	}
 
-	explicit, err := Decode([]byte(validDatabase + "tools: {}\nentities:\n  - name: hidden\n    mcp:\n      dmlTools: false\n"))
+	explicit, err := Decode(
+		[]byte(validDatabase + "tools: {}\nentities:\n  - name: hidden\n    mcp:\n      dmlTools: false\n"),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +140,8 @@ entities:
 	if cfg.Budget.Roles["reader"].MaxConcurrent != 2 || cfg.RateLimit.MaxInflight != 8 {
 		t.Fatalf("nested camel-case keys were not decoded: %+v", cfg)
 	}
-	if len(cfg.Entities) != 1 || cfg.Entities[0].PrimaryKey[0] != "id" || len(cfg.Entities[0].FieldACL["reader"].Read) != 1 {
+	if len(cfg.Entities) != 1 || cfg.Entities[0].PrimaryKey[0] != "id" ||
+		len(cfg.Entities[0].FieldACL["reader"].Read) != 1 {
 		t.Fatalf("entity camel-case keys were not decoded: %+v", cfg.Entities)
 	}
 }
@@ -182,7 +185,8 @@ transactions:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Cost.QueryTimeout != 2*time.Second || cfg.Cache.TTL != 3*time.Second || cfg.Transactions.TTL != 4*time.Second {
+	if cfg.Cost.QueryTimeout != 2*time.Second || cfg.Cache.TTL != 3*time.Second ||
+		cfg.Transactions.TTL != 4*time.Second {
 		t.Fatalf("duration strings decoded incorrectly: cost=%v cache=%v transaction=%v",
 			cfg.Cost.QueryTimeout, cfg.Cache.TTL, cfg.Transactions.TTL)
 	}

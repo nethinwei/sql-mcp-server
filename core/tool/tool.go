@@ -154,114 +154,159 @@ func RunTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Re
 	name := t.Info().Name
 	start := time.Now()
 	auditInput := audit.RedactInput(input, sensitiveFields(name, input, tc.Registry))
-	var lease budget.Lease
-	if tc.Budget != nil {
-		var err error
-		scope := budget.Scope{
-			Role: tc.Role, Tenant: tenantKey(tc.Subject), Session: tc.Session,
-		}
-		if manager, ok := tc.Budget.(budget.ReservingManager); ok {
-			reserved := int64(1)
-			switch name {
-			case "read_records", "aggregate_records":
-				reserved = tc.MaxRows
-			case "execute_entity":
-				reserved = tc.MaxProcedureRows
-			}
-			if strings.HasPrefix(name, "procedure_") {
-				reserved = tc.MaxProcedureRows
-			}
-			if reserved <= 0 {
-				reserved = 1
-			}
-			lease, err = manager.AcquireWithReservation(ctx, scope, budget.Reservation{Cost: reserved})
-		} else {
-			lease, err = tc.Budget.Acquire(ctx, scope)
-		}
-		if err != nil {
-			if tc.Auditor != nil {
-				_ = tc.Auditor.Record(ctx, audit.Event{
-					Time: time.Now(), Role: tc.Role, Tool: name, Input: auditInput,
-					Allowed: false, Error: err.Error(),
-				})
-			}
-			return Result{}, err
-		}
-		ctx = lease.Context()
-		tc.BudgetLimits = lease.Limits()
+	lease, ctx, tc, err := acquireToolBudget(ctx, name, input, tc, auditInput)
+	if err != nil {
+		return Result{}, err
 	}
 	ctx = tc.Hooks.FireBeforeTool(ctx, name, input)
-	var res Result
-	var err error
-	if tc.Engine != nil {
-		// Only read-only tools are de-duplicated, and the key includes role and
-		// subject so callers with different row-level scopes never share a
-		// result. Transactional calls are never coalesced: validate the token
-		// identity before engine admission, then execute against its own Tx.
-		key := ""
-		if t.Info().ReadOnly {
-			transaction := transactionFromInput(input)
-			if transaction != "" {
-				if tc.Transactions == nil {
-					err = ErrTransactionNotFound
-				} else {
-					err = tc.Transactions.Validate(transaction, tc.Session, tc.Role, tc.Subject)
-				}
-			} else {
-				key = name + "\x00" + scopeKey(tc.Role, tc.Subject) + "\x00" + string(input)
-			}
-		}
-		if err == nil {
-			var val any
-			val, err = tc.Engine.Submit(ctx, key, func(ctx context.Context) (any, error) {
-				return t.Run(ctx, input, tc)
-			})
-			if r, ok := val.(Result); ok {
-				res = r
-			}
-		}
-	} else {
-		res, err = t.Run(ctx, input, tc)
+	res, err := invokeTool(ctx, t, input, tc)
+	res, err = finalizeToolResult(res, err, tc, lease, start)
+	tc.Hooks.FireAfterTool(ctx, name, res.StructuredResult, err)
+	if err != nil {
+		tc.Hooks.FireOnError(ctx, err)
 	}
+	recordToolAudit(ctx, tc, name, auditInput, res, err, start)
+	return res, err
+}
+
+func acquireToolBudget(
+	ctx context.Context,
+	name string,
+	input json.RawMessage,
+	tc Context,
+	auditInput json.RawMessage,
+) (budget.Lease, context.Context, Context, error) {
+	if tc.Budget == nil {
+		return nil, ctx, tc, nil
+	}
+	scope := budget.Scope{
+		Role: tc.Role, Tenant: tenantKey(tc.Subject), Session: tc.Session,
+	}
+	var lease budget.Lease
+	var err error
+	if manager, ok := tc.Budget.(budget.ReservingManager); ok {
+		reserved := budgetReservation(name, tc)
+		lease, err = manager.AcquireWithReservation(ctx, scope, budget.Reservation{Cost: reserved})
+	} else {
+		lease, err = tc.Budget.Acquire(ctx, scope)
+	}
+	if err != nil {
+		if tc.Auditor != nil {
+			_ = tc.Auditor.Record(ctx, audit.Event{
+				Time: time.Now(), Role: tc.Role, Tool: name, Input: auditInput,
+				Allowed: false, Error: err.Error(),
+			})
+		}
+		return nil, ctx, tc, err
+	}
+	ctx = lease.Context()
+	tc.BudgetLimits = lease.Limits()
+	return lease, ctx, tc, nil
+}
+
+func budgetReservation(name string, tc Context) int64 {
+	reserved := int64(1)
+	switch name {
+	case "read_records", "aggregate_records":
+		reserved = tc.MaxRows
+	case "execute_entity":
+		reserved = tc.MaxProcedureRows
+	}
+	if strings.HasPrefix(name, "procedure_") {
+		reserved = tc.MaxProcedureRows
+	}
+	if reserved <= 0 {
+		return 1
+	}
+	return reserved
+}
+
+func invokeTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Result, error) {
+	if tc.Engine == nil {
+		return t.Run(ctx, input, tc)
+	}
+	key, err := engineSubmitKey(t, input, tc)
+	if err != nil {
+		return Result{}, err
+	}
+	val, err := tc.Engine.Submit(ctx, key, func(ctx context.Context) (any, error) {
+		return t.Run(ctx, input, tc)
+	})
+	if r, ok := val.(Result); ok {
+		return r, err
+	}
+	return Result{}, err
+}
+
+func engineSubmitKey(t Tool, input json.RawMessage, tc Context) (string, error) {
+	if !t.Info().ReadOnly {
+		return "", nil
+	}
+	transaction := transactionFromInput(input)
+	if transaction == "" {
+		return t.Info().Name + "\x00" + scopeKey(tc.Role, tc.Subject) + "\x00" + string(input), nil
+	}
+	if tc.Transactions == nil {
+		return "", ErrTransactionNotFound
+	}
+	return "", tc.Transactions.Validate(transaction, tc.Session, tc.Role, tc.Subject)
+}
+
+func finalizeToolResult(
+	res Result,
+	err error,
+	tc Context,
+	lease budget.Lease,
+	start time.Time,
+) (Result, error) {
 	if encoded, encodeErr := json.Marshal(res.Content); encodeErr == nil {
 		res.ReturnedBytes = int64(len(encoded))
 		if tc.MaxReturnedBytes > 0 && res.ReturnedBytes > tc.MaxReturnedBytes && err == nil {
 			err = budget.ErrExceeded
 		}
 	}
-	if lease != nil {
-		returnedRows := res.ReturnedRows
-		if returnedRows == 0 {
-			returnedRows = int64(len(res.Content))
-		}
-		budgetErr := lease.Complete(budget.Usage{
-			EstimatedScannedRows: res.EstimatedScannedRows,
-			ReturnedRows:         returnedRows,
-			ReturnedBytes:        res.ReturnedBytes,
-			Duration:             time.Since(start),
-			Cost:                 returnedRows + time.Since(start).Milliseconds(),
-		})
-		if err == nil && budgetErr != nil {
-			err = budgetErr
-		}
+	if lease == nil {
+		return res, err
 	}
-	tc.Hooks.FireAfterTool(ctx, name, res.StructuredResult, err)
-	if err != nil {
-		tc.Hooks.FireOnError(ctx, err)
+	returnedRows := res.ReturnedRows
+	if returnedRows == 0 {
+		returnedRows = int64(len(res.Content))
 	}
-	if tc.Auditor != nil {
-		_ = tc.Auditor.Record(ctx, audit.Event{
-			Time:         time.Now(),
-			Role:         tc.Role,
-			Tool:         name,
-			Input:        auditInput,
-			Allowed:      err == nil,
-			Error:        errString(err),
-			Duration:     time.Since(start),
-			ReturnedRows: returnedRowsForAudit(res),
-		})
+	budgetErr := lease.Complete(budget.Usage{
+		EstimatedScannedRows: res.EstimatedScannedRows,
+		ReturnedRows:         returnedRows,
+		ReturnedBytes:        res.ReturnedBytes,
+		Duration:             time.Since(start),
+		Cost:                 returnedRows + time.Since(start).Milliseconds(),
+	})
+	if err == nil && budgetErr != nil {
+		err = budgetErr
 	}
 	return res, err
+}
+
+func recordToolAudit(
+	ctx context.Context,
+	tc Context,
+	name string,
+	auditInput json.RawMessage,
+	res Result,
+	err error,
+	start time.Time,
+) {
+	if tc.Auditor == nil {
+		return
+	}
+	_ = tc.Auditor.Record(ctx, audit.Event{
+		Time:         time.Now(),
+		Role:         tc.Role,
+		Tool:         name,
+		Input:        auditInput,
+		Allowed:      err == nil,
+		Error:        errString(err),
+		Duration:     time.Since(start),
+		ReturnedRows: returnedRowsForAudit(res),
+	})
 }
 
 func returnedRowsForAudit(res Result) int64 {
@@ -329,107 +374,6 @@ func errString(err error) string {
 		return ""
 	}
 	return err.Error()
-}
-
-// Registry holds an immutable set of tools.
-type Registry struct {
-	tools  []Tool
-	byName map[string]Tool
-}
-
-// NewRegistry builds a Registry, rejecting duplicate tool names.
-func NewRegistry(tools []Tool) (*Registry, error) {
-	r := &Registry{byName: make(map[string]Tool, len(tools))}
-	for _, t := range tools {
-		name := t.Info().Name
-		if _, ok := r.byName[name]; ok {
-			return nil, fmt.Errorf("%w: %q", ErrDuplicateTool, name)
-		}
-		r.byName[name] = t
-		r.tools = append(r.tools, t)
-	}
-	return r, nil
-}
-
-// Tools returns all registered tools.
-func (r *Registry) Tools() []Tool {
-	out := make([]Tool, len(r.tools))
-	copy(out, r.tools)
-	return out
-}
-
-// Get returns a tool by name.
-func (r *Registry) Get(name string) (Tool, bool) {
-	t, ok := r.byName[name]
-	return t, ok
-}
-
-// Enabled returns the tools whose Enabled(flags) is true.
-func (r *Registry) Enabled(flags config.ToolFlags) []Tool {
-	out := make([]Tool, 0, len(r.tools))
-	for _, t := range r.tools {
-		if t.Enabled(flags) {
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
-// ---- input shapes ----
-
-type condJSON struct {
-	Field string `json:"field"`
-	Op    string `json:"op"`
-	Value any    `json:"value"`
-}
-
-type aggJSON struct {
-	Func  string `json:"func"`
-	Field string `json:"field"`
-}
-
-type readInput struct {
-	Entity      string         `json:"entity"`
-	Transaction string         `json:"transaction,omitempty"`
-	Fields      []string       `json:"fields,omitempty"`
-	Expand      []string       `json:"expand,omitempty"`
-	Filter      []condJSON     `json:"filter,omitempty"`
-	Limit       int64          `json:"limit,omitempty"`
-	Offset      int64          `json:"offset,omitempty"`
-	Cursor      map[string]any `json:"cursor,omitempty"`
-}
-
-type createInput struct {
-	Entity      string         `json:"entity"`
-	Transaction string         `json:"transaction,omitempty"`
-	Values      map[string]any `json:"values"`
-}
-
-type updateInput struct {
-	Entity      string         `json:"entity"`
-	Transaction string         `json:"transaction,omitempty"`
-	Filter      []condJSON     `json:"filter"`
-	Set         map[string]any `json:"set"`
-}
-
-type deleteInput struct {
-	Entity      string     `json:"entity"`
-	Transaction string     `json:"transaction,omitempty"`
-	Filter      []condJSON `json:"filter"`
-}
-
-type aggregateInput struct {
-	Entity      string     `json:"entity"`
-	Transaction string     `json:"transaction,omitempty"`
-	GroupBy     []string   `json:"groupBy,omitempty"`
-	Aggregates  []aggJSON  `json:"aggregates"`
-	Filter      []condJSON `json:"filter,omitempty"`
-}
-
-type executeInput struct {
-	Entity      string         `json:"entity"`
-	Args        map[string]any `json:"args,omitempty"`
-	Transaction string         `json:"transaction,omitempty"`
 }
 
 // ---- helpers ----
@@ -577,7 +521,11 @@ func checkGate(ctx context.Context, tc Context, compiled codegen.Compiled) (code
 	return checked, err
 }
 
-func checkGateDetailed(ctx context.Context, tc Context, compiled codegen.Compiled) (codegen.Compiled, *cost.Plan, error) {
+func checkGateDetailed(
+	ctx context.Context,
+	tc Context,
+	compiled codegen.Compiled,
+) (codegen.Compiled, *cost.Plan, error) {
 	if tc.Gate == nil {
 		return compiled, nil, nil
 	}

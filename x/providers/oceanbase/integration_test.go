@@ -22,7 +22,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/providers/oceanbase"
 )
 
-func setupOB(t *testing.T) (*oceanbase.Provider, func()) {
+func startOBContainer(t *testing.T) (testcontainers.Container, string) {
 	t.Helper()
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -37,24 +37,30 @@ func setupOB(t *testing.T) (*oceanbase.Provider, func()) {
 	if err != nil {
 		t.Fatalf("start oceanbase container: %v", err)
 	}
+	t.Cleanup(func() { _ = container.Terminate(context.Background()) })
 	host, _ := container.Host(ctx)
 	port, _ := container.MappedPort(ctx, "2881")
-	dsn := fmt.Sprintf("root:@tcp(%s:%s)/?parseTime=true", host, port.Port())
+	return container, fmt.Sprintf("root:@tcp(%s:%s)/?parseTime=true", host, port.Port())
+}
 
-	// OceanBase takes time to become query-ready after the port is open; retry.
+func connectOBWithRetry(t *testing.T, dsn string) *oceanbase.Provider {
+	t.Helper()
 	var prov *oceanbase.Provider
+	var err error
 	for i := 0; i < 40; i++ {
 		prov, err = oceanbase.New(dsn)
 		if err == nil {
-			break
+			return prov
 		}
 		time.Sleep(5 * time.Second)
 	}
-	if err != nil {
-		_ = container.Terminate(context.Background())
-		t.Fatalf("connect oceanbase: %v", err)
-	}
-	// Retry DDL until the tenant accepts writes.
+	t.Fatalf("connect oceanbase: %v", err)
+	return nil
+}
+
+func seedOBSchema(t *testing.T, prov *oceanbase.Provider) {
+	t.Helper()
+	ctx := context.Background()
 	for i := 0; i < 40; i++ {
 		_, e1 := prov.ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS test")
 		_, e2 := prov.ExecContext(ctx,
@@ -64,20 +70,23 @@ func setupOB(t *testing.T) (*oceanbase.Provider, func()) {
 		}
 		time.Sleep(5 * time.Second)
 	}
-	// Idempotent data: clear then insert, retried until the tenant is ready.
 	for i := 0; i < 40; i++ {
 		_, _ = prov.ExecContext(ctx, "DELETE FROM test.users")
 		_, e := prov.ExecContext(ctx,
 			"INSERT INTO test.users (email, tenant_id) VALUES ('alice@x.com', 7), ('bob@x.com', 8)")
 		if e == nil {
-			break
+			return
 		}
 		time.Sleep(5 * time.Second)
 	}
-	return prov, func() {
-		_ = prov.Close()
-		_ = container.Terminate(context.Background())
-	}
+}
+
+func setupOB(t *testing.T) (*oceanbase.Provider, func()) {
+	t.Helper()
+	_, dsn := startOBContainer(t)
+	prov := connectOBWithRetry(t, dsn)
+	seedOBSchema(t, prov)
+	return prov, func() { _ = prov.Close() }
 }
 
 func TestOBProviderQueryExecExplainIntrospect(t *testing.T) {
@@ -215,7 +224,9 @@ func TestOBExecuteProcedure(t *testing.T) {
 	ctx := context.Background()
 	// The setup DSN selects no default database, so both the procedure and the
 	// CALL must be schema-qualified (test.count_users).
-	if _, err := prov.ExecContext(ctx, "CREATE PROCEDURE test.count_users() BEGIN SELECT count(*) AS n FROM test.users; END"); err != nil {
+	if _, err := prov.ExecContext(ctx,
+		"CREATE PROCEDURE test.count_users() BEGIN SELECT count(*) AS n FROM test.users; END",
+	); err != nil {
 		t.Fatalf("create procedure: %v", err)
 	}
 	cfg := &config.Config{

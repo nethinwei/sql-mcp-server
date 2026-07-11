@@ -23,7 +23,7 @@ func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m)
 }
 
-func setupApp(t *testing.T) (*bootstrap.App, func()) {
+func startE2EPostgres(t *testing.T) (*pgprov.Provider, func()) {
 	t.Helper()
 	ctx := context.Background()
 	container, err := postgres.Run(ctx, "postgres:16-alpine",
@@ -45,6 +45,13 @@ func setupApp(t *testing.T) (*bootstrap.App, func()) {
 	}
 	_, _ = prov.ExecContext(ctx, "CREATE TABLE users (id serial PRIMARY KEY, email text, tenant_id integer)")
 	_, _ = prov.ExecContext(ctx, "INSERT INTO users (email, tenant_id) VALUES ('alice@x.com', 7), ('bob@x.com', 8)")
+	return prov, func() {
+		_ = prov.Close()
+		_ = container.Terminate(context.Background())
+	}
+}
+
+func e2eTestConfig() *config.Config {
 	cfg := &config.Config{
 		Server:   config.ServerConfig{Role: "operator"},
 		Database: config.DatabaseConfig{Driver: "postgres", DSN: "ignored"},
@@ -73,35 +80,56 @@ func setupApp(t *testing.T) (*bootstrap.App, func()) {
 		},
 	}
 	cfg.ApplyDefaults()
-	app, err := bootstrap.AssembleWithProvider(cfg, prov)
+	return cfg
+}
+
+func setupApp(t *testing.T) (*bootstrap.App, func()) {
+	t.Helper()
+	prov, cleanup := startE2EPostgres(t)
+	app, err := bootstrap.AssembleWithProvider(e2eTestConfig(), prov)
 	if err != nil {
+		cleanup()
 		t.Fatal(err)
 	}
 	return app, func() {
 		_ = app.Close()
-		_ = container.Terminate(context.Background())
+		cleanup()
 	}
+}
+
+func connectE2ESession(t *testing.T, app *bootstrap.App) (*mcp.ClientSession, context.Context, context.CancelFunc) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	srv := mcpserver.NewServer(app)
+	stServer, stClient := mcp.NewInMemoryTransports()
+	go func() { _ = srv.Run(ctx, stServer) }()
+	client := mcp.NewClient(&mcp.Implementation{Name: "e2e-test"}, nil)
+	session, err := client.Connect(ctx, stClient, nil)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	return session, ctx, cancel
 }
 
 func TestE2EReleaseCapabilities(t *testing.T) {
 	app, cleanup := setupApp(t)
 	defer cleanup()
-	ctx, cancel := context.WithCancel(context.Background())
+	session, ctx, cancel := connectE2ESession(t, app)
 	defer cancel()
-
-	srv := mcpserver.NewServer(app)
-	stServer, stClient := mcp.NewInMemoryTransports()
-	go func() { _ = srv.Run(ctx, stServer) }()
-
-	client := mcp.NewClient(&mcp.Implementation{Name: "e2e-test"}, nil)
-	session, err := client.Connect(ctx, stClient, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	defer session.Close()
 
-	// Tool visibility includes transactions, while the default-off destructive
-	// tool remains absent.
+	assertE2EToolVisibility(t, ctx, session)
+	assertE2EPKReadAndMasking(t, ctx, session)
+	assertE2ERLSAndRBAC(t, ctx, session)
+	assertE2EUnsafeWriteRejected(t, ctx, session)
+	assertE2ETransactionLifecycle(t, ctx, session)
+	assertE2EFullScanRejected(t, ctx, session)
+	assertE2ESchemaResourceAndPrompts(t, ctx, session)
+}
+
+func assertE2EToolVisibility(t *testing.T, ctx context.Context, session *mcp.ClientSession) {
+	t.Helper()
 	lt, err := session.ListTools(ctx, &mcp.ListToolsParams{})
 	if err != nil {
 		t.Fatal(err)
@@ -121,8 +149,10 @@ func TestE2EReleaseCapabilities(t *testing.T) {
 			t.Fatalf("%s not registered", want)
 		}
 	}
+}
 
-	// read_records with a PK point lookup: succeeds and returns the row.
+func assertE2EPKReadAndMasking(t *testing.T, ctx context.Context, session *mcp.ClientSession) {
+	t.Helper()
 	res, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name: "read_records",
 		Arguments: map[string]any{
@@ -139,8 +169,10 @@ func TestE2EReleaseCapabilities(t *testing.T) {
 	if !contentContains(res, "a***@x.com") || contentContains(res, "alice@x.com") {
 		t.Fatalf("email masking not applied: %+v", res.Content)
 	}
+}
 
-	// RLS removes a PK row outside tenant 7.
+func assertE2ERLSAndRBAC(t *testing.T, ctx context.Context, session *mcp.ClientSession) {
+	t.Helper()
 	rls, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name: "read_records",
 		Arguments: map[string]any{
@@ -156,8 +188,6 @@ func TestE2EReleaseCapabilities(t *testing.T) {
 	if len(rows) != 0 {
 		t.Fatalf("RLS leaked tenant 8 row: %+v", rows)
 	}
-
-	// Entity RBAC and field ACL reject inaccessible data before execution.
 	for name, arguments := range map[string]map[string]any{
 		"entity RBAC": {"entity": "admin_users"},
 		"field ACL":   {"entity": "users", "fields": []string{"tenant_id"}},
@@ -170,8 +200,10 @@ func TestE2EReleaseCapabilities(t *testing.T) {
 			t.Fatalf("%s should be rejected: %+v", name, denied)
 		}
 	}
+}
 
-	// Empty-predicate writes are rejected.
+func assertE2EUnsafeWriteRejected(t *testing.T, ctx context.Context, session *mcp.ClientSession) {
+	t.Helper()
 	write, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name: "update_record",
 		Arguments: map[string]any{
@@ -184,8 +216,10 @@ func TestE2EReleaseCapabilities(t *testing.T) {
 	if !write.IsError {
 		t.Fatalf("unsafe write should be rejected: %+v", write)
 	}
+}
 
-	// Explicit transactions are session-bound and can be rolled back.
+func assertE2ETransactionLifecycle(t *testing.T, ctx context.Context, session *mcp.ClientSession) {
+	t.Helper()
 	begin, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name: "begin_transaction", Arguments: map[string]any{},
 	})
@@ -207,19 +241,24 @@ func TestE2EReleaseCapabilities(t *testing.T) {
 	if err != nil || rollback.IsError {
 		t.Fatalf("rollback transaction failed: result=%+v error=%v", rollback, err)
 	}
+}
 
-	// read_records with no filter (full scan): rejected as IsError by the gate.
-	res2, err := session.CallTool(ctx, &mcp.CallToolParams{
+func assertE2EFullScanRejected(t *testing.T, ctx context.Context, session *mcp.ClientSession) {
+	t.Helper()
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      "read_records",
 		Arguments: map[string]any{"entity": "users"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res2.IsError {
+	if !res.IsError {
 		t.Fatal("full scan should be rejected with IsError")
 	}
+}
 
+func assertE2ESchemaResourceAndPrompts(t *testing.T, ctx context.Context, session *mcp.ClientSession) {
+	t.Helper()
 	resources, err := session.ListResources(ctx, &mcp.ListResourcesParams{})
 	if err != nil || len(resources.Resources) != 1 {
 		t.Fatalf("schema resource list = %+v, error=%v", resources, err)

@@ -92,7 +92,8 @@ func obScanType(op string) cost.ScanType {
 	switch {
 	case strings.Contains(op, "FULL SCAN") || strings.EqualFold(op, "ALL"):
 		return cost.ScanFull
-	case strings.Contains(op, "GET") || strings.EqualFold(op, "const") || strings.EqualFold(op, "eq_ref") || strings.EqualFold(op, "system"):
+	case strings.Contains(op, "GET") || strings.EqualFold(op, "const") ||
+		strings.EqualFold(op, "eq_ref") || strings.EqualFold(op, "system"):
 		return cost.ScanPoint
 	case strings.Contains(op, "INDEX") || strings.Contains(op, "RANGE") || strings.EqualFold(op, "ref"):
 		return cost.ScanIndex

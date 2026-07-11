@@ -214,49 +214,63 @@ func (g *ChainGate) Check(ctx context.Context, c codegen.Compiled) (Decision, er
 		if err != nil {
 			return Decision{}, err
 		}
-		if d.Rewritten != nil {
-			c = *d.Rewritten
-			rewritten = true
-		}
-		if d.Bypass {
-			bypassEstimate = true
-			result.Bypass = true
-		}
-		if d.Plan != nil {
-			result.Plan = d.Plan
-		}
-		if d.Score != nil {
-			result.Score = d.Score
-		}
-		if len(d.Hints) > 0 {
-			result.Hints = d.Hints
-		}
-		if !d.Allow {
-			if d.Soft {
-				copy := d
-				soft = &copy
-				continue
-			}
-			if rewritten {
-				d.Rewritten = &c
-			} else {
-				d.Rewritten = nil
-			}
-			return d, nil
+		c, rewritten = g.applyLayerDecision(&result, c, rewritten, &bypassEstimate, &soft, d)
+		if !d.Allow && !d.Soft {
+			return g.hardDenyDecision(d, c, rewritten), nil
 		}
 	}
 	if soft != nil {
-		d := *soft
-		if rewritten {
-			d.Rewritten = &c
-		}
-		return d, nil
+		return g.attachRewritten(*soft, c, rewritten), nil
 	}
-	d := result
+	return g.attachRewritten(result, c, rewritten), nil
+}
+
+func (g *ChainGate) applyLayerDecision(
+	result *Decision,
+	c codegen.Compiled,
+	rewritten bool,
+	bypassEstimate *bool,
+	soft **Decision,
+	d Decision,
+) (codegen.Compiled, bool) {
+	if d.Rewritten != nil {
+		c = *d.Rewritten
+		rewritten = true
+	}
+	if d.Bypass {
+		*bypassEstimate = true
+		result.Bypass = true
+	}
+	if d.Plan != nil {
+		result.Plan = d.Plan
+	}
+	if d.Score != nil {
+		result.Score = d.Score
+	}
+	if len(d.Hints) > 0 {
+		result.Hints = d.Hints
+	}
+	if !d.Allow && d.Soft {
+		copy := d
+		*soft = &copy
+	}
+	return c, rewritten
+}
+
+func (g *ChainGate) hardDenyDecision(d Decision, c codegen.Compiled, rewritten bool) Decision {
+	if rewritten {
+		d.Rewritten = &c
+	} else {
+		d.Rewritten = nil
+	}
+	return d
+}
+
+func (g *ChainGate) attachRewritten(d Decision, c codegen.Compiled, rewritten bool) Decision {
 	if rewritten {
 		d.Rewritten = &c
 	}
-	return d, nil
+	return d
 }
 
 func layerPhase(l Layer) Phase {

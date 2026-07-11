@@ -37,7 +37,10 @@ func TestTransactionBindingCapacityAndCloseRollback(t *testing.T) {
 	if _, err := manager.DB(token, "session-a", "reader", subject, "primary"); !errors.Is(err, ErrTransactionScope) {
 		t.Fatalf("role mismatch error = %v", err)
 	}
-	if _, err := manager.DB(token, "session-a", "writer", map[string]any{"tenant_id": "b"}, "primary"); !errors.Is(err, ErrTransactionScope) {
+	if _, err := manager.DB(token, "session-a", "writer", map[string]any{"tenant_id": "b"}, "primary"); !errors.Is(
+		err,
+		ErrTransactionScope,
+	) {
 		t.Fatalf("subject mismatch error = %v", err)
 	}
 	if _, err := manager.DB(token, "session-a", "writer", subject, "other"); !errors.Is(err, ErrTransactionScope) {
@@ -46,7 +49,10 @@ func TestTransactionBindingCapacityAndCloseRollback(t *testing.T) {
 	if _, err := manager.DB(token, "session-b", "writer", subject, "primary"); !errors.Is(err, ErrTransactionScope) {
 		t.Fatalf("session mismatch error = %v", err)
 	}
-	if _, err := manager.Begin(context.Background(), db, "session-a", "writer", subject, "primary", nil); !errors.Is(err, ErrTransactionCapacity) {
+	if _, err := manager.Begin(context.Background(), db, "session-a", "writer", subject, "primary", nil); !errors.Is(
+		err,
+		ErrTransactionCapacity,
+	) {
 		t.Fatalf("capacity error = %v", err)
 	}
 	manager.Close()
@@ -217,7 +223,10 @@ func TestTransactionCapacityIsIsolatedByScope(t *testing.T) {
 	if _, err := manager.Begin(context.Background(), db, "", "role-b", nil, "default", nil); err != nil {
 		t.Fatalf("one scope consumed another scope's capacity: %v", err)
 	}
-	if _, err := manager.Begin(context.Background(), db, "", "role-a", nil, "default", nil); !errors.Is(err, ErrTransactionCapacity) {
+	if _, err := manager.Begin(context.Background(), db, "", "role-a", nil, "default", nil); !errors.Is(
+		err,
+		ErrTransactionCapacity,
+	) {
 		t.Fatalf("same-scope capacity error = %v", err)
 	}
 }
@@ -276,7 +285,10 @@ func TestBeginTransactionRequiresRoleAndDefaultsReadOnly(t *testing.T) {
 	}
 	reader := base
 	reader.Role = "reader"
-	if _, err := (BeginTransactionTool{}).Run(context.Background(), json.RawMessage(`{"readOnly":false}`), reader); !errors.Is(err, ErrUnauthorized) {
+	_, err := (BeginTransactionTool{}).Run(
+		context.Background(), json.RawMessage(`{"readOnly":false}`), reader,
+	)
+	if !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("reader write transaction error = %v", err)
 	}
 	if _, err := (BeginTransactionTool{}).Run(context.Background(), json.RawMessage(`{}`), reader); err != nil {
@@ -287,7 +299,10 @@ func TestBeginTransactionRequiresRoleAndDefaultsReadOnly(t *testing.T) {
 	}
 	nobody := base
 	nobody.Role = "nobody"
-	if _, err := (BeginTransactionTool{}).Run(context.Background(), json.RawMessage(`{}`), nobody); !errors.Is(err, ErrUnauthorized) {
+	if _, err := (BeginTransactionTool{}).Run(context.Background(), json.RawMessage(`{}`), nobody); !errors.Is(
+		err,
+		ErrUnauthorized,
+	) {
 		t.Fatalf("unauthorized role error = %v", err)
 	}
 }

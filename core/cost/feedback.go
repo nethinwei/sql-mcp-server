@@ -78,7 +78,12 @@ func NewAdaptiveMemoryStore(size int, factor float64, minSamples int, invalidato
 
 // NewAdaptiveMemoryStoreWithBounds additionally bounds the number of distinct
 // fingerprints retained by the adaptive store.
-func NewAdaptiveMemoryStoreWithBounds(size, maxKeys int, factor float64, minSamples int, invalidator PlanInvalidator) *MemoryStore {
+func NewAdaptiveMemoryStoreWithBounds(
+	size, maxKeys int,
+	factor float64,
+	minSamples int,
+	invalidator PlanInvalidator,
+) *MemoryStore {
 	if size <= 0 {
 		size = 32
 	}

@@ -406,3 +406,93 @@ func TestNewGateFromCapabilitiesWriteGuardMySQL(t *testing.T) {
 		t.Fatal("PK point write should pass")
 	}
 }
+
+type stubLayer struct {
+	name     string
+	phase    Phase
+	decision Decision
+}
+
+func (s stubLayer) Name() string { return s.name }
+
+func (s stubLayer) Phase() Phase { return s.phase }
+
+func (s stubLayer) Check(context.Context, codegen.Compiled) (Decision, error) {
+	return s.decision, nil
+}
+
+func TestChainGateReturnsSoftDenyFromChain(t *testing.T) {
+	t.Parallel()
+	g := NewGate(Estimate{
+		Explainer: FakeExplainer{Plan: Plan{ScanType: ScanSeq, StatsFresh: true}},
+		Threshold: Threshold{SoftScore: 70, HardScore: 30},
+	})
+	d, err := g.Check(context.Background(), codegen.Compiled{Kind: codegen.KindRead})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.Soft || d.Allow {
+		t.Fatalf("expected soft deny from chain, got %+v", d)
+	}
+}
+
+func TestChainGateHardDenyWithoutRewritten(t *testing.T) {
+	t.Parallel()
+	g := NewGate(stubLayer{
+		name:     "hard",
+		decision: Decision{Allow: false, Soft: false},
+	})
+	d, err := g.Check(context.Background(), codegen.Compiled{SQL: "SELECT original"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Rewritten != nil {
+		t.Fatal("hard deny without rewrite must not attach Rewritten")
+	}
+}
+
+func TestChainGateSoftDenyAttachesLayerRewritten(t *testing.T) {
+	t.Parallel()
+	hint := codegen.Compiled{SQL: "SELECT hinted"}
+	g := NewGate(stubLayer{
+		name: "soft",
+		decision: Decision{
+			Allow: false, Soft: true, Rewritten: &hint,
+		},
+	})
+	d, err := g.Check(context.Background(), codegen.Compiled{SQL: "SELECT original"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.Soft {
+		t.Fatalf("expected soft deny, got %+v", d)
+	}
+	if d.Rewritten == nil || d.Rewritten.SQL != hint.SQL {
+		t.Fatalf("soft deny with layer Rewritten must attach rewritten query, got %+v", d.Rewritten)
+	}
+}
+
+func TestChainGateSoftDenyUsesFinalCompiledAfterRewrite(t *testing.T) {
+	t.Parallel()
+	first := codegen.Compiled{SQL: "SELECT first"}
+	g := NewGate(
+		stubLayer{
+			name:     "rewrite",
+			decision: Decision{Allow: true, Rewritten: &first},
+		},
+		stubLayer{
+			name:     "soft",
+			decision: Decision{Allow: false, Soft: true},
+		},
+	)
+	d, err := g.Check(context.Background(), codegen.Compiled{SQL: "SELECT original", Kind: codegen.KindRead})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.Soft {
+		t.Fatalf("expected soft deny, got %+v", d)
+	}
+	if d.Rewritten == nil || d.Rewritten.SQL != first.SQL {
+		t.Fatalf("expected final rewritten SQL %q, got %+v", first.SQL, d.Rewritten)
+	}
+}

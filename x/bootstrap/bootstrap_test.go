@@ -67,7 +67,11 @@ func TestAppCloseContextDrainsBeforeTransactionsAndProviders(t *testing.T) {
 		t.Fatalf("CloseContext error = %v", err)
 	}
 	if !tx.RolledBack || provider.closed != 1 {
-		t.Fatalf("resources were not force-closed after drain timeout: rollback=%v provider=%d", tx.RolledBack, provider.closed)
+		t.Fatalf(
+			"resources were not force-closed after drain timeout: rollback=%v provider=%d",
+			tx.RolledBack,
+			provider.closed,
+		)
 	}
 	close(release)
 	if err := app.Close(); err != nil {
@@ -352,6 +356,57 @@ func TestAssembleWithNamedProvidersRoutesAndClosesAll(t *testing.T) {
 	}
 	if main.closed != 1 || archive.closed != 1 {
 		t.Fatalf("close counts = main:%d archive:%d", main.closed, archive.closed)
+	}
+}
+
+func TestAssembleWithProvidersIndependentGates(t *testing.T) {
+	t.Parallel()
+	app, err := assembleTwoDatasourceApp(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	assertDatasourceRejectsFullScan(t, app.Sources["main"].Gate, postgres.Dialect{}, "users")
+	assertDatasourceRejectsFullScan(t, app.Sources["archive"].Gate, mysql.Dialect{}, "events")
+	if app.Sources["main"].Gate == app.Sources["archive"].Gate {
+		t.Fatal("each datasource must have its own gate instance")
+	}
+}
+
+func assembleTwoDatasourceApp(t *testing.T) (*App, error) {
+	t.Helper()
+	cfg := &config.Config{
+		Databases: map[string]config.DatabaseConfig{
+			"main":    {Driver: "postgres", DSN: "x"},
+			"archive": {Driver: "mysql", DSN: "y"},
+		},
+		Entities: []config.EntityConfig{
+			{Name: "users", DataSource: "main", Fields: []config.FieldConfig{{Name: "id"}}},
+			{Name: "events", DataSource: "archive", Fields: []config.FieldConfig{{Name: "id"}}},
+		},
+	}
+	cfg.ApplyDefaults()
+	fullScan := cost.Plan{ScanType: cost.ScanFull, EstimatedRows: 100000, StatsFresh: true}
+	return AssembleWithProviders(cfg, map[string]Provider{
+		"main":    &fakeProvider{dialect: postgres.Dialect{}, explainPlan: &fullScan},
+		"archive": &fakeProvider{dialect: mysql.Dialect{}, explainPlan: &fullScan},
+	})
+}
+
+func assertDatasourceRejectsFullScan(t *testing.T, gate cost.Gate, d dialect.Dialect, table string) {
+	t.Helper()
+	compiled, err := codegen.Renderer{Dialect: d}.Compile(
+		relalg.Scan{Relation: relalg.RelationRef{Name: table}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := gate.Check(context.Background(), compiled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Allow {
+		t.Fatalf("%s gate should reject full scan", d.Name())
 	}
 }
 

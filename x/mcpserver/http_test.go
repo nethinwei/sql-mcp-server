@@ -46,11 +46,19 @@ func TestValidateHTTPSecurity(t *testing.T) {
 		{"exposed no auth refused", HTTPConfig{Addr: ":8080"}, true},
 		{"exposed with token ok", HTTPConfig{Addr: ":8080", Token: "s3cret"}, false},
 		{"exposed with mtls needs cert", HTTPConfig{Addr: ":8080", ClientCA: "ca.pem"}, true},
-		{"exposed with mtls and cert ok", HTTPConfig{Addr: ":8080", ClientCA: "ca.pem", TLSCert: "c.pem", TLSKey: "k.pem"}, false},
+		{
+			"exposed with mtls and cert ok",
+			HTTPConfig{Addr: ":8080", ClientCA: "ca.pem", TLSCert: "c.pem", TLSKey: "k.pem"},
+			false,
+		},
 		{"cert without key refused", HTTPConfig{Addr: "127.0.0.1:8080", TLSCert: "c.pem"}, true},
 		{"key without cert refused", HTTPConfig{Addr: "127.0.0.1:8080", TLSKey: "k.pem"}, true},
 		{"proxy headers without boundary refused", HTTPConfig{Addr: "127.0.0.1:8080", TrustProxyHeaders: true}, true},
-		{"proxy headers with CIDR ok", HTTPConfig{Addr: "127.0.0.1:8080", TrustProxyHeaders: true, TrustedProxyCIDRs: []string{"127.0.0.0/8"}}, false},
+		{
+			"proxy headers with CIDR ok",
+			HTTPConfig{Addr: "127.0.0.1:8080", TrustProxyHeaders: true, TrustedProxyCIDRs: []string{"127.0.0.0/8"}},
+			false,
+		},
 	}
 	for _, c := range cases {
 		err := validateHTTPSecurity(c.cfg)
