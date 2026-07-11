@@ -14,6 +14,8 @@
 详细文档：
 
 - 当前承诺：[v0.1.5 — Contract + Product Proof](roadmap/committed-v0.1.5.md)
+- 落地计划：[v0.1.5 落地计划](roadmap/execution-v0.1.5.md)
+- 下阶段候选：[v0.1.6（候选）— Observable + Measurable](roadmap/next-v0.1.6.md)
 - 长期方向：[Evidence-Gated Directions](roadmap/directions.md)
 - 衡量方法：[Roadmap Metrics](roadmap/metrics.md)
 - 数据库候选：[Provider Roadmap](provider-roadmap.md)
@@ -53,13 +55,17 @@
 通过设计评审、Demo 可复现、关键威胁均有证据或明确缺口。
 
 完整范围与非目标见
-[v0.1.5 — Contract + Product Proof](roadmap/committed-v0.1.5.md)。
+[v0.1.5 — Contract + Product Proof](roadmap/committed-v0.1.5.md)；工作包
+拆解、依赖顺序和验证方式见
+[v0.1.5 落地计划](roadmap/execution-v0.1.5.md)。
 
 ---
 
 ## Next 1 — Observable + Measurable
 
 进入门禁：`v0.1.5` 验收完成，关键拒绝路径可通过 `decision ID` 关联。
+候选范围的具体化见
+[v0.1.6（候选）— Observable + Measurable](roadmap/next-v0.1.6.md)。
 
 目标结果：
 
