@@ -19,7 +19,8 @@ mem.pprof
 
 # editor / os
 .idea/
-.vscode/
+.vscode/*
+!.vscode/settings.json
 .DS_Store
 
 # codegraph index
