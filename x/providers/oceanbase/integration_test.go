@@ -253,15 +253,13 @@ func assertOBAdversarialRLS(t *testing.T, ctx context.Context, app *bootstrap.Ap
 
 func assertOBQuotedIdentifierRLS(t *testing.T, ctx context.Context, prov *oceanbase.Provider) {
 	t.Helper()
-	// The integration user only has privileges on the default database, so quoted
-	// identifier coverage uses a backtick table name instead of CREATE DATABASE.
 	if _, err := prov.ExecContext(ctx,
-		"CREATE TABLE `user``records` (id int PRIMARY KEY, tenant_id int)",
+		"CREATE TABLE test.`user``records` (id int PRIMARY KEY, tenant_id int)",
 	); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := prov.ExecContext(ctx,
-		"INSERT INTO `user``records` VALUES (1, 7), (2, 8)",
+		"INSERT INTO test.`user``records` VALUES (1, 7), (2, 8)",
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +267,7 @@ func assertOBQuotedIdentifierRLS(t *testing.T, ctx context.Context, prov *oceanb
 		Server:   config.ServerConfig{Role: "reader"},
 		Database: config.DatabaseConfig{Driver: "oceanbase", DSN: "ignored"},
 		Entities: []config.EntityConfig{{
-			Name: "quoted_users", Source: "user`records", Kind: "table",
+			Name: "quoted_users", Source: "user`records", Schema: "test", Kind: "table",
 			PrimaryKey: []string{"id"},
 			Fields:     []config.FieldConfig{{Name: "id"}, {Name: "tenant_id"}},
 			Roles:      config.RoleConfig{Read: []string{"reader"}},
