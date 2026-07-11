@@ -35,9 +35,29 @@ type Config struct {
 
 // ServerConfig holds transport and role settings.
 type ServerConfig struct {
-	Transport string // "stdio" | "http"
-	Addr      string // http listen address
-	Role      string // runtime role (may be overridden by --role flag)
+	Transport string     // "stdio" | "http"
+	Addr      string     // http listen address
+	Role      string     // runtime role (may be overridden by --role flag)
+	Auth      AuthConfig // http transport authentication
+}
+
+// AuthConfig configures HTTP transport authentication. When the listener is not
+// bound to loopback, at least one of Token or TLS.ClientCA (mTLS) must be
+// configured or startup is refused (fail-closed). The caller identity headers
+// (X-MCP-Role / X-MCP-Subject) are trusted only when TrustProxyHeaders is true,
+// which is intended for deployment behind an already-authenticating gateway.
+type AuthConfig struct {
+	Token             string    `yaml:"token" json:"token"`
+	TrustProxyHeaders bool      `yaml:"trustProxyHeaders" json:"trustProxyHeaders"`
+	TLS               TLSConfig `yaml:"tls" json:"tls"`
+}
+
+// TLSConfig configures TLS/mTLS for the HTTP transport. Cert+Key enable TLS;
+// setting ClientCA additionally requires and verifies a client certificate.
+type TLSConfig struct {
+	Cert     string `yaml:"cert" json:"cert"`
+	Key      string `yaml:"key" json:"key"`
+	ClientCA string `yaml:"clientCA" json:"clientCA"`
 }
 
 // DatabaseConfig holds the connection target. DSN may contain ${ENV} or
@@ -66,6 +86,9 @@ type EntityConfig struct {
 	Roles       RoleConfig
 	MCP         MCPFlags
 	RowPolicies RowPolicies
+	// Params is the ordered formal-parameter list for a procedure entity, bound
+	// positionally by execute_entity. Required for procedures.
+	Params []string `yaml:"params" json:"params"`
 }
 
 // FieldConfig configures one column.

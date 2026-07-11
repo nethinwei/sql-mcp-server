@@ -442,6 +442,7 @@ func configToEntity(ec config.EntityConfig) (entity.Entity, error) {
 		Kind: parseKind(ec.Kind), Attributes: attrs, Keys: keys, Role: role,
 		MCP:         entity.MCPFlags{DMLTools: ec.MCP.DMLTools, CustomTool: ec.MCP.CustomTool},
 		RowPolicies: rowPolicies,
+		Params:      ec.Params,
 	}, nil
 }
 

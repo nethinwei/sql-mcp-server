@@ -458,10 +458,13 @@ func runExecute(ctx context.Context, tc Context, in executeInput) (Result, error
 	if !dec.Allowed {
 		return Result{}, ErrUnauthorized
 	}
-	keys := sortedKeys(in.Args)
-	args := make([]any, len(keys))
-	for i, k := range keys {
-		args[i] = in.Args[k]
+	// Bind args positionally in the procedure's declared parameter order. A
+	// procedure with no declared Params cannot be executed (fail-closed): the
+	// map key order is not the formal-parameter order, so guessing (e.g. by
+	// sorting keys) would silently write values into the wrong columns.
+	args, err := orderedProcArgs(res.Entity.Params, in.Args)
+	if err != nil {
+		return Result{}, err
 	}
 	expr := relalg.Call{Procedure: relalg.RelationRef{Name: res.Entity.Source, Schema: res.Entity.Schema}, Args: args}
 	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(expr)
@@ -482,9 +485,39 @@ func runExecute(ctx context.Context, tc Context, in executeInput) (Result, error
 		if err != nil {
 			return Result{}, err
 		}
+		if tc.Masker != nil {
+			maskRow(tc.Masker, res.Entity.Attributes, row)
+		}
 		out = append(out, row)
 	}
 	return Result{Content: out}, nil
+}
+
+// orderedProcArgs binds named args to the procedure's declared parameter order.
+// It rejects an undeclared procedure, unknown args, and missing args so a
+// positional CALL never receives values in the wrong slots.
+func orderedProcArgs(params []string, in map[string]any) ([]any, error) {
+	if len(params) == 0 {
+		return nil, fmt.Errorf("%w: procedure has no declared parameters; declare params to enable execute", ErrInvalidInput)
+	}
+	want := make(map[string]bool, len(params))
+	for _, p := range params {
+		want[p] = true
+	}
+	for k := range in {
+		if !want[k] {
+			return nil, fmt.Errorf("%w: unknown procedure parameter %q", ErrInvalidInput, k)
+		}
+	}
+	args := make([]any, len(params))
+	for i, p := range params {
+		v, ok := in[p]
+		if !ok {
+			return nil, fmt.Errorf("%w: missing procedure parameter %q", ErrInvalidInput, p)
+		}
+		args[i] = v
+	}
+	return args, nil
 }
 
 // ---- aggregate_records ----

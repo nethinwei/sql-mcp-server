@@ -141,6 +141,12 @@ type Entity struct {
 	MCP         MCPFlags
 	RowPolicies RowPolicies
 	Relations   []Relationship
+	// Params is the ordered list of formal parameter names for a KindProcedure
+	// entity. execute_entity binds a caller's named args to positional CALL
+	// placeholders in this exact order; a stored procedure whose params are not
+	// declared cannot be executed (fail-closed) since positional binding would
+	// otherwise be guesswork.
+	Params []string
 }
 
 // PrimaryKey returns the columns of the primary key, or nil if none is declared.

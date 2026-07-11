@@ -55,7 +55,15 @@ func run() error {
 			return err
 		}
 	case "http":
-		if err := mcpserver.ServeHTTP(ctx, srv, *addr); err != nil {
+		httpCfg := mcpserver.HTTPConfig{
+			Addr:              *addr,
+			Token:             cfg.Server.Auth.Token,
+			TrustProxyHeaders: cfg.Server.Auth.TrustProxyHeaders,
+			TLSCert:           cfg.Server.Auth.TLS.Cert,
+			TLSKey:            cfg.Server.Auth.TLS.Key,
+			ClientCA:          cfg.Server.Auth.TLS.ClientCA,
+		}
+		if err := mcpserver.ServeHTTP(ctx, srv, httpCfg); err != nil {
 			return err
 		}
 	default:
