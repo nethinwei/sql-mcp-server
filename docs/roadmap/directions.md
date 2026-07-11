@@ -5,6 +5,22 @@
 本文件记录尚未获得版本承诺的战略方向。以下方向按依赖排序，只有满足触发证据后，
 才可提升为主路线图中的 `Next`。
 
+## Foundation. Semantic Metadata
+
+为现有声明式配置补充不直接执行查询的语义元数据：
+
+- Entity grain、默认时间维度、discoverability 和替代关系；
+- Field 语义角色、枚举、单位、币种、尺度和时间含义；
+- 服从 RBAC、hidden 和 mask 的渐进披露；
+- 稳定语义 lint 与向后兼容的 import/export。
+
+触发证据：`v0.1.7` 校准后的定向任务或真实大 schema/语义歧义负载证明，grain、
+时间、枚举、单位或 catalog token 缺失是显著失败来源。
+
+旧配置行为必须保持不变；元数据不得改变授权或 SQL 语义，不得产生越权或 mask
+侧信道。退出门禁必须使用覆盖对应失败来源的任务集提供前后对照；若没有可测量改善，
+停止投入。该方向稳定并用于真实配置后，才可触发 L1 Executable Semantic Layer。
+
 ## L1. Executable Semantic Layer
 
 在现有 IR 上增加有限的 `Metric`、`Dimension` 和 `TimeDimension`，支持 grain、

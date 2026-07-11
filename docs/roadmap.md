@@ -67,10 +67,13 @@ first-call success、子串评分可能误判等测量问题。
 进入门禁：`v0.1.7` 完成校准，且失败归因证明存在显著、可由服务端解决的 Agent
 短板。只升级证据支持的一项：
 
-- grain、时间、枚举、单位或 catalog token 缺失显著时，进入 Semantic Metadata；
-- 任务因现有 IR 无法表达而失败时，进入 Governed Query Expressiveness；
-- 大 schema 选择失败或 catalog token 成本显著时，进入 Catalog Discovery；
-- 错误提示或工具契约导致可修复失败时，只收紧对应契约。
+- grain、时间、枚举、单位或 catalog token 缺失显著时，进入
+  [Semantic Metadata](roadmap/directions.md#foundation-semantic-metadata)；
+- 任务因现有 IR 无法表达而失败时，进入
+  [Governed Query Expressiveness](roadmap/directions.md#l12-governed-query-expressiveness)；
+- 大 schema 选择失败或 catalog token 成本显著时，进入
+  [Catalog Discovery](roadmap/directions.md#l2-catalog-discovery)；
+- 错误提示或[工具契约](tool-contract.md)导致可修复失败时，只收紧对应契约。
 
 若没有显著短板，本阶段不进入 `Committed`，也不为制造版本内容而扩张 Agent 功能。
 任何升级项必须使用能覆盖对应失败来源的任务集验收，不得复用缺少该场景的旧 pilot
@@ -80,18 +83,12 @@ first-call success、子串评分可能误判等测量问题。
 
 ## Next 2 — Provider Capability + Evidence-Backed SQLite
 
-进入门禁：SQLite 至少具备一个可验证用户场景、外部 contributor 或明确采用目标，
-并有固定公开 CI 环境或维护者承担可持续测试。完整条件以
-[Provider Roadmap](provider-roadmap.md) 为准。
+进入门禁、SQLite 首版范围、capability 前置工程和退出验收均以
+[Provider Roadmap](provider-roadmap.md) 为唯一事实源。
 
-先将平铺 bool capability 重构为“范围 + 保证强度 + 证据”模型，再交付受现有 IR
-和统一 engine 约束的窄 SQLite Provider。首版只承诺有独立 integration 证据的
-能力；extension loading、`ATTACH DATABASE`、危险 `PRAGMA` 和配置根目录外文件
-默认拒绝。
-
-退出门禁：capability model 不削弱现有 Provider 保证；SQLite 的每项公开能力均有
-独立证据或明确标为未验证；兼容矩阵、支持版本、威胁分析和 allow/deny e2e 同时
-交付。进入证据未满足时，本阶段不构成版本承诺。
+阶段结果：先独立交付“范围 + 保证强度 + 证据”的 capability model，再交付一个受
+现有 IR 和统一 engine 约束、且已有采用证据的窄 SQLite Provider。进入条件未满足
+时，本阶段不构成版本承诺。
 
 ---
 
@@ -100,24 +97,22 @@ first-call success、子串评分可能误判等测量问题。
 进入门禁：至少一个真实部署明确需要 revision、diff、simulate、publish 或
 rollback，且无法由现有 CLI 热重载流程合理满足。
 
-只实现已被真实需求触发的最小操作；publish/rollback 与 CLI 热重载共用配置变更
-守卫，并明确控制面不可用、snapshot 不兼容和在途请求语义。
+只实现已被真实需求触发的最小操作；revision 数据模型、配置兼容性、失败处理和
+在途请求语义遵循已评审的
+[Revision 与 Snapshot 设计](design/revision-snapshot.md)。
 
-退出门禁：具备恢复、拒绝、审计和降级测试；控制面不可用不得绕过统一 engine，也
-不得阻塞数据面读取已有有效 snapshot。
+退出门禁：实现满足上述设计并具备恢复、拒绝、审计和降级测试；任何路径不得绕过
+统一 engine。
 
 ---
 
 ## Later
 
-完整 Public Eval（多模型、多客户端和竞品 baseline）、可执行语义、Catalog
-Discovery、成本与数据出站治理、其他 Provider 扩展、生产运维、写治理、企业身份、
-durable audit、管理 UI、查询复用、扩展点，以及受治理查询表达力与 Provider
-优化扩展（IR Evolution）均按证据升级。
-
-范围、触发证据和跨阶段非目标见
-[Evidence-Gated Directions](roadmap/directions.md)。Provider 能力模型与候选顺序
-继续以 [Provider Roadmap](provider-roadmap.md) 为唯一事实源。
+[Semantic Metadata](roadmap/directions.md#foundation-semantic-metadata)、
+[完整 Public Eval](roadmap/metrics.md#agent-与业务效果)及其他战略方向均按证据
+升级。具体范围、触发证据和跨阶段非目标见
+[Evidence-Gated Directions](roadmap/directions.md)；Provider 能力模型与候选顺序
+以 [Provider Roadmap](provider-roadmap.md) 为唯一事实源。
 
 ---
 
