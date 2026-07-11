@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -320,6 +321,77 @@ func TestTrustedProxyRejectsForgedIdentityFromUntrustedSource(t *testing.T) {
 				t.Fatal("forged identity reached trusted subject middleware")
 			}
 		})
+	}
+}
+
+// TestHealthAndReadinessEndpoints guards the health separation contract:
+// /healthz is liveness only and always 200; /readyz/snapshot and /readyz/db
+// reflect their probes and fail closed (503) when a probe is missing or
+// failing, without echoing probe error details.
+func TestHealthAndReadinessEndpoints(t *testing.T) {
+	t.Parallel()
+	probeErr := errors.New("db down: dsn=postgres://user:secret@host/db")
+	cases := []struct {
+		name     string
+		cfg      HTTPConfig
+		path     string
+		wantCode int
+	}{
+		{"liveness always ok", HTTPConfig{}, "/healthz", http.StatusOK},
+		{"snapshot probe missing fails closed", HTTPConfig{}, "/readyz/snapshot", http.StatusServiceUnavailable},
+		{"db probe missing fails closed", HTTPConfig{}, "/readyz/db", http.StatusServiceUnavailable},
+		{
+			"snapshot ready",
+			HTTPConfig{SnapshotReady: func(context.Context) error { return nil }},
+			"/readyz/snapshot", http.StatusOK,
+		},
+		{
+			"snapshot not ready",
+			HTTPConfig{SnapshotReady: func(context.Context) error { return probeErr }},
+			"/readyz/snapshot", http.StatusServiceUnavailable,
+		},
+		{
+			"db ready",
+			HTTPConfig{DatabaseReady: func(context.Context) error { return nil }},
+			"/readyz/db", http.StatusOK,
+		},
+		{
+			"db not ready",
+			HTTPConfig{DatabaseReady: func(context.Context) error { return probeErr }},
+			"/readyz/db", http.StatusServiceUnavailable,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mux := buildHTTPMux(http.NotFoundHandler(), tc.cfg)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			if rec.Code != tc.wantCode {
+				t.Fatalf("%s code = %d, want %d", tc.path, rec.Code, tc.wantCode)
+			}
+			if strings.Contains(rec.Body.String(), "secret") {
+				t.Fatalf("readiness body leaks probe detail: %s", rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestReadinessProbeReceivesBoundedContext ensures a hung probe cannot stall
+// the endpoint forever: the handler passes a deadline-bounded context.
+func TestReadinessProbeReceivesBoundedContext(t *testing.T) {
+	t.Parallel()
+	var hasDeadline bool
+	h := readinessHandler(func(ctx context.Context) error {
+		_, hasDeadline = ctx.Deadline()
+		return nil
+	})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz/db", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d", rec.Code)
+	}
+	if !hasDeadline {
+		t.Fatal("probe context must carry a deadline")
 	}
 }
 

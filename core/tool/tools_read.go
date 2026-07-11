@@ -69,7 +69,8 @@ func recordReadFeedback(
 			tc.Hooks.FireOnError(ctx, samplingErr)
 			if tc.Auditor != nil {
 				_ = tc.Auditor.Record(ctx, audit.Event{
-					Time: time.Now(), Entity: entityName, Action: "explain_analyze_sample",
+					Time: time.Now(), DecisionID: tc.DecisionID, Role: tc.Role,
+					Entity: entityName, Action: "explain_analyze_sample",
 					Tool: "read_records", Allowed: false, Error: samplingErr.Error(),
 				})
 			}

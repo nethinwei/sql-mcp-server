@@ -171,6 +171,34 @@ func (a *App) Close() error {
 	return a.CloseContext(context.Background())
 }
 
+// Ping verifies every configured database is reachable. It backs the
+// /readyz/db readiness probe and stays off the tool execution path: it uses
+// the provider's native connection ping when exposed and falls back to a
+// trivial query otherwise.
+func (a *App) Ping(ctx context.Context) error {
+	providers := a.Providers
+	if len(providers) == 0 && a.Provider != nil {
+		providers = map[string]Provider{"default": a.Provider}
+	}
+	for name, p := range providers {
+		if err := pingProvider(ctx, p); err != nil {
+			return fmt.Errorf("bootstrap: database %q not ready: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func pingProvider(ctx context.Context, p Provider) error {
+	if native, ok := p.(interface{ DB() *sql.DB }); ok {
+		return native.DB().PingContext(ctx)
+	}
+	rows, err := p.QueryContext(ctx, "SELECT 1")
+	if err != nil {
+		return err
+	}
+	return rows.Close()
+}
+
 // Load reads and validates a YAML config file.
 func Load(path string) (*config.Config, error) {
 	cfg, err := configyaml.Load(path)

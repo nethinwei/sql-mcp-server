@@ -1,0 +1,113 @@
+version: "1"
+
+server:
+  transport: stdio
+  role: analyst
+
+databases:
+  primary:
+    driver: postgres
+    dsn: "${DATABASE_DSN}"
+
+tools:
+  describeEntities: true
+  readRecords: true
+  aggregateRecords: true
+
+# The gate stays enabled but permissive; the repair-path denial comes from the
+# per-role budget (maxReturnedRows) so aggregate tasks are not blocked by
+# scan-shape scoring.
+cost:
+  enabled: true
+  softScore: 20
+  hardScore: 10
+  maxRows: 1000
+  maxBytes: 16777216
+  rejectFullScan: false
+  whitelistPKPoint: true
+  queryTimeout: 10s
+
+budget:
+  roles:
+    analyst:
+      maxConcurrent: 4
+      maxExecution: 10s
+      maxReturnedRows: 50
+      maxReturnedBytes: 262144
+      maxSessionCost: 10000000
+
+cache:
+  enabled: false
+
+audit:
+  enabled: false
+
+entities:
+  - name: customers
+    source: eval_customer
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Customers (row-scoped to the analyst's tenant)"
+    primaryKey: [id]
+    roles:
+      read: [analyst]
+      aggregate: [analyst]
+    rowPolicies:
+      analyst:
+        op: eq
+        field: tenant_id
+        value: 7
+    fields:
+      - {name: id, description: "Customer ID"}
+      - {name: name, description: "Customer name"}
+      - {name: email, description: "Email (masked)", mask: email}
+      - {name: city, description: "City"}
+      - {name: tenant_id, description: "Tenant boundary"}
+
+  - name: orders
+    source: eval_order
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Orders"
+    primaryKey: [id]
+    roles:
+      read: [analyst]
+      aggregate: [analyst]
+    fields:
+      - {name: id, description: "Order ID"}
+      - {name: customer_id, description: "Customer ID"}
+      - {name: status, description: "pending | paid | shipped | cancelled"}
+      - {name: amount_cents, description: "Amount in cents"}
+
+  - name: products
+    source: eval_product
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Products"
+    primaryKey: [id]
+    roles:
+      read: [analyst]
+      aggregate: [analyst]
+    fields:
+      - {name: id, description: "Product ID"}
+      - {name: name, description: "Product name"}
+      - {name: category, description: "gadget | widget"}
+      - {name: price_cents, description: "Price in cents"}
+
+  - name: employees
+    source: eval_employee
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Employees (salary is not exposed)"
+    primaryKey: [id]
+    roles:
+      read: [analyst]
+      aggregate: [analyst]
+    fields:
+      - {name: id, description: "Employee ID"}
+      - {name: name, description: "Employee name"}
+      - {name: dept, description: "Department"}

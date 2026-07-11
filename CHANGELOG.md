@@ -9,6 +9,38 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+### Added
+
+- 健康分离：`/healthz` 保留为 liveness，新增 `/readyz/snapshot`（配置快照
+  可用）与 `/readyz/db`（数据库可达）readiness 端点，探针缺失或失败一律
+  503（fail closed），响应体不回显失败细节。
+- 最小可观测：HTTP transport 在 `/metrics` 暴露
+  `sql_mcp_tool_calls_total{tool,outcome}`、按 tool 的时长直方图和
+  `sql_mcp_audit_dropped_total`（Prometheus 文本格式，token 保护）；`serve`
+  改为 stderr JSON 结构化日志，工具失败日志携带 `decisionId` 与 `outcome`；
+  设置 `OTEL_EXPORTER_OTLP_ENDPOINT` 后初始化 OTLP HTTP exporter，使既有
+  hook 产生真实 span。
+- `hook.Join` 组合多组生命周期 hook（tracing、metrics、logging 共存）。
+- 协议 smoke（`make smoke-protocol`）进入 PR/主分支 CI：stdio 与
+  streamable HTTP 各验证 initialize、tools/list、allow、机器可读 deny，
+  HTTP 另验证健康/就绪/metrics 端点。
+- 可复现 data-plane overhead benchmark（`make bench-overhead`）：固定
+  fixture 下对比直连查询与完整治理路径的 p50/p95/p99，方法与样例见
+  [`docs/benchmarks/data-plane-overhead.md`](docs/benchmarks/data-plane-overhead.md)。
+- Agent Eval pilot 框架（`make eval-pilot`）：24 个固定任务、确定性
+  fixture、机械评分与 go/no-go 结论模板，经 OpenAI 兼容端点驱动
+  （见 [`eval/README.md`](eval/README.md)）。
+
+### Changed
+
+- 审计事件 JSON Lines schema 定版：字段改为固定 camelCase json tag
+  （`time`、`decisionId`、`role`、`entity`、`action`、`tool`、`input`、
+  `resultSummary`、`cost`、`allowed`、`code`、`error`、`returnedRows`、
+  `durationMs`）；新增稳定拒绝码 `code` 字段；主路径补记 `entity` 与
+  `action`；`durationMs` 为整数毫秒。此前输出为未定版的 Go 字段名
+  （`Time`、`Tool` 等），消费该格式的脚本需按
+  [`docs/tool-contract.md`](docs/tool-contract.md) 的定版 schema 迁移。
+
 ## 0.1.5 - 2026-07-12
 
 ### Added

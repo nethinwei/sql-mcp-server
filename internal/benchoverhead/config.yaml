@@ -1,0 +1,49 @@
+version: "1"
+
+server:
+  transport: stdio
+  role: reader
+
+databases:
+  primary:
+    driver: postgres
+    dsn: "${DATABASE_DSN}"
+
+tools:
+  describeEntities: true
+  readRecords: true
+  aggregateRecords: true
+
+# Governance stays on so the benchmark measures the real gateway path
+# (RBAC + cost gate + masking). Cache is off so repeated iterations do not
+# collapse into cache hits.
+cost:
+  enabled: true
+  maxRows: 1000
+  maxBytes: 16777216
+  rejectFullScan: true
+  whitelistPKPoint: true
+  requireKnownScan: true
+  queryTimeout: 10s
+
+cache:
+  enabled: false
+
+audit:
+  enabled: false
+
+entities:
+  - name: users
+    source: app_user
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Benchmark users"
+    primaryKey: [id]
+    roles:
+      read: [reader]
+      aggregate: [reader]
+    fields:
+      - {name: id, description: "User ID"}
+      - {name: email, description: "Masked email", mask: email}
+      - {name: tenant_id, description: "Tenant"}

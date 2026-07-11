@@ -57,3 +57,37 @@ func (h *Hooks) FireAuthorize(ctx context.Context, req rbac.Request, dec rbac.De
 	}
 	h.OnAuthorize(ctx, req, dec)
 }
+
+// Join composes hooks so independent consumers (tracing, metrics, ...) can
+// observe the same lifecycle. Callbacks run in argument order; BeforeTool
+// threads the context through the chain. Nil entries are skipped.
+func Join(hooks ...*Hooks) *Hooks {
+	return &Hooks{
+		BeforeTool: func(ctx context.Context, name string, input json.RawMessage) context.Context {
+			for _, h := range hooks {
+				ctx = h.FireBeforeTool(ctx, name, input)
+			}
+			return ctx
+		},
+		AfterTool: func(ctx context.Context, name string, result any, err error) {
+			for _, h := range hooks {
+				h.FireAfterTool(ctx, name, result, err)
+			}
+		},
+		OnError: func(ctx context.Context, err error) {
+			for _, h := range hooks {
+				h.FireOnError(ctx, err)
+			}
+		},
+		OnCostGate: func(ctx context.Context, plan cost.Plan, score cost.Score, decision string) {
+			for _, h := range hooks {
+				h.FireCostGate(ctx, plan, score, decision)
+			}
+		},
+		OnAuthorize: func(ctx context.Context, req rbac.Request, dec rbac.Decision) {
+			for _, h := range hooks {
+				h.FireAuthorize(ctx, req, dec)
+			}
+		},
+	}
+}

@@ -63,9 +63,18 @@ sql-mcp-server serve --config config.yaml --transport http --addr 127.0.0.1:8080
 `--transport`/`--addr` 时使用 YAML 中的 `server.transport`/`addr`，再回退到
 `stdio`/`:8080`。`--role` 同样可覆盖 YAML 默认角色。
 
-HTTP 暴露 `/mcp` 和无需认证的 `/healthz`。未认证的非 loopback 监听会 fail
-closed；认证、TLS、反向代理身份 header 与已知边界以
-[安全模型](security.md)为准。
+HTTP 暴露 `/mcp` 与三个无需认证的健康端点：
+
+- `/healthz`（liveness）：进程存活并在处理 HTTP，恒返回 200；
+- `/readyz/snapshot`（snapshot readiness）：配置快照已发布可服务时返回 200，
+  否则 503；
+- `/readyz/db`（database readiness）：所有已配置数据库可达（带 5 秒超时的
+  轻量 ping，不走查询主路径）时返回 200，否则 503。
+
+readiness 探针 fail closed：未注入探针（如嵌入方直接使用 `Handler` 且未配置
+`SnapshotReady`/`DatabaseReady`）时同样返回 503。响应体不回显失败原因，避免
+在未认证端点泄露数据库细节。未认证的非 loopback 监听会 fail closed；认证、
+TLS、反向代理身份 header 与已知边界以[安全模型](security.md)为准。
 
 ## Secret 与启动检查
 
@@ -115,12 +124,27 @@ manager；事务 `ttl` 或 `maxOpen` 变化会拒绝 reload，必须重启，不
 
 ## 监控与审计
 
-每次工具调用通过 hook 发出 OpenTelemetry span 属性，但仓库不配置 exporter；
-需要由运行环境提供 OTel SDK/exporter 设置。`ServeHTTP` 支持注入 metrics
-handler，但当前 CLI 未提供该注入，因此默认没有 `/metrics`。
+每次工具调用通过 hook 发出 OpenTelemetry span（含 `decision.id`、RBAC 与
+cost gate 属性）。设置标准 `OTEL_EXPORTER_OTLP_ENDPOINT`（或
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`）后，`serve` 会初始化 OTLP
+HTTP/protobuf exporter 并真实导出 span；未设置时保持 no-op，不产生网络流量。
 
-文件审计是异步 best-effort JSON Lines 事件流。队列满时事件会丢弃；当前没有
-内置轮转、远程 sink 或告警。生产环境应监控磁盘、限制文件访问并配置外部轮转。
+HTTP transport 在 `/metrics` 暴露最小 Prometheus 文本格式指标（配置
+`server.auth.token` 时需要同一 Bearer token）：
+
+- `sql_mcp_tool_calls_total{tool,outcome}`：outcome 为 `OK`、Denial 机器码
+  （如 `UNAUTHORIZED`、`COST_EXCEEDED`）或基础设施拒绝
+  （`OVERLOADED`、`RATE_LIMITED`、`CIRCUIT_OPEN`、`TIMEOUT` 等）；
+- `sql_mcp_tool_duration_seconds`：按 tool 的时长直方图；
+- `sql_mcp_audit_dropped_total`：审计队列满导致的事件丢弃数。
+
+`serve` 的日志为 stderr 上的 JSON 结构化日志；每次工具失败记录一行，携带
+`decisionId` 与 `outcome`，可与 MCP 响应、审计事件和 trace span 关联。
+
+文件审计是异步 best-effort JSON Lines 事件流（字段 schema 见
+[tool-contract.md](tool-contract.md)）。队列满时事件会丢弃（计入
+`sql_mcp_audit_dropped_total`）；当前没有内置轮转、远程 sink 或告警。生产
+环境应监控磁盘、限制文件访问并配置外部轮转。
 
 ## 升级
 

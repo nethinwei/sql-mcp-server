@@ -281,7 +281,7 @@ func auditContainsDecision(t *testing.T, path, decisionID string) bool {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		var event struct {
-			DecisionID string
+			DecisionID string `json:"decisionId"` // frozen audit schema field name
 		}
 		if json.Unmarshal(scanner.Bytes(), &event) == nil && event.DecisionID == decisionID {
 			return true

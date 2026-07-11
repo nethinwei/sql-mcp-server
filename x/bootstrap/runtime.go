@@ -225,6 +225,26 @@ func (r *Runtime) Watch(ctx context.Context, path string, interval time.Duration
 	}
 }
 
+// SnapshotReady reports whether a configuration snapshot is currently
+// published and servable. It backs the /readyz/snapshot readiness probe.
+func (r *Runtime) SnapshotReady(context.Context) error {
+	if r.Current() == nil {
+		return ErrRuntimeClosed
+	}
+	return nil
+}
+
+// DatabasesReady pings every database of the current snapshot. It backs the
+// /readyz/db readiness probe.
+func (r *Runtime) DatabasesReady(ctx context.Context) error {
+	app, release, err := r.Acquire()
+	if err != nil {
+		return err
+	}
+	defer release()
+	return app.Ping(ctx)
+}
+
 // RollbackSession rolls back transactions associated with a disconnected MCP
 // session when the transport exposes a stable non-empty session ID.
 func (r *Runtime) RollbackSession(session string) {

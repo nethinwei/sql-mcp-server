@@ -1,0 +1,52 @@
+version: "1"
+
+server:
+  transport: stdio
+  role: reader
+  auth:
+    token: "protocol-smoke-token"
+
+databases:
+  primary:
+    driver: postgres
+    dsn: "${DATABASE_DSN}"
+
+tools:
+  describeEntities: true
+  readRecords: true
+  aggregateRecords: true
+
+cost:
+  enabled: true
+  maxRows: 100
+  maxBytes: 1048576
+  rejectFullScan: true
+  whitelistPKPoint: true
+  requireKnownScan: true
+  queryTimeout: 5s
+
+cache:
+  enabled: false
+
+audit:
+  enabled: false
+
+entities:
+  - name: users
+    source: app_user
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Protocol smoke users"
+    primaryKey: [id]
+    roles:
+      read: [reader]
+      aggregate: [reader]
+    fieldACL:
+      reader:
+        read: [id, email]
+        write: []
+    fields:
+      - {name: id, description: "User ID"}
+      - {name: email, description: "Masked email", mask: email}
+      - {name: tenant_id, description: "Tenant boundary"}

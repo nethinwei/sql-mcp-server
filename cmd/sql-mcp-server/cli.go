@@ -7,7 +7,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
+	"net/http"
 	"os"
 	"reflect"
 	"sort"
@@ -16,11 +17,14 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/nethinwei/sql-mcp-server/core/audit"
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/hook"
 	"github.com/nethinwei/sql-mcp-server/version"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/mcpserver"
 	otelhooks "github.com/nethinwei/sql-mcp-server/x/otel"
+	"github.com/nethinwei/sql-mcp-server/x/telemetry"
 )
 
 func runCLI(ctx context.Context, args []string, stdout io.Writer) error {
@@ -78,18 +82,57 @@ func runServe(ctx context.Context, args []string) error {
 		cfg.Server.Role = *role
 	}
 	resolveServeEndpoint(fs, cfg, transport, addr)
-	build := serveReloadBuilder(*role, cfg.Server, cfg.Tools, toolDiscoverySignature(cfg.Entities))
+	metrics, hooks, otelShutdown, err := setupServeTelemetry(ctx)
+	if err != nil {
+		return err
+	}
+	defer otelShutdown()
+	build := serveReloadBuilder(*role, cfg.Server, cfg.Tools, toolDiscoverySignature(cfg.Entities), hooks)
 	app, err := bootstrap.Assemble(cfg)
 	if err != nil {
 		return err
 	}
-	app.Hooks = otelhooks.NewHooks()
+	app.Hooks = hooks
 	runtime := bootstrap.NewRuntimeWithBuilder(app, build)
 	defer func() { _ = runtime.Close() }()
+	metrics.SetAuditDropped(auditDroppedReader(runtime))
 	if *watch {
 		go serveConfigWatcher(ctx, runtime, *configPath, *watchInterval)
 	}
-	return serveTransport(ctx, runtime, cfg, *transport, *addr)
+	return serveTransport(ctx, runtime, cfg, *transport, *addr, metrics)
+}
+
+// setupServeTelemetry wires the serve-only observability stack: JSON logs on
+// stderr (stdout stays reserved for stdio transports), the metrics collector,
+// OTel span export, and the joined lifecycle hooks shared by every snapshot.
+func setupServeTelemetry(ctx context.Context) (*telemetry.Metrics, *hook.Hooks, func(), error) {
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	slog.SetDefault(logger)
+	otelShutdown, err := otelhooks.Setup(ctx)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("otel setup: %w", err)
+	}
+	shutdown := func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = otelShutdown(shutdownCtx)
+	}
+	metrics := telemetry.NewMetrics()
+	hooks := hook.Join(otelhooks.NewHooks(), metrics.Hooks(), telemetry.LogHooks(logger))
+	return metrics, hooks, shutdown, nil
+}
+
+func auditDroppedReader(runtime *bootstrap.Runtime) func() int64 {
+	return func() int64 {
+		current := runtime.Current()
+		if current == nil {
+			return 0
+		}
+		if async, ok := current.Auditor.(*audit.AsyncAuditor); ok {
+			return async.Dropped()
+		}
+		return 0
+	}
 }
 
 func serveReloadBuilder(
@@ -97,6 +140,7 @@ func serveReloadBuilder(
 	server config.ServerConfig,
 	tools config.ToolFlags,
 	discovery string,
+	hooks *hook.Hooks,
 ) func(string) (*bootstrap.App, error) {
 	return func(path string) (*bootstrap.App, error) {
 		next, err := bootstrap.Load(path)
@@ -113,21 +157,27 @@ func serveReloadBuilder(
 		if err != nil {
 			return nil, err
 		}
-		app.Hooks = otelhooks.NewHooks()
+		app.Hooks = hooks
 		return app, nil
 	}
 }
 
 func serveConfigWatcher(ctx context.Context, runtime *bootstrap.Runtime, path string, interval time.Duration) {
 	err := runtime.Watch(ctx, path, interval, func(err error) {
-		log.Printf("config reload failed; keeping previous snapshot: %v", err)
+		slog.Error("config reload failed; keeping previous snapshot", "error", err.Error())
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {
-		log.Printf("config watcher stopped: %v", err)
+		slog.Error("config watcher stopped", "error", err.Error())
 	}
 }
 
-func serveTransport(ctx context.Context, runtime *bootstrap.Runtime, cfg *config.Config, transport, addr string) error {
+func serveTransport(
+	ctx context.Context,
+	runtime *bootstrap.Runtime,
+	cfg *config.Config,
+	transport, addr string,
+	metrics http.Handler,
+) error {
 	srv := mcpserver.NewRuntimeServer(runtime)
 	switch transport {
 	case "stdio":
@@ -143,6 +193,8 @@ func serveTransport(ctx context.Context, runtime *bootstrap.Runtime, cfg *config
 			TrustedProxyCIDRs: cfg.Server.Auth.TrustedProxyCIDRs,
 			TLSCert:           cfg.Server.Auth.TLS.Cert, TLSKey: cfg.Server.Auth.TLS.Key,
 			ClientCA: cfg.Server.Auth.TLS.ClientCA, OnSessionClosed: runtime.RollbackSession,
+			SnapshotReady: runtime.SnapshotReady, DatabaseReady: runtime.DatabasesReady,
+			Metrics: metrics,
 		})
 	default:
 		return errors.New("unknown transport: " + transport)

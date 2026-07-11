@@ -396,6 +396,12 @@ type HTTPConfig struct {
 	Metrics           http.Handler
 	SessionTimeout    time.Duration
 	OnSessionClosed   func(string)
+	// SnapshotReady backs /readyz/snapshot: it returns nil when a
+	// configuration snapshot is published and servable. DatabaseReady backs
+	// /readyz/db: it returns nil when the configured databases are reachable.
+	// Probes fail closed: a nil probe or a probe error yields 503.
+	SnapshotReady func(context.Context) error
+	DatabaseReady func(context.Context) error
 }
 
 func (c HTTPConfig) tlsEnabled() bool  { return c.TLSCert != "" && c.TLSKey != "" }

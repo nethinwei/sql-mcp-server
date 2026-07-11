@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"sync"
@@ -69,6 +70,60 @@ func TestRecordNonBlocking(t *testing.T) {
 	a.Close()
 }
 
+// TestEventJSONGolden freezes the audit JSON Lines schema. The field names
+// below are a public contract (docs/tool-contract.md): adding an optional
+// field is compatible; renaming or removing one is breaking and must not
+// happen silently.
+func TestEventJSONGolden(t *testing.T) {
+	t.Parallel()
+	e := Event{
+		Time:          time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		DecisionID:    "0123456789abcdef0123456789abcdef",
+		Role:          "reader",
+		Entity:        "users",
+		Action:        "read",
+		Tool:          "read_records",
+		Input:         []byte(`{"entity":"users"}`),
+		ResultSummary: "2 rows",
+		Allowed:       false,
+		Code:          "UNAUTHORIZED",
+		Error:         "tool: unauthorized",
+		Duration:      1500 * time.Millisecond,
+		ReturnedRows:  2,
+	}
+	got, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"time":"2026-01-02T03:04:05Z",` +
+		`"decisionId":"0123456789abcdef0123456789abcdef",` +
+		`"role":"reader","entity":"users","action":"read",` +
+		`"tool":"read_records","input":{"entity":"users"},` +
+		`"resultSummary":"2 rows","allowed":false,` +
+		`"code":"UNAUTHORIZED","error":"tool: unauthorized",` +
+		`"returnedRows":2,"durationMs":1500}`
+	if string(got) != want {
+		t.Fatalf("audit event JSON drifted from the frozen schema\n got: %s\nwant: %s", got, want)
+	}
+}
+
+// TestEventJSONOmitsEmptyOptionalFields ensures optional fields stay omitted
+// so successful minimal events remain compact and stable.
+func TestEventJSONOmitsEmptyOptionalFields(t *testing.T) {
+	t.Parallel()
+	got, err := json.Marshal(Event{
+		Time: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), Tool: "read_records", Allowed: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"time":"2026-01-02T03:04:05Z","tool":"read_records",` +
+		`"allowed":true,"returnedRows":0,"durationMs":0}`
+	if string(got) != want {
+		t.Fatalf("minimal audit event JSON = %s, want %s", got, want)
+	}
+}
+
 func TestRedactInput(t *testing.T) {
 	input := []byte(`{"transaction":"secret-token","filter":[` +
 		`{"field":"email","op":"eq","value":"alice@example.com"}],` +
@@ -100,7 +155,7 @@ func TestFileSinkPersistsAndCloses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), `"Tool":"read_records"`) {
+	if !strings.Contains(string(data), `"tool":"read_records"`) {
 		t.Fatalf("audit file = %s", data)
 	}
 	if err := sink.Record(Event{}); err != ErrSinkClosed {

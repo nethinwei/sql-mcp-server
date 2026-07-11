@@ -203,9 +203,12 @@ func acquireToolBudget(
 	}
 	if err != nil {
 		if tc.Auditor != nil {
+			entityName, action := auditEntityAction(name, input, tc.Registry)
 			_ = tc.Auditor.Record(ctx, audit.Event{
 				Time: time.Now(), DecisionID: tc.DecisionID, Role: tc.Role,
-				Tool: name, Input: auditInput, Allowed: false, Error: err.Error(),
+				Entity: entityName, Action: action,
+				Tool: name, Input: auditInput, Allowed: false,
+				Code: denialCode(err), Error: err.Error(),
 			})
 		}
 		return nil, ctx, tc, err
@@ -295,31 +298,6 @@ func finalizeToolResult(
 		err = budgetErr
 	}
 	return res, err
-}
-
-func recordToolAudit(
-	ctx context.Context,
-	tc Context,
-	name string,
-	auditInput json.RawMessage,
-	res Result,
-	err error,
-	start time.Time,
-) {
-	if tc.Auditor == nil {
-		return
-	}
-	_ = tc.Auditor.Record(ctx, audit.Event{
-		Time:         time.Now(),
-		DecisionID:   tc.DecisionID,
-		Role:         tc.Role,
-		Tool:         name,
-		Input:        auditInput,
-		Allowed:      err == nil,
-		Error:        errString(err),
-		Duration:     time.Since(start),
-		ReturnedRows: returnedRowsForAudit(res),
-	})
 }
 
 func returnedRowsForAudit(res Result) int64 {

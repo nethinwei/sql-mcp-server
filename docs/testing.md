@@ -114,10 +114,23 @@ go test -race -tags=e2e -timeout 10m ./x/mcpserver/...
 # 或 make test-e2e
 ```
 
+运行协议 smoke（stdio + streamable HTTP，需要 Docker）：
+
+```sh
+make smoke-protocol
+```
+
 运行魔搭本地分发展示 smoke：
 
 ```sh
 make modelscope-check
+```
+
+性能基线与 Agent Eval pilot 按需手动运行，不进入 PR CI：
+
+```sh
+make bench-overhead   # data-plane overhead p50/p95/p99（需要 Docker）
+make eval-pilot       # 需要 Docker 与 EVAL_API_KEY/EVAL_MODEL，见 eval/README.md
 ```
 
 测试标签不是自动由 `go test ./...` 覆盖，不能用默认单元测试通过推断真实
@@ -138,6 +151,9 @@ PostgreSQL/MySQL/OceanBase 或 MCP e2e 已在当前机器执行。
   resource/prompt、事务、HTTP 认证/身份 header，以及拒绝契约 decision ID 与
   审计事件的关联；custom procedure 的 MCP 调用使用默认测试中的 fake DB，
   真实执行由三库 integration 覆盖；
+- `protocol-smoke`：stdio 与 streamable HTTP 双传输协议 smoke（真实
+  PostgreSQL、initialize、tools/list、allow/deny、健康/就绪/metrics 端点），
+  本地经 `make smoke-protocol` 复现；
 - `modelscope`：根目录 manifest、真实 PostgreSQL、stdio、mask、row policy 和
   allow/deny smoke；
 - `govulncheck`；

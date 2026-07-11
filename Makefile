@@ -18,7 +18,7 @@ CORE_PACKAGES := ./core/...
 .PHONY: fmt fmt-check vet build test test-fuzz-smoke test-integration test-e2e lint coverage \
 	coverage-check govulncheck workflow-check release-check release-quality \
 	release-snapshot release-metadata-check release-image-check release-preflight-fast \
-	release-preflight modelscope-check ci ci-local ci-full tidy
+	release-preflight modelscope-check smoke-protocol bench-overhead eval-pilot ci ci-local ci-full tidy
 
 # Format all Go sources in place (gofmt + 120-column line shortening).
 fmt:
@@ -60,6 +60,18 @@ release-image-check:
 
 modelscope-check: build
 	MODELSCOPE_BINARY=./$(BINARY) $(GO) run ./internal/modelscopesmoke
+
+# Protocol smoke: stdio + streamable HTTP against a real database (Docker required).
+smoke-protocol: build
+	PROTOCOL_BINARY=./$(BINARY) $(GO) run ./internal/protocolsmoke
+
+# Data-plane overhead benchmark (Docker required). See docs/benchmarks/.
+bench-overhead:
+	$(GO) run ./internal/benchoverhead
+
+# Agent Eval pilot (Docker + EVAL_API_KEY/EVAL_MODEL required). See eval/README.md.
+eval-pilot:
+	$(GO) run ./eval/runner
 
 release-preflight-fast:
 	$(MAKE) workflow-check

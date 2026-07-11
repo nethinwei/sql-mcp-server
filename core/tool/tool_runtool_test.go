@@ -90,6 +90,53 @@ func TestRunToolStampsDecisionID(t *testing.T) {
 	}
 }
 
+// TestRunToolAuditRecordsEntityActionAndCode guards the frozen audit schema:
+// a denied call must carry the entity, the action, and the stable denial code
+// so the audit line alone explains the rejection.
+func TestRunToolAuditRecordsEntityActionAndCode(t *testing.T) {
+	t.Parallel()
+	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	aud := &recorderAuditor{}
+	tc := Context{
+		Role: "intruder", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
+		Auditor: aud, Masker: mask.NewRuleMasker(nil),
+	}
+	in, _ := json.Marshal(readInput{Entity: "users"})
+	if _, err := RunTool(context.Background(), ReadTool{}, in, tc); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("error = %v, want unauthorized", err)
+	}
+	if len(aud.events) != 1 {
+		t.Fatalf("audit events = %+v", aud.events)
+	}
+	e := aud.events[0]
+	if e.Entity != "users" || e.Action != "read" || e.Code != CodeUnauthorized || e.Allowed {
+		t.Fatalf("audit event = %+v, want entity=users action=read code=%s", e, CodeUnauthorized)
+	}
+}
+
+// TestRunToolAuditRecordsSuccessEntityAction guards the allowed path: entity
+// and action must be recorded with an empty code.
+func TestRunToolAuditRecordsSuccessEntityAction(t *testing.T) {
+	t.Parallel()
+	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return store.NewFakeRows([]string{"id"}, []any{int64(1)}), nil
+	}}
+	aud := &recorderAuditor{}
+	tc := Context{
+		Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
+		Authorizer: rbac.NewRoleAuthorizer(reg), Auditor: aud, Masker: mask.NewRuleMasker(nil),
+	}
+	in, _ := json.Marshal(readInput{Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: int64(1)}}})
+	if _, err := RunTool(context.Background(), ReadTool{}, in, tc); err != nil {
+		t.Fatal(err)
+	}
+	e := aud.events[0]
+	if e.Entity != "users" || e.Action != "read" || e.Code != "" || !e.Allowed {
+		t.Fatalf("audit event = %+v", e)
+	}
+}
+
 type denyingBudget struct{}
 
 func (denyingBudget) Acquire(context.Context, budget.Scope) (budget.Lease, error) {

@@ -58,10 +58,15 @@ func buildMCPHandler(s *mcp.Server, cfg HTTPConfig) http.Handler {
 func buildHTTPMux(mcpHandler http.Handler, cfg HTTPConfig) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", mcpHandler)
+	// /healthz is liveness only: the process is up and serving HTTP. Snapshot
+	// and database readiness are separate so orchestrators can distinguish
+	// "restart me" from "do not route traffic to me yet".
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.Handle("/readyz/snapshot", readinessHandler(cfg.SnapshotReady))
+	mux.Handle("/readyz/db", readinessHandler(cfg.DatabaseReady))
 	if cfg.Metrics != nil {
 		metricsHandler := cfg.Metrics
 		if cfg.Token != "" {
@@ -70,6 +75,31 @@ func buildHTTPMux(mcpHandler http.Handler, cfg HTTPConfig) *http.ServeMux {
 		mux.Handle("/metrics", metricsHandler)
 	}
 	return mux
+}
+
+// readinessProbeTimeout bounds one readiness check so a hung database cannot
+// stall probe requests indefinitely.
+const readinessProbeTimeout = 5 * time.Second
+
+// readinessHandler serves one readiness probe, failing closed: a missing
+// probe or a probe error returns 503. The body never echoes probe error
+// details because these endpoints are unauthenticated like /healthz; the
+// cause belongs in server logs, not on the wire.
+func readinessHandler(probe func(context.Context) error) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if probe == nil {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), readinessProbeTimeout)
+		defer cancel()
+		if err := probe(ctx); err != nil {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
 }
 
 func configureMCPTLS(cfg HTTPConfig, srv *http.Server) error {
