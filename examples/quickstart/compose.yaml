@@ -17,7 +17,7 @@ services:
         ipv4_address: 172.30.0.2
 
   mcp:
-    image: ${SQL_MCP_IMAGE:-ghcr.io/nethinwei/sql-mcp-server:v0.1.6}
+    image: ${SQL_MCP_IMAGE:-ghcr.io/nethinwei/sql-mcp-server:v0.1.7}
     depends_on:
       db:
         condition: service_healthy

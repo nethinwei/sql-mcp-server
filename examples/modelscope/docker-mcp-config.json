@@ -10,7 +10,7 @@
         "type=bind,src=/absolute/path/to/config.yaml,dst=/config/config.yaml,readonly",
         "--env",
         "DATABASE_DSN",
-        "ghcr.io/nethinwei/sql-mcp-server:0.1.6",
+        "ghcr.io/nethinwei/sql-mcp-server:0.1.7",
         "serve",
         "--config",
         "/config/config.yaml",

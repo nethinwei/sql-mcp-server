@@ -1,7 +1,7 @@
 # Roadmap
 
-当前稳定基线为 `v0.1.6`。已发布能力以
-[发布说明](releases/v0.1.6.md)、[CHANGELOG](../CHANGELOG.md)、
+当前稳定基线为 `v0.1.7`。已发布能力以
+[发布说明](releases/v0.1.7.md)、[CHANGELOG](../CHANGELOG.md)、
 [配置参考](configuration.md)和[安全模型](security.md)为准。
 
 本文件只给出未发布成果的顺序和门禁：
@@ -36,29 +36,11 @@
 
 ---
 
-## Committed — v0.1.7 Agent Eval Calibration
+## Committed
 
-`v0.1.6`（Observable + Measurable）已完成验收并发布，成果见
-[发布说明](releases/v0.1.6.md)。现有 Agent Eval pilot 的结论
-（[2026-07-12 no-go](../eval/results/2026-07-12-deepseek-v4-flash.md)）表明，
-当前简单 fixture 不能证明语义元数据值得投入，也暴露出 discovery 污染
-first-call success、子串评分可能误判等测量问题。
-
-`v0.1.7` 的目标是在有限测试成本内校准 Agent Eval，使其能可靠识别下一阶段最值得
-解决的问题：
-
-- 保留单模型、单驱动和一个版本化任务集，新增不超过 8 个大 schema、grain、时间、
-  枚举或单位定向任务；
-- 将合理 discovery 与执行失败分开计量，修正 first-call success 定义；
-- 收紧 `answer_forbids` 等易误判规则，并为评分器增加确定性测试；
-- 使用一个主模型正式运行三轮，报告分布、失败归因和后续方向 go/no-go。
-
-成本边界：不做多模型或多客户端矩阵，不做竞品对照；在线模型运行不进入每次 CI；
-任务数、单任务调用数和 token 必须有硬上限。其他模型仅允许按需运行，不作为发布
-门禁。
-
-退出门禁：评分器确定性测试通过；已知误判被复现并消除；discovery 不再计为首调
-失败；三轮结果完成书面归因；至少明确选择或否决一个后续方向。
+`v0.1.7`（Agent Eval Calibration）已完成验收，成果见
+[发布说明](releases/v0.1.7.md)。当前没有版本承诺：下一个 `Committed` 按
+`Next` 顺序在进入门禁满足后确立。
 
 ---
 
@@ -75,9 +57,13 @@ first-call success、子串评分可能误判等测量问题。
   [Catalog Discovery](roadmap/directions.md#l2-catalog-discovery)；
 - 错误提示或[工具契约](tool-contract.md)导致可修复失败时，只收紧对应契约。
 
-若没有显著短板，本阶段不进入 `Committed`，也不为制造版本内容而扩张 Agent 功能。
-任何升级项必须使用能覆盖对应失败来源的任务集验收，不得复用缺少该场景的旧 pilot
-作为价值证据。
+校准结论（[2026-07-12 v3](../eval/results/2026-07-12-deepseek-v4-flash-v3.md)，
+三轮 31/32、32/32、31/32）：Semantic Metadata、Catalog Discovery 和
+Governed Query Expressiveness 均 **no-go**——定向任务全部通过，失败无一可
+归因于对应缺失。唯一证据支持项为小范围契约收紧（无谓词聚合拒绝的 hint 未
+给出最短修复路径，造成聚合任务固定一次被拒并诱发两例失败）；该项不构成
+版本承诺。本阶段其余部分不进入 `Committed`，不为制造版本内容而扩张 Agent
+功能。真实大宽表 schema 或语义歧义负载出现时重新评估。
 
 ---
 

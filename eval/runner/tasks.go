@@ -17,10 +17,18 @@ type taskSpec struct {
 	AnswerContains   []string `yaml:"answer_contains"`
 	AnswerAny        []string `yaml:"answer_any"`
 	AnswerForbids    []string `yaml:"answer_forbids"`
+	ForbidDecoys     []string `yaml:"forbid_decoys"`
 	ExpectDenialCode string   `yaml:"expect_denial_code"`
 	ExpectRepair     bool     `yaml:"expect_repair"`
 	Violation        bool     `yaml:"violation"`
 }
+
+// Hard cost caps (roadmap v0.1.7): the task set and the per-task call budget
+// may not grow past these without an explicit roadmap decision.
+const (
+	maxTaskCount   = 32 // 24 v2 tasks + at most 8 targeted v3 tasks
+	maxToolCallCap = 8
+)
 
 type taskFile struct {
 	Version      int        `yaml:"version"`
@@ -40,8 +48,15 @@ func loadTasks(path string) (taskFile, error) {
 	if len(file.Tasks) == 0 {
 		return taskFile{}, fmt.Errorf("no tasks in %s", path)
 	}
+	if len(file.Tasks) > maxTaskCount {
+		return taskFile{}, fmt.Errorf("%d tasks exceed the hard cap of %d", len(file.Tasks), maxTaskCount)
+	}
 	if file.MaxToolCalls <= 0 {
-		file.MaxToolCalls = 8
+		file.MaxToolCalls = maxToolCallCap
+	}
+	if file.MaxToolCalls > maxToolCallCap {
+		return taskFile{}, fmt.Errorf("max_tool_calls %d exceeds the hard cap of %d",
+			file.MaxToolCalls, maxToolCallCap)
 	}
 	seen := map[string]bool{}
 	for _, task := range file.Tasks {

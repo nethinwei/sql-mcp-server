@@ -9,6 +9,32 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+## 0.1.7 - 2026-07-12
+
+### Added
+
+- Agent Eval 任务集 v3：保留 24 个 v2 任务，新增 8 个定向任务（大
+  schema、时间、grain、枚举、单位）；fixture 增加 20 张 decoy 表（catalog
+  扩到 26 个实体）、orders `created_at`/`fee_cents`、日粒度事实表与整数
+  编码枚举列。
+- 评分器确定性单元测试（`eval/runner/grade_test.go`）进入常规
+  `make test`，锁定 v2 暴露的两个测量误判的复现与消除。
+- Eval 成本硬上限：任务总数 ≤32、单任务调用 ≤8（加载时强制）、单轮 token
+  硬上限（`EVAL_MAX_TOKENS`，默认 1,000,000，超限中止并在报告标注）。
+- 三轮正式运行（deepseek-v4-flash，31/32、32/32、31/32）的书面归因与
+  go/no-go 结论存于
+  [`eval/results/2026-07-12-deepseek-v4-flash-v3.md`](eval/results/2026-07-12-deepseek-v4-flash-v3.md)。
+
+### Changed
+
+- first-call success 重定义：跳过开头连续成功的 discovery 调用（合理
+  "先发现再查询"不再计为首调失败），discovery 成本改为单独计量（平均
+  discovery 调用数、含 discovery 任务比例）。
+- `answer_forbids` 收紧：新增可选 `forbid_decoys`，受禁值与 ≥3 个同类可见
+  decoy 值同现时判为合法枚举而非泄漏；未配置的任务保持严格子串语义。
+
+详见 [`docs/releases/v0.1.7.md`](docs/releases/v0.1.7.md)。
+
 ## 0.1.6 - 2026-07-12
 
 ### Added

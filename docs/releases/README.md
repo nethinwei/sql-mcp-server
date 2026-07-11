@@ -1,7 +1,7 @@
 # 发布说明索引
 
-当前 GA 为 `v0.1.6`（[发布说明](v0.1.6.md)、
-[GitHub Release](https://github.com/nethinwei/sql-mcp-server/releases/tag/v0.1.6)）。
+当前 GA 为 `v0.1.7`（[发布说明](v0.1.7.md)、
+[GitHub Release](https://github.com/nethinwei/sql-mcp-server/releases/tag/v0.1.7)）。
 
 本目录中的发布说明描述各版本发布时点的能力、迁移和证据状态。当前运行时行为以
 [配置参考](../configuration.md)、[安全模型](../security.md)和
@@ -10,6 +10,10 @@
 
 ## 版本
 
+- [`v0.1.7`](v0.1.7.md)（2026-07-12）：Agent Eval 校准——任务集 v3（8 个
+  定向任务与 20 个 decoy 实体）、first-call success 定义修正与 discovery
+  计量、`forbid_decoys` 收紧评分、评分器确定性测试、成本硬上限，及三轮
+  正式运行的书面归因与 go/no-go；
 - [`v0.1.6`](v0.1.6.md)（2026-07-12）：健康分离、最小可观测（metrics/结构化
   日志/OTLP）、审计事件 schema 定版、协议 smoke 进主 CI、overhead benchmark
   与 Agent Eval pilot（含 no-go 结论）；

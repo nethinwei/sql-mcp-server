@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -102,6 +104,24 @@ func (t transcript) toolSteps() []interactionStep {
 	return steps
 }
 
+// tokenBudget is a run-wide hard cap on total token usage (prompt +
+// completion) shared by all parallel tasks. It is a cost circuit breaker,
+// not a precise limit: in-flight model calls complete, remaining ones abort.
+type tokenBudget struct {
+	limit int64
+	used  atomic.Int64
+}
+
+func (b *tokenBudget) add(u usage) {
+	b.used.Add(u.PromptTokens + u.CompletionTokens)
+}
+
+func (b *tokenBudget) exhausted() bool {
+	return b.limit > 0 && b.used.Load() >= b.limit
+}
+
+var errTokenBudgetExhausted = errors.New("run token budget exhausted (EVAL_MAX_TOKENS)")
+
 // runConversation drives one task: model turns alternate with tool
 // executions until the model produces a final answer or the call budget is
 // exhausted.
@@ -112,6 +132,7 @@ func runConversation(
 	tools []chatTool,
 	prompt string,
 	maxToolCalls int,
+	budget *tokenBudget,
 ) (transcript, error) {
 	messages := []chatMessage{
 		{Role: "system", Content: systemPrompt},
@@ -120,10 +141,14 @@ func runConversation(
 	var result transcript
 	toolCalls := 0
 	for toolCalls <= maxToolCalls {
+		if budget.exhausted() {
+			return result, errTokenBudgetExhausted
+		}
 		message, use, err := client.complete(ctx, messages, tools)
 		if err != nil {
 			return result, err
 		}
+		budget.add(use)
 		result.Prompt += use.PromptTokens
 		result.Completion += use.CompletionTokens
 		if len(message.ToolCalls) == 0 {

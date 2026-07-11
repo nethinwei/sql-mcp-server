@@ -83,6 +83,8 @@ entities:
       - {name: customer_id, description: "Customer ID"}
       - {name: status, description: "pending | paid | shipped | cancelled"}
       - {name: amount_cents, description: "Amount in cents"}
+      - {name: fee_cents, description: "Processing fee in cents"}
+      - {name: created_at, description: "Creation date (YYYY-MM-DD)"}
 
   - name: products
     source: eval_product
@@ -114,3 +116,256 @@ entities:
       - {name: id, description: "Employee ID"}
       - {name: name, description: "Employee name"}
       - {name: dept, description: "Department"}
+
+  - name: page_views_daily
+    source: eval_page_view_daily
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Page views, one row per day (daily grain)"
+    primaryKey: [id]
+    roles:
+      read: [analyst]
+      aggregate: [analyst]
+    fields:
+      - {name: id, description: "Row ID"}
+      - {name: day, description: "Day (YYYY-MM-DD)"}
+      - {name: views, description: "Page views on that day"}
+
+  - name: tickets
+    source: eval_ticket
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Support tickets"
+    primaryKey: [id]
+    roles:
+      read: [analyst]
+      aggregate: [analyst]
+    fields:
+      - {name: id, description: "Ticket ID"}
+      - {name: priority, description: "Priority code: 1=low, 2=medium, 3=high"}
+
+  # Decoy entities for the v3 big-schema tasks: real tables (see decoySQL in
+  # eval/runner/main.go), never the answer to any task. They exist to grow the
+  # catalog so entity selection and catalog token cost are measurable.
+  - name: warehouses
+    source: eval_warehouses
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Warehouse locations"
+    primaryKey: [id]
+    roles: {read: [analyst], aggregate: [analyst]}
+    fields:
+      - {name: id, description: "Warehouse ID"}
+      - {name: name, description: "Warehouse name"}
+  - name: inventory
+    source: eval_inventory
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Inventory levels"
+    primaryKey: [id]
+    roles: {read: [analyst], aggregate: [analyst]}
+    fields:
+      - {name: id, description: "Inventory row ID"}
+      - {name: name, description: "Inventory item"}
+  - name: categories
+    source: eval_categories
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Product category tree"
+    primaryKey: [id]
+    roles: {read: [analyst], aggregate: [analyst]}
+    fields:
+      - {name: id, description: "Category ID"}
+      - {name: name, description: "Category name"}
+  - name: reviews
+    source: eval_reviews
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Product reviews"
+    primaryKey: [id]
+    roles: {read: [analyst], aggregate: [analyst]}
+    fields:
+      - {name: id, description: "Review ID"}
+      - {name: name, description: "Review title"}
+  - name: sessions
+    source: eval_sessions
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Web sessions"
+    primaryKey: [id]
+    roles: {read: [analyst], aggregate: [analyst]}
+    fields:
+      - {name: id, description: "Session ID"}
+      - {name: name, description: "Session label"}
+  - name: web_events
+    source: eval_web_events
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Raw web analytics events"
+    primaryKey: [id]
+    roles: {read: [analyst], aggregate: [analyst]}
+    fields:
+      - {name: id, description: "Event ID"}
+      - {name: name, description: "Event name"}
+  - name: campaigns
+    source: eval_campaigns
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Marketing campaigns"
+    primaryKey: [id]
+    roles: {read: [analyst], aggregate: [analyst]}
+    fields:
+      - {name: id, description: "Campaign ID"}
+      - {name: name, description: "Campaign name"}
+  - name: leads
+    source: eval_leads
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Sales leads"
+    primaryKey: [id]
+    roles: {read: [analyst], aggregate: [analyst]}
+    fields:
+      - {name: id, description: "Lead ID"}
+      - {name: name, description: "Lead name"}
+  - name: accounts
+    source: eval_accounts
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Business accounts"
+    primaryKey: [id]
+    roles: {read: [analyst], aggregate: [analyst]}
+    fields:
+      - {name: id, description: "Account ID"}
+      - {name: name, description: "Account name"}
+  - name: contacts
+    source: eval_contacts
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Account contacts"
+    primaryKey: [id]
+    roles: {read: [analyst], aggregate: [analyst]}
+    fields:
+      - {name: id, description: "Contact ID"}
+      - {name: name, description: "Contact name"}
+  - name: subscriptions
+    source: eval_subscriptions
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Recurring subscriptions"
+    primaryKey: [id]
+    roles: {read: [analyst], aggregate: [analyst]}
+    fields:
+      - {name: id, description: "Subscription ID"}
+      - {name: name, description: "Subscription plan"}
+  - name: payments
+    source: eval_payments
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Payment transactions"
+    primaryKey: [id]
+    roles: {read: [analyst], aggregate: [analyst]}
+    fields:
+      - {name: id, description: "Payment ID"}
+      - {name: name, description: "Payment reference"}
+  - name: refunds
+    source: eval_refunds
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Payment refunds"
+    primaryKey: [id]
+    roles: {read: [analyst], aggregate: [analyst]}
+    fields:
+      - {name: id, description: "Refund ID"}
+      - {name: name, description: "Refund reference"}
+  - name: suppliers
+    source: eval_suppliers
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Product suppliers"
+    primaryKey: [id]
+    roles: {read: [analyst], aggregate: [analyst]}
+    fields:
+      - {name: id, description: "Supplier ID"}
+      - {name: name, description: "Supplier name"}
+  - name: stores
+    source: eval_stores
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Retail stores"
+    primaryKey: [id]
+    roles: {read: [analyst], aggregate: [analyst]}
+    fields:
+      - {name: id, description: "Store ID"}
+      - {name: name, description: "Store name"}
+  - name: regions
+    source: eval_regions
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Sales regions"
+    primaryKey: [id]
+    roles: {read: [analyst], aggregate: [analyst]}
+    fields:
+      - {name: id, description: "Region ID"}
+      - {name: name, description: "Region name"}
+  - name: couriers
+    source: eval_couriers
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Delivery couriers"
+    primaryKey: [id]
+    roles: {read: [analyst], aggregate: [analyst]}
+    fields:
+      - {name: id, description: "Courier ID"}
+      - {name: name, description: "Courier name"}
+  - name: coupons
+    source: eval_coupons
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Discount coupons"
+    primaryKey: [id]
+    roles: {read: [analyst], aggregate: [analyst]}
+    fields:
+      - {name: id, description: "Coupon ID"}
+      - {name: name, description: "Coupon code"}
+  - name: wishlists
+    source: eval_wishlists
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Customer wishlists"
+    primaryKey: [id]
+    roles: {read: [analyst], aggregate: [analyst]}
+    fields:
+      - {name: id, description: "Wishlist ID"}
+      - {name: name, description: "Wishlist name"}
+  - name: returns
+    source: eval_returns
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Order returns"
+    primaryKey: [id]
+    roles: {read: [analyst], aggregate: [analyst]}
+    fields:
+      - {name: id, description: "Return ID"}
+      - {name: name, description: "Return reference"}
