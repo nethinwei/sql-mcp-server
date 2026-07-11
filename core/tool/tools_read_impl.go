@@ -99,7 +99,7 @@ func prepareReadPlan(ctx context.Context, tc Context, in readInput) (readPlan, e
 		return readPlan{}, err
 	}
 	if !dec.Allowed {
-		return readPlan{}, ErrUnauthorized
+		return readPlan{}, denyUnauthorized(dec)
 	}
 	full := andPreds(pred, dec.RowFilter)
 	if len(in.Cursor) > 0 {
@@ -421,7 +421,7 @@ func compileExpandBatch(
 		return codegen.Compiled{}, err
 	}
 	if !decision.Allowed {
-		return codegen.Compiled{}, ErrUnauthorized
+		return codegen.Compiled{}, denyUnauthorized(decision)
 	}
 	full := andPreds(predicate, decision.RowFilter)
 	scan := relalg.Scan{Relation: relalg.RelationRef{Name: target.Entity.Source, Schema: target.Entity.Schema}}

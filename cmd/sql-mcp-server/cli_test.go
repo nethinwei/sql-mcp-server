@@ -91,6 +91,79 @@ func TestInitWritesCurrentConfigVersion(t *testing.T) {
 	}
 }
 
+func TestExportIsDeterministicAndPreservesSecrets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	// Map-typed sections (fieldACL, rowPolicies) with multiple keys exercise
+	// deterministic key ordering; the DSN placeholder must survive verbatim.
+	source := []byte(`version: "1"
+database:
+  driver: postgres
+  dsn: ${EXPORT_TEST_DSN}
+entities:
+  - name: users
+    source: users
+    primaryKey: [id]
+    fields:
+      - name: id
+      - name: email
+        mask: email
+      - name: tenant_id
+    roles:
+      read: [reader]
+    fieldACL:
+      reader: {read: [id, email]}
+      operator: {read: [id]}
+    rowPolicies:
+      reader: {op: eq, field: tenant_id, value: "${subject.tenant_id}"}
+      operator: {op: eq, field: tenant_id, value: 1}
+`)
+	if err := os.WriteFile(path, source, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var first, second bytes.Buffer
+	if err := runCLI(context.Background(), []string{"export", "--config", path}, &first); err != nil {
+		t.Fatal(err)
+	}
+	if err := runCLI(context.Background(), []string{"export", "--config", path}, &second); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first.Bytes(), second.Bytes()) {
+		t.Fatalf("export is not deterministic:\n--- first ---\n%s\n--- second ---\n%s", &first, &second)
+	}
+	if !strings.Contains(first.String(), "${EXPORT_TEST_DSN}") {
+		t.Fatalf("export must preserve secret placeholders verbatim:\n%s", &first)
+	}
+}
+
+func TestExportRoundTripsThroughValidate(t *testing.T) {
+	t.Setenv("EXPORT_RT_DSN", "postgres://localhost/test")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	source := []byte("database:\n  driver: postgres\n  dsn: ${EXPORT_RT_DSN}\nentities: []\n")
+	if err := os.WriteFile(path, source, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var exported bytes.Buffer
+	if err := runCLI(context.Background(), []string{"export", "--config", path}, &exported); err != nil {
+		t.Fatal(err)
+	}
+	roundTrip := filepath.Join(dir, "exported.yaml")
+	if err := os.WriteFile(roundTrip, exported.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runCLI(context.Background(), []string{"validate", "--config", roundTrip}, &out); err != nil {
+		t.Fatalf("exported config failed validate: %v\n%s", err, &exported)
+	}
+	var again bytes.Buffer
+	if err := runCLI(context.Background(), []string{"export", "--config", roundTrip}, &again); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(exported.Bytes(), again.Bytes()) {
+		t.Fatalf("export of exported config drifted:\n--- first ---\n%s\n--- second ---\n%s", &exported, &again)
+	}
+}
+
 func TestValidateCommandResolvesSecrets(t *testing.T) {
 	t.Setenv("CLI_TEST_DSN", "postgres://localhost/test")
 	path := filepath.Join(t.TempDir(), "config.yaml")

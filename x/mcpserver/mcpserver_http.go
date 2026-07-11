@@ -111,16 +111,31 @@ func serveHTTPWithShutdown(ctx context.Context, srv *http.Server, tlsEnabled boo
 	return nil
 }
 
+func validatedHandler(s *mcp.Server, cfg *HTTPConfig) (http.Handler, error) {
+	if err := validateHTTPSecurity(*cfg); err != nil {
+		return nil, err
+	}
+	applyHTTPDefaults(cfg)
+	return buildHTTPMux(buildMCPHandler(s, *cfg), *cfg), nil
+}
+
+// Handler returns the fully hardened HTTP handler (token auth, body caps,
+// proxy trust, session identity binding, /mcp, /healthz, optional /metrics)
+// without binding a listener. ServeHTTP serves this same handler; tests and
+// embedders can mount it on their own server so the middleware chain under
+// test is identical to production.
+func Handler(s *mcp.Server, cfg HTTPConfig) (http.Handler, error) {
+	return validatedHandler(s, &cfg)
+}
+
 // ServeHTTP runs the server on streamable HTTP with authentication, request
 // hardening (timeouts, header/body caps), a /healthz check, and an optional
 // /metrics endpoint. See HTTPConfig for the security model.
 func ServeHTTP(ctx context.Context, s *mcp.Server, cfg HTTPConfig) error {
-	if err := validateHTTPSecurity(cfg); err != nil {
+	mux, err := validatedHandler(s, &cfg)
+	if err != nil {
 		return err
 	}
-	applyHTTPDefaults(&cfg)
-	mcpHandler := buildMCPHandler(s, cfg)
-	mux := buildHTTPMux(mcpHandler, cfg)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           mux,

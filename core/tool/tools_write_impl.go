@@ -51,7 +51,7 @@ func prepareInsert(ctx context.Context, tc Context, in createInput) (writePlan, 
 		return writePlan{}, codegen.Compiled{}, err
 	}
 	if !dec.Allowed {
-		return writePlan{}, codegen.Compiled{}, ErrUnauthorized
+		return writePlan{}, codegen.Compiled{}, denyUnauthorized(dec)
 	}
 	cols := make([]string, len(keys))
 	tup := make(relalg.Tuple, len(keys))
@@ -159,7 +159,7 @@ func prepareUpdate(ctx context.Context, tc Context, in updateInput) (writePlan, 
 		return writePlan{}, codegen.Compiled{}, err
 	}
 	if !dec.Allowed {
-		return writePlan{}, codegen.Compiled{}, ErrUnauthorized
+		return writePlan{}, codegen.Compiled{}, denyUnauthorized(dec)
 	}
 	full := andPreds(pred, dec.RowFilter)
 	if full == nil {
@@ -222,7 +222,7 @@ func prepareDelete(ctx context.Context, tc Context, in deleteInput) (writePlan, 
 		return writePlan{}, codegen.Compiled{}, err
 	}
 	if !dec.Allowed {
-		return writePlan{}, codegen.Compiled{}, ErrUnauthorized
+		return writePlan{}, codegen.Compiled{}, denyUnauthorized(dec)
 	}
 	full := andPreds(pred, dec.RowFilter)
 	if full == nil {

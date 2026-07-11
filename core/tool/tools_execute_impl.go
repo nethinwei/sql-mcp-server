@@ -68,7 +68,7 @@ func prepareExecute(
 		return entity.Resolved{}, routed, rbac.Decision{}, err
 	}
 	if !dec.Allowed {
-		return entity.Resolved{}, routed, rbac.Decision{}, ErrUnauthorized
+		return entity.Resolved{}, routed, rbac.Decision{}, denyUnauthorized(dec)
 	}
 	return res, routed, dec, nil
 }

@@ -13,9 +13,11 @@ import (
 // ErrSinkClosed is returned by Record on a closed AsyncAuditor.
 var ErrSinkClosed = errors.New("audit: sink closed")
 
-// Event records one tool invocation for compliance.
+// Event records one tool invocation for compliance. DecisionID correlates the
+// event with the MCP response and trace span of the same call.
 type Event struct {
 	Time          time.Time
+	DecisionID    string
 	Role          string
 	Entity        string
 	Action        string

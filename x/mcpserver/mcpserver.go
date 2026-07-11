@@ -17,7 +17,6 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/nethinwei/sql-mcp-server/core/cost"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
@@ -97,13 +96,14 @@ func registerTool(s *mcp.Server, t tool.Tool, acquire appAcquire) {
 		if req.Session != nil {
 			tc.Session = req.Session.ID()
 		}
+		tc.DecisionID = tool.NewDecisionID()
 		currentRegistered, ok := currentTool(app, info.Name)
 		if !ok {
-			return toResult(tool.ErrUnauthorized)
+			return toResult(tool.ErrUnauthorized, tc.DecisionID)
 		}
 		res, err := tool.RunTool(ctx, currentRegistered, rawArgs(req), tc)
 		if err != nil {
-			return toResult(err)
+			return toResult(err, tc.DecisionID)
 		}
 		return toMCPResult(res), nil
 	}
@@ -286,39 +286,26 @@ func toMCPResult(r tool.Result) *mcp.CallToolResult {
 }
 
 // toResult maps a core error to an MCP outcome. Business errors become
-// IsError results (the agent can read and self-correct); overload/circuit and
-// internal errors become protocol-level errors.
-func toResult(err error) (*mcp.CallToolResult, error) {
-	var ce *cost.ExceededError
-	if errors.As(err, &ce) {
-		text := err.Error()
-		if len(ce.Hints) > 0 {
-			text += "; hints: " + fmt.Sprint(ce.Hints)
-		}
-		return &mcp.CallToolResult{
-			IsError: true,
-			Content: []mcp.Content{&mcp.TextContent{Text: text}},
-		}, nil
+// IsError results carrying the machine-readable tool.Denial contract in
+// StructuredContent (the agent can parse and self-correct); overload/circuit
+// and internal errors become protocol-level errors.
+func toResult(err error, decisionID string) (*mcp.CallToolResult, error) {
+	denial, ok := tool.DenialFor(err, decisionID)
+	if !ok {
+		// Internal/provider errors are deliberately not reflected to clients
+		// because driver messages may contain schema, SQL, constraint, or
+		// connection detail.
+		return nil, errInternal
 	}
-	switch {
-	case errors.Is(err, tool.ErrUnauthorized),
-		errors.Is(err, tool.ErrEntityNotFound),
-		errors.Is(err, tool.ErrDMLToolsDisabled),
-		errors.Is(err, tool.ErrUnsafeWrite),
-		errors.Is(err, tool.ErrInvalidInput),
-		errors.Is(err, tool.ErrTransactionNotFound),
-		errors.Is(err, tool.ErrTransactionScope),
-		errors.Is(err, tool.ErrTransactionCapacity),
-		errors.Is(err, tool.ErrDatabase),
-		errors.Is(err, tool.ErrNotImplemented):
-		return &mcp.CallToolResult{
-			IsError: true,
-			Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
-		}, nil
+	text := denial.Reason
+	if len(denial.Hints) > 0 {
+		text += "; hints: " + strings.Join(denial.Hints, "; ")
 	}
-	// Internal/provider errors are deliberately not reflected to clients because
-	// driver messages may contain schema, SQL, constraint, or connection detail.
-	return nil, errInternal
+	return &mcp.CallToolResult{
+		IsError:           true,
+		Content:           []mcp.Content{&mcp.TextContent{Text: text}},
+		StructuredContent: denial,
+	}, nil
 }
 
 // ServeStdio runs the server on stdio.

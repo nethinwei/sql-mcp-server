@@ -9,6 +9,29 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+### Added
+
+- 机器可读拒绝契约：业务拒绝在 `structuredContent` 携带稳定 `code`、
+  `reason`、`retryable`、`constraints`、`hints` 和 `decisionId`；decision ID
+  贯穿 MCP 响应、审计事件与 trace span。兼容规则见
+  [`docs/tool-contract.md`](docs/tool-contract.md)，契约由 golden 快照在 CI
+  机器检查。
+- 真实 streamable HTTP `/mcp` e2e：认证、身份 header、allow/deny、mask、
+  row policy、成本拒绝与事务，与 in-memory e2e 共享断言以证明传输等价。
+- CLI `export` 子命令：确定性 YAML 导出（固定字段顺序、物化默认值、secret
+  占位符原样保留）。
+- quickstart 六场景 Demo（新增 mask 不可过滤、按结构化错误收窄重试）及对应
+  smoke 自动验证；客户端接入核对（`docs/clients.md`）与证据索引
+  （`docs/evidence.md`）。
+- critical/high threat ID 到回归测试的机器可检查映射
+  （`internal/threatcheck`）。
+
+### Changed
+
+- 预算拒绝（`budget exceeded`）从协议层内部错误改为业务级 `IsError` 结果，
+  携带 `BUDGET_EXCEEDED` 拒绝契约；RBAC 拒绝原因不再在工具层丢弃。
+- 审计事件新增 `DecisionID` 字段（JSON Lines 兼容追加）。
+
 ## 0.1.4 - 2026-07-12
 
 ### Added

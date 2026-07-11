@@ -1,0 +1,110 @@
+{
+  "TM-001": {
+    "severity": "critical",
+    "tests": [
+      {"file": "core/codegen/adversarial_test.go", "name": "TestAdversarialValueIdentifierIsolation"},
+      {"file": "core/codegen/adversarial_test.go", "name": "FuzzCompileNoInjectionAndQuoting"},
+      {"file": "core/tool/adversarial_test.go", "name": "TestAdversarialToolFieldAndSchemaCorpus"},
+      {"file": "core/tool/tool_read_test.go", "name": "TestReadToolRejectsHiddenFieldFilter"},
+      {"file": "core/config/config_test.go", "name": "TestValidateNormalizesRolesAndRejectsCollisions"}
+    ],
+    "gaps": [
+      "无形式化语法证明；数据库 collation/搜索路径差异与管理员误配不在测试范围"
+    ]
+  },
+  "TM-002": {
+    "severity": "high",
+    "tests": [
+      {"file": "core/tool/adversarial_test.go", "name": "TestAdversarialToolFieldAndSchemaCorpus"},
+      {"file": "core/tool/adversarial_test.go", "name": "FuzzToolPayloadDecodeNormalizeFieldGate"},
+      {"file": "core/tool/tool_aggregate_test.go", "name": "TestMaskedFieldsRejectedForValueRevealingUsages"},
+      {"file": "core/tool/tool_aggregate_test.go", "name": "TestAggregateToolMasksResultRows"},
+      {"file": "core/tool/tool_read_test.go", "name": "TestReadToolRejectsHiddenFieldFilter"},
+      {"file": "x/providers/postgres/integration_test.go", "name": "TestRLSRowFilterAndMasking"},
+      {"file": "x/providers/mysql/integration_test.go", "name": "TestMySQLRLSRowFilterAndMasking"},
+      {"file": "x/providers/oceanbase/integration_test.go", "name": "TestOBRLSRowFilterAndMasking"}
+    ],
+    "gaps": [
+      "响应时序、数据库错误文本与小样本聚合推断的不可区分性未证明"
+    ]
+  },
+  "TM-003": {
+    "severity": "critical",
+    "tests": [
+      {"file": "core/rbac/rbac_test.go", "name": "TestAuthorizeResolvesSubjectPlaceholder"},
+      {"file": "core/tool/adversarial_test.go", "name": "TestAdversarialRowPolicyIsAlwaysConjoined"},
+      {"file": "x/providers/postgres/integration_test.go", "name": "TestRLSRowFilterAndMasking"},
+      {"file": "x/providers/mysql/integration_test.go", "name": "TestMySQLRLSRowFilterAndMasking"},
+      {"file": "x/providers/oceanbase/integration_test.go", "name": "TestOBRLSRowFilterAndMasking"}
+    ],
+    "gaps": [
+      "trusted procedure 内部 SQL 与直连数据库访问不受行策略保证（外部信任范围）"
+    ]
+  },
+  "TM-004": {
+    "severity": "critical",
+    "tests": [
+      {"file": "core/tool/transaction_test.go", "name": "TestTransactionBindingCapacityAndCloseRollback"},
+      {"file": "core/tool/transaction_test.go", "name": "TestTransactionCommitFailureRollsBackAndWrapsError"},
+      {"file": "core/tool/transaction_test.go", "name": "TestTransactionDisconnectRollsBackSession"},
+      {"file": "core/tool/transaction_adversarial_test.go", "name": "TestAdversarialTransactionScopeAndTerminalReuse"},
+      {"file": "core/tool/transaction_adversarial_test.go", "name": "FuzzTransactionStateMachine"},
+      {"file": "core/tool/tool_runtool_test.go", "name": "TestRunToolValidatesTransactionBeforeSingleflight"},
+      {"file": "x/mcpserver/http_test.go", "name": "TestBindSessionIdentityNormalizesAndEnforcesIdentity"}
+    ],
+    "gaps": [
+      "MySQL/OceanBase 事务路径为核心层验证，尚无独立 MCP e2e"
+    ]
+  },
+  "TM-005": {
+    "severity": "critical",
+    "tests": [
+      {"file": "x/mcpserver/http_test.go", "name": "TestWithRequestSubjectOnlyWhenTrusted"},
+      {"file": "x/mcpserver/http_test.go", "name": "TestWithRequestSubjectRejectsMalformedSubject"},
+      {"file": "x/mcpserver/http_test.go", "name": "TestTrustedProxyOnly"},
+      {"file": "x/mcpserver/http_test.go", "name": "TestTrustedProxyRejectsForgedIdentityFromUntrustedSource"},
+      {"file": "core/config/config_test.go", "name": "TestValidateSecurityConstraints"},
+      {"file": "x/mcpserver/e2e_http_test.go", "name": "TestE2EHTTPSubjectTenantScoping"}
+    ],
+    "gaps": [
+      "尚无独立反向代理进程（如 nginx）参与的端到端验证"
+    ]
+  },
+  "TM-006": {
+    "severity": "critical",
+    "tests": [
+      {"file": "core/tool/tool_helpers_test.go", "name": "TestArgsKeyNoCollision"},
+      {"file": "core/tool/tool_read_test.go", "name": "TestReadCacheIsolatedByAuthorizationScope"},
+      {"file": "core/tool/tool_read_test.go", "name": "TestTransactionReadBypassesGlobalCache"},
+      {"file": "core/tool/adversarial_test.go", "name": "TestAdversarialCacheAndSingleflightScopeIsolation"},
+      {"file": "core/tool/transaction_test.go", "name": "TestTransactionCacheInvalidatesOnlyAfterCommit"},
+      {"file": "core/engine/engine_test.go", "name": "TestSubmitSingleflightDedup"}
+    ],
+    "gaps": [
+      "缓存隔离证据主要在核心层（fake DB），尚无三库独立缓存隔离 integration"
+    ]
+  },
+  "TM-007": {
+    "severity": "high",
+    "tests": [
+      {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadDrainsBeforePublishing"},
+      {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadFailureKeepsOldApp"},
+      {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadRejectsTransactionLimitChanges"},
+      {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadUpdatesBudgetLimitsAndPreservesState"}
+    ],
+    "gaps": [
+      "race 测试不枚举所有调度交错；多进程/多实例配置发布不在当前一致性模型内"
+    ]
+  },
+  "TM-008": {
+    "severity": "high",
+    "tests": [
+      {"file": "x/mcpserver/http_test.go", "name": "TestLimitBodyBoundary"},
+      {"file": "core/tool/tool_runtool_test.go", "name": "TestRunToolEnforcesReturnedByteLimit"},
+      {"file": "core/tool/adversarial_test.go", "name": "FuzzToolPayloadDecodeNormalizeFieldGate"}
+    ],
+    "gaps": [
+      "stdio 不受 HTTP body/header 限制；数据库连接级 timeout 触发路径未按 provider 分别 integration"
+    ]
+  }
+}

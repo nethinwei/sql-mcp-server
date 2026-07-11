@@ -70,7 +70,7 @@ func prepareAggregate(ctx context.Context, tc Context, in aggregateInput) (aggre
 		return aggregatePlan{}, err
 	}
 	if !dec.Allowed {
-		return aggregatePlan{}, ErrUnauthorized
+		return aggregatePlan{}, denyUnauthorized(dec)
 	}
 	return aggregatePlan{res: res, tc: tc, full: andPreds(pred, dec.RowFilter)}, nil
 }

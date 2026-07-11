@@ -183,6 +183,10 @@ Provider 适用范围使用以下口径：
 
 ## 证据维护规则
 
+- 本账本每个 threat ID 到回归测试的映射由
+  `internal/threatcheck/coverage.json` 维护，并在默认单元测试中机器校验：
+  新增 TM ID 未映射、引用的测试被删除或改名、任一条目缺失测试证据均使 CI
+  失败；剩余缺口必须在映射中显式标注。
 - corpus 用例应引用稳定 threat ID，并标记等级、入口、预期拒绝/允许结果及适用
   provider；critical/high 用例只有进入 CI 后才可标记为“持续验证”。
 - fuzz crash 必须固定 seed、最小化并增加引用 threat ID 的回归用例；短时 fuzz

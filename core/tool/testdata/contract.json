@@ -1,0 +1,373 @@
+{
+  "tools": {
+    "aggregate_records": {
+      "properties": {
+        "aggregates": {
+          "items": {
+            "properties": {
+              "field": {
+                "description": "Omit for count(*)",
+                "type": "string"
+              },
+              "func": {
+                "enum": [
+                  "count",
+                  "sum",
+                  "avg",
+                  "min",
+                  "max"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "func"
+            ],
+            "type": "object"
+          },
+          "maxItems": 16,
+          "type": "array"
+        },
+        "entity": {
+          "type": "string"
+        },
+        "filter": {
+          "items": {
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "op": {
+                "enum": [
+                  "eq",
+                  "ne",
+                  "gt",
+                  "gte",
+                  "lt",
+                  "lte",
+                  "in",
+                  "not_in",
+                  "like",
+                  "is_null",
+                  "is_not_null"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "description": "Value (array for in/not_in; omitted for is_null/is_not_null)"
+              }
+            },
+            "required": [
+              "field",
+              "op"
+            ],
+            "type": "object"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "groupBy": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8,
+          "type": "array"
+        },
+        "transaction": {
+          "description": "Token returned by begin_transaction",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity",
+        "aggregates"
+      ],
+      "type": "object"
+    },
+    "begin_transaction": {
+      "properties": {
+        "datasource": {
+          "type": "string"
+        },
+        "isolation": {
+          "enum": [
+            "read_uncommitted",
+            "read_committed",
+            "repeatable_read",
+            "serializable"
+          ],
+          "type": "string"
+        },
+        "readOnly": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "create_record": {
+      "properties": {
+        "entity": {
+          "type": "string"
+        },
+        "transaction": {
+          "description": "Token returned by begin_transaction",
+          "type": "string"
+        },
+        "values": {
+          "description": "Column name to value map",
+          "type": "object"
+        }
+      },
+      "required": [
+        "entity",
+        "values"
+      ],
+      "type": "object"
+    },
+    "delete_record": {
+      "properties": {
+        "entity": {
+          "type": "string"
+        },
+        "filter": {
+          "items": {
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "op": {
+                "enum": [
+                  "eq",
+                  "ne",
+                  "gt",
+                  "gte",
+                  "lt",
+                  "lte",
+                  "in",
+                  "not_in",
+                  "like",
+                  "is_null",
+                  "is_not_null"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "description": "Value (array for in/not_in; omitted for is_null/is_not_null)"
+              }
+            },
+            "required": [
+              "field",
+              "op"
+            ],
+            "type": "object"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "transaction": {
+          "description": "Token returned by begin_transaction",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity",
+        "filter"
+      ],
+      "type": "object"
+    },
+    "describe_entities": {
+      "properties": {
+        "entity": {
+          "description": "Entity name; omit to list all entities",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "execute_entity": {
+      "properties": {
+        "args": {
+          "description": "Procedure argument name to value map",
+          "type": "object"
+        },
+        "entity": {
+          "type": "string"
+        },
+        "transaction": {
+          "description": "Token returned by begin_transaction",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "read_records": {
+      "properties": {
+        "cursor": {
+          "description": "Keyset pagination: last row's primary-key column values to resume after",
+          "type": "object"
+        },
+        "entity": {
+          "type": "string"
+        },
+        "expand": {
+          "description": "Named same-datasource relationships to batch expand",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8,
+          "type": "array"
+        },
+        "fields": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "type": "array"
+        },
+        "filter": {
+          "items": {
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "op": {
+                "enum": [
+                  "eq",
+                  "ne",
+                  "gt",
+                  "gte",
+                  "lt",
+                  "lte",
+                  "in",
+                  "not_in",
+                  "like",
+                  "is_null",
+                  "is_not_null"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "description": "Value (array for in/not_in; omitted for is_null/is_not_null)"
+              }
+            },
+            "required": [
+              "field",
+              "op"
+            ],
+            "type": "object"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "limit": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "offset": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "transaction": {
+          "description": "Token returned by begin_transaction",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "transaction_token": {
+      "properties": {
+        "transaction": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "transaction"
+      ],
+      "type": "object"
+    },
+    "update_record": {
+      "properties": {
+        "entity": {
+          "type": "string"
+        },
+        "filter": {
+          "items": {
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "op": {
+                "enum": [
+                  "eq",
+                  "ne",
+                  "gt",
+                  "gte",
+                  "lt",
+                  "lte",
+                  "in",
+                  "not_in",
+                  "like",
+                  "is_null",
+                  "is_not_null"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "description": "Value (array for in/not_in; omitted for is_null/is_not_null)"
+              }
+            },
+            "required": [
+              "field",
+              "op"
+            ],
+            "type": "object"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "set": {
+          "description": "Column name to new value map",
+          "type": "object"
+        },
+        "transaction": {
+          "description": "Token returned by begin_transaction",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity",
+        "filter",
+        "set"
+      ],
+      "type": "object"
+    }
+  },
+  "errorCodes": {
+    "BUDGET_EXCEEDED": true,
+    "COST_EXCEEDED": true,
+    "DATABASE_ERROR": false,
+    "DML_TOOLS_DISABLED": false,
+    "ENTITY_NOT_FOUND": false,
+    "INVALID_INPUT": true,
+    "NOT_IMPLEMENTED": false,
+    "TRANSACTION_CAPACITY": true,
+    "TRANSACTION_NOT_FOUND": false,
+    "TRANSACTION_SCOPE": false,
+    "UNAUTHORIZED": false,
+    "UNSAFE_WRITE": true
+  },
+  "denialFields": [
+    "code",
+    "constraints",
+    "decisionId",
+    "hints",
+    "reason",
+    "retryable"
+  ]
+}

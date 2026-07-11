@@ -51,6 +51,45 @@ func TestRunToolWiresHooksAndAudit(t *testing.T) {
 	}
 }
 
+func TestRunToolStampsDecisionID(t *testing.T) {
+	t.Parallel()
+	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	db := &store.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
+		return store.NewFakeRows([]string{"id", "email"}, []any{int64(1), "a@x.com"}), nil
+	}}
+	var ctxID string
+	hooks := &hook.Hooks{
+		BeforeTool: func(ctx context.Context, _ string, _ json.RawMessage) context.Context {
+			ctxID = DecisionIDFromContext(ctx)
+			return ctx
+		},
+	}
+	aud := &recorderAuditor{}
+	tc := Context{
+		Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
+		Authorizer: rbac.NewRoleAuthorizer(reg), Hooks: hooks, Auditor: aud,
+		DecisionID: "fixed-decision-id",
+	}
+	in, _ := json.Marshal(readInput{Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: int64(1)}}})
+	if _, err := RunTool(context.Background(), ReadTool{}, in, tc); err != nil {
+		t.Fatal(err)
+	}
+	if ctxID != "fixed-decision-id" {
+		t.Fatalf("hook context decision ID = %q", ctxID)
+	}
+	if len(aud.events) != 1 || aud.events[0].DecisionID != "fixed-decision-id" {
+		t.Fatalf("audit decision ID = %+v", aud.events)
+	}
+	tc.DecisionID = ""
+	aud.events = nil
+	if _, err := RunTool(context.Background(), ReadTool{}, in, tc); err != nil {
+		t.Fatal(err)
+	}
+	if len(aud.events) != 1 || aud.events[0].DecisionID == "" {
+		t.Fatalf("RunTool must generate a decision ID when unset: %+v", aud.events)
+	}
+}
+
 func TestRunToolEnforcesBudgetAndAuditsRejection(t *testing.T) {
 	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
 	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {

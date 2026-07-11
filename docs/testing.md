@@ -63,7 +63,9 @@ quickstart 和 attestation 验证脚本由本地 Make target 与 GitHub Actions 
 
 - 单元测试：默认 `go test ./...`，核心主要使用手写 fake。
 - provider 集成测试：使用 testcontainers 和真实数据库镜像。
-- MCP e2e：使用真实数据库与 MCP client，带 `e2e` build tag。
+- MCP e2e：使用真实数据库与 MCP client，带 `e2e` build tag；同一断言套件在
+  in-memory 传输和真实 streamable HTTP listener（bearer + 身份 header）上各跑
+  一遍，证明两条传输路径的关键授权行为等价。
 - ModelScope smoke：读取根目录 `mcp_config.json`，启动真实 PostgreSQL 和 stdio
   子进程，验证展示配置及 allow/deny 路径。
 - 并发测试：CI 默认使用 race detector；MCP e2e 包含 goleak 检查。
@@ -131,9 +133,11 @@ PostgreSQL/MySQL/OceanBase 或 MCP e2e 已在当前机器执行。
 - `coverage`：与 Makefile 共用核心包清单，真实检查合计至少 80.0%；
 - `security-fuzz`：Go 1.26.5 下分别运行四个有界、无 Docker 的安全 fuzz smoke；
 - `integration`：PostgreSQL、MySQL、OceanBase 三项 testcontainers matrix；
-- `e2e`：PostgreSQL + in-memory MCP client，覆盖协议边界上的工具发现、成本、
-  RBAC/RLS/字段 ACL、脱敏、写保护、resource/prompt 和事务；custom procedure
-  的 MCP 调用使用默认测试中的 fake DB，真实执行由三库 integration 覆盖；
+- `e2e`：PostgreSQL + in-memory 与真实 streamable HTTP 双传输 MCP client，
+  覆盖协议边界上的工具发现、成本、RBAC/RLS/字段 ACL、脱敏、写保护、
+  resource/prompt、事务、HTTP 认证/身份 header，以及拒绝契约 decision ID 与
+  审计事件的关联；custom procedure 的 MCP 调用使用默认测试中的 fake DB，
+  真实执行由三库 integration 覆盖；
 - `modelscope`：根目录 manifest、真实 PostgreSQL、stdio、mask、row policy 和
   allow/deny smoke；
 - `govulncheck`；

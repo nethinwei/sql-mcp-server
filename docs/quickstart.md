@@ -41,16 +41,12 @@ X-MCP-Subject: {"tenant_id":7}
 }
 ```
 
-应返回 Alice，且 `email` 已脱敏。把 `id` 改为 `2` 时返回空结果，因为该行属于
-tenant 8。
+应返回 Alice，且 `email` 已脱敏（场景 1：正常查询）。把 `id` 改为 `2` 时返回
+空结果，因为该行属于 tenant 8（场景 3：跨 tenant 拒绝）。
 
-再执行两个拒绝示例：
+接着执行四个拒绝与自修复场景。
 
-```json
-{"entity": "users"}
-```
-
-该全表读取会被成本闸门拒绝。
+场景 2 —— 字段拒绝：
 
 ```json
 {
@@ -63,6 +59,53 @@ tenant 8。
 该调用会被字段 ACL 拒绝。`tools/list` 中也不会出现默认关闭的
 `delete_record`。
 
+场景 4 —— mask 字段可返回但不可过滤：
+
+```json
+{
+  "entity": "users",
+  "filter": [{"field": "email", "op": "eq", "value": "alice@example.com"}]
+}
+```
+
+场景 1 证明脱敏后的 `email` 可以返回，但把它用作过滤条件会被拒绝——否则可以
+用等值探测还原被脱敏的原值。错误不区分“字段不存在”与“字段不可用”，不泄露
+列的存在性。
+
+场景 5 —— 执行前成本拒绝：
+
+```json
+{"entity": "users"}
+```
+
+该全表读取在执行前被成本闸门拒绝，数据库不会执行这条查询。
+
+场景 6 —— Agent 根据结构化错误收窄后成功：场景 5 的拒绝结果除了文本，还在
+`structuredContent` 中携带机器可读契约（字段含义见
+[tool-contract.md](tool-contract.md)）：
+
+```json
+{
+  "code": "COST_EXCEEDED",
+  "retryable": true,
+  "hints": ["add a filter on an indexed column or add LIMIT"],
+  "decisionId": "…"
+}
+```
+
+按 hint 收窄请求后重试即可成功：
+
+```json
+{
+  "entity": "users",
+  "filter": [{"field": "id", "op": "eq", "value": 1}],
+  "limit": 1
+}
+```
+
+`retryable: true` 表示在当前权限内修改请求即可成功；`decisionId` 可用于在
+审计日志和 trace 中定位同一次决策。
+
 维护者可用 Go SDK 一次性验证全部路径：
 
 ```sh
@@ -73,6 +116,7 @@ examples/quickstart/smoke.sh
 
 [`examples/clients/`](../examples/clients/) 提供 Cursor、Claude Desktop 和 VS Code
 的 stdio 配置模板。把二进制和配置路径改为绝对路径后复制到客户端配置中。
+各客户端的核对结论与常见故障见[客户端接入核对](clients.md)。
 
 stdio 身份在进程启动时由 `--role` 固定，不能传递 per-request subject。因此，
 上面的 `${subject.tenant_id}` 动态隔离示例必须通过 HTTP 和可信身份注入演示；

@@ -89,6 +89,7 @@ type Context struct {
 	Role                       string
 	Subject                    map[string]any // caller attributes for row-level ${subject.x} policies
 	Session                    string         // MCP session ID when the transport provides one
+	DecisionID                 string         // per-call ID correlating response, audit, and trace
 	DB                         store.DB
 	Dialect                    dialect.Dialect
 	Registry                   *entity.Registry
@@ -154,6 +155,10 @@ type CostGated interface {
 func RunTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Result, error) {
 	name := t.Info().Name
 	start := time.Now()
+	if tc.DecisionID == "" {
+		tc.DecisionID = NewDecisionID()
+	}
+	ctx = WithDecisionID(ctx, tc.DecisionID)
 	auditInput := audit.RedactInput(input, sensitiveFields(name, input, tc.Registry))
 	lease, ctx, tc, err := acquireToolBudget(ctx, name, input, tc, auditInput)
 	if err != nil {
@@ -194,8 +199,8 @@ func acquireToolBudget(
 	if err != nil {
 		if tc.Auditor != nil {
 			_ = tc.Auditor.Record(ctx, audit.Event{
-				Time: time.Now(), Role: tc.Role, Tool: name, Input: auditInput,
-				Allowed: false, Error: err.Error(),
+				Time: time.Now(), DecisionID: tc.DecisionID, Role: tc.Role,
+				Tool: name, Input: auditInput, Allowed: false, Error: err.Error(),
 			})
 		}
 		return nil, ctx, tc, err
@@ -263,7 +268,8 @@ func finalizeToolResult(
 	if encoded, encodeErr := json.Marshal(res.Content); encodeErr == nil {
 		res.ReturnedBytes = int64(len(encoded))
 		if tc.MaxReturnedBytes > 0 && res.ReturnedBytes > tc.MaxReturnedBytes && err == nil {
-			err = budget.ErrExceeded
+			err = fmt.Errorf("%w: result size %d bytes exceeds limit %d",
+				budget.ErrExceeded, res.ReturnedBytes, tc.MaxReturnedBytes)
 		}
 	}
 	if lease == nil {
@@ -300,6 +306,7 @@ func recordToolAudit(
 	}
 	_ = tc.Auditor.Record(ctx, audit.Event{
 		Time:         time.Now(),
+		DecisionID:   tc.DecisionID,
 		Role:         tc.Role,
 		Tool:         name,
 		Input:        auditInput,
@@ -564,7 +571,8 @@ func checkGateDetailed(
 	}
 	if dec.Plan != nil && maxEstimated > 0 &&
 		dec.Plan.EstimatedRows > maxEstimated {
-		return compiled, dec.Plan, budget.ErrExceeded
+		return compiled, dec.Plan, fmt.Errorf("%w: estimated scanned rows %d exceed limit %d",
+			budget.ErrExceeded, dec.Plan.EstimatedRows, maxEstimated)
 	}
 	verdict := "allow"
 	if dec.Soft {

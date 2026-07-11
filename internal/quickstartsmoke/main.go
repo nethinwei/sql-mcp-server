@@ -42,7 +42,8 @@ func main() {
 	if err := verify(ctx, session); err != nil {
 		fail("%v", err)
 	}
-	fmt.Println("quickstart smoke passed: allow, tenant isolation, and deny paths verified")
+	fmt.Println("quickstart smoke passed: all six scenarios verified " +
+		"(read+mask, field deny, tenant isolation, masked-filter deny, cost deny, structured-error narrowing)")
 }
 
 func connect(ctx context.Context) (*mcp.ClientSession, error) {
@@ -73,7 +74,13 @@ func verify(ctx context.Context, session *mcp.ClientSession) error {
 	if err := verifyTools(ctx, session); err != nil {
 		return err
 	}
-	return verifyReads(ctx, session)
+	if err := verifyReads(ctx, session); err != nil {
+		return err
+	}
+	if err := verifyMaskedFilterRejected(ctx, session); err != nil {
+		return err
+	}
+	return verifyStructuredErrorNarrowing(ctx, session)
 }
 
 func verifyTools(ctx context.Context, session *mcp.ClientSession) error {
@@ -130,6 +137,64 @@ func verifyReads(ctx context.Context, session *mcp.ClientSession) error {
 		return fmt.Errorf("hidden field was not rejected: err=%v result=%s", err, resultText(hiddenField))
 	}
 	return nil
+}
+
+// verifyMaskedFilterRejected proves the masked email can be returned (already
+// checked in verifyReads) but not used as a filter, which would allow
+// equality probing of the masked value.
+func verifyMaskedFilterRejected(ctx context.Context, session *mcp.ClientSession) error {
+	res, err := callRead(ctx, session, map[string]any{
+		"entity": "users",
+		"filter": []map[string]any{{"field": "email", "op": "eq", "value": "alice@example.com"}},
+	})
+	if err != nil || !res.IsError {
+		return fmt.Errorf("masked-field filter was not rejected: err=%v result=%s", err, resultText(res))
+	}
+	return nil
+}
+
+// verifyStructuredErrorNarrowing proves the agent self-repair loop: a cost
+// rejection carries the machine-readable denial contract, and a request
+// narrowed per its hints succeeds.
+func verifyStructuredErrorNarrowing(ctx context.Context, session *mcp.ClientSession) error {
+	rejected, err := callRead(ctx, session, map[string]any{"entity": "users"})
+	if err != nil || !rejected.IsError {
+		return fmt.Errorf("full scan was not rejected: err=%v result=%s", err, resultText(rejected))
+	}
+	denial, err := denialContract(rejected)
+	if err != nil {
+		return err
+	}
+	if denial["code"] != "COST_EXCEEDED" || denial["retryable"] != true {
+		return fmt.Errorf("unexpected denial contract: %v", denial)
+	}
+	if id, _ := denial["decisionId"].(string); id == "" {
+		return fmt.Errorf("denial is missing decisionId: %v", denial)
+	}
+	if hints, _ := denial["hints"].([]any); len(hints) == 0 {
+		return fmt.Errorf("denial is missing rewrite hints: %v", denial)
+	}
+	narrowed, err := callRead(ctx, session, map[string]any{
+		"entity": "users",
+		"filter": []map[string]any{{"field": "id", "op": "eq", "value": 1}},
+		"limit":  1,
+	})
+	if err != nil || narrowed.IsError {
+		return fmt.Errorf("narrowed retry failed: err=%v result=%s", err, resultText(narrowed))
+	}
+	return nil
+}
+
+func denialContract(res *mcp.CallToolResult) (map[string]any, error) {
+	raw, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		return nil, fmt.Errorf("marshal structuredContent: %w", err)
+	}
+	var denial map[string]any
+	if err := json.Unmarshal(raw, &denial); err != nil || len(denial) == 0 {
+		return nil, fmt.Errorf("denial structuredContent missing: %s err=%v", raw, err)
+	}
+	return denial, nil
 }
 
 func callRead(ctx context.Context, session *mcp.ClientSession, args map[string]any) (*mcp.CallToolResult, error) {

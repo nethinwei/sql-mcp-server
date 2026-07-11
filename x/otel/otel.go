@@ -11,6 +11,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/cost"
 	"github.com/nethinwei/sql-mcp-server/core/hook"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
+	"github.com/nethinwei/sql-mcp-server/core/tool"
 )
 
 // NewHooks returns hook.Hooks that emit OpenTelemetry spans for tool calls and
@@ -21,7 +22,10 @@ func NewHooks() *hook.Hooks {
 	tracer := otel.Tracer("sql-mcp-server")
 	return &hook.Hooks{
 		BeforeTool: func(ctx context.Context, name string, _ json.RawMessage) context.Context {
-			ctx, _ = tracer.Start(ctx, "tool:"+name)
+			ctx, span := tracer.Start(ctx, "tool:"+name)
+			if id := tool.DecisionIDFromContext(ctx); id != "" {
+				span.SetAttributes(attribute.String("decision.id", id))
+			}
 			return ctx
 		},
 		AfterTool: func(ctx context.Context, _ string, _ any, _ error) {

@@ -16,7 +16,8 @@ DDL**。
 
 运行时安全行为以[安全模型](docs/security.md)为准；Provider 验证边界与证据层级
 以[兼容矩阵](docs/provider-compatibility.md)为准；威胁、控制与剩余风险见
-[威胁模型](docs/threat-model.md)。**不以本页摘要为准。**
+[威胁模型](docs/threat-model.md)。所有对外声明的证据汇总见
+[架构、安全边界与证据索引](docs/evidence.md)。**不以本页摘要为准。**
 
 ## 五分钟体验
 
@@ -41,7 +42,8 @@ make build
 ```
 
 - Cursor、Claude Desktop 和 VS Code 的 stdio 模板：
-  [`examples/clients/`](examples/clients/)；
+  [`examples/clients/`](examples/clients/)（核对结论见
+  [客户端接入核对](docs/clients.md)）；
 - 完整配置模板：[`examples/config.example.yaml`](examples/config.example.yaml)；
 - CLI、启动、热重载和升级：[运行与运维](docs/operations.md)；
 - 魔搭分发展示：[ModelScope 上架与使用](docs/modelscope.md)。

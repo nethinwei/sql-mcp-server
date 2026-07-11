@@ -37,6 +37,8 @@ func runCLI(ctx context.Context, args []string, stdout io.Writer) error {
 		return runAddEntity(args[1:])
 	case "validate":
 		return runValidate(args, stdout)
+	case "export":
+		return runExport(args, stdout)
 	case "explain":
 		return runExplain(args, stdout)
 	case "version":
@@ -307,6 +309,30 @@ func runValidate(args []string, stdout io.Writer) error {
 	}
 	_, err := fmt.Fprintln(stdout, "valid")
 	return err
+}
+
+// runExport writes the effective configuration as deterministic YAML: field
+// order follows the configuration contract (struct order, sorted map keys),
+// defaults are materialized by the same loader used at startup, and secret
+// placeholders (${ENV} / ${file:...}) are preserved verbatim, never resolved
+// to plaintext. Repeated exports of the same config are byte-identical, and
+// the output round-trips through `validate`.
+func runExport(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("export", flag.ContinueOnError)
+	path := fs.String("config", "config.yaml", "config file path")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg, err := bootstrap.Load(*path)
+	if err != nil {
+		return err
+	}
+	encoder := yaml.NewEncoder(stdout)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(cfg); err != nil {
+		return err
+	}
+	return encoder.Close()
 }
 
 func runExplain(args []string, stdout io.Writer) error {
