@@ -13,7 +13,6 @@
     {
       "registryType": "oci",
       "identifier": "ghcr.io/nethinwei/sql-mcp-server:0.1.3",
-      "version": "0.1.3",
       "runtimeHint": "docker",
       "transport": {
         "type": "stdio"

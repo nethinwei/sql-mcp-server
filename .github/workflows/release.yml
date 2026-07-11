@@ -195,7 +195,10 @@ jobs:
         with:
           subject-path: attest/*
       - name: verify provenance
-        run: gh attestation verify attest/* --repo "$GITHUB_REPOSITORY"
+        run: |
+          for artifact in attest/*; do
+            gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"
+          done
 
   registry:
     name: publish MCP Registry metadata
@@ -214,7 +217,6 @@ jobs:
         run: |
           jq --arg version "$VERSION" \
             '.version = $version
-             | .packages[].version = $version
              | .packages[].identifier = ("ghcr.io/nethinwei/sql-mcp-server:" + $version)' \
             server.json > server.tmp
           mv server.tmp server.json

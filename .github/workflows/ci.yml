@@ -139,7 +139,6 @@ jobs:
         run: |
           version=$(jq -r '.version' server.json)
           test "$version" = "0.1.3"
-          test "$(jq -r '.packages[0].version' server.json)" = "$version"
           test "$(jq -r '.packages[0].identifier' server.json)" = \
             "ghcr.io/nethinwei/sql-mcp-server:$version"
       - name: install MCP publisher v1.7.9
