@@ -99,7 +99,8 @@
 ## Later
 
 可执行语义、Catalog Discovery、成本与数据出站治理、Provider 扩展、生产运维、
-写治理、企业身份、durable audit、管理 UI、查询复用和扩展点均按证据升级。
+写治理、企业身份、durable audit、管理 UI、查询复用、扩展点，以及受治理查询
+表达力与 Provider 优化扩展（IR Evolution）均按证据升级。
 
 范围、触发证据和跨阶段非目标见
 [Evidence-Gated Directions](roadmap/directions.md)。Provider 能力模型与候选顺序

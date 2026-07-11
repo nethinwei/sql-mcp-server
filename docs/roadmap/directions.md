@@ -84,11 +84,41 @@ session、signed snapshot、灾难恢复和短期数据库凭证。
 触发证据：至少两个独立集成需要同一扩展边界。扩展必须经过统一 engine，禁止注册
 可执行任意 SQL 的 MCP tool。
 
+## L12. Governed Query Expressiveness
+
+在不引入任意 SQL 的前提下扩大统一 IR 可表达的声明式查询集合：沿显式授权关系的
+join/semi/anti join、集合运算、Having 与复合聚合、受控标量函数、存在性查询、
+窗口函数与 CTE 等按候选池逐项立项。每项能力必须定义完整语义（bag、NULL、排序、
+聚合空集、可见性传播、RLS/mask/ACL 作用位置、成本语义与 Provider 降级），通过
+跨 Provider 统一语义测试与 property/differential codegen 测试，禁止
+`RawSQL`/`RawExpression` 逃生口。
+
+触发证据：Agent Eval（pilot 或公开 suite）或真实部署证明任务失败源于 IR 表达力
+不足，且无法用现有 IR 合理、稳定且低成本地完成。逐能力独立过门禁，不整体升级；
+L1 的 Metric 编译目标是本方向的消费者。详细设计见
+[IR Evolution](../design/ir-evolution.md)。
+
+## L13. Provider Optimization Extensibility
+
+在统一逻辑语义与治理不变量下为 Provider 开放类型化优化切口：Canonical IR →
+Provider Lowering → Physical Execution Plan 三层模型，涵盖 logical rewriter、
+physical planner、参数绑定、类型映射、Explain 解析、执行策略与临时资源生命
+周期。lowering 必须语义保持且授权资源闭包不得扩大；Provider 决定如何执行，
+不决定是否允许执行，任何切口不得绕过授权、RLS、mask、预算、审计或统一 engine。
+
+触发证据：至少两个 Provider 出现可测量的原生优化需求或语义差异问题，且现有
+统一 codegen 无法表达。capability 的实现方式分级
+（`native`/`emulated`/`restricted`/`unsupported`）落入
+[Provider Roadmap](../provider-roadmap.md) 能力模型；系统级扩展边界清单以 L11
+为准。详细设计见 [IR Evolution](../design/ir-evolution.md)。
+
 ## 跨阶段非目标
 
-- 自然语言转任意 SQL、通用 SQL parser + sanitizer；
+- 自然语言转任意 SQL、通用 SQL parser + sanitizer，以及 `RawSQL`/
+  `RawExpression` 等任意表达式逃生口；
 - 自动暴露整个数据库或根据自省结果自动授权；
-- 通用 join/union、跨数据源 federated query 或完整 BI DSL；
+- 未声明关系的任意 join、跨数据源 federated query 或完整 BI DSL（沿显式授权
+  关系的受治理 join 与集合运算属于 L12，须按其门禁逐项升级）；
 - 无审计的生产配置变更、写操作或绕过 engine 的插件；
 - 在 capability 和数据库级证据稳定前一次性扩展大量 Provider；
 - 自建完整 IAM、secret manager、低代码平台或数据库管理工具全集；

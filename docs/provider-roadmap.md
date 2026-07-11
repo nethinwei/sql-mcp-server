@@ -126,6 +126,14 @@ capability 不能退化为 `supportsSQL = true`，也不能因数据库“提供
 本服务已装配硬保证。`best_effort` 不能满足硬限制；缺少 `enforced` 能力时，必须由
 核心层提供等价强制或 fail closed。能力模型升级本身不构成新增 Provider 的承诺。
 
+在保证强度之外，L13（Provider Optimization Extensibility，见
+[Evidence-Gated Directions](roadmap/directions.md)）激活后需要增加与之正交的
+**实现方式**维度：`native`（数据库原生）、`emulated`（核心层或 Provider 模拟）、
+`restricted`（受限子集）、`unsupported`。`emulated`/`restricted` 能力必须声明
+语义差异、原子性限制、性能影响、支持版本、成本可见性与失败模式。保证强度回答
+“能保证什么”，实现方式回答“怎么实现”；该维度在 L13 立项前仅为预留，不构成
+当前承诺。详细设计见 [IR Evolution](design/ir-evolution.md)。
+
 ---
 
 ## 进入条件与验收
