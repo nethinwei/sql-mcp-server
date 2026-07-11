@@ -1,5 +1,6 @@
 # binaries
 /sql-mcp-server
+/sql-mcp-server.exe
 /cmd/sql-mcp-server/sql-mcp-server
 /dist/
 
@@ -7,6 +8,7 @@
 *.test
 *.out
 coverage.txt
+coverage
 coverage.html
 
 # profiling

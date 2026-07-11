@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/nethinwei/sql-mcp-server/codegen"
 	"github.com/nethinwei/sql-mcp-server/dialect"
@@ -35,6 +36,8 @@ type Plan struct {
 	TotalCost       float64
 	EstimatedRows   int64
 	EstimatedBytes  int64
+	ActualRows      int64
+	ExecutionTime   time.Duration
 	ScanType        ScanType
 	PartitionPruned bool
 	HasSort         bool
@@ -101,9 +104,30 @@ type Explainer interface {
 	Explain(ctx context.Context, query string, args []any) (Plan, error)
 }
 
+// AnalyzeSampler is an optional, read-only EXPLAIN ANALYZE capability. It is
+// never invoked unless explicitly enabled by configuration.
+type AnalyzeSampler interface {
+	ExplainAnalyze(ctx context.Context, compiled codegen.Compiled) (Plan, error)
+}
+
+// PlanInvalidator invalidates cached plans after material feedback changes.
+type PlanInvalidator interface {
+	InvalidatePlan(fingerprint string)
+}
+
+// AnalyzeConfig controls optional runtime sampling. The zero value disables it.
+type AnalyzeConfig struct {
+	Enabled    bool
+	SampleRate float64
+	ReadOnly   bool
+	Timeout    time.Duration
+}
+
 // Threshold configures the gate. SoftScore/HardScore are 0-100 cutoffs.
 type Threshold struct {
 	Enabled           bool
+	Datasource        string
+	DialectName       string
 	SoftScore         int
 	HardScore         int
 	MaxRows           int64
@@ -113,6 +137,7 @@ type Threshold struct {
 	RequirePKForWrite bool // reject UPDATE/DELETE that is not a PK point write
 	RequireKnownScan  bool
 	RequireFreshStats bool
+	LegacyExactSQL    bool
 	AllowTemplates    []string
 	RejectTemplates   []string
 }
@@ -196,7 +221,11 @@ func (g *ChainGate) Check(ctx context.Context, c codegen.Compiled) (Decision, er
 // always; Estimate only when the dialect's estimates are trustworthy; EnforceCap
 // when a row cap is configured. RuntimeGuard/DBNative run at execution time.
 func NewGateFromCapabilities(caps dialect.Capabilities, ex Explainer, th Threshold, feedback FeedbackStore) *ChainGate {
-	layers := []Layer{StaticRule{PKWhitelist: th.WhitelistPKPoint, AllowTemplates: th.AllowTemplates, RejectTemplates: th.RejectTemplates}}
+	layers := []Layer{StaticRule{
+		PKWhitelist: th.WhitelistPKPoint, Datasource: th.Datasource,
+		DialectName: th.DialectName, LegacyExactSQL: th.LegacyExactSQL, AllowTemplates: th.AllowTemplates,
+		RejectTemplates: th.RejectTemplates,
+	}}
 	if th.RequirePKForWrite {
 		layers = append(layers, WriteGuard{})
 	}

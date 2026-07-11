@@ -101,9 +101,22 @@ func TestStaticRulePKWhitelist(t *testing.T) {
 	}
 }
 
+func TestStaticRuleRejectPrecedesPKWhitelist(t *testing.T) {
+	t.Parallel()
+	sr := StaticRule{PKWhitelist: true, LegacyExactSQL: true, RejectTemplates: []string{"SELECT blocked"}}
+	d, err := sr.Check(context.Background(), codegen.Compiled{SQL: "SELECT blocked", IsPKPoint: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Allow || d.Bypass {
+		t.Fatalf("reject baseline was bypassed by PK whitelist: %+v", d)
+	}
+}
+
 func TestStaticRuleTemplates(t *testing.T) {
 	t.Parallel()
 	sr := StaticRule{
+		LegacyExactSQL:  true,
 		AllowTemplates:  []string{"SELECT 1"},
 		RejectTemplates: []string{"SELECT bad"},
 	}
@@ -121,6 +134,64 @@ func TestStaticRuleTemplates(t *testing.T) {
 	d, _ = sr.Check(context.Background(), codegen.Compiled{SQL: "SELECT other"})
 	if !d.Allow || d.Bypass {
 		t.Fatalf("unknown template should pass without bypass, got %+v", d)
+	}
+}
+
+func TestStaticRuleExactSQLIsDatasourceScoped(t *testing.T) {
+	compiled := codegen.Compiled{SQL: "SELECT 1"}
+	primary := StaticRule{
+		Datasource: "primary", AllowTemplates: []string{"primary:SELECT 1"},
+	}
+	d, _ := primary.Check(context.Background(), compiled)
+	if !d.Bypass {
+		t.Fatal("datasource-qualified exact SQL did not match its source")
+	}
+	replica := StaticRule{
+		Datasource: "replica", AllowTemplates: []string{"primary:SELECT 1", "SELECT 1"},
+	}
+	d, _ = replica.Check(context.Background(), compiled)
+	if d.Bypass {
+		t.Fatal("multi-datasource rule accepted another source or bare exact SQL")
+	}
+	replica.LegacyExactSQL = true
+	d, _ = replica.Check(context.Background(), compiled)
+	if !d.Bypass {
+		t.Fatal("single-datasource compatibility did not accept bare exact SQL")
+	}
+}
+
+func TestValidateTemplateScopes(t *testing.T) {
+	t.Parallel()
+	datasources := []string{"replica", "primary"}
+	for _, tc := range []struct {
+		name   string
+		allow  []string
+		reject []string
+		want   string
+	}{
+		{name: "fingerprints", allow: []string{"fp:v2:abc"}, reject: []string{"fp:v2:def"}},
+		{name: "scoped exact SQL", allow: []string{"primary:SELECT 1"}, reject: []string{"replica:SELECT bad"}},
+		{name: "bare allow", allow: []string{"SELECT 1"}, want: "allowTemplates"},
+		{name: "bare reject", reject: []string{"SELECT bad"}, want: "rejectTemplates"},
+		{name: "unknown datasource", reject: []string{"archive:SELECT bad"}, want: "rejectTemplates"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateTemplateScopes(datasources, tc.allow, tc.reject)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("ValidateTemplateScopes() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) ||
+				!strings.Contains(err.Error(), "fp:v2:<sha256>") ||
+				!strings.Contains(err.Error(), "primary:") {
+				t.Fatalf("ValidateTemplateScopes() error = %v, want migration guidance for %s", err, tc.want)
+			}
+		})
+	}
+	if err := ValidateTemplateScopes([]string{"primary"}, []string{"SELECT 1"}, []string{"SELECT bad"}); err != nil {
+		t.Fatalf("single datasource compatibility error = %v", err)
 	}
 }
 

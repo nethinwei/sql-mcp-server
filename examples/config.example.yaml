@@ -1,64 +1,127 @@
-# SQL MCP Server example configuration.
+# SQL MCP Server v0.1.0 example.
+# Explicit CLI transport/addr flags override these YAML values:
+#   sql-mcp-server serve --config config.yaml --transport stdio
+#   sql-mcp-server serve --config config.yaml --transport http \
+#     --addr 127.0.0.1:8080 --watch --watch-interval 1s
 version: "1"
 
 server:
-  transport: stdio        # stdio | http
-  addr: ":8080"
-  role: reader            # runtime role; override with --role
+  # Used unless the corresponding serve flag is provided.
+  transport: stdio
+  addr: "127.0.0.1:8080"
+  role: reader
+  auth:
+    # Required for non-loopback HTTP unless mTLS is enabled. This value is
+    # literal: unlike DSNs, auth fields do not resolve ${ENV} placeholders.
+    token: ""
+    # Enable only behind a gateway that authenticates callers, strips incoming
+    # X-MCP-Role/X-MCP-Subject, and injects trusted replacements.
+    trustProxyHeaders: false
+    # Required with trustProxyHeaders unless clientCA enables mTLS.
+    trustedProxyCIDRs: []
+    tls:
+      cert: ""
+      key: ""
+      clientCA: "" # setting this enables mTLS and requires cert + key
 
-database:
-  driver: postgres        # postgres | mysql | oceanbase
-  dsn: "postgres://user:password@localhost:5432/appdb?sslmode=disable"
-  # DSN may use placeholders resolved at startup (fail-fast if missing):
-  #   dsn: "postgres://$$${PGUSER}:${PGPASS}@${PGHOST}:5432/${PGDB}"
+# Use "database" for one legacy/default source, or "databases" for named sources.
+databases:
+  primary:
+    driver: postgres # postgres | mysql | oceanbase
+    # Every ${...} placeholder in a DSN is resolved at startup.
+    dsn: "postgres://${PGUSER}:${PGPASSWORD}@${PGHOST}:5432/${PGDATABASE}?sslmode=require"
+  analytics:
+    driver: mysql
+    # MySQL/OceanBase use go-sql-driver/mysql DSN syntax.
+    dsn: "${MYSQL_USER}:${MYSQL_PASSWORD}@tcp(${MYSQL_HOST}:3306)/${MYSQL_DATABASE}?parseTime=true"
+    # A whole DSN can instead come from a mounted secret:
+    # dsn: "${file:/run/secrets/analytics_dsn}"
 
 tools:
   describeEntities: true
   readRecords: true
   createRecord: true
   updateRecord: true
-  deleteRecord: false      # safe default: off
+  deleteRecord: false # safe default
   executeEntity: true
   aggregateRecords: true
+  beginTransaction: true
+  commitTransaction: true
+  rollbackTransaction: true
 
 cost:
   enabled: true
-  softScore: 60            # 0-100 safety score (higher = safer); >= soft = pass
-  hardScore: 40            # [hard,soft) = soft reject (suggest LIMIT); < hard = hard reject
-  maxRows: 10000           # EnforceCap wraps reads in LIMIT maxRows
+  softScore: 60 # score is 0-100; higher is safer
+  hardScore: 40 # [hard, soft) is a soft reject; below hard is hard reject
+  maxRows: 10000 # deterministic outer LIMIT for read-only SQL
+  maxBytes: 0
   rejectFullScan: true
-  whitelistPKPoint: true   # PK point lookup skips EXPLAIN
-  requirePKForWrite: true  # reject UPDATE/DELETE not scoped to a primary key (default on)
+  whitelistPKPoint: true
+  requirePKForWrite: true
   requireKnownScan: false
   requireFreshStats: false
+  queryTimeout: 30s
+  # Prefer datasource-scoped fp:v2:<sha256> values from reviewed generated SQL.
+  allowTemplates: []
+  rejectTemplates: []
+  aqe:
+    windowSize: 32
+    anomalyFactor: 3
+    anomalyMinSamples: 5
+    explainAnalyze: false # PostgreSQL only; executes the read-only query once more
+    readOnly: true # must remain true when explainAnalyze is enabled
+    sampleRate: 0 # 0..1; opt in with a small non-zero rate
+    timeout: 1s # independent sampling timeout; maximum 5s
+
+budget:
+  roles:
+    reader:
+      maxConcurrent: 8
+      maxExecution: 20s
+      maxScannedRows: 50000
+      maxReturnedRows: 10000
+      maxSessionCost: 100000
+  tenants:
+    tenant-demo:
+      maxConcurrent: 4
+      maxExecution: 10s
+      maxScannedRows: 20000
+      maxReturnedRows: 5000
+      maxSessionCost: 50000
 
 cache:
   enabled: true
   ttl: 30s
   maxSize: 1000
+  preparedMaxSize: 128
 
 rateLimit:
-  enabled: true            # set false to disable adaptive limiting/breaker (e.g. tests)
-  maxInflight: 256         # backpressure queue cap
-  ioPool: 16               # IO concurrency (also DB MaxOpenConns)
-  cpuPool: 8               # CPU concurrency
-  minConcurrency: 1        # AIMD lower bound
-  rttThreshold: 0s         # latency above which AIMD decreases (0 disables)
-  breakerThreshold: 5      # consecutive failures to open the breaker
-  breakerCooldown: 5s      # breaker open duration
-  connMaxIdleTime: 5m      # DB connection idle timeout
+  enabled: true
+  maxInflight: 256
+  ioPool: 16 # also bounds DB MaxOpenConns
+  cpuPool: 8
+  minConcurrency: 1
+  rttThreshold: 0s
+  breakerThreshold: 5
+  breakerCooldown: 5s
+  connMaxIdleTime: 5m
 
 mask:
-  enabled: true        # set false to disable field masking
+  enabled: true
 
 audit:
   enabled: false
-  path: ""
-  queueSize: 1024          # async audit queue capacity (drops + counts when full)
+  path: "./sql-mcp-audit.yaml"
+  queueSize: 1024
+
+transactions:
+  ttl: 5m
+  maxOpen: 128
 
 entities:
   - name: users
-    source: t_user
+    source: app_user
+    datasource: primary
     schema: public
     kind: table
     description: "Registered users"
@@ -72,23 +135,50 @@ entities:
       update: [writer, admin]
       delete: [admin]
       aggregate: [reader, writer, admin]
+    fieldACL:
+      reader:
+        read: [id, tenant_id, email, createdAt]
+        write: []
     rowPolicies:
-      # ${subject.x} is resolved per-request from the authenticated caller's
-      # attributes (set by a trusted gateway via the X-MCP-Subject header, or
-      # injected through mcpserver.WithSubject). A missing attribute resolves to
-      # NULL and matches no rows (fail-closed).
       reader:
         and:
-          - { op: eq, field: tenant_id, value: "${subject.tenant_id}" }
+          - {op: eq, field: tenant_id, value: "${subject.tenant_id}"}
+    relationships:
+      - name: orders
+        target: orders
+        cardinality: many
+        joinOn: {id: user_id}
     fields:
-      - name: id
-        description: "User ID (primary key)"
-      - name: email
-        description: "Email address"
-        mask: email
-      - name: phone
-        exclude: true
-        description: "Phone (sensitive, excluded)"
-      - name: created_at
-        alias: createdAt
-        description: "Registration time"
+      - {name: id, description: "User ID"}
+      - {name: tenant_id, description: "Tenant ID"}
+      - {name: email, description: "Email address", mask: email}
+      - {name: phone, description: "Hidden phone", exclude: true}
+      - {name: created_at, alias: createdAt, description: "Registration time"}
+
+  - name: orders
+    source: orders
+    datasource: primary # relationships must stay on the same datasource
+    schema: public
+    kind: table
+    primaryKey: [id]
+    roles:
+      read: [reader, writer, admin]
+      aggregate: [reader, writer, admin]
+    rowPolicies:
+      reader: {op: eq, field: tenant_id, value: "${subject.tenant_id}"}
+    fields:
+      - {name: id}
+      - {name: user_id}
+      - {name: tenant_id}
+      - {name: total}
+
+  - name: refresh_reporting
+    source: refresh_reporting
+    datasource: analytics
+    kind: procedure
+    params: [tenant_id]
+    roles:
+      execute: [admin]
+    mcp:
+      dmlTools: true
+      customTool: true

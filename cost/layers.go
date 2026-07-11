@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/nethinwei/sql-mcp-server/codegen"
+	"github.com/nethinwei/sql-mcp-server/relalg"
 )
 
 // StaticRule applies whitelist/blacklist checks without EXPLAIN. A primary-key
@@ -13,6 +14,9 @@ import (
 // reject known-bad queries (plan baselines).
 type StaticRule struct {
 	PKWhitelist     bool
+	Datasource      string
+	DialectName     string
+	LegacyExactSQL  bool
 	AllowTemplates  []string
 	RejectTemplates []string
 }
@@ -22,19 +26,15 @@ func (s StaticRule) Name() string { return "static-rule" }
 
 // Check implements Layer.
 func (s StaticRule) Check(_ context.Context, c codegen.Compiled) (Decision, error) {
+	if matchesBaseline(s.RejectTemplates, s.Datasource, s.DialectName, c, s.LegacyExactSQL) {
+		return Decision{Allow: false, Hints: []string{"query matches a rejected template"}}, nil
+	}
 	if s.PKWhitelist && c.IsPKPoint {
 		p := Plan{ScanType: ScanPoint, StatsFresh: true}
 		return Decision{Allow: true, Bypass: true, Plan: &p, Score: ptrScore(ScorePlan(p))}, nil
 	}
-	for _, t := range s.RejectTemplates {
-		if c.SQL == t {
-			return Decision{Allow: false, Hints: []string{"query matches a rejected template"}}, nil
-		}
-	}
-	for _, t := range s.AllowTemplates {
-		if c.SQL == t {
-			return Decision{Allow: true, Bypass: true}, nil
-		}
+	if matchesBaseline(s.AllowTemplates, s.Datasource, s.DialectName, c, s.LegacyExactSQL) {
+		return Decision{Allow: true, Bypass: true}, nil
 	}
 	return Decision{Allow: true}, nil
 }
@@ -59,8 +59,9 @@ func (e Estimate) Check(ctx context.Context, c codegen.Compiled) (Decision, erro
 	}
 	// Calibrate against observed history: trust reality over estimates.
 	if e.Feedback != nil {
-		if avg, ok := e.Feedback.AverageRows(c.SQL); ok && avg > plan.EstimatedRows {
-			plan.EstimatedRows = avg
+		key := Fingerprint(e.Threshold.Datasource, e.Threshold.DialectName, c)
+		if stats, ok := e.Feedback.Stats(key); ok && stats.AverageRows > plan.EstimatedRows {
+			plan.EstimatedRows = stats.AverageRows
 		}
 	}
 	score := ScorePlan(plan)
@@ -131,7 +132,17 @@ func (WriteGuard) Name() string { return "write-guard" }
 
 // Check implements Layer.
 func (WriteGuard) Check(_ context.Context, c codegen.Compiled) (Decision, error) {
-	if c.ReadOnly || c.IsPKPoint {
+	if c.ReadOnly {
+		return Decision{Allow: true}, nil
+	}
+	if c.Expr != nil {
+		switch c.Expr.(type) {
+		case relalg.Update, relalg.Delete:
+		default:
+			return Decision{Allow: true}, nil
+		}
+	}
+	if c.IsPKPoint {
 		return Decision{Allow: true}, nil
 	}
 	return Decision{

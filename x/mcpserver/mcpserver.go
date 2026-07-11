@@ -11,35 +11,69 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/nethinwei/sql-mcp-server/cost"
+	"github.com/nethinwei/sql-mcp-server/entity"
+	"github.com/nethinwei/sql-mcp-server/rbac"
 	"github.com/nethinwei/sql-mcp-server/tool"
+	"github.com/nethinwei/sql-mcp-server/version"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 )
 
+const schemaResourceURI = "sql-mcp://schema"
+
+type appAcquire func() (*bootstrap.App, func(), error)
+
 // NewServer builds an mcp.Server with the app's enabled tools registered.
 func NewServer(app *bootstrap.App) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "sql-mcp-server", Version: "v0.1.0"}, &mcp.ServerOptions{
+	return newServer(func() (*bootstrap.App, func(), error) {
+		return app, func() {}, nil
+	})
+}
+
+// NewRuntimeServer builds a server whose handlers acquire the current app
+// snapshot for every request. Tool discovery reflects the snapshot at server
+// creation; request execution and resources always use the latest snapshot.
+func NewRuntimeServer(runtime *bootstrap.Runtime) *mcp.Server {
+	return newServer(runtime.Acquire)
+}
+
+func newServer(acquire appAcquire) *mcp.Server {
+	app, release, err := acquire()
+	if err != nil {
+		panic(err)
+	}
+	s := mcp.NewServer(&mcp.Implementation{Name: "sql-mcp-server", Version: version.String()}, &mcp.ServerOptions{
 		Instructions: "SQL MCP server with defense-in-depth cost gate and RBAC. " +
 			"Tools are gated by role permissions and a multi-layer cost gate; " +
 			"unsafe writes and over-budget queries are rejected with rewrite hints.",
 	})
 	for _, t := range app.Tools.Enabled(app.ToolFlags) {
-		registerTool(s, t, app)
+		registerTool(s, t, acquire)
 	}
+	for _, e := range app.Registry.Entities() {
+		if e.Kind == entity.KindProcedure && e.MCP.CustomTool {
+			registerTool(s, tool.ProcedureTool{Entity: e}, acquire)
+		}
+	}
+	release()
+	registerSchemaResource(s, acquire)
+	registerPrompts(s)
 	return s
 }
 
-func registerTool(s *mcp.Server, t tool.Tool, app *bootstrap.App) {
+func registerTool(s *mcp.Server, t tool.Tool, acquire appAcquire) {
 	info := t.Info()
 	schema := info.InputSchema
 	if len(schema) == 0 {
 		// go-sdk requires an object-typed input schema. Tools that do not yet
 		// declare a detailed schema get a permissive object; parameters are
-		// still validated inside tool.Run. Detailed schemas are P1.
+		// still validated inside tool.Run.
 		schema = json.RawMessage(`{"type":"object"}`)
 	}
 	mt := &mcp.Tool{
@@ -51,15 +85,148 @@ func registerTool(s *mcp.Server, t tool.Tool, app *bootstrap.App) {
 		mt.Annotations = &mcp.ToolAnnotations{ReadOnlyHint: true}
 	}
 	handler := func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		app, release, err := acquire()
+		if err != nil {
+			return nil, err
+		}
+		defer release()
 		role, subject := subjectFromContext(ctx, app.DefaultRole)
 		tc := app.ToolContextForSubject(role, subject)
-		res, err := tool.RunTool(ctx, t, rawArgs(req), tc)
+		if req.Session != nil {
+			tc.Session = req.Session.ID()
+		}
+		currentRegistered, ok := currentTool(app, info.Name)
+		if !ok {
+			return toResult(tool.ErrUnauthorized)
+		}
+		res, err := tool.RunTool(ctx, currentRegistered, rawArgs(req), tc)
 		if err != nil {
 			return toResult(err)
 		}
 		return toMCPResult(res), nil
 	}
 	s.AddTool(mt, handler)
+}
+
+func currentTool(app *bootstrap.App, name string) (tool.Tool, bool) {
+	if registered, ok := app.Tools.Get(name); ok {
+		if registered.Enabled(app.ToolFlags) {
+			return registered, true
+		}
+		return nil, false
+	}
+	for _, e := range app.Registry.Entities() {
+		if e.Kind == entity.KindProcedure && e.MCP.CustomTool && tool.ProcedureToolName(e.Name) == name {
+			return tool.ProcedureTool{Entity: e}, true
+		}
+	}
+	return nil, false
+}
+
+func registerSchemaResource(s *mcp.Server, acquire appAcquire) {
+	resource := &mcp.Resource{
+		URI:         schemaResourceURI,
+		Name:        "authorized-schema",
+		Title:       "Authorized SQL schema",
+		Description: "Entities and fields visible to the authenticated role and subject",
+		MIMEType:    "application/json",
+	}
+	s.AddResource(resource, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		if req.Params.URI != schemaResourceURI {
+			return nil, mcp.ResourceNotFoundError(req.Params.URI)
+		}
+		app, release, err := acquire()
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+		role, subject := subjectFromContext(ctx, app.DefaultRole)
+		payload, err := authorizedSchema(ctx, app, role, subject)
+		if err != nil {
+			return nil, err
+		}
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{
+			URI: schemaResourceURI, MIMEType: "application/json", Text: string(data),
+		}}}, nil
+	})
+}
+
+func authorizedSchema(ctx context.Context, app *bootstrap.App, role string, subject map[string]any) (map[string]any, error) {
+	entities := make([]map[string]any, 0)
+	for _, e := range app.Registry.Entities() {
+		if e.Kind == entity.KindProcedure || !e.MCP.DMLTools {
+			continue
+		}
+		read, err := app.Authorizer.Authorize(ctx, rbac.Request{
+			Role: role, Subject: subject, Entity: e.Name, Action: entity.ActionRead,
+		})
+		if err != nil {
+			return nil, err
+		}
+		aggregate, err := app.Authorizer.Authorize(ctx, rbac.Request{
+			Role: role, Subject: subject, Entity: e.Name, Action: entity.ActionAggregate,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if !read.Allowed && !aggregate.Allowed {
+			continue
+		}
+		fieldNames := read.Fields
+		if !read.Allowed {
+			fieldNames = aggregate.Fields
+		}
+		fields := make([]map[string]any, 0, len(fieldNames))
+		for _, name := range fieldNames {
+			if attr, ok := e.AttributeByName(name); ok {
+				fields = append(fields, map[string]any{
+					"name": attr.Name, "alias": attr.Alias, "type": attr.Domain.Type,
+					"description": attr.Description, "masked": attr.Mask != "",
+				})
+			}
+		}
+		actions := make([]string, 0, 2)
+		if read.Allowed {
+			actions = append(actions, "read")
+		}
+		if aggregate.Allowed {
+			actions = append(actions, "aggregate")
+		}
+		entities = append(entities, map[string]any{
+			"name": e.Name, "description": e.Description, "fields": fields,
+			"actions": actions, "rowScoped": e.RowPolicies[role] != nil,
+		})
+	}
+	return map[string]any{"role": role, "entities": entities}, nil
+}
+
+func registerPrompts(s *mcp.Server) {
+	addPrompt := func(name, description, argument, text string) {
+		s.AddPrompt(&mcp.Prompt{
+			Name: name, Description: description,
+			Arguments: []*mcp.PromptArgument{{
+				Name: argument, Description: "User request or failed tool input", Required: true,
+			}},
+		}, func(_ context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+			return &mcp.GetPromptResult{
+				Description: description,
+				Messages: []*mcp.PromptMessage{{
+					Role:    "user",
+					Content: &mcp.TextContent{Text: text + "\n\nRequest:\n" + req.Params.Arguments[argument]},
+				}},
+			}, nil
+		})
+	}
+	addPrompt("safe_read", "Build a bounded, authorized read_records call", "request",
+		"Use the authorized-schema resource first. Call only read_records, select only visible fields, add the narrowest supported filter, and set a conservative limit. Never invent entities or fields.")
+	addPrompt("safe_aggregate", "Build a bounded, authorized aggregate_records call", "request",
+		"Use the authorized-schema resource first. Call only aggregate_records with visible fields, a narrow filter, and the minimum grouping needed. Do not request raw rows or bypass row scope.")
+	addPrompt("rewrite_query", "Rewrite a rejected request using safety hints", "request",
+		"Rewrite the failed MCP tool input without weakening authorization or cost controls. Preserve intent, narrow filters, reduce fields and limits, and follow returned cost-gate hints. Never switch datasources or use raw SQL.")
 }
 
 func rawArgs(req *mcp.CallToolRequest) json.RawMessage {
@@ -94,8 +261,12 @@ func toResult(err error) (*mcp.CallToolResult, error) {
 	switch {
 	case errors.Is(err, tool.ErrUnauthorized),
 		errors.Is(err, tool.ErrEntityNotFound),
+		errors.Is(err, tool.ErrDMLToolsDisabled),
 		errors.Is(err, tool.ErrUnsafeWrite),
 		errors.Is(err, tool.ErrInvalidInput),
+		errors.Is(err, tool.ErrTransactionNotFound),
+		errors.Is(err, tool.ErrTransactionScope),
+		errors.Is(err, tool.ErrTransactionCapacity),
 		errors.Is(err, tool.ErrNotImplemented):
 		return &mcp.CallToolResult{
 			IsError: true,
@@ -152,7 +323,10 @@ func withRequestSubject(next http.Handler) http.Handler {
 		role := r.Header.Get("X-MCP-Role")
 		var attrs map[string]any
 		if raw := r.Header.Get("X-MCP-Subject"); raw != "" {
-			_ = json.Unmarshal([]byte(raw), &attrs)
+			if err := json.Unmarshal([]byte(raw), &attrs); err != nil || attrs == nil {
+				http.Error(w, "invalid X-MCP-Subject: expected a JSON object", http.StatusBadRequest)
+				return
+			}
 		}
 		if role != "" || attrs != nil {
 			r = r.WithContext(WithSubject(r.Context(), role, attrs))
@@ -168,6 +342,7 @@ type HTTPConfig struct {
 	Addr              string
 	Token             string // shared-secret bearer token; empty disables token auth
 	TrustProxyHeaders bool   // trust X-MCP-Role/X-MCP-Subject identity headers
+	TrustedProxyCIDRs []string
 	TLSCert           string
 	TLSKey            string
 	ClientCA          string // PEM bundle; when set, require+verify a client cert (mTLS)
@@ -178,6 +353,8 @@ type HTTPConfig struct {
 	MaxHeaderBytes    int
 	MaxBodyBytes      int64
 	Metrics           http.Handler
+	SessionTimeout    time.Duration
+	OnSessionClosed   func(string)
 }
 
 func (c HTTPConfig) tlsEnabled() bool  { return c.TLSCert != "" && c.TLSKey != "" }
@@ -210,13 +387,51 @@ func isLoopbackAddr(addr string) bool {
 // loopback must configure authentication (token or mTLS); mTLS requires a
 // server certificate.
 func validateHTTPSecurity(c HTTPConfig) error {
+	if (c.TLSCert == "") != (c.TLSKey == "") {
+		return errors.New("mcpserver: tls.cert and tls.key must be configured together")
+	}
 	if !isLoopbackAddr(c.Addr) && !c.authConfigured() {
 		return fmt.Errorf("mcpserver: refusing to serve on non-loopback address %q without authentication: set server.auth.token or server.auth.tls.clientCA, or bind to 127.0.0.1", c.Addr)
 	}
 	if c.mtlsEnabled() && !c.tlsEnabled() {
 		return errors.New("mcpserver: mTLS (clientCA) requires a server certificate (tls.cert/tls.key)")
 	}
+	if c.TrustProxyHeaders && !c.mtlsEnabled() && len(c.TrustedProxyCIDRs) == 0 {
+		return errors.New("mcpserver: TrustProxyHeaders requires mTLS or at least one trusted proxy CIDR")
+	}
+	if _, err := parseTrustedProxyCIDRs(c.TrustedProxyCIDRs); err != nil {
+		return err
+	}
 	return nil
+}
+
+func parseTrustedProxyCIDRs(values []string) ([]*net.IPNet, error) {
+	nets := make([]*net.IPNet, 0, len(values))
+	for _, value := range values {
+		_, network, err := net.ParseCIDR(value)
+		if err != nil {
+			return nil, fmt.Errorf("mcpserver: invalid trusted proxy CIDR %q: %w", value, err)
+		}
+		nets = append(nets, network)
+	}
+	return nets, nil
+}
+
+func trustedProxyOnly(networks []*net.IPNet, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			host = r.RemoteAddr
+		}
+		ip := net.ParseIP(host)
+		for _, network := range networks {
+			if ip != nil && network.Contains(ip) {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		http.Error(w, "untrusted proxy", http.StatusForbidden)
+	})
 }
 
 // tokenAuth rejects requests lacking a matching bearer token. Comparison is
@@ -244,6 +459,97 @@ func limitBody(maxBytes int64, next http.Handler) http.Handler {
 	})
 }
 
+type sessionEventStore struct {
+	mcp.EventStore
+	onClosed func(string)
+	identity *sessionIdentityStore
+}
+
+func (s *sessionEventStore) SessionClosed(ctx context.Context, sessionID string) error {
+	err := s.EventStore.SessionClosed(ctx, sessionID)
+	if s.identity != nil {
+		s.identity.close(sessionID)
+	}
+	if s.onClosed != nil {
+		s.onClosed(sessionID)
+	}
+	return err
+}
+
+const sessionIDHeader = "Mcp-Session-Id"
+
+type sessionIdentity struct {
+	role    string
+	subject string
+}
+
+type sessionIdentityStore struct {
+	mu       sync.RWMutex
+	sessions map[string]sessionIdentity
+}
+
+func newSessionIdentityStore() *sessionIdentityStore {
+	return &sessionIdentityStore{sessions: make(map[string]sessionIdentity)}
+}
+
+func requestIdentity(ctx context.Context) sessionIdentity {
+	subject, _ := ctx.Value(subjectCtxKey{}).(requestSubject)
+	role := strings.TrimSpace(subject.role)
+	attrs := ""
+	if len(subject.attrs) > 0 {
+		// encoding/json sorts map keys, giving semantically identical header
+		// objects one stable identity regardless of input key order.
+		if encoded, err := json.Marshal(subject.attrs); err == nil {
+			attrs = string(encoded)
+		}
+	}
+	return sessionIdentity{role: role, subject: attrs}
+}
+
+func (s *sessionIdentityStore) bind(sessionID string, identity sessionIdentity) bool {
+	if sessionID == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing, ok := s.sessions[sessionID]; ok {
+		return existing == identity
+	}
+	s.sessions[sessionID] = identity
+	return true
+}
+
+func (s *sessionIdentityStore) matches(sessionID string, identity sessionIdentity) bool {
+	s.mu.RLock()
+	existing, ok := s.sessions[sessionID]
+	s.mu.RUnlock()
+	return ok && existing == identity
+}
+
+func (s *sessionIdentityStore) close(sessionID string) {
+	s.mu.Lock()
+	delete(s.sessions, sessionID)
+	s.mu.Unlock()
+}
+
+func bindSessionIdentity(store *sessionIdentityStore, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		identity := requestIdentity(r.Context())
+		sessionID := strings.TrimSpace(r.Header.Get(sessionIDHeader))
+		switch r.Method {
+		case http.MethodPost, http.MethodGet, http.MethodDelete:
+			if sessionID != "" && !store.matches(sessionID, identity) {
+				http.Error(w, "MCP session identity mismatch", http.StatusForbidden)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+		if sessionID == "" && r.Method == http.MethodPost {
+			_ = store.bind(strings.TrimSpace(w.Header().Get(sessionIDHeader)), identity)
+		}
+	})
+}
+
 // ServeHTTP runs the server on streamable HTTP with authentication, request
 // hardening (timeouts, header/body caps), a /healthz check, and an optional
 // /metrics endpoint. See HTTPConfig for the security model.
@@ -263,11 +569,26 @@ func ServeHTTP(ctx context.Context, s *mcp.Server, cfg HTTPConfig) error {
 	if cfg.MaxBodyBytes <= 0 {
 		cfg.MaxBodyBytes = 4 << 20 // 4 MiB
 	}
+	if cfg.SessionTimeout <= 0 {
+		cfg.SessionTimeout = 5 * time.Minute
+	}
 
-	var mcpHandler http.Handler = mcp.NewStreamableHTTPHandler(func(_ *http.Request) *mcp.Server { return s }, nil)
+	identities := newSessionIdentityStore()
+	eventStore := &sessionEventStore{
+		EventStore: mcp.NewMemoryEventStore(nil), onClosed: cfg.OnSessionClosed, identity: identities,
+	}
+	var mcpHandler http.Handler = mcp.NewStreamableHTTPHandler(
+		func(_ *http.Request) *mcp.Server { return s },
+		&mcp.StreamableHTTPOptions{EventStore: eventStore, SessionTimeout: cfg.SessionTimeout},
+	)
+	mcpHandler = bindSessionIdentity(identities, mcpHandler)
 	// Identity headers are trusted only behind an authenticating gateway.
 	if cfg.TrustProxyHeaders {
 		mcpHandler = withRequestSubject(mcpHandler)
+		if !cfg.mtlsEnabled() {
+			networks, _ := parseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
+			mcpHandler = trustedProxyOnly(networks, mcpHandler)
+		}
 	}
 	mcpHandler = limitBody(cfg.MaxBodyBytes, mcpHandler)
 	if cfg.Token != "" {

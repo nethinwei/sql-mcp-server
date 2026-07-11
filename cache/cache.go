@@ -6,11 +6,12 @@ import (
 	"time"
 )
 
-// Key identifies a cached entry: the entity and the parameterized SQL + args.
+// Key identifies a cached entry. Scope separates authorization/RLS identities.
 type Key struct {
 	Entity string
 	SQL    string
 	Args   string
+	Scope  string
 }
 
 // Cache is a generic read cache with per-table invalidation.

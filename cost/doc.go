@@ -7,11 +7,12 @@
 // layer may reject; a single layer's failure is not fatal.
 //
 // Runtime/DB-native guards sit beneath this synchronous gate:
-//   - statement_timeout is enforced by context.WithTimeout around each DB call
-//     (the driver cancels the query when the deadline fires).
-//   - max_read_size / sql_safe_updates are DB session variables; *sql.DB pools
-//     have no per-connection init hook, so these are not auto-set here. Set them
-//     at the database/user level for production hardening.
+//   - context.WithTimeout plus QueryContext/ExecContext is the portable
+//     cancellation contract. Drivers are responsible for propagating it.
+//   - native statement/scan timeouts are not SET per request: *sql.DB may run
+//     the SET and query on different pooled connections. Configure those at the
+//     database/user level. MySQL-compatible providers do set sql_safe_updates
+//     through the DSN, which applies when each connection is established.
 //
 // Estimate failure (bad EXPLAIN, plan drift) degrades to Plan{ScanUnknown,
 // !StatsFresh} rather than panicking (Murphy); RequireKnownScan/RequireFreshStats

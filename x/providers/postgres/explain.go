@@ -4,10 +4,19 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
+	"time"
 
+	"github.com/nethinwei/sql-mcp-server/codegen"
 	"github.com/nethinwei/sql-mcp-server/cost"
+	"github.com/nethinwei/sql-mcp-server/store"
 )
+
+// ErrAnalyzeRequiresReadOnly protects the provider boundary from executing
+// EXPLAIN ANALYZE for statements not marked read-only by codegen.
+var ErrAnalyzeRequiresReadOnly = errors.New("postgres: EXPLAIN ANALYZE requires a codegen read-only query")
 
 // pgExplainer estimates a plan by running EXPLAIN (FORMAT JSON).
 type pgExplainer struct {
@@ -35,8 +44,8 @@ func (e pgExplainer) Explain(ctx context.Context, query string, args []any) (cos
 	if err != nil {
 		return p, err
 	}
-	if root.RelationName != "" {
-		p.StatsFresh = e.statsFresh(ctx, root.RelationName)
+	if relation := relationForScan(root, p.ScanType); relation != "" {
+		p.StatsFresh = e.statsFresh(ctx, relation)
 	}
 	return p, nil
 }
@@ -60,12 +69,90 @@ type pgPlanNode struct {
 	RelationName    string       `json:"Relation Name"`
 	TotalCost       float64      `json:"Total Cost"`
 	PlanRows        int64        `json:"Plan Rows"`
+	ActualRows      int64        `json:"Actual Rows"`
+	ActualLoops     int64        `json:"Actual Loops"`
 	SubplansRemoved int          `json:"Subplans Removed"`
 	Plans           []pgPlanNode `json:"Plans"`
 }
 
 type pgExplainRow struct {
-	Plan pgPlanNode `json:"Plan"`
+	Plan          pgPlanNode `json:"Plan"`
+	ExecutionTime float64    `json:"Execution Time"`
+}
+
+// ExplainAnalyze implements cost.AnalyzeSampler. EXPLAIN ANALYZE executes the
+// compiled read-only statement once more; callers must apply a separate,
+// tightly bounded sampling context.
+func (p *Provider) ExplainAnalyze(ctx context.Context, compiled codegen.Compiled) (plan cost.Plan, err error) {
+	if !compiled.ReadOnly {
+		return cost.Plan{}, ErrAnalyzeRequiresReadOnly
+	}
+	beginner := p.analyzeTx
+	if beginner == nil {
+		beginner = p
+	}
+	tx, err := beginner.BeginTx(ctx, &store.TxOptions{ReadOnly: true})
+	if err != nil {
+		return cost.Plan{}, err
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(); err == nil && rollbackErr != nil {
+			err = rollbackErr
+		}
+	}()
+	rows, err := tx.QueryContext(ctx,
+		"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+compiled.SQL,
+		compiled.Args...,
+	)
+	if err != nil {
+		return cost.Plan{}, err
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return cost.Plan{}, err
+		}
+		return cost.Plan{}, errors.New("postgres: EXPLAIN ANALYZE returned no plan")
+	}
+	var raw any
+	if err := rows.Scan(&raw); err != nil {
+		return cost.Plan{}, err
+	}
+	var encoded []byte
+	switch value := raw.(type) {
+	case string:
+		encoded = []byte(value)
+	case []byte:
+		encoded = value
+	default:
+		return cost.Plan{}, fmt.Errorf("postgres: unexpected EXPLAIN ANALYZE result %T", raw)
+	}
+	return parsePGExplainAnalyze(encoded)
+}
+
+func parsePGExplainAnalyze(b []byte) (cost.Plan, error) {
+	p, _, err := parsePGExplain(b)
+	if err != nil {
+		return p, err
+	}
+	var arr []pgExplainRow
+	if err := json.Unmarshal(b, &arr); err != nil {
+		return cost.Plan{ScanType: cost.ScanUnknown, Raw: b}, fmt.Errorf("postgres: parse EXPLAIN ANALYZE JSON: %w", err)
+	}
+	if len(arr) == 0 {
+		return cost.Plan{ScanType: cost.ScanUnknown, Raw: b}, errors.New("postgres: empty EXPLAIN ANALYZE plan")
+	}
+	p.ActualRows = actualRowsProcessed(arr[0].Plan)
+	p.ExecutionTime = time.Duration(arr[0].ExecutionTime * float64(time.Millisecond))
+	return p, nil
+}
+
+func actualRowsProcessed(node pgPlanNode) int64 {
+	rows := node.ActualRows * node.ActualLoops
+	for _, child := range node.Plans {
+		rows += actualRowsProcessed(child)
+	}
+	return rows
 }
 
 // parsePGExplain parses EXPLAIN (FORMAT JSON) output, walking the plan tree to
@@ -91,8 +178,16 @@ func parsePGExplain(b []byte) (cost.Plan, pgPlanNode, error) {
 	return p, root, nil
 }
 
-// walkPlan recurses the plan tree, setting HasSort/HasTempTable/PartitionPruned.
+// walkPlan recurses the plan tree, retaining the riskiest concrete scan and
+// the largest row estimate rather than classifying only a wrapper root node.
 func walkPlan(n pgPlanNode, p *cost.Plan) {
+	if scan := pgScanType(n.NodeType); scan != cost.ScanUnknown &&
+		(p.ScanType == cost.ScanUnknown || scanRisk(scan) > scanRisk(p.ScanType)) {
+		p.ScanType = scan
+	}
+	if n.PlanRows > p.EstimatedRows {
+		p.EstimatedRows = n.PlanRows
+	}
 	switch n.NodeType {
 	case "Sort":
 		p.HasSort = true
@@ -105,6 +200,33 @@ func walkPlan(n pgPlanNode, p *cost.Plan) {
 	for _, sub := range n.Plans {
 		walkPlan(sub, p)
 	}
+}
+
+func scanRisk(scan cost.ScanType) int {
+	switch scan {
+	case cost.ScanFull:
+		return 4
+	case cost.ScanSeq:
+		return 3
+	case cost.ScanIndex:
+		return 2
+	case cost.ScanPoint:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func relationForScan(node pgPlanNode, scan cost.ScanType) string {
+	if pgScanType(node.NodeType) == scan && node.RelationName != "" {
+		return node.RelationName
+	}
+	for _, child := range node.Plans {
+		if relation := relationForScan(child, scan); relation != "" {
+			return relation
+		}
+	}
+	return ""
 }
 
 func pgScanType(node string) cost.ScanType {

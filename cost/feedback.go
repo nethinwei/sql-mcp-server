@@ -8,18 +8,27 @@ import (
 // Feedback records one observed execution for a query template, used to
 // calibrate future estimates against reality.
 type Feedback struct {
-	Template string
-	Rows     int64
-	Duration time.Duration
+	Template      string
+	EstimatedRows int64
+	ActualRows    int64
+	Rows          int64 // deprecated alias for ActualRows
+	Duration      time.Duration
 }
 
-// FeedbackStore records observed executions and answers average-row queries,
-// so the Estimate layer can be calibrated against actual behavior over time.
-// This is the feedback half of the cost gate's self-correction (P1 wires the
-// Estimate layer to consult it).
+// Statistics is a bounded-window summary for one fingerprint.
+type Statistics struct {
+	Samples       int
+	AverageRows   int64
+	AverageTime   time.Duration
+	LatestRows    int64
+	LatestTime    time.Duration
+	EstimatedRows int64
+}
+
+// FeedbackStore records observed executions and exposes bounded statistics.
 type FeedbackStore interface {
 	Record(f Feedback)
-	AverageRows(template string) (rows int64, ok bool)
+	Stats(template string) (Statistics, bool)
 }
 
 // NoopFeedbackStore discards feedback.
@@ -28,40 +37,118 @@ type NoopFeedbackStore struct{}
 // Record implements FeedbackStore.
 func (NoopFeedbackStore) Record(Feedback) {}
 
-// AverageRows implements FeedbackStore.
-func (NoopFeedbackStore) AverageRows(string) (int64, bool) { return 0, false }
+// Stats implements FeedbackStore.
+func (NoopFeedbackStore) Stats(string) (Statistics, bool) { return Statistics{}, false }
 
-type avg struct {
-	sum int64
-	n   int64
-}
-
-// MemoryStore keeps per-template average row counts in memory.
+// MemoryStore keeps a bounded sliding window per fingerprint.
 type MemoryStore struct {
-	mu sync.Mutex
-	m  map[string]avg
+	mu                sync.Mutex
+	windowSize        int
+	anomalyFactor     float64
+	anomalyMinSamples int
+	invalidator       PlanInvalidator
+	m                 map[string][]Feedback
 }
 
 // NewMemoryStore returns an in-memory FeedbackStore.
-func NewMemoryStore() *MemoryStore { return &MemoryStore{m: map[string]avg{}} }
+func NewMemoryStore() *MemoryStore { return NewMemoryStoreWithWindow(32) }
+
+// NewMemoryStoreWithWindow returns a store retaining at most size samples per
+// fingerprint.
+func NewMemoryStoreWithWindow(size int) *MemoryStore {
+	return NewAdaptiveMemoryStore(size, 3, 5, nil)
+}
+
+// NewAdaptiveMemoryStore additionally invalidates a plan when a new actual-row
+// count exceeds the prior window average by factor.
+func NewAdaptiveMemoryStore(size int, factor float64, minSamples int, invalidator PlanInvalidator) *MemoryStore {
+	if size <= 0 {
+		size = 32
+	}
+	if factor <= 1 {
+		factor = 3
+	}
+	if minSamples <= 0 {
+		minSamples = 5
+	}
+	return &MemoryStore{
+		windowSize: size, anomalyFactor: factor, anomalyMinSamples: minSamples,
+		invalidator: invalidator, m: map[string][]Feedback{},
+	}
+}
 
 // Record implements FeedbackStore.
 func (s *MemoryStore) Record(f Feedback) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	a := s.m[f.Template]
-	a.sum += f.Rows
-	a.n++
-	s.m[f.Template] = a
+	if f.ActualRows == 0 && f.Rows != 0 {
+		f.ActualRows = f.Rows
+	}
+	previous := s.m[f.Template]
+	anomalous := false
+	if len(previous) >= s.anomalyMinSamples {
+		var total int64
+		for _, sample := range previous {
+			total += sample.ActualRows
+		}
+		average := total / int64(len(previous))
+		anomalous = average > 0 && float64(f.ActualRows) > float64(average)*s.anomalyFactor
+	}
+	samples := append(previous, f)
+	if len(samples) > s.windowSize {
+		samples = append([]Feedback(nil), samples[len(samples)-s.windowSize:]...)
+	}
+	s.m[f.Template] = samples
+	invalidator := s.invalidator
+	s.mu.Unlock()
+	if anomalous && invalidator != nil {
+		invalidator.InvalidatePlan(f.Template)
+	}
 }
 
-// AverageRows implements FeedbackStore.
+// AverageRows is retained for source compatibility; new code should use Stats.
 func (s *MemoryStore) AverageRows(template string) (int64, bool) {
+	stats, ok := s.Stats(template)
+	return stats.AverageRows, ok
+}
+
+// AverageRows is retained for source compatibility.
+func (NoopFeedbackStore) AverageRows(string) (int64, bool) { return 0, false }
+
+// Stats implements FeedbackStore.
+func (s *MemoryStore) Stats(template string) (Statistics, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	a, ok := s.m[template]
-	if !ok || a.n == 0 {
-		return 0, false
+	samples := s.m[template]
+	if len(samples) == 0 {
+		return Statistics{}, false
 	}
-	return a.sum / a.n, true
+	var rows int64
+	var duration time.Duration
+	for _, sample := range samples {
+		rows += sample.ActualRows
+		duration += sample.Duration
+	}
+	latest := samples[len(samples)-1]
+	return Statistics{
+		Samples:       len(samples),
+		AverageRows:   rows / int64(len(samples)),
+		AverageTime:   duration / time.Duration(len(samples)),
+		LatestRows:    latest.ActualRows,
+		LatestTime:    latest.Duration,
+		EstimatedRows: latest.EstimatedRows,
+	}, true
+}
+
+// Anomalous reports a sudden increase over the preceding bounded history.
+// At least minSamples historical samples are required to avoid cold-start
+// noise. factor values <= 1 use the conservative default of 3.
+func (s *MemoryStore) Anomalous(template string, factor float64, minSamples int) bool {
+	stats, ok := s.Stats(template)
+	if !ok || stats.Samples < minSamples || stats.AverageRows <= 0 {
+		return false
+	}
+	if factor <= 1 {
+		factor = 3
+	}
+	return float64(stats.LatestRows) > float64(stats.AverageRows)*factor
 }

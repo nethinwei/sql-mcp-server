@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/ratelimit"
@@ -29,6 +28,7 @@ type config struct {
 	io, cpu, inflight int
 	limiter           *ratelimit.Adaptive
 	breaker           *ratelimit.Breaker
+	recordFailure     func(error) bool
 }
 
 // WithIOPool sets the IO concurrency (<= DB connection pool size).
@@ -46,14 +46,25 @@ func WithLimiter(l *ratelimit.Adaptive) Option { return func(c *config) { c.limi
 // WithBreaker attaches a circuit breaker.
 func WithBreaker(b *ratelimit.Breaker) Option { return func(c *config) { c.breaker = b } }
 
+// WithFailureClassifier decides whether a non-nil execution error represents
+// provider/system health and should affect AIMD and the circuit breaker.
+func WithFailureClassifier(classify func(error) bool) Option {
+	return func(c *config) { c.recordFailure = classify }
+}
+
 // Engine bounds concurrency and deduplicates concurrent identical requests.
 type Engine struct {
-	iosem    chan struct{}
-	inflight chan struct{}
-	sf       singleflight
-	limiter  *ratelimit.Adaptive
-	breaker  *ratelimit.Breaker
-	closed   atomic.Bool
+	iosem         chan struct{}
+	cpusem        chan struct{}
+	inflight      chan struct{}
+	sf            singleflight
+	limiter       *ratelimit.Adaptive
+	breaker       *ratelimit.Breaker
+	recordFailure func(error) bool
+	stateMu       sync.Mutex
+	closed        bool
+	active        sync.WaitGroup
+	executions    sync.WaitGroup
 }
 
 // New returns an Engine with the given options and sane defaults.
@@ -68,12 +79,24 @@ func New(opts ...Option) (*Engine, error) {
 		return nil, ErrInvalidConfig
 	}
 	return &Engine{
-		iosem:    make(chan struct{}, cfg.io),
-		inflight: make(chan struct{}, cfg.inflight),
-		limiter:  cfg.limiter,
-		breaker:  cfg.breaker,
+		iosem:         make(chan struct{}, cfg.io),
+		cpusem:        make(chan struct{}, cfg.cpu),
+		inflight:      make(chan struct{}, cfg.inflight),
+		limiter:       cfg.limiter,
+		breaker:       cfg.breaker,
+		recordFailure: cfg.recordFailure,
 	}, nil
 }
+
+// WorkClass selects the resource pool used by a submission.
+type WorkClass uint8
+
+const (
+	// WorkIO is database or network work and uses the IO pool.
+	WorkIO WorkClass = iota
+	// WorkCPU is compute-heavy work and uses the CPU pool.
+	WorkCPU
+)
 
 // Submit schedules fn under backpressure and returns fn's result value and
 // error. It returns ErrOverloaded if the in-flight queue is full, ErrCircuitOpen
@@ -82,9 +105,25 @@ func New(opts ...Option) (*Engine, error) {
 // (singleflight) and all receive the leader's result. An empty key opts out of
 // de-duplication (writes/unique ops). Panics in fn are recovered as errors.
 func (e *Engine) Submit(ctx context.Context, key string, fn func(context.Context) (any, error)) (any, error) {
-	if e.closed.Load() {
+	return e.SubmitClass(ctx, WorkIO, key, fn)
+}
+
+// SubmitCPU schedules compute-heavy work on the CPU pool.
+func (e *Engine) SubmitCPU(ctx context.Context, key string, fn func(context.Context) (any, error)) (any, error) {
+	return e.SubmitClass(ctx, WorkCPU, key, fn)
+}
+
+// SubmitClass schedules fn on the selected resource pool. Submit remains the
+// backwards-compatible IO entry point.
+func (e *Engine) SubmitClass(ctx context.Context, class WorkClass, key string, fn func(context.Context) (any, error)) (any, error) {
+	e.stateMu.Lock()
+	if e.closed {
+		e.stateMu.Unlock()
 		return nil, ErrClosed
 	}
+	e.active.Add(1)
+	e.stateMu.Unlock()
+	defer e.active.Done()
 	if e.breaker != nil {
 		if err := e.breaker.Allow(); err != nil {
 			return nil, err
@@ -96,35 +135,42 @@ func (e *Engine) Submit(ctx context.Context, key string, fn func(context.Context
 		return nil, ErrOverloaded
 	}
 	defer func() { <-e.inflight }()
-	exec := func() (any, error) {
+	exec := func(runCtx context.Context) (any, error) {
 		// AIMD admission: reject fast when concurrency exceeds the adaptive
-		// limit, then bound IO concurrency by the pool semaphore.
-		if e.limiter != nil {
+		// limit for IO work, then use the selected resource semaphore.
+		if class == WorkIO && e.limiter != nil {
 			if err := e.limiter.Acquire(); err != nil {
 				return nil, err
 			}
 			defer e.limiter.Release()
 		}
+		sem := e.iosem
+		if class == WorkCPU {
+			sem = e.cpusem
+		}
 		select {
-		case e.iosem <- struct{}{}:
-		case <-ctx.Done():
-			return nil, ctx.Err()
+		case sem <- struct{}{}:
+		case <-runCtx.Done():
+			return nil, runCtx.Err()
 		}
-		defer func() { <-e.iosem }()
+		defer func() { <-sem }()
 		start := time.Now()
-		val, err := e.runSafe(ctx, fn)
-		if e.limiter != nil {
-			e.limiter.OnResult(err, time.Since(start))
-		}
-		if e.breaker != nil {
-			e.breaker.Record(err == nil)
+		val, err := e.runSafe(runCtx, fn)
+		record := err == nil || e.recordFailure == nil || e.recordFailure(err)
+		if record {
+			if e.limiter != nil {
+				e.limiter.OnResult(err, time.Since(start))
+			}
+			if e.breaker != nil {
+				e.breaker.Record(err == nil)
+			}
 		}
 		return val, err
 	}
 	if key == "" {
-		return exec()
+		return exec(ctx)
 	}
-	return e.sf.Do(key, exec)
+	return e.sf.Do(ctx, fmt.Sprintf("%d\x00%s", class, key), &e.executions, exec)
 }
 
 // runSafe recovers panics from fn so a single bad call cannot crash the process.
@@ -137,8 +183,28 @@ func (e *Engine) runSafe(ctx context.Context, fn func(context.Context) (any, err
 	return fn(ctx)
 }
 
-// Close marks the engine closed; subsequent Submit returns ErrClosed.
-func (e *Engine) Close() { e.closed.Store(true) }
+// Drain rejects new submissions and waits for admitted callers and detached
+// singleflight execution goroutines to return.
+func (e *Engine) Drain(ctx context.Context) error {
+	e.stateMu.Lock()
+	e.closed = true
+	e.stateMu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		e.active.Wait()
+		e.executions.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Close rejects new work and waits for all in-flight submissions.
+func (e *Engine) Close() { _ = e.Drain(context.Background()) }
 
 // singleflight deduplicates concurrent calls by key using only the standard
 // library. Waiters receive the leader's result value and error.
@@ -148,34 +214,54 @@ type singleflight struct {
 }
 
 type call struct {
-	wg  sync.WaitGroup
-	val any
-	err error
+	done    chan struct{}
+	cancel  context.CancelFunc
+	waiters int
+	val     any
+	err     error
 }
 
 // Do executes fn once for concurrent callers with the same key; all callers
-// receive the same result value and error. wg.Done and map cleanup are deferred
-// so a panic in fn cannot deadlock waiters.
-func (s *singleflight) Do(key string, fn func() (any, error)) (any, error) {
+// receive the same result value and error. Completion signaling and map cleanup
+// are deferred so a panic in fn cannot deadlock waiters.
+func (s *singleflight) Do(ctx context.Context, key string, executions *sync.WaitGroup, fn func(context.Context) (any, error)) (any, error) {
 	s.mu.Lock()
 	if s.m == nil {
 		s.m = make(map[string]*call)
 	}
 	if c, ok := s.m[key]; ok {
+		c.waiters++
 		s.mu.Unlock()
-		c.wg.Wait()
-		return c.val, c.err
+		return s.wait(ctx, c)
 	}
-	c := &call{}
-	c.wg.Add(1)
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	c := &call{done: make(chan struct{}), cancel: cancel, waiters: 1}
 	s.m[key] = c
+	executions.Add(1)
 	s.mu.Unlock()
-	defer func() {
+	go func() {
+		defer executions.Done()
+		c.val, c.err = fn(runCtx)
+		cancel()
 		s.mu.Lock()
 		delete(s.m, key)
 		s.mu.Unlock()
+		close(c.done)
 	}()
-	defer c.wg.Done()
-	c.val, c.err = fn()
-	return c.val, c.err
+	return s.wait(ctx, c)
+}
+
+func (s *singleflight) wait(ctx context.Context, c *call) (any, error) {
+	select {
+	case <-c.done:
+		return c.val, c.err
+	case <-ctx.Done():
+		s.mu.Lock()
+		c.waiters--
+		if c.waiters == 0 {
+			c.cancel()
+		}
+		s.mu.Unlock()
+		return nil, ctx.Err()
+	}
 }

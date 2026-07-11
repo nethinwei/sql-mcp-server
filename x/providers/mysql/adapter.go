@@ -14,8 +14,8 @@ import (
 // savepointName validates a savepoint name (not parameterized in SQL).
 var savepointName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
-// Adapter wraps *sql.DB for the MySQL protocol, satisfying store.DB,
-// store.TxBeginner, and store.Canceler. Shared with the oceanbase provider.
+// Adapter wraps *sql.DB for the MySQL protocol, satisfying store.DB and
+// store.TxBeginner. Shared with the oceanbase provider.
 type Adapter struct {
 	db *sql.DB
 }
@@ -69,6 +69,15 @@ func (a *Adapter) ExecContext(ctx context.Context, query string, args ...any) (s
 	return store.Result{LastInsertID: li, RowsAffected: ra}, nil
 }
 
+// PrepareContext implements store.Preparer for MySQL and OceanBase.
+func (a *Adapter) PrepareContext(ctx context.Context, query string) (store.Prepared, error) {
+	stmt, err := a.db.PrepareContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	return stmtAdapter{Stmt: stmt}, nil
+}
+
 // BeginTx implements store.TxBeginner.
 func (a *Adapter) BeginTx(ctx context.Context, opts *store.TxOptions) (store.Tx, error) {
 	tx, err := a.db.BeginTx(ctx, toSqlOpts(opts))
@@ -76,12 +85,6 @@ func (a *Adapter) BeginTx(ctx context.Context, opts *store.TxOptions) (store.Tx,
 		return nil, err
 	}
 	return &txAdapter{tx: tx}, nil
-}
-
-// CancelQuery implements store.Canceler via KILL QUERY.
-func (a *Adapter) CancelQuery(ctx context.Context, connID int64) error {
-	_, err := a.db.ExecContext(ctx, fmt.Sprintf("KILL QUERY %d", connID))
-	return err
 }
 
 // Close closes the pool.
@@ -94,6 +97,26 @@ func (r rowsAdapter) Scan(dest ...any) error     { return r.Rows.Scan(dest...) }
 func (r rowsAdapter) Columns() ([]string, error) { return r.Rows.Columns() }
 func (r rowsAdapter) Close() error               { return r.Rows.Close() }
 func (r rowsAdapter) Err() error                 { return r.Rows.Err() }
+
+type stmtAdapter struct{ *sql.Stmt }
+
+func (s stmtAdapter) QueryContext(ctx context.Context, args ...any) (store.Rows, error) {
+	rows, err := s.Stmt.QueryContext(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+	return rowsAdapter{Rows: rows}, nil
+}
+
+func (s stmtAdapter) ExecContext(ctx context.Context, args ...any) (store.Result, error) {
+	result, err := s.Stmt.ExecContext(ctx, args...)
+	if err != nil {
+		return store.Result{}, err
+	}
+	li, _ := result.LastInsertId()
+	ra, _ := result.RowsAffected()
+	return store.Result{LastInsertID: li, RowsAffected: ra}, nil
+}
 
 type txAdapter struct{ tx *sql.Tx }
 

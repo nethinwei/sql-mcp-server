@@ -112,7 +112,7 @@ func TestMySQLReadEnforceCap(t *testing.T) {
 		Tools: config.DefaultToolFlags(),
 		// MySQL estimates are not trusted (ExplainAccurate=false), so the gate
 		// skips Estimate and relies on EnforceCap to bound rows with LIMIT.
-		Cost: config.CostConfig{Enabled: true, SoftScore: 90, HardScore: 95, MaxRows: 1},
+		Cost: config.CostConfig{Enabled: config.Bool(true), SoftScore: 90, HardScore: 95, MaxRows: 1},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -149,7 +149,7 @@ func TestMySQLRLSRowFilterAndMasking(t *testing.T) {
 			},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: true, SoftScore: 40, HardScore: 70, MaxRows: 10000, WhitelistPKPoint: true},
+		Cost:  config.CostConfig{Enabled: config.Bool(true), SoftScore: 40, HardScore: 70, MaxRows: 10000, WhitelistPKPoint: true},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -184,7 +184,7 @@ func TestMySQLUpdateUnsafeWriteAndPK(t *testing.T) {
 			Roles:  config.RoleConfig{Update: []string{"writer"}},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: false},
+		Cost:  config.CostConfig{Enabled: config.Bool(false)},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -226,7 +226,7 @@ func TestMySQLExecuteProcedure(t *testing.T) {
 			Roles: config.RoleConfig{Execute: []string{"caller"}},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: false},
+		Cost:  config.CostConfig{Enabled: config.Bool(false)},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -257,7 +257,7 @@ func TestMySQLReadPKWhitelist(t *testing.T) {
 			Roles:  config.RoleConfig{Read: []string{"reader"}},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: true, SoftScore: 40, HardScore: 70, MaxRows: 10000, WhitelistPKPoint: true},
+		Cost:  config.CostConfig{Enabled: config.Bool(true), SoftScore: 40, HardScore: 70, MaxRows: 10000, WhitelistPKPoint: true},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
+	"github.com/nethinwei/sql-mcp-server/codegen"
 	"github.com/nethinwei/sql-mcp-server/config"
 	"github.com/nethinwei/sql-mcp-server/cost"
 	"github.com/nethinwei/sql-mcp-server/entity"
@@ -77,6 +78,15 @@ func TestProviderQueryExecExplainIntrospect(t *testing.T) {
 	if plan.ScanType != cost.ScanFull {
 		t.Fatalf("ScanType = %v, want ScanFull for unfiltered scan", plan.ScanType)
 	}
+	analyzed, err := prov.ExplainAnalyze(ctx, codegen.Compiled{
+		SQL: "SELECT * FROM users", ReadOnly: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analyzed.ActualRows == 0 || analyzed.ExecutionTime <= 0 {
+		t.Fatalf("EXPLAIN ANALYZE plan = %+v", analyzed)
+	}
 
 	// EXPLAIN: a PK point lookup uses the index -> ScanPoint.
 	plan2, err := prov.Explainer().Explain(ctx, "SELECT * FROM users WHERE id = $1", []any{1})
@@ -121,7 +131,7 @@ func TestCostGateEndToEnd(t *testing.T) {
 		}},
 		Tools: config.DefaultToolFlags(),
 		Cost: config.CostConfig{
-			Enabled: true, SoftScore: 40, HardScore: 70, MaxRows: 10000,
+			Enabled: config.Bool(true), SoftScore: 40, HardScore: 70, MaxRows: 10000,
 			RejectFullScan: true, WhitelistPKPoint: true,
 		},
 	}
@@ -176,7 +186,7 @@ func TestRLSRowFilterAndMasking(t *testing.T) {
 			// Score thresholds left disabled (0): this test verifies RLS +
 			// masking, not the score gate. A small table is a Seq Scan (low
 			// safety score) that EnforceCap bounds by MaxRows instead.
-			Enabled: true, MaxRows: 10000, WhitelistPKPoint: true,
+			Enabled: config.Bool(true), MaxRows: 10000, WhitelistPKPoint: true,
 		},
 	}
 	cfg.ApplyDefaults()
@@ -213,7 +223,7 @@ func TestUpdateUnsafeWriteAndPK(t *testing.T) {
 			Roles:  config.RoleConfig{Update: []string{"writer"}},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: false},
+		Cost:  config.CostConfig{Enabled: config.Bool(false)},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -260,7 +270,7 @@ func TestEnforceCapLimitsRows(t *testing.T) {
 		// Score thresholds disabled (0) so Estimate passes on a Seq Scan;
 		// EnforceCap deterministically wraps the query in LIMIT 1 (MaxRows).
 		Cost: config.CostConfig{
-			Enabled: true, MaxRows: 1,
+			Enabled: config.Bool(true), MaxRows: 1,
 		},
 	}
 	cfg.ApplyDefaults()
@@ -293,7 +303,7 @@ func TestPGExecuteProcedure(t *testing.T) {
 			Roles: config.RoleConfig{Execute: []string{"caller"}},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: false},
+		Cost:  config.CostConfig{Enabled: config.Bool(false)},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)

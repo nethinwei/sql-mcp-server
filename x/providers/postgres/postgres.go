@@ -28,6 +28,7 @@ type Provider struct {
 	dialect      dialect.Dialect
 	explainer    cost.Explainer
 	introspector introspect.Introspector
+	analyzeTx    store.TxBeginner
 }
 
 // New opens a PostgreSQL database and pings it. The DSN uses the pgx driver
@@ -42,12 +43,14 @@ func New(dsn string) (*Provider, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("%w: %v", ErrPing, err)
 	}
-	return &Provider{
+	p := &Provider{
 		db:           db,
 		dialect:      dialect.Postgres{},
 		explainer:    pgExplainer{db: db},
 		introspector: pgIntrospector{db: db},
-	}, nil
+	}
+	p.analyzeTx = p
+	return p, nil
 }
 
 // QueryContext implements store.DB.
@@ -68,6 +71,15 @@ func (p *Provider) ExecContext(ctx context.Context, query string, args ...any) (
 	li, _ := res.LastInsertId()
 	ra, _ := res.RowsAffected()
 	return store.Result{LastInsertID: li, RowsAffected: ra}, nil
+}
+
+// PrepareContext implements store.Preparer.
+func (p *Provider) PrepareContext(ctx context.Context, query string) (store.Prepared, error) {
+	stmt, err := p.db.PrepareContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	return stmtAdapter{Stmt: stmt}, nil
 }
 
 // BeginTx implements store.TxBeginner.
@@ -92,12 +104,6 @@ func (p *Provider) Explainer() cost.Explainer { return p.explainer }
 // Introspector returns the schema introspector.
 func (p *Provider) Introspector() introspect.Introspector { return p.introspector }
 
-// CancelQuery implements store.Canceler via pg_cancel_backend.
-func (p *Provider) CancelQuery(ctx context.Context, connID int64) error {
-	_, err := p.db.ExecContext(ctx, "SELECT pg_cancel_backend($1)", connID)
-	return err
-}
-
 // Close closes the underlying connection pool.
 func (p *Provider) Close() error { return p.db.Close() }
 
@@ -109,6 +115,26 @@ func (r rowsAdapter) Scan(dest ...any) error     { return r.Rows.Scan(dest...) }
 func (r rowsAdapter) Columns() ([]string, error) { return r.Rows.Columns() }
 func (r rowsAdapter) Close() error               { return r.Rows.Close() }
 func (r rowsAdapter) Err() error                 { return r.Rows.Err() }
+
+type stmtAdapter struct{ *sql.Stmt }
+
+func (s stmtAdapter) QueryContext(ctx context.Context, args ...any) (store.Rows, error) {
+	rows, err := s.Stmt.QueryContext(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+	return rowsAdapter{Rows: rows}, nil
+}
+
+func (s stmtAdapter) ExecContext(ctx context.Context, args ...any) (store.Result, error) {
+	result, err := s.Stmt.ExecContext(ctx, args...)
+	if err != nil {
+		return store.Result{}, err
+	}
+	li, _ := result.LastInsertId()
+	ra, _ := result.RowsAffected()
+	return store.Result{LastInsertID: li, RowsAffected: ra}, nil
+}
 
 // txAdapter wraps *sql.Tx to satisfy store.Tx.
 type txAdapter struct{ tx *sql.Tx }

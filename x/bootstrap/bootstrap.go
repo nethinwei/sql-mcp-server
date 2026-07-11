@@ -3,15 +3,18 @@ package bootstrap
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/nethinwei/sql-mcp-server/audit"
+	"github.com/nethinwei/sql-mcp-server/budget"
 	"github.com/nethinwei/sql-mcp-server/cache"
 	"github.com/nethinwei/sql-mcp-server/config"
 	"github.com/nethinwei/sql-mcp-server/cost"
@@ -47,6 +50,9 @@ type Provider interface {
 // App is the assembled application, ready to serve.
 type App struct {
 	Provider     Provider
+	Providers    map[string]Provider
+	Prepared     map[string]*store.PreparedDB
+	Sources      map[string]tool.DataSource
 	Dialect      dialect.Dialect
 	Registry     *entity.Registry
 	Authorizer   rbac.Authorizer
@@ -61,24 +67,35 @@ type App struct {
 	Hooks        *hook.Hooks
 	Cache        cache.Cache[[]map[string]any]
 	Feedback     cost.FeedbackStore
+	Analyze      cost.AnalyzePolicy
+	Budget       budget.Manager
+	Transactions *tool.TransactionManager
+	TxBeginners  map[string]store.TxBeginner
+	closeMu      sync.Mutex
+	closed       bool
 }
 
 // ToolContext builds a per-request tool.Context for the given role.
 func (a *App) ToolContext(role string) tool.Context {
 	return tool.Context{
-		Role:       role,
-		DB:         a.Provider,
-		Dialect:    a.Dialect,
-		Registry:   a.Registry,
-		Authorizer: a.Authorizer,
-		Masker:     a.Masker,
-		Gate:       a.Gate,
-		Cache:      a.Cache,
-		Engine:     a.Engine,
-		Auditor:    a.Auditor,
-		Hooks:      a.Hooks,
-		Timeout:    a.QueryTimeout,
-		Feedback:   a.Feedback,
+		Role:         role,
+		DB:           a.Provider,
+		Dialect:      a.Dialect,
+		Registry:     a.Registry,
+		Authorizer:   a.Authorizer,
+		Masker:       a.Masker,
+		Gate:         a.Gate,
+		Cache:        a.Cache,
+		Engine:       a.Engine,
+		Auditor:      a.Auditor,
+		Hooks:        a.Hooks,
+		Timeout:      a.QueryTimeout,
+		Feedback:     a.Feedback,
+		Analyze:      a.Analyze,
+		Sources:      a.Sources,
+		Budget:       a.Budget,
+		Transactions: a.Transactions,
+		TxBeginners:  a.TxBeginners,
 	}
 }
 
@@ -90,14 +107,49 @@ func (a *App) ToolContextForSubject(role string, subject map[string]any) tool.Co
 	return tc
 }
 
-// Close releases provider and audit resources.
-func (a *App) Close() error {
+// CloseContext stops engine admission and drains all execution before rolling
+// back transactions and releasing audit/provider resources.
+func (a *App) CloseContext(ctx context.Context) error {
+	a.closeMu.Lock()
+	defer a.closeMu.Unlock()
+	if a.closed {
+		return nil
+	}
+	if a.Engine != nil {
+		if err := a.Engine.Drain(ctx); err != nil {
+			return err
+		}
+	}
+	if a.Transactions != nil {
+		a.Transactions.Close()
+	}
 	if a.Auditor != nil {
 		if closer, ok := a.Auditor.(interface{ Close() }); ok {
 			closer.Close()
 		}
 	}
-	return a.Provider.Close()
+	var first error
+	for _, prepared := range a.Prepared {
+		if err := prepared.Close(); err != nil && first == nil {
+			first = err
+		}
+	}
+	for _, provider := range a.Providers {
+		if err := provider.Close(); err != nil && first == nil {
+			first = err
+		}
+	}
+	if len(a.Providers) == 0 && a.Provider != nil {
+		first = a.Provider.Close()
+	}
+	a.closed = true
+	return first
+}
+
+// Close preserves the original unbounded close contract. Callers that need a
+// shutdown deadline should use CloseContext.
+func (a *App) Close() error {
+	return a.CloseContext(context.Background())
 }
 
 // Load reads and validates a YAML config file.
@@ -117,6 +169,28 @@ func Load(path string) (*config.Config, error) {
 	return &cfg, nil
 }
 
+// ValidateFile parses, defaults, validates, and resolves secrets without
+// opening database connections.
+func ValidateFile(path string, resolver SecretResolver) error {
+	cfg, err := Load(path)
+	if err != nil {
+		return err
+	}
+	if resolver == nil {
+		resolver = EnvFileResolver{}
+	}
+	databases := cfg.Databases
+	if len(databases) == 0 {
+		databases = map[string]config.DatabaseConfig{"default": cfg.Database}
+	}
+	for name, database := range databases {
+		if _, err := resolver.Resolve(database.DSN); err != nil {
+			return fmt.Errorf("database %q: %w", name, err)
+		}
+	}
+	return nil
+}
+
 // Assemble opens the provider and wires the application from cfg, using the
 // default EnvFileResolver for secret placeholders.
 func Assemble(cfg *config.Config) (*App, error) {
@@ -128,27 +202,70 @@ func Assemble(cfg *config.Config) (*App, error) {
 // secret managers (Vault, AWS Secrets Manager, etc.) without coupling core to
 // any specific backend.
 func AssembleWithResolver(cfg *config.Config, r SecretResolver) (*App, error) {
-	dsn, err := r.Resolve(cfg.Database.DSN)
+	databases := cfg.Databases
+	if len(databases) == 0 {
+		databases = map[string]config.DatabaseConfig{"default": cfg.Database}
+	}
+	providers := make(map[string]Provider, len(databases))
+	for name, database := range databases {
+		dsn, err := r.Resolve(database.DSN)
+		if err != nil {
+			closeProviders(providers)
+			return nil, err
+		}
+		provider, err := newProvider(database.Driver, dsn)
+		if err != nil {
+			closeProviders(providers)
+			return nil, err
+		}
+		providers[name] = provider
+	}
+	app, err := AssembleWithProviders(cfg, providers)
 	if err != nil {
+		closeProviders(providers)
 		return nil, err
 	}
-	prov, err := newProvider(cfg.Database.Driver, dsn)
-	if err != nil {
-		return nil, err
-	}
-	return AssembleWithProvider(cfg, prov)
+	return app, nil
 }
 
 // AssembleWithProvider wires the application using an injected provider (for
 // testing with fakes).
 func AssembleWithProvider(cfg *config.Config, prov Provider) (*App, error) {
-	configurePool(prov, cfg.RateLimit.IOPool, cfg.RateLimit.ConnMaxIdleTime)
+	return AssembleWithProviders(cfg, map[string]Provider{"default": prov})
+}
+
+// AssembleWithProviders wires named providers. It is intended for tests and
+// embedders; ownership transfers to the returned App on success.
+func AssembleWithProviders(cfg *config.Config, providers map[string]Provider) (*App, error) {
+	datasources := make([]string, 0, len(providers))
+	for name := range providers {
+		datasources = append(datasources, name)
+	}
+	if err := cost.ValidateTemplateScopes(datasources, cfg.Cost.AllowTemplates, cfg.Cost.RejectTemplates); err != nil {
+		return nil, fmt.Errorf("assemble: %w", err)
+	}
+	for _, prov := range providers {
+		configurePool(prov, cfg.RateLimit.IOPool, cfg.RateLimit.ConnMaxIdleTime)
+	}
 	entities, err := configToEntities(cfg.Entities)
 	if err != nil {
 		return nil, err
 	}
-	if err := checkDrift(context.Background(), prov, entities); err != nil {
-		return nil, err
+	for _, e := range entities {
+		if _, ok := providers[e.DataSource]; !ok {
+			return nil, fmt.Errorf("entity %q references unavailable datasource %q", e.Name, e.DataSource)
+		}
+	}
+	for name, prov := range providers {
+		var scoped []entity.Entity
+		for _, e := range entities {
+			if e.DataSource == name {
+				scoped = append(scoped, e)
+			}
+		}
+		if err := checkDrift(context.Background(), prov, scoped); err != nil {
+			return nil, fmt.Errorf("datasource %q: %w", name, err)
+		}
 	}
 	reg, err := entity.NewRegistry(entities)
 	if err != nil {
@@ -156,17 +273,43 @@ func AssembleWithProvider(cfg *config.Config, prov Provider) (*App, error) {
 	}
 	auth := rbac.NewRoleAuthorizer(reg)
 	var feedback cost.FeedbackStore = cost.NoopFeedbackStore{}
-	if cfg.Cost.Enabled {
-		feedback = cost.NewMemoryStore()
-	}
-	var gate cost.Gate
-	if cfg.Cost.Enabled {
-		gate = cost.NewGateFromCapabilities(
-			prov.Dialect().Capabilities(),
-			prov.Explainer(),
-			toThreshold(cfg.Cost),
-			feedback,
+	if cfg.Cost.EnabledOrDefault() {
+		feedback = cost.NewAdaptiveMemoryStore(
+			cfg.Cost.AQE.WindowSize,
+			cfg.Cost.AQE.AnomalyFactor,
+			cfg.Cost.AQE.AnomalyMinSamples,
+			nil,
 		)
+	}
+	sources := make(map[string]tool.DataSource, len(providers))
+	txBeginners := make(map[string]store.TxBeginner, len(providers))
+	prepared := make(map[string]*store.PreparedDB, len(providers))
+	for name, prov := range providers {
+		txBeginners[name] = prov
+		db := store.WithPreparedCache(prov, cfg.Cache.PreparedMaxSize)
+		prepared[name] = db
+		sampler, supportsAnalyze := prov.(cost.AnalyzeSampler)
+		if cfg.Cost.AQE.ExplainAnalyze && !supportsAnalyze {
+			return nil, fmt.Errorf("datasource %q (%s) does not support EXPLAIN ANALYZE sampling", name, prov.Dialect().Name())
+		}
+		analyze := cost.AnalyzePolicy{
+			Sampler: sampler,
+			Config: cost.AnalyzeConfig{
+				Enabled:    cfg.Cost.AQE.ExplainAnalyze,
+				ReadOnly:   cfg.Cost.AQE.ReadOnly,
+				SampleRate: cfg.Cost.AQE.SampleRate,
+				Timeout:    cfg.Cost.AQE.Timeout,
+			},
+		}
+		var gate cost.Gate
+		if cfg.Cost.EnabledOrDefault() {
+			threshold := toThreshold(cfg.Cost)
+			threshold.Datasource = name
+			threshold.DialectName = prov.Dialect().Name()
+			threshold.LegacyExactSQL = len(providers) == 1
+			gate = cost.NewGateFromCapabilities(prov.Dialect().Capabilities(), prov.Explainer(), threshold, feedback)
+		}
+		sources[name] = tool.DataSource{DB: db, Dialect: prov.Dialect(), Gate: gate, Analyze: analyze}
 	}
 	var limiter *ratelimit.Adaptive
 	var breaker *ratelimit.Breaker
@@ -180,6 +323,7 @@ func AssembleWithProvider(cfg *config.Config, prov Provider) (*App, error) {
 		engine.WithMaxInflight(cfg.RateLimit.MaxInflight),
 		engine.WithLimiter(limiter),
 		engine.WithBreaker(breaker),
+		engine.WithFailureClassifier(recordProviderFailure),
 	)
 	if err != nil {
 		return nil, err
@@ -204,14 +348,26 @@ func AssembleWithProvider(cfg *config.Config, prov Provider) (*App, error) {
 		}
 		msk = rm
 	}
+	defaultName := "default"
+	if _, ok := providers[defaultName]; !ok && len(providers) == 1 {
+		for name := range providers {
+			defaultName = name
+		}
+	}
+	defaultProvider := providers[defaultName]
+	defaultSource := sources[defaultName]
 	return &App{
-		Provider:     prov,
-		Dialect:      prov.Dialect(),
+		Provider:     defaultProvider,
+		Providers:    providers,
+		Prepared:     prepared,
+		Sources:      sources,
+		Dialect:      defaultSource.Dialect,
 		Registry:     reg,
 		Authorizer:   auth,
 		Masker:       msk,
 		Feedback:     feedback,
-		Gate:         gate,
+		Analyze:      defaultSource.Analyze,
+		Gate:         defaultSource.Gate,
 		Engine:       eng,
 		Tools:        tools,
 		ToolFlags:    cfg.Tools,
@@ -219,7 +375,33 @@ func AssembleWithProvider(cfg *config.Config, prov Provider) (*App, error) {
 		QueryTimeout: cfg.Cost.QueryTimeout,
 		Auditor:      aud,
 		Cache:        cc,
+		Budget:       newBudgetManager(cfg.Budget),
+		Transactions: tool.NewTransactionManager(cfg.Transactions.TTL, cfg.Transactions.MaxOpen),
+		TxBeginners:  txBeginners,
 	}, nil
+}
+
+func recordProviderFailure(err error) bool {
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded),
+		errors.Is(err, budget.ErrExceeded), errors.Is(err, cost.ErrCostExceeded),
+		errors.Is(err, tool.ErrUnauthorized), errors.Is(err, tool.ErrEntityNotFound),
+		errors.Is(err, tool.ErrInvalidInput), errors.Is(err, tool.ErrDMLToolsDisabled),
+		errors.Is(err, tool.ErrUnsafeWrite), errors.Is(err, tool.ErrNotImplemented),
+		errors.Is(err, tool.ErrTransactionNotFound), errors.Is(err, tool.ErrTransactionScope),
+		errors.Is(err, tool.ErrTransactionCapacity):
+		return false
+	default:
+		return true
+	}
+}
+
+func closeProviders(providers map[string]Provider) {
+	for _, provider := range providers {
+		_ = provider.Close()
+	}
 }
 
 func newProvider(driver, dsn string) (Provider, error) {
@@ -286,7 +468,7 @@ func checkDrift(ctx context.Context, prov Provider, entities []entity.Entity) er
 // toThreshold maps config.CostConfig to cost.Threshold.
 func toThreshold(c config.CostConfig) cost.Threshold {
 	return cost.Threshold{
-		Enabled:           c.Enabled,
+		Enabled:           c.EnabledOrDefault(),
 		SoftScore:         c.SoftScore,
 		HardScore:         c.HardScore,
 		MaxRows:           c.MaxRows,
@@ -410,6 +592,10 @@ func configToEntity(ec config.EntityConfig) (entity.Entity, error) {
 	if source == "" {
 		source = ec.Name
 	}
+	dataSource := ec.DataSource
+	if dataSource == "" {
+		dataSource = "default"
+	}
 	attrs := make([]entity.Attribute, 0, len(ec.Fields))
 	for _, f := range ec.Fields {
 		attrs = append(attrs, entity.Attribute{
@@ -425,6 +611,10 @@ func configToEntity(ec config.EntityConfig) (entity.Entity, error) {
 		entity.ActionExecute:   ec.Roles.Execute,
 		entity.ActionAggregate: ec.Roles.Aggregate,
 	}
+	fieldAccess := make(entity.FieldAccess, len(ec.FieldACL))
+	for role, acl := range ec.FieldACL {
+		fieldAccess[role] = entity.FieldPermissions{Read: acl.Read, Write: acl.Write}
+	}
 	rowPolicies := entity.RowPolicies{}
 	for r, fc := range ec.RowPolicies {
 		p, err := filterConfigToPredicate(fc)
@@ -437,13 +627,41 @@ func configToEntity(ec config.EntityConfig) (entity.Entity, error) {
 	if len(ec.PrimaryKey) > 0 {
 		keys = []entity.Key{{Name: "pk", Columns: ec.PrimaryKey, Primary: true}}
 	}
+	relations := make([]entity.Relationship, 0, len(ec.Relationships))
+	for _, relation := range ec.Relationships {
+		relations = append(relations, entity.Relationship{
+			Name: relation.Name, Target: relation.Target,
+			Cardinality: relation.Cardinality, JoinOn: relation.JoinOn,
+		})
+	}
 	return entity.Entity{
-		Name: ec.Name, Source: source, Schema: ec.Schema, Description: ec.Description,
-		Kind: parseKind(ec.Kind), Attributes: attrs, Keys: keys, Role: role,
+		Name: ec.Name, Source: source, DataSource: dataSource, Schema: ec.Schema, Description: ec.Description,
+		Kind: parseKind(ec.Kind), Attributes: attrs, Keys: keys, Role: role, FieldAccess: fieldAccess,
 		MCP:         entity.MCPFlags{DMLTools: ec.MCP.DMLTools, CustomTool: ec.MCP.CustomTool},
 		RowPolicies: rowPolicies,
+		Relations:   relations,
 		Params:      ec.Params,
 	}, nil
+}
+
+func newBudgetManager(c config.BudgetConfig) budget.Manager {
+	roles := make(map[string]budget.Limits, len(c.Roles))
+	for name, limits := range c.Roles {
+		roles[name] = toBudgetLimits(limits)
+	}
+	tenants := make(map[string]budget.Limits, len(c.Tenants))
+	for name, limits := range c.Tenants {
+		tenants[name] = toBudgetLimits(limits)
+	}
+	return budget.New(roles, tenants)
+}
+
+func toBudgetLimits(c config.BudgetLimits) budget.Limits {
+	return budget.Limits{
+		MaxConcurrent: c.MaxConcurrent, MaxExecution: c.MaxExecution,
+		MaxScannedRows: c.MaxScannedRows, MaxReturnedRows: c.MaxReturnedRows,
+		MaxSessionCost: c.MaxSessionCost,
+	}
 }
 
 func parseKind(s string) entity.Kind {

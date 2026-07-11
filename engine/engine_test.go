@@ -92,6 +92,34 @@ func TestSubmitBreakerOpen(t *testing.T) {
 	}
 }
 
+func TestSubmitIgnoredFailureDoesNotAffectBreakerOrAIMD(t *testing.T) {
+	t.Parallel()
+	businessErr := errors.New("business rejection")
+	breaker := ratelimit.NewBreaker(1, time.Second)
+	limiter := ratelimit.NewAdaptive(4, 1, 8, 0)
+	e, _ := New(
+		WithIOPool(4), WithMaxInflight(8), WithBreaker(breaker), WithLimiter(limiter),
+		WithFailureClassifier(func(err error) bool { return !errors.Is(err, businessErr) }),
+	)
+	before := limiter.Limit()
+	_, err := e.Submit(context.Background(), "", func(context.Context) (any, error) {
+		return nil, businessErr
+	})
+	if !errors.Is(err, businessErr) {
+		t.Fatal(err)
+	}
+	if breaker.IsOpen() || limiter.Limit() != before {
+		t.Fatalf("business error changed health controls: breaker=%v limit=%d", breaker.IsOpen(), limiter.Limit())
+	}
+	systemErr := errors.New("provider failed")
+	_, _ = e.Submit(context.Background(), "", func(context.Context) (any, error) {
+		return nil, systemErr
+	})
+	if !breaker.IsOpen() || limiter.Limit() >= before {
+		t.Fatalf("system error did not change health controls: breaker=%v limit=%d", breaker.IsOpen(), limiter.Limit())
+	}
+}
+
 func TestSubmitCtxCancel(t *testing.T) {
 	t.Parallel()
 	e, _ := New(WithIOPool(1), WithMaxInflight(2))
@@ -189,6 +217,211 @@ func TestSubmitSingleflightSharesResult(t *testing.T) {
 			t.Fatalf("waiter %d got %v, want shared result 42", i, v)
 		}
 	}
+}
+
+func TestSingleflightWaiterContextCancellation(t *testing.T) {
+	t.Parallel()
+	e, _ := New(WithIOPool(2), WithMaxInflight(4))
+	started := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		_, _ = e.Submit(context.Background(), "shared", func(context.Context) (any, error) {
+			close(started)
+			<-release
+			return 1, nil
+		})
+	}()
+	<-started
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err := e.Submit(ctx, "shared", func(context.Context) (any, error) {
+		t.Fatal("waiter must not execute")
+		return nil, nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v, want context deadline", err)
+	}
+	close(release)
+}
+
+func TestSingleflightLeaderCancellationDoesNotCancelRemainingWaiter(t *testing.T) {
+	t.Parallel()
+	e, _ := New(WithIOPool(2), WithMaxInflight(4))
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	release := make(chan struct{})
+	leaderDone := make(chan error, 1)
+	go func() {
+		_, err := e.Submit(leaderCtx, "shared-cancel", func(ctx context.Context) (any, error) {
+			close(started)
+			select {
+			case <-release:
+				return 7, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		})
+		leaderDone <- err
+	}()
+	<-started
+	waiterDone := make(chan struct {
+		value any
+		err   error
+	}, 1)
+	go func() {
+		value, err := e.Submit(context.Background(), "shared-cancel", func(context.Context) (any, error) {
+			t.Error("waiter must not execute")
+			return nil, nil
+		})
+		waiterDone <- struct {
+			value any
+			err   error
+		}{value, err}
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		e.sf.mu.Lock()
+		call := e.sf.m["0\x00shared-cancel"]
+		joined := call != nil && call.waiters == 2
+		e.sf.mu.Unlock()
+		if joined {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("waiter did not join shared execution")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancelLeader()
+	if err := <-leaderDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("leader error = %v", err)
+	}
+	close(release)
+	got := <-waiterDone
+	if got.err != nil || got.value != 7 {
+		t.Fatalf("waiter = %v, %v; want 7, nil", got.value, got.err)
+	}
+}
+
+func TestDrainRejectsAndWaits(t *testing.T) {
+	t.Parallel()
+	e, _ := New(WithIOPool(1), WithMaxInflight(4))
+	started := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		_, _ = e.Submit(context.Background(), "", func(context.Context) (any, error) {
+			close(started)
+			<-release
+			return nil, nil
+		})
+	}()
+	<-started
+	drained := make(chan error, 1)
+	go func() { drained <- e.Drain(context.Background()) }()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		_, err := e.Submit(ctx, "", func(context.Context) (any, error) { return nil, nil })
+		cancel()
+		if errors.Is(err, ErrClosed) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("engine did not close admission, last error %v", err)
+		}
+	}
+	select {
+	case err := <-drained:
+		t.Fatalf("drain returned before in-flight work finished: %v", err)
+	default:
+	}
+	close(release)
+	if err := <-drained; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDrainWaitsForSingleflightExecutionAfterAllWaitersCancel(t *testing.T) {
+	e, _ := New(WithIOPool(1), WithMaxInflight(4))
+	started := make(chan struct{})
+	release := make(chan struct{})
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	results := make(chan error, 2)
+	run := func(ctx context.Context) {
+		_, err := e.Submit(ctx, "detached", func(context.Context) (any, error) {
+			close(started)
+			<-release // deliberately ignores cancellation
+			return nil, nil
+		})
+		results <- err
+	}
+	go run(ctx1)
+	<-started
+	go run(ctx2)
+	deadline := time.Now().Add(time.Second)
+	for {
+		e.sf.mu.Lock()
+		call := e.sf.m["0\x00detached"]
+		joined := call != nil && call.waiters == 2
+		e.sf.mu.Unlock()
+		if joined {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("second waiter did not join")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel1()
+	cancel2()
+	for i := 0; i < 2; i++ {
+		if err := <-results; !errors.Is(err, context.Canceled) {
+			t.Fatalf("waiter error = %v, want canceled", err)
+		}
+	}
+	drained := make(chan error, 1)
+	go func() { drained <- e.Drain(context.Background()) }()
+	select {
+	case err := <-drained:
+		t.Fatalf("Drain returned while execution goroutine was running: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-drained; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSubmitCPUBoundsConcurrency(t *testing.T) {
+	t.Parallel()
+	e, _ := New(WithIOPool(1), WithCPUPool(1), WithMaxInflight(4))
+	started := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		_, _ = e.SubmitCPU(context.Background(), "", func(context.Context) (any, error) {
+			close(started)
+			<-release
+			return nil, nil
+		})
+	}()
+	<-started
+	ioCtx, ioCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer ioCancel()
+	if _, err := e.Submit(ioCtx, "", func(context.Context) (any, error) { return nil, nil }); err != nil {
+		t.Fatalf("IO work should use a pool independent from CPU: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err := e.SubmitCPU(ctx, "", func(context.Context) (any, error) {
+		t.Fatal("second CPU task must not pass a full CPU pool")
+		return nil, nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v, want context deadline", err)
+	}
+	close(release)
 }
 
 func contains(s, sub string) bool {

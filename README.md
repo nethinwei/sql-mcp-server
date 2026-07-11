@@ -1,86 +1,70 @@
 # SQL MCP Server
 
-SQL MCP server，让 AI agent 通过受控契约安全访问关系数据库。参考微软
-Data API Builder（DAB）的 SQL MCP Server，支持 PostgreSQL、MySQL、OceanBase。
+SQL MCP Server 通过受控的实体、权限和成本契约，让 AI agent 访问
+PostgreSQL、MySQL 或 OceanBase。它不接受任意 SQL，也不提供 DDL。
 
-## 特性
+## 已实现能力
 
-- **关系代数 IR**：查询经方言无关的中间表示渲染为参数化 SQL，杜绝注入；接入新库只需实现 5 个窄接口。
-- **成本门限**：多层级联闸门（defense in depth）——静态规则（PK 白名单/模板基线）→ 写主键保护（WriteGuard：非主键点写硬拒）→ EXPLAIN 预筛（仅可信方言启用）→ 确定性 LIMIT 兜底（EnforceCap），再叠加请求超时与 MySQL/OceanBase 原生 `sql_safe_updates`。计划质量归一化为 0–100 安全分（越高越安全），低于阈值软/硬拒并返回重写建议。支持计划基线（`allowTemplates`/`rejectTemplates`）与反馈闭环（记录实际行数校准估算）。
-- **安全**：RBAC（字段级投影 + 过滤/写字段校验，杜绝隐藏列侧信道）+ 行级安全（`${subject.x}` 按请求主体动态过滤，属性缺失即 fail-closed）+ 字段脱敏（类型无关，未知规则启动即报错）+ 每次工具调用异步审计。
-- **接口化工具**：七个 DML 工具（describe/read/create/update/delete/execute/aggregate）按配置开关启用，关闭即不注册；`execute_entity` 支持存储过程调用。
-- **分页**：支持 offset 与 keyset（游标）分页，大表续页用 `WHERE pk > cursor ORDER BY pk LIMIT n` 避免 O(offset) 开销。
-- **有界并发**：所有工具调用经统一编排（`tool.RunTool`）接入 bounded worker pool + 背压（`ErrOverloaded`）+ singleflight 读去重（共享结果）+ 自适应限流（AIMD）+ 熔断。
-- **可观测**：每次工具调用发射 OpenTelemetry span/属性（经 hook 适配，核心不绑后端）+ 健康检查。
-- **密钥管理**：DSN 支持 `${ENV}` / `${file:/path}` 占位符；`SecretResolver` 接口可注入 Vault 等外部 secret manager。
-- **核心零外部依赖**：核心包仅用标准库，外部依赖（go-sdk、driver、yaml、otel）隔离于 `x/`，depguard 强制单向依赖。
+- stdio 与 streamable HTTP MCP 传输。
+- 七个实体工具：描述、读取、新增、更新、删除、存储过程执行和聚合；另有显式事务的 begin/commit/rollback 工具。
+- 参数化 SQL、RBAC、字段级读写限制、行级策略、字段脱敏和异步审计（默认关闭）。
+- 成本闸门：模板基线、主键点查白名单、非主键写保护、PostgreSQL EXPLAIN 预筛、读取行数上限和查询超时。
+- 命名数据源、同数据源关系展开、offset/keyset 分页、prepared statement 缓存和配置热重载。
+- MCP 授权 schema resource，以及 `safe_read`、`safe_aggregate`、`rewrite_query` prompts。
 
-## 安装
-
-```sh
-go build -o sql-mcp-server ./cmd/sql-mcp-server
-```
+准确的安全保证与 provider 差异见
+[`docs/security.md`](docs/security.md)。尤其注意：MySQL/OceanBase 的 EXPLAIN
+估算当前不参与同步闸门；v0.1 仅 PostgreSQL 支持显式 opt-in 的只读
+`EXPLAIN ANALYZE` 采样。每次命中采样都会额外执行一次生成的只读语句；
+MySQL/OceanBase 配置启用该能力时会 fail-fast。
 
 ## 快速开始
 
-配置文件示例见 [`examples/config.example.yaml`](examples/config.example.yaml)。
-
-stdio 模式（供 MCP 客户端通过子进程调用）：
+要求 Go 1.25+ 和一个可连接的受支持数据库。
 
 ```sh
-sql-mcp-server --config config.yaml --transport stdio --role reader
+make build VERSION=v0.1.0
+sql-mcp-server init --config config.yaml --driver postgres
 ```
 
-HTTP 模式（streamable HTTP）：
+编辑 `config.yaml`，通过 `${DATABASE_DSN}` 注入 DSN，然后校验并启动：
 
 ```sh
-sql-mcp-server --config config.yaml --transport http --addr :8080 --role reader
+sql-mcp-server validate --config config.yaml
+sql-mcp-server serve --config config.yaml --transport stdio --role reader
 ```
 
-用 [MCP Inspector](https://github.com/modelcontextprotocol/inspector) 调试：
+HTTP 仅建议先绑定 loopback：
 
 ```sh
-npx -y @modelcontextprotocol/inspector http://localhost:8080/mcp
+sql-mcp-server serve --config config.yaml --transport http --addr 127.0.0.1:8080
+npx -y @modelcontextprotocol/inspector http://127.0.0.1:8080/mcp
 ```
 
-## 配置要点
+HTTP 的地址默认值是 `:8080`，它会监听所有接口，属于非 loopback；未通过
+`--addr` 或配置改为 loopback 且未配置 bearer token/mTLS 时，服务会 fail
+closed 并拒绝启动。完整示例见
+[`examples/config.example.yaml`](examples/config.example.yaml)。
 
-- `database.driver`：`postgres` | `mysql` | `oceanbase`；`dsn` 支持 `${ENV}` / `${file:/path}` 占位符，缺失即启动失败（fail-fast）。
-- `tools`：按工具开关，`deleteRecord` 默认关闭。
-- `cost`：`softScore`/`hardScore`（0–100 安全分阈值，越高越安全，需 `softScore ≥ hardScore`；低于 `hardScore` 硬拒，`[hardScore, softScore)` 软拒）、`maxRows`（EnforceCap 强制 LIMIT）、`rejectFullScan`、`whitelistPKPoint`、`requirePKForWrite`（默认开：非主键点写硬拒）、`allowTemplates`/`rejectTemplates`（计划基线）、`queryTimeout`（默认 30s）。
-- `mask.enabled` / `rateLimit.enabled`：脱敏与限流可按需关闭（默认开）。
-- `rateLimit`：`ioPool`/`cpuPool`/`maxInflight`（并发）、`breakerThreshold`/`breakerCooldown`（熔断）、`minConcurrency`/`rttThreshold`（AIMD）、`connMaxIdleTime`（连接空闲）。
-- `audit.queueSize`、`cache.ttl`/`maxSize`。
-- `entities`：暴露的表/视图/存储过程，含别名、主键、字段投影（`exclude`）、脱敏（`mask`）、角色权限、行级策略（`rowPolicies`）。
-- 启动期 introspect 自动发现 schema 并与配置比对，配置引用不存在的实体/字段即 fail-fast。
-- **角色/主体**：stdio 模式用启动 `--role`；HTTP 模式每请求角色与主体属性经 `X-MCP-Role`、`X-MCP-Subject`（JSON）请求头传入，须由可信网关在认证后设置（完整 OAuth 见 roadmap）。
+## 版本状态
 
-## 架构
+发布构建通过 `make build VERSION=<version>` 将同一版本注入 CLI `version` 和
+MCP `Implementation`；未注入的开发构建显示 `dev`。`v0.1.0` 功能基线已包含
+核心工具、三种 provider、权限/成本控制、事务、多数据源、热重载和 MCP
+resources/prompts，但仍有明确限制；详见
+[`v0.1.0 发布说明`](docs/releases/v0.1.0.md)。未来工作只记录在
+[`roadmap`](docs/roadmap.md)。
 
-```text
-核心包（零外部依赖）  →  x/ 适配层（go-sdk / driver / yaml / otel）
-  relalg, codegen, entity, dialect, store, rbac, mask, cost,
-  audit, tool, cache, hook, ratelimit, engine, introspect, config
-```
+## 文档
 
-只有 `x/mcpserver` 接触 go-sdk 类型；业务逻辑为核心包，可独立测试。完整设计与路线图见 [`docs/roadmap.md`](docs/roadmap.md)。
-
-## 开发
-
-```sh
-make test              # 单元测试（-race）
-make test-integration  # testcontainers 集成测试：PG/MySQL/OceanBase（需 docker）
-make test-e2e          # 端到端：真实 DB + MCP 客户端 + goleak 泄漏检测
-make lint              # golangci-lint + depguard 边界强制
-make coverage          # 核心包覆盖率（≥80%）
-make ci                # 全套
-```
-
-编码规范见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。设计与路线图见 [`docs/roadmap.md`](docs/roadmap.md)。
-
-## 状态
-
-核心与三库 provider 已实现并通过 testcontainers 集成测试（PG/MySQL/OceanBase）与 e2e MCP 客户端测试（含 goleak 泄漏检测）验证。核心包覆盖率 ≥80%，lint 0 issues。进行中的工作见 `docs/roadmap.md` 的里程碑与 P1/P2 路线图。
+- [架构](docs/architecture.md)
+- [安全模型与边界](docs/security.md)
+- [配置参考](docs/configuration.md)
+- [运行与 CLI](docs/operations.md)
+- [测试与 CI](docs/testing.md)
+- [核心不变量](docs/invariants.md)
+- [变更记录](CHANGELOG.md)
+- [贡献指南](CONTRIBUTING.md)
 
 ## 许可
 

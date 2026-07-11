@@ -4,7 +4,7 @@
 //
 // The IR is relationally complete for safe read queries (selection, projection,
 // aggregation, sort, limit, distinct) and DML (insert/update/delete over a
-// predicate). Join and union are intentionally absent until needed (P1) — the
+// predicate). Join and union are intentionally absent until needed — the
 // surface stays deterministic, inject-proof, and gateable, excluding NL2SQL.
 //
 // Expr and Predicate are sealed interfaces: their marker methods (rel, pred)

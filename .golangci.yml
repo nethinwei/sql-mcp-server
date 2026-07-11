@@ -16,15 +16,14 @@ linters:
     - misspell
     - depguard
   settings:
-    # Core packages must be absolutely clean: stdlib + sibling core packages only.
-    # No external dependencies, no imports from x/. x/ depends on core, never the
-    # reverse. This rule makes the architecture boundary machine-enforced.
+    # Core packages use stdlib + sibling core packages only, except config's
+    # yaml.v3 dependency for presence-aware YAML decoding. No core package may
+    # import x/; x/ depends on core, never the reverse.
     depguard:
       rules:
         core-purity:
           list-mode: strict
           files:
-            - "config/**.go"
             - "relalg/**.go"
             - "codegen/**.go"
             - "entity/**.go"
@@ -33,6 +32,7 @@ linters:
             - "rbac/**.go"
             - "mask/**.go"
             - "cost/**.go"
+            - "budget/**.go"
             - "audit/**.go"
             - "tool/**.go"
             - "cache/**.go"
@@ -43,6 +43,14 @@ linters:
           allow:
             - $gostd
             - github.com/nethinwei/sql-mcp-server
+        config-yaml-presence:
+          list-mode: strict
+          files:
+            - "config/**.go"
+          allow:
+            - $gostd
+            - github.com/nethinwei/sql-mcp-server
+            - gopkg.in/yaml.v3
     revive:
       rules:
         # Interface contracts are documented at the interface; requiring every

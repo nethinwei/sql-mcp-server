@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/audit"
+	"github.com/nethinwei/sql-mcp-server/budget"
 	"github.com/nethinwei/sql-mcp-server/cache"
+	"github.com/nethinwei/sql-mcp-server/codegen"
 	"github.com/nethinwei/sql-mcp-server/config"
 	"github.com/nethinwei/sql-mcp-server/cost"
 	"github.com/nethinwei/sql-mcp-server/dialect"
@@ -29,6 +31,59 @@ func (r *recorderAuditor) Record(_ context.Context, e audit.Event) error {
 	return nil
 }
 
+type queryTx struct {
+	store.FakeTx
+	query func(context.Context, string, ...any) (store.Rows, error)
+}
+
+func (t *queryTx) QueryContext(ctx context.Context, query string, args ...any) (store.Rows, error) {
+	return t.query(ctx, query, args...)
+}
+
+type recordingAuthorizer struct {
+	events *[]string
+	dec    rbac.Decision
+}
+
+func (a recordingAuthorizer) Authorize(_ context.Context, _ rbac.Request) (rbac.Decision, error) {
+	*a.events = append(*a.events, "authorize")
+	return a.dec, nil
+}
+
+type recordingGate struct {
+	events *[]string
+}
+
+func (g recordingGate) Check(_ context.Context, _ codegen.Compiled) (cost.Decision, error) {
+	*g.events = append(*g.events, "gate")
+	return cost.Decision{Allow: true}, nil
+}
+
+type recordingAnalyzeSampler struct {
+	calls []codegen.Compiled
+	plan  cost.Plan
+}
+
+type blockingTransactionReadTool struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (blockingTransactionReadTool) Info() Info {
+	return Info{Name: "transaction_read_probe", ReadOnly: true}
+}
+func (blockingTransactionReadTool) Enabled(config.ToolFlags) bool { return true }
+func (t blockingTransactionReadTool) Run(context.Context, json.RawMessage, Context) (Result, error) {
+	close(t.started)
+	<-t.release
+	return Result{Content: []map[string]any{{"ok": true}}}, nil
+}
+
+func (s *recordingAnalyzeSampler) ExplainAnalyze(_ context.Context, compiled codegen.Compiled) (cost.Plan, error) {
+	s.calls = append(s.calls, compiled)
+	return s.plan, nil
+}
+
 func testUsersEntity() entity.Entity {
 	return entity.Entity{
 		Name:       "users",
@@ -36,6 +91,7 @@ func testUsersEntity() entity.Entity {
 		Attributes: []entity.Attribute{{Name: "id"}, {Name: "email", Mask: "email"}},
 		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
 		Role:       entity.RoleAccess{entity.ActionRead: {"reader"}, entity.ActionCreate: {"writer"}},
+		MCP:        entity.MCPFlags{DMLTools: true},
 	}
 }
 
@@ -43,8 +99,8 @@ func TestRegistryEnabledFilters(t *testing.T) {
 	t.Parallel()
 	r, _ := NewRegistry(DefaultTools())
 	enabled := r.Enabled(config.DefaultToolFlags()) // delete off
-	if len(enabled) != 6 {
-		t.Fatalf("got %d tools, want 6 (delete off)", len(enabled))
+	if len(enabled) != 9 {
+		t.Fatalf("got %d tools, want 9 (delete off, transaction tools on)", len(enabled))
 	}
 	for _, tl := range enabled {
 		if tl.Info().Name == "delete_record" {
@@ -81,6 +137,143 @@ func TestReadToolEndToEnd(t *testing.T) {
 	}
 	if res.Content[0]["email"] != "a***@x.com" {
 		t.Fatalf("email not masked: %v", res.Content[0]["email"])
+	}
+}
+
+func TestReadToolRecordsExplainAnalyzeFeedback(t *testing.T) {
+	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	db := &store.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
+		return store.NewFakeRows([]string{"id", "email"}, []any{int64(1), "a@x.com"}), nil
+	}}
+	feedback := cost.NewMemoryStore()
+	tc := Context{
+		Role: "reader", DB: db, Dialect: dialect.Postgres{}, Registry: reg,
+		Authorizer: rbac.NewRoleAuthorizer(reg), Feedback: feedback,
+		Analyze: cost.AnalyzePolicy{
+			Sampler: cost.FakeAnalyzeSampler{Plan: cost.Plan{ActualRows: 25, ExecutionTime: 3 * time.Millisecond}},
+			Config:  cost.AnalyzeConfig{Enabled: true, ReadOnly: true, SampleRate: 1, Timeout: time.Second},
+		},
+	}
+	input, _ := json.Marshal(readInput{Entity: "users"})
+	if _, err := (ReadTool{}).Run(context.Background(), input, tc); err != nil {
+		t.Fatal(err)
+	}
+	query := db.Queries[0]
+	fingerprint := cost.Fingerprint("default", "postgres", codegen.Compiled{
+		SQL: query.Query, Args: query.Args, ReadOnly: true,
+	})
+	stats, ok := feedback.Stats(fingerprint)
+	if !ok || stats.LatestRows != 25 || stats.LatestTime != 3*time.Millisecond {
+		t.Fatalf("feedback = %+v, ok = %v", stats, ok)
+	}
+}
+
+func TestReadToolIgnoresExplainAnalyzeFailure(t *testing.T) {
+	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	db := &store.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
+		return store.NewFakeRows([]string{"id", "email"}, []any{int64(1), "a@x.com"}), nil
+	}}
+	auditor := &recorderAuditor{}
+	var hookErr error
+	tc := Context{
+		Role: "reader", DB: db, Dialect: dialect.Postgres{}, Registry: reg,
+		Authorizer: rbac.NewRoleAuthorizer(reg), Feedback: cost.NewMemoryStore(), Auditor: auditor,
+		Hooks: &hook.Hooks{OnError: func(_ context.Context, err error) { hookErr = err }},
+		Analyze: cost.AnalyzePolicy{
+			Sampler: cost.FakeAnalyzeSampler{Err: errors.New("sampling timeout")},
+			Config:  cost.AnalyzeConfig{Enabled: true, ReadOnly: true, SampleRate: 1, Timeout: time.Second},
+		},
+	}
+	input, _ := json.Marshal(readInput{Entity: "users"})
+	result, err := (ReadTool{}).Run(context.Background(), input, tc)
+	if err != nil || len(result.Content) != 1 {
+		t.Fatalf("successful read changed by sampling failure: result=%+v err=%v", result, err)
+	}
+	if hookErr == nil || len(auditor.events) != 1 || auditor.events[0].Action != "explain_analyze_sample" {
+		t.Fatalf("sampling failure observability: hook=%v events=%+v", hookErr, auditor.events)
+	}
+}
+
+func TestReadToolSelectsAnalyzeSamplerByEntityDatasource(t *testing.T) {
+	mainEntity := testUsersEntity()
+	mainEntity.DataSource = "main"
+	archiveEntity := testUsersEntity()
+	archiveEntity.Name = "archived_users"
+	archiveEntity.DataSource = "archive"
+	reg, _ := entity.NewRegistry([]entity.Entity{mainEntity, archiveEntity})
+	mainDB := &store.FakeDB{}
+	archiveDB := &store.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
+		return store.NewFakeRows([]string{"id"}, []any{int64(1)}), nil
+	}}
+	mainSampler := &recordingAnalyzeSampler{}
+	archiveSampler := &recordingAnalyzeSampler{plan: cost.Plan{ActualRows: 7}}
+	policy := func(s cost.AnalyzeSampler) cost.AnalyzePolicy {
+		return cost.AnalyzePolicy{
+			Sampler: s,
+			Config:  cost.AnalyzeConfig{Enabled: true, ReadOnly: true, SampleRate: 1, Timeout: time.Second},
+		}
+	}
+	tc := Context{
+		Role: "reader", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
+		Feedback: cost.NewMemoryStore(),
+		Sources: map[string]DataSource{
+			"main":    {DB: mainDB, Dialect: dialect.Postgres{}, Analyze: policy(mainSampler)},
+			"archive": {DB: archiveDB, Dialect: dialect.Postgres{}, Analyze: policy(archiveSampler)},
+		},
+	}
+	input, _ := json.Marshal(readInput{Entity: "archived_users"})
+	if _, err := (ReadTool{}).Run(context.Background(), input, tc); err != nil {
+		t.Fatal(err)
+	}
+	if len(mainSampler.calls) != 0 || len(archiveSampler.calls) != 1 {
+		t.Fatalf("sampler calls = main:%d archive:%d", len(mainSampler.calls), len(archiveSampler.calls))
+	}
+}
+
+func TestReadToolBatchExpandsRelationship(t *testing.T) {
+	parent := testUsersEntity()
+	parent.DataSource = "default"
+	parent.Relations = []entity.Relationship{{
+		Name: "orders", Target: "orders", Cardinality: "many",
+		JoinOn: map[string]string{"id": "user_id"},
+	}}
+	orders := entity.Entity{
+		Name: "orders", Source: "orders", DataSource: "default",
+		Attributes: []entity.Attribute{{Name: "id"}, {Name: "user_id"}},
+		Role:       entity.RoleAccess{entity.ActionRead: {"reader"}},
+		MCP:        entity.MCPFlags{DMLTools: true},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{parent, orders})
+	db := &store.FakeDB{}
+	queries := 0
+	db.QueryFn = func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
+		queries++
+		if queries == 1 {
+			return store.NewFakeRows([]string{"id", "email"}, []any{int64(1), "a@x.com"}, []any{int64(2), "b@x.com"}), nil
+		}
+		return store.NewFakeRows([]string{"id", "user_id"}, []any{int64(10), int64(1)}, []any{int64(11), int64(1)}), nil
+	}
+	auth := rbac.NewRoleAuthorizer(reg)
+	tc := Context{
+		Role: "reader", DB: db, Dialect: dialect.Postgres{}, Registry: reg, Authorizer: auth,
+		Sources: map[string]DataSource{"default": {DB: db, Dialect: dialect.Postgres{}}},
+	}
+	input, _ := json.Marshal(readInput{Entity: "users", Expand: []string{"orders"}})
+	result, err := ReadTool{}.Run(context.Background(), input, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queries != 2 {
+		t.Fatalf("queries = %d, want one parent and one batch expansion", queries)
+	}
+	children, ok := result.Content[0]["orders"].([]map[string]any)
+	if !ok || len(children) != 2 {
+		t.Fatalf("expanded orders = %#v", result.Content[0]["orders"])
+	}
+	queries = 0
+	tc.BudgetLimits.MaxReturnedRows = 3
+	if _, err := (ReadTool{}).Run(context.Background(), input, tc); !errors.Is(err, budget.ErrExceeded) {
+		t.Fatalf("parent + expand row limit error = %v", err)
 	}
 }
 
@@ -155,7 +348,7 @@ func TestUpdateToolUnsafeWrite(t *testing.T) {
 func TestDescribeTool(t *testing.T) {
 	t.Parallel()
 	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
-	tc := Context{Registry: reg}
+	tc := Context{Role: "reader", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}
 	in, _ := json.Marshal(map[string]any{"entity": "users"})
 	res, err := DescribeTool{}.Run(context.Background(), in, tc)
 	if err != nil {
@@ -166,11 +359,45 @@ func TestDescribeTool(t *testing.T) {
 	}
 }
 
+func TestDescribeToolFiltersUnauthorizedEntitiesAndFields(t *testing.T) {
+	t.Parallel()
+	users := testUsersEntity()
+	users.Attributes = append(users.Attributes, entity.Attribute{Name: "secret"})
+	users.FieldAccess = entity.FieldAccess{"reader": {Read: []string{"id"}}}
+	adminOnly := entity.Entity{
+		Name: "admin_only", Source: "admin_only", Attributes: []entity.Attribute{{Name: "id"}},
+		Role: entity.RoleAccess{entity.ActionRead: {"admin"}}, MCP: entity.MCPFlags{DMLTools: true},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{users, adminOnly})
+	tc := Context{Role: "reader", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}
+	list, err := DescribeTool{}.Run(context.Background(), json.RawMessage(`{}`), tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Content) != 1 || list.Content[0]["name"] != "users" {
+		t.Fatalf("entity list leaked unauthorized entity: %#v", list.Content)
+	}
+	detail, err := DescribeTool{}.Run(context.Background(), json.RawMessage(`{"entity":"users"}`), tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := detail.Content[0]["fields"].([]map[string]any)
+	if len(fields) != 1 || fields[0]["name"] != "id" {
+		t.Fatalf("field list leaked ACL fields: %#v", fields)
+	}
+	if _, err := (DescribeTool{}).Run(context.Background(), json.RawMessage(`{"entity":"admin_only"}`), tc); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("unauthorized detail error = %v", err)
+	}
+}
+
 func TestExecuteToolCallsProcedure(t *testing.T) {
 	t.Parallel()
 	e := entity.Entity{
 		Name: "sp", Source: "sp", Kind: entity.KindProcedure,
-		Role: entity.RoleAccess{entity.ActionExecute: {"caller"}},
+		Role:       entity.RoleAccess{entity.ActionExecute: {"caller"}},
+		MCP:        entity.MCPFlags{DMLTools: true},
+		Params:     []string{"x"},
+		Attributes: []entity.Attribute{{Name: "n"}},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	auth := rbac.NewRoleAuthorizer(reg)
@@ -182,7 +409,11 @@ func TestExecuteToolCallsProcedure(t *testing.T) {
 		}
 		return store.NewFakeRows([]string{"n"}, []any{int64(42)}), nil
 	}}
-	tc := Context{Role: "caller", DB: db, Dialect: dialect.Postgres{}, Registry: reg, Authorizer: auth}
+	events := []string{}
+	tc := Context{
+		Role: "caller", DB: db, Dialect: dialect.Postgres{}, Registry: reg,
+		Authorizer: auth, Gate: recordingGate{events: &events},
+	}
 	in, _ := json.Marshal(executeInput{Entity: "sp", Args: map[string]any{"x": 1}})
 	res, err := ExecuteTool{}.Run(context.Background(), in, tc)
 	if err != nil {
@@ -190,6 +421,9 @@ func TestExecuteToolCallsProcedure(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("procedure not called")
+	}
+	if len(events) != 1 || events[0] != "gate" {
+		t.Fatalf("execute cost gate events = %v", events)
 	}
 	if len(res.Content) != 1 || res.Content[0]["n"] != int64(42) {
 		t.Fatalf("got %v", res.Content)
@@ -208,6 +442,128 @@ func TestExecuteToolRejectsNonProcedure(t *testing.T) {
 	}
 }
 
+func TestEntityToolsRejectDMLDisabled(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{
+		Name:       "hidden",
+		Source:     "hidden",
+		Kind:       entity.KindProcedure,
+		Attributes: []entity.Attribute{{Name: "id"}},
+		Params:     []string{"id"},
+		Role: entity.RoleAccess{
+			entity.ActionRead: {"role"}, entity.ActionCreate: {"role"},
+			entity.ActionUpdate: {"role"}, entity.ActionDelete: {"role"},
+			entity.ActionExecute: {"role"}, entity.ActionAggregate: {"role"},
+		},
+		MCP: entity.MCPFlags{DMLTools: false},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	tc := Context{
+		Role: "role", Dialect: dialect.Postgres{}, Registry: reg,
+		Authorizer: rbac.NewRoleAuthorizer(reg),
+	}
+	cases := []struct {
+		name  string
+		tool  Tool
+		input string
+	}{
+		{"describe", DescribeTool{}, `{"entity":"hidden"}`},
+		{"read", ReadTool{}, `{"entity":"hidden"}`},
+		{"create", CreateTool{}, `{"entity":"hidden","values":{"id":1}}`},
+		{"update", UpdateTool{}, `{"entity":"hidden","filter":[],"set":{"id":1}}`},
+		{"delete", DeleteTool{}, `{"entity":"hidden","filter":[]}`},
+		{"execute", ExecuteTool{}, `{"entity":"hidden","args":{"id":1}}`},
+		{"aggregate", AggregateTool{}, `{"entity":"hidden","aggregates":[]}`},
+	}
+	for _, tcse := range cases {
+		t.Run(tcse.name, func(t *testing.T) {
+			_, err := tcse.tool.Run(context.Background(), json.RawMessage(tcse.input), tc)
+			if !errors.Is(err, ErrDMLToolsDisabled) {
+				t.Fatalf("got %v, want ErrDMLToolsDisabled", err)
+			}
+		})
+	}
+}
+
+func TestProcedureToolRunsWhenDMLDisabled(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{
+		Name: "refresh-cache", Source: "refresh_cache", Kind: entity.KindProcedure,
+		Params:     []string{"tenant"},
+		Role:       entity.RoleAccess{entity.ActionExecute: {"caller"}},
+		MCP:        entity.MCPFlags{CustomTool: true},
+		Attributes: []entity.Attribute{{Name: "ok"}},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	auth := rbac.NewRoleAuthorizer(reg)
+	db := &store.FakeDB{QueryFn: func(_ context.Context, _ string, args ...any) (store.Rows, error) {
+		if len(args) != 1 || args[0] != "acme" {
+			t.Fatalf("args = %v, want [acme]", args)
+		}
+		return store.NewFakeRows([]string{"ok"}, []any{true}), nil
+	}}
+	tc := Context{
+		Role: "caller", DB: db, Dialect: dialect.Postgres{},
+		Registry: reg, Authorizer: auth,
+	}
+	pt := ProcedureTool{Entity: e}
+	if pt.Info().Name != ProcedureToolName(e.Name) || strings.Contains(pt.Info().Name, "execute_entity") {
+		t.Fatalf("unstable or conflicting tool name %q", pt.Info().Name)
+	}
+	res, err := pt.Run(context.Background(), json.RawMessage(`{"tenant":"acme"}`), tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Content) != 1 || res.Content[0]["ok"] != true {
+		t.Fatalf("got %v", res.Content)
+	}
+}
+
+func TestExecuteToolDoesNotRetryQueryFailureWithExec(t *testing.T) {
+	t.Parallel()
+	want := errors.New("provider query failed")
+	e := entity.Entity{
+		Name: "sp", Source: "sp", Kind: entity.KindProcedure, Params: []string{"x"},
+		Role: entity.RoleAccess{entity.ActionExecute: {"caller"}}, MCP: entity.MCPFlags{DMLTools: true},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	db := &store.FakeDB{
+		QueryFn: func(context.Context, string, ...any) (store.Rows, error) { return nil, want },
+		ExecFn: func(context.Context, string, ...any) (store.Result, error) {
+			t.Fatal("failed procedure query must not be executed a second time")
+			return store.Result{}, nil
+		},
+	}
+	tc := Context{Role: "caller", DB: db, Dialect: dialect.Postgres{}, Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}
+	_, err := ExecuteTool{}.Run(context.Background(), json.RawMessage(`{"entity":"sp","args":{"x":1}}`), tc)
+	if !errors.Is(err, want) || len(db.Execs) != 0 {
+		t.Fatalf("error = %v, execs = %d", err, len(db.Execs))
+	}
+}
+
+func TestExecuteToolFiltersProcedureColumnsFailClosed(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{
+		Name: "sp", Source: "sp", Kind: entity.KindProcedure, Params: []string{"x"},
+		Attributes:  []entity.Attribute{{Name: "visible"}, {Name: "secret"}, {Name: "excluded", Excluded: true}},
+		Role:        entity.RoleAccess{entity.ActionExecute: {"caller"}},
+		FieldAccess: entity.FieldAccess{"caller": {Read: []string{"visible"}}},
+		MCP:         entity.MCPFlags{DMLTools: true},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return store.NewFakeRows([]string{"visible", "secret", "excluded", "undeclared"}, []any{1, 2, 3, 4}), nil
+	}}
+	tc := Context{Role: "caller", DB: db, Dialect: dialect.Postgres{}, Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}
+	result, err := ExecuteTool{}.Run(context.Background(), json.RawMessage(`{"entity":"sp","args":{"x":1}}`), tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Content) != 1 || len(result.Content[0]) != 1 || result.Content[0]["visible"] != 1 {
+		t.Fatalf("procedure output leaked fields: %#v", result.Content)
+	}
+}
+
 func TestCreateToolReturning(t *testing.T) {
 	t.Parallel()
 	e := entity.Entity{
@@ -215,6 +571,7 @@ func TestCreateToolReturning(t *testing.T) {
 		Attributes: []entity.Attribute{{Name: "id"}, {Name: "email"}},
 		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
 		Role:       entity.RoleAccess{entity.ActionCreate: {"writer"}},
+		MCP:        entity.MCPFlags{DMLTools: true},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	auth := rbac.NewRoleAuthorizer(reg)
@@ -239,6 +596,7 @@ func TestAggregateTool(t *testing.T) {
 		Attributes: []entity.Attribute{{Name: "dept"}, {Name: "salary"}},
 		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
 		Role:       entity.RoleAccess{entity.ActionAggregate: {"reader"}},
+		MCP:        entity.MCPFlags{DMLTools: true},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	auth := rbac.NewRoleAuthorizer(reg)
@@ -262,6 +620,7 @@ func TestAggregateToolRejectsInvalidFunc(t *testing.T) {
 		Name: "users", Source: "users",
 		Attributes: []entity.Attribute{{Name: "dept"}},
 		Role:       entity.RoleAccess{entity.ActionAggregate: {"reader"}},
+		MCP:        entity.MCPFlags{DMLTools: true},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	auth := rbac.NewRoleAuthorizer(reg)
@@ -284,6 +643,7 @@ func TestDeleteTool(t *testing.T) {
 		Attributes: []entity.Attribute{{Name: "id"}},
 		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
 		Role:       entity.RoleAccess{entity.ActionDelete: {"admin"}},
+		MCP:        entity.MCPFlags{DMLTools: true},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	auth := rbac.NewRoleAuthorizer(reg)
@@ -310,13 +670,60 @@ func TestReadToolCacheHit(t *testing.T) {
 		calls++
 		return store.NewFakeRows([]string{"id", "email"}, []any{int64(1), "a@x.com"}), nil
 	}}
+	sampler := &recordingAnalyzeSampler{}
 	tc := Context{Role: "reader", DB: db, Dialect: dialect.Postgres{}, Registry: reg, Authorizer: auth,
-		Cache: cache.NewTTLCache[[]map[string]any](time.Minute, 0)}
+		Cache: cache.NewTTLCache[[]map[string]any](time.Minute, 0), Feedback: cost.NewMemoryStore(),
+		Analyze: cost.AnalyzePolicy{
+			Sampler: sampler,
+			Config:  cost.AnalyzeConfig{Enabled: true, ReadOnly: true, SampleRate: 1, Timeout: time.Second},
+		}}
 	in, _ := json.Marshal(readInput{Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: 1}}})
 	_, _ = ReadTool{}.Run(context.Background(), in, tc)
 	_, _ = ReadTool{}.Run(context.Background(), in, tc)
 	if calls != 1 {
 		t.Fatalf("DB called %d times, want 1 (cache hit)", calls)
+	}
+	if len(sampler.calls) != 1 {
+		t.Fatalf("EXPLAIN ANALYZE called %d times, want only the real DB read", len(sampler.calls))
+	}
+}
+
+func TestTransactionReadBypassesGlobalCache(t *testing.T) {
+	t.Parallel()
+	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	auth := rbac.NewRoleAuthorizer(reg)
+	global := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return store.NewFakeRows([]string{"id"}, []any{int64(1)}), nil
+	}}
+	tx := &queryTx{query: func(context.Context, string, ...any) (store.Rows, error) {
+		return store.NewFakeRows([]string{"id"}, []any{int64(2)}), nil
+	}}
+	beginner := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+		return tx, nil
+	}}
+	manager := NewTransactionManager(time.Minute, 2)
+	defer manager.Close()
+	cc := cache.NewTTLCache[[]map[string]any](time.Minute, 0)
+	tc := Context{
+		Role: "reader", DB: global, Dialect: dialect.Postgres{}, Registry: reg, Authorizer: auth, Cache: cc,
+		Sources:      map[string]DataSource{"default": {DB: global, Dialect: dialect.Postgres{}}},
+		Transactions: manager,
+	}
+	base, _ := json.Marshal(readInput{Entity: "users", Fields: []string{"id"}})
+	if _, err := (ReadTool{}).Run(context.Background(), base, tc); err != nil {
+		t.Fatal(err)
+	}
+	token, err := manager.Begin(context.Background(), beginner, "", "reader", nil, "default", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inside, _ := json.Marshal(readInput{Entity: "users", Fields: []string{"id"}, Transaction: token})
+	result, err := (ReadTool{}).Run(context.Background(), inside, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content[0]["id"] != int64(2) {
+		t.Fatalf("transaction read used global cache: %#v", result.Content)
 	}
 }
 
@@ -370,6 +777,7 @@ func TestUpdateToolWriteGuardRejectsNonPK(t *testing.T) {
 		Attributes: []entity.Attribute{{Name: "id"}, {Name: "status"}},
 		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
 		Role:       entity.RoleAccess{entity.ActionUpdate: {"writer"}},
+		MCP:        entity.MCPFlags{DMLTools: true},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	auth := rbac.NewRoleAuthorizer(reg)
@@ -397,6 +805,7 @@ func TestReadToolCompositeKeyset(t *testing.T) {
 		Attributes: []entity.Attribute{{Name: "a"}, {Name: "b"}},
 		Keys:       []entity.Key{{Columns: []string{"a", "b"}, Primary: true}},
 		Role:       entity.RoleAccess{entity.ActionRead: {"reader"}},
+		MCP:        entity.MCPFlags{DMLTools: true},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	auth := rbac.NewRoleAuthorizer(reg)
@@ -435,6 +844,7 @@ func TestReadToolRejectsHiddenFieldFilter(t *testing.T) {
 		Attributes: []entity.Attribute{{Name: "id"}, {Name: "salary", Excluded: true}},
 		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
 		Role:       entity.RoleAccess{entity.ActionRead: {"reader"}},
+		MCP:        entity.MCPFlags{DMLTools: true},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	auth := rbac.NewRoleAuthorizer(reg)
@@ -483,6 +893,33 @@ func TestRunToolWiresHooksAndAudit(t *testing.T) {
 	}
 }
 
+func TestRunToolEnforcesBudgetAndAuditsRejection(t *testing.T) {
+	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return store.NewFakeRows(
+			[]string{"id", "email"},
+			[]any{int64(1), "a@x.com"},
+			[]any{int64(2), "b@x.com"},
+		), nil
+	}}
+	auditor := &recorderAuditor{}
+	tc := Context{
+		Role: "reader", DB: db, Dialect: dialect.Postgres{}, Registry: reg,
+		Authorizer: rbac.NewRoleAuthorizer(reg), Auditor: auditor,
+		Budget: budget.New(map[string]budget.Limits{
+			"reader": {MaxReturnedRows: 1},
+		}, nil),
+	}
+	input, _ := json.Marshal(readInput{Entity: "users"})
+	_, err := RunTool(context.Background(), ReadTool{}, input, tc)
+	if !errors.Is(err, budget.ErrExceeded) {
+		t.Fatalf("error = %v", err)
+	}
+	if len(auditor.events) != 1 || auditor.events[0].Allowed {
+		t.Fatalf("audit = %+v", auditor.events)
+	}
+}
+
 func TestRunToolEngineBackpressure(t *testing.T) {
 	t.Parallel()
 	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
@@ -506,4 +943,175 @@ func TestRunToolEngineBackpressure(t *testing.T) {
 	}
 	close(block)
 	<-done
+}
+
+func TestRunToolValidatesTransactionBeforeSingleflight(t *testing.T) {
+	manager := NewTransactionManager(time.Minute, 2)
+	defer manager.Close()
+	tx := &store.FakeTx{}
+	beginner := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+		return tx, nil
+	}}
+	token, err := manager.Begin(context.Background(), beginner, "session-a", "reader", nil, "default", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, _ := engine.New(engine.WithIOPool(2), engine.WithMaxInflight(4))
+	started := make(chan struct{})
+	release := make(chan struct{})
+	probe := blockingTransactionReadTool{started: started, release: release}
+	input := json.RawMessage(`{"transaction":"` + token + `"}`)
+	validDone := make(chan error, 1)
+	go func() {
+		_, err := RunTool(context.Background(), probe, input, Context{
+			Role: "reader", Session: "session-a", Transactions: manager, Engine: eng,
+		})
+		validDone <- err
+	}()
+	<-started
+	_, err = RunTool(context.Background(), probe, input, Context{
+		Role: "reader", Session: "session-b", Transactions: manager, Engine: eng,
+	})
+	if !errors.Is(err, ErrTransactionScope) {
+		t.Fatalf("cross-session transaction error = %v, want scope mismatch", err)
+	}
+	close(release)
+	if err := <-validDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAuthorizePrecedesGateAndHooksFire(t *testing.T) {
+	t.Parallel()
+	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	events := []string{}
+	hooks := &hook.Hooks{
+		OnAuthorize: func(context.Context, rbac.Request, rbac.Decision) {
+			events = append(events, "authorize-hook")
+		},
+		OnCostGate: func(context.Context, cost.Plan, cost.Score, string) {
+			events = append(events, "gate-hook")
+		},
+	}
+	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return store.NewFakeRows([]string{"id"}, []any{int64(1)}), nil
+	}}
+	tc := Context{
+		Role: "reader", DB: db, Dialect: dialect.Postgres{}, Registry: reg,
+		Authorizer: recordingAuthorizer{events: &events, dec: rbac.Decision{Allowed: true, Fields: []string{"id"}}},
+		Gate:       recordingGate{events: &events}, Hooks: hooks,
+	}
+	in, _ := json.Marshal(readInput{Entity: "users", Fields: []string{"id"}})
+	if _, err := (ReadTool{}).Run(context.Background(), in, tc); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(events, ","); got != "authorize,authorize-hook,gate,gate-hook" {
+		t.Fatalf("event order = %s", got)
+	}
+}
+
+func TestCreateAuthorizesWithoutCostGate(t *testing.T) {
+	t.Parallel()
+	e := testUsersEntity()
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	events := []string{}
+	db := &store.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
+		return store.Result{RowsAffected: 1}, nil
+	}}
+	tc := Context{
+		Role: "writer", DB: db, Dialect: dialect.MySQL{}, Registry: reg,
+		Authorizer: recordingAuthorizer{events: &events, dec: rbac.Decision{Allowed: true}},
+		Gate:       recordingGate{events: &events},
+		Hooks: &hook.Hooks{OnAuthorize: func(context.Context, rbac.Request, rbac.Decision) {
+			events = append(events, "authorize-hook")
+		}},
+	}
+	in, _ := json.Marshal(createInput{Entity: "users", Values: map[string]any{"email": "a@x.com"}})
+	if _, err := (CreateTool{}).Run(context.Background(), in, tc); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(events, ","); got != "authorize,authorize-hook" {
+		t.Fatalf("create events = %s; cost gate must not run", got)
+	}
+}
+
+func TestToolFieldACLByUsage(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{
+		Name:       "users",
+		Source:     "users",
+		Attributes: []entity.Attribute{{Name: "id"}, {Name: "email"}},
+		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
+		Role: entity.RoleAccess{
+			entity.ActionRead:      {"editor"},
+			entity.ActionCreate:    {"editor"},
+			entity.ActionUpdate:    {"editor"},
+			entity.ActionAggregate: {"editor"},
+		},
+		FieldAccess: entity.FieldAccess{
+			"editor": {Read: []string{"id"}, Write: []string{"email"}},
+		},
+		MCP: entity.MCPFlags{DMLTools: true},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	tc := Context{
+		Role: "editor", Dialect: dialect.Postgres{}, Registry: reg,
+		Authorizer: rbac.NewRoleAuthorizer(reg),
+	}
+	cases := []struct {
+		name  string
+		tool  Tool
+		input string
+	}{
+		{"projection", ReadTool{}, `{"entity":"users","fields":["email"]}`},
+		{"filter", ReadTool{}, `{"entity":"users","filter":[{"field":"email","op":"eq","value":"x"}]}`},
+		{"create values", CreateTool{}, `{"entity":"users","values":{"id":1}}`},
+		{"update set", UpdateTool{}, `{"entity":"users","filter":[{"field":"id","op":"eq","value":1}],"set":{"id":2}}`},
+		{"group by", AggregateTool{}, `{"entity":"users","groupBy":["email"],"aggregates":[{"func":"count"}]}`},
+	}
+	for _, tcse := range cases {
+		t.Run(tcse.name, func(t *testing.T) {
+			_, err := tcse.tool.Run(context.Background(), json.RawMessage(tcse.input), tc)
+			if !errors.Is(err, ErrUnauthorized) {
+				t.Fatalf("got %v, want ErrUnauthorized", err)
+			}
+		})
+	}
+}
+
+func TestReadCacheIsolatedByAuthorizationScope(t *testing.T) {
+	t.Parallel()
+	e := testUsersEntity()
+	e.Role[entity.ActionRead] = []string{"tenant-a", "tenant-b"}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	calls := 0
+	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		calls++
+		return store.NewFakeRows([]string{"id"}, []any{int64(calls)}), nil
+	}}
+	cc := cache.NewTTLCache[[]map[string]any](time.Minute, 0)
+	in, _ := json.Marshal(readInput{Entity: "users", Fields: []string{"id"}})
+	scopes := []struct {
+		role    string
+		subject map[string]any
+	}{
+		{"tenant-a", map[string]any{"tenant_id": 1}},
+		{"tenant-a", map[string]any{"tenant_id": 2}},
+		{"tenant-b", map[string]any{"tenant_id": 1}},
+		{"tenant-a", map[string]any{"tenant_id": 1}},
+		{"tenant-a", map[string]any{"tenant_id": 2}},
+		{"tenant-b", map[string]any{"tenant_id": 1}},
+	}
+	for _, scope := range scopes {
+		tc := Context{
+			Role: scope.role, Subject: scope.subject, DB: db, Dialect: dialect.Postgres{}, Registry: reg,
+			Authorizer: rbac.NewRoleAuthorizer(reg), Cache: cc,
+		}
+		if _, err := (ReadTool{}).Run(context.Background(), in, tc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 3 {
+		t.Fatalf("DB called %d times, want one isolated cache fill per role/subject", calls)
+	}
 }

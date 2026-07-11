@@ -25,6 +25,8 @@ type Event struct {
 	Cost          *cost.Plan
 	Allowed       bool
 	Error         string
+	Duration      time.Duration
+	ReturnedRows  int64
 }
 
 // Auditor records an Event. It must not block or fail the caller (invariant I12).

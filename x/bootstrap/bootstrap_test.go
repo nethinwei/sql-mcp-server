@@ -1,13 +1,98 @@
 package bootstrap
 
 import (
+	"context"
+	"errors"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/nethinwei/sql-mcp-server/codegen"
 	"github.com/nethinwei/sql-mcp-server/config"
+	"github.com/nethinwei/sql-mcp-server/cost"
+	"github.com/nethinwei/sql-mcp-server/dialect"
+	"github.com/nethinwei/sql-mcp-server/engine"
 	"github.com/nethinwei/sql-mcp-server/entity"
+	"github.com/nethinwei/sql-mcp-server/introspect"
 	"github.com/nethinwei/sql-mcp-server/relalg"
+	"github.com/nethinwei/sql-mcp-server/store"
+	"github.com/nethinwei/sql-mcp-server/tool"
 )
+
+func TestRecordProviderFailureClassification(t *testing.T) {
+	t.Parallel()
+	for _, err := range []error{
+		context.Canceled, context.DeadlineExceeded, tool.ErrUnauthorized,
+		tool.ErrInvalidInput, cost.ErrCostExceeded,
+	} {
+		if recordProviderFailure(err) {
+			t.Errorf("business/context error counted as provider failure: %v", err)
+		}
+	}
+	if !recordProviderFailure(errors.New("connection reset")) {
+		t.Fatal("provider error was not counted")
+	}
+}
+
+func TestAppCloseContextDrainsBeforeTransactionsAndProviders(t *testing.T) {
+	eng, _ := engine.New(engine.WithIOPool(1), engine.WithMaxInflight(2))
+	started := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		_, _ = eng.Submit(context.Background(), "", func(context.Context) (any, error) {
+			close(started)
+			<-release
+			return nil, nil
+		})
+	}()
+	<-started
+	tx := &store.FakeTx{}
+	beginner := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+		return tx, nil
+	}}
+	manager := tool.NewTransactionManager(time.Minute, 1)
+	if _, err := manager.Begin(context.Background(), beginner, "s", "reader", nil, "default", nil); err != nil {
+		t.Fatal(err)
+	}
+	provider := &fakeProvider{}
+	app := &App{Provider: provider, Engine: eng, Transactions: manager}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := app.CloseContext(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("CloseContext error = %v", err)
+	}
+	if tx.RolledBack || provider.closed != 0 {
+		t.Fatalf("resources closed before engine drain: rollback=%v provider=%d", tx.RolledBack, provider.closed)
+	}
+	close(release)
+	if err := app.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !tx.RolledBack || provider.closed != 1 {
+		t.Fatalf("resources not closed after drain: rollback=%v provider=%d", tx.RolledBack, provider.closed)
+	}
+}
+
+type fakeProvider struct {
+	store.FakeDB
+	dialect dialect.Dialect
+	closed  int
+}
+
+func (p *fakeProvider) Dialect() dialect.Dialect              { return p.dialect }
+func (p *fakeProvider) Explainer() cost.Explainer             { return nil }
+func (p *fakeProvider) Introspector() introspect.Introspector { return nil }
+func (p *fakeProvider) Close() error                          { p.closed++; return nil }
+func (p *fakeProvider) QueryContext(context.Context, string, ...any) (store.Rows, error) {
+	return store.NewFakeRows([]string{"id"}), nil
+}
+
+type fakeAnalyzeProvider struct{ *fakeProvider }
+
+func (p *fakeAnalyzeProvider) ExplainAnalyze(context.Context, codegen.Compiled) (cost.Plan, error) {
+	return cost.Plan{ActualRows: 1}, nil
+}
 
 func TestLoad(t *testing.T) {
 	t.Parallel()
@@ -58,7 +143,10 @@ func TestConfigToEntities(t *testing.T) {
 			Name: "users", Source: "t_user", Kind: "table", PrimaryKey: []string{"id"},
 			Fields: []config.FieldConfig{{Name: "id"}, {Name: "phone", Exclude: true}},
 			Roles:  config.RoleConfig{Read: []string{"reader"}},
-			MCP:    config.MCPFlags{DMLTools: true},
+			FieldACL: map[string]config.FieldACLConfig{
+				"reader": {Read: []string{"id"}},
+			},
+			MCP: config.MCPFlags{DMLTools: true},
 			RowPolicies: config.RowPolicies{
 				"reader": config.FilterConfig{"op": "eq", "field": "tenant_id", "value": 7},
 			},
@@ -80,6 +168,9 @@ func TestConfigToEntities(t *testing.T) {
 	}
 	if len(e.Attributes) != 2 {
 		t.Fatalf("attrs = %+v", e.Attributes)
+	}
+	if got := e.FieldAccess["reader"].Read; len(got) != 1 || got[0] != "id" {
+		t.Fatalf("field ACL = %+v", e.FieldAccess)
 	}
 	rp := e.RowPolicies["reader"]
 	if rp == nil {
@@ -173,5 +264,97 @@ func TestEnvFileResolver(t *testing.T) {
 	}
 	if _, err := r.Resolve("${MISSING_RES_ZZZ}"); err == nil {
 		t.Fatal("expected error for missing env")
+	}
+}
+
+func TestAssembleWithNamedProvidersRoutesAndClosesAll(t *testing.T) {
+	cfg := &config.Config{
+		Databases: map[string]config.DatabaseConfig{
+			"main":    {Driver: "postgres", DSN: "x"},
+			"archive": {Driver: "mysql", DSN: "y"},
+		},
+		Entities: []config.EntityConfig{
+			{Name: "users", DataSource: "main"},
+			{Name: "events", DataSource: "archive"},
+		},
+	}
+	cfg.ApplyDefaults()
+	main := &fakeProvider{dialect: dialect.Postgres{}}
+	archive := &fakeProvider{dialect: dialect.MySQL{}}
+	app, err := AssembleWithProviders(cfg, map[string]Provider{"main": main, "archive": archive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.Sources["main"].Dialect.Name() != "postgres" ||
+		app.Sources["archive"].Dialect.Name() != "mysql" {
+		t.Fatalf("sources = %+v", app.Sources)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if main.closed != 1 || archive.closed != 1 {
+		t.Fatalf("close counts = main:%d archive:%d", main.closed, archive.closed)
+	}
+}
+
+func TestAssembleWithProvidersRejectsBareTemplateForMultipleDatasources(t *testing.T) {
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{Driver: "postgres", DSN: "x"},
+		Cost: config.CostConfig{
+			RejectTemplates: []string{"SELECT blocked"},
+		},
+	}
+	cfg.ApplyDefaults()
+	_, err := AssembleWithProviders(cfg, map[string]Provider{
+		"primary": &fakeProvider{dialect: dialect.Postgres{}},
+		"replica": &fakeProvider{dialect: dialect.Postgres{}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "rejectTemplates") ||
+		!strings.Contains(err.Error(), "legacy bare SQL") ||
+		!strings.Contains(err.Error(), "primary:SELECT blocked") {
+		t.Fatalf("error = %v, want bare rejectTemplates migration error", err)
+	}
+}
+
+func TestAssembleExplainAnalyzeRequiresEveryDatasourceSupport(t *testing.T) {
+	cfg := &config.Config{
+		Databases: map[string]config.DatabaseConfig{
+			"main":    {Driver: "postgres", DSN: "x"},
+			"archive": {Driver: "mysql", DSN: "y"},
+		},
+		Entities: []config.EntityConfig{
+			{Name: "users", DataSource: "main"},
+			{Name: "events", DataSource: "archive"},
+		},
+		Cost: config.CostConfig{AQE: config.AQEConfig{
+			ExplainAnalyze: true, ReadOnly: true, SampleRate: 1, Timeout: time.Second,
+		}},
+	}
+	cfg.ApplyDefaults()
+	main := &fakeAnalyzeProvider{fakeProvider: &fakeProvider{dialect: dialect.Postgres{}}}
+	archive := &fakeProvider{dialect: dialect.MySQL{}}
+	_, err := AssembleWithProviders(cfg, map[string]Provider{"main": main, "archive": archive})
+	if err == nil || !strings.Contains(err.Error(), `datasource "archive"`) {
+		t.Fatalf("error = %v, want unsupported archive datasource", err)
+	}
+}
+
+func TestAssembleWiresAnalyzePolicyPerDatasource(t *testing.T) {
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{Driver: "postgres", DSN: "x"},
+		Entities: []config.EntityConfig{{Name: "users"}},
+		Cost: config.CostConfig{AQE: config.AQEConfig{
+			ExplainAnalyze: true, ReadOnly: true, SampleRate: 0.5, Timeout: time.Second,
+		}},
+	}
+	cfg.ApplyDefaults()
+	provider := &fakeAnalyzeProvider{fakeProvider: &fakeProvider{dialect: dialect.Postgres{}}}
+	app, err := AssembleWithProvider(cfg, provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	if !app.Analyze.Config.Enabled || app.Sources["default"].Analyze.Config.SampleRate != 0.5 {
+		t.Fatalf("analyze wiring = %+v / %+v", app.Analyze, app.Sources["default"].Analyze)
 	}
 }

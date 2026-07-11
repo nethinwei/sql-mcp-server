@@ -109,6 +109,18 @@ type ForeignKey struct {
 // RoleAccess maps each action to the roles allowed to perform it.
 type RoleAccess map[Action][]string
 
+// FieldPermissions is one role's field-level access. Read applies to
+// projections, filters, grouping, and aggregate inputs; Write applies to
+// create values and update assignments.
+type FieldPermissions struct {
+	Read  []string
+	Write []string
+}
+
+// FieldAccess maps role names to field-level permissions. Absence of a role
+// preserves entity-level authorization behavior for backwards compatibility.
+type FieldAccess map[string]FieldPermissions
+
 // MCPFlags controls how an entity participates in MCP.
 type MCPFlags struct {
 	DMLTools   bool // expose the seven DML tools for this entity
@@ -119,7 +131,7 @@ type MCPFlags struct {
 // package ANDs the role's predicate with the request predicate.
 type RowPolicies map[string]relalg.Predicate
 
-// Relationship describes a link to another entity for nested expansion (P1).
+// Relationship describes a link to another entity for nested expansion.
 type Relationship struct {
 	Name        string
 	Target      string
@@ -131,6 +143,7 @@ type Relationship struct {
 type Entity struct {
 	Name        string
 	Source      string
+	DataSource  string
 	Schema      string
 	Description string
 	Kind        Kind
@@ -138,6 +151,7 @@ type Entity struct {
 	Keys        []Key
 	ForeignKeys []ForeignKey
 	Role        RoleAccess
+	FieldAccess FieldAccess
 	MCP         MCPFlags
 	RowPolicies RowPolicies
 	Relations   []Relationship

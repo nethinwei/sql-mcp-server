@@ -68,13 +68,6 @@ type TxBeginner interface {
 	BeginTx(ctx context.Context, opts *TxOptions) (Tx, error)
 }
 
-// Canceler optionally cancels an in-flight query on the database side when a
-// context is cancelled (pg_cancel_backend / KILL QUERY). Providers implement
-// it to release DB resources promptly (invariant I11).
-type Canceler interface {
-	CancelQuery(ctx context.Context, connID int64) error
-}
-
 // Row is a single decoded result row keyed by column name.
 type Row = map[string]any
 

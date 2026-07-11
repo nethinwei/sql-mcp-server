@@ -4,16 +4,10 @@ package main
 
 import (
 	"context"
-	"errors"
-	"flag"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
-
-	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
-	"github.com/nethinwei/sql-mcp-server/x/mcpserver"
-	otelhooks "github.com/nethinwei/sql-mcp-server/x/otel"
 )
 
 func main() {
@@ -23,51 +17,7 @@ func main() {
 }
 
 func run() error {
-	configPath := flag.String("config", "config.yaml", "config file path")
-	transport := flag.String("transport", "stdio", "transport: stdio | http")
-	addr := flag.String("addr", ":8080", "http listen address")
-	role := flag.String("role", "", "runtime role (overrides config)")
-	flag.Parse()
-
-	cfg, err := bootstrap.Load(*configPath)
-	if err != nil {
-		return err
-	}
-	if *role != "" {
-		cfg.Server.Role = *role
-	}
-	app, err := bootstrap.Assemble(cfg)
-	if err != nil {
-		return err
-	}
-	// Wire OpenTelemetry hooks (no-op tracer without a provider; initialize an
-	// exporter in main to export spans).
-	app.Hooks = otelhooks.NewHooks()
-	defer func() { _ = app.Close() }()
-
-	srv := mcpserver.NewServer(app)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
-	switch *transport {
-	case "stdio":
-		if err := mcpserver.ServeStdio(ctx, srv); err != nil && !errors.Is(err, context.Canceled) {
-			return err
-		}
-	case "http":
-		httpCfg := mcpserver.HTTPConfig{
-			Addr:              *addr,
-			Token:             cfg.Server.Auth.Token,
-			TrustProxyHeaders: cfg.Server.Auth.TrustProxyHeaders,
-			TLSCert:           cfg.Server.Auth.TLS.Cert,
-			TLSKey:            cfg.Server.Auth.TLS.Key,
-			ClientCA:          cfg.Server.Auth.TLS.ClientCA,
-		}
-		if err := mcpserver.ServeHTTP(ctx, srv, httpCfg); err != nil {
-			return err
-		}
-	default:
-		return errors.New("unknown transport: " + *transport)
-	}
-	return nil
+	return runCLI(ctx, os.Args[1:], os.Stdout)
 }

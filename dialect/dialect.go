@@ -22,7 +22,7 @@ type Capabilities struct {
 	ExplainJSON      bool // supports EXPLAIN ... JSON output
 	ExplainCost      bool // EXPLAIN yields a numeric cost (SQLite does not)
 	ExplainAccurate  bool // estimate trustworthiness (PG high; MySQL/OB medium; SQLite low)
-	StatementTimeout bool // pg statement_timeout / mysql max_execution_time / ob ob_query_timeout
+	StatementTimeout bool // native timeout exists; core does not SET it across pooled connections
 	ScanRowCap       bool // ob max_read_size / mysql max_join_size (runtime scan-row hard cap)
 	SQLSafeUpdates   bool // mysql/ob sql_safe_updates (prevents full-table writes)
 	ResourceManager  bool // ob tenant / oracle resource isolation

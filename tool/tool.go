@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/audit"
+	"github.com/nethinwei/sql-mcp-server/budget"
 	"github.com/nethinwei/sql-mcp-server/cache"
+	"github.com/nethinwei/sql-mcp-server/codegen"
 	"github.com/nethinwei/sql-mcp-server/config"
 	"github.com/nethinwei/sql-mcp-server/cost"
 	"github.com/nethinwei/sql-mcp-server/dialect"
@@ -31,6 +33,9 @@ var (
 	ErrUnauthorized = errors.New("tool: unauthorized")
 	// ErrInvalidInput is returned for malformed tool input.
 	ErrInvalidInput = errors.New("tool: invalid input")
+	// ErrDMLToolsDisabled is returned when an entity is not exposed to the
+	// generic entity tools.
+	ErrDMLToolsDisabled = errors.New("tool: entity DML tools disabled")
 	// ErrUnsafeWrite is returned when an update/delete lacks a PK-scoped filter.
 	ErrUnsafeWrite = errors.New("tool: unsafe write without primary-key filter")
 	// ErrNotImplemented is returned by stub tools.
@@ -53,24 +58,42 @@ type Result struct {
 	Content          []map[string]any
 	IsError          bool
 	StructuredResult any
+	ReturnedRows     int64
 }
 
 // Context carries per-request dependencies (injected, no mutable global state).
 type Context struct {
-	Role       string
-	Subject    map[string]any // caller attributes for row-level ${subject.x} policies
-	DB         store.DB
-	Dialect    dialect.Dialect
-	Registry   *entity.Registry
-	Authorizer rbac.Authorizer
-	Masker     mask.Masker
-	Gate       cost.Gate
-	Cache      cache.Cache[[]map[string]any]
-	Engine     *engine.Engine
-	Auditor    audit.Auditor
-	Hooks      *hook.Hooks
-	Timeout    time.Duration
-	Feedback   cost.FeedbackStore
+	Role         string
+	Subject      map[string]any // caller attributes for row-level ${subject.x} policies
+	Session      string         // MCP session ID when the transport provides one
+	DB           store.DB
+	Dialect      dialect.Dialect
+	Registry     *entity.Registry
+	Authorizer   rbac.Authorizer
+	Masker       mask.Masker
+	Gate         cost.Gate
+	Cache        cache.Cache[[]map[string]any]
+	Engine       *engine.Engine
+	Auditor      audit.Auditor
+	Hooks        *hook.Hooks
+	Timeout      time.Duration
+	Feedback     cost.FeedbackStore
+	Analyze      cost.AnalyzePolicy
+	DataSource   string
+	Sources      map[string]DataSource
+	Budget       budget.Manager
+	BudgetLimits budget.Limits
+	Transactions *TransactionManager
+	TxBeginners  map[string]store.TxBeginner
+	Transaction  string
+}
+
+// DataSource is the per-entity execution route.
+type DataSource struct {
+	DB      store.DB
+	Dialect dialect.Dialect
+	Gate    cost.Gate
+	Analyze cost.AnalyzePolicy
 }
 
 // Tool is a single DML capability.
@@ -94,26 +117,71 @@ type CostGated interface {
 // A nil Engine/Auditor/Hooks each degrade to a no-op.
 func RunTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Result, error) {
 	name := t.Info().Name
+	start := time.Now()
+	var lease budget.Lease
+	if tc.Budget != nil {
+		var err error
+		lease, err = tc.Budget.Acquire(ctx, budget.Scope{
+			Role: tc.Role, Tenant: tenantKey(tc.Subject), Session: tc.Session,
+		})
+		if err != nil {
+			if tc.Auditor != nil {
+				_ = tc.Auditor.Record(ctx, audit.Event{
+					Time: time.Now(), Role: tc.Role, Tool: name, Input: input,
+					Allowed: false, Error: err.Error(),
+				})
+			}
+			return Result{}, err
+		}
+		ctx = lease.Context()
+		tc.BudgetLimits = lease.Limits()
+	}
 	ctx = tc.Hooks.FireBeforeTool(ctx, name, input)
 	var res Result
 	var err error
 	if tc.Engine != nil {
 		// Only read-only tools are de-duplicated, and the key includes role and
 		// subject so callers with different row-level scopes never share a
-		// result. Writes and procedure calls use an empty key (no coalescing).
+		// result. Transactional calls are never coalesced: validate the token
+		// identity before engine admission, then execute against its own Tx.
 		key := ""
 		if t.Info().ReadOnly {
-			key = name + "\x00" + tc.Role + "\x00" + fmt.Sprint(tc.Subject) + "\x00" + string(input)
+			transaction := transactionFromInput(input)
+			if transaction != "" {
+				if tc.Transactions == nil {
+					err = ErrTransactionNotFound
+				} else {
+					err = tc.Transactions.Validate(transaction, tc.Session, tc.Role, tc.Subject)
+				}
+			} else {
+				key = name + "\x00" + scopeKey(tc.Role, tc.Subject) + "\x00" + string(input)
+			}
 		}
-		var val any
-		val, err = tc.Engine.Submit(ctx, key, func(ctx context.Context) (any, error) {
-			return t.Run(ctx, input, tc)
-		})
-		if r, ok := val.(Result); ok {
-			res = r
+		if err == nil {
+			var val any
+			val, err = tc.Engine.Submit(ctx, key, func(ctx context.Context) (any, error) {
+				return t.Run(ctx, input, tc)
+			})
+			if r, ok := val.(Result); ok {
+				res = r
+			}
 		}
 	} else {
 		res, err = t.Run(ctx, input, tc)
+	}
+	if lease != nil {
+		returnedRows := res.ReturnedRows
+		if returnedRows == 0 {
+			returnedRows = int64(len(res.Content))
+		}
+		budgetErr := lease.Complete(budget.Usage{
+			ReturnedRows: returnedRows,
+			Duration:     time.Since(start),
+			Cost:         returnedRows + time.Since(start).Milliseconds(),
+		})
+		if err == nil && budgetErr != nil {
+			err = budgetErr
+		}
 	}
 	tc.Hooks.FireAfterTool(ctx, name, res.StructuredResult, err)
 	if err != nil {
@@ -121,15 +189,34 @@ func RunTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Re
 	}
 	if tc.Auditor != nil {
 		_ = tc.Auditor.Record(ctx, audit.Event{
-			Time:    time.Now(),
-			Role:    tc.Role,
-			Tool:    name,
-			Input:   input,
-			Allowed: err == nil,
-			Error:   errString(err),
+			Time:         time.Now(),
+			Role:         tc.Role,
+			Tool:         name,
+			Input:        input,
+			Allowed:      err == nil,
+			Error:        errString(err),
+			Duration:     time.Since(start),
+			ReturnedRows: int64(len(res.Content)),
 		})
 	}
 	return res, err
+}
+
+func transactionFromInput(input json.RawMessage) string {
+	var envelope struct {
+		Transaction string `json:"transaction"`
+	}
+	_ = json.Unmarshal(input, &envelope)
+	return envelope.Transaction
+}
+
+func tenantKey(subject map[string]any) string {
+	for _, key := range []string{"tenant", "tenant_id", "tenantID"} {
+		if value, ok := subject[key]; ok {
+			return fmt.Sprint(value)
+		}
+	}
+	return ""
 }
 
 func errString(err error) string {
@@ -197,40 +284,47 @@ type aggJSON struct {
 }
 
 type readInput struct {
-	Entity string         `json:"entity"`
-	Fields []string       `json:"fields,omitempty"`
-	Filter []condJSON     `json:"filter,omitempty"`
-	Limit  int64          `json:"limit,omitempty"`
-	Offset int64          `json:"offset,omitempty"`
-	Cursor map[string]any `json:"cursor,omitempty"`
+	Entity      string         `json:"entity"`
+	Transaction string         `json:"transaction,omitempty"`
+	Fields      []string       `json:"fields,omitempty"`
+	Expand      []string       `json:"expand,omitempty"`
+	Filter      []condJSON     `json:"filter,omitempty"`
+	Limit       int64          `json:"limit,omitempty"`
+	Offset      int64          `json:"offset,omitempty"`
+	Cursor      map[string]any `json:"cursor,omitempty"`
 }
 
 type createInput struct {
-	Entity string         `json:"entity"`
-	Values map[string]any `json:"values"`
+	Entity      string         `json:"entity"`
+	Transaction string         `json:"transaction,omitempty"`
+	Values      map[string]any `json:"values"`
 }
 
 type updateInput struct {
-	Entity string         `json:"entity"`
-	Filter []condJSON     `json:"filter"`
-	Set    map[string]any `json:"set"`
+	Entity      string         `json:"entity"`
+	Transaction string         `json:"transaction,omitempty"`
+	Filter      []condJSON     `json:"filter"`
+	Set         map[string]any `json:"set"`
 }
 
 type deleteInput struct {
-	Entity string     `json:"entity"`
-	Filter []condJSON `json:"filter"`
+	Entity      string     `json:"entity"`
+	Transaction string     `json:"transaction,omitempty"`
+	Filter      []condJSON `json:"filter"`
 }
 
 type aggregateInput struct {
-	Entity     string     `json:"entity"`
-	GroupBy    []string   `json:"groupBy,omitempty"`
-	Aggregates []aggJSON  `json:"aggregates"`
-	Filter     []condJSON `json:"filter,omitempty"`
+	Entity      string     `json:"entity"`
+	Transaction string     `json:"transaction,omitempty"`
+	GroupBy     []string   `json:"groupBy,omitempty"`
+	Aggregates  []aggJSON  `json:"aggregates"`
+	Filter      []condJSON `json:"filter,omitempty"`
 }
 
 type executeInput struct {
-	Entity string         `json:"entity"`
-	Args   map[string]any `json:"args,omitempty"`
+	Entity      string         `json:"entity"`
+	Args        map[string]any `json:"args,omitempty"`
+	Transaction string         `json:"transaction,omitempty"`
 }
 
 // ---- helpers ----
@@ -313,6 +407,53 @@ func toExceededError(d cost.Decision) error {
 	return &cost.ExceededError{Plan: p, Score: s, Hints: d.Hints, Soft: d.Soft}
 }
 
+func authorize(ctx context.Context, tc Context, req rbac.Request) (rbac.Decision, error) {
+	dec, err := tc.Authorizer.Authorize(ctx, req)
+	tc.Hooks.FireAuthorize(ctx, req, dec)
+	return dec, err
+}
+
+func checkGate(ctx context.Context, tc Context, compiled codegen.Compiled) (codegen.Compiled, error) {
+	checked, _, err := checkGateDetailed(ctx, tc, compiled)
+	return checked, err
+}
+
+func checkGateDetailed(ctx context.Context, tc Context, compiled codegen.Compiled) (codegen.Compiled, *cost.Plan, error) {
+	if tc.Gate == nil {
+		return compiled, nil, nil
+	}
+	dec, err := tc.Gate.Check(ctx, compiled)
+	if err != nil {
+		tc.Hooks.FireCostGate(ctx, cost.Plan{}, cost.Score{}, "hard")
+		return compiled, nil, err
+	}
+	plan, score := cost.Plan{}, cost.Score{}
+	if dec.Plan != nil {
+		plan = *dec.Plan
+	}
+	if dec.Score != nil {
+		score = *dec.Score
+	}
+	if dec.Plan != nil && tc.BudgetLimits.MaxScannedRows > 0 &&
+		dec.Plan.EstimatedRows > tc.BudgetLimits.MaxScannedRows {
+		return compiled, dec.Plan, budget.ErrExceeded
+	}
+	verdict := "allow"
+	if dec.Soft {
+		verdict = "soft"
+	} else if !dec.Allow {
+		verdict = "hard"
+	}
+	tc.Hooks.FireCostGate(ctx, plan, score, verdict)
+	if !dec.Allow {
+		return compiled, dec.Plan, toExceededError(dec)
+	}
+	if dec.Rewritten != nil {
+		compiled = *dec.Rewritten
+	}
+	return compiled, dec.Plan, nil
+}
+
 func maskRow(m mask.Masker, attrs []entity.Attribute, row map[string]any) {
 	rules := make(map[string]string, len(attrs))
 	for _, a := range attrs {
@@ -338,6 +479,13 @@ func argsKey(args []any) string {
 		return string(b)
 	}
 	return fmt.Sprintf("%#v", args)
+}
+
+func scopeKey(role string, subject map[string]any) string {
+	if b, err := json.Marshal(subject); err == nil {
+		return role + "\x00" + string(b)
+	}
+	return role + "\x00" + fmt.Sprintf("%#v", subject)
 }
 
 func sortedKeys(m map[string]any) []string {
@@ -380,6 +528,61 @@ func validateFields(res entity.Resolved, fields ...string) error {
 		}
 	}
 	return nil
+}
+
+func resolveDMLEntity(tc Context, name string) (entity.Resolved, error) {
+	res, ok := tc.Registry.Resolve(name)
+	if !ok {
+		return entity.Resolved{}, ErrEntityNotFound
+	}
+	if !res.Entity.MCP.DMLTools {
+		return entity.Resolved{}, ErrDMLToolsDisabled
+	}
+	return res, nil
+}
+
+func routeEntity(tc Context, e entity.Entity) (Context, error) {
+	name := e.DataSource
+	if name == "" {
+		name = "default"
+	}
+	tc.DataSource = name
+	if len(tc.Sources) == 0 {
+		return tc, nil
+	}
+	source, ok := tc.Sources[name]
+	if !ok {
+		return tc, fmt.Errorf("%w: datasource %q", ErrEntityNotFound, name)
+	}
+	tc.DB, tc.Dialect, tc.Gate, tc.Analyze = source.DB, source.Dialect, source.Gate, source.Analyze
+	if tc.Transaction != "" {
+		if tc.Transactions == nil {
+			return tc, ErrTransactionNotFound
+		}
+		db, err := tc.Transactions.DB(tc.Transaction, tc.Session, tc.Role, tc.Subject, name)
+		if err != nil {
+			return tc, err
+		}
+		tc.DB = db
+	}
+	return tc, nil
+}
+
+func afterWrite(tc Context, e entity.Entity, transaction string) error {
+	if transaction == "" {
+		if tc.Cache != nil {
+			return tc.Cache.Invalidate(e.Name)
+		}
+		return nil
+	}
+	if tc.Transactions == nil {
+		return ErrTransactionNotFound
+	}
+	datasource := e.DataSource
+	if datasource == "" {
+		datasource = "default"
+	}
+	return tc.Transactions.MarkDirty(transaction, tc.Session, tc.Role, tc.Subject, datasource, e.Name)
 }
 
 // withTimeout returns a context bounded by tc.Timeout, or ctx unchanged when

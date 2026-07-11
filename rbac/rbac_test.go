@@ -126,3 +126,49 @@ func TestAuthorizeAllVisibleWhenNoFields(t *testing.T) {
 		t.Fatalf("fields = %v, want 2 (id, email)", dec.Fields)
 	}
 }
+
+func TestAuthorizeFieldACL(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{
+		Name:       "users",
+		Source:     "users",
+		Attributes: []entity.Attribute{{Name: "id"}, {Name: "email"}, {Name: "secret", Excluded: true}},
+		Role: entity.RoleAccess{
+			entity.ActionRead:   {"editor", "blind"},
+			entity.ActionUpdate: {"editor"},
+		},
+		FieldAccess: entity.FieldAccess{
+			"editor": {Read: []string{"id"}, Write: []string{"email"}},
+			"blind":  {},
+		},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	a := NewRoleAuthorizer(reg)
+
+	allowed, _ := a.Authorize(context.Background(), Request{
+		Role: "editor", Entity: "users", Action: entity.ActionUpdate,
+		ReadFields: []string{"id"}, WriteFields: []string{"email"},
+	})
+	if !allowed.Allowed {
+		t.Fatalf("expected allowed field combination: %s", allowed.Reason)
+	}
+	denied, _ := a.Authorize(context.Background(), Request{
+		Role: "editor", Entity: "users", Action: entity.ActionUpdate,
+		ReadFields: []string{"email"}, WriteFields: []string{"email"},
+	})
+	if denied.Allowed {
+		t.Fatal("write-only field must not be usable in a filter")
+	}
+	read, _ := a.Authorize(context.Background(), Request{
+		Role: "editor", Entity: "users", Action: entity.ActionRead,
+	})
+	if len(read.Fields) != 1 || read.Fields[0] != "id" {
+		t.Fatalf("default projection = %v, want [id]", read.Fields)
+	}
+	blind, _ := a.Authorize(context.Background(), Request{
+		Role: "blind", Entity: "users", Action: entity.ActionRead,
+	})
+	if blind.Allowed {
+		t.Fatal("configured role with no readable fields must fail closed")
+	}
+}

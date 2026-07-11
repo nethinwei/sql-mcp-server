@@ -11,12 +11,14 @@ import (
 
 // Request describes an authorization query.
 type Request struct {
-	Role      string
-	Entity    string
-	Action    entity.Action
-	Fields    []string         // requested fields; nil/empty means all visible
-	Subject   map[string]any   // caller attributes for ${subject.x} row-policy resolution
-	Predicate relalg.Predicate // the request's own filter (for context, not mutated here)
+	Role        string
+	Entity      string
+	Action      entity.Action
+	Fields      []string         // requested fields; nil/empty means all visible
+	ReadFields  []string         // fields used by projections, filters, grouping, or aggregates
+	WriteFields []string         // fields assigned by create/update
+	Subject     map[string]any   // caller attributes for ${subject.x} row-policy resolution
+	Predicate   relalg.Predicate // the request's own filter (for context, not mutated here)
 }
 
 // Decision is the authorization outcome. When Allowed, Fields is the
@@ -56,9 +58,29 @@ func (a *RoleAuthorizer) Authorize(_ context.Context, req Request) (Decision, er
 	if !roleAllowed(res.Entity.Role, req.Action, req.Role) {
 		return Decision{Allowed: false, Reason: fmt.Sprintf("role %q not permitted to %s %q", req.Role, req.Action, req.Entity)}, nil
 	}
+	readFields, writeFields := req.ReadFields, req.WriteFields
+	if len(readFields) == 0 && len(writeFields) == 0 {
+		switch req.Action {
+		case entity.ActionCreate, entity.ActionUpdate:
+			writeFields = req.Fields
+		default:
+			readFields = req.Fields
+		}
+	}
+	if acl, configured := res.Entity.FieldAccess[req.Role]; configured {
+		if req.Action == entity.ActionRead && len(req.Fields) == 0 && len(acl.Read) == 0 {
+			return Decision{Allowed: false, Reason: fmt.Sprintf("role %q has no readable fields", req.Role)}, nil
+		}
+		if denied := firstDenied(readFields, acl.Read, res.Attributes); denied != "" {
+			return Decision{Allowed: false, Reason: fmt.Sprintf("field %q is not readable by role %q", denied, req.Role)}, nil
+		}
+		if denied := firstDenied(writeFields, acl.Write, res.Attributes); denied != "" {
+			return Decision{Allowed: false, Reason: fmt.Sprintf("field %q is not writable by role %q", denied, req.Role)}, nil
+		}
+	}
 	return Decision{
 		Allowed:   true,
-		Fields:    projectFields(res.Attributes, req.Fields),
+		Fields:    projectFieldsForRole(res.Attributes, req.Fields, res.Entity.FieldAccess, req.Role),
 		RowFilter: resolveSubject(res.Entity.RowPolicies[req.Role], req.Subject),
 	}, nil
 }
@@ -97,6 +119,50 @@ func projectFields(visible []entity.Attribute, requested []string) []string {
 		}
 	}
 	return out
+}
+
+func projectFieldsForRole(visible []entity.Attribute, requested []string, access entity.FieldAccess, role string) []string {
+	acl, configured := access[role]
+	if !configured {
+		return projectFields(visible, requested)
+	}
+	allowed := make(map[string]bool, len(acl.Read))
+	for _, f := range acl.Read {
+		allowed[f] = true
+	}
+	projected := projectFields(visible, requested)
+	out := projected[:0]
+	for _, f := range projected {
+		if fieldAllowed(f, allowed, visible) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func firstDenied(requested, configured []string, visible []entity.Attribute) string {
+	allowed := make(map[string]bool, len(configured))
+	for _, f := range configured {
+		allowed[f] = true
+	}
+	for _, f := range requested {
+		if !fieldAllowed(f, allowed, visible) {
+			return f
+		}
+	}
+	return ""
+}
+
+func fieldAllowed(field string, allowed map[string]bool, visible []entity.Attribute) bool {
+	if allowed[field] {
+		return true
+	}
+	for _, a := range visible {
+		if (a.Name == field || a.Alias == field) && (allowed[a.Name] || a.Alias != "" && allowed[a.Alias]) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveSubject walks a row-policy predicate and replaces ${subject.attr}
