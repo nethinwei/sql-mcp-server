@@ -70,31 +70,10 @@ sql-mcp-server validate --config /absolute/path/to/config.yaml
 Docker 方式仍需要管理员提供 YAML。只有 DSN 无法安全推断可暴露表、字段、租户策略
 和预算，因此项目不会自动暴露数据库 schema。
 
-## 验证示例
+## 验证
 
-### 授权读取与脱敏
-
-```json
-{
-  "entity": "users",
-  "filter": [{"field": "id", "op": "eq", "value": 1}]
-}
-```
-
-预期返回授权行，email 已脱敏。
-
-### 行策略隔离
-
-将 `id` 改为属于其他 tenant 的记录，预期返回空数组，不返回越权错误详情。
-
-### 拒绝路径
-
-```json
-{"entity": "users"}
-```
-
-无过滤的高成本读取应被拒绝。请求未列入 `fieldACL.read` 的字段也应被拒绝，默认
-工具列表中不应出现 `delete_record`。
+授权读取、mask、tenant 隔离和拒绝路径的 Inspector 请求统一见
+[五分钟快速体验](quickstart.md)，本文件不重复维护演示 payload。
 
 维护者提交魔搭前运行：
 

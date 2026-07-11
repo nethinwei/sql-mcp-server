@@ -1,50 +1,37 @@
 # SQL MCP Server
 
-面向 AI agent 的**受控 SQL 数据访问网关**。通过实体模型、关系代数 IR 与参数化
-codegen 暴露 PostgreSQL、MySQL、OceanBase——**不接受任意 SQL，不提供 DDL**。
+> **The governed SQL gateway for untrusted AI agents.**
 
-设计参考 Microsoft Data API Builder 的 MCP 思路，并在成本闸门、多租户预算与
-fail-closed 安全边界上做了强化。详见 [架构](docs/architecture.md)。
+面向不可信 AI Agent 的受控 SQL 数据访问网关。通过显式 Entity、关系代数 IR 和
+参数化 codegen 访问 PostgreSQL、MySQL 与 OceanBase，**不接受任意 SQL，不提供
+DDL**。
 
-## 为什么选择
+## 核心差异
 
-| 诉求 | 做法 |
-|------|------|
-| 防止 agent 随意查库 | 仅暴露配置中的实体与字段；值参数化，标识符来自元数据 |
-| 防止误删/全表扫 | 写保护、EXPLAIN 预筛、确定性行数/字节上限、查询超时 |
-| 多团队/多角色 | RBAC、字段 ACL、行级策略、字段脱敏、按 session 预算 |
-| 可运维 | 配置热重载、异步审计、OpenTelemetry hook、分层测试 |
+- **确定性执行**：Agent 只能组合受控工具和白名单 IR；
+- **字段与行治理**：RBAC、字段 ACL、row policy 和 mask 统一强制；
+- **成本可控**：EXPLAIN 预筛、结果上限、超时和 session/tenant 预算；
+- **默认拒绝**：安全能力无法证明时 fail closed；
+- **可审计**：配置热重载、异步审计和 OpenTelemetry hook。
 
-安全行为与 provider 差异以 [安全模型](docs/security.md) 为准，**不以本页为准**；
-威胁、控制、验证证据与剩余风险见 [威胁模型](docs/threat-model.md)。
+安全行为与 Provider 差异以[安全模型](docs/security.md)为准，**不以本页为准**；
+威胁、控制、验证证据与剩余风险见[威胁模型](docs/threat-model.md)。
 
-## 功能概览
+## 五分钟体验
 
-**MCP 面** — stdio 与 streamable HTTP；实体工具（describe / read / create /
-update / delete / execute / aggregate）与显式事务（begin / commit / rollback）；
-授权 schema resource；`safe_read`、`safe_aggregate`、`rewrite_query` prompts。
-
-**治理** — 参数化 SQL；RBAC + 字段 ACL + 行级策略 + mask；不可关闭的
-Safety/Enforcement 成本链；模板 fingerprint 与读取反馈；角色/租户进程内预算。
-
-**数据** — 命名多数据源；同源关系展开；offset / keyset 分页；prepared
-statement 缓存。
-
-## 快速开始
-
-**Docker（推荐）：** 只需 Docker 与 Docker Compose，即可启动 PostgreSQL 示例、
-执行授权读取并观察全表读取/越权字段被拒绝：
+只需 Docker 与 Docker Compose：
 
 ```sh
 docker compose -f examples/quickstart/compose.yaml up -d --wait
 curl -fsS http://127.0.0.1:8080/healthz
 ```
 
-完整的 Inspector 调用、tenant 隔离和拒绝示例见
-[5 分钟快速体验](docs/quickstart.md)。
+完整的 MCP Inspector 调用、tenant 隔离、mask 和拒绝场景见
+[五分钟快速体验](docs/quickstart.md)。
 
-**源码构建：** 要求 Go 1.25.12+ 和一个
-[已验证数据库版本](docs/supported-versions.md)。
+## 安装与接入
+
+源码构建要求 Go 1.25.12+ 和一个[已验证数据库版本](docs/supported-versions.md)：
 
 ```sh
 git clone https://github.com/nethinwei/sql-mcp-server.git
@@ -52,70 +39,39 @@ cd sql-mcp-server
 make build
 ```
 
-初始化配置、注入 DSN、校验并启动（stdio，适合本机 MCP 客户端）：
+- Cursor、Claude Desktop 和 VS Code 的 stdio 模板：
+  [`examples/clients/`](examples/clients/)；
+- 完整配置模板：[`examples/config.example.yaml`](examples/config.example.yaml)；
+- CLI、启动、热重载和升级：[运行与运维](docs/operations.md)；
+- 魔搭分发展示：[ModelScope 上架与使用](docs/modelscope.md)。
 
-```sh
-sql-mcp-server init --config config.yaml --driver postgres
-# 编辑 config.yaml，设置 dsn（可用 ${ENV} 占位符）
-sql-mcp-server validate --config config.yaml
-sql-mcp-server serve --config config.yaml --transport stdio --role reader
-```
+## 按角色阅读
 
-HTTP（开发时建议绑定 loopback）：
+### 首次体验与集成
 
-```sh
-sql-mcp-server serve --config config.yaml --transport http --addr 127.0.0.1:8080
-```
+- [五分钟快速体验](docs/quickstart.md)：唯一完整 Demo 与 Inspector 示例；
+- [配置参考](docs/configuration.md)：公开 YAML 配置的唯一事实源；
+- [Provider 兼容性](docs/provider-compatibility.md)与
+  [支持版本](docs/supported-versions.md)：当前能力和验证边界。
 
-完整配置示例见 [`examples/config.example.yaml`](examples/config.example.yaml)。
-运行细节、热重载与 secret 见 [运行与 CLI](docs/operations.md)。
+### 部署与安全
 
-> **注意：** 默认 HTTP 地址 `:8080` 监听所有接口。非 loopback 且未配置 bearer
-> token 或 mTLS 时，服务会 **fail closed** 并拒绝启动。
+- [运行与运维](docs/operations.md)：CLI、生命周期、监控和升级；
+- [安全模型](docs/security.md)：运行时安全行为的唯一事实源；
+- [威胁模型](docs/threat-model.md)：威胁、控制、测试证据与剩余风险；
+- [SECURITY.md](SECURITY.md)：漏洞披露流程。
 
-### 连接 MCP 客户端
+### 开发与维护
 
-**stdio**（Cursor、Claude Desktop、VS Code）：在 MCP 配置中指定发布二进制路径
-与 `serve` 参数；可复制 [`examples/clients/`](examples/clients/) 中的模板。
+- [架构](docs/architecture.md)与[不变量](docs/invariants.md)；
+- [测试与 CI](docs/testing.md)：测试命令、CI、fuzz 和发布前门禁；
+- [贡献指南](CONTRIBUTING.md)。
 
-**HTTP**：端点为 `/mcp`；可用 MCP Inspector 探测：
+### 版本与规划
 
-```sh
-npx -y @modelcontextprotocol/inspector http://127.0.0.1:8080/mcp
-```
-
-**魔搭 ModelScope**：使用根目录 [`mcp_config.json`](mcp_config.json) 进行
-“仅本地可用/分发展示”配置；提交资料、Docker 方式和安全边界见
-[魔搭上架与使用](docs/modelscope.md)。
-
-## 文档
-
-| 主题 | 链接 |
-|------|------|
-| 配置 | [configuration.md](docs/configuration.md) |
-| 安全边界 | [security.md](docs/security.md) · [threat-model.md](docs/threat-model.md) · [SECURITY.md](SECURITY.md) |
-| 运行与升级 | [operations.md](docs/operations.md) |
-| 架构 | [architecture.md](docs/architecture.md) |
-| 不变量 | [invariants.md](docs/invariants.md) |
-| 测试与 CI | [testing.md](docs/testing.md) |
-| 5 分钟体验 | [quickstart.md](docs/quickstart.md) |
-| 魔搭 ModelScope | [modelscope.md](docs/modelscope.md) |
-| Provider 兼容性 | [provider-compatibility.md](docs/provider-compatibility.md) |
-| Provider 路线图 | [provider-roadmap.md](docs/provider-roadmap.md) |
-| 支持版本 | [supported-versions.md](docs/supported-versions.md) |
-| 变更记录 | [CHANGELOG.md](CHANGELOG.md) |
-| 发布说明 | [docs/releases/](docs/releases/) |
-| 路线图 | [roadmap.md](docs/roadmap.md) |
-| 参与贡献 | [CONTRIBUTING.md](CONTRIBUTING.md) |
-
-版本与迁移说明见 [CHANGELOG](CHANGELOG.md) 及各 [发布说明](docs/releases/)；
-未发布规划见 [roadmap](docs/roadmap.md)。
-
-## 安全
-
-如发现漏洞，请参阅 [SECURITY.md](SECURITY.md)。部署前请阅读
-[安全模型](docs/security.md) 中的信任边界与已知限制；安全分析与证据状态见
-[威胁模型](docs/threat-model.md)。
+- 已发布变更：[CHANGELOG](CHANGELOG.md)和[发布说明](docs/releases/)；
+- 未发布产品规划：[Roadmap](docs/roadmap.md)；
+- 数据库候选：[Provider Roadmap](docs/provider-roadmap.md)。
 
 ## 许可
 

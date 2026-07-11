@@ -17,15 +17,9 @@ sql-mcp-server explain --config config.yaml --entity users
 
 ### 发布产物与完整性验证
 
-创建 RC/GA tag 前先运行：
-
-```sh
-make release-preflight RELEASE_VERSION=0.1.4
-```
-
-该命令复用 GitHub workflow 使用的验证脚本，覆盖完整测试、跨平台 snapshot、
-Registry metadata、容器 SBOM 和 quickstart。GitHub OIDC 签名及对 GHCR/Registry
-的实际写入只能在 tag workflow 中完成。
+RC/GA tag 的 `release-preflight`、依赖和 CI 门禁统一见
+[测试与 CI](testing.md#本地检查)。本节只说明已生成发布产物的验证和运行时使用。
+GitHub OIDC 签名及对 GHCR/Registry 的实际写入只能在 tag workflow 中完成。
 
 GitHub Release 提供 Linux、macOS、Windows 的 amd64/arm64 归档、`checksums.txt`、
 每个归档的 SPDX JSON SBOM，以及 checksum 的 Sigstore bundle。以 Linux amd64
@@ -69,11 +63,9 @@ sql-mcp-server serve --config config.yaml --transport http --addr 127.0.0.1:8080
 `--transport`/`--addr` 时使用 YAML 中的 `server.transport`/`addr`，再回退到
 `stdio`/`:8080`。`--role` 同样可覆盖 YAML 默认角色。
 
-HTTP 暴露 `/mcp` 和无需认证的 `/healthz`。非 loopback 监听必须在配置中提供
-bearer token 或 mTLS。地址默认值 `:8080` 监听所有接口，属于非 loopback；
-因此选择 HTTP 但未改为 loopback、也未配置认证时，服务会 fail closed 并拒绝
-启动。TLS、反向代理身份 header 与已知边界见
-[security.md](security.md)。
+HTTP 暴露 `/mcp` 和无需认证的 `/healthz`。未认证的非 loopback 监听会 fail
+closed；认证、TLS、反向代理身份 header 与已知边界以
+[安全模型](security.md)为准。
 
 ## Secret 与启动检查
 

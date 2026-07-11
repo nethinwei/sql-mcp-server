@@ -1,5 +1,7 @@
 # 5 分钟快速体验
 
+本文件是 quickstart、MCP Inspector 请求和 allow/deny 演示的唯一完整出处。
+
 该示例启动 PostgreSQL 16 和已发布的 SQL MCP Server 镜像，演示低权限读取、
 字段脱敏、tenant 行隔离及拒绝路径。只需要 Docker、Docker Compose 和一个 MCP
 客户端。

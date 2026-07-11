@@ -1,5 +1,8 @@
 # 测试与 CI
 
+本文件是本地测试、CI job、fuzz target、integration/e2e 和发布前门禁的唯一事实源。
+已生成发布产物的 checksum、签名和运行时验证见[运行与运维](operations.md)。
+
 ## 本地检查
 
 无需数据库的默认检查：
