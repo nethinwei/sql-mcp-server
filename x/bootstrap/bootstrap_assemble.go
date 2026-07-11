@@ -157,7 +157,11 @@ func dataSourceForProvider(
 ) (tool.DataSource, error) {
 	explainer := prov.Explainer()
 	if cfg.Cost.EnabledOrDefault() && prov.Dialect().Capabilities().ExplainCost && explainer == nil {
-		return tool.DataSource{}, fmt.Errorf("datasource %q (%s) has no EXPLAIN implementation", name, prov.Dialect().Name())
+		return tool.DataSource{}, fmt.Errorf(
+			"datasource %q (%s) has no EXPLAIN implementation",
+			name,
+			prov.Dialect().Name(),
+		)
 	}
 	sampler, supportsAnalyze := prov.(cost.AnalyzeSampler)
 	if cfg.Cost.AQE.ExplainAnalyze && !supportsAnalyze {

@@ -1,4 +1,5 @@
 GO ?= go
+GORELEASER ?= goreleaser
 VERSION ?= dev
 VERSION_PACKAGE := github.com/nethinwei/sql-mcp-server/version.value
 LDFLAGS ?= -X $(VERSION_PACKAGE)=$(VERSION)
@@ -7,7 +8,7 @@ CORE_COVERAGE_MIN := 80.0
 CORE_PACKAGES := ./core/...
 
 .PHONY: fmt fmt-check vet build test test-integration test-e2e lint coverage \
-	coverage-check govulncheck ci ci-local ci-full tidy
+	coverage-check govulncheck release-check release-snapshot ci ci-local ci-full tidy
 
 # Format all Go sources in place (gofmt + 120-column line shortening).
 fmt:
@@ -22,6 +23,13 @@ vet:
 
 build:
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/sql-mcp-server
+
+release-check:
+	$(GORELEASER) check
+
+release-snapshot: release-check
+	$(GORELEASER) release --snapshot --clean --skip=publish,sign
+	cd dist && sha256sum --check checksums.txt
 
 # Unit tests (core packages, no docker).
 test:

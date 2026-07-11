@@ -48,7 +48,11 @@ func prepareExecute(
 		return entity.Resolved{}, tc, rbac.Decision{}, ErrDMLToolsDisabled
 	}
 	if res.Entity.Kind != entity.KindProcedure {
-		return entity.Resolved{}, tc, rbac.Decision{}, fmt.Errorf("%w: %q is not a procedure", ErrInvalidInput, in.Entity)
+		return entity.Resolved{}, tc, rbac.Decision{}, fmt.Errorf(
+			"%w: %q is not a procedure",
+			ErrInvalidInput,
+			in.Entity,
+		)
 	}
 	if !res.Entity.MCP.TrustedProcedure {
 		return entity.Resolved{}, tc, rbac.Decision{}, ErrUnauthorized

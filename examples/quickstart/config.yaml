@@ -1,0 +1,78 @@
+version: "1"
+
+server:
+  transport: http
+  addr: "0.0.0.0:8080"
+  role: reader
+  auth:
+    token: "quickstart-only-token"
+    trustProxyHeaders: true
+    trustedProxyCIDRs: ["172.30.0.0/24"]
+
+databases:
+  primary:
+    driver: postgres
+    dsn: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?sslmode=disable"
+
+tools:
+  describeEntities: true
+  readRecords: true
+  aggregateRecords: true
+
+cost:
+  enabled: true
+  maxRows: 100
+  maxBytes: 1048576
+  rejectFullScan: true
+  whitelistPKPoint: true
+  requireKnownScan: true
+  queryTimeout: 5s
+
+budget:
+  roles:
+    reader:
+      maxConcurrent: 2
+      maxExecution: 5s
+      maxEstimatedScannedRows: 1000
+      maxReturnedRows: 100
+      maxReturnedBytes: 1048576
+      maxSessionCost: 5000
+  tenants:
+    "7":
+      maxConcurrent: 1
+      maxExecution: 3s
+      maxEstimatedScannedRows: 100
+      maxReturnedRows: 20
+      maxReturnedBytes: 262144
+      maxSessionCost: 1000
+
+cache:
+  enabled: false
+
+audit:
+  enabled: false
+
+entities:
+  - name: users
+    source: app_user
+    datasource: primary
+    schema: public
+    kind: table
+    description: "Quickstart users"
+    primaryKey: [id]
+    roles:
+      read: [reader]
+      aggregate: [reader]
+    fieldACL:
+      reader:
+        read: [id, email]
+        write: []
+    rowPolicies:
+      reader:
+        op: eq
+        field: tenant_id
+        value: "${subject.tenant_id}"
+    fields:
+      - {name: id, description: "User ID"}
+      - {name: email, description: "Masked email", mask: email}
+      - {name: tenant_id, description: "Tenant boundary"}

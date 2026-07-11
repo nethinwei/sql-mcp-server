@@ -1,0 +1,72 @@
+version: 2
+
+project_name: sql-mcp-server
+
+builds:
+  - id: sql-mcp-server
+    main: ./cmd/sql-mcp-server
+    binary: sql-mcp-server
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - >-
+        -s -w
+        -X github.com/nethinwei/sql-mcp-server/version.value={{ .Tag }}
+
+archives:
+  - id: default
+    ids:
+      - sql-mcp-server
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "arm64" }}arm64
+      {{- else }}{{ .Arch }}{{ end }}
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+signs:
+  - id: checksums
+    cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - --bundle=${signature}
+      - ${artifact}
+      - --yes
+
+sboms:
+  - id: archives
+    artifacts: archive
+    cmd: syft
+    args:
+      - $artifact
+      - --output
+      - spdx-json=$document
+
+changelog:
+  disable: true
+
+release:
+  prerelease: auto

@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "sql-mcp-server": {
+      "command": "/absolute/path/to/sql-mcp-server",
+      "args": [
+        "serve",
+        "--config",
+        "/absolute/path/to/config.yaml",
+        "--transport",
+        "stdio",
+        "--role",
+        "reader"
+      ]
+    }
+  }
+}

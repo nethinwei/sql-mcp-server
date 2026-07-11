@@ -31,7 +31,19 @@ statement 缓存。
 
 ## 快速开始
 
-**要求：** Go 1.25+，可连接的支持数据库之一。
+**Docker（推荐）：** 只需 Docker 与 Docker Compose，即可启动 PostgreSQL 示例、
+执行授权读取并观察全表读取/越权字段被拒绝：
+
+```sh
+docker compose -f examples/quickstart/compose.yaml up -d --wait
+curl -fsS http://127.0.0.1:8080/healthz
+```
+
+完整的 Inspector 调用、tenant 隔离和拒绝示例见
+[5 分钟快速体验](docs/quickstart.md)。
+
+**源码构建：** 要求 Go 1.25+ 和一个
+[已验证数据库版本](docs/supported-versions.md)。
 
 ```sh
 git clone https://github.com/nethinwei/sql-mcp-server.git
@@ -62,7 +74,8 @@ sql-mcp-server serve --config config.yaml --transport http --addr 127.0.0.1:8080
 
 ### 连接 MCP 客户端
 
-**stdio**（Cursor 等）：在 MCP 配置中指定编译产物路径与 `serve` 参数。
+**stdio**（Cursor、Claude Desktop、VS Code）：在 MCP 配置中指定发布二进制路径
+与 `serve` 参数；可复制 [`examples/clients/`](examples/clients/) 中的模板。
 
 **HTTP**：端点为 `/mcp`；可用 MCP Inspector 探测：
 
@@ -80,6 +93,9 @@ npx -y @modelcontextprotocol/inspector http://127.0.0.1:8080/mcp
 | 架构 | [architecture.md](docs/architecture.md) |
 | 不变量 | [invariants.md](docs/invariants.md) |
 | 测试与 CI | [testing.md](docs/testing.md) |
+| 5 分钟体验 | [quickstart.md](docs/quickstart.md) |
+| Provider 兼容性 | [provider-compatibility.md](docs/provider-compatibility.md) |
+| 支持版本 | [supported-versions.md](docs/supported-versions.md) |
 | 变更记录 | [CHANGELOG.md](CHANGELOG.md) |
 | 发布说明 | [docs/releases/](docs/releases/) |
 | 路线图 | [roadmap.md](docs/roadmap.md) |

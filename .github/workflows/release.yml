@@ -1,0 +1,245 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: release quality gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache: true
+      - run: make fmt-check vet test coverage-check
+
+  integration:
+    name: release integration (${{ matrix.db }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      matrix:
+        db: [postgres, mysql, oceanbase]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache: true
+      - run: make test-integration-${{ matrix.db }}
+
+  e2e:
+    name: release e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache: true
+      - run: make test-e2e
+
+  artifacts:
+    name: signed release artifacts
+    needs: [quality, integration, e2e]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache: true
+      - id: syft
+        uses: anchore/sbom-action/download-syft@v0.24.0
+        with:
+          syft-version: v1.46.0
+      - uses: sigstore/cosign-installer@v4.1.2
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: v2.17.0
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: verify checksum signature
+        run: >-
+          cosign verify-blob
+          --bundle dist/checksums.txt.sigstore.json
+          --certificate-identity-regexp
+          '^https://github.com/nethinwei/sql-mcp-server/.github/workflows/release.yml@refs/tags/v'
+          --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          dist/checksums.txt
+
+  image:
+    name: signed multi-arch image
+    needs: artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+      - id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: VERSION=${{ steps.version.outputs.value }}
+      - uses: sigstore/cosign-installer@v4.1.2
+      - name: sign and verify image
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign sign --yes "$IMAGE@$DIGEST"
+          cosign verify \
+            --certificate-identity-regexp \
+            '^https://github.com/nethinwei/sql-mcp-server/.github/workflows/release.yml@refs/tags/v' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$IMAGE@$DIGEST"
+      - id: syft
+        uses: anchore/sbom-action/download-syft@v0.24.0
+        with:
+          syft-version: v1.46.0
+      - name: create, sign, and upload image SBOM
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          syft "$IMAGE@$DIGEST" --output spdx-json=image.spdx.json
+          cosign sign-blob --yes --bundle=image.spdx.json.sigstore.json image.spdx.json
+          cosign verify-blob \
+            --bundle image.spdx.json.sigstore.json \
+            --certificate-identity-regexp \
+            '^https://github.com/nethinwei/sql-mcp-server/.github/workflows/release.yml@refs/tags/v' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            image.spdx.json
+          gh release upload "$GITHUB_REF_NAME" image.spdx.json image.spdx.json.sigstore.json --clobber
+
+  quickstart:
+    name: published image quickstart
+    needs: image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: run allow and deny smoke
+        env:
+          SQL_MCP_IMAGE: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+        run: |
+          docker compose -f examples/quickstart/compose.yaml up -d --wait
+          go run ./internal/quickstartsmoke
+      - if: always()
+        run: docker compose -f examples/quickstart/compose.yaml down -v
+
+  rc-attestations:
+    name: RC provenance trial
+    if: contains(github.ref_name, '-rc.')
+    continue-on-error: true
+    needs: [artifacts, image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: download release archives
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir attest
+          gh release download "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'sql-mcp-server_*' \
+            --dir attest
+      - uses: actions/attest@v4
+        with:
+          subject-path: attest/*
+      - name: verify provenance
+        run: gh attestation verify attest/* --repo "$GITHUB_REPOSITORY"
+
+  registry:
+    name: publish MCP Registry metadata
+    needs: quickstart
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: set release version
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          jq --arg version "$VERSION" \
+            '.version = $version
+             | .packages[].version = $version
+             | .packages[].identifier = ("ghcr.io/nethinwei/sql-mcp-server:" + $version)' \
+            server.json > server.tmp
+          mv server.tmp server.json
+      - name: install MCP publisher v1.7.9
+        run: |
+          curl -fsSLO https://github.com/modelcontextprotocol/registry/releases/download/v1.7.9/mcp-publisher_linux_amd64.tar.gz
+          curl -fsSLO https://github.com/modelcontextprotocol/registry/releases/download/v1.7.9/registry_1.7.9_checksums.txt
+          sha256sum --check --ignore-missing registry_1.7.9_checksums.txt
+          tar xzf mcp-publisher_linux_amd64.tar.gz mcp-publisher
+      - name: validate and publish
+        run: |
+          ./mcp-publisher validate server.json
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish server.json
+      - name: verify discovery
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          for attempt in $(seq 1 12); do
+            if curl -fsS \
+              "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.nethinwei/sql-mcp-server" \
+              | jq -e --arg version "$VERSION" \
+                '.servers[]? | select(.server.version == $version)' >/dev/null; then
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1

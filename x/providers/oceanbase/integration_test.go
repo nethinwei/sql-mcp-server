@@ -27,7 +27,7 @@ func startOBContainer(t *testing.T) (testcontainers.Container, string) {
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        "oceanbase/oceanbase-ce:latest",
+			Image:        "oceanbase/oceanbase-ce:4.3.5.6-106000012026040916",
 			ExposedPorts: []string{"2881/tcp"},
 			WaitingFor:   wait.ForListeningPort("2881/tcp").WithStartupTimeout(5 * time.Minute),
 			Env:          map[string]string{"MODE": "mini"},

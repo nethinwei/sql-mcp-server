@@ -19,10 +19,20 @@ tag，便于 IDE 分析带标签的测试文件。
 
 本次变更的最低验证也可使用 `go test ./...`；提交前按 CI 使用 `-race`。
 `make test` 等价于 `go test -race ./...`。`make ci` 是 `make ci-local` 的别名，
-运行格式检查、vet、lint、输出单个 `sql-mcp-server` 且带版本注入的 build、
+运行格式检查、vet、lint、输出版本为 `dev` 的本机 `sql-mcp-server` build、
 race tests、核心 coverage 门槛和
 govulncheck，不需要 Docker。`make ci-full` 在此基础上增加三库 integration 和
 PostgreSQL MCP e2e，需要 Docker。
+
+发布构建由 GoReleaser 注入 tag 版本。安装 GoReleaser v2.17.0 与 Syft v1.46.0
+后可在本地检查：
+
+```sh
+make release-check
+make release-snapshot
+```
+
+snapshot 会生成 6 个目标归档、SHA-256 checksum 和归档 SBOM，但跳过发布与签名。
 
 ## 测试层
 
@@ -53,14 +63,20 @@ PostgreSQL/MySQL/OceanBase 或 MCP e2e 已在当前机器执行。
 当前 workflow 包含：
 
 - `lint`：golangci-lint；
-- `unit`：Go 1.25 与 stable，通过 Make target 执行 gofmt、vet、带版本注入的
-  build、`go test -race ./...`；
+- `unit`：Go 1.25 与 stable，通过 Make target 执行 gofmt、vet、开发版本 build、
+  `go test -race ./...`；
 - `coverage`：与 Makefile 共用核心包清单，真实检查合计至少 80.0%；
 - `integration`：PostgreSQL、MySQL、OceanBase 三项 testcontainers matrix；
 - `e2e`：PostgreSQL + in-memory MCP client，覆盖协议边界上的工具发现、成本、
   RBAC/RLS/字段 ACL、脱敏、写保护、resource/prompt 和事务；custom procedure
   的 MCP 调用使用默认测试中的 fake DB，真实执行由三库 integration 覆盖；
-- `govulncheck`。
+- `govulncheck`；
+- `release-config`：GoReleaser snapshot、6 个目标归档、checksum 和 SBOM；
+- `registry-metadata`：`server.json` 版本一致性与官方 publisher 校验。
+
+tag workflow 会重新运行 release quality、三库 integration 和 MCP e2e，然后发布
+签名二进制、GHCR 多架构镜像、quickstart smoke 与 Registry metadata。发布流程
+见 [运行与运维](operations.md)。
 
 ## 编写测试
 

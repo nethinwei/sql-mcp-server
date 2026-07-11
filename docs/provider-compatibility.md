@@ -1,0 +1,60 @@
+# Provider 兼容矩阵
+
+本页区分“真实数据库验证”“核心层验证”和“未独立验证”，避免把方言能力声明
+误写成生产保证。安全语义以 [安全模型](security.md) 为准。
+
+状态：
+
+- **已验证**：当前 CI 对固定数据库镜像运行 integration；
+- **核心层验证**：共享 tool/codegen 单元测试覆盖，但该 provider 没有独立场景；
+- **未支持**：启动时拒绝或无实现；
+- **外部配置**：能力依赖 DBA/部署配置，本服务不代管。
+
+## 功能
+
+| 能力 | PostgreSQL | MySQL | OceanBase | 证据 |
+|---|---|---|---|---|
+| read、过滤、行策略、mask | 已验证 | 已验证 | 已验证 | [PG](../x/providers/postgres/integration_test.go)、[MySQL](../x/providers/mysql/integration_test.go)、[OB](../x/providers/oceanbase/integration_test.go) 的 `Test*RLSRowFilterAndMasking` |
+| update 与主键写保护 | 已验证 | 已验证 | 已验证 | 上述 integration 的 `Test*UpdateUnsafeWriteAndPK` |
+| create / delete | 核心层验证 | 核心层验证 | 核心层验证 | [`tool_write_test.go`](../core/tool/tool_write_test.go)；`delete_record` 默认关闭 |
+| aggregate | 核心层验证 | 核心层验证 | 核心层验证 | [`tool_aggregate_test.go`](../core/tool/tool_aggregate_test.go) |
+| procedure | 已验证 | 已验证 | 已验证 | 三库 integration 的 `Test*ExecuteProcedure` |
+| 显式事务 | PostgreSQL MCP e2e | 核心层验证 | 核心层验证 | [`e2e_test.go`](../x/mcpserver/e2e_test.go) 与 store/provider 契约 |
+| keyset cursor | 能力声明 + 核心层验证 | 能力声明 + 核心层验证 | 能力声明 + 核心层验证 | 各 provider `dialect.go` 与 codegen 测试 |
+
+## 成本与资源控制
+
+| 能力 | PostgreSQL | MySQL | OceanBase | 依据与边界 |
+|---|---|---|---|---|
+| EXPLAIN 估算 | 准确模式，已验证 | 保守 fail-closed，已验证 | 保守 fail-closed，已验证 | `Test*CostGate` / `Test*ReadPKWhitelist` 及 [安全模型](security.md#成本闸门) |
+| EXPLAIN ANALYZE feedback | 支持，默认关闭 | 未支持，启用时启动失败 | 未支持，启用时启动失败 | PostgreSQL `ExplainAnalyze` integration 与 bootstrap 校验 |
+| 连接级 timeout | `statement_timeout` | `max_execution_time` | `ob_query_timeout` | provider DSN/runtime 参数；数据库触发路径尚未独立 integration |
+| 应用 context timeout | 已实现 | 已实现 | 已实现 | 统一 bootstrap/tool 执行链 |
+| `sql_safe_updates` | 不适用 | 默认注入 | MySQL 协议路径注入 | `x/providers/mysql/adapter.go` |
+| scan row cap | 无 | 能力声明；不作为扫描硬保证 | 能力声明；不作为扫描硬保证 | 应用无法跨方言证明实际扫描行数 |
+| resource manager | 无 | 无 | 外部配置 | 由 OceanBase DBA 配置，本服务不代管 |
+
+## 关键安全差异
+
+- 三种 provider 都只执行由配置实体和关系代数 IR 生成的参数化 SQL，不接受原始
+  SQL。
+- PostgreSQL 估算用于常规 Estimate；MySQL/OceanBase 在 EXPLAIN 失败、未知计划
+  或全表扫描时保守拒绝。
+- 行策略是应用层约束，不是数据库原生 RLS。任何绕过本服务的数据库访问都不受它
+  保护。
+- procedure 体内 SQL 无法由应用证明；三库均要求 `trustedProcedure`、reviewed
+  fingerprint、独立 timeout 与结果上限。
+- `ScanRowCap`、`ResourceManager` 等 capability 表示方言/数据库可用能力，不表示
+  本服务已替 DBA 完成资源治理配置。
+
+## 验证命令
+
+```sh
+make test-integration-postgres
+make test-integration-mysql
+make test-integration-oceanbase
+make test-e2e
+```
+
+固定测试版本见 [支持版本](supported-versions.md)。默认单元测试不等价于上述真实
+数据库和 MCP e2e。

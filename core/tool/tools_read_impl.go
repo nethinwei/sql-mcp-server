@@ -49,7 +49,16 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	recordReadFeedback(ctx, plan.tc, in.Entity, compiled, planTemplate, estimatedPlan, int64(len(out)), time.Since(start))
+	recordReadFeedback(
+		ctx,
+		plan.tc,
+		in.Entity,
+		compiled,
+		planTemplate,
+		estimatedPlan,
+		int64(len(out)),
+		time.Since(start),
+	)
 	storeReadCache(ctx, plan.tc, in, cacheKey, out)
 	estimatedRows := int64(0)
 	if estimatedPlan != nil {

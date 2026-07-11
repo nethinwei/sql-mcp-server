@@ -6,6 +6,20 @@
 
 ## Unreleased
 
+### Added
+
+- GoReleaser tag workflow，发布 6 个平台归档、SHA-256 checksum、归档 SBOM 和
+  keyless Cosign 签名。
+- GHCR linux/amd64 与 linux/arm64 镜像、镜像签名和镜像 SBOM。
+- PostgreSQL Docker Compose quickstart，覆盖授权读取、tenant 隔离、脱敏、全表
+  扫描和字段越权拒绝。
+- MCP Registry `server.json`、官方 publisher CI 校验与 GitHub OIDC 发布流程。
+- Provider 兼容矩阵、支持版本和 Cursor/Claude Desktop/VS Code 配置模板。
+
+### Changed
+
+- OceanBase integration 镜像固定到 4.3.5.6，避免 `latest` 漂移。
+
 ## 0.1.2 - 2026-07-11
 
 ### Added

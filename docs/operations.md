@@ -15,6 +15,36 @@ sql-mcp-server explain --config config.yaml --entity users
 数据库自省。`validate` 解析配置、应用默认值、执行静态校验并解析 DSN secret，
 但不连接数据库。`explain` 只输出配置中的实体摘要，不执行 SQL `EXPLAIN`。
 
+### 发布产物与完整性验证
+
+GitHub Release 提供 Linux、macOS、Windows 的 amd64/arm64 归档、`checksums.txt`、
+每个归档的 SPDX JSON SBOM，以及 checksum 的 Sigstore bundle。以 Linux amd64
+为例：
+
+```sh
+sha256sum --check checksums.txt
+cosign verify-blob \
+  --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp \
+  '^https://github.com/nethinwei/sql-mcp-server/.github/workflows/release.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+```
+
+容器发布到 `ghcr.io/nethinwei/sql-mcp-server`，支持 linux/amd64 和 linux/arm64。
+使用不可变 digest 可验证镜像签名：
+
+```sh
+cosign verify \
+  --certificate-identity-regexp \
+  '^https://github.com/nethinwei/sql-mcp-server/.github/workflows/release.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/nethinwei/sql-mcp-server@sha256:<digest>
+```
+
+RC 流程可试运行 GitHub Artifact Attestations，但 v0.1.3 不把 provenance 作为
+发布阻塞项。
+
 ## 启动
 
 ```sh
