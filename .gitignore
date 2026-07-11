@@ -17,6 +17,9 @@ default.pgo
 cpu.pprof
 mem.pprof
 
+# local environment (see .env.example)
+.env
+
 # editor / os
 .idea/
 .vscode/*

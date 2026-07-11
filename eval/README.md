@@ -17,6 +17,13 @@ export EVAL_BASE_URL=https://api.openai.com/v1   # 可选，默认 OpenAI
 make eval-pilot > eval/report.json
 ```
 
+也可以把这三个变量写进仓库根目录的 `.env`（模板见 `.env.example`，文件已
+gitignore）；Makefile 会自动加载，之后直接 `make eval-pilot` 即可。
+
+任务默认以 6 路并行执行（`EVAL_PARALLEL` 可调，报告顺序不受影响）；并行度
+须低于 `config.yaml` 中 analyst 的 `budget.maxConcurrent`，否则并发拒绝会
+污染评分。
+
 在线模型是非确定性的：正式结论应重复运行至少 3 次并报告分布
 （见 [Roadmap Metrics](../docs/roadmap/metrics.md) 公开数字规则）。
 
@@ -49,9 +56,16 @@ make eval-pilot > eval/report.json
 聚合指标：task success、first-call success rate、repair rate、平均工具调用
 数、prompt/completion token 总量、violation blocked 比例。
 
-## go/no-go 结论模板
+## go/no-go 结论
 
-正式运行后，把结论记录在本节（每个模型一份，附 report.json）：
+正式结论按模型和日期存放在 [results/](results/) 目录
+（`results/<日期>-<模型>.md`，附对应 report JSON），本文件只保留模板。
+已有结论：
+
+- [2026-07-12 deepseek-v4-flash](results/2026-07-12-deepseek-v4-flash.md)：
+  **no-go**（三轮 24/24、24/24、23/24，无语义元数据可解决的失败）。
+
+结论模板：
 
 ```markdown
 ### 结论：<model>，<日期>，runs=<N>

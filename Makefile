@@ -1,3 +1,8 @@
+# Optional local environment (gitignored); see .env.example for the fields.
+-include .env
+export EVAL_API_KEY EVAL_MODEL EVAL_BASE_URL EVAL_PARALLEL \
+	OTEL_EXPORTER_OTLP_ENDPOINT BENCH_ROWS BENCH_ITERATIONS
+
 GO ?= go
 GORELEASER ?= goreleaser
 ACTIONLINT ?= actionlint
@@ -66,12 +71,13 @@ smoke-protocol: build
 	PROTOCOL_BINARY=./$(BINARY) $(GO) run ./internal/protocolsmoke
 
 # Data-plane overhead benchmark (Docker required). See docs/benchmarks/.
+# Recipes are silenced (@) so stdout stays parseable JSON.
 bench-overhead:
-	$(GO) run ./internal/benchoverhead
+	@$(GO) run ./internal/benchoverhead
 
 # Agent Eval pilot (Docker + EVAL_API_KEY/EVAL_MODEL required). See eval/README.md.
 eval-pilot:
-	$(GO) run ./eval/runner
+	@$(GO) run ./eval/runner
 
 release-preflight-fast:
 	$(MAKE) workflow-check

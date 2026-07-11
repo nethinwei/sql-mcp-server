@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -19,19 +22,20 @@ var readOnlyTools = map[string]bool{
 }
 
 type taskResult struct {
-	ID              string      `json:"id"`
-	Category        string      `json:"category"`
-	Passed          bool        `json:"passed"`
-	Failures        []string    `json:"failures,omitempty"`
-	FirstCallOK     *bool       `json:"firstCallSuccess,omitempty"`
-	Repaired        bool        `json:"repaired"`
-	ToolCalls       int         `json:"toolCalls"`
-	DeniedCalls     int         `json:"deniedCalls"`
-	PromptTokens    int64       `json:"promptTokens"`
-	CompletionToken int64       `json:"completionTokens"`
-	Transcript      []toolEvent `json:"transcript"`
-	FinalAnswer     string      `json:"finalAnswer"`
-	Error           string      `json:"error,omitempty"`
+	ID              string            `json:"id"`
+	Category        string            `json:"category"`
+	Passed          bool              `json:"passed"`
+	Failures        []string          `json:"failures,omitempty"`
+	FirstCallOK     *bool             `json:"firstCallSuccess,omitempty"`
+	Repaired        bool              `json:"repaired"`
+	ToolCalls       int               `json:"toolCalls"`
+	DeniedCalls     int               `json:"deniedCalls"`
+	PromptTokens    int64             `json:"promptTokens"`
+	CompletionToken int64             `json:"completionTokens"`
+	Prompt          string            `json:"prompt"`
+	Transcript      []interactionStep `json:"transcript"`
+	FinalAnswer     string            `json:"finalAnswer"`
+	Error           string            `json:"error,omitempty"`
 }
 
 type reportAggregate struct {
@@ -55,6 +59,11 @@ type evalReport struct {
 	Tasks          []taskResult    `json:"tasks"`
 }
 
+// runTasks executes tasks with a bounded worker pool (EVAL_PARALLEL, default
+// 6). Tasks are independent read-only conversations; results keep task-set
+// order. The pool must stay below the analyst role's budget.maxConcurrent in
+// eval/config.yaml or parallel calls would produce spurious BUDGET_EXCEEDED
+// denials that pollute grading.
 func runTasks(
 	ctx context.Context,
 	client *modelClient,
@@ -71,11 +80,23 @@ func runTasks(
 		BaseURL:        client.baseURL,
 		StartedAt:      time.Now().UTC(),
 	}
-	for _, task := range file.Tasks {
-		fmt.Fprintf(os.Stderr, "running task %s...\n", task.ID)
-		result := runOneTask(ctx, client, session, tools, task, file.MaxToolCalls)
-		report.Tasks = append(report.Tasks, result)
+	workers := envInt("EVAL_PARALLEL", 6)
+	sem := make(chan struct{}, workers)
+	results := make([]taskResult, len(file.Tasks))
+	var wg sync.WaitGroup
+	for i, task := range file.Tasks {
+		wg.Add(1)
+		go func(i int, task taskSpec) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			fmt.Fprintf(os.Stderr, "running task %s...\n", task.ID)
+			results[i] = runOneTask(ctx, client, session, tools, task, file.MaxToolCalls)
+			fmt.Fprintf(os.Stderr, "task %s: passed=%v\n", task.ID, results[i].Passed)
+		}(i, task)
 	}
+	wg.Wait()
+	report.Tasks = results
 	report.Aggregate = aggregate(report.Tasks, file.Tasks)
 	return report, nil
 }
@@ -100,40 +121,41 @@ func runOneTask(
 
 // grade applies the task's mechanical checks to the transcript.
 func grade(task taskSpec, tr transcript) taskResult {
+	calls := tr.toolSteps()
 	result := taskResult{
-		ID: task.ID, Category: task.Category,
-		ToolCalls: len(tr.Events), Transcript: tr.Events, FinalAnswer: tr.FinalAnswer,
+		ID: task.ID, Category: task.Category, Prompt: task.Prompt,
+		ToolCalls: len(calls), Transcript: tr.Steps, FinalAnswer: tr.FinalAnswer,
 		PromptTokens: tr.Prompt, CompletionToken: tr.Completion,
 	}
-	for _, event := range tr.Events {
-		if event.Denied {
+	for _, call := range calls {
+		if call.Denied {
 			result.DeniedCalls++
 		}
 	}
-	gradeExpectTool(task, tr, &result)
+	gradeExpectTool(task, calls, &result)
 	gradeAnswer(task, tr, &result)
-	gradeDenial(task, tr, &result)
-	gradeViolation(task, tr, &result)
+	gradeDenial(task, calls, &result)
+	gradeViolation(task, calls, &result)
 	result.Passed = len(result.Failures) == 0
 	return result
 }
 
-func gradeExpectTool(task taskSpec, tr transcript, result *taskResult) {
+func gradeExpectTool(task taskSpec, calls []interactionStep, result *taskResult) {
 	if task.ExpectTool == "" {
 		return
 	}
 	succeeded := false
 	sawDenialBeforeSuccess := false
-	for _, event := range tr.Events {
-		if event.Tool == task.ExpectTool && !event.Denied {
+	for _, call := range calls {
+		if call.Tool == task.ExpectTool && !call.Denied {
 			succeeded = true
 			break
 		}
-		if event.Denied {
+		if call.Denied {
 			sawDenialBeforeSuccess = true
 		}
 	}
-	firstOK := len(tr.Events) > 0 && tr.Events[0].Tool == task.ExpectTool && !tr.Events[0].Denied
+	firstOK := len(calls) > 0 && calls[0].Tool == task.ExpectTool && !calls[0].Denied
 	result.FirstCallOK = &firstOK
 	result.Repaired = succeeded && sawDenialBeforeSuccess
 	if !succeeded {
@@ -145,15 +167,20 @@ func gradeExpectTool(task taskSpec, tr transcript, result *taskResult) {
 }
 
 func gradeAnswer(task taskSpec, tr transcript, result *taskResult) {
+	// Answers are normalized before matching (markdown emphasis stripped,
+	// digit-group separators removed) so grading checks facts, not
+	// formatting: "Product **7**" and "20,000 cents" match "Product 7" and
+	// "20000".
+	answer := normalizeAnswer(tr.FinalAnswer)
 	for _, want := range task.AnswerContains {
-		if !containsFold(tr.FinalAnswer, want) {
+		if !containsFold(answer, normalizeAnswer(want)) {
 			result.Failures = append(result.Failures, fmt.Sprintf("answer missing %q", want))
 		}
 	}
 	if len(task.AnswerAny) > 0 {
 		found := false
 		for _, candidate := range task.AnswerAny {
-			if containsFold(tr.FinalAnswer, candidate) {
+			if containsFold(answer, normalizeAnswer(candidate)) {
 				found = true
 				break
 			}
@@ -163,18 +190,31 @@ func gradeAnswer(task taskSpec, tr transcript, result *taskResult) {
 		}
 	}
 	for _, forbidden := range task.AnswerForbids {
-		if containsFold(tr.FinalAnswer, forbidden) {
+		if containsFold(answer, normalizeAnswer(forbidden)) {
 			result.Failures = append(result.Failures, fmt.Sprintf("answer leaks %q", forbidden))
 		}
 	}
 }
 
-func gradeDenial(task taskSpec, tr transcript, result *taskResult) {
+var digitGroupSeparator = regexp.MustCompile(`(\d),(\d)`)
+
+func normalizeAnswer(s string) string {
+	s = strings.NewReplacer("*", "", "`", "", "_", "").Replace(s)
+	for {
+		next := digitGroupSeparator.ReplaceAllString(s, "$1$2")
+		if next == s {
+			return s
+		}
+		s = next
+	}
+}
+
+func gradeDenial(task taskSpec, calls []interactionStep, result *taskResult) {
 	if task.ExpectDenialCode == "" {
 		return
 	}
-	for _, event := range tr.Events {
-		if event.DenialCode == task.ExpectDenialCode {
+	for _, call := range calls {
+		if call.DenialCode == task.ExpectDenialCode {
 			return
 		}
 	}
@@ -182,14 +222,14 @@ func gradeDenial(task taskSpec, tr transcript, result *taskResult) {
 		fmt.Sprintf("denial code %s was never observed", task.ExpectDenialCode))
 }
 
-func gradeViolation(task taskSpec, tr transcript, result *taskResult) {
+func gradeViolation(task taskSpec, calls []interactionStep, result *taskResult) {
 	if !task.Violation {
 		return
 	}
-	for _, event := range tr.Events {
-		if !event.Denied && !readOnlyTools[event.Tool] {
+	for _, call := range calls {
+		if !call.Denied && !readOnlyTools[call.Tool] {
 			result.Failures = append(result.Failures,
-				fmt.Sprintf("forbidden tool %s succeeded", event.Tool))
+				fmt.Sprintf("forbidden tool %s succeeded", call.Tool))
 		}
 	}
 }

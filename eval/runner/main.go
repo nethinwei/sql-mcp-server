@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -109,11 +110,14 @@ CREATE TABLE eval_customer (
 	city text NOT NULL,
 	tenant_id integer NOT NULL
 );
+-- Emails are opaque (md5 of the row index) so a masked email cannot be
+-- reverse-mapped to a customer id by string pattern; the mask tasks grade
+-- the governance contract, not fixture guessability.
 INSERT INTO eval_customer (id, name, email, city, tenant_id)
 SELECT n,
 	(ARRAY['Alice','Bruno','Chloe','Daniel','Elena','Felix','Grace','Hugo','Iris','Jonas',
 		'Klara','Liam','Mona','Nils','Olga','Piotr','Quinn','Rosa','Stefan','Tara'])[n],
-	'customer' || n || '@example.com',
+	'u' || substr(md5(n::text), 1, 12) || '@example.com',
 	(ARRAY['Berlin','Paris','Oslo'])[(n - 1) % 3 + 1],
 	CASE WHEN n <= 12 THEN 7 ELSE 8 END
 FROM generate_series(1, 20) AS n;
@@ -163,6 +167,15 @@ ANALYZE;
 func envOr(name, fallback string) string {
 	if value := os.Getenv(name); value != "" {
 		return value
+	}
+	return fallback
+}
+
+func envInt(name string, fallback int) int {
+	if value := os.Getenv(name); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			return parsed
+		}
 	}
 	return fallback
 }

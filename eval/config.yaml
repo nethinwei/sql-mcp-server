@@ -27,10 +27,13 @@ cost:
   whitelistPKPoint: true
   queryTimeout: 10s
 
+# maxConcurrent stays above the runner's worker pool (EVAL_PARALLEL) so
+# parallel task execution never triggers spurious concurrency denials; the
+# graded repair path comes from maxReturnedRows.
 budget:
   roles:
     analyst:
-      maxConcurrent: 4
+      maxConcurrent: 16
       maxExecution: 10s
       maxReturnedRows: 50
       maxReturnedBytes: 262144
