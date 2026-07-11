@@ -36,67 +36,84 @@
 
 ---
 
-## Now — 无承诺版本（v0.1.6 已发布，下一承诺待证据）
+## Committed — v0.1.7 Agent Eval Calibration
 
 `v0.1.6`（Observable + Measurable）已完成验收并发布，成果见
-[发布说明](releases/v0.1.6.md)。
+[发布说明](releases/v0.1.6.md)。现有 Agent Eval pilot 的结论
+（[2026-07-12 no-go](../eval/results/2026-07-12-deepseek-v4-flash.md)）表明，
+当前简单 fixture 不能证明语义元数据值得投入，也暴露出 discovery 污染
+first-call success、子串评分可能误判等测量问题。
 
-Agent Eval pilot 的结论
-（[2026-07-12 no-go](../eval/results/2026-07-12-deepseek-v4-flash.md)）表明
-语义元数据的进入门禁**未满足**：三轮 24 任务运行中没有失败可归因于 grain、
-时间、枚举、单位或 catalog token 缺失。按本路线图规则，Next 1 不升格；下一个
-`Committed` 由采用侧证据决定，当前候选（不构成承诺）：
+`v0.1.7` 的目标是在有限测试成本内校准 Agent Eval，使其能可靠识别下一阶段最值得
+解决的问题：
 
-- SQLite Provider（按 [Provider Roadmap](provider-roadmap.md) 进入条件，
-  含 capability model 前置重构）；
-- Next 2 的公开 Eval 准备（复用 pilot 框架升级为版本化任务集）。
+- 保留单模型、单驱动和一个版本化任务集，新增不超过 8 个大 schema、grain、时间、
+  枚举或单位定向任务；
+- 将合理 discovery 与执行失败分开计量，修正 first-call success 定义；
+- 收紧 `answer_forbids` 等易误判规则，并为评分器增加确定性测试；
+- 使用一个主模型正式运行三轮，报告分布、失败归因和后续方向 go/no-go。
 
----
+成本边界：不做多模型或多客户端矩阵，不做竞品对照；在线模型运行不进入每次 CI；
+任务数、单任务调用数和 token 必须有硬上限。其他模型仅允许按需运行，不作为发布
+门禁。
 
-## Next 1 — Semantic Metadata
-
-进入门禁：可观测基线完成，且 pilot 证明 grain、时间、枚举、单位或 catalog token
-是显著失败来源。**2026-07-12 pilot 结论为 no-go，本门禁未满足**；真实大
-schema 或语义歧义负载出现时重新评估。
-
-目标结果：
-
-- Entity grain、默认时间维度、discoverability 和替代关系；
-- Field 语义角色、枚举、单位、币种、尺度和时间含义；
-- 服从 RBAC、hidden 和 mask 的渐进披露；
-- 稳定语义 lint 与向后兼容的 import/export。
-
-退出门禁：旧配置行为不变，不产生越权或 mask 侧信道，不改变授权和 SQL 语义，并
-通过同一 pilot 任务集证明价值或停止投入。
+退出门禁：评分器确定性测试通过；已知误判被复现并消除；discovery 不再计为首调
+失败；三轮结果完成书面归因；至少明确选择或否决一个后续方向。
 
 ---
 
-## Next 2 — Public Eval + Minimum Control Plane
+## Next 1 — Eval-Driven Agent Improvement
 
-进入门禁：机器错误、可观测基线和 pilot 稳定；至少两个真实客户端可重复集成；
-至少一个真实部署需要 revision、diff 或 simulate。
+进入门禁：`v0.1.7` 完成校准，且失败归因证明存在显著、可由服务端解决的 Agent
+短板。只升级证据支持的一项：
 
-目标结果：
+- grain、时间、枚举、单位或 catalog token 缺失显著时，进入 Semantic Metadata；
+- 任务因现有 IR 无法表达而失败时，进入 Governed Query Expressiveness；
+- 大 schema 选择失败或 catalog token 成本显著时，进入 Catalog Discovery；
+- 错误提示或工具契约导致可修复失败时，只收紧对应契约。
 
-- 版本化公开任务集与三类可复现 baseline；
-- 任务成功、错误修复、越权执行、调用数、token 和业务正确性指标；
-- 按真实需求提供 validate、diff、simulate、publish 和 rollback；
-- publish/rollback 与 CLI 热重载共用同一套配置变更守卫（现有守卫从 CLI 层
-  下沉到 bootstrap，避免两条发布路径规则漂移）；
-- 明确控制面不可用、snapshot 不兼容和在途请求语义。
+若没有显著短板，本阶段不进入 `Committed`，也不为制造版本内容而扩张 Agent 功能。
+任何升级项必须使用能覆盖对应失败来源的任务集验收，不得复用缺少该场景的旧 pilot
+作为价值证据。
 
-退出门禁：公开结果可复现，tool/error hint 变更有前后对照，安全证据无回归；
-控制面若实现，必须具备恢复、拒绝、审计和降级测试。
+---
 
-公开 Eval 必须先于大控制面，控制面不得成为评测阻塞项。
+## Next 2 — Provider Capability + Evidence-Backed SQLite
+
+进入门禁：SQLite 至少具备一个可验证用户场景、外部 contributor 或明确采用目标，
+并有固定公开 CI 环境或维护者承担可持续测试。完整条件以
+[Provider Roadmap](provider-roadmap.md) 为准。
+
+先将平铺 bool capability 重构为“范围 + 保证强度 + 证据”模型，再交付受现有 IR
+和统一 engine 约束的窄 SQLite Provider。首版只承诺有独立 integration 证据的
+能力；extension loading、`ATTACH DATABASE`、危险 `PRAGMA` 和配置根目录外文件
+默认拒绝。
+
+退出门禁：capability model 不削弱现有 Provider 保证；SQLite 的每项公开能力均有
+独立证据或明确标为未验证；兼容矩阵、支持版本、威胁分析和 allow/deny e2e 同时
+交付。进入证据未满足时，本阶段不构成版本承诺。
+
+---
+
+## Next 3 — Minimum Control Plane
+
+进入门禁：至少一个真实部署明确需要 revision、diff、simulate、publish 或
+rollback，且无法由现有 CLI 热重载流程合理满足。
+
+只实现已被真实需求触发的最小操作；publish/rollback 与 CLI 热重载共用配置变更
+守卫，并明确控制面不可用、snapshot 不兼容和在途请求语义。
+
+退出门禁：具备恢复、拒绝、审计和降级测试；控制面不可用不得绕过统一 engine，也
+不得阻塞数据面读取已有有效 snapshot。
 
 ---
 
 ## Later
 
-可执行语义、Catalog Discovery、成本与数据出站治理、Provider 扩展、生产运维、
-写治理、企业身份、durable audit、管理 UI、查询复用、扩展点，以及受治理查询
-表达力与 Provider 优化扩展（IR Evolution）均按证据升级。
+完整 Public Eval（多模型、多客户端和竞品 baseline）、可执行语义、Catalog
+Discovery、成本与数据出站治理、其他 Provider 扩展、生产运维、写治理、企业身份、
+durable audit、管理 UI、查询复用、扩展点，以及受治理查询表达力与 Provider
+优化扩展（IR Evolution）均按证据升级。
 
 范围、触发证据和跨阶段非目标见
 [Evidence-Gated Directions](roadmap/directions.md)。Provider 能力模型与候选顺序
