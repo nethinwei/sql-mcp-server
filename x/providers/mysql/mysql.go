@@ -24,7 +24,7 @@ func New(dsn string) (*Provider, error) {
 	}
 	return &Provider{
 		Adapter:      ad,
-		dialect:      dialect.MySQL{},
+		dialect:      Dialect{},
 		explainer:    mysqlExplainer{db: ad.db},
 		introspector: NewIntrospector(ad.db),
 	}, nil

@@ -8,6 +8,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/codegen"
 	"github.com/nethinwei/sql-mcp-server/dialect"
+	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
 )
 
 func TestScorePlan(t *testing.T) {
@@ -235,7 +236,7 @@ func TestCostExceededErrorUnwrap(t *testing.T) {
 
 func TestNewGateFromCapabilities(t *testing.T) {
 	t.Parallel()
-	caps := dialect.Postgres{}.Capabilities()
+	caps := testdialect.Postgres{}.Capabilities()
 	g := NewGateFromCapabilities(caps,
 		FakeExplainer{Plan: Plan{ScanType: ScanIndex, StatsFresh: true}},
 		Threshold{SoftScore: 70, HardScore: 30, MaxRows: 1000}, nil)
@@ -281,7 +282,7 @@ func TestNewGateFromCapabilitiesWriteGuardMySQL(t *testing.T) {
 	t.Parallel()
 	// MySQL has no trustworthy Estimate; WriteGuard must still block non-PK
 	// writes deterministically.
-	caps := dialect.MySQL{}.Capabilities()
+	caps := testdialect.MySQL{}.Capabilities()
 	g := NewGateFromCapabilities(caps, nil, Threshold{RequirePKForWrite: true, MaxRows: 1000}, nil)
 	d, err := g.Check(context.Background(), codegen.Compiled{SQL: "UPDATE t SET x=1", IsPKPoint: false})
 	if err != nil {

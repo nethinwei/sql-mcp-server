@@ -9,13 +9,13 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/nethinwei/sql-mcp-server/config"
-	"github.com/nethinwei/sql-mcp-server/dialect"
 	"github.com/nethinwei/sql-mcp-server/entity"
 	"github.com/nethinwei/sql-mcp-server/rbac"
 	"github.com/nethinwei/sql-mcp-server/store"
 	"github.com/nethinwei/sql-mcp-server/tool"
 	"github.com/nethinwei/sql-mcp-server/version"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
+	"github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
 
 func TestAuthorizedSchemaResourceAndPrompts(t *testing.T) {
@@ -131,7 +131,7 @@ func TestCustomProcedureThroughMCP(t *testing.T) {
 	}}
 	app := &bootstrap.App{
 		Sources: map[string]tool.DataSource{
-			"default": {DB: db, Dialect: dialect.Postgres{}},
+			"default": {DB: db, Dialect: postgres.Dialect{}},
 		},
 		Registry: registry, Authorizer: rbac.NewRoleAuthorizer(registry),
 		Tools: tools, ToolFlags: config.DefaultToolFlags(), DefaultRole: "caller",

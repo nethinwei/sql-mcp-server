@@ -14,15 +14,15 @@ MCP client
   -> PostgreSQL / MySQL / OceanBase
 ```
 
-核心包包含 `config`、`relalg`、`codegen`、`entity`、`dialect`、`store`、
-`rbac`、`mask`、`cost`、`budget`、`audit`、`tool`、`cache`、`hook`、
+核心包包含 `config`、`relalg`、`codegen`、`entity`、`dialect`（接口与能力声明）、
+`store`、`rbac`、`mask`、`cost`、`budget`、`audit`、`tool`、`cache`、`hook`、
 `ratelimit`、`engine` 和 `introspect`。目标边界是外部依赖位于 `x/` 或可执行
 入口，且业务核心不反向依赖 `x/`；`.golangci.yml` 配置了 depguard。当前
 `config` 为实现 YAML 自定义解码直接依赖 `yaml.v3`，尚未完全满足“核心仅标准
 库”的目标；depguard 只在 `config-yaml-presence` 规则中精确放行该依赖，不能
 把目标描述为已完成事实。
 
-`x/mcpserver` 是唯一接触官方 MCP SDK 的业务适配层。provider 位于
+`x/mcpserver` 是唯一接触官方 MCP SDK 的业务适配层。provider 与方言实现位于
 `x/providers`，配置加载、secret 解析、schema drift 检查和运行时装配位于
 `x/bootstrap`。
 

@@ -324,7 +324,7 @@ type CommitTransactionTool struct{}
 type RollbackTransactionTool struct{}
 
 func (BeginTransactionTool) Info() Info {
-	return Info{Name: "begin_transaction", Description: "Begin a bounded explicit transaction", InputSchema: json.RawMessage(`{"type":"object","properties":{"datasource":{"type":"string"},"isolation":{"type":"string","enum":["read_uncommitted","read_committed","repeatable_read","serializable"]},"readOnly":{"type":"boolean"}}}`)}
+	return Info{Name: "begin_transaction", Description: "Begin a bounded explicit transaction", InputSchema: schemaBeginTransaction}
 }
 func (BeginTransactionTool) Enabled(f config.ToolFlags) bool { return f.BeginTransaction }
 func (BeginTransactionTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
@@ -463,8 +463,6 @@ func (RollbackTransactionTool) Run(_ context.Context, input json.RawMessage, tc 
 	}
 	return Result{Content: []map[string]any{{"rolledBack": true}}}, nil
 }
-
-var transactionTokenSchema = json.RawMessage(`{"type":"object","properties":{"transaction":{"type":"string"}},"required":["transaction"]}`)
 
 func transactionToken(input json.RawMessage) (string, error) {
 	var in struct {

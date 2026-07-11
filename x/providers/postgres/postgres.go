@@ -45,7 +45,7 @@ func New(dsn string) (*Provider, error) {
 	}
 	p := &Provider{
 		db:           db,
-		dialect:      dialect.Postgres{},
+		dialect:      Dialect{},
 		explainer:    pgExplainer{db: db},
 		introspector: pgIntrospector{db: db},
 	}

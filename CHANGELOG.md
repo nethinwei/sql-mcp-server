@@ -6,8 +6,14 @@
 
 ## Unreleased
 
+## 0.1.1 - 2026-07-11
+
 ### Changed
 
+- 将 PostgreSQL、MySQL、OceanBase 方言实现从核心 `dialect` 包移至
+  `x/providers/*`，核心仅保留 `Dialect` 接口与 `Capabilities` 声明。
+- 配置 JSON Schema 与 MCP 工具 input schema 改为 `embed` 静态 JSON 文件，不再
+  硬编码在 Go 源码中。
 - 重组文档，使配置、安全边界、运行和测试分别拥有单一真相源。
 - 扩充用于 YAML 编辑辅助的配置 JSON Schema，并统一配置字段的 lowerCamelCase
   名称；Schema 不作为标准 `encoding/json` 输入契约。

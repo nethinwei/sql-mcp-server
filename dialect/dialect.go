@@ -1,13 +1,5 @@
 package dialect
 
-import (
-	"errors"
-	"fmt"
-)
-
-// ErrUnknownDialect is returned by New for an unrecognized dialect name.
-var ErrUnknownDialect = errors.New("unknown dialect")
-
 // Capabilities declares what a database supports. It drives codegen rendering
 // (e.g. RETURNING fallback) and which Gate layers are assembled (e.g. whether
 // the Estimate layer is enabled, which DB-native limits apply). See the cost
@@ -36,19 +28,4 @@ type Dialect interface {
 	Placeholder(index int) string
 	ExplainSQL(query string) string
 	Capabilities() Capabilities
-}
-
-// New returns the Dialect for the given name, or an error wrapping
-// ErrUnknownDialect.
-func New(name string) (Dialect, error) {
-	switch name {
-	case "postgres":
-		return Postgres{}, nil
-	case "mysql":
-		return MySQL{}, nil
-	case "oceanbase":
-		return OceanBase{}, nil
-	default:
-		return nil, fmt.Errorf("%w: %q", ErrUnknownDialect, name)
-	}
 }

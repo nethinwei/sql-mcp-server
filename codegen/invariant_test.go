@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nethinwei/sql-mcp-server/dialect"
+	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
 	"github.com/nethinwei/sql-mcp-server/relalg"
 )
 
@@ -13,7 +13,7 @@ import (
 // classic injection vectors; each must appear only in args, never in the SQL.
 func TestInvariantNoInjection(t *testing.T) {
 	t.Parallel()
-	r := NewRenderer(dialect.Postgres{})
+	r := NewRenderer(testdialect.Postgres{})
 	vectors := []string{
 		"1; DROP TABLE users;--",
 		"' OR '1'='1",
@@ -44,7 +44,7 @@ func TestInvariantNoInjection(t *testing.T) {
 // placeholders) to ensure both renderers parameterize.
 func TestInvariantNoInjectionMySQL(t *testing.T) {
 	t.Parallel()
-	r := NewRenderer(dialect.MySQL{})
+	r := NewRenderer(testdialect.MySQL{})
 	v := "' OR '1'='1"
 	expr := relalg.Select{
 		Predicate: relalg.Condition{Field: "name", Op: relalg.OpEq, Value: v},

@@ -1,0 +1,1 @@
+{"type":"object","properties":{"entity":{"type":"string"},"transaction":{"type":"string","description":"Token returned by begin_transaction"},"args":{"type":"object","description":"Procedure argument name to value map"}},"required":["entity"]}

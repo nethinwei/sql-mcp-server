@@ -1,28 +1,37 @@
 package tool
 
-import "encoding/json"
+import (
+	_ "embed"
+	"encoding/json"
+)
 
 // JSON Schemas for the entity tools. These describe inputs to MCP clients
 // (agents see them via tools/list); tool.Run still parses and validates inputs.
 // The filter condition shape is repeated inline to keep each schema standalone.
 
-// schemaDescribe describes describe_entities input.
-var schemaDescribe = json.RawMessage(`{"type":"object","properties":{"entity":{"type":"string","description":"Entity name; omit to list all entities"}}}`)
+//go:embed schema/describe.json
+var schemaDescribe json.RawMessage
 
-// schemaRead describes read_records input.
-var schemaRead = json.RawMessage(`{"type":"object","properties":{"entity":{"type":"string"},"transaction":{"type":"string","description":"Token returned by begin_transaction"},"fields":{"type":"array","items":{"type":"string"}},"expand":{"type":"array","items":{"type":"string"},"description":"Named same-datasource relationships to batch expand"},"filter":{"type":"array","items":{"type":"object","properties":{"field":{"type":"string"},"op":{"type":"string","enum":["eq","ne","gt","gte","lt","lte","in","not_in","like","is_null","is_not_null"]},"value":{"description":"Value (array for in/not_in; omitted for is_null/is_not_null)"}},"required":["field","op"]}},"limit":{"type":"integer","minimum":1},"offset":{"type":"integer","minimum":0},"cursor":{"type":"object","description":"Keyset pagination: last row's primary-key column values to resume after"}},"required":["entity"]}`)
+//go:embed schema/read.json
+var schemaRead json.RawMessage
 
-// schemaCreate describes create_record input.
-var schemaCreate = json.RawMessage(`{"type":"object","properties":{"entity":{"type":"string"},"transaction":{"type":"string","description":"Token returned by begin_transaction"},"values":{"type":"object","description":"Column name to value map"}},"required":["entity","values"]}`)
+//go:embed schema/create.json
+var schemaCreate json.RawMessage
 
-// schemaUpdate describes update_record input.
-var schemaUpdate = json.RawMessage(`{"type":"object","properties":{"entity":{"type":"string"},"transaction":{"type":"string","description":"Token returned by begin_transaction"},"filter":{"type":"array","items":{"type":"object","properties":{"field":{"type":"string"},"op":{"type":"string","enum":["eq","ne","gt","gte","lt","lte","in","not_in","like","is_null","is_not_null"]},"value":{"description":"Value (array for in/not_in; omitted for is_null/is_not_null)"}},"required":["field","op"]}},"set":{"type":"object","description":"Column name to new value map"}},"required":["entity","filter","set"]}`)
+//go:embed schema/update.json
+var schemaUpdate json.RawMessage
 
-// schemaDelete describes delete_record input.
-var schemaDelete = json.RawMessage(`{"type":"object","properties":{"entity":{"type":"string"},"transaction":{"type":"string","description":"Token returned by begin_transaction"},"filter":{"type":"array","items":{"type":"object","properties":{"field":{"type":"string"},"op":{"type":"string","enum":["eq","ne","gt","gte","lt","lte","in","not_in","like","is_null","is_not_null"]},"value":{"description":"Value (array for in/not_in; omitted for is_null/is_not_null)"}},"required":["field","op"]}}},"required":["entity","filter"]}`)
+//go:embed schema/delete.json
+var schemaDelete json.RawMessage
 
-// schemaExecute describes execute_entity input.
-var schemaExecute = json.RawMessage(`{"type":"object","properties":{"entity":{"type":"string"},"transaction":{"type":"string","description":"Token returned by begin_transaction"},"args":{"type":"object","description":"Procedure argument name to value map"}},"required":["entity"]}`)
+//go:embed schema/execute.json
+var schemaExecute json.RawMessage
 
-// schemaAggregate describes aggregate_records input.
-var schemaAggregate = json.RawMessage(`{"type":"object","properties":{"entity":{"type":"string"},"transaction":{"type":"string","description":"Token returned by begin_transaction"},"groupBy":{"type":"array","items":{"type":"string"}},"aggregates":{"type":"array","items":{"type":"object","properties":{"func":{"type":"string","enum":["count","sum","avg","min","max"]},"field":{"type":"string","description":"Omit for count(*)"}},"required":["func"]}},"filter":{"type":"array","items":{"type":"object","properties":{"field":{"type":"string"},"op":{"type":"string","enum":["eq","ne","gt","gte","lt","lte","in","not_in","like","is_null","is_not_null"]},"value":{"description":"Value (array for in/not_in; omitted for is_null/is_not_null)"}},"required":["field","op"]}}},"required":["entity","aggregates"]}`)
+//go:embed schema/aggregate.json
+var schemaAggregate json.RawMessage
+
+//go:embed schema/begin_transaction.json
+var schemaBeginTransaction json.RawMessage
+
+//go:embed schema/transaction_token.json
+var transactionTokenSchema json.RawMessage

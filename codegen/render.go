@@ -274,7 +274,9 @@ func (b *builder) renderCondition(c relalg.Condition) error {
 		}
 		b.sql.WriteString(")")
 	default:
-		b.sql.WriteString(" " + opSQL(c.Op) + " ")
+		b.sql.WriteString(" ")
+		b.sql.WriteString(opSQL(c.Op))
+		b.sql.WriteString(" ")
 		b.sql.WriteString(b.placeholder())
 		b.args = append(b.args, c.Value)
 	}

@@ -5,13 +5,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nethinwei/sql-mcp-server/dialect"
+	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
 	"github.com/nethinwei/sql-mcp-server/relalg"
 )
 
 func TestCompileSelectWithFilter(t *testing.T) {
 	t.Parallel()
-	r := NewRenderer(dialect.Postgres{})
+	r := NewRenderer(testdialect.Postgres{})
 	expr := relalg.Select{
 		Predicate: relalg.Condition{Field: "id", Op: relalg.OpEq, Value: int64(42)},
 		Input:     relalg.Scan{Relation: relalg.RelationRef{Name: "users"}},
@@ -34,7 +34,7 @@ func TestCompileSelectWithFilter(t *testing.T) {
 
 func TestCompileProjectAndLimit(t *testing.T) {
 	t.Parallel()
-	r := NewRenderer(dialect.Postgres{})
+	r := NewRenderer(testdialect.Postgres{})
 	expr := relalg.Limit{
 		Count: 10, Offset: 5,
 		Input: relalg.Project{
@@ -54,7 +54,7 @@ func TestCompileProjectAndLimit(t *testing.T) {
 
 func TestCompileAggregate(t *testing.T) {
 	t.Parallel()
-	r := NewRenderer(dialect.MySQL{})
+	r := NewRenderer(testdialect.MySQL{})
 	expr := relalg.Aggregate{
 		GroupBy:    []string{"dept"},
 		Aggregates: []relalg.AggCall{{Func: "count"}, {Func: "sum", Field: "salary"}},
@@ -77,7 +77,7 @@ func TestCompileInsertReturning(t *testing.T) {
 		Columns: []string{"name", "email"},
 		Tuples:  []relalg.Tuple{{"alice", "a@x.com"}},
 	}
-	pg := NewRenderer(dialect.Postgres{})
+	pg := NewRenderer(testdialect.Postgres{})
 	c, err := pg.Compile(ins, WithPrimaryKey("id"))
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +90,7 @@ func TestCompileInsertReturning(t *testing.T) {
 		t.Fatal("insert should not be read-only")
 	}
 
-	my := NewRenderer(dialect.MySQL{})
+	my := NewRenderer(testdialect.MySQL{})
 	c2, err := my.Compile(ins, WithPrimaryKey("id"))
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +103,7 @@ func TestCompileInsertReturning(t *testing.T) {
 
 func TestCompileUpdate(t *testing.T) {
 	t.Parallel()
-	r := NewRenderer(dialect.Postgres{})
+	r := NewRenderer(testdialect.Postgres{})
 	expr := relalg.Update{
 		Target:    relalg.RelationRef{Name: "users"},
 		Predicate: relalg.Condition{Field: "id", Op: relalg.OpEq, Value: int64(1)},
@@ -124,7 +124,7 @@ func TestCompileUpdate(t *testing.T) {
 
 func TestCompileDelete(t *testing.T) {
 	t.Parallel()
-	r := NewRenderer(dialect.MySQL{})
+	r := NewRenderer(testdialect.MySQL{})
 	expr := relalg.Delete{
 		Target:    relalg.RelationRef{Name: "users"},
 		Predicate: relalg.Condition{Field: "id", Op: relalg.OpEq, Value: int64(1)},
@@ -141,7 +141,7 @@ func TestCompileDelete(t *testing.T) {
 
 func TestCompileInjectionAttempt(t *testing.T) {
 	t.Parallel()
-	r := NewRenderer(dialect.Postgres{})
+	r := NewRenderer(testdialect.Postgres{})
 	malicious := "1; DROP TABLE users;--"
 	expr := relalg.Select{
 		Predicate: relalg.Condition{Field: "name", Op: relalg.OpEq, Value: malicious},
@@ -161,7 +161,7 @@ func TestCompileInjectionAttempt(t *testing.T) {
 
 func TestCompileIsPKPoint(t *testing.T) {
 	t.Parallel()
-	r := NewRenderer(dialect.Postgres{})
+	r := NewRenderer(testdialect.Postgres{})
 	pk := relalg.Select{
 		Predicate: relalg.Condition{Field: "id", Op: relalg.OpEq, Value: 1},
 		Input:     relalg.Scan{Relation: relalg.RelationRef{Name: "users"}},
@@ -189,7 +189,7 @@ func TestCompileIsPKPoint(t *testing.T) {
 
 func TestCompileInList(t *testing.T) {
 	t.Parallel()
-	r := NewRenderer(dialect.Postgres{})
+	r := NewRenderer(testdialect.Postgres{})
 	expr := relalg.Select{
 		Predicate: relalg.Condition{Field: "id", Op: relalg.OpIn, Value: []any{1, 2, 3}},
 		Input:     relalg.Scan{Relation: relalg.RelationRef{Name: "users"}},
@@ -209,7 +209,7 @@ func TestCompileInList(t *testing.T) {
 
 func TestCompileDistinct(t *testing.T) {
 	t.Parallel()
-	r := NewRenderer(dialect.Postgres{})
+	r := NewRenderer(testdialect.Postgres{})
 	c, err := r.Compile(relalg.Distinct{Input: relalg.Scan{Relation: relalg.RelationRef{Name: "users"}}})
 	if err != nil {
 		t.Fatal(err)
@@ -221,7 +221,7 @@ func TestCompileDistinct(t *testing.T) {
 
 func TestCompileCall(t *testing.T) {
 	t.Parallel()
-	r := NewRenderer(dialect.Postgres{})
+	r := NewRenderer(testdialect.Postgres{})
 	c, err := r.Compile(relalg.Call{Procedure: relalg.RelationRef{Name: "sp"}, Args: []any{1, "x"}})
 	if err != nil {
 		t.Fatal(err)
@@ -237,7 +237,7 @@ func TestCompileCall(t *testing.T) {
 
 func TestCompileInvalidOp(t *testing.T) {
 	t.Parallel()
-	r := NewRenderer(dialect.Postgres{})
+	r := NewRenderer(testdialect.Postgres{})
 	expr := relalg.Select{
 		Predicate: relalg.Condition{Field: "id", Op: "bad", Value: 1},
 		Input:     relalg.Scan{Relation: relalg.RelationRef{Name: "users"}},
@@ -249,7 +249,7 @@ func TestCompileInvalidOp(t *testing.T) {
 
 func TestCompileSortAndBoolean(t *testing.T) {
 	t.Parallel()
-	r := NewRenderer(dialect.Postgres{})
+	r := NewRenderer(testdialect.Postgres{})
 	expr := relalg.Sort{
 		OrderBy: []relalg.OrderTerm{{Field: "id", Dir: "desc"}},
 		Input:   relalg.Scan{Relation: relalg.RelationRef{Name: "users"}},
@@ -265,7 +265,7 @@ func TestCompileSortAndBoolean(t *testing.T) {
 
 func TestCompileAndOrNotIsNull(t *testing.T) {
 	t.Parallel()
-	r := NewRenderer(dialect.Postgres{})
+	r := NewRenderer(testdialect.Postgres{})
 	expr := relalg.Select{
 		Predicate: relalg.And{Preds: []relalg.Predicate{
 			relalg.Or{Preds: []relalg.Predicate{
@@ -287,7 +287,7 @@ func TestCompileAndOrNotIsNull(t *testing.T) {
 
 func TestCompileIsPKPointRejectsOr(t *testing.T) {
 	t.Parallel()
-	r := NewRenderer(dialect.Postgres{})
+	r := NewRenderer(testdialect.Postgres{})
 	// `id=5 OR name='x'` contains a PK equality but the OR branch can match
 	// arbitrary rows; it must NOT be whitelisted as a point lookup.
 	orExpr := relalg.Select{
@@ -327,7 +327,7 @@ func TestCompileIsPKPointRejectsOr(t *testing.T) {
 
 func TestCompileRejectsInvalidAggFunc(t *testing.T) {
 	t.Parallel()
-	r := NewRenderer(dialect.Postgres{})
+	r := NewRenderer(testdialect.Postgres{})
 	expr := relalg.Aggregate{
 		Aggregates: []relalg.AggCall{{Func: "count(*) FROM t; DROP TABLE t--"}},
 		Input:      relalg.Scan{Relation: relalg.RelationRef{Name: "users"}},
@@ -339,7 +339,7 @@ func TestCompileRejectsInvalidAggFunc(t *testing.T) {
 
 func TestCompileWriteIsPKPoint(t *testing.T) {
 	t.Parallel()
-	r := NewRenderer(dialect.Postgres{})
+	r := NewRenderer(testdialect.Postgres{})
 	upd := relalg.Update{
 		Target:    relalg.RelationRef{Name: "users"},
 		Predicate: relalg.Condition{Field: "id", Op: relalg.OpEq, Value: 1},

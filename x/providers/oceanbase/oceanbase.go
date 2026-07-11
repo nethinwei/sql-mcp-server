@@ -23,7 +23,7 @@ func New(dsn string) (*Provider, error) {
 	}
 	return &Provider{
 		Adapter:      ad,
-		dialect:      dialect.OceanBase{},
+		dialect:      Dialect{},
 		explainer:    obExplainer{db: ad.DB()},
 		introspector: mysql.NewIntrospector(ad.DB()),
 	}, nil

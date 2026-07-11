@@ -18,6 +18,8 @@ import (
 	"github.com/nethinwei/sql-mcp-server/relalg"
 	"github.com/nethinwei/sql-mcp-server/store"
 	"github.com/nethinwei/sql-mcp-server/tool"
+	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
+	"github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
 
 func TestRecordProviderFailureClassification(t *testing.T) {
@@ -279,8 +281,8 @@ func TestAssembleWithNamedProvidersRoutesAndClosesAll(t *testing.T) {
 		},
 	}
 	cfg.ApplyDefaults()
-	main := &fakeProvider{dialect: dialect.Postgres{}}
-	archive := &fakeProvider{dialect: dialect.MySQL{}}
+	main := &fakeProvider{dialect: postgres.Dialect{}}
+	archive := &fakeProvider{dialect: mysql.Dialect{}}
 	app, err := AssembleWithProviders(cfg, map[string]Provider{"main": main, "archive": archive})
 	if err != nil {
 		t.Fatal(err)
@@ -306,8 +308,8 @@ func TestAssembleWithProvidersRejectsBareTemplateForMultipleDatasources(t *testi
 	}
 	cfg.ApplyDefaults()
 	_, err := AssembleWithProviders(cfg, map[string]Provider{
-		"primary": &fakeProvider{dialect: dialect.Postgres{}},
-		"replica": &fakeProvider{dialect: dialect.Postgres{}},
+		"primary": &fakeProvider{dialect: postgres.Dialect{}},
+		"replica": &fakeProvider{dialect: postgres.Dialect{}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "rejectTemplates") ||
 		!strings.Contains(err.Error(), "legacy bare SQL") ||
@@ -331,8 +333,8 @@ func TestAssembleExplainAnalyzeRequiresEveryDatasourceSupport(t *testing.T) {
 		}},
 	}
 	cfg.ApplyDefaults()
-	main := &fakeAnalyzeProvider{fakeProvider: &fakeProvider{dialect: dialect.Postgres{}}}
-	archive := &fakeProvider{dialect: dialect.MySQL{}}
+	main := &fakeAnalyzeProvider{fakeProvider: &fakeProvider{dialect: postgres.Dialect{}}}
+	archive := &fakeProvider{dialect: mysql.Dialect{}}
 	_, err := AssembleWithProviders(cfg, map[string]Provider{"main": main, "archive": archive})
 	if err == nil || !strings.Contains(err.Error(), `datasource "archive"`) {
 		t.Fatalf("error = %v, want unsupported archive datasource", err)
@@ -348,7 +350,7 @@ func TestAssembleWiresAnalyzePolicyPerDatasource(t *testing.T) {
 		}},
 	}
 	cfg.ApplyDefaults()
-	provider := &fakeAnalyzeProvider{fakeProvider: &fakeProvider{dialect: dialect.Postgres{}}}
+	provider := &fakeAnalyzeProvider{fakeProvider: &fakeProvider{dialect: postgres.Dialect{}}}
 	app, err := AssembleWithProvider(cfg, provider)
 	if err != nil {
 		t.Fatal(err)
