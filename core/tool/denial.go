@@ -78,8 +78,16 @@ func DenialFor(err error, decisionID string) (Denial, bool) {
 	}
 	for _, m := range sentinelDenials {
 		if errors.Is(err, m.err) {
+			reason := err.Error()
+			if m.code == CodeUnauthorized {
+				// Authorization denials are normalized for clients: a detailed
+				// reason would let a restricted role enumerate hidden entities
+				// and fields (TM-002). The full reason still reaches the audit
+				// log through the error chain, correlated by decision ID.
+				reason = ErrUnauthorized.Error()
+			}
 			return Denial{
-				Code: m.code, Reason: err.Error(), Retryable: m.retryable,
+				Code: m.code, Reason: reason, Retryable: m.retryable,
 				DecisionID: decisionID,
 			}, true
 		}

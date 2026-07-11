@@ -28,6 +28,10 @@
 - **最小可观测**：最小 metrics 集与结构化日志，均可通过 `decision ID`
   与审计、trace 关联；补齐 `x/otel` 的 TracerProvider 初始化，使既有
   hook 产生真实 span；
+- **审计事件 schema 定版**：为审计 JSON Lines 字段补 json tag 并固定命名
+  （当前为 Go 字段名，正在成为事实契约，越晚定版破坏面越大）；主路径补记
+  entity、action 与拒绝码（Denial `code`），使审计能独立解释每一次拒绝；
+  定版后纳入 [tool-contract.md](../tool-contract.md) 兼容规则；
 - **协议 smoke 进主 CI**：stdio 与 streamable HTTP 协议 smoke 从
   release 链前移到 PR/主分支 CI；
 - **性能基线**：可复现的 p50/p95/p99 data-plane overhead benchmark，

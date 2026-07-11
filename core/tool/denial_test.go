@@ -48,13 +48,27 @@ func TestDenialForSentinels(t *testing.T) {
 }
 
 func TestDenialForWrappedSentinelKeepsReason(t *testing.T) {
-	err := fmt.Errorf("%w: role \"intern\" not permitted to read \"users\"", ErrUnauthorized)
+	err := fmt.Errorf("%w: unknown or inaccessible field \"salary\"", ErrInvalidInput)
 	denial, ok := DenialFor(err, "d2")
-	if !ok || denial.Code != CodeUnauthorized {
+	if !ok || denial.Code != CodeInvalidInput {
 		t.Fatalf("wrapped sentinel not mapped: %+v ok=%v", denial, ok)
 	}
 	if denial.Reason != err.Error() {
 		t.Fatalf("reason %q does not carry wrapped detail", denial.Reason)
+	}
+}
+
+// TestDenialForUnauthorizedReasonIsNormalized guards the TM-002 anti-
+// enumeration control: authorization denials must not echo entity or field
+// detail to clients, no matter what the internal error carries.
+func TestDenialForUnauthorizedReasonIsNormalized(t *testing.T) {
+	err := fmt.Errorf("%w: role \"intern\" not permitted to read \"admin_only\"", ErrUnauthorized)
+	denial, ok := DenialFor(err, "d2")
+	if !ok || denial.Code != CodeUnauthorized {
+		t.Fatalf("wrapped sentinel not mapped: %+v ok=%v", denial, ok)
+	}
+	if denial.Reason != ErrUnauthorized.Error() {
+		t.Fatalf("client-visible reason %q must be normalized", denial.Reason)
 	}
 }
 

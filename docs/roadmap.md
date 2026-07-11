@@ -71,6 +71,7 @@
 
 - liveness、snapshot readiness 和数据库 readiness 分离；
 - 最小 metrics、结构化日志和 stdio/HTTP 协议 smoke；
+- 审计事件 schema 定版（json tag 命名、拒绝码、entity/action）；
 - 可复现的 p50/p95/p99 data-plane overhead benchmark；
 - 20–30 个固定任务的 Agent Eval pilot。
 
@@ -106,6 +107,8 @@
 - 版本化公开任务集与三类可复现 baseline；
 - 任务成功、错误修复、越权执行、调用数、token 和业务正确性指标；
 - 按真实需求提供 validate、diff、simulate、publish 和 rollback；
+- publish/rollback 与 CLI 热重载共用同一套配置变更守卫（现有守卫从 CLI 层
+  下沉到 bootstrap，避免两条发布路径规则漂移）；
 - 明确控制面不可用、snapshot 不兼容和在途请求语义。
 
 退出门禁：公开结果可复现，tool/error hint 变更有前后对照，安全证据无回归；

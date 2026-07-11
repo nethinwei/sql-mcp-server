@@ -27,6 +27,9 @@
 
    - `code`：稳定机器码（全集见 `core/tool/testdata/contract.json`）；
    - `retryable`：在当前权限内修改请求后是否可能成功；
+   - `UNAUTHORIZED` 的 `reason` 为统一泛化文案，不携带实体、字段或角色细节
+     （防止受限角色枚举隐藏 schema，见 TM-002）；详细拒绝原因仅写入审计
+     事件，经 `decisionId` 关联；
    - `constraints`：可选的机器可读限制（估算行数、生效上限等）；
    - `hints`：修复建议，只能收紧或等价改写请求，不得扩权；
    - `decisionId`：贯穿 MCP 响应、审计事件（`DecisionID` 字段）与 trace

@@ -160,17 +160,22 @@ func RunTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Re
 	}
 	ctx = WithDecisionID(ctx, tc.DecisionID)
 	auditInput := audit.RedactInput(input, sensitiveFields(name, input, tc.Registry))
+	// BeforeTool fires ahead of budget acquisition so budget denials are also
+	// observable (span + decision.id); OnError fires before AfterTool so the
+	// error is recorded before the span ends.
+	ctx = tc.Hooks.FireBeforeTool(ctx, name, input)
 	lease, ctx, tc, err := acquireToolBudget(ctx, name, input, tc, auditInput)
 	if err != nil {
+		tc.Hooks.FireOnError(ctx, err)
+		tc.Hooks.FireAfterTool(ctx, name, nil, err)
 		return Result{}, err
 	}
-	ctx = tc.Hooks.FireBeforeTool(ctx, name, input)
 	res, err := invokeTool(ctx, t, input, tc)
 	res, err = finalizeToolResult(res, err, tc, lease, start)
-	tc.Hooks.FireAfterTool(ctx, name, res.StructuredResult, err)
 	if err != nil {
 		tc.Hooks.FireOnError(ctx, err)
 	}
+	tc.Hooks.FireAfterTool(ctx, name, res.StructuredResult, err)
 	recordToolAudit(ctx, tc, name, auditInput, res, err, start)
 	return res, err
 }

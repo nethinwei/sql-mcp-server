@@ -44,6 +44,10 @@
   degraded 状态，而不是静默回退到内置默认值。
 - 任何失败路径都不得使数据面进入“无授权配置”状态：没有可用 snapshot 时
   拒绝服务（fail closed），有旧 snapshot 时保守续用（fail static）。
+- publish 必须复用与 CLI 热重载相同的变更守卫（transport/addr/auth/TLS/
+  工具集变化拒绝热发布）；该守卫当前位于 CLI 层
+  （`cmd/sql-mcp-server` 的 `validateHotReloadConfig`），实现控制面前应下沉到
+  `x/bootstrap`，使两条发布路径共用一份规则。
 
 ## 在途请求一致性（结论）
 

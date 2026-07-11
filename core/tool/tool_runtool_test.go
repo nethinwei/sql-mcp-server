@@ -90,6 +90,51 @@ func TestRunToolStampsDecisionID(t *testing.T) {
 	}
 }
 
+type denyingBudget struct{}
+
+func (denyingBudget) Acquire(context.Context, budget.Scope) (budget.Lease, error) {
+	return nil, budget.ErrExceeded
+}
+
+// TestRunToolBudgetAcquireDenialFiresHooks guards telemetry coverage of the
+// earliest rejection path: a budget-acquire denial must still produce a span
+// (BeforeTool with the decision ID in context) and record the error before
+// the span ends.
+func TestRunToolBudgetAcquireDenialFiresHooks(t *testing.T) {
+	t.Parallel()
+	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	var events []string
+	var ctxID string
+	hooks := &hook.Hooks{
+		BeforeTool: func(ctx context.Context, _ string, _ json.RawMessage) context.Context {
+			events = append(events, "before")
+			ctxID = DecisionIDFromContext(ctx)
+			return ctx
+		},
+		OnError:   func(context.Context, error) { events = append(events, "error") },
+		AfterTool: func(context.Context, string, any, error) { events = append(events, "after") },
+	}
+	aud := &recorderAuditor{}
+	tc := Context{
+		Role: "reader", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
+		Hooks: hooks, Auditor: aud, Budget: denyingBudget{},
+	}
+	input, _ := json.Marshal(readInput{Entity: "users"})
+	_, err := RunTool(context.Background(), ReadTool{}, input, tc)
+	if !errors.Is(err, budget.ErrExceeded) {
+		t.Fatalf("error = %v", err)
+	}
+	if len(events) != 3 || events[0] != "before" || events[1] != "error" || events[2] != "after" {
+		t.Fatalf("hook sequence = %v, want [before error after]", events)
+	}
+	if ctxID == "" {
+		t.Fatal("BeforeTool context must carry the decision ID")
+	}
+	if len(aud.events) != 1 || aud.events[0].DecisionID == "" || aud.events[0].Allowed {
+		t.Fatalf("audit = %+v", aud.events)
+	}
+}
+
 func TestRunToolEnforcesBudgetAndAuditsRejection(t *testing.T) {
 	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
 	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {

@@ -35,6 +35,9 @@ func TestToResultBusinessErrorCarriesDenial(t *testing.T) {
 	if denial.Code != tool.CodeUnauthorized || denial.DecisionID != "decision-1" {
 		t.Fatalf("denial = %+v", denial)
 	}
+	if strings.Contains(denial.Reason, "users") || strings.Contains(denial.Reason, "intern") {
+		t.Fatalf("client-visible reason must not echo entity/role detail: %q", denial.Reason)
+	}
 }
 
 func TestToResultCostExceededIncludesHints(t *testing.T) {

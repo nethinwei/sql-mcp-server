@@ -29,8 +29,12 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 ### Changed
 
 - 预算拒绝（`budget exceeded`）从协议层内部错误改为业务级 `IsError` 结果，
-  携带 `BUDGET_EXCEEDED` 拒绝契约；RBAC 拒绝原因不再在工具层丢弃。
+  携带 `BUDGET_EXCEEDED` 拒绝契约。
+- RBAC 拒绝原因不再在工具层丢弃：详细原因写入审计事件；客户端可见的
+  `UNAUTHORIZED` reason 统一泛化，防止受限角色枚举隐藏实体/字段（TM-002）。
 - 审计事件新增 `DecisionID` 字段（JSON Lines 兼容追加）。
+- 工具生命周期 hook 现在在预算获取前触发 `BeforeTool`、在 span 结束前记录
+  错误，使预算拒绝同样可通过 trace 中的 `decision.id` 定位。
 
 ## 0.1.4 - 2026-07-12
 
