@@ -1,4 +1,4 @@
-# SQL MCP Server v0.1.0 example.
+# SQL MCP Server example configuration.
 # Explicit CLI transport/addr flags override these YAML values:
 #   sql-mcp-server serve --config config.yaml --transport stdio
 #   sql-mcp-server serve --config config.yaml --transport http \

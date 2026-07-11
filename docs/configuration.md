@@ -164,7 +164,8 @@ tenant 从 subject 的 `tenant`、`tenant_id`、`tenantID` 中按顺序提取。
   才使用 CPU pool，engine 不会自动拆分 SQL 执行阶段。
   `rps > 0` 会装配 token-bucket 限流；0 表示仅使用并发限制。
 - `mask.enabled` 默认 true。
-- `audit.enabled` 为 true 时 `path` 必填；`queueSize` 默认 1024。
+- `audit.enabled` 为 true 时 `path` 必填；`queueSize` 默认 1024。启用后向
+  `path` 追加 JSON Lines 事件（非 YAML）。
 
 ## 事务
 

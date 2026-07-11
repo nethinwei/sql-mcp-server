@@ -1,71 +1,98 @@
 # SQL MCP Server
 
-SQL MCP Server 通过受控的实体、权限和成本契约，让 AI agent 访问
-PostgreSQL、MySQL 或 OceanBase。它不接受任意 SQL，也不提供 DDL。
+面向 AI agent 的**受控 SQL 数据访问网关**。通过实体模型、关系代数 IR 与参数化
+codegen 暴露 PostgreSQL、MySQL、OceanBase——**不接受任意 SQL，不提供 DDL**。
 
-## 已实现能力
+设计参考 Microsoft Data API Builder 的 MCP 思路，并在成本闸门、多租户预算与
+fail-closed 安全边界上做了强化。详见 [架构](docs/architecture.md)。
 
-- stdio 与 streamable HTTP MCP 传输。
-- 七个实体工具：描述、读取、新增、更新、删除、存储过程执行和聚合；另有显式事务的 begin/commit/rollback 工具。
-- 参数化 SQL、RBAC、字段级读写限制、行级策略、字段脱敏和异步审计（默认关闭）。
-- 成本闸门：模板基线、主键点查白名单、非主键写保护、PostgreSQL EXPLAIN 预筛、读取行数上限和查询超时。
-- 命名数据源、同数据源关系展开、offset/keyset 分页、prepared statement 缓存和配置热重载。
-- MCP 授权 schema resource，以及 `safe_read`、`safe_aggregate`、`rewrite_query` prompts。
+## 为什么选择
 
-准确的安全保证与 provider 差异见
-[`docs/security.md`](docs/security.md)。MySQL/OceanBase 以保守、fail-closed
-方式使用 EXPLAIN；仅 PostgreSQL 支持显式 opt-in 的只读
-`EXPLAIN ANALYZE` 采样。每次命中采样都会额外执行一次生成的只读语句；
-MySQL/OceanBase 配置启用该能力时会 fail-fast。
+| 诉求 | 做法 |
+|------|------|
+| 防止 agent 随意查库 | 仅暴露配置中的实体与字段；值参数化，标识符来自元数据 |
+| 防止误删/全表扫 | 写保护、EXPLAIN 预筛、确定性行数/字节上限、查询超时 |
+| 多团队/多角色 | RBAC、字段 ACL、行级策略、字段脱敏、按 session 预算 |
+| 可运维 | 配置热重载、异步审计、OpenTelemetry hook、分层测试 |
+
+安全保证与 provider 差异以 [安全模型](docs/security.md) 为准，**不以本页为准**。
+
+## 功能概览
+
+**MCP 面** — stdio 与 streamable HTTP；实体工具（describe / read / create /
+update / delete / execute / aggregate）与显式事务（begin / commit / rollback）；
+授权 schema resource；`safe_read`、`safe_aggregate`、`rewrite_query` prompts。
+
+**治理** — 参数化 SQL；RBAC + 字段 ACL + 行级策略 + mask；不可关闭的
+Safety/Enforcement 成本链；模板 fingerprint 与读取反馈；角色/租户进程内预算。
+
+**数据** — 命名多数据源；同源关系展开；offset / keyset 分页；prepared
+statement 缓存。
 
 ## 快速开始
 
-要求 Go 1.25+ 和一个可连接的受支持数据库。
+**要求：** Go 1.25+，可连接的支持数据库之一。
 
 ```sh
-make build VERSION=v0.1.0
-sql-mcp-server init --config config.yaml --driver postgres
+git clone https://github.com/nethinwei/sql-mcp-server.git
+cd sql-mcp-server
+make build
 ```
 
-编辑 `config.yaml`，通过 `${DATABASE_DSN}` 注入 DSN，然后校验并启动：
+初始化配置、注入 DSN、校验并启动（stdio，适合本机 MCP 客户端）：
 
 ```sh
+sql-mcp-server init --config config.yaml --driver postgres
+# 编辑 config.yaml，设置 dsn（可用 ${ENV} 占位符）
 sql-mcp-server validate --config config.yaml
 sql-mcp-server serve --config config.yaml --transport stdio --role reader
 ```
 
-HTTP 仅建议先绑定 loopback：
+HTTP（开发时建议绑定 loopback）：
 
 ```sh
 sql-mcp-server serve --config config.yaml --transport http --addr 127.0.0.1:8080
+```
+
+完整配置示例见 [`examples/config.example.yaml`](examples/config.example.yaml)。
+运行细节、热重载与 secret 见 [运行与 CLI](docs/operations.md)。
+
+> **注意：** 默认 HTTP 地址 `:8080` 监听所有接口。非 loopback 且未配置 bearer
+> token 或 mTLS 时，服务会 **fail closed** 并拒绝启动。
+
+### 连接 MCP 客户端
+
+**stdio**（Cursor 等）：在 MCP 配置中指定编译产物路径与 `serve` 参数。
+
+**HTTP**：端点为 `/mcp`；可用 MCP Inspector 探测：
+
+```sh
 npx -y @modelcontextprotocol/inspector http://127.0.0.1:8080/mcp
 ```
 
-HTTP 的地址默认值是 `:8080`，它会监听所有接口，属于非 loopback；未通过
-`--addr` 或配置改为 loopback 且未配置 bearer token/mTLS 时，服务会 fail
-closed 并拒绝启动。完整示例见
-[`examples/config.example.yaml`](examples/config.example.yaml)。
-
-## 版本状态
-
-发布构建通过 `make build VERSION=<version>` 将同一版本注入 CLI `version` 和
-MCP `Implementation`；未注入的开发构建显示 `dev`。`v0.1.0` 功能基线已包含
-核心工具、三种 provider、权限/成本控制、事务、多数据源、热重载和 MCP
-resources/prompts，但仍有明确限制；详见
-[`v0.1.0 发布说明`](docs/releases/v0.1.0.md)。未来工作只记录在
-[`roadmap`](docs/roadmap.md)。
-
 ## 文档
 
-- [架构](docs/architecture.md)
-- [安全模型与边界](docs/security.md)
-- [配置参考](docs/configuration.md)
-- [运行与 CLI](docs/operations.md)
-- [测试与 CI](docs/testing.md)
-- [核心不变量](docs/invariants.md)
-- [变更记录](CHANGELOG.md)
-- [贡献指南](CONTRIBUTING.md)
+| 主题 | 链接 |
+|------|------|
+| 配置 | [configuration.md](docs/configuration.md) |
+| 安全边界 | [security.md](docs/security.md) · [SECURITY.md](SECURITY.md) |
+| 运行与升级 | [operations.md](docs/operations.md) |
+| 架构 | [architecture.md](docs/architecture.md) |
+| 不变量 | [invariants.md](docs/invariants.md) |
+| 测试与 CI | [testing.md](docs/testing.md) |
+| 变更记录 | [CHANGELOG.md](CHANGELOG.md) |
+| 发布说明 | [docs/releases/](docs/releases/) |
+| 路线图 | [roadmap.md](docs/roadmap.md) |
+| 参与贡献 | [CONTRIBUTING.md](CONTRIBUTING.md) |
+
+版本与迁移说明见 [CHANGELOG](CHANGELOG.md) 及各 [发布说明](docs/releases/)；
+未发布规划见 [roadmap](docs/roadmap.md)。
+
+## 安全
+
+如发现漏洞，请参阅 [SECURITY.md](SECURITY.md)。部署前请阅读
+[安全模型](docs/security.md) 中的信任边界与已知限制。
 
 ## 许可
 
-MIT，见 [LICENSE](LICENSE)。
+[MIT](LICENSE)

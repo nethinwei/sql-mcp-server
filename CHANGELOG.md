@@ -6,12 +6,23 @@
 
 ## Unreleased
 
+## 0.1.2 - 2026-07-11
+
+### Added
+
+- 业务包迁入 `core/`；YAML 解码迁至 `x/configyaml`；provider 通过
+  `x/providerregistry` 可插拔注册。
+- 成本链 Safety/Enforcement/Estimate 分层（`core/cost/layers.go`）。
+- `internal/fmtcheck` 文件、函数与行宽限制；`make fmt` 集成 golines。
+- procedure 独立结果上限 `maxProcedureRows`；expand 分批 IN；审计输入脱敏与
+  transaction token 哈希。
+
 ### Security
 
 - 修复 aggregate 未脱敏、mask 字段谓词/分组侧信道、数据库错误详情外泄、
   procedure rows 泄漏路径和 commit 失败未 rollback。
 - bearer token 改为固定长度摘要恒时比较；角色统一小写规范化；动态 JSON 保留
-  大整数精度；审计输入字段脱敏并哈希 transaction token。
+  大整数精度。
 - `${file:...}` secret 限制到允许根目录并阻止符号链接逃逸；扩充 DSN 脱敏。
 
 ### Changed
@@ -21,12 +32,13 @@
 - MySQL/OceanBase 使用保守 EXPLAIN 并在错误/未知/全扫时 fail closed；三种
   provider 同时装配数据库原生 statement timeout。
 - procedure 默认拒绝，须设置 `mcp.trustedProcedure: true` 并命中 reviewed
-  `allowTemplates`；新增 procedure 独立结果上限。
+  `allowTemplates`。
 - cache、feedback、IN/filter/groupBy/aggregate/expand、预算 session 和响应字节
-  均增加硬边界；expand 改为分批 IN。
+  均增加硬边界。
 - 热重载改为 drain-before-publish；改变工具发现集合的 reload 要求重启。
 - prepared statement 不再锁内执行网络 prepare；singleflight 传播 deadline；
   RPS 配置现已实际装配。
+- 审计文件格式改为 JSON Lines。
 
 ### Breaking
 
@@ -34,7 +46,9 @@
 - `maxScannedRows` 被 `maxEstimatedScannedRows` 取代（旧字段暂作 deprecated
   alias）；零值不再能产生无界缓存或 mandatory cost limit。
 - 角色在配置与请求入口统一 trim 并转为小写，规范化碰撞会拒绝启动。
-- 审计文件格式改为 JSON Lines。
+- Go import 路径由顶层包改为 `core/<pkg>`（例如 `core/config`）。
+
+详见 [`docs/releases/v0.1.2.md`](docs/releases/v0.1.2.md)。
 
 ## 0.1.1 - 2026-07-11
 

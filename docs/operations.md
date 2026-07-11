@@ -3,7 +3,7 @@
 ## 构建和命令
 
 ```sh
-make build VERSION=v0.1.0
+make build
 sql-mcp-server version
 sql-mcp-server init --config config.yaml --driver postgres
 sql-mcp-server add entity --config config.yaml --name users --source users
@@ -64,10 +64,11 @@ sql-mcp-server serve --config config.yaml --watch --watch-interval 1s
 
 watcher 轮询文件内容 hash。新配置必须完整通过加载、secret 解析、数据库连接、
 自省和装配才会发布；失败会记录日志、继续使用旧快照，并对相同文件内容继续重试。
-成功后等待旧快照的在途请求结束，再关闭其 engine、审计、prepared statement
-和 provider；事务 manager 与 budget session 状态跨快照保留。新预算限制会
-原子应用到原 manager；事务 `ttl` 或 `maxOpen` 变化会拒绝 reload，必须重启，
-不会静默沿用旧限制。
+采用 drain-before-publish：新快照构建成功后，reload 窗口内的新请求等待发布；
+旧快照的在途请求结束后才关闭其 engine、审计、prepared statement 和 provider。
+事务 manager 与 budget session 状态跨快照保留。新预算限制会原子应用到原
+manager；事务 `ttl` 或 `maxOpen` 变化会拒绝 reload，必须重启，不会静默沿用
+旧限制。
 
 热重载明确拒绝 transport/address、auth、TLS、trusted proxy 和 tool-set 变化；
 这些变化以及新增/移除 custom procedure tool 都必须重启服务。详见
@@ -90,12 +91,12 @@ watcher 轮询文件内容 hash。新配置必须完整通过加载、secret 解
 需要由运行环境提供 OTel SDK/exporter 设置。`ServeHTTP` 支持注入 metrics
 handler，但当前 CLI 未提供该注入，因此默认没有 `/metrics`。
 
-文件审计是异步 best-effort YAML 事件流。队列满时事件会丢弃；当前没有内置
-轮转、远程 sink 或告警。生产环境应监控磁盘、限制文件访问并配置外部轮转。
+文件审计是异步 best-effort JSON Lines 事件流。队列满时事件会丢弃；当前没有
+内置轮转、远程 sink 或告警。生产环境应监控磁盘、限制文件访问并配置外部轮转。
 
 ## 升级
 
 升级前阅读 [CHANGELOG](../CHANGELOG.md) 和对应
-[发布说明](releases/v0.1.0.md)，先运行 `validate`，再在测试数据库运行 provider
-集成测试。热重载会新建一组数据库连接，切换期间应为新旧 pool 的短暂重叠留出
-容量。
+[发布说明](releases/)（含不兼容变更与迁移步骤），先运行
+`validate`，再在测试数据库运行 provider 集成测试。热重载会新建一组数据库连接，
+切换期间应为新旧 pool 的短暂重叠留出容量。
