@@ -100,6 +100,7 @@ npx -y @modelcontextprotocol/inspector http://127.0.0.1:8080/mcp
 | 5 分钟体验 | [quickstart.md](docs/quickstart.md) |
 | 魔搭 ModelScope | [modelscope.md](docs/modelscope.md) |
 | Provider 兼容性 | [provider-compatibility.md](docs/provider-compatibility.md) |
+| Provider 路线图 | [provider-roadmap.md](docs/provider-roadmap.md) |
 | 支持版本 | [supported-versions.md](docs/supported-versions.md) |
 | 变更记录 | [CHANGELOG.md](CHANGELOG.md) |
 | 发布说明 | [docs/releases/](docs/releases/) |
