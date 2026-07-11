@@ -42,7 +42,7 @@ curl -fsS http://127.0.0.1:8080/healthz
 完整的 Inspector 调用、tenant 隔离和拒绝示例见
 [5 分钟快速体验](docs/quickstart.md)。
 
-**源码构建：** 要求 Go 1.25+ 和一个
+**源码构建：** 要求 Go 1.25.12+ 和一个
 [已验证数据库版本](docs/supported-versions.md)。
 
 ```sh

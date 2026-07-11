@@ -82,8 +82,8 @@ PostgreSQL/MySQL/OceanBase 或 MCP e2e 已在当前机器执行。
 当前 workflow 包含：
 
 - `lint`：golangci-lint；
-- `unit`：Go 1.25 与 stable，通过 Make target 执行 gofmt、vet、开发版本 build、
-  `go test -race ./...`；
+- `unit`：Go 1.25.12 与 1.26.5，通过 Make target 执行 gofmt、vet、开发版本
+  build、`go test -race ./...`；
 - `coverage`：与 Makefile 共用核心包清单，真实检查合计至少 80.0%；
 - `integration`：PostgreSQL、MySQL、OceanBase 三项 testcontainers matrix；
 - `e2e`：PostgreSQL + in-memory MCP client，覆盖协议边界上的工具发现、成本、

@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
+          go-version: "1.26.5"
           cache: true
       - name: install golangci-lint
         run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go: ["1.25", "stable"]
+        go: ["1.25.12", "1.26.5"]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -51,7 +51,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
+          go-version: "1.26.5"
           cache: true
       - name: core coverage (>=80.0%)
         run: make coverage-check
@@ -71,7 +71,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
+          go-version: "1.26.5"
           cache: true
       - name: integration tests (testcontainers)
         run: make test-integration-${{ matrix.db }}
@@ -84,7 +84,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
+          go-version: "1.26.5"
           cache: true
       - name: end-to-end tests (real DB + in-memory MCP client)
         run: make test-e2e
@@ -96,7 +96,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
+          go-version: "1.26.5"
           cache: true
       - name: govulncheck
         run: |
@@ -112,7 +112,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
+          go-version: "1.26.5"
           cache: true
       - name: install actionlint v1.7.12
         run: |
