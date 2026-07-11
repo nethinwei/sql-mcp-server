@@ -6,6 +6,8 @@
 
 ## Unreleased
 
+## 0.1.3 - 2026-07-11
+
 ### Added
 
 - GoReleaser tag workflow，发布 6 个平台归档、SHA-256 checksum、归档 SBOM 和
@@ -15,6 +17,7 @@
   扫描和字段越权拒绝。
 - MCP Registry `server.json`、官方 publisher CI 校验与 GitHub OIDC 发布流程。
 - Provider 兼容矩阵、支持版本和 Cursor/Claude Desktop/VS Code 配置模板。
+- 魔搭 ModelScope 本地分发展示 manifest、专用安全配置和真实 stdio smoke。
 
 ### Changed
 

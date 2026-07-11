@@ -18,7 +18,7 @@ CORE_PACKAGES := ./core/...
 .PHONY: fmt fmt-check vet build test test-integration test-e2e lint coverage \
 	coverage-check govulncheck workflow-check release-check release-quality \
 	release-snapshot release-metadata-check release-image-check release-preflight-fast \
-	release-preflight ci ci-local ci-full tidy
+	release-preflight modelscope-check ci ci-local ci-full tidy
 
 # Format all Go sources in place (gofmt + 120-column line shortening).
 fmt:
@@ -58,11 +58,15 @@ release-image-check:
 	$(SYFT) $(RELEASE_IMAGE) --output spdx-json=dist/image.spdx.json
 	SQL_MCP_IMAGE=$(RELEASE_IMAGE) scripts/release/quickstart.sh
 
+modelscope-check: build
+	MODELSCOPE_BINARY=./$(BINARY) $(GO) run ./internal/modelscopesmoke
+
 release-preflight-fast:
 	$(MAKE) workflow-check
 	$(MAKE) release-snapshot
 	$(MAKE) release-metadata-check
 	$(MAKE) release-image-check
+	$(MAKE) modelscope-check
 
 release-preflight:
 	$(MAKE) ci-full

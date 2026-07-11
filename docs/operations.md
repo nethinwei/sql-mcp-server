@@ -20,7 +20,7 @@ sql-mcp-server explain --config config.yaml --entity users
 创建 RC/GA tag 前先运行：
 
 ```sh
-make release-preflight RELEASE_VERSION=0.1.3-rc.3
+make release-preflight RELEASE_VERSION=0.1.3
 ```
 
 该命令复用 GitHub workflow 使用的验证脚本，覆盖完整测试、跨平台 snapshot、

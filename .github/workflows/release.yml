@@ -47,9 +47,21 @@ jobs:
           cache: true
       - run: make test-e2e
 
+  modelscope:
+    name: modelscope local listing
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.5"
+          cache: true
+      - run: make modelscope-check
+
   artifacts:
     name: signed release artifacts
-    needs: [quality, integration, e2e]
+    needs: [quality, integration, e2e, modelscope]
     runs-on: ubuntu-latest
     permissions:
       contents: write

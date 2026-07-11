@@ -1,0 +1,65 @@
+version: "1"
+
+server:
+  transport: stdio
+  role: reader
+
+databases:
+  primary:
+    driver: postgres
+    dsn: "${DATABASE_DSN}"
+
+tools:
+  describeEntities: true
+  readRecords: true
+  aggregateRecords: true
+
+cost:
+  enabled: true
+  maxRows: 100
+  maxBytes: 1048576
+  rejectFullScan: true
+  whitelistPKPoint: true
+  requireKnownScan: true
+  queryTimeout: 5s
+
+budget:
+  roles:
+    reader:
+      maxConcurrent: 2
+      maxExecution: 5s
+      maxEstimatedScannedRows: 1000
+      maxReturnedRows: 100
+      maxReturnedBytes: 1048576
+      maxSessionCost: 5000
+
+cache:
+  enabled: false
+
+audit:
+  enabled: false
+
+entities:
+  - name: users
+    source: app_user
+    datasource: primary
+    schema: public
+    kind: table
+    description: "ModelScope smoke users"
+    primaryKey: [id]
+    roles:
+      read: [reader]
+      aggregate: [reader]
+    fieldACL:
+      reader:
+        read: [id, email]
+        write: []
+    rowPolicies:
+      reader:
+        op: eq
+        field: tenant_id
+        value: 7
+    fields:
+      - {name: id, description: "User ID"}
+      - {name: email, description: "Masked email", mask: email}
+      - {name: tenant_id, description: "Tenant boundary"}

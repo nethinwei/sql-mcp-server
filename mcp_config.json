@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "sql-mcp-server": {
+      "command": "sql-mcp-server",
+      "args": [
+        "serve",
+        "--config",
+        "/absolute/path/to/config.yaml",
+        "--transport",
+        "stdio",
+        "--role",
+        "reader"
+      ],
+      "env": {
+        "DATABASE_DSN": "postgres://reader:password@127.0.0.1:5432/app?sslmode=require"
+      }
+    }
+  }
+}

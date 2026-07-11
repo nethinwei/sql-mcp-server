@@ -83,6 +83,10 @@ sql-mcp-server serve --config config.yaml --transport http --addr 127.0.0.1:8080
 npx -y @modelcontextprotocol/inspector http://127.0.0.1:8080/mcp
 ```
 
+**魔搭 ModelScope**：使用根目录 [`mcp_config.json`](mcp_config.json) 进行
+“仅本地可用/分发展示”配置；提交资料、Docker 方式和安全边界见
+[魔搭上架与使用](docs/modelscope.md)。
+
 ## 文档
 
 | 主题 | 链接 |
@@ -94,6 +98,7 @@ npx -y @modelcontextprotocol/inspector http://127.0.0.1:8080/mcp
 | 不变量 | [invariants.md](docs/invariants.md) |
 | 测试与 CI | [testing.md](docs/testing.md) |
 | 5 分钟体验 | [quickstart.md](docs/quickstart.md) |
+| 魔搭 ModelScope | [modelscope.md](docs/modelscope.md) |
 | Provider 兼容性 | [provider-compatibility.md](docs/provider-compatibility.md) |
 | 支持版本 | [supported-versions.md](docs/supported-versions.md) |
 | 变更记录 | [CHANGELOG.md](CHANGELOG.md) |

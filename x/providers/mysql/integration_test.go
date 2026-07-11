@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	tcmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
 
@@ -34,10 +35,7 @@ func setupMySQL(t *testing.T) (*mysql.Provider, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prov, err := mysql.New(dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
+	prov := connectMySQLWithRetry(t, dsn)
 	_, _ = prov.ExecContext(ctx,
 		"CREATE TABLE users (id int AUTO_INCREMENT PRIMARY KEY, email text, tenant_id int)")
 	_, _ = prov.ExecContext(ctx,
@@ -46,6 +44,21 @@ func setupMySQL(t *testing.T) (*mysql.Provider, func()) {
 		_ = prov.Close()
 		_ = container.Terminate(context.Background())
 	}
+}
+
+func connectMySQLWithRetry(t *testing.T, dsn string) *mysql.Provider {
+	t.Helper()
+	var lastErr error
+	for range 20 {
+		provider, err := mysql.New(dsn)
+		if err == nil {
+			return provider
+		}
+		lastErr = err
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatalf("connect mysql after startup: %v", lastErr)
+	return nil
 }
 
 func TestMySQLProviderQueryExecExplainIntrospect(t *testing.T) {
