@@ -107,7 +107,9 @@ func TestApplyDefaultsCostThresholds(t *testing.T) {
 	t.Parallel()
 	c := &Config{Database: DatabaseConfig{Driver: "postgres", DSN: "x"}, Cost: CostConfig{Enabled: Bool(true)}}
 	c.ApplyDefaults()
-	if c.Cost.HardScore != 40 || c.Cost.SoftScore != 60 || c.Cost.MaxRows != 10000 {
+	if c.Cost.HardScore != 40 || c.Cost.SoftScore != 60 || c.Cost.MaxRows != 10000 ||
+		c.Cost.MaxINListSize != 256 || c.Cost.MaxProcedureRows != 1000 ||
+		!c.Cost.RejectFullScan || !c.Cost.RequireKnownScan {
 		t.Fatalf("expected default thresholds, got %+v", c.Cost)
 	}
 	if !c.Cost.WhitelistPKPoint {
@@ -167,8 +169,27 @@ func TestApplyDefaultsCacheTTL(t *testing.T) {
 	t.Parallel()
 	c := &Config{Database: DatabaseConfig{Driver: "postgres", DSN: "x"}, Cache: CacheConfig{Enabled: true}}
 	c.ApplyDefaults()
-	if c.Cache.TTL != 30*time.Second {
-		t.Fatalf("got %v, want 30s", c.Cache.TTL)
+	if c.Cache.TTL != 30*time.Second || c.Cache.MaxSize != 4096 ||
+		c.Cache.MaxEntryRows != 10000 || c.Cache.MaxEntryBytes != 16<<20 {
+		t.Fatalf("unexpected cache defaults: %+v", c.Cache)
+	}
+}
+
+func TestValidateNormalizesRolesAndRejectsCollisions(t *testing.T) {
+	cfg := &Config{
+		Database: DatabaseConfig{Driver: "postgres", DSN: "x"},
+		Entities: []EntityConfig{{
+			Name:  "users",
+			Roles: RoleConfig{Read: []string{" Reader "}},
+			FieldACL: map[string]FieldACLConfig{
+				"Reader": {Read: []string{"id"}},
+				"reader": {Read: []string{"id"}},
+			},
+			Fields: []FieldConfig{{Name: "id"}},
+		}},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected normalized role collision")
 	}
 }
 

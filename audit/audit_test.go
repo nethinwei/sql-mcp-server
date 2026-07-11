@@ -2,6 +2,8 @@ package audit
 
 import (
 	"context"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -65,4 +67,41 @@ func TestRecordNonBlocking(t *testing.T) {
 		t.Fatal("Record blocked")
 	}
 	a.Close()
+}
+
+func TestRedactInput(t *testing.T) {
+	input := []byte(`{"transaction":"secret-token","filter":[{"field":"email","op":"eq","value":"alice@example.com"}],"values":{"email":"bob@example.com","name":"Bob"}}`)
+	got := string(RedactInput(input, map[string]bool{"email": true}))
+	for _, secret := range []string{"secret-token", "alice@example.com", "bob@example.com"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("redacted input contains %q: %s", secret, got)
+		}
+	}
+	if !strings.Contains(got, `"name":"Bob"`) {
+		t.Fatalf("non-sensitive value was removed: %s", got)
+	}
+}
+
+func TestFileSinkPersistsAndCloses(t *testing.T) {
+	path := t.TempDir() + "/audit.jsonl"
+	sink, err := OpenFileSink(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Record(Event{Tool: "read_records"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"Tool":"read_records"`) {
+		t.Fatalf("audit file = %s", data)
+	}
+	if err := sink.Record(Event{}); err != ErrSinkClosed {
+		t.Fatalf("record after close error = %v", err)
+	}
 }

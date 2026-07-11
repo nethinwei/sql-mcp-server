@@ -66,6 +66,33 @@ func TestTTLCacheMaxSize(t *testing.T) {
 	}
 }
 
+func TestTTLCacheDefaultCapacityIsBounded(t *testing.T) {
+	t.Parallel()
+	c := NewTTLCache[int](time.Minute, 0)
+	ctx := context.Background()
+	for i := 0; i < defaultMaxSize+10; i++ {
+		if err := c.Set(ctx, Key{SQL: string(rune(i))}, i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := len(c.m); got != defaultMaxSize {
+		t.Fatalf("entries = %d, want %d", got, defaultMaxSize)
+	}
+}
+
+func TestTTLCacheSetRemovesAllExpiredEntries(t *testing.T) {
+	t.Parallel()
+	c := NewTTLCache[int](time.Millisecond, 3)
+	ctx := context.Background()
+	_ = c.Set(ctx, Key{SQL: "a"}, 1)
+	_ = c.Set(ctx, Key{SQL: "b"}, 2)
+	time.Sleep(5 * time.Millisecond)
+	_ = c.Set(ctx, Key{SQL: "c"}, 3)
+	if got := len(c.m); got != 1 {
+		t.Fatalf("entries after expiry cleanup = %d, want 1", got)
+	}
+}
+
 func TestNoopCache(t *testing.T) {
 	t.Parallel()
 	var n NoopCache[int]

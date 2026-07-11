@@ -113,7 +113,7 @@ func TestCustomProcedureThroughMCP(t *testing.T) {
 	procedure := entity.Entity{
 		Name: "refresh-cache", Source: "refresh_cache", Kind: entity.KindProcedure,
 		Params: []string{"tenant"}, Role: entity.RoleAccess{entity.ActionExecute: {"caller"}},
-		MCP: entity.MCPFlags{CustomTool: true}, DataSource: "default",
+		MCP: entity.MCPFlags{CustomTool: true, TrustedProcedure: true}, DataSource: "default",
 	}
 	registry, err := entity.NewRegistry([]entity.Entity{procedure})
 	if err != nil {

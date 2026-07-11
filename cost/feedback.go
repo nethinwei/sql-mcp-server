@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+const defaultMaxFingerprintKeys = 4096
+
 // Feedback records one observed execution for a query template, used to
 // calibrate future estimates against reality.
 type Feedback struct {
@@ -47,7 +49,9 @@ type MemoryStore struct {
 	anomalyFactor     float64
 	anomalyMinSamples int
 	invalidator       PlanInvalidator
+	maxKeys           int
 	m                 map[string][]Feedback
+	keys              []string
 }
 
 // NewMemoryStore returns an in-memory FeedbackStore.
@@ -56,14 +60,30 @@ func NewMemoryStore() *MemoryStore { return NewMemoryStoreWithWindow(32) }
 // NewMemoryStoreWithWindow returns a store retaining at most size samples per
 // fingerprint.
 func NewMemoryStoreWithWindow(size int) *MemoryStore {
-	return NewAdaptiveMemoryStore(size, 3, 5, nil)
+	return NewMemoryStoreWithBounds(size, defaultMaxFingerprintKeys)
+}
+
+// NewMemoryStoreWithBounds returns a store bounded both per fingerprint and
+// across all fingerprints. When full, the oldest inserted fingerprint is
+// evicted.
+func NewMemoryStoreWithBounds(windowSize, maxKeys int) *MemoryStore {
+	return NewAdaptiveMemoryStoreWithBounds(windowSize, maxKeys, 3, 5, nil)
 }
 
 // NewAdaptiveMemoryStore additionally invalidates a plan when a new actual-row
 // count exceeds the prior window average by factor.
 func NewAdaptiveMemoryStore(size int, factor float64, minSamples int, invalidator PlanInvalidator) *MemoryStore {
+	return NewAdaptiveMemoryStoreWithBounds(size, defaultMaxFingerprintKeys, factor, minSamples, invalidator)
+}
+
+// NewAdaptiveMemoryStoreWithBounds additionally bounds the number of distinct
+// fingerprints retained by the adaptive store.
+func NewAdaptiveMemoryStoreWithBounds(size, maxKeys int, factor float64, minSamples int, invalidator PlanInvalidator) *MemoryStore {
 	if size <= 0 {
 		size = 32
+	}
+	if maxKeys <= 0 {
+		maxKeys = defaultMaxFingerprintKeys
 	}
 	if factor <= 1 {
 		factor = 3
@@ -73,7 +93,7 @@ func NewAdaptiveMemoryStore(size int, factor float64, minSamples int, invalidato
 	}
 	return &MemoryStore{
 		windowSize: size, anomalyFactor: factor, anomalyMinSamples: minSamples,
-		invalidator: invalidator, m: map[string][]Feedback{},
+		invalidator: invalidator, maxKeys: maxKeys, m: map[string][]Feedback{},
 	}
 }
 
@@ -83,7 +103,15 @@ func (s *MemoryStore) Record(f Feedback) {
 	if f.ActualRows == 0 && f.Rows != 0 {
 		f.ActualRows = f.Rows
 	}
-	previous := s.m[f.Template]
+	previous, exists := s.m[f.Template]
+	if !exists {
+		if len(s.m) >= s.maxKeys {
+			oldest := s.keys[0]
+			delete(s.m, oldest)
+			s.keys = s.keys[1:]
+		}
+		s.keys = append(s.keys, f.Template)
+	}
 	anomalous := false
 	if len(previous) >= s.anomalyMinSamples {
 		var total int64
@@ -93,7 +121,8 @@ func (s *MemoryStore) Record(f Feedback) {
 		average := total / int64(len(previous))
 		anomalous = average > 0 && float64(f.ActualRows) > float64(average)*s.anomalyFactor
 	}
-	samples := append(previous, f)
+	samples := append([]Feedback(nil), previous...)
+	samples = append(samples, f)
 	if len(samples) > s.windowSize {
 		samples = append([]Feedback(nil), samples[len(samples)-s.windowSize:]...)
 	}

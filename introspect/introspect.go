@@ -30,7 +30,11 @@ func DetectDrift(configured, discovered []entity.Entity) Drift {
 	d := Drift{}
 	disc := indexByName(discovered)
 	for _, ce := range configured {
-		de, ok := disc[ce.Name]
+		physicalName := ce.Source
+		if physicalName == "" {
+			physicalName = ce.Name
+		}
+		de, ok := disc[physicalName]
 		if !ok {
 			d.Missing = append(d.Missing, ce.Name)
 			continue

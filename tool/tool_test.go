@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
 	"github.com/nethinwei/sql-mcp-server/mask"
 	"github.com/nethinwei/sql-mcp-server/rbac"
+	"github.com/nethinwei/sql-mcp-server/relalg"
 	"github.com/nethinwei/sql-mcp-server/store"
 )
 
@@ -34,6 +36,39 @@ func (r *recorderAuditor) Record(_ context.Context, e audit.Event) error {
 type queryTx struct {
 	store.FakeTx
 	query func(context.Context, string, ...any) (store.Rows, error)
+}
+
+type recordingRows struct {
+	store.Rows
+	events *[]string
+	once   sync.Once
+}
+
+func (r *recordingRows) Close() error {
+	var err error
+	r.once.Do(func() {
+		*r.events = append(*r.events, "close")
+		err = r.Rows.Close()
+	})
+	return err
+}
+
+type recordingCache struct {
+	events        *[]string
+	invalidations int
+	err           error
+}
+
+func (*recordingCache) Get(context.Context, cache.Key) ([]map[string]any, bool) {
+	return nil, false
+}
+func (*recordingCache) Set(context.Context, cache.Key, []map[string]any) error { return nil }
+func (c *recordingCache) Invalidate(string) error {
+	c.invalidations++
+	if c.events != nil {
+		*c.events = append(*c.events, "invalidate")
+	}
+	return c.err
 }
 
 func (t *queryTx) QueryContext(ctx context.Context, query string, args ...any) (store.Rows, error) {
@@ -330,6 +365,33 @@ func TestCreateTool(t *testing.T) {
 	}
 }
 
+func TestExecErrorsAreWrapped(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("driver exec failed")
+	e := entity.Entity{
+		Name:       "users",
+		Source:     "users",
+		Attributes: []entity.Attribute{{Name: "id"}},
+		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
+		Role:       entity.RoleAccess{entity.ActionUpdate: {"writer"}},
+		MCP:        entity.MCPFlags{DMLTools: true},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	db := &store.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
+		return store.Result{}, cause
+	}}
+	tc := Context{
+		Role: "writer", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
+		Authorizer: rbac.NewRoleAuthorizer(reg),
+	}
+	_, err := (UpdateTool{}).Run(context.Background(), json.RawMessage(
+		`{"entity":"users","filter":[{"field":"id","op":"eq","value":1}],"set":{"id":2}}`,
+	), tc)
+	if !errors.Is(err, ErrDatabase) || !errors.Is(err, cause) {
+		t.Fatalf("exec error = %v", err)
+	}
+}
+
 func TestUpdateToolUnsafeWrite(t *testing.T) {
 	t.Parallel()
 	e := testUsersEntity()
@@ -395,7 +457,7 @@ func TestExecuteToolCallsProcedure(t *testing.T) {
 	e := entity.Entity{
 		Name: "sp", Source: "sp", Kind: entity.KindProcedure,
 		Role:       entity.RoleAccess{entity.ActionExecute: {"caller"}},
-		MCP:        entity.MCPFlags{DMLTools: true},
+		MCP:        entity.MCPFlags{DMLTools: true, TrustedProcedure: true},
 		Params:     []string{"x"},
 		Attributes: []entity.Attribute{{Name: "n"}},
 	}
@@ -439,6 +501,22 @@ func TestExecuteToolRejectsNonProcedure(t *testing.T) {
 	_, err := ExecuteTool{}.Run(context.Background(), in, tc)
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("got %v, want ErrInvalidInput", err)
+	}
+}
+
+func TestExecuteToolRejectsUntrustedProcedure(t *testing.T) {
+	entityConfig := entity.Entity{
+		Name: "sp", Source: "sp", Kind: entity.KindProcedure, Params: []string{"x"},
+		Role: entity.RoleAccess{entity.ActionExecute: {"caller"}},
+		MCP:  entity.MCPFlags{DMLTools: true},
+	}
+	registry, _ := entity.NewRegistry([]entity.Entity{entityConfig})
+	_, err := ExecuteTool{}.Run(context.Background(), json.RawMessage(`{"entity":"sp","args":{"x":1}}`), Context{
+		Role: "caller", Dialect: testdialect.Postgres{}, Registry: registry,
+		Authorizer: rbac.NewRoleAuthorizer(registry),
+	})
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("error = %v, want unauthorized", err)
 	}
 }
 
@@ -491,7 +569,7 @@ func TestProcedureToolRunsWhenDMLDisabled(t *testing.T) {
 		Name: "refresh-cache", Source: "refresh_cache", Kind: entity.KindProcedure,
 		Params:     []string{"tenant"},
 		Role:       entity.RoleAccess{entity.ActionExecute: {"caller"}},
-		MCP:        entity.MCPFlags{CustomTool: true},
+		MCP:        entity.MCPFlags{CustomTool: true, TrustedProcedure: true},
 		Attributes: []entity.Attribute{{Name: "ok"}},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
@@ -524,7 +602,7 @@ func TestExecuteToolDoesNotRetryQueryFailureWithExec(t *testing.T) {
 	want := errors.New("provider query failed")
 	e := entity.Entity{
 		Name: "sp", Source: "sp", Kind: entity.KindProcedure, Params: []string{"x"},
-		Role: entity.RoleAccess{entity.ActionExecute: {"caller"}}, MCP: entity.MCPFlags{DMLTools: true},
+		Role: entity.RoleAccess{entity.ActionExecute: {"caller"}}, MCP: entity.MCPFlags{DMLTools: true, TrustedProcedure: true},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	db := &store.FakeDB{
@@ -536,7 +614,7 @@ func TestExecuteToolDoesNotRetryQueryFailureWithExec(t *testing.T) {
 	}
 	tc := Context{Role: "caller", DB: db, Dialect: testdialect.Postgres{}, Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}
 	_, err := ExecuteTool{}.Run(context.Background(), json.RawMessage(`{"entity":"sp","args":{"x":1}}`), tc)
-	if !errors.Is(err, want) || len(db.Execs) != 0 {
+	if !errors.Is(err, ErrDatabase) || !errors.Is(err, want) || len(db.Execs) != 0 {
 		t.Fatalf("error = %v, execs = %d", err, len(db.Execs))
 	}
 }
@@ -548,7 +626,7 @@ func TestExecuteToolFiltersProcedureColumnsFailClosed(t *testing.T) {
 		Attributes:  []entity.Attribute{{Name: "visible"}, {Name: "secret"}, {Name: "excluded", Excluded: true}},
 		Role:        entity.RoleAccess{entity.ActionExecute: {"caller"}},
 		FieldAccess: entity.FieldAccess{"caller": {Read: []string{"visible"}}},
-		MCP:         entity.MCPFlags{DMLTools: true},
+		MCP:         entity.MCPFlags{DMLTools: true, TrustedProcedure: true},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
@@ -561,6 +639,144 @@ func TestExecuteToolFiltersProcedureColumnsFailClosed(t *testing.T) {
 	}
 	if len(result.Content) != 1 || len(result.Content[0]) != 1 || result.Content[0]["visible"] != 1 {
 		t.Fatalf("procedure output leaked fields: %#v", result.Content)
+	}
+}
+
+func TestExecuteToolClosesRowsBeforeAfterWrite(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{
+		Name: "sp", Source: "sp", Kind: entity.KindProcedure, Params: []string{"x"},
+		Attributes: []entity.Attribute{{Name: "n"}},
+		Role:       entity.RoleAccess{entity.ActionExecute: {"caller"}},
+		MCP:        entity.MCPFlags{DMLTools: true, TrustedProcedure: true},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	events := []string{}
+	rows := &recordingRows{
+		Rows:   store.NewFakeRows([]string{"n"}, []any{int64(1)}),
+		events: &events,
+	}
+	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return rows, nil
+	}}
+	cc := &recordingCache{events: &events}
+	tc := Context{
+		Role: "caller", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
+		Authorizer: rbac.NewRoleAuthorizer(reg), Cache: cc,
+	}
+	_, err := (ExecuteTool{}).Run(context.Background(), json.RawMessage(`{"entity":"sp","args":{"x":1}}`), tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(events, ","); got != "close,invalidate" {
+		t.Fatalf("event order = %s, want close,invalidate", got)
+	}
+}
+
+func TestExecuteToolClosesRowsOnAfterWriteError(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{
+		Name: "sp", Source: "sp", Kind: entity.KindProcedure, Params: []string{"x"},
+		Attributes: []entity.Attribute{{Name: "n"}},
+		Role:       entity.RoleAccess{entity.ActionExecute: {"caller"}},
+		MCP:        entity.MCPFlags{DMLTools: true, TrustedProcedure: true},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	events := []string{}
+	rows := &recordingRows{
+		Rows:   store.NewFakeRows([]string{"n"}, []any{int64(1)}),
+		events: &events,
+	}
+	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return rows, nil
+	}}
+	want := errors.New("cache invalidation failed")
+	tc := Context{
+		Role: "caller", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
+		Authorizer: rbac.NewRoleAuthorizer(reg),
+		Cache:      &recordingCache{events: &events, err: want},
+	}
+	_, err := (ExecuteTool{}).Run(context.Background(), json.RawMessage(`{"entity":"sp","args":{"x":1}}`), tc)
+	if !errors.Is(err, want) {
+		t.Fatalf("error = %v, want %v", err, want)
+	}
+	if got := strings.Join(events, ","); got != "close,invalidate" {
+		t.Fatalf("event order = %s, want close,invalidate", got)
+	}
+}
+
+func TestExecuteToolClosesRowsOnConsumptionErrors(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{
+		Name: "sp", Source: "sp", Kind: entity.KindProcedure, Params: []string{"x"},
+		Attributes: []entity.Attribute{{Name: "n"}},
+		Role:       entity.RoleAccess{entity.ActionExecute: {"caller"}},
+		MCP:        entity.MCPFlags{DMLTools: true, TrustedProcedure: true},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	cases := []struct {
+		name             string
+		rows             *store.FakeRows
+		limits           budget.Limits
+		maxProcedureRows int64
+		want             error
+	}{
+		{
+			name: "iteration error",
+			rows: func() *store.FakeRows {
+				rows := store.NewFakeRows([]string{"n"})
+				rows.SetErr(errors.New("driver iteration failed"))
+				return rows
+			}(),
+			want: ErrDatabase,
+		},
+		{
+			name:   "budget error",
+			rows:   store.NewFakeRows([]string{"n"}, []any{1}, []any{2}),
+			limits: budget.Limits{MaxReturnedRows: 1},
+			want:   budget.ErrExceeded,
+		},
+		{
+			name:             "procedure hard cap",
+			rows:             store.NewFakeRows([]string{"n"}, []any{1}, []any{2}),
+			maxProcedureRows: 1,
+			want:             budget.ErrExceeded,
+		},
+	}
+	for _, tcse := range cases {
+		t.Run(tcse.name, func(t *testing.T) {
+			cc := &recordingCache{}
+			db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+				return tcse.rows, nil
+			}}
+			tc := Context{
+				Role: "caller", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
+				Authorizer: rbac.NewRoleAuthorizer(reg), Cache: cc, BudgetLimits: tcse.limits,
+				MaxProcedureRows: tcse.maxProcedureRows,
+			}
+			_, err := (ExecuteTool{}).Run(context.Background(), json.RawMessage(`{"entity":"sp","args":{"x":1}}`), tc)
+			if !errors.Is(err, tcse.want) {
+				t.Fatalf("error = %v, want %v", err, tcse.want)
+			}
+			if !tcse.rows.Closed() {
+				t.Fatal("rows were not closed")
+			}
+			if cc.invalidations != 0 {
+				t.Fatal("afterWrite ran before successful result consumption")
+			}
+		})
+	}
+}
+
+func TestWrapDBErrorPreservesCause(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("driver failed")
+	err := WrapDBError(cause)
+	if !errors.Is(err, ErrDatabase) || !errors.Is(err, cause) || errors.Unwrap(err) != cause {
+		t.Fatalf("wrapped error = %v", err)
+	}
+	if WrapDBError(nil) != nil || WrapDBError(err) != err {
+		t.Fatal("WrapDBError should preserve nil and existing wrappers")
 	}
 }
 
@@ -633,6 +849,134 @@ func TestAggregateToolRejectsInvalidFunc(t *testing.T) {
 	_, err := AggregateTool{}.Run(context.Background(), in, tc)
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("got %v, want ErrInvalidInput", err)
+	}
+}
+
+func TestAggregateToolMasksResultRows(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{
+		Name:       "users",
+		Source:     "users",
+		Attributes: []entity.Attribute{{Name: "email", Mask: "email"}},
+		Role:       entity.RoleAccess{entity.ActionAggregate: {"reader"}},
+		MCP:        entity.MCPFlags{DMLTools: true},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return store.NewFakeRows([]string{"email"}, []any{"alice@example.com"}), nil
+	}}
+	tc := Context{
+		Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
+		Authorizer: rbac.NewRoleAuthorizer(reg), Masker: mask.NewRuleMasker(nil),
+	}
+	result, err := (AggregateTool{}).Run(context.Background(), json.RawMessage(`{"entity":"users","aggregates":[{"func":"count"}]}`), tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result.Content[0]["email"]; got != "a***@example.com" {
+		t.Fatalf("aggregate result was not masked: %v", got)
+	}
+}
+
+func TestMaskedFieldsRejectedForValueRevealingUsages(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{
+		Name:       "users",
+		Source:     "users",
+		Attributes: []entity.Attribute{{Name: "id"}, {Name: "secret", Alias: "private", Mask: "email"}},
+		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
+		Role: entity.RoleAccess{
+			entity.ActionRead:      {"role"},
+			entity.ActionCreate:    {"role"},
+			entity.ActionUpdate:    {"role"},
+			entity.ActionDelete:    {"role"},
+			entity.ActionAggregate: {"role"},
+		},
+		MCP: entity.MCPFlags{DMLTools: true},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return store.NewFakeRows([]string{"secret"}, []any{"alice@example.com"}), nil
+	}}
+	tc := Context{
+		Role: "role", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
+		Authorizer: rbac.NewRoleAuthorizer(reg),
+	}
+	projection, err := (ReadTool{}).Run(context.Background(), json.RawMessage(`{"entity":"users","fields":["secret"]}`), tc)
+	if err != nil || len(projection.Content) != 1 {
+		t.Fatalf("read projection should allow masked field: result=%v error=%v", projection.Content, err)
+	}
+	cases := []struct {
+		name  string
+		tool  Tool
+		input string
+	}{
+		{"read filter", ReadTool{}, `{"entity":"users","filter":[{"field":"secret","op":"eq","value":"x"}]}`},
+		{"read cursor alias", ReadTool{}, `{"entity":"users","cursor":{"private":"x"}}`},
+		{"update filter", UpdateTool{}, `{"entity":"users","filter":[{"field":"secret","op":"eq","value":"x"}],"set":{"id":1}}`},
+		{"delete filter", DeleteTool{}, `{"entity":"users","filter":[{"field":"secret","op":"eq","value":"x"}]}`},
+		{"group by", AggregateTool{}, `{"entity":"users","groupBy":["secret"],"aggregates":[{"func":"count"}]}`},
+		{"aggregate field", AggregateTool{}, `{"entity":"users","aggregates":[{"func":"max","field":"secret"}]}`},
+	}
+	for _, tcse := range cases {
+		t.Run(tcse.name, func(t *testing.T) {
+			_, err := tcse.tool.Run(context.Background(), json.RawMessage(tcse.input), tc)
+			if !errors.Is(err, ErrInvalidInput) ||
+				!strings.Contains(err.Error(), "unknown or inaccessible field") ||
+				strings.Contains(err.Error(), "mask") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+func TestExpandUsesMaskedJoinFieldsInternally(t *testing.T) {
+	t.Parallel()
+	parent := entity.Entity{
+		Name:       "users",
+		Source:     "users",
+		Attributes: []entity.Attribute{{Name: "email", Mask: "email"}},
+		Relations: []entity.Relationship{{
+			Name: "orders", Target: "orders", Cardinality: "many",
+			JoinOn: map[string]string{"email": "user_email"},
+		}},
+		Role: entity.RoleAccess{entity.ActionRead: {"reader"}},
+		MCP:  entity.MCPFlags{DMLTools: true},
+	}
+	target := entity.Entity{
+		Name:       "orders",
+		Source:     "orders",
+		Attributes: []entity.Attribute{{Name: "id"}, {Name: "user_email", Mask: "email"}},
+		Role:       entity.RoleAccess{entity.ActionRead: {"reader"}},
+		MCP:        entity.MCPFlags{DMLTools: true},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{parent, target})
+	queries := 0
+	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		queries++
+		if queries == 1 {
+			return store.NewFakeRows([]string{"email"}, []any{"alice@example.com"}), nil
+		}
+		return store.NewFakeRows([]string{"id", "user_email"}, []any{int64(7), "alice@example.com"}), nil
+	}}
+	tc := Context{
+		Role: "reader", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
+		Masker: mask.NewRuleMasker(nil),
+		Sources: map[string]DataSource{
+			"default": {DB: db, Dialect: testdialect.Postgres{}},
+		},
+	}
+	result, err := (ReadTool{}).Run(context.Background(), json.RawMessage(`{"entity":"users","expand":["orders"]}`), tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	children, ok := result.Content[0]["orders"].([]map[string]any)
+	if !ok || len(children) != 1 || children[0]["id"] != int64(7) {
+		t.Fatalf("expanded rows = %#v", result.Content)
+	}
+	if result.Content[0]["email"] != "a***@example.com" ||
+		children[0]["user_email"] != "a***@example.com" {
+		t.Fatalf("join fields were not safely masked: %#v", result.Content)
 	}
 }
 
@@ -1113,5 +1457,37 @@ func TestReadCacheIsolatedByAuthorizationScope(t *testing.T) {
 	}
 	if calls != 3 {
 		t.Fatalf("DB called %d times, want one isolated cache fill per role/subject", calls)
+	}
+}
+
+func TestDecodeInputPreservesLargeInteger(t *testing.T) {
+	var input readInput
+	err := decodeInput([]byte(`{"entity":"users","filter":[{"field":"id","op":"eq","value":9007199254740993}]}`), &input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	predicate, err := filterToPredicate(input.Filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	condition, ok := predicate.(relalg.Condition)
+	if !ok || condition.Value != int64(9007199254740993) {
+		t.Fatalf("condition = %#v", predicate)
+	}
+}
+
+func TestRunToolEnforcesReturnedByteLimit(t *testing.T) {
+	entityConfig := testUsersEntity()
+	registry, _ := entity.NewRegistry([]entity.Entity{entityConfig})
+	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return store.NewFakeRows([]string{"id", "email"}, []any{int64(1), strings.Repeat("x", 64)}), nil
+	}}
+	input := json.RawMessage(`{"entity":"users","fields":["id","email"]}`)
+	_, err := RunTool(context.Background(), ReadTool{}, input, Context{
+		Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Registry: registry,
+		Authorizer: rbac.NewRoleAuthorizer(registry), MaxReturnedBytes: 16,
+	})
+	if !errors.Is(err, budget.ErrExceeded) {
+		t.Fatalf("error = %v, want budget exceeded", err)
 	}
 }

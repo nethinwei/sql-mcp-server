@@ -1,1 +1,11 @@
-{"type":"object","properties":{"transaction":{"type":"string"}},"required":["transaction"]}
+{
+    "type": "object",
+    "properties": {
+        "transaction": {
+            "type": "string"
+        }
+    },
+    "required": [
+        "transaction"
+    ]
+}

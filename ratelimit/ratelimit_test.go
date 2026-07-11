@@ -24,6 +24,16 @@ func TestAdaptiveAcquireRelease(t *testing.T) {
 	}
 }
 
+func TestTokenBucketRejectsBurstOverflow(t *testing.T) {
+	limiter := NewTokenBucket(1)
+	if err := limiter.Allow(); err != nil {
+		t.Fatal(err)
+	}
+	if err := limiter.Allow(); err != ErrRateLimited {
+		t.Fatalf("second request error = %v", err)
+	}
+}
+
 func TestAdaptiveAIMD(t *testing.T) {
 	t.Parallel()
 	a := NewAdaptive(4, 1, 8, time.Second)

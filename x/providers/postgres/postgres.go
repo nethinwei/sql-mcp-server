@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
+	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib" // register the "pgx" driver
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/nethinwei/sql-mcp-server/cost"
 	"github.com/nethinwei/sql-mcp-server/dialect"
@@ -35,10 +38,25 @@ type Provider struct {
 // format. It returns ErrPing (wrapping the cause) if the database is
 // unreachable, failing fast rather than starting up broken.
 func New(dsn string) (*Provider, error) {
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		return nil, err
+	return NewWithTimeout(dsn, 30*time.Second)
+}
+
+// NewWithTimeout opens PostgreSQL with a DB-native statement timeout.
+func NewWithTimeout(dsn string, timeout time.Duration) (*Provider, error) {
+	if timeout <= 0 {
+		return nil, errors.New("postgres: statement timeout must be positive")
 	}
+	cfg, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: parse dsn: %w", err)
+	}
+	if cfg.RuntimeParams == nil {
+		cfg.RuntimeParams = map[string]string{}
+	}
+	if _, configured := cfg.RuntimeParams["statement_timeout"]; !configured {
+		cfg.RuntimeParams["statement_timeout"] = strconv.FormatInt(timeout.Milliseconds(), 10)
+	}
+	db := stdlib.OpenDB(*cfg)
 	if err := db.PingContext(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("%w: %v", ErrPing, err)

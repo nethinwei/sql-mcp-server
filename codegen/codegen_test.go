@@ -68,6 +68,9 @@ func TestCompileAggregate(t *testing.T) {
 	if c.SQL != want {
 		t.Fatalf("got %q, want %q", c.SQL, want)
 	}
+	if c.Kind != KindAggregate {
+		t.Fatalf("kind = %q, want aggregate", c.Kind)
+	}
 }
 
 func TestCompileInsertReturning(t *testing.T) {
@@ -88,6 +91,9 @@ func TestCompileInsertReturning(t *testing.T) {
 	}
 	if c.ReadOnly {
 		t.Fatal("insert should not be read-only")
+	}
+	if c.Kind != KindWrite {
+		t.Fatalf("kind = %q, want write", c.Kind)
 	}
 
 	my := NewRenderer(testdialect.MySQL{})
@@ -173,6 +179,20 @@ func TestCompileIsPKPoint(t *testing.T) {
 	if !c.IsPKPoint {
 		t.Fatal("expected IsPKPoint for full-PK equality")
 	}
+	scoped := relalg.Select{
+		Predicate: relalg.And{Preds: []relalg.Predicate{
+			relalg.Condition{Field: "id", Op: relalg.OpEq, Value: 1},
+			relalg.Condition{Field: "tenant_id", Op: relalg.OpEq, Value: 7},
+		}},
+		Input: relalg.Scan{Relation: relalg.RelationRef{Name: "users"}},
+	}
+	scopedCompiled, err := r.Compile(scoped, WithPrimaryKey("id"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !scopedCompiled.IsPKPoint {
+		t.Fatal("PK equality plus row policy remains a point lookup")
+	}
 
 	nonPK := relalg.Select{
 		Predicate: relalg.Condition{Field: "name", Op: relalg.OpEq, Value: "x"},
@@ -207,6 +227,21 @@ func TestCompileInList(t *testing.T) {
 	}
 }
 
+func TestCompileRejectsOversizedInList(t *testing.T) {
+	t.Parallel()
+	r := NewRenderer(testdialect.Postgres{})
+	expr := relalg.Select{
+		Predicate: relalg.Condition{Field: "id", Op: relalg.OpIn, Value: []any{1, 2, 3}},
+		Input:     relalg.Scan{Relation: relalg.RelationRef{Name: "users"}},
+	}
+	if _, err := r.Compile(expr, WithMaxINCardinality(2)); !errors.Is(err, relalg.ErrINCardinality) {
+		t.Fatalf("got %v, want ErrINCardinality", err)
+	}
+	if _, err := r.Compile(expr, WithMaxINCardinality(0)); !errors.Is(err, relalg.ErrINCardinality) {
+		t.Fatalf("zero maximum got %v, want ErrINCardinality", err)
+	}
+}
+
 func TestCompileDistinct(t *testing.T) {
 	t.Parallel()
 	r := NewRenderer(testdialect.Postgres{})
@@ -232,6 +267,25 @@ func TestCompileCall(t *testing.T) {
 	}
 	if len(c.Args) != 2 {
 		t.Fatalf("args = %v", c.Args)
+	}
+	if c.Kind != KindCall {
+		t.Fatalf("kind = %q, want call", c.Kind)
+	}
+}
+
+func TestCompileKinds(t *testing.T) {
+	t.Parallel()
+	r := NewRenderer(testdialect.Postgres{})
+	read, err := r.Compile(relalg.Scan{Relation: relalg.RelationRef{Name: "users"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	write, err := r.Compile(relalg.Delete{Target: relalg.RelationRef{Name: "users"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read.Kind != KindRead || write.Kind != KindWrite {
+		t.Fatalf("read kind=%q write kind=%q", read.Kind, write.Kind)
 	}
 }
 

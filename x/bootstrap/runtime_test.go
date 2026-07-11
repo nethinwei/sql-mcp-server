@@ -11,7 +11,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/tool"
 )
 
-func TestRuntimeReloadPublishesThenDrainsOldApp(t *testing.T) {
+func TestRuntimeReloadDrainsBeforePublishing(t *testing.T) {
 	oldProvider := &fakeProvider{}
 	nextProvider := &fakeProvider{}
 	oldApp := &App{Provider: oldProvider}
@@ -25,12 +25,9 @@ func TestRuntimeReloadPublishesThenDrainsOldApp(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() { done <- runtime.Reload("ignored") }()
-	deadline := time.Now().Add(time.Second)
-	for runtime.Current() != nextApp && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if runtime.Current() != nextApp {
-		t.Fatal("new app was not atomically published")
+	time.Sleep(20 * time.Millisecond)
+	if runtime.Current() != oldApp {
+		t.Fatal("new app was published before old authorization snapshot drained")
 	}
 	select {
 	case err := <-done:
@@ -40,6 +37,9 @@ func TestRuntimeReloadPublishesThenDrainsOldApp(t *testing.T) {
 	release()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+	if runtime.Current() != nextApp {
+		t.Fatal("new app was not published after drain")
 	}
 	if oldProvider.closed != 1 {
 		t.Fatalf("old provider closed %d times", oldProvider.closed)

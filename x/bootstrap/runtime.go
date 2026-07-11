@@ -77,6 +77,9 @@ func (r *Runtime) Acquire() (*App, func(), error) {
 		}
 		snapshot.mu.Lock()
 		if snapshot.retired {
+			for snapshot.retired && r.current.Load() == snapshot {
+				snapshot.cond.Wait()
+			}
 			snapshot.mu.Unlock()
 			continue
 		}
@@ -137,10 +140,11 @@ func (r *Runtime) Reload(path string) error {
 	}
 	old.mu.Lock()
 	old.retired = true
-	r.current.Store(newAppSnapshot(next))
 	for old.refs > 0 {
 		old.cond.Wait()
 	}
+	r.current.Store(newAppSnapshot(next))
+	old.cond.Broadcast()
 	if next.Transactions == old.app.Transactions {
 		old.app.Transactions = nil
 	}
@@ -214,6 +218,7 @@ func (r *Runtime) Close() error {
 	}
 	old.mu.Lock()
 	old.retired = true
+	old.cond.Broadcast()
 	for old.refs > 0 {
 		old.cond.Wait()
 	}

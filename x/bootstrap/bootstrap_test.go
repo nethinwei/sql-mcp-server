@@ -64,26 +64,34 @@ func TestAppCloseContextDrainsBeforeTransactionsAndProviders(t *testing.T) {
 	if err := app.CloseContext(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("CloseContext error = %v", err)
 	}
-	if tx.RolledBack || provider.closed != 0 {
-		t.Fatalf("resources closed before engine drain: rollback=%v provider=%d", tx.RolledBack, provider.closed)
+	if !tx.RolledBack || provider.closed != 1 {
+		t.Fatalf("resources were not force-closed after drain timeout: rollback=%v provider=%d", tx.RolledBack, provider.closed)
 	}
 	close(release)
 	if err := app.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if !tx.RolledBack || provider.closed != 1 {
-		t.Fatalf("resources not closed after drain: rollback=%v provider=%d", tx.RolledBack, provider.closed)
+		t.Fatalf("resources closed more than once: rollback=%v provider=%d", tx.RolledBack, provider.closed)
 	}
 }
 
 type fakeProvider struct {
 	store.FakeDB
-	dialect dialect.Dialect
-	closed  int
+	dialect     dialect.Dialect
+	explainPlan *cost.Plan
+	closed      int
 }
 
-func (p *fakeProvider) Dialect() dialect.Dialect              { return p.dialect }
-func (p *fakeProvider) Explainer() cost.Explainer             { return nil }
+func (p *fakeProvider) Dialect() dialect.Dialect { return p.dialect }
+func (p *fakeProvider) Explainer() cost.Explainer {
+	if p.explainPlan != nil {
+		return cost.FakeExplainer{Plan: *p.explainPlan}
+	}
+	return cost.FakeExplainer{Plan: cost.Plan{
+		ScanType: cost.ScanIndex, EstimatedRows: 1, StatsFresh: true,
+	}}
+}
 func (p *fakeProvider) Introspector() introspect.Introspector { return nil }
 func (p *fakeProvider) Close() error                          { p.closed++; return nil }
 func (p *fakeProvider) QueryContext(context.Context, string, ...any) (store.Rows, error) {
@@ -228,11 +236,11 @@ func TestResolveSecrets(t *testing.T) {
 
 func TestNewProviderUnsupported(t *testing.T) {
 	t.Parallel()
-	if _, err := newProvider("oracle", ""); err == nil {
+	if _, err := newProvider("oracle", "", time.Second); err == nil {
 		t.Fatal("expected error for unsupported driver")
 	}
 	// mysql with an invalid DSN fails fast at ping (still an error).
-	if _, err := newProvider("mysql", ""); err == nil {
+	if _, err := newProvider("mysql", "", time.Second); err == nil {
 		t.Fatal("expected error for invalid mysql dsn")
 	}
 }
@@ -240,15 +248,36 @@ func TestNewProviderUnsupported(t *testing.T) {
 func TestRedactDSN(t *testing.T) {
 	t.Parallel()
 	cases := []struct{ in, want string }{
-		{"postgres://user:secret@host:5432/db", "postgres://user:***@host:5432/db"},
-		{"postgresql://u:p@h/db", "postgresql://u:***@h/db"},
+		{"postgres://user:secret@host:5432/db", "postgres://user:%2A%2A%2A@host:5432/db"},
+		{"postgresql://u:p@h/db", "postgresql://u:%2A%2A%2A@h/db"},
 		{"user:secret@tcp(127.0.0.1:3306)/db", "user:***@tcp(127.0.0.1:3306)/db"},
 		{"postgres://user@host/db", "postgres://user@host/db"},
+		{"postgres://user:secret@host/db?password=other", "postgres://user:%2A%2A%2A@host/db?password=***"},
+		{"user=x password=secret host=db", "user=x password=*** host=db"},
 	}
 	for _, c := range cases {
 		if got := RedactDSN(c.in); got != c.want {
 			t.Errorf("RedactDSN(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+func TestEnvFileResolverRestrictsRoots(t *testing.T) {
+	root := t.TempDir()
+	path := root + "/dsn"
+	if err := os.WriteFile(path, []byte("postgres://db"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolver := EnvFileResolver{AllowedRoots: []string{root}}
+	got, err := resolver.Resolve("${file:" + path + "}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "postgres://db" {
+		t.Fatalf("resolved = %q", got)
+	}
+	if _, err := resolver.Resolve("${file:/etc/passwd}"); err == nil {
+		t.Fatal("expected path outside allowed roots to be rejected")
 	}
 }
 
@@ -296,6 +325,67 @@ func TestAssembleWithNamedProvidersRoutesAndClosesAll(t *testing.T) {
 	}
 	if main.closed != 1 || archive.closed != 1 {
 		t.Fatalf("close counts = main:%d archive:%d", main.closed, archive.closed)
+	}
+}
+
+func TestAssembleKeepsMandatorySafetyWhenCostEstimateDisabled(t *testing.T) {
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{Driver: "postgres", DSN: "x"},
+		Cost:     config.CostConfig{Enabled: config.Bool(false)},
+		Entities: []config.EntityConfig{{
+			Name: "users", PrimaryKey: []string{"id"},
+			Fields: []config.FieldConfig{{Name: "id"}, {Name: "status"}},
+			Roles:  config.RoleConfig{Update: []string{"writer"}},
+		}},
+	}
+	cfg.ApplyDefaults()
+	app, err := AssembleWithProvider(cfg, &fakeProvider{dialect: postgres.Dialect{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	chain, ok := app.Gate.(*cost.ChainGate)
+	if !ok {
+		t.Fatalf("gate type = %T", app.Gate)
+	}
+	foundWriteGuard := false
+	for _, layer := range chain.Layers() {
+		if layer.Name() == "write-guard" {
+			foundWriteGuard = true
+		}
+	}
+	if !foundWriteGuard {
+		t.Fatal("cost.enabled=false removed mandatory write guard")
+	}
+}
+
+func TestAssembleUsesConservativeMySQLEstimate(t *testing.T) {
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{Driver: "mysql", DSN: "x"},
+		Entities: []config.EntityConfig{{
+			Name: "users", Fields: []config.FieldConfig{{Name: "id"}},
+			Roles: config.RoleConfig{Read: []string{"reader"}},
+		}},
+	}
+	cfg.ApplyDefaults()
+	plan := cost.Plan{ScanType: cost.ScanFull, EstimatedRows: 100000, StatsFresh: true}
+	app, err := AssembleWithProvider(cfg, &fakeProvider{dialect: mysql.Dialect{}, explainPlan: &plan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	compiled, err := codegen.Renderer{Dialect: mysql.Dialect{}}.Compile(
+		relalg.Scan{Relation: relalg.RelationRef{Name: "users"}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := app.Gate.Check(context.Background(), compiled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Allow {
+		t.Fatal("MySQL full scan was not rejected by conservative estimate")
 	}
 }
 

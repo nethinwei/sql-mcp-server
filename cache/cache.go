@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+const defaultMaxSize = 1024
+
 // Key identifies a cached entry. Scope separates authorization/RLS identities.
 type Key struct {
 	Entity string
@@ -38,8 +40,9 @@ type entry[T any] struct {
 	exp time.Time
 }
 
-// TTLCache stores values with a TTL, evaluated lazily on Get. When maxSize > 0,
-// Set evicts (expired first, then arbitrary) to stay under the cap.
+// TTLCache stores values with a TTL, evaluated lazily on Get. Set removes all
+// expired entries before evicting an arbitrary live entry to stay under the
+// configured cap.
 type TTLCache[T any] struct {
 	ttl     time.Duration
 	maxSize int
@@ -47,8 +50,11 @@ type TTLCache[T any] struct {
 	m       map[Key]entry[T]
 }
 
-// NewTTLCache returns a TTLCache. maxSize <= 0 means unbounded.
+// NewTTLCache returns a TTLCache. maxSize <= 0 uses a safe default capacity.
 func NewTTLCache[T any](ttl time.Duration, maxSize int) *TTLCache[T] {
+	if maxSize <= 0 {
+		maxSize = defaultMaxSize
+	}
 	return &TTLCache[T]{ttl: ttl, maxSize: maxSize, m: make(map[Key]entry[T])}
 }
 
@@ -73,25 +79,19 @@ func (c *TTLCache[T]) Get(_ context.Context, k Key) (T, bool) {
 func (c *TTLCache[T]) Set(_ context.Context, k Key, v T) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.maxSize > 0 {
-		if _, exists := c.m[k]; !exists && len(c.m) >= c.maxSize {
-			evicted := false
-			for ek, ev := range c.m {
-				if time.Now().After(ev.exp) {
-					delete(c.m, ek)
-					evicted = true
-					break
-				}
-			}
-			if !evicted {
-				for ek := range c.m {
-					delete(c.m, ek)
-					break
-				}
-			}
+	now := time.Now()
+	for ek, ev := range c.m {
+		if now.After(ev.exp) {
+			delete(c.m, ek)
 		}
 	}
-	c.m[k] = entry[T]{v: v, exp: time.Now().Add(c.ttl)}
+	if _, exists := c.m[k]; !exists && len(c.m) >= c.maxSize {
+		for ek := range c.m {
+			delete(c.m, ek)
+			break
+		}
+	}
+	c.m[k] = entry[T]{v: v, exp: now.Add(c.ttl)}
 	return nil
 }
 

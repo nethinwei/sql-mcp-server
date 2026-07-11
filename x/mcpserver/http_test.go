@@ -71,6 +71,7 @@ func TestTokenAuth(t *testing.T) {
 		wantCode   int
 	}{
 		{"valid", "Bearer s3cret", http.StatusOK},
+		{"case-insensitive scheme", "bearer s3cret", http.StatusOK},
 		{"missing", "", http.StatusUnauthorized},
 		{"wrong", "Bearer nope", http.StatusUnauthorized},
 		{"no scheme", "s3cret", http.StatusUnauthorized},
@@ -220,6 +221,18 @@ func TestWithRequestSubjectRejectsMalformedSubject(t *testing.T) {
 	}
 }
 
+func TestWithRequestSubjectPreservesLargeInteger(t *testing.T) {
+	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_, subject := subjectFromContext(r.Context(), "reader")
+		if got := subject["tenant"]; got == nil || got.(interface{ String() string }).String() != "9007199254740993" {
+			t.Fatalf("tenant = %#v", got)
+		}
+	})
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("X-MCP-Subject", `{"tenant":9007199254740993}`)
+	withRequestSubject(next).ServeHTTP(httptest.NewRecorder(), req)
+}
+
 func TestTrustedProxyOnly(t *testing.T) {
 	networks, err := parseTrustedProxyCIDRs([]string{"10.0.0.0/8"})
 	if err != nil {
@@ -248,7 +261,7 @@ func TestNewServerRegistersProcedureCustomTools(t *testing.T) {
 		Name:   "refresh-cache",
 		Kind:   entity.KindProcedure,
 		Params: []string{"tenant"},
-		MCP:    entity.MCPFlags{CustomTool: true},
+		MCP:    entity.MCPFlags{CustomTool: true, TrustedProcedure: true},
 	}
 	entities, err := entity.NewRegistry([]entity.Entity{e})
 	if err != nil {

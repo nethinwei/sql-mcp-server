@@ -182,12 +182,9 @@ func TestRLSRowFilterAndMasking(t *testing.T) {
 			},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost: config.CostConfig{
-			// Score thresholds left disabled (0): this test verifies RLS +
-			// masking, not the score gate. A small table is a Seq Scan (low
-			// safety score) that EnforceCap bounds by MaxRows instead.
-			Enabled: config.Bool(true), MaxRows: 10000, WhitelistPKPoint: true,
-		},
+		// This test targets RLS/masking; mandatory EnforceCap remains active
+		// while optional EXPLAIN scoring is disabled.
+		Cost: config.CostConfig{Enabled: config.Bool(false), MaxRows: 10000},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -267,10 +264,9 @@ func TestEnforceCapLimitsRows(t *testing.T) {
 			Roles:  config.RoleConfig{Read: []string{"reader"}},
 		}},
 		Tools: config.DefaultToolFlags(),
-		// Score thresholds disabled (0) so Estimate passes on a Seq Scan;
-		// EnforceCap deterministically wraps the query in LIMIT 1 (MaxRows).
+		// Optional Estimate is disabled; mandatory EnforceCap remains active.
 		Cost: config.CostConfig{
-			Enabled: config.Bool(true), MaxRows: 1,
+			Enabled: config.Bool(false), MaxRows: 1,
 		},
 	}
 	cfg.ApplyDefaults()
@@ -301,9 +297,13 @@ func TestPGExecuteProcedure(t *testing.T) {
 		Entities: []config.EntityConfig{{
 			Name: "noop_proc", Source: "noop_proc", Kind: "procedure",
 			Roles: config.RoleConfig{Execute: []string{"caller"}},
+			MCP:   config.MCPFlags{TrustedProcedure: true},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(false)},
+		Cost: config.CostConfig{
+			Enabled:        config.Bool(false),
+			AllowTemplates: []string{`CALL "noop_proc"()`},
+		},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)

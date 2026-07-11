@@ -13,10 +13,21 @@ import (
 // cannot render.
 var ErrUnsupportedExpr = errors.New("codegen: unsupported expression")
 
+// Kind identifies the execution class of a compiled statement.
+type Kind string
+
+const (
+	KindRead      Kind = "read"
+	KindAggregate Kind = "aggregate"
+	KindWrite     Kind = "write"
+	KindCall      Kind = "call"
+)
+
 // Compiled is the physical, executable product of a logical plan: the rendered
 // SQL, bound args, and metadata consumed by the cost gate, cache, and store.
 type Compiled struct {
 	Expr           relalg.Expr
+	Kind           Kind
 	SQL            string
 	Args           []any
 	IsPKPoint      bool // all primary-key columns matched by equality (gate whitelist)
@@ -28,13 +39,21 @@ type Compiled struct {
 type CompileOption func(*compileConfig)
 
 type compileConfig struct {
-	pkCols []string
+	pkCols           []string
+	maxINCardinality int
 }
 
 // WithPrimaryKey supplies primary-key columns so Compile can detect a primary
 // key point lookup and set Compiled.IsPKPoint.
 func WithPrimaryKey(cols ...string) CompileOption {
 	return func(c *compileConfig) { c.pkCols = cols }
+}
+
+// WithMaxINCardinality sets the maximum accepted IN/NOT IN list size. Values
+// must be positive; invalid values fail compilation rather than disabling the
+// bound.
+func WithMaxINCardinality(max int) CompileOption {
+	return func(c *compileConfig) { c.maxINCardinality = max }
 }
 
 // Renderer renders relalg expressions for a single dialect.
@@ -52,13 +71,16 @@ func NewRenderer(d dialect.Dialect) Renderer {
 // RETURNING). It does not run a separate optimizer: the IR is deliberately
 // limited (no join/subquery), so predicate pushdown has nothing to push over.
 func (r Renderer) Compile(e relalg.Expr, opts ...CompileOption) (Compiled, error) {
-	cfg := compileConfig{}
+	cfg := compileConfig{maxINCardinality: relalg.DefaultMaxINCardinality}
 	for _, o := range opts {
 		if o != nil {
 			o(&cfg)
 		}
 	}
-	b := &builder{dialect: r.Dialect}
+	if cfg.maxINCardinality <= 0 {
+		return Compiled{}, fmt.Errorf("%w: maximum must be positive", relalg.ErrINCardinality)
+	}
+	b := &builder{dialect: r.Dialect, maxINCardinality: cfg.maxINCardinality}
 	if r.Dialect.Capabilities().Returning && len(cfg.pkCols) > 0 {
 		b.returningCols = cfg.pkCols
 	}
@@ -67,6 +89,7 @@ func (r Renderer) Compile(e relalg.Expr, opts ...CompileOption) (Compiled, error
 	}
 	c := Compiled{
 		Expr:           e,
+		Kind:           kindOf(e),
 		SQL:            b.sql.String(),
 		Args:           b.args,
 		ReadOnly:       b.readOnly,
@@ -78,16 +101,49 @@ func (r Renderer) Compile(e relalg.Expr, opts ...CompileOption) (Compiled, error
 	return c, nil
 }
 
+func kindOf(e relalg.Expr) Kind {
+	switch e.(type) {
+	case relalg.Insert, relalg.Update, relalg.Delete:
+		return KindWrite
+	case relalg.Call:
+		return KindCall
+	}
+	if containsAggregate(e) {
+		return KindAggregate
+	}
+	return KindRead
+}
+
+func containsAggregate(e relalg.Expr) bool {
+	switch n := e.(type) {
+	case relalg.Aggregate:
+		return true
+	case relalg.Select:
+		return containsAggregate(n.Input)
+	case relalg.Project:
+		return containsAggregate(n.Input)
+	case relalg.Sort:
+		return containsAggregate(n.Input)
+	case relalg.Limit:
+		return containsAggregate(n.Input)
+	case relalg.Distinct:
+		return containsAggregate(n.Input)
+	default:
+		return false
+	}
+}
+
 // builder accumulates SQL text and bound args while tracking a placeholder
 // counter for positional dialects ($1, $2, ...).
 type builder struct {
-	dialect       dialect.Dialect
-	sql           strings.Builder
-	args          []any
-	ph            int
-	readOnly      bool
-	tables        []string
-	returningCols []string // appended to INSERT when the dialect supports RETURNING
+	dialect          dialect.Dialect
+	sql              strings.Builder
+	args             []any
+	ph               int
+	readOnly         bool
+	tables           []string
+	returningCols    []string // appended to INSERT when the dialect supports RETURNING
+	maxINCardinality int
 }
 
 func (b *builder) placeholder() string {
@@ -190,7 +246,7 @@ func isPKPoint(p relalg.Predicate, pkCols []string) bool {
 		return false
 	}
 	conds, pure := flattenAnd(p)
-	if !pure || len(conds) != len(pkCols) {
+	if !pure || len(conds) < len(pkCols) {
 		return false
 	}
 	seen := make(map[string]bool, len(pkCols))
@@ -199,7 +255,10 @@ func isPKPoint(p relalg.Predicate, pkCols []string) bool {
 		pkSet[c] = true
 	}
 	for _, c := range conds {
-		if c.Op != relalg.OpEq || !pkSet[c.Field] {
+		if !pkSet[c.Field] {
+			continue
+		}
+		if c.Op != relalg.OpEq {
 			return false
 		}
 		seen[c.Field] = true

@@ -27,6 +27,7 @@ type Option func(*config)
 type config struct {
 	io, cpu, inflight int
 	limiter           *ratelimit.Adaptive
+	rps               *ratelimit.TokenBucket
 	breaker           *ratelimit.Breaker
 	recordFailure     func(error) bool
 }
@@ -42,6 +43,9 @@ func WithMaxInflight(n int) Option { return func(c *config) { c.inflight = n } }
 
 // WithLimiter attaches an adaptive limiter for AIMD feedback.
 func WithLimiter(l *ratelimit.Adaptive) Option { return func(c *config) { c.limiter = l } }
+
+// WithRPSLimiter attaches a token-bucket request-rate limiter.
+func WithRPSLimiter(l *ratelimit.TokenBucket) Option { return func(c *config) { c.rps = l } }
 
 // WithBreaker attaches a circuit breaker.
 func WithBreaker(b *ratelimit.Breaker) Option { return func(c *config) { c.breaker = b } }
@@ -59,6 +63,7 @@ type Engine struct {
 	inflight      chan struct{}
 	sf            singleflight
 	limiter       *ratelimit.Adaptive
+	rps           *ratelimit.TokenBucket
 	breaker       *ratelimit.Breaker
 	recordFailure func(error) bool
 	stateMu       sync.Mutex
@@ -83,6 +88,7 @@ func New(opts ...Option) (*Engine, error) {
 		cpusem:        make(chan struct{}, cfg.cpu),
 		inflight:      make(chan struct{}, cfg.inflight),
 		limiter:       cfg.limiter,
+		rps:           cfg.rps,
 		breaker:       cfg.breaker,
 		recordFailure: cfg.recordFailure,
 	}, nil
@@ -124,6 +130,11 @@ func (e *Engine) SubmitClass(ctx context.Context, class WorkClass, key string, f
 	e.active.Add(1)
 	e.stateMu.Unlock()
 	defer e.active.Done()
+	if e.rps != nil {
+		if err := e.rps.Allow(); err != nil {
+			return nil, err
+		}
+	}
 	if e.breaker != nil {
 		if err := e.breaker.Allow(); err != nil {
 			return nil, err
@@ -234,7 +245,14 @@ func (s *singleflight) Do(ctx context.Context, key string, executions *sync.Wait
 		s.mu.Unlock()
 		return s.wait(ctx, c)
 	}
-	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	baseCtx := context.WithoutCancel(ctx)
+	var runCtx context.Context
+	var cancel context.CancelFunc
+	if deadline, ok := ctx.Deadline(); ok {
+		runCtx, cancel = context.WithDeadline(baseCtx, deadline)
+	} else {
+		runCtx, cancel = context.WithCancel(baseCtx)
+	}
 	c := &call{done: make(chan struct{}), cancel: cancel, waiters: 1}
 	s.m[key] = c
 	executions.Add(1)
@@ -244,7 +262,9 @@ func (s *singleflight) Do(ctx context.Context, key string, executions *sync.Wait
 		c.val, c.err = fn(runCtx)
 		cancel()
 		s.mu.Lock()
-		delete(s.m, key)
+		if s.m[key] == c {
+			delete(s.m, key)
+		}
 		s.mu.Unlock()
 		close(c.done)
 	}()

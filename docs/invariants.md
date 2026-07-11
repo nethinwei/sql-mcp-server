@@ -24,6 +24,21 @@
 - **I8** 通用实体工具只能访问 `entity.MCP.DMLTools` 开启的实体。
 - **I15** filter、group-by、set、values 和 cursor 字段必须是可见实体字段；
   隐藏字段不能作为谓词或写目标。
+- **I16** mask 字段只允许作为读取投影；不得用于 filter、cursor、group-by、
+  aggregate 或 update/delete 谓词，所有结果路径在返回前执行 mask。
+- **I17** 写保护、CALL 审核、输入 cardinality、timeout 和结果 cap 属于不可关闭
+  的 Safety/Enforcement；`cost.enabled: false` 只能关闭 EXPLAIN/AQE 估算。
+- **I18** 主键白名单与 allow template 只能跳过 Estimate，不得绕过 mandatory
+  enforcement。
+- **I19** procedure 默认拒绝；必须同时标记 `trustedProcedure` 且命中 reviewed
+  allow fingerprint，返回行数受独立硬上限。
+- **I20** aggregate 必须包含用户或行级谓词；无谓词聚合 fail closed。
+- **I21** filter、IN、group-by、aggregate 和 expand 数量有上限；expand 必须分批。
+- **I22** cache 条目、单条缓存值、feedback fingerprint、预算 session 和事务均
+  有全局容量边界。
+- **I23** begin、commit、rollback 各自受 deadline；commit 失败必须尝试 rollback。
+- **I24** 不能将返回行数冒充实际扫描行数；跨方言只承诺 EXPLAIN 估算上限，并在
+  计划未知或 EXPLAIN 失败时 fail closed。
 
 MCP 工具是否在 tools/list 中还取决于全局 `tools` 开关；custom procedure tool
 由 `mcp.customTool` 独立注册，不受通用 `executeEntity` 开关控制。

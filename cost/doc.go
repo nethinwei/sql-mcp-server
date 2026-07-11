@@ -1,10 +1,9 @@
 // Package cost implements the defense-in-depth cost & resource gate.
 //
-// EXPLAIN is one optional layer, not a leash. The gate chains layers in order:
-// StaticRule (PK-point whitelist, no EXPLAIN) -> Estimate (optional EXPLAIN
-// pre-filter, only when the dialect's estimates are trustworthy) -> EnforceCap
-// (deterministic LIMIT injection, independent of estimate correctness). Any
-// layer may reject; a single layer's failure is not fatal.
+// EXPLAIN is one optional layer, not a leash. Layers have Safety, Estimate, and
+// Enforcement phases. A static PK/template bypass skips Estimate only; guards
+// and deterministic caps still run. CALL is denied unless reviewed explicitly,
+// and optional write/aggregate guards remain independent of EXPLAIN support.
 //
 // Runtime/DB-native guards sit beneath this synchronous gate:
 //   - context.WithTimeout plus QueryContext/ExecContext is the portable
@@ -14,7 +13,6 @@
 //     database/user level. MySQL-compatible providers do set sql_safe_updates
 //     through the DSN, which applies when each connection is established.
 //
-// Estimate failure (bad EXPLAIN, plan drift) degrades to Plan{ScanUnknown,
-// !StatsFresh} rather than panicking (Murphy); RequireKnownScan/RequireFreshStats
-// decide whether that degrades to a hard reject.
+// Estimate failure defaults to Plan{ScanUnknown, !StatsFresh} for compatibility.
+// FailClosed, RequireKnownScan, or RequireFreshStats can make it a hard reject.
 package cost

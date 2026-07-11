@@ -42,3 +42,18 @@ func TestDetectDriftNoDrift(t *testing.T) {
 		t.Fatalf("expected no drift, got %+v", d)
 	}
 }
+
+func TestDetectDriftUsesPhysicalSource(t *testing.T) {
+	t.Parallel()
+	configured := []entity.Entity{{
+		Name: "admin_users", Source: "users",
+		Attributes: []entity.Attribute{{Name: "id"}},
+	}}
+	discovered := []entity.Entity{{
+		Name: "users", Attributes: []entity.Attribute{{Name: "id"}},
+	}}
+	drift := DetectDrift(configured, discovered)
+	if len(drift.Missing) != 0 {
+		t.Fatalf("physical source reported missing: %+v", drift)
+	}
+}

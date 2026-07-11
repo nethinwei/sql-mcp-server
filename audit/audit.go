@@ -46,29 +46,41 @@ type Sink func(Event) error
 // AsyncAuditor pushes events to a bounded queue drained by a background
 // flusher. On overflow it drops and counts (atomic) instead of blocking.
 type AsyncAuditor struct {
-	queue   chan Event
-	sink    Sink
-	done    chan struct{}
-	dropped atomic.Int64
-	closed  atomic.Bool
+	queue     chan Event
+	sink      Sink
+	closeSink func() error
+	done      chan struct{}
+	dropped   atomic.Int64
+	closed    atomic.Bool
 }
 
 // NewAsyncAuditor starts a flusher goroutine. Call Close to drain and stop.
 func NewAsyncAuditor(sink Sink, queueSize int) *AsyncAuditor {
+	return NewAsyncAuditorWithClose(sink, nil, queueSize)
+}
+
+// NewAsyncAuditorWithClose starts an auditor and closes the sink after draining.
+func NewAsyncAuditorWithClose(sink Sink, closeSink func() error, queueSize int) *AsyncAuditor {
 	if queueSize <= 0 {
 		queueSize = 1024
 	}
 	a := &AsyncAuditor{
-		queue: make(chan Event, queueSize),
-		sink:  sink,
-		done:  make(chan struct{}),
+		queue:     make(chan Event, queueSize),
+		sink:      sink,
+		closeSink: closeSink,
+		done:      make(chan struct{}),
 	}
 	go a.flush()
 	return a
 }
 
 func (a *AsyncAuditor) flush() {
-	defer close(a.done)
+	defer func() {
+		if a.closeSink != nil {
+			_ = a.closeSink()
+		}
+		close(a.done)
+	}()
 	for e := range a.queue {
 		if a.sink != nil {
 			_ = a.sink(e)

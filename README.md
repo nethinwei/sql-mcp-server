@@ -13,8 +13,8 @@ PostgreSQL、MySQL 或 OceanBase。它不接受任意 SQL，也不提供 DDL。
 - MCP 授权 schema resource，以及 `safe_read`、`safe_aggregate`、`rewrite_query` prompts。
 
 准确的安全保证与 provider 差异见
-[`docs/security.md`](docs/security.md)。尤其注意：MySQL/OceanBase 的 EXPLAIN
-估算当前不参与同步闸门；v0.1 仅 PostgreSQL 支持显式 opt-in 的只读
+[`docs/security.md`](docs/security.md)。MySQL/OceanBase 以保守、fail-closed
+方式使用 EXPLAIN；仅 PostgreSQL 支持显式 opt-in 的只读
 `EXPLAIN ANALYZE` 采样。每次命中采样都会额外执行一次生成的只读语句；
 MySQL/OceanBase 配置启用该能力时会 fail-fast。
 

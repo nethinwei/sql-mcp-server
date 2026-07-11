@@ -2,6 +2,7 @@ package mysql
 
 import (
 	"database/sql"
+	"time"
 
 	"github.com/nethinwei/sql-mcp-server/cost"
 	"github.com/nethinwei/sql-mcp-server/dialect"
@@ -18,7 +19,12 @@ type Provider struct {
 
 // New opens a MySQL database and assembles the core adapters.
 func New(dsn string) (*Provider, error) {
-	ad, err := NewAdapter(dsn)
+	return NewWithTimeout(dsn, 30*time.Second)
+}
+
+// NewWithTimeout opens MySQL with a DB-native SELECT timeout.
+func NewWithTimeout(dsn string, timeout time.Duration) (*Provider, error) {
+	ad, err := NewAdapterWithTimeout(dsn, timeout, "")
 	if err != nil {
 		return nil, err
 	}

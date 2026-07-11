@@ -48,6 +48,18 @@ func TestAuthorizeAllowed(t *testing.T) {
 	}
 }
 
+func TestAuthorizeNormalizesRole(t *testing.T) {
+	t.Parallel()
+	a := NewRoleAuthorizer(testRegistry(t))
+	dec, err := a.Authorize(context.Background(), Request{Role: " Reader ", Entity: "users", Action: entity.ActionRead})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dec.Allowed || dec.RowFilter == nil {
+		t.Fatalf("normalized role denied: %+v", dec)
+	}
+}
+
 func TestAuthorizeRoleDenied(t *testing.T) {
 	t.Parallel()
 	a := NewRoleAuthorizer(testRegistry(t))

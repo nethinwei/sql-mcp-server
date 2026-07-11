@@ -31,7 +31,7 @@ func profileCoverage(path string) (float64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("open coverage profile: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var total, covered int64
 	scanner := bufio.NewScanner(file)

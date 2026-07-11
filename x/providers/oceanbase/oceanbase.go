@@ -1,6 +1,8 @@
 package oceanbase
 
 import (
+	"time"
+
 	"github.com/nethinwei/sql-mcp-server/cost"
 	"github.com/nethinwei/sql-mcp-server/dialect"
 	"github.com/nethinwei/sql-mcp-server/introspect"
@@ -17,7 +19,12 @@ type Provider struct {
 
 // New opens an OceanBase database (MySQL-protocol DSN) and assembles adapters.
 func New(dsn string) (*Provider, error) {
-	ad, err := mysql.NewAdapter(dsn)
+	return NewWithTimeout(dsn, 30*time.Second)
+}
+
+// NewWithTimeout opens OceanBase with a DB-native query timeout.
+func NewWithTimeout(dsn string, timeout time.Duration) (*Provider, error) {
+	ad, err := mysql.NewAdapterWithTimeout(dsn, timeout, "ob_query_timeout")
 	if err != nil {
 		return nil, err
 	}

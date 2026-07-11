@@ -1,1 +1,9 @@
-{"type":"object","properties":{"entity":{"type":"string","description":"Entity name; omit to list all entities"}}}
+{
+    "type": "object",
+    "properties": {
+        "entity": {
+            "type": "string",
+            "description": "Entity name; omit to list all entities"
+        }
+    }
+}

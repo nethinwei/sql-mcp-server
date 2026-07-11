@@ -71,6 +71,25 @@ func TestValidatePredicate(t *testing.T) {
 	}
 }
 
+func TestValidatePredicateBoundsINCardinality(t *testing.T) {
+	t.Parallel()
+	oversized := Condition{Field: "id", Op: OpIn, Value: []any{1, 2, 3}}
+	if err := ValidatePredicateWithMaxINCardinality(oversized, 2); !errors.Is(err, ErrINCardinality) {
+		t.Fatalf("oversized list got %v, want ErrINCardinality", err)
+	}
+	if err := ValidatePredicateWithMaxINCardinality(oversized, 0); !errors.Is(err, ErrINCardinality) {
+		t.Fatalf("unbounded maximum got %v, want ErrINCardinality", err)
+	}
+	for _, pred := range []Predicate{
+		Condition{Field: "id", Op: OpIn, Value: []any{}},
+		Condition{Field: "id", Op: OpIn, Value: []int{1}},
+	} {
+		if err := ValidatePredicate(pred); !errors.Is(err, ErrINCardinality) {
+			t.Fatalf("invalid IN value got %v, want ErrINCardinality", err)
+		}
+	}
+}
+
 func TestNodeConstruction(t *testing.T) {
 	t.Parallel()
 	// read_records shape: Limit(Sort(Project(Select(Scan, pred), items), order), n)

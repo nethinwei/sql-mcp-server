@@ -9,6 +9,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/codegen"
 	"github.com/nethinwei/sql-mcp-server/dialect"
 	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
+	"github.com/nethinwei/sql-mcp-server/relalg"
 )
 
 func TestScorePlan(t *testing.T) {
@@ -63,6 +64,28 @@ func TestEstimateExplainFailureDegrades(t *testing.T) {
 	}
 }
 
+func TestEstimateFailClosed(t *testing.T) {
+	t.Parallel()
+	for _, est := range []Estimate{
+		NewEstimate(FakeExplainer{Err: errors.New("explain failed")}, Threshold{}, nil, WithFailClosed()),
+		NewEstimate(FakeExplainer{Plan: Plan{ScanType: ScanUnknown}}, Threshold{}, nil, WithFailClosed()),
+	} {
+		d, err := est.Check(context.Background(), codegen.Compiled{Kind: codegen.KindRead})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.Allow || d.Soft {
+			t.Fatalf("fail-closed estimate must hard reject: %+v", d)
+		}
+	}
+	defaultEstimate := NewEstimate(
+		FakeExplainer{Err: errors.New("explain failed")}, Threshold{}, nil,
+	)
+	if d, _ := defaultEstimate.Check(context.Background(), codegen.Compiled{Kind: codegen.KindRead}); !d.Allow {
+		t.Fatalf("default estimate must retain fail-open compatibility: %+v", d)
+	}
+}
+
 func TestEstimatePass(t *testing.T) {
 	t.Parallel()
 	est := Estimate{
@@ -90,6 +113,23 @@ func TestEnforceCapSkipsWrites(t *testing.T) {
 	d, _ := ec.Check(context.Background(), codegen.Compiled{SQL: "UPDATE t SET x=1", ReadOnly: false})
 	if d.Rewritten != nil {
 		t.Fatal("write should not be wrapped")
+	}
+}
+
+func TestEnforceCapHandlesKindsWithoutWrappingCall(t *testing.T) {
+	t.Parallel()
+	ec := EnforceCap{HardRows: 10}
+	for _, kind := range []codegen.Kind{codegen.KindRead, codegen.KindAggregate} {
+		d, _ := ec.Check(context.Background(), codegen.Compiled{Kind: kind, SQL: "SELECT 1"})
+		if d.Rewritten == nil {
+			t.Fatalf("%s should be capped", kind)
+		}
+	}
+	d, _ := ec.Check(context.Background(), codegen.Compiled{
+		Kind: codegen.KindCall, SQL: "CALL p()", ReadOnly: true,
+	})
+	if d.Rewritten != nil {
+		t.Fatalf("CALL must not receive a SELECT wrapper: %+v", d)
 	}
 }
 
@@ -226,6 +266,27 @@ func TestChainGatePKWhitelistSkipsEstimate(t *testing.T) {
 	}
 }
 
+func TestChainGateBypassStillRunsEnforcement(t *testing.T) {
+	t.Parallel()
+	g := NewGate(
+		StaticRule{PKWhitelist: true},
+		Estimate{
+			Explainer: FakeExplainer{Plan: Plan{ScanType: ScanFull}},
+			Threshold: Threshold{RejectFullScan: true},
+		},
+		EnforceCap{HardRows: 25},
+	)
+	d, err := g.Check(context.Background(), codegen.Compiled{
+		Kind: codegen.KindRead, SQL: "SELECT * FROM t", ReadOnly: true, IsPKPoint: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.Allow || d.Rewritten == nil || !strings.Contains(d.Rewritten.SQL, "LIMIT 25") {
+		t.Fatalf("bypass must skip Estimate but retain EnforceCap: %+v", d)
+	}
+}
+
 func TestCostExceededErrorUnwrap(t *testing.T) {
 	t.Parallel()
 	e := &ExceededError{Plan: Plan{ScanType: ScanFull}}
@@ -275,6 +336,52 @@ func TestWriteGuard(t *testing.T) {
 	d, _ := wg.Check(context.Background(), codegen.Compiled{SQL: "UPDATE t SET x=1 WHERE status='a'"})
 	if d.Allow || len(d.Hints) == 0 {
 		t.Fatalf("non-PK write must be hard-rejected with hints, got %+v", d)
+	}
+}
+
+func TestCallGuardDefaultsDenyAndAllowsReviewedTemplate(t *testing.T) {
+	t.Parallel()
+	call := codegen.Compiled{Kind: codegen.KindCall, SQL: "CALL p()"}
+	if d, _ := (CallGuard{}).Check(context.Background(), call); d.Allow {
+		t.Fatal("CALL should be denied by default")
+	}
+	guard := CallGuard{LegacyExactSQL: true, AllowTemplates: []string{"CALL p()"}}
+	if d, _ := guard.Check(context.Background(), call); !d.Allow {
+		t.Fatalf("reviewed CALL should be allowed: %+v", d)
+	}
+}
+
+func TestAggregateGuardRequiresPredicate(t *testing.T) {
+	t.Parallel()
+	guard := AggregateGuard{RequirePredicate: true}
+	unfiltered := codegen.Compiled{
+		Kind: codegen.KindAggregate,
+		Expr: relalg.Aggregate{
+			Input: relalg.Scan{Relation: relalg.RelationRef{Name: "events"}},
+		},
+	}
+	if d, _ := guard.Check(context.Background(), unfiltered); d.Allow {
+		t.Fatal("unfiltered aggregate should be rejected")
+	}
+	filtered := unfiltered
+	filtered.Expr = relalg.Aggregate{Input: relalg.Select{
+		Input:     relalg.Scan{Relation: relalg.RelationRef{Name: "events"}},
+		Predicate: relalg.Condition{Field: "tenant_id", Op: relalg.OpEq, Value: 1},
+	}}
+	if d, _ := guard.Check(context.Background(), filtered); !d.Allow {
+		t.Fatalf("filtered aggregate should pass: %+v", d)
+	}
+}
+
+func TestAllowedCallStillRunsCallGuard(t *testing.T) {
+	t.Parallel()
+	call := codegen.Compiled{Kind: codegen.KindCall, SQL: "CALL p()"}
+	g := NewGate(
+		StaticRule{LegacyExactSQL: true, AllowTemplates: []string{"CALL p()"}},
+		CallGuard{},
+	)
+	if d, _ := g.Check(context.Background(), call); d.Allow {
+		t.Fatal("StaticRule allow bypass must not skip CallGuard")
 	}
 }
 

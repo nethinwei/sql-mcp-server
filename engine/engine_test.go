@@ -192,6 +192,21 @@ func TestSubmitAdaptiveLimitRejects(t *testing.T) {
 	close(block)
 }
 
+func TestSubmitRPSLimitRejects(t *testing.T) {
+	t.Parallel()
+	e, _ := New(WithRPSLimiter(ratelimit.NewTokenBucket(1)))
+	if _, err := e.Submit(context.Background(), "", func(context.Context) (any, error) {
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Submit(context.Background(), "", func(context.Context) (any, error) {
+		return nil, nil
+	}); !errors.Is(err, ratelimit.ErrRateLimited) {
+		t.Fatalf("second submit error = %v", err)
+	}
+}
+
 func TestSubmitSingleflightSharesResult(t *testing.T) {
 	t.Parallel()
 	e, _ := New(WithIOPool(4), WithMaxInflight(10))
@@ -300,6 +315,93 @@ func TestSingleflightLeaderCancellationDoesNotCancelRemainingWaiter(t *testing.T
 	got := <-waiterDone
 	if got.err != nil || got.value != 7 {
 		t.Fatalf("waiter = %v, %v; want 7, nil", got.value, got.err)
+	}
+}
+
+func TestSingleflightPropagatesLeaderDeadline(t *testing.T) {
+	t.Parallel()
+	e, _ := New(WithIOPool(1), WithMaxInflight(2))
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := e.Submit(ctx, "deadline", func(runCtx context.Context) (any, error) {
+		deadline, ok := runCtx.Deadline()
+		if !ok {
+			t.Fatal("shared execution context has no deadline")
+		}
+		if want, _ := ctx.Deadline(); !deadline.Equal(want) {
+			t.Fatalf("execution deadline = %v, want %v", deadline, want)
+		}
+		<-runCtx.Done()
+		return nil, runCtx.Err()
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v, want context deadline", err)
+	}
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), time.Second)
+	defer drainCancel()
+	if err := e.Drain(drainCtx); err != nil {
+		t.Fatalf("drain after deadline: %v", err)
+	}
+}
+
+func TestSingleflightCancelsExecutionAfterAllWaitersCancel(t *testing.T) {
+	t.Parallel()
+	e, _ := New(WithIOPool(1), WithMaxInflight(4))
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	executionCanceled := make(chan error, 1)
+	results := make(chan error, 2)
+	go func() {
+		_, err := e.Submit(ctx1, "all-cancel", func(ctx context.Context) (any, error) {
+			close(started)
+			<-ctx.Done()
+			executionCanceled <- ctx.Err()
+			return nil, ctx.Err()
+		})
+		results <- err
+	}()
+	<-started
+	go func() {
+		_, err := e.Submit(ctx2, "all-cancel", func(context.Context) (any, error) {
+			t.Error("waiter must not execute")
+			return nil, nil
+		})
+		results <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		e.sf.mu.Lock()
+		call := e.sf.m["0\x00all-cancel"]
+		joined := call != nil && call.waiters == 2
+		e.sf.mu.Unlock()
+		if joined {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("second waiter did not join")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel1()
+	select {
+	case err := <-executionCanceled:
+		t.Fatalf("one canceled waiter stopped shared execution: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	cancel2()
+	select {
+	case err := <-executionCanceled:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("execution error = %v, want canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shared execution was not canceled after all waiters left")
+	}
+	for range 2 {
+		if err := <-results; !errors.Is(err, context.Canceled) {
+			t.Fatalf("waiter error = %v, want canceled", err)
+		}
 	}
 }
 

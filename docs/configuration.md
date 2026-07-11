@@ -27,6 +27,8 @@ HTTP 无 bearer token/mTLS 时会 fail closed 并拒绝启动。热重载不是 
 ```yaml
 server:
   role: reader
+  secrets:
+    allowedRoots: [/run/secrets, /var/run/secrets]
   auth:
     token: ""
     trustProxyHeaders: false
@@ -47,7 +49,8 @@ mTLS 或 `trustedProxyCIDRs`。非 loopback 的 HTTP 安全规则和约束见
 ## 数据源与实体
 
 每个 database 需要 `driver` 和非空 `dsn`。DSN 可包含 `${ENV}` 或
-`${file:/path}`，占位符仅在 DSN 中解析。
+`${file:/path}`，占位符仅在 DSN 中解析。file 路径必须是
+`server.secrets.allowedRoots` 下的绝对路径，且符号链接不能逃逸允许根。
 
 实体字段：
 
@@ -55,7 +58,8 @@ mTLS 或 `trustedProxyCIDRs`。非 loopback 的 HTTP 安全规则和约束见
 - `datasource`：命名数据源，默认 `default`。
 - `schema`、`kind`（`table`/`view`/`procedure`）、`description`。
 - `primaryKey`：主键字段，决定 keyset 和主键写保护。
-- `fields`：`name`、`alias`、`description`、`mask`、`exclude`。
+- `fields`：`name`、`alias`、`description`、`mask`、`exclude`。mask 字段只允许
+  读取投影，不能用于 filter/cursor/group-by/aggregate/写谓词。
 - `roles`：`read`、`create`、`update`、`delete`、`execute`、`aggregate`。
 - `fieldACL.<role>.read/write`：角色级字段白名单。
 - `rowPolicies.<role>`：`{op, field, value}` 或 `and`/`or` 组合。operator 与
@@ -64,7 +68,9 @@ mTLS 或 `trustedProxyCIDRs`。非 loopback 的 HTTP 安全规则和约束见
 - `mcp.dmlTools`：是否加入通用实体工具，省略默认 true。
 - `mcp.customTool`：procedure 是否额外注册独立 MCP 工具；它与全局
   `tools.executeEntity` 解耦，后者只控制通用 `execute_entity` 工具。
-- `params`：procedure 参数的固定位置顺序；没有声明时拒绝执行。
+- `mcp.trustedProcedure`：DBA 已审核 procedure 权限与内部成本；默认 false。
+  只有 true 且 CALL fingerprint 命中 `allowTemplates` 时才能执行。
+- `params`：procedure 参数的固定位置顺序；省略或空数组表示无参 procedure。
 - `relationships`：`name`、`target`、`cardinality`、`joinOn`。当前只支持同
   数据源且恰好一个 join pair 的一层展开。
 
@@ -90,18 +96,21 @@ procedure 不参与 drift 检查。
 - `softScore`/`hardScore`：0–100，越高越安全，要求
   `softScore >= hardScore`。省略时分别默认 60/40。
 - `maxRows`：读取 SQL 的确定性外层 LIMIT；默认 10000。
-- `maxBytes`：只用于生成拒绝提示，当前 Estimate 不直接按它拒绝。
-- `rejectFullScan`、`requireKnownScan`、`requireFreshStats`：仅有 Estimate
-  层时生效；默认装配中即 PostgreSQL。
-- `whitelistPKPoint`：主键点查询直接绕过后续成本层。
-- `requirePKForWrite`：默认 true，保护 update/delete。
-- `queryTimeout`：Go duration，默认 `30s`。
+- `maxBytes`：响应硬上限，默认 16 MiB。
+- `maxProcedureRows`：reviewed procedure 结果硬上限，默认 1000。
+- `maxINListSize`、`maxFilterConditions`、`maxGroupByFields`、`maxAggregates`、
+  `maxExpand`：默认 256/32/8/16/8；超限在执行前拒绝，expand 按 IN 上限分批。
+- `rejectFullScan`、`requireKnownScan`：默认 true；MySQL/OceanBase 使用保守
+  EXPLAIN，失败或未知时 fail closed。
+- `whitelistPKPoint`：主键点查询只跳过 Estimate，不跳过结果 cap。
+- `requirePKForWrite`：默认 true 且不可由 `cost.enabled` 间接关闭。
+- `queryTimeout`：Go context 与数据库原生 statement timeout，默认 `30s`。
 - `allowTemplates`/`rejectTemplates`：匹配生成 SQL，推荐使用包含 datasource
   隔离的 `fp:v2:<sha256>` fingerprint。精确 SQL 在多数据源配置中必须写成
-  `datasource:SQL`，裸 SQL 仅为单数据源旧配置保留兼容。allow 会绕过后续成本层，
-  应作为安全例外审查。
-- `aqe.windowSize`、`anomalyFactor`、`anomalyMinSamples`：进程内读取反馈窗口，
-  默认 32/3/5。
+  `datasource:SQL`，裸 SQL 仅为单数据源旧配置保留兼容。allow 只跳过 Estimate，
+  不绕过 mandatory Safety/Enforcement。
+- `aqe.windowSize`、`anomalyFactor`、`anomalyMinSamples`、
+  `maxFingerprints`：进程内读取反馈窗口和全局模板上限，默认 32/3/5/4096。
 - `aqe.explainAnalyze`：默认 false。仅 PostgreSQL 支持；启用后，命中采样的成功
   且实际访问数据库的读取会额外执行一次
   `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` 包装的生成 SQL；缓存命中不采样。
@@ -129,8 +138,10 @@ procedure 不参与 drift 检查。
 ## Budget
 
 `budget.roles.<role>` 与 `budget.tenants.<tenant>` 接受：
-`maxConcurrent`、`maxExecution`、`maxScannedRows`、`maxReturnedRows`、
-`maxSessionCost`。零值表示不限，tenant 命中时覆盖而非合并 role 限制。
+`maxConcurrent`、`maxExecution`、`maxEstimatedScannedRows`、
+`maxReturnedRows`、`maxReturnedBytes`、`maxSessionCost`。旧
+`maxScannedRows` 仅作 deprecated alias。零值表示不限，tenant 命中时覆盖而非
+合并 role 限制。
 
 tenant 从 subject 的 `tenant`、`tenant_id`、`tenantID` 中按顺序提取。预算是
 按 MCP session 隔离的单进程有界内存状态，session 关闭时清理；行数与 cost
@@ -138,21 +149,24 @@ tenant 从 subject 的 `tenant`、`tenant_id`、`tenantID` 中按顺序提取。
 
 ## Cache、限流、脱敏与审计
 
-- `cache.enabled`、`ttl`（启用时默认 `30s`）、`maxSize`、
-  `preparedMaxSize`。prepared 为 0 时禁用。
+- `cache.enabled`、`ttl`（启用时默认 `30s`）、`maxSize`（默认 4096）、
+  `maxEntryRows`、`maxEntryBytes`、`preparedMaxSize`。条目数和单条值必须有界；
+  prepared 为 0 时禁用。
 - `rateLimit.enabled` 默认 true；`maxInflight` 默认 256，`ioPool` 默认 16，
   `cpuPool` 默认逻辑 CPU 数，`minConcurrency` 默认 1，
   `breakerThreshold`/`breakerCooldown` 默认 5/`5s`，
-  `connMaxIdleTime` 默认 `5m`。`rttThreshold: 0s` 不触发延迟下降。
+  `connMaxIdleTime`/`connMaxLifetime` 默认 `5m`/`30m`。
+  `rttThreshold: 0s` 不触发延迟下降。
   普通 `Submit` 使用 IO pool；只有调用方显式使用 `SubmitCPU`/`SubmitClass`
   才使用 CPU pool，engine 不会自动拆分 SQL 执行阶段。
-  `rps` 当前被解析但未被装配，设置后没有运行时效果。
+  `rps > 0` 会装配 token-bucket 限流；0 表示仅使用并发限制。
 - `mask.enabled` 默认 true。
 - `audit.enabled` 为 true 时 `path` 必填；`queueSize` 默认 1024。
 
 ## 事务
 
-`transactions.ttl` 默认 `5m`，`maxOpen` 默认每个角色/subject scope 128。
+`transactions.ttl` 默认 `5m`，`maxOpen` 默认每个角色/subject scope 128；
+`beginTimeout`/`commitTimeout`/`rollbackTimeout` 默认 `5s`/`30s`/`30s`。
 begin 工具可指定 `datasource`、`isolation` 和 `readOnly`；角色必须在该数据源
 至少拥有一个读/聚合或写/执行权限。`readOnly` 省略时为 true，只有具备写权限的
 角色可显式请求 false。后续实体工具通过 `transaction` 传 token。隔离值为

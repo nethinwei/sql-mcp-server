@@ -13,6 +13,16 @@ import (
 	"github.com/nethinwei/sql-mcp-server/store"
 )
 
+type failingCommitTx struct {
+	store.FakeTx
+	err error
+}
+
+func (t *failingCommitTx) Commit() error {
+	t.Committed = true
+	return t.err
+}
+
 func TestTransactionBindingCapacityAndCloseRollback(t *testing.T) {
 	tx := &store.FakeTx{}
 	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
@@ -77,6 +87,101 @@ func TestTransactionCommitAndTTL(t *testing.T) {
 		t.Fatal("expired transaction was not rolled back")
 	}
 	manager.Close()
+}
+
+func TestTransactionLifetimeOutlivesBeginRequest(t *testing.T) {
+	var transactionContext context.Context
+	tx := &store.FakeTx{}
+	db := &store.FakeDB{BeginFn: func(ctx context.Context, _ *store.TxOptions) (store.Tx, error) {
+		transactionContext = ctx
+		return tx, nil
+	}}
+	manager := NewTransactionManager(time.Minute, 1)
+	requestContext, cancelRequest := context.WithCancel(context.Background())
+	token, err := manager.Begin(requestContext, db, "session", "writer", nil, "default", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelRequest()
+	select {
+	case <-transactionContext.Done():
+		t.Fatal("transaction lifetime was tied to completed begin request")
+	case <-time.After(10 * time.Millisecond):
+	}
+	if _, err := manager.DB(token, "session", "writer", nil, "default"); err != nil {
+		t.Fatal(err)
+	}
+	manager.Close()
+}
+
+func TestTransactionCommitFailureRollsBackAndWrapsError(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("commit failed")
+	tx := &failingCommitTx{err: cause}
+	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+		return tx, nil
+	}}
+	manager := NewTransactionManager(time.Minute, 1)
+	defer manager.Close()
+	token, err := manager.Begin(context.Background(), db, "", "writer", nil, "default", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = manager.Commit(token, "", "writer", nil)
+	if !errors.Is(err, ErrDatabase) || !errors.Is(err, cause) {
+		t.Fatalf("commit error = %v", err)
+	}
+	if !tx.RolledBack {
+		t.Fatal("failed commit did not attempt rollback")
+	}
+}
+
+func TestTransactionToolsUseRequestContextAndTimeout(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{
+		Name: "users", DataSource: "default",
+		Role: entity.RoleAccess{entity.ActionRead: {"reader"}},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	manager := NewTransactionManager(time.Minute, 3)
+	defer manager.Close()
+	beginner := &store.FakeDB{BeginFn: func(ctx context.Context, _ *store.TxOptions) (store.Tx, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
+	tc := Context{
+		Role: "reader", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
+		Transactions: manager, TxBeginners: map[string]store.TxBeginner{"default": beginner},
+		Timeout: 5 * time.Millisecond,
+	}
+	_, err := (BeginTransactionTool{}).Run(context.Background(), json.RawMessage(`{}`), tc)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("begin timeout error = %v", err)
+	}
+
+	tx := &store.FakeTx{}
+	immediate := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+		return tx, nil
+	}}
+	token, err := manager.Begin(context.Background(), immediate, "", "reader", nil, "default", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, _ := json.Marshal(map[string]string{"transaction": token})
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = (CommitTransactionTool{}).Run(cancelled, input, Context{
+		Role: "reader", Transactions: manager,
+	})
+	if !errors.Is(err, context.Canceled) || tx.Committed {
+		t.Fatalf("commit context error = %v, committed = %v", err, tx.Committed)
+	}
+	_, err = (RollbackTransactionTool{}).Run(cancelled, input, Context{
+		Role: "reader", Transactions: manager,
+	})
+	if !errors.Is(err, context.Canceled) || tx.RolledBack {
+		t.Fatalf("rollback context error = %v, rolled back = %v", err, tx.RolledBack)
+	}
 }
 
 func TestTransactionDisconnectRollsBackSession(t *testing.T) {

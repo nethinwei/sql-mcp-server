@@ -3,6 +3,7 @@ package budget
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -102,4 +103,86 @@ func TestMemoryManagerUpdateLimitsPreservesSessionState(t *testing.T) {
 		t.Fatalf("fresh limits = %+v", fresh.Limits())
 	}
 	_ = fresh.Complete(Usage{})
+}
+
+func TestMemoryManagerConcurrentReservationsAreAtomic(t *testing.T) {
+	m := New(map[string]Limits{"reader": {MaxSessionCost: 10}}, nil)
+	scope := Scope{Role: "reader", Session: "shared"}
+	const workers = 16
+
+	start := make(chan struct{})
+	results := make(chan Lease, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			lease, err := m.AcquireWithReservation(
+				context.Background(),
+				scope,
+				Reservation{Cost: 6},
+			)
+			if err != nil {
+				results <- nil
+				return
+			}
+			results <- lease
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	var acquired []Lease
+	for lease := range results {
+		if lease != nil {
+			acquired = append(acquired, lease)
+		}
+	}
+	if len(acquired) != 1 {
+		t.Fatalf("acquired reservations = %d, want 1", len(acquired))
+	}
+	if err := acquired[0].Complete(Usage{Cost: 4}); err != nil {
+		t.Fatal(err)
+	}
+
+	next, err := m.AcquireWithReservation(context.Background(), scope, Reservation{Cost: 6})
+	if err != nil {
+		t.Fatalf("reconciled reservation was not released: %v", err)
+	}
+	if err := next.Complete(Usage{Cost: 6}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Acquire(context.Background(), scope); !errors.Is(err, ErrExceeded) {
+		t.Fatalf("actual cost at limit was not enforced: %v", err)
+	}
+}
+
+func TestMemoryManagerChecksEstimatedAndObservedScannedRowsSeparately(t *testing.T) {
+	m := New(map[string]Limits{"reader": {MaxScannedRows: 10}}, nil)
+	scope := Scope{Role: "reader"}
+	if _, err := m.AcquireWithReservation(
+		context.Background(),
+		scope,
+		Reservation{EstimatedScannedRows: 11},
+	); !errors.Is(err, ErrExceeded) {
+		t.Fatalf("estimated scan error = %v", err)
+	}
+
+	lease, err := m.AcquireWithReservation(
+		context.Background(),
+		scope,
+		Reservation{EstimatedScannedRows: 5},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Complete(Usage{
+		EstimatedScannedRows: 5,
+		ScannedRows:          11,
+		ReturnedRows:         1,
+	}); !errors.Is(err, ErrExceeded) {
+		t.Fatalf("observed scan error = %v", err)
+	}
 }

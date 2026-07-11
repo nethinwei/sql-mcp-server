@@ -1,1 +1,20 @@
-{"type":"object","properties":{"entity":{"type":"string"},"transaction":{"type":"string","description":"Token returned by begin_transaction"},"values":{"type":"object","description":"Column name to value map"}},"required":["entity","values"]}
+{
+    "type": "object",
+    "properties": {
+        "entity": {
+            "type": "string"
+        },
+        "transaction": {
+            "type": "string",
+            "description": "Token returned by begin_transaction"
+        },
+        "values": {
+            "type": "object",
+            "description": "Column name to value map"
+        }
+    },
+    "required": [
+        "entity",
+        "values"
+    ]
+}

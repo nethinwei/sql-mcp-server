@@ -3,8 +3,11 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
+	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 
@@ -25,6 +28,12 @@ type Adapter struct {
 // UPDATE/DELETE (defense in depth alongside the cost gate's WriteGuard); a DSN
 // that sets sql_safe_updates explicitly is respected.
 func NewAdapter(dsn string) (*Adapter, error) {
+	return NewAdapterWithTimeout(dsn, 30*time.Second, "")
+}
+
+// NewAdapterWithTimeout opens a MySQL-compatible database with a DB-native
+// statement timeout. oceanBaseVariable may be "ob_query_timeout".
+func NewAdapterWithTimeout(dsn string, timeout time.Duration, oceanBaseVariable string) (*Adapter, error) {
 	cfg, err := mysqldriver.ParseDSN(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("mysql: parse dsn: %w", err)
@@ -34,6 +43,16 @@ func NewAdapter(dsn string) (*Adapter, error) {
 	}
 	if _, ok := cfg.Params["sql_safe_updates"]; !ok {
 		cfg.Params["sql_safe_updates"] = "1"
+	}
+	if timeout <= 0 {
+		return nil, errors.New("mysql: statement timeout must be positive")
+	}
+	if oceanBaseVariable == "" {
+		if _, ok := cfg.Params["max_execution_time"]; !ok {
+			cfg.Params["max_execution_time"] = strconv.FormatInt(timeout.Milliseconds(), 10)
+		}
+	} else if _, ok := cfg.Params[oceanBaseVariable]; !ok {
+		cfg.Params[oceanBaseVariable] = strconv.FormatInt(timeout.Microseconds(), 10)
 	}
 	db, err := sql.Open("mysql", cfg.FormatDSN())
 	if err != nil {

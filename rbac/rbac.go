@@ -51,6 +51,7 @@ func NewRoleAuthorizer(reg *entity.Registry) *RoleAuthorizer {
 // and attaches the role's row-level filter. An unknown entity or unpermitted
 // role yields Allowed=false (not an error).
 func (a *RoleAuthorizer) Authorize(_ context.Context, req Request) (Decision, error) {
+	req.Role = NormalizeRole(req.Role)
 	res, ok := a.registry.Resolve(req.Entity)
 	if !ok {
 		return Decision{Allowed: false, Reason: fmt.Sprintf("entity %q not found", req.Entity)}, nil
@@ -67,7 +68,7 @@ func (a *RoleAuthorizer) Authorize(_ context.Context, req Request) (Decision, er
 			readFields = req.Fields
 		}
 	}
-	if acl, configured := res.Entity.FieldAccess[req.Role]; configured {
+	if acl, configured := fieldAccessForRole(res.Entity.FieldAccess, req.Role); configured {
 		if req.Action == entity.ActionRead && len(req.Fields) == 0 && len(acl.Read) == 0 {
 			return Decision{Allowed: false, Reason: fmt.Sprintf("role %q has no readable fields", req.Role)}, nil
 		}
@@ -81,17 +82,47 @@ func (a *RoleAuthorizer) Authorize(_ context.Context, req Request) (Decision, er
 	return Decision{
 		Allowed:   true,
 		Fields:    projectFieldsForRole(res.Attributes, req.Fields, res.Entity.FieldAccess, req.Role),
-		RowFilter: resolveSubject(res.Entity.RowPolicies[req.Role], req.Subject),
+		RowFilter: resolveSubject(rowPolicyForRole(res.Entity.RowPolicies, req.Role), req.Subject),
 	}, nil
+}
+
+// NormalizeRole returns the canonical role identity used by authorization,
+// transport session binding, and configuration.
+func NormalizeRole(role string) string {
+	return strings.ToLower(strings.TrimSpace(role))
 }
 
 func roleAllowed(access entity.RoleAccess, action entity.Action, role string) bool {
 	for _, r := range access[action] {
-		if r == role {
+		if NormalizeRole(r) == role {
 			return true
 		}
 	}
 	return false
+}
+
+func fieldAccessForRole(access entity.FieldAccess, role string) (entity.FieldPermissions, bool) {
+	if acl, ok := access[role]; ok {
+		return acl, true
+	}
+	for configured, acl := range access {
+		if NormalizeRole(configured) == role {
+			return acl, true
+		}
+	}
+	return entity.FieldPermissions{}, false
+}
+
+func rowPolicyForRole(policies entity.RowPolicies, role string) relalg.Predicate {
+	if policy, ok := policies[role]; ok {
+		return policy
+	}
+	for configured, policy := range policies {
+		if NormalizeRole(configured) == role {
+			return policy
+		}
+	}
+	return nil
 }
 
 // projectFields returns the visible field names a request may read. With no
@@ -122,7 +153,7 @@ func projectFields(visible []entity.Attribute, requested []string) []string {
 }
 
 func projectFieldsForRole(visible []entity.Attribute, requested []string, access entity.FieldAccess, role string) []string {
-	acl, configured := access[role]
+	acl, configured := fieldAccessForRole(access, NormalizeRole(role))
 	if !configured {
 		return projectFields(visible, requested)
 	}

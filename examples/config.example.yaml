@@ -10,6 +10,8 @@ server:
   transport: stdio
   addr: "127.0.0.1:8080"
   role: reader
+  secrets:
+    allowedRoots: [/run/secrets, /var/run/secrets]
   auth:
     # Required for non-loopback HTTP unless mTLS is enabled. This value is
     # literal: unlike DSNs, auth fields do not resolve ${ENV} placeholders.
@@ -54,11 +56,17 @@ cost:
   softScore: 60 # score is 0-100; higher is safer
   hardScore: 40 # [hard, soft) is a soft reject; below hard is hard reject
   maxRows: 10000 # deterministic outer LIMIT for read-only SQL
-  maxBytes: 0
+  maxBytes: 16777216 # hard response-size cap
+  maxINListSize: 256
+  maxFilterConditions: 32
+  maxGroupByFields: 8
+  maxAggregates: 16
+  maxExpand: 8
+  maxProcedureRows: 1000
   rejectFullScan: true
   whitelistPKPoint: true
   requirePKForWrite: true
-  requireKnownScan: false
+  requireKnownScan: true
   requireFreshStats: false
   queryTimeout: 30s
   # Prefer datasource-scoped fp:v2:<sha256> values from reviewed generated SQL.
@@ -68,6 +76,7 @@ cost:
     windowSize: 32
     anomalyFactor: 3
     anomalyMinSamples: 5
+    maxFingerprints: 4096
     explainAnalyze: false # PostgreSQL only; executes the read-only query once more
     readOnly: true # must remain true when explainAnalyze is enabled
     sampleRate: 0 # 0..1; opt in with a small non-zero rate
@@ -78,25 +87,30 @@ budget:
     reader:
       maxConcurrent: 8
       maxExecution: 20s
-      maxScannedRows: 50000
+      maxEstimatedScannedRows: 50000
       maxReturnedRows: 10000
+      maxReturnedBytes: 16777216
       maxSessionCost: 100000
   tenants:
     tenant-demo:
       maxConcurrent: 4
       maxExecution: 10s
-      maxScannedRows: 20000
+      maxEstimatedScannedRows: 20000
       maxReturnedRows: 5000
+      maxReturnedBytes: 8388608
       maxSessionCost: 50000
 
 cache:
   enabled: true
   ttl: 30s
   maxSize: 1000
+  maxEntryRows: 10000
+  maxEntryBytes: 16777216
   preparedMaxSize: 128
 
 rateLimit:
   enabled: true
+  rps: 100
   maxInflight: 256
   ioPool: 16 # also bounds DB MaxOpenConns
   cpuPool: 8
@@ -105,18 +119,22 @@ rateLimit:
   breakerThreshold: 5
   breakerCooldown: 5s
   connMaxIdleTime: 5m
+  connMaxLifetime: 30m
 
 mask:
   enabled: true
 
 audit:
   enabled: false
-  path: "./sql-mcp-audit.yaml"
+  path: "./sql-mcp-audit.jsonl"
   queueSize: 1024
 
 transactions:
   ttl: 5m
   maxOpen: 128
+  beginTimeout: 5s
+  commitTimeout: 30s
+  rollbackTimeout: 30s
 
 entities:
   - name: users
@@ -182,3 +200,6 @@ entities:
     mcp:
       dmlTools: true
       customTool: true
+      # Set true only after DBA review and add the generated CALL fingerprint
+      # to cost.allowTemplates.
+      trustedProcedure: false

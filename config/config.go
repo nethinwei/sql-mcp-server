@@ -7,6 +7,7 @@ import (
 	"math"
 	"net"
 	"runtime"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -46,10 +47,16 @@ type Config struct {
 
 // ServerConfig holds transport and role settings.
 type ServerConfig struct {
-	Transport string     `yaml:"transport" json:"transport"` // "stdio" | "http"
-	Addr      string     `yaml:"addr" json:"addr"`           // http listen address
-	Role      string     `yaml:"role" json:"role"`           // runtime role (may be overridden by --role flag)
-	Auth      AuthConfig `yaml:"auth" json:"auth"`           // http transport authentication
+	Transport string        `yaml:"transport" json:"transport"` // "stdio" | "http"
+	Addr      string        `yaml:"addr" json:"addr"`           // http listen address
+	Role      string        `yaml:"role" json:"role"`           // runtime role (may be overridden by --role flag)
+	Auth      AuthConfig    `yaml:"auth" json:"auth"`           // http transport authentication
+	Secrets   SecretsConfig `yaml:"secrets" json:"secrets"`
+}
+
+// SecretsConfig restricts ${file:...} expansion to explicitly trusted roots.
+type SecretsConfig struct {
+	AllowedRoots []string `yaml:"allowedRoots" json:"allowedRoots"`
 }
 
 // AuthConfig configures HTTP transport authentication. When the listener is not
@@ -143,9 +150,10 @@ type FieldACLConfig struct {
 // MCPFlags controls entity participation in MCP. Zero value means "not set";
 // ApplyDefaults sets DMLTools=true for unset entities.
 type MCPFlags struct {
-	DMLTools    bool `yaml:"dmlTools" json:"dmlTools"`
-	CustomTool  bool `yaml:"customTool" json:"customTool"`
-	dmlToolsSet bool
+	DMLTools         bool `yaml:"dmlTools" json:"dmlTools"`
+	CustomTool       bool `yaml:"customTool" json:"customTool"`
+	TrustedProcedure bool `yaml:"trustedProcedure" json:"trustedProcedure"`
+	dmlToolsSet      bool
 }
 
 // MCPFlagsWithDMLTools constructs MCP flags with an explicit dmlTools value.
@@ -232,28 +240,37 @@ func (f *ToolFlags) UnmarshalJSON(data []byte) error {
 
 // TransactionConfig bounds explicit transaction lifetime and cardinality.
 type TransactionConfig struct {
-	TTL     time.Duration `yaml:"ttl" json:"ttl"`
-	MaxOpen int           `yaml:"maxOpen" json:"maxOpen"`
+	TTL             time.Duration `yaml:"ttl" json:"ttl"`
+	MaxOpen         int           `yaml:"maxOpen" json:"maxOpen"`
+	BeginTimeout    time.Duration `yaml:"beginTimeout" json:"beginTimeout"`
+	CommitTimeout   time.Duration `yaml:"commitTimeout" json:"commitTimeout"`
+	RollbackTimeout time.Duration `yaml:"rollbackTimeout" json:"rollbackTimeout"`
 }
 
 // CostConfig configures the defense-in-depth cost gate. SoftScore/HardScore are
 // the 0-100 normalized thresholds (from cost.ScorePlan) for soft/hard reject.
 type CostConfig struct {
-	Enabled           *bool         `yaml:"enabled" json:"enabled"`
-	SoftScore         int           `yaml:"softScore" json:"softScore"`
-	HardScore         int           `yaml:"hardScore" json:"hardScore"`
-	MaxRows           int64         `yaml:"maxRows" json:"maxRows"`
-	MaxBytes          int64         `yaml:"maxBytes" json:"maxBytes"`
-	RejectFullScan    bool          `yaml:"rejectFullScan" json:"rejectFullScan"`
-	WhitelistPKPoint  bool          `yaml:"whitelistPKPoint" json:"whitelistPKPoint"`
-	RequirePKForWrite *bool         `yaml:"requirePKForWrite" json:"requirePKForWrite"`
-	RequireKnownScan  bool          `yaml:"requireKnownScan" json:"requireKnownScan"`
-	RequireFreshStats bool          `yaml:"requireFreshStats" json:"requireFreshStats"`
-	QueryTimeout      time.Duration `yaml:"queryTimeout" json:"queryTimeout"`
-	AllowTemplates    []string      `yaml:"allowTemplates" json:"allowTemplates"`
-	RejectTemplates   []string      `yaml:"rejectTemplates" json:"rejectTemplates"`
-	AQE               AQEConfig     `yaml:"aqe" json:"aqe"`
-	present           map[string]bool
+	Enabled             *bool         `yaml:"enabled" json:"enabled"`
+	SoftScore           int           `yaml:"softScore" json:"softScore"`
+	HardScore           int           `yaml:"hardScore" json:"hardScore"`
+	MaxRows             int64         `yaml:"maxRows" json:"maxRows"`
+	MaxBytes            int64         `yaml:"maxBytes" json:"maxBytes"`
+	MaxINListSize       int           `yaml:"maxINListSize" json:"maxINListSize"`
+	MaxFilterConditions int           `yaml:"maxFilterConditions" json:"maxFilterConditions"`
+	MaxGroupByFields    int           `yaml:"maxGroupByFields" json:"maxGroupByFields"`
+	MaxAggregates       int           `yaml:"maxAggregates" json:"maxAggregates"`
+	MaxExpand           int           `yaml:"maxExpand" json:"maxExpand"`
+	MaxProcedureRows    int64         `yaml:"maxProcedureRows" json:"maxProcedureRows"`
+	RejectFullScan      bool          `yaml:"rejectFullScan" json:"rejectFullScan"`
+	WhitelistPKPoint    bool          `yaml:"whitelistPKPoint" json:"whitelistPKPoint"`
+	RequirePKForWrite   *bool         `yaml:"requirePKForWrite" json:"requirePKForWrite"`
+	RequireKnownScan    bool          `yaml:"requireKnownScan" json:"requireKnownScan"`
+	RequireFreshStats   bool          `yaml:"requireFreshStats" json:"requireFreshStats"`
+	QueryTimeout        time.Duration `yaml:"queryTimeout" json:"queryTimeout"`
+	AllowTemplates      []string      `yaml:"allowTemplates" json:"allowTemplates"`
+	RejectTemplates     []string      `yaml:"rejectTemplates" json:"rejectTemplates"`
+	AQE                 AQEConfig     `yaml:"aqe" json:"aqe"`
+	present             map[string]bool
 }
 
 // UnmarshalYAML tracks each cost field independently so partial configuration
@@ -301,6 +318,7 @@ type AQEConfig struct {
 	ReadOnly          bool          `yaml:"readOnly" json:"readOnly"`
 	SampleRate        float64       `yaml:"sampleRate" json:"sampleRate"`
 	Timeout           time.Duration `yaml:"timeout" json:"timeout"`
+	MaxFingerprints   int           `yaml:"maxFingerprints" json:"maxFingerprints"`
 	present           map[string]bool
 }
 
@@ -347,11 +365,13 @@ type BudgetConfig struct {
 
 // BudgetLimits is unlimited when all fields are zero.
 type BudgetLimits struct {
-	MaxConcurrent   int           `yaml:"maxConcurrent" json:"maxConcurrent"`
-	MaxExecution    time.Duration `yaml:"maxExecution" json:"maxExecution"`
-	MaxScannedRows  int64         `yaml:"maxScannedRows" json:"maxScannedRows"`
-	MaxReturnedRows int64         `yaml:"maxReturnedRows" json:"maxReturnedRows"`
-	MaxSessionCost  int64         `yaml:"maxSessionCost" json:"maxSessionCost"`
+	MaxConcurrent           int           `yaml:"maxConcurrent" json:"maxConcurrent"`
+	MaxExecution            time.Duration `yaml:"maxExecution" json:"maxExecution"`
+	MaxEstimatedScannedRows int64         `yaml:"maxEstimatedScannedRows" json:"maxEstimatedScannedRows"`
+	MaxScannedRows          int64         `yaml:"maxScannedRows,omitempty" json:"maxScannedRows,omitempty"` // deprecated
+	MaxReturnedRows         int64         `yaml:"maxReturnedRows" json:"maxReturnedRows"`
+	MaxReturnedBytes        int64         `yaml:"maxReturnedBytes" json:"maxReturnedBytes"`
+	MaxSessionCost          int64         `yaml:"maxSessionCost" json:"maxSessionCost"`
 }
 
 // EnabledOrDefault reports whether cost protection is on; nil means default
@@ -396,6 +416,8 @@ type CacheConfig struct {
 	Enabled         bool          `yaml:"enabled" json:"enabled"`
 	TTL             time.Duration `yaml:"ttl" json:"ttl"`
 	MaxSize         int           `yaml:"maxSize" json:"maxSize"`
+	MaxEntryRows    int           `yaml:"maxEntryRows" json:"maxEntryRows"`
+	MaxEntryBytes   int64         `yaml:"maxEntryBytes" json:"maxEntryBytes"`
 	PreparedMaxSize int           `yaml:"preparedMaxSize" json:"preparedMaxSize"`
 }
 
@@ -411,6 +433,7 @@ type RateLimitConfig struct {
 	BreakerThreshold int           `yaml:"breakerThreshold" json:"breakerThreshold"`
 	BreakerCooldown  time.Duration `yaml:"breakerCooldown" json:"breakerCooldown"`
 	ConnMaxIdleTime  time.Duration `yaml:"connMaxIdleTime" json:"connMaxIdleTime"`
+	ConnMaxLifetime  time.Duration `yaml:"connMaxLifetime" json:"connMaxLifetime"`
 }
 
 // EnabledOrDefault reports whether rate limiting is on; nil means default true.
@@ -463,6 +486,10 @@ func DefaultToolFlags() ToolFlags {
 // omitted cost safety field receives its own default; rate limits default to
 // conservative bounds.
 func (c *Config) ApplyDefaults() {
+	c.Server.Role = canonicalRole(c.Server.Role)
+	if len(c.Server.Secrets.AllowedRoots) == 0 {
+		c.Server.Secrets.AllowedRoots = []string{"/run/secrets", "/var/run/secrets"}
+	}
 	if len(c.Databases) == 0 && c.Database.Driver != "" {
 		c.Databases = map[string]DatabaseConfig{"default": c.Database}
 	}
@@ -474,6 +501,30 @@ func (c *Config) ApplyDefaults() {
 			c.Entities[i].MCP.DMLTools = true
 		}
 	}
+	if !c.Cost.present["maxRows"] && c.Cost.MaxRows == 0 {
+		c.Cost.MaxRows = 10000
+	}
+	if !c.Cost.present["maxBytes"] && c.Cost.MaxBytes == 0 {
+		c.Cost.MaxBytes = 16 << 20
+	}
+	if c.Cost.MaxINListSize == 0 {
+		c.Cost.MaxINListSize = 256
+	}
+	if c.Cost.MaxFilterConditions == 0 {
+		c.Cost.MaxFilterConditions = 32
+	}
+	if c.Cost.MaxGroupByFields == 0 {
+		c.Cost.MaxGroupByFields = 8
+	}
+	if c.Cost.MaxAggregates == 0 {
+		c.Cost.MaxAggregates = 16
+	}
+	if c.Cost.MaxExpand == 0 {
+		c.Cost.MaxExpand = 8
+	}
+	if c.Cost.MaxProcedureRows == 0 {
+		c.Cost.MaxProcedureRows = 1000
+	}
 	if c.Cost.EnabledOrDefault() {
 		// Scores are 0-100 where higher is safer; apply every safety default
 		// independently so setting one field cannot erase the others.
@@ -483,11 +534,14 @@ func (c *Config) ApplyDefaults() {
 		if !c.Cost.present["hardScore"] && c.Cost.HardScore == 0 {
 			c.Cost.HardScore = 40
 		}
-		if !c.Cost.present["maxRows"] && c.Cost.MaxRows == 0 {
-			c.Cost.MaxRows = 10000
-		}
 		if !c.Cost.present["whitelistPKPoint"] {
 			c.Cost.WhitelistPKPoint = true
+		}
+		if !c.Cost.present["rejectFullScan"] {
+			c.Cost.RejectFullScan = true
+		}
+		if !c.Cost.present["requireKnownScan"] {
+			c.Cost.RequireKnownScan = true
 		}
 	}
 	if !c.Cost.present["queryTimeout"] && c.Cost.QueryTimeout == 0 {
@@ -501,6 +555,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Cost.AQE.AnomalyMinSamples == 0 {
 		c.Cost.AQE.AnomalyMinSamples = 5
+	}
+	if c.Cost.AQE.MaxFingerprints == 0 {
+		c.Cost.AQE.MaxFingerprints = 4096
 	}
 	if !c.Cost.AQE.present["readOnly"] {
 		c.Cost.AQE.ReadOnly = true
@@ -529,11 +586,23 @@ func (c *Config) ApplyDefaults() {
 	if c.RateLimit.ConnMaxIdleTime == 0 {
 		c.RateLimit.ConnMaxIdleTime = 5 * time.Minute
 	}
+	if c.RateLimit.ConnMaxLifetime == 0 {
+		c.RateLimit.ConnMaxLifetime = 30 * time.Minute
+	}
 	if c.Audit.QueueSize == 0 {
 		c.Audit.QueueSize = 1024
 	}
 	if c.Cache.Enabled && c.Cache.TTL == 0 {
 		c.Cache.TTL = 30 * time.Second
+	}
+	if c.Cache.Enabled && c.Cache.MaxSize == 0 {
+		c.Cache.MaxSize = 4096
+	}
+	if c.Cache.Enabled && c.Cache.MaxEntryRows == 0 {
+		c.Cache.MaxEntryRows = int(c.Cost.MaxRows)
+	}
+	if c.Cache.Enabled && c.Cache.MaxEntryBytes == 0 {
+		c.Cache.MaxEntryBytes = c.Cost.MaxBytes
 	}
 	if c.Server.Transport == "" {
 		c.Server.Transport = "stdio"
@@ -544,11 +613,23 @@ func (c *Config) ApplyDefaults() {
 	if c.Transactions.MaxOpen == 0 {
 		c.Transactions.MaxOpen = 128
 	}
+	if c.Transactions.BeginTimeout == 0 {
+		c.Transactions.BeginTimeout = 5 * time.Second
+	}
+	if c.Transactions.CommitTimeout == 0 {
+		c.Transactions.CommitTimeout = 30 * time.Second
+	}
+	if c.Transactions.RollbackTimeout == 0 {
+		c.Transactions.RollbackTimeout = 30 * time.Second
+	}
 }
 
 // Validate checks required fields. DSN placeholder resolution happens later in
 // x/bootstrap; here we only require non-empty.
 func (c *Config) Validate() error {
+	if err := c.normalizeRoles(); err != nil {
+		return err
+	}
 	databases := c.Databases
 	if len(databases) == 0 && c.Database.Driver != "" {
 		databases = map[string]DatabaseConfig{"default": c.Database}
@@ -593,6 +674,11 @@ func (c *Config) Validate() error {
 	if c.Cost.SoftScore < c.Cost.HardScore {
 		return fmt.Errorf("config: cost softScore must be greater than or equal to hardScore")
 	}
+	if len(c.Cost.present) > 0 && (c.Cost.MaxRows <= 0 || c.Cost.MaxBytes <= 0 || c.Cost.MaxProcedureRows <= 0 ||
+		c.Cost.MaxINListSize <= 0 || c.Cost.MaxFilterConditions <= 0 ||
+		c.Cost.MaxGroupByFields <= 0 || c.Cost.MaxAggregates <= 0 || c.Cost.MaxExpand <= 0) {
+		return fmt.Errorf("config: mandatory cost and input limits must be greater than zero")
+	}
 	if math.IsNaN(c.Cost.AQE.SampleRate) || c.Cost.AQE.SampleRate < 0 || c.Cost.AQE.SampleRate > 1 {
 		return fmt.Errorf("config: cost aqe sampleRate must be between 0 and 1")
 	}
@@ -621,9 +707,21 @@ func (c *Config) Validate() error {
 	if c.RateLimit.IOPool < 0 || c.RateLimit.CPUPool < 0 {
 		return fmt.Errorf("config: rate-limit pools must not be negative")
 	}
+	if math.IsNaN(c.RateLimit.RPS) || c.RateLimit.RPS < 0 {
+		return fmt.Errorf("config: rate-limit rps must not be negative or NaN")
+	}
 	if c.Cost.QueryTimeout < 0 || c.Cache.TTL < 0 || c.RateLimit.RTTThreshold < 0 ||
-		c.RateLimit.BreakerCooldown < 0 || c.RateLimit.ConnMaxIdleTime < 0 || c.Transactions.TTL < 0 {
-		return fmt.Errorf("config: timeouts must not be negative")
+		c.RateLimit.BreakerCooldown < 0 || c.RateLimit.ConnMaxIdleTime < 0 ||
+		c.RateLimit.ConnMaxLifetime < 0 || c.Transactions.TTL < 0 ||
+		c.Transactions.BeginTimeout < 0 || c.Transactions.CommitTimeout < 0 ||
+		c.Transactions.RollbackTimeout < 0 {
+		return fmt.Errorf("config: mandatory timeouts must be greater than zero and optional timeouts must not be negative")
+	}
+	if c.Cache.Enabled && (c.Cache.MaxSize <= 0 || c.Cache.MaxEntryRows <= 0 || c.Cache.MaxEntryBytes <= 0) {
+		return fmt.Errorf("config: enabled cache requires positive maxSize, maxEntryRows, and maxEntryBytes")
+	}
+	if c.Cost.AQE.MaxFingerprints < 0 {
+		return fmt.Errorf("config: cost aqe maxFingerprints must be greater than zero")
 	}
 	if c.Transactions.MaxOpen < 0 {
 		return fmt.Errorf("config: transactions maxOpen must not be negative")
@@ -663,6 +761,9 @@ func (c *Config) Validate() error {
 		}
 		if duplicate, ok := firstDuplicate(e.Params); ok {
 			return fmt.Errorf("config: entity %q has duplicate parameter %q", e.Name, duplicate)
+		}
+		if e.MCP.TrustedProcedure && e.Kind != "procedure" {
+			return fmt.Errorf("config: entity %q sets trustedProcedure but is not a procedure", e.Name)
 		}
 		visibleFields := make(map[string]bool, len(e.Fields)*2)
 		for _, field := range e.Fields {
@@ -735,6 +836,70 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+func canonicalRole(role string) string {
+	return strings.ToLower(strings.TrimSpace(role))
+}
+
+func canonicalRoleList(values []string) []string {
+	out := make([]string, len(values))
+	for i, value := range values {
+		out[i] = canonicalRole(value)
+	}
+	return out
+}
+
+func (c *Config) normalizeRoles() error {
+	c.Server.Role = canonicalRole(c.Server.Role)
+	for i := range c.Entities {
+		e := &c.Entities[i]
+		e.Roles.Read = canonicalRoleList(e.Roles.Read)
+		e.Roles.Create = canonicalRoleList(e.Roles.Create)
+		e.Roles.Update = canonicalRoleList(e.Roles.Update)
+		e.Roles.Delete = canonicalRoleList(e.Roles.Delete)
+		e.Roles.Execute = canonicalRoleList(e.Roles.Execute)
+		e.Roles.Aggregate = canonicalRoleList(e.Roles.Aggregate)
+
+		fieldACL := make(map[string]FieldACLConfig, len(e.FieldACL))
+		for role, acl := range e.FieldACL {
+			key := canonicalRole(role)
+			if key == "" {
+				return fmt.Errorf("config: entity %q has an empty field ACL role", e.Name)
+			}
+			if _, exists := fieldACL[key]; exists {
+				return fmt.Errorf("config: entity %q has colliding field ACL role %q after normalization", e.Name, key)
+			}
+			fieldACL[key] = acl
+		}
+		e.FieldACL = fieldACL
+
+		policies := make(RowPolicies, len(e.RowPolicies))
+		for role, policy := range e.RowPolicies {
+			key := canonicalRole(role)
+			if key == "" {
+				return fmt.Errorf("config: entity %q has an empty row-policy role", e.Name)
+			}
+			if _, exists := policies[key]; exists {
+				return fmt.Errorf("config: entity %q has colliding row-policy role %q after normalization", e.Name, key)
+			}
+			policies[key] = policy
+		}
+		e.RowPolicies = policies
+	}
+	roles := make(map[string]BudgetLimits, len(c.Budget.Roles))
+	for role, limits := range c.Budget.Roles {
+		key := canonicalRole(role)
+		if key == "" {
+			return fmt.Errorf("config: budget has an empty role")
+		}
+		if _, exists := roles[key]; exists {
+			return fmt.Errorf("config: budget has colliding role %q after normalization", key)
+		}
+		roles[key] = limits
+	}
+	c.Budget.Roles = roles
+	return nil
+}
+
 func configuredFields(fields []FieldConfig) map[string]bool {
 	out := make(map[string]bool, len(fields)*2)
 	for _, field := range fields {
@@ -747,8 +912,9 @@ func configuredFields(fields []FieldConfig) map[string]bool {
 }
 
 func validateBudgetLimits(limits BudgetLimits) error {
-	if limits.MaxConcurrent < 0 || limits.MaxExecution < 0 || limits.MaxScannedRows < 0 ||
-		limits.MaxReturnedRows < 0 || limits.MaxSessionCost < 0 {
+	if limits.MaxConcurrent < 0 || limits.MaxExecution < 0 || limits.MaxEstimatedScannedRows < 0 ||
+		limits.MaxScannedRows < 0 || limits.MaxReturnedRows < 0 ||
+		limits.MaxReturnedBytes < 0 || limits.MaxSessionCost < 0 {
 		return fmt.Errorf("limits must not be negative")
 	}
 	return nil

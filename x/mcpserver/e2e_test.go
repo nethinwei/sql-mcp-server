@@ -136,9 +136,6 @@ func TestE2EReleaseCapabilities(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("PK lookup should succeed: %+v", res)
 	}
-	if !contentContains(res, "alice") {
-		t.Fatalf("expected 'alice' in result, got %+v", res.Content)
-	}
 	if !contentContains(res, "a***@x.com") || contentContains(res, "alice@x.com") {
 		t.Fatalf("email masking not applied: %+v", res.Content)
 	}

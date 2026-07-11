@@ -28,7 +28,7 @@ func Fingerprint(datasource, dialectName string, c codegen.Compiled) string {
 			continue
 		}
 		t := reflect.TypeOf(arg)
-		b.WriteString(fmt.Sprintf("%s/%s", t.PkgPath(), t.String()))
+		_, _ = fmt.Fprintf(&b, "%s/%s", t.PkgPath(), t.String())
 	}
 	sum := sha256.Sum256([]byte(b.String()))
 	return "fp:v2:" + hex.EncodeToString(sum[:])

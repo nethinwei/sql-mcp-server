@@ -14,6 +14,12 @@
         "transport": {"type": "string", "enum": ["stdio", "http"]},
         "addr": {"type": "string"},
         "role": {"type": "string"},
+        "secrets": {
+          "type": "object",
+          "properties": {
+            "allowedRoots": {"type": "array", "items": {"type": "string"}}
+          }
+        },
         "auth": {
           "type": "object",
           "properties": {
@@ -62,8 +68,14 @@
         "enabled": {"type": "boolean"},
         "softScore": {"type": "integer", "minimum": 0, "maximum": 100},
         "hardScore": {"type": "integer", "minimum": 0, "maximum": 100},
-        "maxRows": {"type": "integer", "minimum": 0},
-        "maxBytes": {"type": "integer", "minimum": 0},
+        "maxRows": {"type": "integer", "minimum": 1},
+        "maxBytes": {"type": "integer", "minimum": 1},
+        "maxINListSize": {"type": "integer", "minimum": 1},
+        "maxFilterConditions": {"type": "integer", "minimum": 1},
+        "maxGroupByFields": {"type": "integer", "minimum": 1},
+        "maxAggregates": {"type": "integer", "minimum": 1},
+        "maxExpand": {"type": "integer", "minimum": 1},
+        "maxProcedureRows": {"type": "integer", "minimum": 1},
         "rejectFullScan": {"type": "boolean"},
         "whitelistPKPoint": {"type": "boolean"},
         "requirePKForWrite": {"type": "boolean"},
@@ -81,7 +93,8 @@
             "explainAnalyze": {"type": "boolean"},
             "readOnly": {"type": "boolean"},
             "sampleRate": {"type": "number", "minimum": 0, "maximum": 1},
-            "timeout": {"type": "string"}
+            "timeout": {"type": "string"},
+            "maxFingerprints": {"type": "integer", "minimum": 1}
           }
         }
       }
@@ -99,6 +112,8 @@
         "enabled": {"type": "boolean"},
         "ttl": {"type": "string"},
         "maxSize": {"type": "integer", "minimum": 0},
+        "maxEntryRows": {"type": "integer", "minimum": 1},
+        "maxEntryBytes": {"type": "integer", "minimum": 1},
         "preparedMaxSize": {"type": "integer", "minimum": 0}
       }
     },
@@ -114,7 +129,8 @@
         "rttThreshold": {"type": "string"},
         "breakerThreshold": {"type": "integer", "minimum": 0},
         "breakerCooldown": {"type": "string"},
-        "connMaxIdleTime": {"type": "string"}
+        "connMaxIdleTime": {"type": "string"},
+        "connMaxLifetime": {"type": "string"}
       }
     },
     "mask": {"type": "object", "properties": {"enabled": {"type": "boolean"}}},
@@ -130,7 +146,10 @@
       "type": "object",
       "properties": {
         "ttl": {"type": "string"},
-        "maxOpen": {"type": "integer", "minimum": 0}
+        "maxOpen": {"type": "integer", "minimum": 0},
+        "beginTimeout": {"type": "string"},
+        "commitTimeout": {"type": "string"},
+        "rollbackTimeout": {"type": "string"}
       }
     }
   },
@@ -148,8 +167,10 @@
       "properties": {
         "maxConcurrent": {"type": "integer", "minimum": 0},
         "maxExecution": {"type": "string"},
+        "maxEstimatedScannedRows": {"type": "integer", "minimum": 0},
         "maxScannedRows": {"type": "integer", "minimum": 0},
         "maxReturnedRows": {"type": "integer", "minimum": 0},
+        "maxReturnedBytes": {"type": "integer", "minimum": 0},
         "maxSessionCost": {"type": "integer", "minimum": 0}
       }
     },
@@ -187,7 +208,8 @@
           "type": "object",
           "properties": {
             "dmlTools": {"type": "boolean"},
-            "customTool": {"type": "boolean"}
+            "customTool": {"type": "boolean"},
+            "trustedProcedure": {"type": "boolean"}
           }
         }
       }

@@ -21,10 +21,12 @@ type Preparer interface {
 // the DB interface. A non-Preparer DB is passed through unchanged.
 type PreparedDB struct {
 	DB
-	max   int
-	mu    sync.Mutex
-	items map[string]*preparedEntry
-	order []string
+	max        int
+	mu         sync.Mutex
+	items      map[string]*preparedEntry
+	order      []string
+	preparing  map[string]*prepareCall
+	generation uint64
 }
 
 type preparedEntry struct {
@@ -33,9 +35,23 @@ type preparedEntry struct {
 	retired bool
 }
 
+type prepareCall struct {
+	done       chan struct{}
+	entry      *preparedEntry
+	err        error
+	waiters    int
+	generation uint64
+	complete   bool
+}
+
 // WithPreparedCache wraps db. max <= 0 disables preparing.
 func WithPreparedCache(db DB, max int) *PreparedDB {
-	return &PreparedDB{DB: db, max: max, items: map[string]*preparedEntry{}}
+	return &PreparedDB{
+		DB:        db,
+		max:       max,
+		items:     map[string]*preparedEntry{},
+		preparing: map[string]*prepareCall{},
+	}
 }
 
 func (d *PreparedDB) statement(ctx context.Context, query string) (*preparedEntry, bool, error) {
@@ -44,26 +60,69 @@ func (d *PreparedDB) statement(ctx context.Context, query string) (*preparedEntr
 		return nil, false, nil
 	}
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	if entry, ok := d.items[query]; ok {
 		entry.refs++
+		d.mu.Unlock()
 		return entry, true, nil
 	}
+	if call, ok := d.preparing[query]; ok {
+		call.waiters++
+		d.mu.Unlock()
+		return d.waitPrepare(ctx, call)
+	}
+	call := &prepareCall{
+		done:       make(chan struct{}),
+		waiters:    1,
+		generation: d.generation,
+	}
+	d.preparing[query] = call
+	d.mu.Unlock()
+
 	stmt, err := preparer.PrepareContext(ctx, query)
+	d.mu.Lock()
 	if err != nil {
+		call.err = err
+		call.complete = true
+		delete(d.preparing, query)
+		close(call.done)
+		d.mu.Unlock()
 		return nil, false, err
 	}
-	if len(d.order) >= d.max {
-		oldest := d.order[0]
-		d.order = d.order[1:]
-		entry := d.items[oldest]
-		delete(d.items, oldest)
-		d.retireLocked(entry)
+	entry := &preparedEntry{stmt: stmt, refs: call.waiters}
+	call.entry = entry
+	call.complete = true
+	if call.generation == d.generation {
+		if len(d.order) >= d.max {
+			oldest := d.order[0]
+			d.order = d.order[1:]
+			oldEntry := d.items[oldest]
+			delete(d.items, oldest)
+			d.retireLocked(oldEntry)
+		}
+		d.items[query] = entry
+		d.order = append(d.order, query)
+	} else {
+		entry.retired = true
 	}
-	entry := &preparedEntry{stmt: stmt, refs: 1}
-	d.items[query] = entry
-	d.order = append(d.order, query)
+	delete(d.preparing, query)
+	close(call.done)
+	d.mu.Unlock()
 	return entry, true, nil
+}
+
+func (d *PreparedDB) waitPrepare(ctx context.Context, call *prepareCall) (*preparedEntry, bool, error) {
+	select {
+	case <-call.done:
+		return call.entry, call.err == nil, call.err
+	case <-ctx.Done():
+		d.mu.Lock()
+		call.waiters--
+		if call.complete && call.entry != nil {
+			d.releaseLocked(call.entry)
+		}
+		d.mu.Unlock()
+		return nil, false, ctx.Err()
+	}
 }
 
 func (d *PreparedDB) retireLocked(entry *preparedEntry) {
@@ -76,6 +135,10 @@ func (d *PreparedDB) retireLocked(entry *preparedEntry) {
 func (d *PreparedDB) release(entry *preparedEntry) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.releaseLocked(entry)
+}
+
+func (d *PreparedDB) releaseLocked(entry *preparedEntry) {
 	entry.refs--
 	if entry.refs == 0 && entry.retired {
 		_ = entry.stmt.Close()
@@ -128,6 +191,7 @@ func (d *PreparedDB) ExecContext(ctx context.Context, query string, args ...any)
 func (d *PreparedDB) Close() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.generation++
 	var first error
 	for _, entry := range d.items {
 		entry.retired = true

@@ -123,8 +123,9 @@ type FieldAccess map[string]FieldPermissions
 
 // MCPFlags controls how an entity participates in MCP.
 type MCPFlags struct {
-	DMLTools   bool // expose the seven DML tools for this entity
-	CustomTool bool // register a stored procedure as a named tool
+	DMLTools         bool // expose the seven DML tools for this entity
+	CustomTool       bool // register a stored procedure as a named tool
+	TrustedProcedure bool // procedure passed explicit DBA cost/safety review
 }
 
 // RowPolicies maps a role name to a row-level filter predicate. The rbac

@@ -198,7 +198,7 @@ func (b *builder) renderAggregateCols(ctx *selectCtx) (string, error) {
 }
 
 func (b *builder) renderPredicate(p relalg.Predicate) error {
-	if err := relalg.ValidatePredicate(p); err != nil {
+	if err := relalg.ValidatePredicateWithMaxINCardinality(p, b.maxINCardinality); err != nil {
 		return err
 	}
 	switch pp := p.(type) {
@@ -260,6 +260,10 @@ func (b *builder) renderCondition(c relalg.Condition) error {
 		}
 		if len(vals) == 0 {
 			return fmt.Errorf("codegen: empty IN list")
+		}
+		if len(vals) > b.maxINCardinality {
+			return fmt.Errorf("%w: got %d values, maximum %d",
+				relalg.ErrINCardinality, len(vals), b.maxINCardinality)
 		}
 		if c.Op == relalg.OpNotIn {
 			b.sql.WriteString(" NOT")

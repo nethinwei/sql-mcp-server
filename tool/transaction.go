@@ -31,6 +31,7 @@ type transactionHandle struct {
 	dirty      map[string]struct{}
 	expires    time.Time
 	timer      *time.Timer
+	cancel     context.CancelFunc
 	mu         sync.Mutex
 	closed     bool
 }
@@ -61,23 +62,43 @@ func (m *TransactionManager) Begin(ctx context.Context, beginner store.TxBeginne
 		return "", ErrTransactionCapacity
 	}
 	m.mu.Unlock()
-	tx, err := beginner.BeginTx(ctx, opts)
+	lifetimeCtx := context.WithoutCancel(ctx)
+	var cancel context.CancelFunc
+	if m.ttl > 0 {
+		lifetimeCtx, cancel = context.WithTimeout(lifetimeCtx, m.ttl)
+	} else {
+		lifetimeCtx, cancel = context.WithCancel(lifetimeCtx)
+	}
+	stopRequestCancel := context.AfterFunc(ctx, cancel)
+	tx, err := beginner.BeginTx(lifetimeCtx, opts)
+	stopRequestCancel()
 	if err != nil {
+		cancel()
+		if requestErr := ctx.Err(); requestErr != nil {
+			return "", requestErr
+		}
+		return "", WrapDBError(err)
+	}
+	if err := ctx.Err(); err != nil {
+		cancel()
+		_ = tx.Rollback()
 		return "", err
 	}
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
+		cancel()
 		_ = tx.Rollback()
 		return "", err
 	}
 	token := hex.EncodeToString(tokenBytes)
 	handle := &transactionHandle{
 		tx: tx, session: session, role: role, subject: scopeKey("", subject), datasource: datasource,
-		dirty: make(map[string]struct{}), expires: time.Now().Add(m.ttl),
+		dirty: make(map[string]struct{}), expires: time.Now().Add(m.ttl), cancel: cancel,
 	}
 	m.mu.Lock()
 	if m.closed || m.maxOpen > 0 && m.scopeCountLocked(scope) >= m.maxOpen {
 		m.mu.Unlock()
+		cancel()
 		_ = tx.Rollback()
 		if m.closed {
 			return "", ErrTransactionNotFound
@@ -112,14 +133,15 @@ func (m *TransactionManager) expire(token string, handle *transactionHandle) {
 		m.mu.Unlock()
 		return
 	}
-	delete(m.handles, token)
-	m.mu.Unlock()
 	handle.mu.Lock()
-	defer handle.mu.Unlock()
 	if !handle.closed {
 		handle.closed = true
 		_ = handle.tx.Rollback()
 	}
+	handle.cancel()
+	delete(m.handles, token)
+	handle.mu.Unlock()
+	m.mu.Unlock()
 }
 
 func (m *TransactionManager) lookup(token, session, role string, subject map[string]any, datasource string) (*transactionHandle, error) {
@@ -162,7 +184,10 @@ func (m *TransactionManager) Configuration() (time.Duration, int) {
 	return m.ttl, m.maxOpen
 }
 
-func (m *TransactionManager) finish(token, session, role string, subject map[string]any, commit bool) ([]string, error) {
+func (m *TransactionManager) finish(ctx context.Context, token, session, role string, subject map[string]any, commit bool) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	handle, err := m.lookup(token, session, role, subject, "")
 	if err != nil {
 		return nil, err
@@ -179,13 +204,21 @@ func (m *TransactionManager) finish(token, session, role string, subject map[str
 	m.mu.Unlock()
 	handle.mu.Lock()
 	defer handle.mu.Unlock()
+	defer handle.cancel()
 	if handle.closed {
 		return nil, ErrTransactionNotFound
 	}
 	handle.closed = true
+	if err := ctx.Err(); err != nil {
+		_ = handle.tx.Rollback()
+		return nil, err
+	}
+	stopDeadline := context.AfterFunc(ctx, handle.cancel)
+	defer stopDeadline()
 	if commit {
 		if err := handle.tx.Commit(); err != nil {
-			return nil, err
+			_ = handle.tx.Rollback()
+			return nil, WrapDBError(err)
 		}
 		entities := make([]string, 0, len(handle.dirty))
 		for entity := range handle.dirty {
@@ -193,11 +226,11 @@ func (m *TransactionManager) finish(token, session, role string, subject map[str
 		}
 		return entities, nil
 	}
-	return nil, handle.tx.Rollback()
+	return nil, WrapDBError(handle.tx.Rollback())
 }
 
 func (m *TransactionManager) Commit(token, session, role string, subject map[string]any) error {
-	_, err := m.finish(token, session, role, subject, true)
+	_, err := m.finish(context.Background(), token, session, role, subject, true)
 	return err
 }
 
@@ -205,11 +238,20 @@ func (m *TransactionManager) Commit(token, session, role string, subject map[str
 // The list is returned only after a successful commit so callers can invalidate
 // global read caches without rollback pollution.
 func (m *TransactionManager) CommitWithEntities(token, session, role string, subject map[string]any) ([]string, error) {
-	return m.finish(token, session, role, subject, true)
+	return m.finish(context.Background(), token, session, role, subject, true)
+}
+
+func (m *TransactionManager) commitWithEntitiesContext(ctx context.Context, token, session, role string, subject map[string]any) ([]string, error) {
+	return m.finish(ctx, token, session, role, subject, true)
 }
 
 func (m *TransactionManager) Rollback(token, session, role string, subject map[string]any) error {
-	_, err := m.finish(token, session, role, subject, false)
+	_, err := m.finish(context.Background(), token, session, role, subject, false)
+	return err
+}
+
+func (m *TransactionManager) rollbackContext(ctx context.Context, token, session, role string, subject map[string]any) error {
+	_, err := m.finish(ctx, token, session, role, subject, false)
 	return err
 }
 
@@ -252,6 +294,7 @@ func (m *TransactionManager) RollbackSession(session string) {
 			handle.closed = true
 			_ = handle.tx.Rollback()
 		}
+		handle.cancel()
 		handle.mu.Unlock()
 	}
 }
@@ -275,6 +318,7 @@ func (m *TransactionManager) Close() {
 			handle.closed = true
 			_ = handle.tx.Rollback()
 		}
+		handle.cancel()
 		handle.mu.Unlock()
 	}
 }
@@ -328,12 +372,18 @@ func (BeginTransactionTool) Info() Info {
 }
 func (BeginTransactionTool) Enabled(f config.ToolFlags) bool { return f.BeginTransaction }
 func (BeginTransactionTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
+	timeout := tc.TransactionBeginTimeout
+	if timeout == 0 {
+		timeout = tc.Timeout
+	}
+	ctx, cancel := withSpecificTimeout(ctx, timeout)
+	defer cancel()
 	var in struct {
 		Datasource string `json:"datasource"`
 		Isolation  string `json:"isolation"`
 		ReadOnly   *bool  `json:"readOnly"`
 	}
-	if err := json.Unmarshal(input, &in); err != nil {
+	if err := decodeInput(input, &in); err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
 	if in.Datasource == "" {
@@ -426,7 +476,13 @@ func (CommitTransactionTool) Info() Info {
 	return Info{Name: "commit_transaction", Description: "Commit an explicit transaction", InputSchema: transactionTokenSchema}
 }
 func (CommitTransactionTool) Enabled(f config.ToolFlags) bool { return f.CommitTransaction }
-func (CommitTransactionTool) Run(_ context.Context, input json.RawMessage, tc Context) (Result, error) {
+func (CommitTransactionTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
+	timeout := tc.TransactionCommitTimeout
+	if timeout == 0 {
+		timeout = tc.Timeout
+	}
+	ctx, cancel := withSpecificTimeout(ctx, timeout)
+	defer cancel()
 	token, err := transactionToken(input)
 	if err != nil {
 		return Result{}, err
@@ -434,7 +490,7 @@ func (CommitTransactionTool) Run(_ context.Context, input json.RawMessage, tc Co
 	if tc.Transactions == nil {
 		return Result{}, ErrTransactionNotFound
 	}
-	entities, err := tc.Transactions.CommitWithEntities(token, tc.Session, tc.Role, tc.Subject)
+	entities, err := tc.Transactions.commitWithEntitiesContext(ctx, token, tc.Session, tc.Role, tc.Subject)
 	if err != nil {
 		return Result{}, err
 	}
@@ -450,7 +506,13 @@ func (RollbackTransactionTool) Info() Info {
 	return Info{Name: "rollback_transaction", Description: "Rollback an explicit transaction", InputSchema: transactionTokenSchema}
 }
 func (RollbackTransactionTool) Enabled(f config.ToolFlags) bool { return f.RollbackTransaction }
-func (RollbackTransactionTool) Run(_ context.Context, input json.RawMessage, tc Context) (Result, error) {
+func (RollbackTransactionTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
+	timeout := tc.TransactionRollbackTimeout
+	if timeout == 0 {
+		timeout = tc.Timeout
+	}
+	ctx, cancel := withSpecificTimeout(ctx, timeout)
+	defer cancel()
 	token, err := transactionToken(input)
 	if err != nil {
 		return Result{}, err
@@ -458,7 +520,7 @@ func (RollbackTransactionTool) Run(_ context.Context, input json.RawMessage, tc 
 	if tc.Transactions == nil {
 		return Result{}, ErrTransactionNotFound
 	}
-	if err := tc.Transactions.Rollback(token, tc.Session, tc.Role, tc.Subject); err != nil {
+	if err := tc.Transactions.rollbackContext(ctx, token, tc.Session, tc.Role, tc.Subject); err != nil {
 		return Result{}, err
 	}
 	return Result{Content: []map[string]any{{"rolledBack": true}}}, nil
@@ -468,7 +530,7 @@ func transactionToken(input json.RawMessage) (string, error) {
 	var in struct {
 		Transaction string `json:"transaction"`
 	}
-	if err := json.Unmarshal(input, &in); err != nil || in.Transaction == "" {
+	if err := decodeInput(input, &in); err != nil || in.Transaction == "" {
 		return "", fmt.Errorf("%w: transaction token is required", ErrInvalidInput)
 	}
 	return in.Transaction, nil

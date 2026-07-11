@@ -110,8 +110,7 @@ func TestMySQLReadEnforceCap(t *testing.T) {
 			Roles:  config.RoleConfig{Read: []string{"reader"}},
 		}},
 		Tools: config.DefaultToolFlags(),
-		// MySQL estimates are not trusted (ExplainAccurate=false), so the gate
-		// skips Estimate and relies on EnforceCap to bound rows with LIMIT.
+		// MySQL uses conservative EXPLAIN: unfiltered full scans are rejected.
 		Cost: config.CostConfig{Enabled: config.Bool(true), SoftScore: 90, HardScore: 95, MaxRows: 1},
 	}
 	cfg.ApplyDefaults()
@@ -122,9 +121,16 @@ func TestMySQLReadEnforceCap(t *testing.T) {
 	tc := app.ToolContext("reader")
 
 	in, _ := json.Marshal(map[string]any{"entity": "users"})
+	if _, err := (tool.ReadTool{}).Run(ctx, in, tc); !errors.Is(err, cost.ErrCostExceeded) {
+		t.Fatalf("unfiltered full scan error = %v", err)
+	}
+	in, _ = json.Marshal(map[string]any{
+		"entity": "users",
+		"filter": []map[string]any{{"field": "id", "op": "eq", "value": 1}},
+	})
 	res, err := tool.ReadTool{}.Run(ctx, in, tc)
 	if err != nil {
-		t.Fatalf("should pass gate and execute, got %v", err)
+		t.Fatalf("PK read should pass, got %v", err)
 	}
 	if len(res.Content) > 1 {
 		t.Fatalf("EnforceCap should limit to 1 row, got %d", len(res.Content))
@@ -135,6 +141,7 @@ func TestMySQLRLSRowFilterAndMasking(t *testing.T) {
 	prov, cleanup := setupMySQL(t)
 	defer cleanup()
 	ctx := context.Background()
+	_, _ = prov.ExecContext(ctx, "CREATE INDEX idx_users_tenant_id ON users (tenant_id)")
 	cfg := &config.Config{
 		Server:   config.ServerConfig{Role: "reader"},
 		Database: config.DatabaseConfig{Driver: "mysql", DSN: "ignored"},
@@ -149,7 +156,7 @@ func TestMySQLRLSRowFilterAndMasking(t *testing.T) {
 			},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(true), SoftScore: 40, HardScore: 70, MaxRows: 10000, WhitelistPKPoint: true},
+		Cost:  config.CostConfig{Enabled: config.Bool(false), MaxRows: 10000},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -224,9 +231,13 @@ func TestMySQLExecuteProcedure(t *testing.T) {
 		Entities: []config.EntityConfig{{
 			Name: "count_users", Source: "count_users", Kind: "procedure",
 			Roles: config.RoleConfig{Execute: []string{"caller"}},
+			MCP:   config.MCPFlags{TrustedProcedure: true},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(false)},
+		Cost: config.CostConfig{
+			Enabled:        config.Bool(false),
+			AllowTemplates: []string{"CALL `count_users`()"},
+		},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)

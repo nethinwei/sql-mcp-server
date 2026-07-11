@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -77,12 +78,13 @@ func runServe(ctx context.Context, args []string) error {
 	resolveServeEndpoint(fs, cfg, transport, addr)
 	immutableServer := cfg.Server
 	immutableTools := cfg.Tools
+	immutableDiscovery := toolDiscoverySignature(cfg.Entities)
 	build := func(path string) (*bootstrap.App, error) {
 		next, err := bootstrap.Load(path)
 		if err != nil {
 			return nil, err
 		}
-		if err := validateHotReloadConfig(immutableServer, immutableTools, next); err != nil {
+		if err := validateHotReloadConfig(immutableServer, immutableTools, next, immutableDiscovery); err != nil {
 			return nil, err
 		}
 		if *role != "" {
@@ -144,14 +146,28 @@ func resolveServeEndpoint(fs *flag.FlagSet, cfg *config.Config, transport, addr 
 	}
 }
 
-func validateHotReloadConfig(server config.ServerConfig, tools config.ToolFlags, next *config.Config) error {
+func validateHotReloadConfig(server config.ServerConfig, tools config.ToolFlags, next *config.Config, discovery ...string) error {
 	if next.Server.Transport != server.Transport ||
 		next.Server.Addr != server.Addr ||
 		!reflect.DeepEqual(next.Server.Auth, server.Auth) ||
 		!reflect.DeepEqual(next.Tools, tools) {
 		return errors.New("config reload requires restart for transport, address, auth/TLS/trusted proxy, or tool-set changes")
 	}
+	if len(discovery) > 0 && toolDiscoverySignature(next.Entities) != discovery[0] {
+		return errors.New("config reload requires restart when custom procedure tools change")
+	}
 	return nil
+}
+
+func toolDiscoverySignature(entities []config.EntityConfig) string {
+	names := make([]string, 0)
+	for _, entity := range entities {
+		if entity.Kind == "procedure" && entity.MCP.CustomTool && entity.MCP.TrustedProcedure {
+			names = append(names, entity.Name)
+		}
+	}
+	sort.Strings(names)
+	return strings.Join(names, "\x00")
 }
 
 func runInit(args []string) error {
@@ -166,7 +182,7 @@ func runInit(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	_, err = io.WriteString(file, content)
 	return err
 }

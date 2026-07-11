@@ -6,6 +6,36 @@
 
 ## Unreleased
 
+### Security
+
+- 修复 aggregate 未脱敏、mask 字段谓词/分组侧信道、数据库错误详情外泄、
+  procedure rows 泄漏路径和 commit 失败未 rollback。
+- bearer token 改为固定长度摘要恒时比较；角色统一小写规范化；动态 JSON 保留
+  大整数精度；审计输入字段脱敏并哈希 transaction token。
+- `${file:...}` secret 限制到允许根目录并阻止符号链接逃逸；扩充 DSN 脱敏。
+
+### Changed
+
+- 成本链拆分为不可关闭的 Safety/Enforcement 与可选 Estimate；
+  `cost.enabled: false` 不再关闭写保护、CALL 审核、输入及结果上限。
+- MySQL/OceanBase 使用保守 EXPLAIN 并在错误/未知/全扫时 fail closed；三种
+  provider 同时装配数据库原生 statement timeout。
+- procedure 默认拒绝，须设置 `mcp.trustedProcedure: true` 并命中 reviewed
+  `allowTemplates`；新增 procedure 独立结果上限。
+- cache、feedback、IN/filter/groupBy/aggregate/expand、预算 session 和响应字节
+  均增加硬边界；expand 改为分批 IN。
+- 热重载改为 drain-before-publish；改变工具发现集合的 reload 要求重启。
+- prepared statement 不再锁内执行网络 prepare；singleflight 传播 deadline；
+  RPS 配置现已实际装配。
+
+### Breaking
+
+- mask 字段不再允许用于 filter、cursor、group-by、aggregate 或写谓词。
+- `maxScannedRows` 被 `maxEstimatedScannedRows` 取代（旧字段暂作 deprecated
+  alias）；零值不再能产生无界缓存或 mandatory cost limit。
+- 角色在配置与请求入口统一 trim 并转为小写，规范化碰撞会拒绝启动。
+- 审计文件格式改为 JSON Lines。
+
 ## 0.1.1 - 2026-07-11
 
 ### Changed

@@ -33,6 +33,27 @@ func TestMemoryStoreBoundedStatistics(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreBoundsFingerprintKeysFIFO(t *testing.T) {
+	s := NewMemoryStoreWithBounds(2, 2)
+	s.Record(Feedback{Template: "first", ActualRows: 1})
+	s.Record(Feedback{Template: "second", ActualRows: 2})
+	s.Record(Feedback{Template: "first", ActualRows: 3})
+	s.Record(Feedback{Template: "third", ActualRows: 4})
+
+	if _, ok := s.Stats("first"); ok {
+		t.Fatal("oldest fingerprint was not evicted")
+	}
+	if _, ok := s.Stats("second"); !ok {
+		t.Fatal("second fingerprint should remain")
+	}
+	if _, ok := s.Stats("third"); !ok {
+		t.Fatal("new fingerprint should remain")
+	}
+	if got := len(s.m); got != 2 {
+		t.Fatalf("fingerprint keys = %d, want 2", got)
+	}
+}
+
 func TestFingerprintStableAcrossValuesAndSensitiveToTypes(t *testing.T) {
 	a := Fingerprint("primary", "postgres", codegen.Compiled{SQL: " SELECT  *  FROM t WHERE id=$1 ", Args: []any{int64(1)}})
 	b := Fingerprint("primary", "postgres", codegen.Compiled{SQL: "SELECT * FROM t WHERE id=$1", Args: []any{int64(2)}})

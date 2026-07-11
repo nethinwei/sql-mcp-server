@@ -1,11 +1,13 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/audit"
@@ -42,7 +44,25 @@ var (
 	ErrNotImplemented = errors.New("tool: not implemented")
 	// ErrDuplicateTool is returned by NewRegistry for duplicate tool names.
 	ErrDuplicateTool = errors.New("tool: duplicate name")
+	// ErrDatabase identifies errors returned by the database driver.
+	ErrDatabase = errors.New("tool: database error")
 )
+
+type databaseError struct{ err error }
+
+func (e *databaseError) Error() string { return ErrDatabase.Error() }
+func (e *databaseError) Unwrap() error { return e.err }
+func (e *databaseError) Is(target error) bool {
+	return target == ErrDatabase
+}
+
+// WrapDBError classifies a database driver error while preserving its cause.
+func WrapDBError(err error) error {
+	if err == nil || errors.Is(err, ErrDatabase) {
+		return err
+	}
+	return &databaseError{err: err}
+}
 
 // Info is a tool's static metadata, mapped to an MCP tool definition.
 type Info struct {
@@ -55,37 +75,52 @@ type Info struct {
 // Result is a tool's outcome. Content holds structured rows/text; IsError marks
 // a business-level error the agent can act on.
 type Result struct {
-	Content          []map[string]any
-	IsError          bool
-	StructuredResult any
-	ReturnedRows     int64
+	Content              []map[string]any
+	IsError              bool
+	StructuredResult     any
+	ReturnedRows         int64
+	ReturnedBytes        int64
+	EstimatedScannedRows int64
 }
 
 // Context carries per-request dependencies (injected, no mutable global state).
 type Context struct {
-	Role         string
-	Subject      map[string]any // caller attributes for row-level ${subject.x} policies
-	Session      string         // MCP session ID when the transport provides one
-	DB           store.DB
-	Dialect      dialect.Dialect
-	Registry     *entity.Registry
-	Authorizer   rbac.Authorizer
-	Masker       mask.Masker
-	Gate         cost.Gate
-	Cache        cache.Cache[[]map[string]any]
-	Engine       *engine.Engine
-	Auditor      audit.Auditor
-	Hooks        *hook.Hooks
-	Timeout      time.Duration
-	Feedback     cost.FeedbackStore
-	Analyze      cost.AnalyzePolicy
-	DataSource   string
-	Sources      map[string]DataSource
-	Budget       budget.Manager
-	BudgetLimits budget.Limits
-	Transactions *TransactionManager
-	TxBeginners  map[string]store.TxBeginner
-	Transaction  string
+	Role                       string
+	Subject                    map[string]any // caller attributes for row-level ${subject.x} policies
+	Session                    string         // MCP session ID when the transport provides one
+	DB                         store.DB
+	Dialect                    dialect.Dialect
+	Registry                   *entity.Registry
+	Authorizer                 rbac.Authorizer
+	Masker                     mask.Masker
+	Gate                       cost.Gate
+	Cache                      cache.Cache[[]map[string]any]
+	Engine                     *engine.Engine
+	Auditor                    audit.Auditor
+	Hooks                      *hook.Hooks
+	Timeout                    time.Duration
+	MaxRows                    int64
+	MaxProcedureRows           int64
+	MaxReturnedBytes           int64
+	MaxINListSize              int
+	MaxFilterConditions        int
+	MaxGroupByFields           int
+	MaxAggregates              int
+	MaxExpand                  int
+	CacheMaxEntryRows          int
+	CacheMaxEntryBytes         int64
+	TransactionBeginTimeout    time.Duration
+	TransactionCommitTimeout   time.Duration
+	TransactionRollbackTimeout time.Duration
+	Feedback                   cost.FeedbackStore
+	Analyze                    cost.AnalyzePolicy
+	DataSource                 string
+	Sources                    map[string]DataSource
+	Budget                     budget.Manager
+	BudgetLimits               budget.Limits
+	Transactions               *TransactionManager
+	TxBeginners                map[string]store.TxBeginner
+	Transaction                string
 }
 
 // DataSource is the per-entity execution route.
@@ -118,16 +153,35 @@ type CostGated interface {
 func RunTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Result, error) {
 	name := t.Info().Name
 	start := time.Now()
+	auditInput := audit.RedactInput(input, sensitiveFields(name, input, tc.Registry))
 	var lease budget.Lease
 	if tc.Budget != nil {
 		var err error
-		lease, err = tc.Budget.Acquire(ctx, budget.Scope{
+		scope := budget.Scope{
 			Role: tc.Role, Tenant: tenantKey(tc.Subject), Session: tc.Session,
-		})
+		}
+		if manager, ok := tc.Budget.(budget.ReservingManager); ok {
+			reserved := int64(1)
+			switch name {
+			case "read_records", "aggregate_records":
+				reserved = tc.MaxRows
+			case "execute_entity":
+				reserved = tc.MaxProcedureRows
+			}
+			if strings.HasPrefix(name, "procedure_") {
+				reserved = tc.MaxProcedureRows
+			}
+			if reserved <= 0 {
+				reserved = 1
+			}
+			lease, err = manager.AcquireWithReservation(ctx, scope, budget.Reservation{Cost: reserved})
+		} else {
+			lease, err = tc.Budget.Acquire(ctx, scope)
+		}
 		if err != nil {
 			if tc.Auditor != nil {
 				_ = tc.Auditor.Record(ctx, audit.Event{
-					Time: time.Now(), Role: tc.Role, Tool: name, Input: input,
+					Time: time.Now(), Role: tc.Role, Tool: name, Input: auditInput,
 					Allowed: false, Error: err.Error(),
 				})
 			}
@@ -169,15 +223,23 @@ func RunTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Re
 	} else {
 		res, err = t.Run(ctx, input, tc)
 	}
+	if encoded, encodeErr := json.Marshal(res.Content); encodeErr == nil {
+		res.ReturnedBytes = int64(len(encoded))
+		if tc.MaxReturnedBytes > 0 && res.ReturnedBytes > tc.MaxReturnedBytes && err == nil {
+			err = budget.ErrExceeded
+		}
+	}
 	if lease != nil {
 		returnedRows := res.ReturnedRows
 		if returnedRows == 0 {
 			returnedRows = int64(len(res.Content))
 		}
 		budgetErr := lease.Complete(budget.Usage{
-			ReturnedRows: returnedRows,
-			Duration:     time.Since(start),
-			Cost:         returnedRows + time.Since(start).Milliseconds(),
+			EstimatedScannedRows: res.EstimatedScannedRows,
+			ReturnedRows:         returnedRows,
+			ReturnedBytes:        res.ReturnedBytes,
+			Duration:             time.Since(start),
+			Cost:                 returnedRows + time.Since(start).Milliseconds(),
 		})
 		if err == nil && budgetErr != nil {
 			err = budgetErr
@@ -192,21 +254,64 @@ func RunTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Re
 			Time:         time.Now(),
 			Role:         tc.Role,
 			Tool:         name,
-			Input:        input,
+			Input:        auditInput,
 			Allowed:      err == nil,
 			Error:        errString(err),
 			Duration:     time.Since(start),
-			ReturnedRows: int64(len(res.Content)),
+			ReturnedRows: returnedRowsForAudit(res),
 		})
 	}
 	return res, err
+}
+
+func returnedRowsForAudit(res Result) int64 {
+	if res.ReturnedRows > 0 {
+		return res.ReturnedRows
+	}
+	return int64(len(res.Content))
+}
+
+func sensitiveFields(toolName string, input json.RawMessage, registry *entity.Registry) map[string]bool {
+	var envelope struct {
+		Entity string `json:"entity"`
+	}
+	if registry == nil || decodeInput(input, &envelope) != nil {
+		return nil
+	}
+	entityName := envelope.Entity
+	if entityName == "" {
+		for _, candidate := range registry.Entities() {
+			if candidate.Kind == entity.KindProcedure && ProcedureToolName(candidate.Name) == toolName {
+				entityName = candidate.Name
+				break
+			}
+		}
+	}
+	if entityName == "" {
+		return nil
+	}
+	resolved, ok := registry.Resolve(entityName)
+	if !ok {
+		return nil
+	}
+	fields := make(map[string]bool)
+	for _, attribute := range resolved.Attributes {
+		if attribute.Mask == "" {
+			continue
+		}
+		fields[attribute.Name] = true
+		if attribute.Alias != "" {
+			fields[attribute.Alias] = true
+		}
+	}
+	return fields
 }
 
 func transactionFromInput(input json.RawMessage) string {
 	var envelope struct {
 		Transaction string `json:"transaction"`
 	}
-	_ = json.Unmarshal(input, &envelope)
+	_ = decodeInput(input, &envelope)
 	return envelope.Transaction
 }
 
@@ -339,12 +444,66 @@ func filterToPredicate(conds []condJSON) (relalg.Predicate, error) {
 		if !op.Valid() {
 			return nil, fmt.Errorf("%w: operator %q", ErrInvalidInput, c.Op)
 		}
-		preds = append(preds, relalg.Condition{Field: c.Field, Op: op, Value: c.Value})
+		value, err := normalizeJSONValue(c.Value)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+		}
+		preds = append(preds, relalg.Condition{Field: c.Field, Op: op, Value: value})
 	}
 	if len(preds) == 1 {
 		return preds[0], nil
 	}
 	return relalg.And{Preds: preds}, nil
+}
+
+func decodeInput(data json.RawMessage, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	return decoder.Decode(target)
+}
+
+func normalizeMapValues(values map[string]any) error {
+	for key, value := range values {
+		normalized, err := normalizeJSONValue(value)
+		if err != nil {
+			return err
+		}
+		values[key] = normalized
+	}
+	return nil
+}
+
+func normalizeJSONValue(value any) (any, error) {
+	switch typed := value.(type) {
+	case json.Number:
+		if integer, err := typed.Int64(); err == nil {
+			return integer, nil
+		}
+		if strings.ContainsAny(typed.String(), ".eE") {
+			floating, err := typed.Float64()
+			if err != nil {
+				return nil, fmt.Errorf("invalid JSON number %q", typed)
+			}
+			return floating, nil
+		}
+		return nil, fmt.Errorf("integer %q exceeds int64; encode it as a JSON string", typed)
+	case []any:
+		for i, item := range typed {
+			normalized, err := normalizeJSONValue(item)
+			if err != nil {
+				return nil, err
+			}
+			typed[i] = normalized
+		}
+		return typed, nil
+	case map[string]any:
+		if err := normalizeMapValues(typed); err != nil {
+			return nil, err
+		}
+		return typed, nil
+	default:
+		return value, nil
+	}
 }
 
 func andPreds(a, b relalg.Predicate) relalg.Predicate {
@@ -434,8 +593,12 @@ func checkGateDetailed(ctx context.Context, tc Context, compiled codegen.Compile
 	if dec.Score != nil {
 		score = *dec.Score
 	}
-	if dec.Plan != nil && tc.BudgetLimits.MaxScannedRows > 0 &&
-		dec.Plan.EstimatedRows > tc.BudgetLimits.MaxScannedRows {
+	maxEstimated := tc.BudgetLimits.MaxEstimatedScannedRows
+	if maxEstimated == 0 {
+		maxEstimated = tc.BudgetLimits.MaxScannedRows
+	}
+	if dec.Plan != nil && maxEstimated > 0 &&
+		dec.Plan.EstimatedRows > maxEstimated {
 		return compiled, dec.Plan, budget.ErrExceeded
 	}
 	verdict := "allow"
@@ -530,6 +693,20 @@ func validateFields(res entity.Resolved, fields ...string) error {
 	return nil
 }
 
+// validateUnmaskedFields rejects masked fields in usages that can reveal or
+// compare their underlying values. It intentionally uses the same error as an
+// unknown field so callers cannot probe whether a field is masked.
+func validateUnmaskedFields(res entity.Resolved, fields ...string) error {
+	for _, f := range fields {
+		for _, a := range res.Attributes {
+			if (a.Name == f || a.Alias == f) && a.Mask != "" {
+				return fmt.Errorf("%w: unknown or inaccessible field %q", ErrInvalidInput, f)
+			}
+		}
+	}
+	return nil
+}
+
 func resolveDMLEntity(tc Context, name string) (entity.Resolved, error) {
 	res, ok := tc.Registry.Resolve(name)
 	if !ok {
@@ -590,6 +767,13 @@ func afterWrite(tc Context, e entity.Entity, transaction string) error {
 func withTimeout(ctx context.Context, tc Context) (context.Context, context.CancelFunc) {
 	if tc.Timeout > 0 {
 		return context.WithTimeout(ctx, tc.Timeout)
+	}
+	return ctx, func() {}
+}
+
+func withSpecificTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout > 0 {
+		return context.WithTimeout(ctx, timeout)
 	}
 	return ctx, func() {}
 }

@@ -1,7 +1,9 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
@@ -26,6 +28,8 @@ import (
 )
 
 const schemaResourceURI = "sql-mcp://schema"
+
+var errInternal = errors.New("sql-mcp-server: internal operation failed")
 
 type appAcquire func() (*bootstrap.App, func(), error)
 
@@ -57,7 +61,7 @@ func newServer(acquire appAcquire) *mcp.Server {
 		registerTool(s, t, acquire)
 	}
 	for _, e := range app.Registry.Entities() {
-		if e.Kind == entity.KindProcedure && e.MCP.CustomTool {
+		if e.Kind == entity.KindProcedure && e.MCP.CustomTool && e.MCP.TrustedProcedure {
 			registerTool(s, tool.ProcedureTool{Entity: e}, acquire)
 		}
 	}
@@ -116,7 +120,7 @@ func currentTool(app *bootstrap.App, name string) (tool.Tool, bool) {
 		return nil, false
 	}
 	for _, e := range app.Registry.Entities() {
-		if e.Kind == entity.KindProcedure && e.MCP.CustomTool && tool.ProcedureToolName(e.Name) == name {
+		if e.Kind == entity.KindProcedure && e.MCP.CustomTool && e.MCP.TrustedProcedure && tool.ProcedureToolName(e.Name) == name {
 			return tool.ProcedureTool{Entity: e}, true
 		}
 	}
@@ -267,14 +271,16 @@ func toResult(err error) (*mcp.CallToolResult, error) {
 		errors.Is(err, tool.ErrTransactionNotFound),
 		errors.Is(err, tool.ErrTransactionScope),
 		errors.Is(err, tool.ErrTransactionCapacity),
+		errors.Is(err, tool.ErrDatabase),
 		errors.Is(err, tool.ErrNotImplemented):
 		return &mcp.CallToolResult{
 			IsError: true,
 			Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
 		}, nil
 	}
-	// ErrOverloaded / ErrCircuitOpen / internal -> protocol-level error.
-	return nil, err
+	// Internal/provider errors are deliberately not reflected to clients because
+	// driver messages may contain schema, SQL, constraint, or connection detail.
+	return nil, errInternal
 }
 
 // ServeStdio runs the server on stdio.
@@ -296,18 +302,22 @@ type requestSubject struct {
 // role- and tenant-scoped context, so a single process is no longer pinned to
 // one role. Exported so custom transports can inject an authenticated subject.
 func WithSubject(ctx context.Context, role string, attrs map[string]any) context.Context {
-	return context.WithValue(ctx, subjectCtxKey{}, requestSubject{role: role, attrs: attrs})
+	return context.WithValue(ctx, subjectCtxKey{}, requestSubject{role: canonicalRole(role), attrs: attrs})
 }
 
 func subjectFromContext(ctx context.Context, defaultRole string) (string, map[string]any) {
 	if s, ok := ctx.Value(subjectCtxKey{}).(requestSubject); ok {
 		role := s.role
 		if role == "" {
-			role = defaultRole
+			role = canonicalRole(defaultRole)
 		}
 		return role, s.attrs
 	}
-	return defaultRole, nil
+	return canonicalRole(defaultRole), nil
+}
+
+func canonicalRole(role string) string {
+	return strings.ToLower(strings.TrimSpace(role))
 }
 
 // withRequestSubject extracts the caller's role and attributes from request
@@ -323,7 +333,9 @@ func withRequestSubject(next http.Handler) http.Handler {
 		role := r.Header.Get("X-MCP-Role")
 		var attrs map[string]any
 		if raw := r.Header.Get("X-MCP-Subject"); raw != "" {
-			if err := json.Unmarshal([]byte(raw), &attrs); err != nil || attrs == nil {
+			dec := json.NewDecoder(bytes.NewBufferString(raw))
+			dec.UseNumber()
+			if err := dec.Decode(&attrs); err != nil || attrs == nil {
 				http.Error(w, "invalid X-MCP-Subject: expected a JSON object", http.StatusBadRequest)
 				return
 			}
@@ -437,10 +449,15 @@ func trustedProxyOnly(networks []*net.IPNet, next http.Handler) http.Handler {
 // tokenAuth rejects requests lacking a matching bearer token. Comparison is
 // constant-time to avoid leaking the token via timing.
 func tokenAuth(token string, next http.Handler) http.Handler {
-	want := []byte("Bearer " + token)
+	want := sha256.Sum256([]byte(token))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got := []byte(r.Header.Get("Authorization"))
-		if subtle.ConstantTimeCompare(got, want) != 1 {
+		header := strings.TrimSpace(r.Header.Get("Authorization"))
+		scheme, presented, ok := strings.Cut(header, " ")
+		if !ok || !strings.EqualFold(scheme, "Bearer") {
+			presented = ""
+		}
+		got := sha256.Sum256([]byte(strings.TrimSpace(presented)))
+		if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return

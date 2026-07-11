@@ -152,9 +152,16 @@ func TestOBReadEnforceCap(t *testing.T) {
 	tc := app.ToolContext("reader")
 
 	in, _ := json.Marshal(map[string]any{"entity": "users"})
+	if _, err := (tool.ReadTool{}).Run(ctx, in, tc); !errors.Is(err, cost.ErrCostExceeded) {
+		t.Fatalf("unfiltered full scan error = %v", err)
+	}
+	in, _ = json.Marshal(map[string]any{
+		"entity": "users",
+		"filter": []map[string]any{{"field": "id", "op": "eq", "value": 1}},
+	})
 	res, err := tool.ReadTool{}.Run(ctx, in, tc)
 	if err != nil {
-		t.Fatalf("should pass gate and execute, got %v", err)
+		t.Fatalf("PK read should pass, got %v", err)
 	}
 	if len(res.Content) > 1 {
 		t.Fatalf("EnforceCap should limit to 1 row, got %d", len(res.Content))
@@ -165,6 +172,7 @@ func TestOBRLSRowFilterAndMasking(t *testing.T) {
 	prov, cleanup := setupOB(t)
 	defer cleanup()
 	ctx := context.Background()
+	_, _ = prov.ExecContext(ctx, "CREATE INDEX idx_users_tenant_id ON test.users (tenant_id)")
 	cfg := &config.Config{
 		Server:   config.ServerConfig{Role: "reader"},
 		Database: config.DatabaseConfig{Driver: "oceanbase", DSN: "ignored"},
@@ -179,7 +187,7 @@ func TestOBRLSRowFilterAndMasking(t *testing.T) {
 			},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(true), SoftScore: 40, HardScore: 70, MaxRows: 10000, WhitelistPKPoint: true},
+		Cost:  config.CostConfig{Enabled: config.Bool(false), MaxRows: 10000},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -216,9 +224,13 @@ func TestOBExecuteProcedure(t *testing.T) {
 		Entities: []config.EntityConfig{{
 			Name: "count_users", Source: "count_users", Schema: "test", Kind: "procedure",
 			Roles: config.RoleConfig{Execute: []string{"caller"}},
+			MCP:   config.MCPFlags{TrustedProcedure: true},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(false)},
+		Cost: config.CostConfig{
+			Enabled:        config.Bool(false),
+			AllowTemplates: []string{"CALL `test`.`count_users`()"},
+		},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)

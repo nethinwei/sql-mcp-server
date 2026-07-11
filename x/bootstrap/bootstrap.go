@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -49,53 +51,79 @@ type Provider interface {
 
 // App is the assembled application, ready to serve.
 type App struct {
-	Provider     Provider
-	Providers    map[string]Provider
-	Prepared     map[string]*store.PreparedDB
-	Sources      map[string]tool.DataSource
-	Dialect      dialect.Dialect
-	Registry     *entity.Registry
-	Authorizer   rbac.Authorizer
-	Masker       mask.Masker
-	Gate         cost.Gate
-	Engine       *engine.Engine
-	Tools        *tool.Registry
-	ToolFlags    config.ToolFlags
-	DefaultRole  string
-	QueryTimeout time.Duration
-	Auditor      audit.Auditor
-	Hooks        *hook.Hooks
-	Cache        cache.Cache[[]map[string]any]
-	Feedback     cost.FeedbackStore
-	Analyze      cost.AnalyzePolicy
-	Budget       budget.Manager
-	Transactions *tool.TransactionManager
-	TxBeginners  map[string]store.TxBeginner
-	closeMu      sync.Mutex
-	closed       bool
+	Provider                   Provider
+	Providers                  map[string]Provider
+	Prepared                   map[string]*store.PreparedDB
+	Sources                    map[string]tool.DataSource
+	Dialect                    dialect.Dialect
+	Registry                   *entity.Registry
+	Authorizer                 rbac.Authorizer
+	Masker                     mask.Masker
+	Gate                       cost.Gate
+	Engine                     *engine.Engine
+	Tools                      *tool.Registry
+	ToolFlags                  config.ToolFlags
+	DefaultRole                string
+	QueryTimeout               time.Duration
+	MaxRows                    int64
+	MaxProcedureRows           int64
+	MaxReturnedBytes           int64
+	MaxINListSize              int
+	MaxFilterConditions        int
+	MaxGroupByFields           int
+	MaxAggregates              int
+	MaxExpand                  int
+	CacheMaxEntryRows          int
+	CacheMaxEntryBytes         int64
+	TransactionBeginTimeout    time.Duration
+	TransactionCommitTimeout   time.Duration
+	TransactionRollbackTimeout time.Duration
+	Auditor                    audit.Auditor
+	Hooks                      *hook.Hooks
+	Cache                      cache.Cache[[]map[string]any]
+	Feedback                   cost.FeedbackStore
+	Analyze                    cost.AnalyzePolicy
+	Budget                     budget.Manager
+	Transactions               *tool.TransactionManager
+	TxBeginners                map[string]store.TxBeginner
+	closeMu                    sync.Mutex
+	closed                     bool
 }
 
 // ToolContext builds a per-request tool.Context for the given role.
 func (a *App) ToolContext(role string) tool.Context {
 	return tool.Context{
-		Role:         role,
-		DB:           a.Provider,
-		Dialect:      a.Dialect,
-		Registry:     a.Registry,
-		Authorizer:   a.Authorizer,
-		Masker:       a.Masker,
-		Gate:         a.Gate,
-		Cache:        a.Cache,
-		Engine:       a.Engine,
-		Auditor:      a.Auditor,
-		Hooks:        a.Hooks,
-		Timeout:      a.QueryTimeout,
-		Feedback:     a.Feedback,
-		Analyze:      a.Analyze,
-		Sources:      a.Sources,
-		Budget:       a.Budget,
-		Transactions: a.Transactions,
-		TxBeginners:  a.TxBeginners,
+		Role:                       role,
+		DB:                         a.Provider,
+		Dialect:                    a.Dialect,
+		Registry:                   a.Registry,
+		Authorizer:                 a.Authorizer,
+		Masker:                     a.Masker,
+		Gate:                       a.Gate,
+		Cache:                      a.Cache,
+		Engine:                     a.Engine,
+		Auditor:                    a.Auditor,
+		Hooks:                      a.Hooks,
+		Timeout:                    a.QueryTimeout,
+		MaxRows:                    a.MaxRows,
+		MaxProcedureRows:           a.MaxProcedureRows,
+		MaxReturnedBytes:           a.MaxReturnedBytes,
+		MaxINListSize:              a.MaxINListSize,
+		MaxFilterConditions:        a.MaxFilterConditions,
+		MaxGroupByFields:           a.MaxGroupByFields,
+		MaxAggregates:              a.MaxAggregates,
+		MaxExpand:                  a.MaxExpand,
+		CacheMaxEntryRows:          a.CacheMaxEntryRows,
+		CacheMaxEntryBytes:         a.CacheMaxEntryBytes,
+		TransactionBeginTimeout:    a.TransactionBeginTimeout,
+		TransactionCommitTimeout:   a.TransactionCommitTimeout,
+		TransactionRollbackTimeout: a.TransactionRollbackTimeout,
+		Feedback:                   a.Feedback,
+		Analyze:                    a.Analyze,
+		Sources:                    a.Sources,
+		Budget:                     a.Budget,
+		Transactions:               a.Transactions,
+		TxBeginners:                a.TxBeginners,
 	}
 }
 
@@ -115,9 +143,10 @@ func (a *App) CloseContext(ctx context.Context) error {
 	if a.closed {
 		return nil
 	}
+	var errs []error
 	if a.Engine != nil {
 		if err := a.Engine.Drain(ctx); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
 	if a.Transactions != nil {
@@ -128,22 +157,23 @@ func (a *App) CloseContext(ctx context.Context) error {
 			closer.Close()
 		}
 	}
-	var first error
 	for _, prepared := range a.Prepared {
-		if err := prepared.Close(); err != nil && first == nil {
-			first = err
+		if err := prepared.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	for _, provider := range a.Providers {
-		if err := provider.Close(); err != nil && first == nil {
-			first = err
+		if err := provider.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	if len(a.Providers) == 0 && a.Provider != nil {
-		first = a.Provider.Close()
+		if err := a.Provider.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	a.closed = true
-	return first
+	return errors.Join(errs...)
 }
 
 // Close preserves the original unbounded close contract. Callers that need a
@@ -177,7 +207,7 @@ func ValidateFile(path string, resolver SecretResolver) error {
 		return err
 	}
 	if resolver == nil {
-		resolver = EnvFileResolver{}
+		resolver = EnvFileResolver{AllowedRoots: cfg.Server.Secrets.AllowedRoots}
 	}
 	databases := cfg.Databases
 	if len(databases) == 0 {
@@ -194,7 +224,7 @@ func ValidateFile(path string, resolver SecretResolver) error {
 // Assemble opens the provider and wires the application from cfg, using the
 // default EnvFileResolver for secret placeholders.
 func Assemble(cfg *config.Config) (*App, error) {
-	return AssembleWithResolver(cfg, EnvFileResolver{})
+	return AssembleWithResolver(cfg, EnvFileResolver{AllowedRoots: cfg.Server.Secrets.AllowedRoots})
 }
 
 // AssembleWithResolver resolves secrets with the given resolver, opens the
@@ -213,7 +243,7 @@ func AssembleWithResolver(cfg *config.Config, r SecretResolver) (*App, error) {
 			closeProviders(providers)
 			return nil, err
 		}
-		provider, err := newProvider(database.Driver, dsn)
+		provider, err := newProvider(database.Driver, dsn, cfg.Cost.QueryTimeout)
 		if err != nil {
 			closeProviders(providers)
 			return nil, err
@@ -245,7 +275,7 @@ func AssembleWithProviders(cfg *config.Config, providers map[string]Provider) (*
 		return nil, fmt.Errorf("assemble: %w", err)
 	}
 	for _, prov := range providers {
-		configurePool(prov, cfg.RateLimit.IOPool, cfg.RateLimit.ConnMaxIdleTime)
+		configurePool(prov, cfg.RateLimit.IOPool, cfg.RateLimit.ConnMaxIdleTime, cfg.RateLimit.ConnMaxLifetime)
 	}
 	entities, err := configToEntities(cfg.Entities)
 	if err != nil {
@@ -274,8 +304,9 @@ func AssembleWithProviders(cfg *config.Config, providers map[string]Provider) (*
 	auth := rbac.NewRoleAuthorizer(reg)
 	var feedback cost.FeedbackStore = cost.NoopFeedbackStore{}
 	if cfg.Cost.EnabledOrDefault() {
-		feedback = cost.NewAdaptiveMemoryStore(
+		feedback = cost.NewAdaptiveMemoryStoreWithBounds(
 			cfg.Cost.AQE.WindowSize,
+			cfg.Cost.AQE.MaxFingerprints,
 			cfg.Cost.AQE.AnomalyFactor,
 			cfg.Cost.AQE.AnomalyMinSamples,
 			nil,
@@ -288,6 +319,10 @@ func AssembleWithProviders(cfg *config.Config, providers map[string]Provider) (*
 		txBeginners[name] = prov
 		db := store.WithPreparedCache(prov, cfg.Cache.PreparedMaxSize)
 		prepared[name] = db
+		explainer := prov.Explainer()
+		if cfg.Cost.EnabledOrDefault() && prov.Dialect().Capabilities().ExplainCost && explainer == nil {
+			return nil, fmt.Errorf("datasource %q (%s) has no EXPLAIN implementation", name, prov.Dialect().Name())
+		}
 		sampler, supportsAnalyze := prov.(cost.AnalyzeSampler)
 		if cfg.Cost.AQE.ExplainAnalyze && !supportsAnalyze {
 			return nil, fmt.Errorf("datasource %q (%s) does not support EXPLAIN ANALYZE sampling", name, prov.Dialect().Name())
@@ -301,27 +336,36 @@ func AssembleWithProviders(cfg *config.Config, providers map[string]Provider) (*
 				Timeout:    cfg.Cost.AQE.Timeout,
 			},
 		}
-		var gate cost.Gate
-		if cfg.Cost.EnabledOrDefault() {
-			threshold := toThreshold(cfg.Cost)
-			threshold.Datasource = name
-			threshold.DialectName = prov.Dialect().Name()
-			threshold.LegacyExactSQL = len(providers) == 1
-			gate = cost.NewGateFromCapabilities(prov.Dialect().Capabilities(), prov.Explainer(), threshold, feedback)
+		threshold := toThreshold(cfg.Cost)
+		threshold.Datasource = name
+		threshold.DialectName = prov.Dialect().Name()
+		threshold.LegacyExactSQL = len(providers) == 1
+		if !cfg.Cost.EnabledOrDefault() {
+			threshold.DisableEstimate = true
+			threshold.SoftScore = 0
+			threshold.HardScore = 0
+			threshold.RejectFullScan = false
+			threshold.RequireKnownScan = false
+			threshold.RequireFreshStats = false
+			threshold.ExplainFailClosed = false
 		}
+		gate := cost.NewGateFromCapabilities(prov.Dialect().Capabilities(), explainer, threshold, feedback)
 		sources[name] = tool.DataSource{DB: db, Dialect: prov.Dialect(), Gate: gate, Analyze: analyze}
 	}
 	var limiter *ratelimit.Adaptive
 	var breaker *ratelimit.Breaker
+	var rps *ratelimit.TokenBucket
 	if cfg.RateLimit.EnabledOrDefault() {
 		limiter = ratelimit.NewAdaptive(int64(cfg.RateLimit.IOPool), int64(cfg.RateLimit.MinConcurrency), int64(cfg.RateLimit.MaxInflight), cfg.RateLimit.RTTThreshold)
 		breaker = ratelimit.NewBreaker(int64(cfg.RateLimit.BreakerThreshold), cfg.RateLimit.BreakerCooldown)
+		rps = ratelimit.NewTokenBucket(cfg.RateLimit.RPS)
 	}
 	eng, err := engine.New(
 		engine.WithIOPool(cfg.RateLimit.IOPool),
 		engine.WithCPUPool(cfg.RateLimit.CPUPool),
 		engine.WithMaxInflight(cfg.RateLimit.MaxInflight),
 		engine.WithLimiter(limiter),
+		engine.WithRPSLimiter(rps),
 		engine.WithBreaker(breaker),
 		engine.WithFailureClassifier(recordProviderFailure),
 	)
@@ -334,7 +378,13 @@ func AssembleWithProviders(cfg *config.Config, providers map[string]Provider) (*
 	}
 	var aud audit.Auditor = audit.NoopAuditor{}
 	if cfg.Audit.Enabled && cfg.Audit.Path != "" {
-		aud = audit.NewAsyncAuditor(fileSink(cfg.Audit.Path), cfg.Audit.QueueSize)
+		sink, err := audit.OpenFileSink(cfg.Audit.Path)
+		if err != nil {
+			eng.Close()
+			closeProviders(providers)
+			return nil, fmt.Errorf("assemble audit sink: %w", err)
+		}
+		aud = audit.NewAsyncAuditorWithClose(sink.Record, sink.Close, cfg.Audit.QueueSize)
 	}
 	var cc cache.Cache[[]map[string]any] = cache.NoopCache[[]map[string]any]{}
 	if cfg.Cache.Enabled {
@@ -357,27 +407,40 @@ func AssembleWithProviders(cfg *config.Config, providers map[string]Provider) (*
 	defaultProvider := providers[defaultName]
 	defaultSource := sources[defaultName]
 	return &App{
-		Provider:     defaultProvider,
-		Providers:    providers,
-		Prepared:     prepared,
-		Sources:      sources,
-		Dialect:      defaultSource.Dialect,
-		Registry:     reg,
-		Authorizer:   auth,
-		Masker:       msk,
-		Feedback:     feedback,
-		Analyze:      defaultSource.Analyze,
-		Gate:         defaultSource.Gate,
-		Engine:       eng,
-		Tools:        tools,
-		ToolFlags:    cfg.Tools,
-		DefaultRole:  cfg.Server.Role,
-		QueryTimeout: cfg.Cost.QueryTimeout,
-		Auditor:      aud,
-		Cache:        cc,
-		Budget:       newBudgetManager(cfg.Budget),
-		Transactions: tool.NewTransactionManager(cfg.Transactions.TTL, cfg.Transactions.MaxOpen),
-		TxBeginners:  txBeginners,
+		Provider:                   defaultProvider,
+		Providers:                  providers,
+		Prepared:                   prepared,
+		Sources:                    sources,
+		Dialect:                    defaultSource.Dialect,
+		Registry:                   reg,
+		Authorizer:                 auth,
+		Masker:                     msk,
+		Feedback:                   feedback,
+		Analyze:                    defaultSource.Analyze,
+		Gate:                       defaultSource.Gate,
+		Engine:                     eng,
+		Tools:                      tools,
+		ToolFlags:                  cfg.Tools,
+		DefaultRole:                cfg.Server.Role,
+		QueryTimeout:               cfg.Cost.QueryTimeout,
+		MaxRows:                    cfg.Cost.MaxRows,
+		MaxProcedureRows:           cfg.Cost.MaxProcedureRows,
+		MaxReturnedBytes:           cfg.Cost.MaxBytes,
+		MaxINListSize:              cfg.Cost.MaxINListSize,
+		MaxFilterConditions:        cfg.Cost.MaxFilterConditions,
+		MaxGroupByFields:           cfg.Cost.MaxGroupByFields,
+		MaxAggregates:              cfg.Cost.MaxAggregates,
+		MaxExpand:                  cfg.Cost.MaxExpand,
+		CacheMaxEntryRows:          cfg.Cache.MaxEntryRows,
+		CacheMaxEntryBytes:         cfg.Cache.MaxEntryBytes,
+		TransactionBeginTimeout:    cfg.Transactions.BeginTimeout,
+		TransactionCommitTimeout:   cfg.Transactions.CommitTimeout,
+		TransactionRollbackTimeout: cfg.Transactions.RollbackTimeout,
+		Auditor:                    aud,
+		Cache:                      cc,
+		Budget:                     newBudgetManager(cfg.Budget),
+		Transactions:               tool.NewTransactionManager(cfg.Transactions.TTL, cfg.Transactions.MaxOpen),
+		TxBeginners:                txBeginners,
 	}, nil
 }
 
@@ -404,21 +467,21 @@ func closeProviders(providers map[string]Provider) {
 	}
 }
 
-func newProvider(driver, dsn string) (Provider, error) {
+func newProvider(driver, dsn string, timeout time.Duration) (Provider, error) {
 	switch driver {
 	case "postgres":
-		return postgres.New(dsn)
+		return postgres.NewWithTimeout(dsn, timeout)
 	case "mysql":
-		return mysql.New(dsn)
+		return mysql.NewWithTimeout(dsn, timeout)
 	case "oceanbase":
-		return oceanbase.New(dsn)
+		return oceanbase.NewWithTimeout(dsn, timeout)
 	}
 	return nil, fmt.Errorf("%w: %q", ErrUnsupportedDriver, driver)
 }
 
 // configurePool bounds the DB connection pool to the IO pool size so workers
 // never wait on a connection they already hold a slot for.
-func configurePool(p Provider, maxOpen int, connMaxIdle time.Duration) {
+func configurePool(p Provider, maxOpen int, connMaxIdle, connMaxLifetime time.Duration) {
 	type dbExposer interface{ DB() *sql.DB }
 	e, ok := p.(dbExposer)
 	if !ok || maxOpen <= 0 {
@@ -429,6 +492,9 @@ func configurePool(p Provider, maxOpen int, connMaxIdle time.Duration) {
 	db.SetMaxIdleConns(maxOpen)
 	if connMaxIdle > 0 {
 		db.SetConnMaxIdleTime(connMaxIdle)
+	}
+	if connMaxLifetime > 0 {
+		db.SetConnMaxLifetime(connMaxLifetime)
 	}
 }
 
@@ -468,18 +534,20 @@ func checkDrift(ctx context.Context, prov Provider, entities []entity.Entity) er
 // toThreshold maps config.CostConfig to cost.Threshold.
 func toThreshold(c config.CostConfig) cost.Threshold {
 	return cost.Threshold{
-		Enabled:           c.EnabledOrDefault(),
-		SoftScore:         c.SoftScore,
-		HardScore:         c.HardScore,
-		MaxRows:           c.MaxRows,
-		MaxBytes:          c.MaxBytes,
-		RejectFullScan:    c.RejectFullScan,
-		WhitelistPKPoint:  c.WhitelistPKPoint,
-		RequirePKForWrite: c.RequirePKForWriteOrDefault(),
-		RequireKnownScan:  c.RequireKnownScan,
-		RequireFreshStats: c.RequireFreshStats,
-		AllowTemplates:    c.AllowTemplates,
-		RejectTemplates:   c.RejectTemplates,
+		Enabled:                   c.EnabledOrDefault(),
+		SoftScore:                 c.SoftScore,
+		HardScore:                 c.HardScore,
+		MaxRows:                   c.MaxRows,
+		MaxBytes:                  c.MaxBytes,
+		RejectFullScan:            c.RejectFullScan,
+		WhitelistPKPoint:          c.WhitelistPKPoint,
+		RequirePKForWrite:         c.RequirePKForWriteOrDefault(),
+		RequireAggregatePredicate: true,
+		ExplainFailClosed:         c.EnabledOrDefault(),
+		RequireKnownScan:          c.RequireKnownScan,
+		RequireFreshStats:         c.RequireFreshStats,
+		AllowTemplates:            c.AllowTemplates,
+		RejectTemplates:           c.RejectTemplates,
 	}
 }
 
@@ -488,6 +556,10 @@ func toThreshold(c config.CostConfig) cost.Threshold {
 var secretRe = regexp.MustCompile(`\$\{([^}]+)\}`)
 
 func resolveSecrets(s string) (string, error) {
+	return resolveSecretsWithRoots(s, []string{"/run/secrets", "/var/run/secrets"})
+}
+
+func resolveSecretsWithRoots(s string, allowedRoots []string) (string, error) {
 	var firstErr error
 	out := secretRe.ReplaceAllStringFunc(s, func(m string) string {
 		if firstErr != nil {
@@ -495,9 +567,14 @@ func resolveSecrets(s string) (string, error) {
 		}
 		name := m[2 : len(m)-1]
 		if strings.HasPrefix(name, "file:") {
-			b, err := os.ReadFile(name[len("file:"):])
+			path, err := allowedSecretPath(name[len("file:"):], allowedRoots)
 			if err != nil {
-				firstErr = fmt.Errorf("read secret file %q: %w", name, err)
+				firstErr = err
+				return m
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				firstErr = fmt.Errorf("read secret file: %w", err)
 				return m
 			}
 			return strings.TrimSpace(string(b))
@@ -515,20 +592,28 @@ func resolveSecrets(s string) (string, error) {
 	return out, nil
 }
 
-func fileSink(path string) audit.Sink {
-	return func(e audit.Event) error {
-		b, err := yaml.Marshal(e)
-		if err != nil {
-			return err
-		}
-		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = f.Close() }()
-		_, err = f.Write(b)
-		return err
+func allowedSecretPath(path string, roots []string) (string, error) {
+	if !filepath.IsAbs(path) {
+		return "", errors.New("secret file path must be absolute")
 	}
+	resolved, err := filepath.EvalSymlinks(filepath.Clean(path))
+	if err != nil {
+		return "", fmt.Errorf("resolve secret file: %w", err)
+	}
+	for _, root := range roots {
+		if !filepath.IsAbs(root) {
+			continue
+		}
+		resolvedRoot, err := filepath.EvalSymlinks(filepath.Clean(root))
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(resolvedRoot, resolved)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return resolved, nil
+		}
+	}
+	return "", errors.New("secret file is outside allowed roots")
 }
 
 // SecretResolver resolves ${...} placeholders in a string (e.g. a DSN).
@@ -541,24 +626,49 @@ type SecretResolver interface {
 
 // EnvFileResolver resolves ${ENV} (environment variables) and ${file:/path}
 // (file contents, e.g. Kubernetes Secret volume mounts).
-type EnvFileResolver struct{}
+type EnvFileResolver struct {
+	AllowedRoots []string
+}
 
 // Resolve implements SecretResolver.
-func (EnvFileResolver) Resolve(s string) (string, error) { return resolveSecrets(s) }
+func (r EnvFileResolver) Resolve(s string) (string, error) {
+	roots := r.AllowedRoots
+	if len(roots) == 0 {
+		roots = []string{"/run/secrets", "/var/run/secrets"}
+	}
+	return resolveSecretsWithRoots(s, roots)
+}
 
 var (
 	pgPassRe    = regexp.MustCompile(`(://[^:/@]+:)[^@]+(@)`)
 	mysqlPassRe = regexp.MustCompile(`^([^:@]+:)[^@]+(@tcp)`)
+	keyPassRe   = regexp.MustCompile(`(?i)(^|[?;&\s])(password|pwd)=([^&;\s]+)`)
 )
 
 // RedactDSN returns dsn with any password replaced by ***, for safe logging.
 // It handles PostgreSQL URI form (scheme://user:pass@host) and MySQL DSN form
 // (user:pass@tcp(host)); DSNs without a password are returned unchanged.
 func RedactDSN(dsn string) string {
-	if pgPassRe.MatchString(dsn) {
-		return pgPassRe.ReplaceAllString(dsn, "${1}***${2}")
+	redacted := dsn
+	if parsed, err := url.Parse(dsn); err == nil && parsed.Scheme != "" {
+		if parsed.User != nil {
+			if _, hasPassword := parsed.User.Password(); hasPassword {
+				parsed.User = url.UserPassword(parsed.User.Username(), "***")
+			}
+		}
+		query := parsed.Query()
+		for _, key := range []string{"password", "pwd"} {
+			if query.Has(key) {
+				query.Set(key, "***")
+			}
+		}
+		parsed.RawQuery = query.Encode()
+		redacted = parsed.String()
+	} else if pgPassRe.MatchString(redacted) {
+		redacted = pgPassRe.ReplaceAllString(redacted, "${1}***${2}")
 	}
-	return mysqlPassRe.ReplaceAllString(dsn, "${1}***${2}")
+	redacted = mysqlPassRe.ReplaceAllString(redacted, "${1}***${2}")
+	return keyPassRe.ReplaceAllString(redacted, "${1}${2}=***")
 }
 
 // validateMaskRules fails fast if a configured mask rule is unknown, so a typo
@@ -637,7 +747,10 @@ func configToEntity(ec config.EntityConfig) (entity.Entity, error) {
 	return entity.Entity{
 		Name: ec.Name, Source: source, DataSource: dataSource, Schema: ec.Schema, Description: ec.Description,
 		Kind: parseKind(ec.Kind), Attributes: attrs, Keys: keys, Role: role, FieldAccess: fieldAccess,
-		MCP:         entity.MCPFlags{DMLTools: ec.MCP.DMLTools, CustomTool: ec.MCP.CustomTool},
+		MCP: entity.MCPFlags{
+			DMLTools: ec.MCP.DMLTools, CustomTool: ec.MCP.CustomTool,
+			TrustedProcedure: ec.MCP.TrustedProcedure,
+		},
 		RowPolicies: rowPolicies,
 		Relations:   relations,
 		Params:      ec.Params,
@@ -657,10 +770,14 @@ func newBudgetManager(c config.BudgetConfig) budget.Manager {
 }
 
 func toBudgetLimits(c config.BudgetLimits) budget.Limits {
+	maxEstimated := c.MaxEstimatedScannedRows
+	if maxEstimated == 0 {
+		maxEstimated = c.MaxScannedRows
+	}
 	return budget.Limits{
 		MaxConcurrent: c.MaxConcurrent, MaxExecution: c.MaxExecution,
-		MaxScannedRows: c.MaxScannedRows, MaxReturnedRows: c.MaxReturnedRows,
-		MaxSessionCost: c.MaxSessionCost,
+		MaxEstimatedScannedRows: maxEstimated, MaxReturnedRows: c.MaxReturnedRows,
+		MaxReturnedBytes: c.MaxReturnedBytes, MaxSessionCost: c.MaxSessionCost,
 	}
 }
 

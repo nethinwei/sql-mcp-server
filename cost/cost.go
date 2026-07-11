@@ -125,27 +125,28 @@ type AnalyzeConfig struct {
 
 // Threshold configures the gate. SoftScore/HardScore are 0-100 cutoffs.
 type Threshold struct {
-	Enabled           bool
-	Datasource        string
-	DialectName       string
-	SoftScore         int
-	HardScore         int
-	MaxRows           int64
-	MaxBytes          int64
-	RejectFullScan    bool
-	WhitelistPKPoint  bool
-	RequirePKForWrite bool // reject UPDATE/DELETE that is not a PK point write
-	RequireKnownScan  bool
-	RequireFreshStats bool
-	LegacyExactSQL    bool
-	AllowTemplates    []string
-	RejectTemplates   []string
+	Enabled                   bool
+	Datasource                string
+	DialectName               string
+	SoftScore                 int
+	HardScore                 int
+	MaxRows                   int64
+	MaxBytes                  int64
+	RejectFullScan            bool
+	WhitelistPKPoint          bool
+	RequirePKForWrite         bool // reject UPDATE/DELETE that is not a PK point write
+	RequireAggregatePredicate bool
+	ExplainFailClosed         bool
+	DisableEstimate           bool
+	RequireKnownScan          bool
+	RequireFreshStats         bool
+	LegacyExactSQL            bool
+	AllowTemplates            []string
+	RejectTemplates           []string
 }
 
-// Decision is a layer's verdict. Allow+!Soft continues to the next layer;
-// Bypass short-circuits the chain (e.g. PK whitelist skips EXPLAIN); !Allow or
-// Soft stops the chain. Rewritten, if set, replaces the compiled query for
-// subsequent layers and execution (EnforceCap injects LIMIT).
+// Decision is a layer's verdict. Bypass skips optional estimate layers only;
+// mandatory safety and enforcement layers continue to run.
 type Decision struct {
 	Allow     bool
 	Soft      bool
@@ -162,12 +163,29 @@ type Layer interface {
 	Check(ctx context.Context, c codegen.Compiled) (Decision, error)
 }
 
+// Phase separates mandatory safety/enforcement from optional estimates.
+type Phase uint8
+
+const (
+	PhaseSafety Phase = iota
+	PhaseEstimate
+	PhaseEnforcement
+)
+
+// PhasedLayer identifies where a layer belongs. Layers without Phase are
+// treated as mandatory enforcement for backwards-compatible composition.
+type PhasedLayer interface {
+	Layer
+	Phase() Phase
+}
+
 // Gate is the synchronous gate consulted before execution (invariant I4).
 type Gate interface {
 	Check(ctx context.Context, c codegen.Compiled) (Decision, error)
 }
 
-// ChainGate runs layers in order. It short-circuits on Bypass, Soft, or reject.
+// ChainGate runs layers in order. Bypass only suppresses estimate layers;
+// mandatory rejection always takes precedence over an earlier soft decision.
 type ChainGate struct {
 	layers []Layer
 }
@@ -184,7 +202,14 @@ func (g *ChainGate) Layers() []Layer { return g.layers }
 // later layers and the final return.
 func (g *ChainGate) Check(ctx context.Context, c codegen.Compiled) (Decision, error) {
 	rewritten := false
+	bypassEstimate := false
+	var result Decision
+	result.Allow = true
+	var soft *Decision
 	for _, l := range g.layers {
+		if bypassEstimate && layerPhase(l) == PhaseEstimate {
+			continue
+		}
 		d, err := l.Check(ctx, c)
 		if err != nil {
 			return Decision{}, err
@@ -194,6 +219,24 @@ func (g *ChainGate) Check(ctx context.Context, c codegen.Compiled) (Decision, er
 			rewritten = true
 		}
 		if d.Bypass {
+			bypassEstimate = true
+			result.Bypass = true
+		}
+		if d.Plan != nil {
+			result.Plan = d.Plan
+		}
+		if d.Score != nil {
+			result.Score = d.Score
+		}
+		if len(d.Hints) > 0 {
+			result.Hints = d.Hints
+		}
+		if !d.Allow {
+			if d.Soft {
+				copy := d
+				soft = &copy
+				continue
+			}
 			if rewritten {
 				d.Rewritten = &c
 			} else {
@@ -201,20 +244,26 @@ func (g *ChainGate) Check(ctx context.Context, c codegen.Compiled) (Decision, er
 			}
 			return d, nil
 		}
-		if !d.Allow || d.Soft {
-			if !rewritten {
-				d.Rewritten = nil
-			} else {
-				d.Rewritten = &c
-			}
-			return d, nil
-		}
 	}
-	d := Decision{Allow: true}
+	if soft != nil {
+		d := *soft
+		if rewritten {
+			d.Rewritten = &c
+		}
+		return d, nil
+	}
+	d := result
 	if rewritten {
 		d.Rewritten = &c
 	}
 	return d, nil
+}
+
+func layerPhase(l Layer) Phase {
+	if phased, ok := l.(interface{ Phase() Phase }); ok {
+		return phased.Phase()
+	}
+	return PhaseEnforcement
 }
 
 // NewGateFromCapabilities assembles the synchronous gate chain: StaticRule
@@ -229,8 +278,18 @@ func NewGateFromCapabilities(caps dialect.Capabilities, ex Explainer, th Thresho
 	if th.RequirePKForWrite {
 		layers = append(layers, WriteGuard{})
 	}
-	if caps.ExplainCost && caps.ExplainAccurate && ex != nil {
-		layers = append(layers, Estimate{Explainer: ex, Threshold: th, Feedback: feedback})
+	layers = append(layers, CallGuard{
+		Datasource: th.Datasource, DialectName: th.DialectName,
+		LegacyExactSQL: th.LegacyExactSQL, AllowTemplates: th.AllowTemplates,
+	})
+	if th.RequireAggregatePredicate {
+		layers = append(layers, AggregateGuard{RequirePredicate: true})
+	}
+	if !th.DisableEstimate && caps.ExplainCost && ex != nil && (caps.ExplainAccurate || th.ExplainFailClosed) {
+		layers = append(layers, Estimate{
+			Explainer: ex, Threshold: th, Feedback: feedback,
+			FailClosed: th.ExplainFailClosed,
+		})
 	}
 	if th.MaxRows > 0 {
 		layers = append(layers, EnforceCap{HardRows: th.MaxRows})

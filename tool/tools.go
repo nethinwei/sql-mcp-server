@@ -48,7 +48,7 @@ func (DescribeTool) Run(ctx context.Context, input json.RawMessage, tc Context) 
 	var in struct {
 		Entity string `json:"entity"`
 	}
-	_ = json.Unmarshal(input, &in)
+	_ = decodeInput(input, &in)
 	if in.Entity != "" {
 		res, err := resolveDMLEntity(tc, in.Entity)
 		if err != nil {
@@ -171,7 +171,16 @@ func (ReadTool) CostGated()                      {}
 
 func (ReadTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
 	var in readInput
-	if err := json.Unmarshal(input, &in); err != nil {
+	if err := decodeInput(input, &in); err != nil {
+		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+	}
+	if tc.MaxFilterConditions > 0 && len(in.Filter) > tc.MaxFilterConditions {
+		return Result{}, fmt.Errorf("%w: too many filter conditions", ErrInvalidInput)
+	}
+	if tc.MaxExpand > 0 && len(in.Expand) > tc.MaxExpand {
+		return Result{}, fmt.Errorf("%w: too many relationships", ErrInvalidInput)
+	}
+	if err := normalizeMapValues(in.Cursor); err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
 	return runRead(ctx, tc, in)
@@ -210,6 +219,10 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 	}
 	readFields = append(readFields, sortedKeys(in.Cursor)...)
 	if err := validateFields(res, readFields...); err != nil {
+		return Result{}, err
+	}
+	predicateFields := append(filterFields(in.Filter), sortedKeys(in.Cursor)...)
+	if err := validateUnmaskedFields(res, predicateFields...); err != nil {
 		return Result{}, err
 	}
 	dec, err := authorize(ctx, tc, rbac.Request{
@@ -253,7 +266,9 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 	if in.Limit > 0 {
 		input = relalg.Limit{Input: input, Count: in.Limit, Offset: in.Offset}
 	}
-	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(input, codegen.WithPrimaryKey(res.Entity.PrimaryKey()...))
+	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(input,
+		codegen.WithPrimaryKey(res.Entity.PrimaryKey()...),
+		codegen.WithMaxINCardinality(effectiveMaxIN(tc)))
 	if err != nil {
 		return Result{}, err
 	}
@@ -280,13 +295,13 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 	}
 	rows, err := tc.DB.QueryContext(ctx, compiled.SQL, compiled.Args...)
 	if err != nil {
-		return Result{}, err
+		return Result{}, WrapDBError(err)
 	}
 	out := make([]map[string]any, 0)
 	var returned int64
 	for row, err := range store.Iter(rows) {
 		if err != nil {
-			return Result{}, err
+			return Result{}, WrapDBError(err)
 		}
 		returned++
 		if tc.BudgetLimits.MaxReturnedRows > 0 && returned > tc.BudgetLimits.MaxReturnedRows {
@@ -318,9 +333,18 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 	}
 	recordReadFeedback(ctx, tc, in.Entity, compiled, planTemplate, estimatedPlan, int64(len(out)), time.Since(start))
 	if tc.Cache != nil && in.Transaction == "" && len(in.Expand) == 0 {
-		_ = tc.Cache.Set(ctx, key, out)
+		encoded, encodeErr := json.Marshal(out)
+		rowsAllowed := tc.CacheMaxEntryRows <= 0 || len(out) <= tc.CacheMaxEntryRows
+		bytesAllowed := tc.CacheMaxEntryBytes <= 0 || int64(len(encoded)) <= tc.CacheMaxEntryBytes
+		if encodeErr == nil && rowsAllowed && bytesAllowed {
+			_ = tc.Cache.Set(ctx, key, out)
+		}
 	}
-	return Result{Content: out, ReturnedRows: returned}, nil
+	estimatedRows := int64(0)
+	if estimatedPlan != nil {
+		estimatedRows = estimatedPlan.EstimatedRows
+	}
+	return Result{Content: out, ReturnedRows: returned, EstimatedScannedRows: estimatedRows}, nil
 }
 
 func recordReadFeedback(
@@ -372,7 +396,10 @@ func (CreateTool) Info() Info {
 func (CreateTool) Enabled(f config.ToolFlags) bool { return f.CreateRecord }
 func (CreateTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
 	var in createInput
-	if err := json.Unmarshal(input, &in); err != nil {
+	if err := decodeInput(input, &in); err != nil {
+		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+	}
+	if err := normalizeMapValues(in.Values); err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
 	return runInsert(ctx, tc, in)
@@ -414,6 +441,7 @@ func runInsert(ctx context.Context, tc Context, in createInput) (Result, error) 
 	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(
 		relalg.Insert{Target: target, Columns: cols, Tuples: []relalg.Tuple{tup}},
 		codegen.WithPrimaryKey(res.Entity.PrimaryKey()...),
+		codegen.WithMaxINCardinality(effectiveMaxIN(tc)),
 	)
 	if err != nil {
 		return Result{}, err
@@ -423,12 +451,12 @@ func runInsert(ctx context.Context, tc Context, in createInput) (Result, error) 
 	if tc.Dialect.Capabilities().Returning && len(res.Entity.PrimaryKey()) > 0 {
 		rows, err := tc.DB.QueryContext(ctx, compiled.SQL, compiled.Args...)
 		if err != nil {
-			return Result{}, err
+			return Result{}, WrapDBError(err)
 		}
 		var row map[string]any
 		for r, err := range store.Iter(rows) {
 			if err != nil {
-				return Result{}, err
+				return Result{}, WrapDBError(err)
 			}
 			row = r
 			break
@@ -444,7 +472,7 @@ func runInsert(ctx context.Context, tc Context, in createInput) (Result, error) 
 	}
 	r, err := tc.DB.ExecContext(ctx, compiled.SQL, compiled.Args...)
 	if err != nil {
-		return Result{}, err
+		return Result{}, WrapDBError(err)
 	}
 	if err := afterWrite(tc, res.Entity, in.Transaction); err != nil {
 		return Result{}, err
@@ -464,7 +492,13 @@ func (UpdateTool) Enabled(f config.ToolFlags) bool { return f.UpdateRecord }
 func (UpdateTool) CostGated()                      {}
 func (UpdateTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
 	var in updateInput
-	if err := json.Unmarshal(input, &in); err != nil {
+	if err := decodeInput(input, &in); err != nil {
+		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+	}
+	if tc.MaxFilterConditions > 0 && len(in.Filter) > tc.MaxFilterConditions {
+		return Result{}, fmt.Errorf("%w: too many filter conditions", ErrInvalidInput)
+	}
+	if err := normalizeMapValues(in.Set); err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
 	return runUpdate(ctx, tc, in)
@@ -490,6 +524,9 @@ func runUpdate(ctx context.Context, tc Context, in updateInput) (Result, error) 
 	if err := validateFields(res, updFields...); err != nil {
 		return Result{}, err
 	}
+	if err := validateUnmaskedFields(res, filterFields(in.Filter)...); err != nil {
+		return Result{}, err
+	}
 	dec, err := authorize(ctx, tc, rbac.Request{
 		Role: tc.Role, Subject: tc.Subject, Entity: in.Entity, Action: entity.ActionUpdate,
 		ReadFields: filterFields(in.Filter), WriteFields: sortedKeys(in.Set), Predicate: pred,
@@ -512,6 +549,7 @@ func runUpdate(ctx context.Context, tc Context, in updateInput) (Result, error) 
 	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(
 		relalg.Update{Target: target, Predicate: full, Set: setItems},
 		codegen.WithPrimaryKey(res.Entity.PrimaryKey()...),
+		codegen.WithMaxINCardinality(effectiveMaxIN(tc)),
 	)
 	if err != nil {
 		return Result{}, err
@@ -522,7 +560,7 @@ func runUpdate(ctx context.Context, tc Context, in updateInput) (Result, error) 
 	}
 	r, err := tc.DB.ExecContext(ctx, compiled.SQL, compiled.Args...)
 	if err != nil {
-		return Result{}, err
+		return Result{}, WrapDBError(err)
 	}
 	if err := afterWrite(tc, res.Entity, in.Transaction); err != nil {
 		return Result{}, err
@@ -542,8 +580,11 @@ func (DeleteTool) Enabled(f config.ToolFlags) bool { return f.DeleteRecord }
 func (DeleteTool) CostGated()                      {}
 func (DeleteTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
 	var in deleteInput
-	if err := json.Unmarshal(input, &in); err != nil {
+	if err := decodeInput(input, &in); err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+	}
+	if tc.MaxFilterConditions > 0 && len(in.Filter) > tc.MaxFilterConditions {
+		return Result{}, fmt.Errorf("%w: too many filter conditions", ErrInvalidInput)
 	}
 	return runDelete(ctx, tc, in)
 }
@@ -567,6 +608,9 @@ func runDelete(ctx context.Context, tc Context, in deleteInput) (Result, error) 
 	if err := validateFields(res, filterFields(in.Filter)...); err != nil {
 		return Result{}, err
 	}
+	if err := validateUnmaskedFields(res, filterFields(in.Filter)...); err != nil {
+		return Result{}, err
+	}
 	dec, err := authorize(ctx, tc, rbac.Request{
 		Role: tc.Role, Subject: tc.Subject, Entity: in.Entity, Action: entity.ActionDelete,
 		ReadFields: filterFields(in.Filter), Predicate: pred,
@@ -585,6 +629,7 @@ func runDelete(ctx context.Context, tc Context, in deleteInput) (Result, error) 
 	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(
 		relalg.Delete{Target: target, Predicate: full},
 		codegen.WithPrimaryKey(res.Entity.PrimaryKey()...),
+		codegen.WithMaxINCardinality(effectiveMaxIN(tc)),
 	)
 	if err != nil {
 		return Result{}, err
@@ -595,7 +640,7 @@ func runDelete(ctx context.Context, tc Context, in deleteInput) (Result, error) 
 	}
 	r, err := tc.DB.ExecContext(ctx, compiled.SQL, compiled.Args...)
 	if err != nil {
-		return Result{}, err
+		return Result{}, WrapDBError(err)
 	}
 	if err := afterWrite(tc, res.Entity, in.Transaction); err != nil {
 		return Result{}, err
@@ -615,7 +660,10 @@ func (ExecuteTool) Enabled(f config.ToolFlags) bool { return f.ExecuteEntity }
 func (ExecuteTool) CostGated()                      {}
 func (ExecuteTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
 	var in executeInput
-	if err := json.Unmarshal(input, &in); err != nil {
+	if err := decodeInput(input, &in); err != nil {
+		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+	}
+	if err := normalizeMapValues(in.Args); err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
 	return runExecute(ctx, tc, in, true)
@@ -634,6 +682,9 @@ func runExecute(ctx context.Context, tc Context, in executeInput, requireDMLTool
 	}
 	if res.Entity.Kind != entity.KindProcedure {
 		return Result{}, fmt.Errorf("%w: %q is not a procedure", ErrInvalidInput, in.Entity)
+	}
+	if !res.Entity.MCP.TrustedProcedure {
+		return Result{}, ErrUnauthorized
 	}
 	routed, err := routeEntity(tc, res.Entity)
 	if err != nil {
@@ -656,7 +707,7 @@ func runExecute(ctx context.Context, tc Context, in executeInput, requireDMLTool
 		return Result{}, err
 	}
 	expr := relalg.Call{Procedure: relalg.RelationRef{Name: res.Entity.Source, Schema: res.Entity.Schema}, Args: args}
-	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(expr)
+	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(expr, codegen.WithMaxINCardinality(effectiveMaxIN(tc)))
 	if err != nil {
 		return Result{}, err
 	}
@@ -666,11 +717,9 @@ func runExecute(ctx context.Context, tc Context, in executeInput, requireDMLTool
 	}
 	rows, err := tc.DB.QueryContext(ctx, compiled.SQL, compiled.Args...)
 	if err != nil {
-		return Result{}, err
+		return Result{}, WrapDBError(err)
 	}
-	if err := afterWrite(tc, res.Entity, in.Transaction); err != nil {
-		return Result{}, err
-	}
+	defer func() { _ = rows.Close() }()
 	allowedFields := make(map[string]bool, len(dec.Fields))
 	for _, field := range dec.Fields {
 		if attr, ok := res.Entity.AttributeByName(field); ok && !attr.Excluded {
@@ -683,7 +732,7 @@ func runExecute(ctx context.Context, tc Context, in executeInput, requireDMLTool
 	out := make([]map[string]any, 0)
 	for row, err := range store.Iter(rows) {
 		if err != nil {
-			return Result{}, err
+			return Result{}, WrapDBError(err)
 		}
 		for field := range row {
 			if !allowedFields[field] {
@@ -693,12 +742,19 @@ func runExecute(ctx context.Context, tc Context, in executeInput, requireDMLTool
 		if tc.Masker != nil {
 			maskRow(tc.Masker, res.Attributes, row)
 		}
-		if tc.BudgetLimits.MaxReturnedRows > 0 && int64(len(out)+1) > tc.BudgetLimits.MaxReturnedRows {
+		nextRows := int64(len(out) + 1)
+		if tc.MaxProcedureRows > 0 && nextRows > tc.MaxProcedureRows {
+			return Result{}, budget.ErrExceeded
+		}
+		if tc.BudgetLimits.MaxReturnedRows > 0 && nextRows > tc.BudgetLimits.MaxReturnedRows {
 			return Result{}, budget.ErrExceeded
 		}
 		out = append(out, row)
 	}
-	return Result{Content: out}, nil
+	if err := afterWrite(tc, res.Entity, in.Transaction); err != nil {
+		return Result{}, err
+	}
+	return Result{Content: out, ReturnedRows: int64(len(out))}, nil
 }
 
 // ProcedureTool exposes one configured procedure as an independent MCP tool.
@@ -754,7 +810,10 @@ func (ProcedureTool) CostGated()                    {}
 // Run implements Tool.
 func (t ProcedureTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
 	var args map[string]any
-	if err := json.Unmarshal(input, &args); err != nil {
+	if err := decodeInput(input, &args); err != nil {
+		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+	}
+	if err := normalizeMapValues(args); err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
 	return runExecute(ctx, tc, executeInput{Entity: t.Entity.Name, Args: args}, false)
@@ -765,7 +824,10 @@ func (t ProcedureTool) Run(ctx context.Context, input json.RawMessage, tc Contex
 // positional CALL never receives values in the wrong slots.
 func orderedProcArgs(params []string, in map[string]any) ([]any, error) {
 	if len(params) == 0 {
-		return nil, fmt.Errorf("%w: procedure has no declared parameters; declare params to enable execute", ErrInvalidInput)
+		if len(in) == 0 {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("%w: procedure declares no parameters", ErrInvalidInput)
 	}
 	want := make(map[string]bool, len(params))
 	for _, p := range params {
@@ -799,8 +861,17 @@ func (AggregateTool) Enabled(f config.ToolFlags) bool { return f.AggregateRecord
 func (AggregateTool) CostGated()                      {}
 func (AggregateTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
 	var in aggregateInput
-	if err := json.Unmarshal(input, &in); err != nil {
+	if err := decodeInput(input, &in); err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+	}
+	if tc.MaxFilterConditions > 0 && len(in.Filter) > tc.MaxFilterConditions {
+		return Result{}, fmt.Errorf("%w: too many filter conditions", ErrInvalidInput)
+	}
+	if tc.MaxGroupByFields > 0 && len(in.GroupBy) > tc.MaxGroupByFields {
+		return Result{}, fmt.Errorf("%w: too many group-by fields", ErrInvalidInput)
+	}
+	if tc.MaxAggregates > 0 && len(in.Aggregates) > tc.MaxAggregates {
+		return Result{}, fmt.Errorf("%w: too many aggregates", ErrInvalidInput)
 	}
 	return runAggregate(ctx, tc, in)
 }
@@ -831,6 +902,9 @@ func runAggregate(ctx context.Context, tc Context, in aggregateInput) (Result, e
 	if err := validateFields(res, aggFields...); err != nil {
 		return Result{}, err
 	}
+	if err := validateUnmaskedFields(res, aggFields...); err != nil {
+		return Result{}, err
+	}
 	dec, err := authorize(ctx, tc, rbac.Request{
 		Role: tc.Role, Subject: tc.Subject, Entity: in.Entity, Action: entity.ActionAggregate,
 		ReadFields: aggFields, Predicate: pred,
@@ -856,29 +930,39 @@ func runAggregate(ctx context.Context, tc Context, in aggregateInput) (Result, e
 		calls = append(calls, relalg.AggCall{Func: f, Field: a.Field})
 	}
 	input = relalg.Aggregate{Input: input, GroupBy: in.GroupBy, Aggregates: calls}
-	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(input, codegen.WithPrimaryKey(res.Entity.PrimaryKey()...))
+	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(input,
+		codegen.WithPrimaryKey(res.Entity.PrimaryKey()...),
+		codegen.WithMaxINCardinality(effectiveMaxIN(tc)))
 	if err != nil {
 		return Result{}, err
 	}
-	compiled, err = checkGate(ctx, tc, compiled)
+	var estimatedPlan *cost.Plan
+	compiled, estimatedPlan, err = checkGateDetailed(ctx, tc, compiled)
 	if err != nil {
 		return Result{}, err
 	}
 	rows, err := tc.DB.QueryContext(ctx, compiled.SQL, compiled.Args...)
 	if err != nil {
-		return Result{}, err
+		return Result{}, WrapDBError(err)
 	}
 	out := make([]map[string]any, 0)
 	for row, err := range store.Iter(rows) {
 		if err != nil {
-			return Result{}, err
+			return Result{}, WrapDBError(err)
 		}
 		if tc.BudgetLimits.MaxReturnedRows > 0 && int64(len(out)+1) > tc.BudgetLimits.MaxReturnedRows {
 			return Result{}, budget.ErrExceeded
 		}
+		if tc.Masker != nil {
+			maskRow(tc.Masker, res.Attributes, row)
+		}
 		out = append(out, row)
 	}
-	return Result{Content: out}, nil
+	estimatedRows := int64(0)
+	if estimatedPlan != nil {
+		estimatedRows = estimatedPlan.EstimatedRows
+	}
+	return Result{Content: out, ReturnedRows: int64(len(out)), EstimatedScannedRows: estimatedRows}, nil
 }
 
 func relationshipByName(e entity.Entity, name string) (entity.Relationship, bool) {
@@ -899,6 +983,13 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
+func effectiveMaxIN(tc Context) int {
+	if tc.MaxINListSize > 0 {
+		return tc.MaxINListSize
+	}
+	return relalg.DefaultMaxINCardinality
+}
+
 // expandRows executes one batched IN query per requested relationship. Nested
 // expansion and cross-data-source joins are intentionally unsupported.
 func expandRows(ctx context.Context, tc Context, parent entity.Entity, rows []map[string]any, names []string, returned *int64) error {
@@ -912,6 +1003,9 @@ func expandRows(ctx context.Context, tc Context, parent entity.Entity, rows []ma
 		}
 		target, err := resolveDMLEntity(tc, relation.Target)
 		if err != nil {
+			return err
+		}
+		if err := validateFields(target, targetField); err != nil {
 			return err
 		}
 		if target.Entity.DataSource != parent.DataSource {
@@ -940,53 +1034,59 @@ func expandRows(ctx context.Context, tc Context, parent entity.Entity, rows []ma
 			}
 			continue
 		}
-		predicate := relalg.Condition{Field: targetField, Op: relalg.OpIn, Value: values}
-		decision, err := authorize(ctx, targetTC, rbac.Request{
-			Role: tc.Role, Subject: tc.Subject, Entity: relation.Target,
-			Action: entity.ActionRead, ReadFields: []string{targetField}, Predicate: predicate,
-		})
-		if err != nil {
-			return err
-		}
-		if !decision.Allowed {
-			return ErrUnauthorized
-		}
-		full := andPreds(predicate, decision.RowFilter)
-		scan := relalg.Scan{Relation: relalg.RelationRef{Name: target.Entity.Source, Schema: target.Entity.Schema}}
-		expr := relalg.Expr(relalg.Select{Input: scan, Predicate: full})
-		if len(decision.Fields) > 0 {
-			items := make([]relalg.ProjectItem, len(decision.Fields))
-			for i, field := range decision.Fields {
-				items[i] = relalg.ProjectItem{Field: field}
-			}
-			expr = relalg.Project{Input: expr, Items: items}
-		}
-		compiled, err := codegen.Renderer{Dialect: targetTC.Dialect}.Compile(expr, codegen.WithPrimaryKey(target.Entity.PrimaryKey()...))
-		if err != nil {
-			return err
-		}
-		compiled, err = checkGate(ctx, targetTC, compiled)
-		if err != nil {
-			return err
-		}
-		resultRows, err := targetTC.DB.QueryContext(ctx, compiled.SQL, compiled.Args...)
-		if err != nil {
-			return err
-		}
 		grouped := map[string][]map[string]any{}
-		for child, iterErr := range store.Iter(resultRows) {
-			if iterErr != nil {
-				return iterErr
+		batchSize := effectiveMaxIN(targetTC)
+		for start := 0; start < len(values); start += batchSize {
+			stop := min(start+batchSize, len(values))
+			predicate := relalg.Condition{Field: targetField, Op: relalg.OpIn, Value: values[start:stop]}
+			decision, err := authorize(ctx, targetTC, rbac.Request{
+				Role: tc.Role, Subject: tc.Subject, Entity: relation.Target,
+				Action: entity.ActionRead, ReadFields: []string{targetField}, Predicate: predicate,
+			})
+			if err != nil {
+				return err
 			}
-			(*returned)++
-			if tc.BudgetLimits.MaxReturnedRows > 0 && *returned > tc.BudgetLimits.MaxReturnedRows {
-				return budget.ErrExceeded
+			if !decision.Allowed {
+				return ErrUnauthorized
 			}
-			key := fmt.Sprintf("%T:%v", child[targetField], child[targetField])
-			if targetTC.Masker != nil {
-				maskRow(targetTC.Masker, target.Entity.Attributes, child)
+			full := andPreds(predicate, decision.RowFilter)
+			scan := relalg.Scan{Relation: relalg.RelationRef{Name: target.Entity.Source, Schema: target.Entity.Schema}}
+			expr := relalg.Expr(relalg.Select{Input: scan, Predicate: full})
+			if len(decision.Fields) > 0 {
+				items := make([]relalg.ProjectItem, len(decision.Fields))
+				for i, field := range decision.Fields {
+					items[i] = relalg.ProjectItem{Field: field}
+				}
+				expr = relalg.Project{Input: expr, Items: items}
 			}
-			grouped[key] = append(grouped[key], child)
+			compiled, err := codegen.Renderer{Dialect: targetTC.Dialect}.Compile(expr,
+				codegen.WithPrimaryKey(target.Entity.PrimaryKey()...),
+				codegen.WithMaxINCardinality(batchSize))
+			if err != nil {
+				return err
+			}
+			compiled, err = checkGate(ctx, targetTC, compiled)
+			if err != nil {
+				return err
+			}
+			resultRows, err := targetTC.DB.QueryContext(ctx, compiled.SQL, compiled.Args...)
+			if err != nil {
+				return WrapDBError(err)
+			}
+			for child, iterErr := range store.Iter(resultRows) {
+				if iterErr != nil {
+					return WrapDBError(iterErr)
+				}
+				(*returned)++
+				if tc.BudgetLimits.MaxReturnedRows > 0 && *returned > tc.BudgetLimits.MaxReturnedRows {
+					return budget.ErrExceeded
+				}
+				key := fmt.Sprintf("%T:%v", child[targetField], child[targetField])
+				if targetTC.Masker != nil {
+					maskRow(targetTC.Masker, target.Entity.Attributes, child)
+				}
+				grouped[key] = append(grouped[key], child)
+			}
 		}
 		for _, row := range rows {
 			value := row[localField]
