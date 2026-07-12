@@ -165,7 +165,7 @@ func TestSortLimitOffset(t *testing.T) {
 }
 
 func globalAgg(pred relalg.Predicate, calls ...relalg.AggCall) relalg.Expr {
-	var in relalg.Expr = scanT()
+	in := scanT()
 	if pred != nil {
 		in = relalg.Select{Input: scanT(), Predicate: pred}
 	}

@@ -73,7 +73,7 @@ func eval(db DB, e relalg.Expr) (relation, error) {
 		if !ok {
 			return relation{}, fmt.Errorf("%w: %q", ErrUnknownRelation, n.Relation.Name)
 		}
-		return relation{Cols: t.Cols, Rows: t.Rows}, nil
+		return relation(t), nil
 	case relalg.Select:
 		return evalSelect(db, n)
 	case relalg.Project:
