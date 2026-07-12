@@ -71,6 +71,9 @@ bool，成本闸门装配（`cost.NewGateFromCapabilities`）直接消费这些 
   capability 的保证强度和证据状态可区分；
 - 字段取舍以 SQLite（下一版本交付对象）为校验对象：模型必须能表达
   "缺少 `enforced` 成本证明时由核心层等价强制或 fail closed"这类组合。
+- 真实负载模型用例目录：`fixtures/v4/use-cases.md` 四模块各 **Top 32**
+  参考查询，按真实运营场景频率排序，标注语义陷阱与 Eval 覆盖；`v0.1.9`
+  已交付 21 个 Eval 任务，本目录为 `v0.1.10` 扩展交付。
 
 **非目标**：本版本不新增任何 Provider（SQLite 随下一版本交付）；不引入
 L13 的实现方式维度（`native`/`emulated`/`restricted`/`unsupported` 仅
@@ -82,6 +85,8 @@ L13 的实现方式维度（`native`/`emulated`/`restricted`/`unsupported` 仅
   单 bool；
 - [ ] "`best_effort` 不能满足硬限制；缺少 `enforced` 能力时，必须由核心层
   提供等价强制或 fail closed" 有测试锁定；
+- [ ] `fixtures/v4/use-cases.md` 四模块各 32 条用例齐备，与模块
+  `metadata/` 语义一致；
 - [ ] 三库现有 integration、conformance 与 workload conformance suite
   （`make test-integration`）全绿，证明行为无回归；
 - [ ] 兼容矩阵按新模型更新；发布链检查（fmt/vet/test/race/docs-check）

@@ -13,12 +13,16 @@ payment-orchestration/        支付编排模型（行业中立）
 ledger-settlement/            账务、结算与对账模型（行业中立）
 verticals/live-monetization/  直播与创作者经济行业扩展
 profiles/default.yaml         可直接运行的组合 profile（四模块全量实体）
-tasks/                        v4 任务集（跨模块聚合）
+tasks/                        v4 任务集（跨模块聚合，v0.1.9 已交付 21 项）
+use-cases.md                  v0.1.10 目标：四模块各 Top 32 业务用例（草案）
 ```
 
 每个模块目录含 `schema/`（各方言 DDL）、`seed/`（各方言种子数据）、
 `policies/`（Entity/RBAC/mask/relationship 配置示例）、`expected/`
 （任务预期结果 CSV）、`metadata/`（grain、时间、单位与状态说明）。
+
+业务用例目录草案见 [use-cases.md](use-cases.md)（**v0.1.10 目标**，非
+`v0.1.9` 发布范围）：四模块各 32 条按真实运营场景频率排序的参考查询。
 
 ## 确定性
 
