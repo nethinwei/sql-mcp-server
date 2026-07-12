@@ -80,8 +80,8 @@ L13 的实现方式维度（`native`/`emulated`/`restricted`/`unsupported` 仅
 
 - [ ] 每项 capability 分别表达范围、保证强度和证据，不再存在混合语义的
   单 bool；
-- [ ] "`best_effort` 不满足硬限制；缺少 `enforced` 能力时由核心层等价
-  强制或 fail closed"有测试锁定；
+- [ ] "`best_effort` 不能满足硬限制；缺少 `enforced` 能力时，必须由核心层
+  提供等价强制或 fail closed" 有测试锁定；
 - [ ] 三库现有 integration、conformance 与 workload conformance suite
   （`make test-integration`）全绿，证明行为无回归；
 - [ ] 兼容矩阵按新模型更新；发布链检查（fmt/vet/test/race/docs-check）
