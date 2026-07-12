@@ -41,71 +41,65 @@
 
 ## Committed
 
-### v0.1.9 — Provider Capability Model
+### v0.1.9 — Real Business Workload Model
 
 `v0.1.8`（IR Semantics and Provider Conformance）已完成验收，成果见
-[发布说明](releases/v0.1.8.md)。本版本承诺 `Next 1`
-（Evidence-Backed SQLite）的前置工程项：Provider capability model 重构。
+[发布说明](releases/v0.1.8.md)。本版本交付 Eval 真实负载轨（v4）的
+载体：一组可复现、可扩展、可供社区共同改进的业务 reference model、
+确定性数据与自然语言任务。模块范围、语义细则与验收标准以
+[真实业务负载模型](design/business-workload-model.md)为唯一事实源。
 
-**问题证据**：[Provider Roadmap](provider-roadmap.md) 将"范围 + 强度 +
-证据"能力模型定义为任何新 Provider 或兼容性认证立项的前置工程项，且应
-作为独立变更先行交付。现有实现（`core/dialect.Capabilities`）是平铺
-bool，成本闸门装配（`cost.NewGateFromCapabilities`）直接消费这些 bool，
-无法表达保证强度与证据状态——即无法区分"数据库提供该能力"与"本服务已
-装配可测试的强制机制"。
+**问题证据**：内部合成证据接近饱和——v3 任务集对 deepseek-v4-flash
+三轮 94/96
+（[结论](../eval/results/2026-07-12-deepseek-v4-flash-v3.md)自述接近
+饱和且不可外推），其 20 张仅含 id/name 两列的 decoy 表不构成真实
+复杂度；而休眠项重开、`Next 2` 门禁与后续方向取舍全部依赖真实形态
+负载的失败归因，该负载当前不存在。继续在同一 fixture 上加同类合成
+任务边际信息量低。
 
-**阶段结果**：
+**阶段结果**（语义细节见设计文档）：
 
-- capability 重构为"范围 + 强度 + 证据"模型：保证强度统一为
-  `unsupported` / `best_effort` / `enforced`；能力范围至少区分数据能力、
-  生命周期、成本证明、原生执行边界、安全与身份、证据状态。字段定义以
-  [Provider Roadmap](provider-roadmap.md) 的 Capability Model 章节为
-  唯一事实源；
-- 闸门装配与 codegen 渲染改为消费新模型；
-- PostgreSQL、MySQL、OceanBase 三个现有 Provider 的声明按新模型迁移；
-  [Provider 兼容矩阵](provider-compatibility.md)中每项安全与成本
-  capability 的保证强度和证据状态可区分；
-- 字段取舍以 SQLite（[Provider Roadmap](provider-roadmap.md) Adoption
-  Accelerator 首位候选）为假想校验对象：模型必须能表达"缺少 `enforced`
-  成本证明时由核心层等价强制或 fail closed"这类组合，避免下一个
-  Provider 立项时返工。此项只约束模型设计，不构成 SQLite 承诺。
+- 四个业务模块首期 Schema——行业中立的 `commerce-core`、
+  `payment-orchestration`、`ledger-settlement` 与首个行业扩展
+  `live-monetization`——及至少一个可直接运行的组合 profile；
+- 确定性数据生成器：固定 seed 可重复、规模可控、可注入指定异常模式、
+  跨 Provider 结果一致；
+- ≥20 个真实业务任务（通用商业与支付 ≥12、账务/结算/对账 ≥5、直播
+  ≥3），每个任务显式声明目标能力、语义陷阱、预期结果与失败分类；
+- 评测报告把失败归因到十类出口：Agent 发现、参数构造、关系选择、
+  grain、时间语义、状态语义、单位/币种、IR 表达能力、Provider 差异、
+  治理策略；
+- dogfooding：至少一套真实或脱敏的支付中台工作负载运行并输出问题
+  清单（与外部证据冲刺的 dogfooding 部署同源）。
 
 **伴随项**（参照 v0.1.7/v0.1.8 惯例，不扩大版本核心）：
 
-- Eval 双轨化与任务集 v4。v3 对 deepseek-v4-flash 已接近饱和（94/96），
-  继续在同一 fixture 上加同类任务边际信息量低，但校准结论需要回归保护。
-  Eval 因此分为两轨，v4 不是 v3 的扩充：
-  - **回归轨**：v3 任务集与 fixture 冻结为回归基线——小、确定、每版本
-    运行，只保证不退步，不再扩充；
-  - **真实负载轨（v4）**：从 1–2 个真实形态 reference 场景新建 fixture
-    与任务（SaaS 多租户 / 电商分析 / 证券数据中选取，证券场景与外部
-    证据冲刺的 dogfooding 部署共用），复杂、低频运行，专职发现产品
-    问题，为休眠项重评估与 Next 2 门禁（失败归因）提供测量工具。
-    fixture 须具备可核对的真实复杂度，至少覆盖以下若干项：相似表名、
-    多条可选关联路径、多种时间字段、快照表与流水表并存、单位不一致、
-    枚举编码、grain 不一致、逻辑删除——仅含 id/name 两列的 decoy 表
-    不满足本要求；
+- Eval 双轨化：v3 任务集与 fixture 冻结为回归轨——小、确定、每版本
+  运行，只保证不退步，不再扩充；本版本交付的真实负载轨（v4）复杂、
+  低频运行，专职发现产品问题，v4 不是 v3 的扩充；
 - 文档一致性检查进入 CI：文档内部链接有效性与 README/roadmap/release
   版本号一致性校验，防止已发布页面与事实源漂移。
 
-**非目标**：不新增任何 Provider（SQLite 仍受采用证据门禁约束）；不引入
-L13 的实现方式维度（`native`/`emulated`/`restricted`/`unsupported` 仅
-预留）；不改变三库现有运行时行为与闸门语义（行为等价重构）；能力模型
-升级本身不构成新增 Provider 的承诺。
+**非目标**：不完整复刻任何现有支付产品的内部数据库；不建设生产级支付
+系统、渠道 SDK、资金清算、风控引擎或计费平台；不为覆盖任务而无门禁地
+扩大 IR——IR 不可表达记为失败证据，走休眠项分流出口；不把业务语义硬
+编码进核心；Provider capability model 重构移回 `Next 1`
+（Evidence-Backed SQLite）的前置工程项，不属于本版本。
 
-**退出门禁**：
+**退出门禁**（完整验收标准见设计文档第十节）：
 
-- [ ] 每项 capability 分别表达范围、保证强度和证据，不再存在混合语义的
-  单 bool；
-- [ ] "`best_effort` 不满足硬限制；缺少 `enforced` 能力时由核心层等价
-  强制或 fail closed"有测试锁定；
-- [ ] 三库现有 integration 与 conformance suite
-  （`make test-integration`）全绿，证明行为无回归；
-- [ ] 兼容矩阵按新模型更新；发布链检查（fmt/vet/test/race）通过；
-- [ ] Eval 回归轨（v3 冻结基线）保持全绿；真实负载轨（v4）交付并完成
-  至少一轮运行，fixture 满足伴随项定义的复杂度要求，结果按
-  [Roadmap Metrics](roadmap/metrics.md) 三类基准与公开数字规则记录；
-- [ ] 文档一致性检查进入 CI 并全绿。
+- [ ] 四模块首期 Schema 与组合 profile 交付，目录与任务定义符合设计
+  文档规范；
+- [ ] 数据生成器满足确定性 seed、可重复、规模可控与异常注入要求；
+  三库在支持范围内逻辑结果一致；
+- [ ] ≥20 个任务且分布达标，每个任务含预期结果与失败分类；fixture
+  至少覆盖设计文档复杂度清单中的八项；
+- [ ] 至少完成一轮评测运行，报告按十类失败出口归因，结果按
+  [Roadmap Metrics](roadmap/metrics.md) 公开数字规则记录；
+- [ ] dogfooding 问题清单输出；
+- [ ] 为至少一个休眠方向给出 go / no-go / 继续观察结论；
+- [ ] Eval 回归轨（v3 冻结基线）全绿；发布链检查（fmt/vet/test/race）
+  与文档一致性 CI 通过。
 
 ---
 
@@ -120,11 +114,11 @@ L13 的实现方式维度（`native`/`emulated`/`restricted`/`unsupported` 仅
   与"用审计 decision trace 解释一次拒绝"两个场景，使 Demo 完整覆盖
   产品差异声明；
 - 3 分钟演示视频与"对比任意 SQL MCP Server"的安全架构对照材料；
-- 维护者 dogfooding 部署：把维护者自己的证券研究库经本服务暴露给真实
-  Agent 任务（point-in-time、复权、多 grain、多单位、大表成本治理），
-  形成第一个不依赖外部响应的参考部署和一页 dogfooding case study，
-  fixture 与 Eval 真实负载轨共用——维护者自己的生产工作负载也是采用
-  证据；
+- 维护者 dogfooding 部署：以真实或脱敏的支付中台工作负载（即
+  [真实业务负载模型](design/business-workload-model.md)验收标准中的
+  dogfooding 项）经本服务暴露给真实 Agent 任务，形成第一个不依赖外部
+  响应的参考部署和一页 dogfooding case study——维护者自己的生产工作
+  负载也是采用证据；
 - 邀请 3–5 个 design partner（AI 数据分析、内部 BI、SaaS Agent 或
   数据库安全方向），每个只观察四件事：能否安装、能否配置第一个
   Entity、Agent 能否发现并调用、第一次失败发生在哪里；
@@ -141,15 +135,18 @@ L13 的实现方式维度（`native`/`emulated`/`restricted`/`unsupported` 仅
 进入门禁、SQLite 首版范围和退出验收均以
 [Provider Roadmap](provider-roadmap.md) 为唯一事实源；`v0.1.8` 交付的
 conformance suite（[IR 语义规范](design/ir-semantics.md)）是任何新
-Provider 的验收前置；capability model 前置工程为 `v0.1.9` `Committed`。
+Provider 的验收前置；Provider capability model 重构（"范围 + 强度 +
+证据"模型，字段定义见 Provider Roadmap 的 Capability Model 章节）是
+本阶段前置工程项，按 Provider Roadmap 应作为独立变更先行交付。
 
 阶段结果：在 capability model 交付后，交付一个受现有 IR 和统一 engine
 约束的窄 SQLite Provider。进入条件按 Provider Roadmap 为三选一——真实
 用户场景、外部 contributor 或明确的采用/架构验证目标——其中架构验证
-目标应在 `v0.1.9` 发布复审时显式评估是否确立：SQLite 是新 capability
-model 的首个新增 Provider 消费者，验证"弱成本证明、核心层兜底"的执行
-模型，同时是产生真实采用证据（`Next 2`–`Next 4` 门禁来源，与外部证据
-冲刺互补）的最低门槛入口。进入条件未满足时，本阶段不构成版本承诺。
+目标应在 `v0.1.9` 发布复审时结合真实负载轨结果显式评估是否确立：
+SQLite 是新 capability model 的首个新增 Provider 消费者，验证"弱成本
+证明、核心层兜底"的执行模型，同时是产生真实采用证据（`Next 2`–
+`Next 4` 门禁来源，与外部证据冲刺互补）的最低门槛入口。进入条件未
+满足时，本阶段不构成版本承诺。
 
 ---
 
