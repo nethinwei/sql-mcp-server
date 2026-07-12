@@ -211,7 +211,7 @@ row-policy 依赖列变化。本方向把现有启动/reload 的 drift 检查扩
 闭包或改变策略语义（例如有限枚举列变为自由字符串）。
 
 触发证据：真实部署出现 schema 演进需求，或最小控制面进入条件满足（本方向
-是其前置，已提升为主路线图 Next 4）。
+是其前置，已提升为主路线图 Next 3）。
 
 ## L16. Data Inference and Policy Composition Safety
 

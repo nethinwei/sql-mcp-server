@@ -48,6 +48,8 @@ Agent Eval 分为两级：
 ## 采用与生态
 
 - 五分钟 Demo 完成率；
+- 接入漏斗摩擦：首个 Entity 配置耗时、最常见配置错误、Agent 首个失败
+  任务出现的位置；
 - Registry 和客户端集成可用性；
 - 活跃生产部署；
 - 公开 case study；
