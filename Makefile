@@ -24,7 +24,7 @@ CORE_PACKAGES := ./core/...
 	coverage-check govulncheck workflow-check release-check release-quality \
 	release-snapshot release-metadata-check release-image-check release-preflight-fast \
 	release-preflight release-bump modelscope-check smoke-protocol bench-overhead eval-pilot \
-	ci ci-local ci-full tidy
+	eval-workload fixtures-v4 docs-check ci ci-local ci-full tidy
 
 # Format all Go sources in place (gofmt + 120-column line shortening).
 fmt:
@@ -81,9 +81,26 @@ smoke-protocol: build
 bench-overhead:
 	@$(GO) run ./internal/benchoverhead
 
-# Agent Eval pilot (Docker + EVAL_API_KEY/EVAL_MODEL required). See eval/README.md.
+# Agent Eval regression track: frozen v3 task set (Docker + EVAL_API_KEY/EVAL_MODEL
+# required). See eval/README.md.
 eval-pilot:
 	@$(GO) run ./eval/runner
+
+# Agent Eval realistic-workload track: fixtures/v4 business workload (Docker +
+# EVAL_API_KEY/EVAL_MODEL required; EVAL_DSN/EVAL_CONFIG/EVAL_TASKS switch to
+# dogfooding mode against an external database). See eval/README.md.
+eval-workload:
+	@$(GO) run ./eval/runner -track workload
+
+# Regenerate the checked-in fixtures/v4 workload artifacts from the
+# deterministic generator (a drift test locks them to the generator).
+fixtures-v4:
+	$(GO) run ./fixtures/v4/generator/cmd/workloadgen
+
+# Documentation consistency: relative markdown links resolve and pinned
+# version references (README, roadmap, releases, CHANGELOG) agree.
+docs-check:
+	$(GO) run ./internal/docscheck
 
 release-preflight-fast:
 	$(MAKE) workflow-check
@@ -135,7 +152,7 @@ govulncheck:
 
 # Docker-free local release gates. Install golangci-lint and govulncheck first.
 ci: ci-local
-ci-local: fmt-check vet lint build test coverage-check govulncheck
+ci-local: fmt-check vet lint docs-check build test coverage-check govulncheck
 
 # Complete release gates; additionally requires Docker for three providers/e2e.
 ci-full: ci-local test-integration test-e2e

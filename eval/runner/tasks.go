@@ -8,7 +8,7 @@ import (
 )
 
 // taskSpec is one pilot task with its mechanical grading rules. See the
-// header of eval/tasks.yaml for field semantics.
+// header of eval/regression/tasks.yaml for field semantics.
 type taskSpec struct {
 	ID               string   `yaml:"id"`
 	Category         string   `yaml:"category"`

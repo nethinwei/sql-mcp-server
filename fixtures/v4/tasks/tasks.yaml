@@ -1,0 +1,251 @@
+# Workload task set v4 (fixtures/v4, docs/design/business-workload-model.md).
+# 21 tasks over the four-module reference profile. Expected answers are NOT
+# written here: the runner injects them from the fixture generator
+# (fixtures/v4/generator/expected.go), so data and grading share one source.
+#
+# Fields:
+#   module              owning business module (report category)
+#   expect_tool         the tool that must succeed at least once
+#   capabilities        capabilities the task exercises (report metadata)
+#   semantic_traps      traps the task deliberately contains (report metadata)
+#   failure_categories  candidate attribution outlets when the answer is
+#                       wrong for non-structural reasons (manual review
+#                       refines within this list; roadmap's ten categories)
+#
+# Distribution gate (design doc §10.4): commerce+payments >= 12,
+# ledger >= 5, live >= 3, total >= 20.
+version: 4
+max_tool_calls: 16
+tasks:
+  # ---- commerce-core (4) ----
+  - id: commerce.active-customers-by-country
+    module: commerce-core
+    prompt: >
+      How many active customers do we have in total, and how many of them
+      are in China (country code CN)? Customers that were logically deleted
+      must not be counted.
+    expect_tool: aggregate_records
+    capabilities: [aggregation, filtering]
+    semantic_traps: [soft_delete, users_vs_customers]
+    failure_categories: [agent_discovery, status_semantics]
+
+  - id: commerce.completed-revenue-app1-june
+    module: commerce-core
+    prompt: >
+      What was the total revenue in US dollars from completed orders of
+      application 1 (novashop) created in June 2025? Amounts are stored in
+      minor units (cents); answer in dollars.
+    expect_tool: aggregate_records
+    capabilities: [aggregation, temporal_filter, unit_conversion]
+    semantic_traps: [minor_units, created_vs_completed_time, order_status]
+    failure_categories: [unit_currency, time_semantics, status_semantics]
+
+  - id: commerce.orders-vs-items-grain
+    module: commerce-core
+    prompt: >
+      For orders created in March 2025, how many orders were there and how
+      many order line items did they contain in total?
+    expect_tool: aggregate_records
+    capabilities: [aggregation, multi_entity_relation, temporal_filter]
+    semantic_traps: [order_vs_item_grain]
+    failure_categories: [grain, relation_selection]
+
+  - id: commerce.historical-price
+    module: commerce-core
+    prompt: >
+      What was the unit price of product 2 in dollars on 2025-02-01, and
+      what was it on 2025-04-01? Use the price versions that were valid on
+      those dates, not the current price.
+    expect_tool: read_records
+    capabilities: [point_in_time, filtering]
+    semantic_traps: [rule_versioning, minor_units]
+    failure_categories: [time_semantics, unit_currency]
+
+  # ---- payment-orchestration (8) ----
+  - id: payments.intent-vs-attempt-counts
+    module: payment-orchestration
+    prompt: >
+      For May 2025, how many payment intents were created and how many
+      payment attempts were made? Explain why the two numbers differ.
+    expect_tool: aggregate_records
+    capabilities: [aggregation, temporal_filter]
+    semantic_traps: [intent_vs_attempt_grain]
+    failure_categories: [grain, agent_discovery]
+
+  - id: payments.first-vs-final-success-april
+    module: payment-orchestration
+    prompt: >
+      Of the payment intents created in April 2025, how many succeeded on
+      their first attempt, and how many succeeded in the end (on any
+      attempt)?
+    expect_tool: aggregate_records
+    capabilities: [aggregation, temporal_filter, multi_entity_relation]
+    semantic_traps: [first_attempt_vs_final_result, intent_vs_attempt_grain]
+    failure_categories: [grain, status_semantics, ir_expressibility]
+
+  - id: payments.channel-switch-recovered
+    module: payment-orchestration
+    prompt: >
+      How many payments failed on their first attempt but eventually
+      succeeded after switching to another channel? Count succeeded
+      attempts whose attempt number is greater than 1.
+    expect_tool: aggregate_records
+    capabilities: [aggregation, filtering]
+    semantic_traps: [retry_sequence, first_attempt_vs_final_result]
+    failure_categories: [status_semantics, ir_expressibility]
+
+  - id: payments.final-success-by-channel
+    module: payment-orchestration
+    prompt: >
+      How many payment intents finally succeeded through each channel? Use
+      the channel of the succeeding attempt and report the count for the
+      stripe channel explicitly.
+    expect_tool: aggregate_records
+    capabilities: [aggregation, grouping, multi_entity_relation]
+    semantic_traps: [channel_attribution, intent_vs_attempt_grain]
+    failure_categories: [relation_selection, grain]
+
+  - id: payments.partial-refunds
+    module: payment-orchestration
+    prompt: >
+      How many refunds were partial (not full) refunds?
+    expect_tool: aggregate_records
+    capabilities: [aggregation, filtering]
+    semantic_traps: [partial_vs_full_refund]
+    failure_categories: [status_semantics]
+
+  - id: payments.duplicate-callbacks
+    module: payment-orchestration
+    prompt: >
+      How many channel callback rows are duplicate deliveries, i.e. they
+      share an external event id with an earlier delivery of the same
+      event? Total callback rows minus distinct external event ids.
+    expect_tool: aggregate_records
+    capabilities: [aggregation, deduplication]
+    semantic_traps: [duplicate_events, event_vs_transaction_count]
+    failure_categories: [grain, ir_expressibility]
+
+  - id: payments.unprocessed-callbacks
+    module: payment-orchestration
+    prompt: >
+      How many channel callbacks were received but never processed
+      internally (their processed time is missing)?
+    expect_tool: aggregate_records
+    capabilities: [aggregation, null_semantics]
+    semantic_traps: [received_vs_processed_time, async_consistency]
+    failure_categories: [time_semantics, status_semantics]
+
+  - id: payments.routing-rule-on-may-1
+    module: payment-orchestration
+    prompt: >
+      Which routing rule version id was in force for payment attempts made
+      on 2025-05-01? Use the version validity ranges, not the newest
+      version.
+    expect_tool: read_records
+    capabilities: [point_in_time, filtering]
+    semantic_traps: [rule_versioning]
+    failure_categories: [time_semantics]
+
+  # ---- ledger-settlement (5) ----
+  - id: ledger.succeeded-unposted
+    module: ledger-settlement
+    prompt: >
+      How many payment intents have succeeded but have no posted ledger
+      transaction yet (payment succeeded but the internal ledger has not
+      recorded it)? Ledger transactions reference intents via source_type
+      'payment' and source_id.
+    expect_tool: read_records
+    capabilities: [multi_entity_relation, anti_join, async_state]
+    semantic_traps: [business_vs_ledger_fact, async_consistency]
+    failure_categories: [relation_selection, ir_expressibility]
+
+  - id: ledger.reconciliation-exceptions
+    module: ledger-settlement
+    prompt: >
+      Break down the reconciliation exceptions by status: how many results
+      are amount_mismatch, how many are missing_external, and how many are
+      missing_internal?
+    expect_tool: aggregate_records
+    capabilities: [aggregation, grouping]
+    semantic_traps: [internal_vs_external_records]
+    failure_categories: [agent_discovery, status_semantics]
+
+  - id: ledger.balance-snapshot-march
+    module: ledger-settlement
+    prompt: >
+      What was the balance in minor units of ledger account 3 (the org-1
+      merchant payable account) at the 2025-03-31 snapshot? Use the balance
+      snapshot, do not recompute from entries.
+    expect_tool: read_records
+    capabilities: [point_in_time, filtering]
+    semantic_traps: [snapshot_vs_flow]
+    failure_categories: [agent_discovery, time_semantics]
+
+  - id: ledger.settlement-net-org1
+    module: ledger-settlement
+    prompt: >
+      How much was paid out to organization 1 in its settlement, net of
+      fees and refunds? The amount is stored in minor units; answer in
+      dollars.
+    expect_tool: read_records
+    capabilities: [filtering, unit_conversion]
+    semantic_traps: [gross_vs_net, minor_units, settled_vs_posted]
+    failure_categories: [unit_currency, status_semantics]
+
+  - id: ledger.fees-may
+    module: ledger-settlement
+    prompt: >
+      What was the total channel fee in minor units for payment intents
+      that succeeded in May 2025? Fees were computed with the fee rule
+      versions valid at payment time; the per-payment fee is stored on the
+      intent.
+    expect_tool: aggregate_records
+    capabilities: [aggregation, temporal_filter, rule_versioning]
+    semantic_traps: [rule_versioning, minor_units]
+    failure_categories: [time_semantics, unit_currency]
+
+  # ---- live-monetization (4) ----
+  - id: live.room1-vs-best-session
+    module: live-monetization
+    prompt: >
+      For live room 1: how many stars of processed gift revenue did the
+      room accumulate over its lifetime, and what was the highest processed
+      gift revenue of a single session in that room?
+    expect_tool: aggregate_records
+    capabilities: [aggregation, grouping, multi_entity_relation]
+    semantic_traps: [room_vs_session_grain, event_status]
+    failure_categories: [grain, relation_selection, status_semantics]
+
+  - id: live.creator1-settled-vs-pending
+    module: live-monetization
+    prompt: >
+      For creator 1: how many stars of revenue share have already been
+      settled, and how many stars earned after the settled period are still
+      pending? The revenue splits carry the creator share per gift event;
+      the creator settlement covers events before its period end.
+    expect_tool: aggregate_records
+    capabilities: [aggregation, temporal_filter, multi_entity_relation]
+    semantic_traps: [settled_vs_pending, rule_versioning]
+    failure_categories: [status_semantics, time_semantics, ir_expressibility]
+
+  - id: live.gift-price-versions
+    module: live-monetization
+    prompt: >
+      What was the star price of the Rose gift (gift 1) on 2025-02-01, and
+      what was it on 2025-05-01? Use the price versions valid on those
+      dates.
+    expect_tool: read_records
+    capabilities: [point_in_time, filtering]
+    semantic_traps: [rule_versioning, virtual_asset_units]
+    failure_categories: [time_semantics, unit_currency]
+
+  - id: live.duplicate-gift-events
+    module: live-monetization
+    prompt: >
+      How many gift event rows are duplicate deliveries (their dedup_of
+      field references an original event)? Confirm that these duplicates
+      carry zero stars so revenue totals are unaffected.
+    expect_tool: aggregate_records
+    capabilities: [aggregation, deduplication, null_semantics]
+    semantic_traps: [duplicate_events, event_vs_transaction_count]
+    failure_categories: [grain, status_semantics]

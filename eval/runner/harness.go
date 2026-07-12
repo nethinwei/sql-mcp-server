@@ -21,13 +21,13 @@ const systemPrompt = "You are a data analyst agent. The only way to access data 
 	"and either narrow the request or explain why the request is not allowed."
 
 // startServer assembles the app in-process and connects an in-memory MCP
-// session, so the pilot measures the tool contract rather than transport
+// session, so the eval measures the tool contract rather than transport
 // differences.
-func startServer(ctx context.Context, dsn string) (*mcp.ClientSession, func(), error) {
+func startServer(ctx context.Context, dsn, configPath string) (*mcp.ClientSession, func(), error) {
 	if err := os.Setenv("DATABASE_DSN", dsn); err != nil {
 		return nil, nil, err
 	}
-	cfg, err := bootstrap.Load("eval/config.yaml")
+	cfg, err := bootstrap.Load(configPath)
 	if err != nil {
 		return nil, nil, err
 	}

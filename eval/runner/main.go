@@ -1,5 +1,5 @@
-// Command runner executes the Agent Eval pilot: a fixed task set
-// (eval/tasks.yaml) against a deterministic fixture, driven by any
+// Command runner executes the Agent Eval regression track: a frozen task set
+// (eval/regression/tasks.yaml) against a deterministic fixture, driven by any
 // OpenAI-compatible chat-completions endpoint with tool calling. It scores
 // tasks mechanically (see eval/README.md) and prints a JSON report to stdout.
 //
@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"strconv"
@@ -24,8 +25,19 @@ import (
 )
 
 func main() {
+	track := flag.String("track", "regression",
+		"eval track: regression (frozen v3 pilot) or workload (fixtures/v4)")
+	flag.Parse()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
-	err := run(ctx)
+	var err error
+	switch *track {
+	case "regression":
+		err = run(ctx)
+	case "workload":
+		err = runWorkload(ctx)
+	default:
+		err = fmt.Errorf("unknown track %q (want regression or workload)", *track)
+	}
 	cancel()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -33,21 +45,29 @@ func main() {
 	}
 }
 
-func run(ctx context.Context) error {
+// newModelClient reads the shared model endpoint configuration.
+func newModelClient() (*modelClient, error) {
 	apiKey := os.Getenv("EVAL_API_KEY")
 	model := os.Getenv("EVAL_MODEL")
 	if apiKey == "" || model == "" {
-		return fmt.Errorf("EVAL_API_KEY and EVAL_MODEL are required " +
+		return nil, fmt.Errorf("EVAL_API_KEY and EVAL_MODEL are required " +
 			"(EVAL_BASE_URL defaults to https://api.openai.com/v1); " +
-			"the pilot needs a live OpenAI-compatible endpoint")
+			"the eval needs a live OpenAI-compatible endpoint")
 	}
-	client := &modelClient{
+	return &modelClient{
 		baseURL: envOr("EVAL_BASE_URL", "https://api.openai.com/v1"),
 		apiKey:  apiKey,
 		model:   model,
+	}, nil
+}
+
+func run(ctx context.Context) error {
+	client, err := newModelClient()
+	if err != nil {
+		return err
 	}
 
-	tasks, err := loadTasks("eval/tasks.yaml")
+	tasks, err := loadTasks("eval/regression/tasks.yaml")
 	if err != nil {
 		return fmt.Errorf("tasks: %w", err)
 	}
@@ -58,7 +78,7 @@ func run(ctx context.Context) error {
 	}
 	defer cleanup()
 
-	session, closeSession, err := startServer(ctx, dsn)
+	session, closeSession, err := startServer(ctx, dsn, "eval/regression/config.yaml")
 	if err != nil {
 		return fmt.Errorf("server: %w", err)
 	}
@@ -105,7 +125,7 @@ func startDatabase(ctx context.Context) (string, func(), error) {
 
 // decoyTables are the plausible-but-irrelevant catalog entries for the v3
 // big-schema tasks. Every name here must have a matching entity in
-// eval/config.yaml (the bootstrap drift check fails fast on mismatch).
+// eval/regression/config.yaml (the bootstrap drift check fails fast on mismatch).
 var decoyTables = []string{
 	"warehouses", "inventory", "categories", "reviews", "sessions",
 	"web_events", "campaigns", "leads", "accounts", "contacts",
@@ -210,7 +230,7 @@ FROM generate_series(1, 90) AS n;
 
 -- Integer-coded enum for the enum task: priority cycles 1,2,3 over 30 rows
 -- (10 each); the 1=low/2=medium/3=high mapping lives only in the field
--- description in eval/config.yaml.
+-- description in eval/regression/config.yaml.
 CREATE TABLE eval_ticket (
 	id integer PRIMARY KEY,
 	priority integer NOT NULL

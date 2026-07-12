@@ -43,6 +43,15 @@ type taskResult struct {
 	Transcript      []interactionStep `json:"transcript"`
 	FinalAnswer     string            `json:"finalAnswer"`
 	Error           string            `json:"error,omitempty"`
+
+	// Workload-track fields (empty on the regression track).
+	Module                string   `json:"module,omitempty"`
+	Capabilities          []string `json:"capabilities,omitempty"`
+	SemanticTraps         []string `json:"semanticTraps,omitempty"`
+	EvidenceRowsFound     int      `json:"evidenceRowsFound,omitempty"`
+	EvidenceRowsTotal     int      `json:"evidenceRowsTotal,omitempty"`
+	Attribution           []string `json:"attribution,omitempty"`
+	AttributionConfidence string   `json:"attributionConfidence,omitempty"`
 }
 
 type reportAggregate struct {
@@ -60,6 +69,7 @@ type reportAggregate struct {
 }
 
 type evalReport struct {
+	Track          string          `json:"track,omitempty"` // "" (regression) | "workload"
 	TaskSetVersion int             `json:"taskSetVersion"`
 	Model          string          `json:"model"`
 	BaseURL        string          `json:"baseUrl"`
@@ -78,7 +88,7 @@ const defaultTokenLimit = 1_000_000
 // runTasks executes tasks with a bounded worker pool (EVAL_PARALLEL, default
 // 6). Tasks are independent read-only conversations; results keep task-set
 // order. The pool must stay below the analyst role's budget.maxConcurrent in
-// eval/config.yaml or parallel calls would produce spurious BUDGET_EXCEEDED
+// eval/regression/config.yaml or parallel calls would produce spurious BUDGET_EXCEEDED
 // denials that pollute grading.
 func runTasks(
 	ctx context.Context,

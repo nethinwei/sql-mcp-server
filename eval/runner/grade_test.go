@@ -315,7 +315,7 @@ func TestLoadTasksRejectsToolCallCapAboveHardLimit(t *testing.T) {
 }
 
 func TestLoadTasksAcceptsCurrentTaskSet(t *testing.T) {
-	file, err := loadTasks("../tasks.yaml")
+	file, err := loadTasks("../regression/tasks.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
