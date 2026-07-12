@@ -9,6 +9,30 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+## 0.1.8 - 2026-07-12
+
+### Added
+
+- IR 语义规范（[`docs/design/ir-semantics.md`](docs/design/ir-semantics.md)）：
+  读路径算子与 11 个谓词操作符的 bag semantics、三值逻辑、聚合空集/`NULL`
+  边界与 documented deviations 表。
+- reference interpreter（`core/relalg/interp`）：按规范实现读路径语义，
+  作为 codegen 的 oracle，规范每条语义有单元测试。
+- 跨 Provider differential conformance suite（`internal/conformance`）：
+  85 个差分用例（25 固定 + 60 固定 seed 生成）在 PostgreSQL、MySQL、
+  OceanBase 上比对 interpreter 与真实执行结果，接入
+  `make test-integration`；三库验收运行全部通过。
+- `codegen.Compiled` 新增 `PrimaryKey` 元数据（兼容追加）。
+
+### Changed
+
+- 无谓词聚合拒绝（`COST_EXCEEDED`）的 hint 收紧为可直接执行的最短修复
+  （主键 `is_not_null` 谓词示例），消除 v0.1.7 校准归因的聚合修复绕路。
+- [Provider 兼容矩阵](docs/provider-compatibility.md)：aggregate 与读路径
+  IR 语义一致性升级为"真实数据库验证"。
+
+详见 [`docs/releases/v0.1.8.md`](docs/releases/v0.1.8.md)。
+
 ## 0.1.7 - 2026-07-12
 
 ### Added

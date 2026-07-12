@@ -20,7 +20,8 @@
 | read、过滤、行策略、mask | 真实数据库验证 | 真实数据库验证 | 真实数据库验证 | [PG](../x/providers/postgres/integration_test.go)、[MySQL](../x/providers/mysql/integration_test.go)、[OB](../x/providers/oceanbase/integration_test.go) 的 `Test*RLSRowFilterAndMasking` |
 | update 与主键写保护 | 真实数据库验证 | 真实数据库验证 | 真实数据库验证 | 上述 integration 的 `Test*UpdateUnsafeWriteAndPK` |
 | create / delete | 核心层验证 | 核心层验证 | 核心层验证 | [`tool_write_test.go`](../core/tool/tool_write_test.go)；`delete_record` 默认关闭 |
-| aggregate | 核心层验证 | 核心层验证 | 核心层验证 | [`tool_aggregate_test.go`](../core/tool/tool_aggregate_test.go) |
+| aggregate | 真实数据库验证 | 真实数据库验证 | 真实数据库验证 | [`tool_aggregate_test.go`](../core/tool/tool_aggregate_test.go) 与三库 conformance 差分（`Test*Conformance`） |
+| 读路径 IR 语义一致性 | 真实数据库验证 | 真实数据库验证 | 真实数据库验证 | 三库 `Test*Conformance`：reference interpreter 差分 [`internal/conformance`](../internal/conformance)，语义与偏差表见 [IR 语义规范](design/ir-semantics.md) |
 | procedure | 真实数据库验证 | 真实数据库验证 | 真实数据库验证 | 三库 integration 的 `Test*ExecuteProcedure` |
 | 显式事务 | 真实数据库验证（MCP e2e） | 核心层验证 | 核心层验证 | [`e2e_test.go`](../x/mcpserver/e2e_test.go) 与 store/provider 契约 |
 | keyset cursor | 能力声明 + 核心层验证 | 能力声明 + 核心层验证 | 能力声明 + 核心层验证 | 各 provider `dialect.go` 与 codegen 测试 |

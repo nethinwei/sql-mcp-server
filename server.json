@@ -3,7 +3,7 @@
   "name": "io.github.nethinwei/sql-mcp-server",
   "title": "SQL MCP Server",
   "description": "Controlled SQL access gateway with policy, cost limits, tenant isolation, and safe tools.",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "websiteUrl": "https://github.com/nethinwei/sql-mcp-server",
   "repository": {
     "url": "https://github.com/nethinwei/sql-mcp-server",
@@ -12,7 +12,7 @@
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/nethinwei/sql-mcp-server:0.1.7",
+      "identifier": "ghcr.io/nethinwei/sql-mcp-server:0.1.8",
       "runtimeHint": "docker",
       "transport": {
         "type": "stdio"

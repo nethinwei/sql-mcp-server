@@ -1,7 +1,7 @@
 # 发布说明索引
 
-当前 GA 为 `v0.1.7`（[发布说明](v0.1.7.md)、
-[GitHub Release](https://github.com/nethinwei/sql-mcp-server/releases/tag/v0.1.7)）。
+当前 GA 为 `v0.1.8`（[发布说明](v0.1.8.md)、
+[GitHub Release](https://github.com/nethinwei/sql-mcp-server/releases/tag/v0.1.8)）。
 
 本目录中的发布说明描述各版本发布时点的能力、迁移和证据状态。当前运行时行为以
 [配置参考](../configuration.md)、[安全模型](../security.md)和
@@ -10,6 +10,10 @@
 
 ## 版本
 
+- [`v0.1.8`](v0.1.8.md)（2026-07-12）：IR Semantics and Provider
+  Conformance——读路径 IR 语义规范、reference interpreter、三库
+  differential conformance suite（85 用例全绿），及无谓词聚合 hint 契约
+  收紧；
 - [`v0.1.7`](v0.1.7.md)（2026-07-12）：Agent Eval 校准——任务集 v3（8 个
   定向任务与 20 个 decoy 实体）、first-call success 定义修正与 discovery
   计量、`forbid_decoys` 收紧评分、评分器确定性测试、成本硬上限，及三轮

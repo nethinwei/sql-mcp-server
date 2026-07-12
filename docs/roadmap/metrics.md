@@ -26,9 +26,21 @@
 
 Agent Eval 分为两级：
 
-- **Pilot**：20–30 个固定任务，用于尽早校正 roadmap，不承担竞品排名；
+- **Pilot**：20–32 个固定任务，用于尽早校正 roadmap，不承担竞品排名；
 - **Public suite**：版本化任务集、多客户端与多模型环境、固定评分规则和可复现
   baseline，用于支持公开方案对照。
+
+校准（v0.1.7）之后，Eval 按三类独立基准报告，**不合成单一总分**（合成分会
+让"调用次数少"掩盖安全回归）：
+
+- **Agent Utility**：实体发现、IR 构造正确性、first-call success、修复
+  次数、token 与 tool-call 成本、最终答案正确性；
+- **Governance**：未授权查询阻止率、false allow / false deny、mask 与 RLS
+  泄漏、多轮推断、prompt injection、预算绕过；
+- **Provider Conformance**：相同 IR 跨 Provider 结果等价、错误分类等价、
+  timeout/cancel 行为、事务与写语义、precision/timezone/NULL 差异（依托
+  `v0.1.8` 的 conformance suite：[IR 语义规范](../design/ir-semantics.md)
+  + `internal/conformance` 差分，经 `make test-integration` 运行）。
 
 任何竞品或方案对比必须使用相同任务、fixture、环境和评分方法。非确定性的在线模型
 结果应报告多次运行分布，不以单次结果作为每次 CI 的硬门禁。

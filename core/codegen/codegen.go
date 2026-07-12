@@ -30,7 +30,8 @@ type Compiled struct {
 	Kind           Kind
 	SQL            string
 	Args           []any
-	IsPKPoint      bool // all primary-key columns matched by equality (gate whitelist)
+	IsPKPoint      bool     // all primary-key columns matched by equality (gate whitelist)
+	PrimaryKey     []string // primary-key columns, when supplied via WithPrimaryKey
 	ReadOnly       bool
 	AffectedTables []string // tables touched by a write (cache invalidation)
 }
@@ -97,6 +98,7 @@ func (r Renderer) Compile(e relalg.Expr, opts ...CompileOption) (Compiled, error
 	}
 	if len(cfg.pkCols) > 0 {
 		c.IsPKPoint = isPKPoint(predicateOf(e), cfg.pkCols)
+		c.PrimaryKey = cfg.pkCols
 	}
 	return c, nil
 }

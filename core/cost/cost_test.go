@@ -373,6 +373,34 @@ func TestAggregateGuardRequiresPredicate(t *testing.T) {
 	}
 }
 
+// TestAggregateGuardHintNamesExecutableRepair locks the v0.1.8 contract
+// tightening: the rejection hint must contain a predicate the agent can send
+// verbatim, using the primary key when known (2026-07-12 pilot attribution).
+func TestAggregateGuardHintNamesExecutableRepair(t *testing.T) {
+	t.Parallel()
+	guard := AggregateGuard{RequirePredicate: true}
+	unfiltered := codegen.Compiled{
+		Kind:       codegen.KindAggregate,
+		PrimaryKey: []string{"id"},
+		Expr: relalg.Aggregate{
+			Input: relalg.Scan{Relation: relalg.RelationRef{Name: "events"}},
+		},
+	}
+	d, _ := guard.Check(context.Background(), unfiltered)
+	if d.Allow || len(d.Hints) != 1 {
+		t.Fatalf("expected one rejection hint, got %+v", d)
+	}
+	want := `{"field":"id","op":"is_not_null"}`
+	if !strings.Contains(d.Hints[0], want) {
+		t.Fatalf("hint %q must contain the executable repair %q", d.Hints[0], want)
+	}
+	unfiltered.PrimaryKey = nil
+	d, _ = guard.Check(context.Background(), unfiltered)
+	if d.Allow || len(d.Hints) != 1 || !strings.Contains(d.Hints[0], "is_not_null") {
+		t.Fatalf("fallback hint must still name an executable repair, got %+v", d)
+	}
+}
+
 func TestAllowedCallStillRunsCallGuard(t *testing.T) {
 	t.Parallel()
 	call := codegen.Compiled{Kind: codegen.KindCall, SQL: "CALL p()"}

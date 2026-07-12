@@ -107,6 +107,10 @@ go test -race -tags=integration -timeout 20m ./x/providers/...
 # 或 make test-integration
 ```
 
+该通道包含三库 conformance 差分（`Test{PG,MySQL,OB}Conformance`）：同一
+IR 的 reference interpreter 结果与真实数据库执行结果比对，语义定义见
+[IR 语义规范](design/ir-semantics.md)，corpus 在 `internal/conformance`。
+
 运行 MCP e2e：
 
 ```sh

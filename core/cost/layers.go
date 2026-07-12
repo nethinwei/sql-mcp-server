@@ -2,6 +2,7 @@ package cost
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
@@ -254,10 +255,20 @@ func (g AggregateGuard) Check(_ context.Context, c codegen.Compiled) (Decision, 
 	if p != nil && relalg.ValidatePredicate(p) == nil {
 		return Decision{Allow: true}, nil
 	}
-	return Decision{
-		Allow: false,
-		Hints: []string{"add a valid WHERE predicate to the aggregate query"},
-	}, nil
+	return Decision{Allow: false, Hints: []string{aggregatePredicateHint(c)}}, nil
+}
+
+// aggregatePredicateHint spells out the shortest executable repair instead of
+// only naming the rule. The 2026-07-12 eval pilot showed models burning their
+// call budget guessing predicates when the hint did not include one.
+func aggregatePredicateHint(c codegen.Compiled) string {
+	if len(c.PrimaryKey) > 0 {
+		return fmt.Sprintf(
+			"aggregate queries require a filter; the narrowest always-true predicate is "+
+				`{"field":%q,"op":"is_not_null"} on the primary key`, c.PrimaryKey[0])
+	}
+	return "aggregate queries require a filter; add one, e.g. " +
+		`{"field":"<any allowed field>","op":"is_not_null"}`
 }
 
 func compiledPredicate(e relalg.Expr) relalg.Predicate {
