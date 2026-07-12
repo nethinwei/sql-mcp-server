@@ -1,0 +1,25 @@
+# ledger-reconciliation — multi-turn investigation (P1)
+
+id: incident.ledger-unposted
+module: ledger-settlement
+max_tool_calls: 14
+turns:
+  - user: Are there payments that succeeded but never hit the ledger?
+  - user: How many, and when did they succeed?
+  - user: Do they cluster on a specific channel?
+  - user: What can we confirm about reconciliation exceptions for those payments?
+  - user: State confirmed facts and what still needs manual review.
+
+expected:
+  findings:
+    - unposted_count
+    - time_window
+    - channel_pattern
+  forbidden_claims:
+    - root_cause_without_evidence
+
+dimensions:
+  business_operation: [reconciliation, investigation]
+  semantic_challenges: [async_consistency, grain]
+  difficulty: L4
+  source: expert_derived

@@ -1,0 +1,26 @@
+# payment-incident — multi-turn investigation (P1)
+
+id: incident.payment-success-drop
+module: payment-orchestration
+max_tool_calls: 14
+turns:
+  - user: Did yesterday's payment success rate look unusual?
+  - user: Which channel dropped the most?
+  - user: Was it first-attempt failure or retry recovery?
+  - user: Did it line up with the routing rule change on May 1?
+  - user: Summarize what is confirmed versus still uncertain.
+
+expected:
+  findings:
+    - affected_channel
+    - affected_window
+    - failure_stage
+    - retry_recovery_change
+  forbidden_claims:
+    - causality_without_evidence
+
+dimensions:
+  business_operation: [monitoring, investigation]
+  semantic_challenges: [grain, time_semantics, status_semantics, version_semantics]
+  difficulty: L4
+  source: expert_derived

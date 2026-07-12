@@ -1,0 +1,219 @@
+# v5 metadata overlay for v4 guided tasks (fixtures/v4/tasks/tasks.yaml).
+tasks:
+  commerce.active-customers-by-country:
+    prompt_level: guided
+    expected_behavior: answer
+    dimensions:
+      domain: [commerce-core]
+      business_operation: [monitoring]
+      query_shape: [aggregation, filtering]
+      semantic_challenges: [soft_delete, users_vs_customers]
+      difficulty: L2
+      source: regression_derived
+
+  commerce.completed-revenue-app1-june:
+    prompt_level: guided
+    expected_behavior: answer
+    dimensions:
+      domain: [commerce-core]
+      business_operation: [reporting]
+      query_shape: [aggregation, temporal_filter]
+      semantic_challenges: [minor_units, time_semantics, status_semantics]
+      difficulty: L3
+      source: regression_derived
+
+  commerce.orders-vs-items-grain:
+    prompt_level: guided
+    expected_behavior: answer
+    dimensions:
+      domain: [commerce-core]
+      query_shape: [aggregation, multi_hop_relation]
+      semantic_challenges: [grain, time_semantics]
+      difficulty: L3
+      source: regression_derived
+
+  commerce.historical-price:
+    prompt_level: guided
+    expected_behavior: answer
+    dimensions:
+      domain: [commerce-core]
+      query_shape: [point_in_time, filtering]
+      semantic_challenges: [version_semantics, unit_semantics]
+      difficulty: L3
+      source: regression_derived
+
+  payments.intent-vs-attempt-counts:
+    prompt_level: guided
+    expected_behavior: answer
+    dimensions:
+      domain: [payment-orchestration]
+      business_operation: [monitoring]
+      query_shape: [aggregation, temporal_filter]
+      semantic_challenges: [grain, time_semantics]
+      difficulty: L3
+      source: regression_derived
+
+  payments.first-vs-final-success-april:
+    prompt_level: guided
+    expected_behavior: answer
+    dimensions:
+      domain: [payment-orchestration]
+      business_operation: [monitoring]
+      query_shape: [aggregation, multi_hop_relation]
+      semantic_challenges: [grain, status_semantics, time_semantics]
+      difficulty: L4
+      source: regression_derived
+
+  payments.channel-switch-recovered:
+    prompt_level: guided
+    expected_behavior: answer
+    dimensions:
+      domain: [payment-orchestration]
+      query_shape: [aggregation, filtering]
+      semantic_challenges: [status_semantics, grain]
+      difficulty: L3
+      source: regression_derived
+
+  payments.final-success-by-channel:
+    prompt_level: guided
+    expected_behavior: answer
+    dimensions:
+      domain: [payment-orchestration]
+      query_shape: [aggregation, grouping]
+      semantic_challenges: [grain, relation_selection]
+      difficulty: L3
+      source: regression_derived
+
+  payments.partial-refunds:
+    prompt_level: guided
+    expected_behavior: answer
+    dimensions:
+      domain: [payment-orchestration]
+      query_shape: [aggregation, filtering]
+      semantic_challenges: [status_semantics]
+      difficulty: L2
+      source: regression_derived
+
+  payments.duplicate-callbacks:
+    prompt_level: guided
+    expected_behavior: answer
+    dimensions:
+      domain: [payment-orchestration]
+      query_shape: [aggregation, deduplication]
+      semantic_challenges: [async_consistency, grain]
+      difficulty: L3
+      source: regression_derived
+
+  payments.unprocessed-callbacks:
+    prompt_level: guided
+    expected_behavior: answer
+    dimensions:
+      domain: [payment-orchestration]
+      query_shape: [aggregation, null_semantics]
+      semantic_challenges: [time_semantics, async_consistency]
+      difficulty: L3
+      source: regression_derived
+
+  payments.routing-rule-on-may-1:
+    prompt_level: guided
+    expected_behavior: answer
+    dimensions:
+      domain: [payment-orchestration]
+      query_shape: [point_in_time, filtering]
+      semantic_challenges: [version_semantics, time_semantics]
+      difficulty: L3
+      source: regression_derived
+
+  ledger.succeeded-unposted:
+    prompt_level: guided
+    expected_behavior: answer
+    dimensions:
+      domain: [ledger-settlement]
+      business_operation: [reconciliation]
+      query_shape: [anti_join, multi_hop_relation]
+      semantic_challenges: [async_consistency, grain]
+      difficulty: L4
+      source: regression_derived
+
+  ledger.reconciliation-exceptions:
+    prompt_level: guided
+    expected_behavior: answer
+    dimensions:
+      domain: [ledger-settlement]
+      business_operation: [reconciliation]
+      query_shape: [aggregation, grouping]
+      semantic_challenges: [status_semantics]
+      difficulty: L3
+      source: regression_derived
+
+  ledger.balance-snapshot-march:
+    prompt_level: guided
+    expected_behavior: answer
+    dimensions:
+      domain: [ledger-settlement]
+      query_shape: [point_in_time, filtering]
+      semantic_challenges: [time_semantics, snapshot_vs_flow]
+      difficulty: L3
+      source: regression_derived
+
+  ledger.settlement-net-org1:
+    prompt_level: guided
+    expected_behavior: answer
+    dimensions:
+      domain: [ledger-settlement]
+      business_operation: [settlement]
+      query_shape: [filtering, unit_conversion]
+      semantic_challenges: [unit_semantics, status_semantics]
+      difficulty: L3
+      source: regression_derived
+
+  ledger.fees-may:
+    prompt_level: guided
+    expected_behavior: answer
+    dimensions:
+      domain: [ledger-settlement]
+      query_shape: [aggregation, temporal_filter]
+      semantic_challenges: [version_semantics, unit_semantics, time_semantics]
+      difficulty: L4
+      source: regression_derived
+
+  live.room1-vs-best-session:
+    prompt_level: guided
+    expected_behavior: answer
+    dimensions:
+      domain: [live-monetization]
+      query_shape: [aggregation, grouping]
+      semantic_challenges: [grain, status_semantics]
+      difficulty: L4
+      source: regression_derived
+
+  live.creator1-settled-vs-pending:
+    prompt_level: guided
+    expected_behavior: answer
+    dimensions:
+      domain: [live-monetization]
+      business_operation: [settlement]
+      query_shape: [aggregation, temporal_filter]
+      semantic_challenges: [status_semantics, time_semantics, version_semantics]
+      difficulty: L4
+      source: regression_derived
+
+  live.gift-price-versions:
+    prompt_level: guided
+    expected_behavior: answer
+    dimensions:
+      domain: [live-monetization]
+      query_shape: [point_in_time, filtering]
+      semantic_challenges: [version_semantics, unit_semantics]
+      difficulty: L3
+      source: regression_derived
+
+  live.duplicate-gift-events:
+    prompt_level: guided
+    expected_behavior: answer
+    dimensions:
+      domain: [live-monetization]
+      query_shape: [aggregation, deduplication]
+      semantic_challenges: [grain, status_semantics]
+      difficulty: L3
+      source: regression_derived

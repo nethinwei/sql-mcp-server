@@ -8,7 +8,7 @@
 *.test
 *.out
 coverage.txt
-coverage
+/coverage
 coverage.html
 
 # profiling

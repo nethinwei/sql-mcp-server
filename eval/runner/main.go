@@ -26,7 +26,7 @@ import (
 
 func main() {
 	track := flag.String("track", "regression",
-		"eval track: regression (frozen v3 pilot) or workload (fixtures/v4)")
+		"eval track: regression (frozen v3 pilot), workload (fixtures/v4), or diagnostic (v5)")
 	flag.Parse()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 	var err error
@@ -35,8 +35,10 @@ func main() {
 		err = run(ctx)
 	case "workload":
 		err = runWorkload(ctx)
+	case "diagnostic":
+		err = runDiagnostic(ctx)
 	default:
-		err = fmt.Errorf("unknown track %q (want regression or workload)", *track)
+		err = fmt.Errorf("unknown track %q (want regression, workload, or diagnostic)", *track)
 	}
 	cancel()
 	if err != nil {

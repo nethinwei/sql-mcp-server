@@ -1,0 +1,58 @@
+# P1 draft only. These tasks are not loaded by make eval-diagnostic and do
+# not count toward the v0.1.10 release gate.
+version: 5
+tasks:
+  - id: role.finance.fees-may
+    module: ledger-settlement
+    role: finance
+    prompt: What was the total channel fee in May 2025 for succeeded payments?
+    expect_tool: aggregate_records
+    prompt_level: natural
+    expected_behavior: answer
+    capabilities: [aggregation, temporal_filter]
+    semantic_traps: [rule_versioning, minor_units]
+    failure_categories: [time_semantics, unit_currency]
+
+  - id: role.support.active-customers
+    module: commerce-core
+    role: customer-support
+    prompt: How many active customers do we have in China?
+    expect_tool: aggregate_records
+    prompt_level: natural
+    expected_behavior: answer
+    capabilities: [aggregation, filtering]
+    semantic_traps: [soft_delete]
+    failure_categories: [status_semantics]
+
+  - id: role.risk.unposted
+    module: ledger-settlement
+    role: risk-investigator
+    prompt: How many succeeded payments lack a posted ledger transaction?
+    expect_tool: read_records
+    prompt_level: natural
+    expected_behavior: answer
+    capabilities: [anti_join]
+    semantic_traps: [async_consistency]
+    failure_categories: [relation_selection]
+
+  - id: role.operator.callbacks
+    module: payment-orchestration
+    role: payment-operator
+    prompt: How many callbacks are still unprocessed?
+    expect_tool: aggregate_records
+    prompt_level: natural
+    expected_behavior: answer
+    capabilities: [aggregation]
+    semantic_traps: [received_vs_processed_time]
+    failure_categories: [time_semantics]
+
+  - id: role.merchant.settlement
+    module: ledger-settlement
+    role: merchant-admin
+    prompt: What was organization 1's net settlement amount in dollars?
+    expect_tool: read_records
+    prompt_level: natural
+    expected_behavior: answer
+    capabilities: [filtering, unit_conversion]
+    semantic_traps: [minor_units, gross_vs_net]
+    failure_categories: [unit_currency]

@@ -1,0 +1,123 @@
+{
+  "semantic": {
+    "async_consistency": {
+      "positive": 7,
+      "clarify": 0,
+      "deny": 0,
+      "natural": 4,
+      "guided": 3
+    },
+    "grain": {
+      "positive": 14,
+      "clarify": 1,
+      "deny": 0,
+      "natural": 6,
+      "guided": 9
+    },
+    "minor_units": {
+      "positive": 1,
+      "clarify": 0,
+      "deny": 0,
+      "natural": 0,
+      "guided": 1
+    },
+    "relation_selection": {
+      "positive": 1,
+      "clarify": 0,
+      "deny": 0,
+      "natural": 0,
+      "guided": 1
+    },
+    "snapshot_vs_flow": {
+      "positive": 2,
+      "clarify": 1,
+      "deny": 0,
+      "natural": 2,
+      "guided": 1
+    },
+    "soft_delete": {
+      "positive": 1,
+      "clarify": 0,
+      "deny": 0,
+      "natural": 0,
+      "guided": 1
+    },
+    "status_semantics": {
+      "positive": 12,
+      "clarify": 2,
+      "deny": 0,
+      "natural": 5,
+      "guided": 9
+    },
+    "time_semantics": {
+      "positive": 14,
+      "clarify": 2,
+      "deny": 0,
+      "natural": 7,
+      "guided": 9
+    },
+    "unit_semantics": {
+      "positive": 6,
+      "clarify": 0,
+      "deny": 1,
+      "natural": 3,
+      "guided": 4
+    },
+    "users_vs_customers": {
+      "positive": 1,
+      "clarify": 0,
+      "deny": 0,
+      "natural": 0,
+      "guided": 1
+    },
+    "version_semantics": {
+      "positive": 6,
+      "clarify": 0,
+      "deny": 1,
+      "natural": 2,
+      "guided": 5
+    }
+  },
+  "governance": {
+    "field_acl": {
+      "positive": 0,
+      "clarify": 0,
+      "deny": 5,
+      "natural": 3,
+      "guided": 2
+    },
+    "inference_risk": {
+      "positive": 1,
+      "clarify": 0,
+      "deny": 3,
+      "natural": 4,
+      "guided": 0
+    },
+    "masking": {
+      "positive": 0,
+      "clarify": 0,
+      "deny": 3,
+      "natural": 3,
+      "guided": 0
+    },
+    "tenant_isolation": {
+      "positive": 0,
+      "clarify": 0,
+      "deny": 3,
+      "natural": 3,
+      "guided": 0
+    }
+  },
+  "behaviors": {
+    "answer": 29,
+    "clarify": 3,
+    "deny": 11,
+    "qualify": 3,
+    "unsupported": 2
+  },
+  "promptLevel": {
+    "ambiguous": 3,
+    "guided": 23,
+    "natural": 22
+  }
+}

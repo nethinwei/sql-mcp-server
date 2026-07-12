@@ -24,7 +24,7 @@ CORE_PACKAGES := ./core/...
 	coverage-check govulncheck workflow-check release-check release-quality \
 	release-snapshot release-metadata-check release-image-check release-preflight-fast \
 	release-preflight release-bump modelscope-check smoke-protocol bench-overhead eval-pilot \
-	eval-workload fixtures-v4 docs-check ci ci-local ci-full tidy
+	eval-workload fixtures-v4 eval-diagnostic eval-coverage docs-check ci ci-local ci-full tidy
 
 # Format all Go sources in place (gofmt + 120-column line shortening).
 fmt:
@@ -91,6 +91,14 @@ eval-pilot:
 # dogfooding mode against an external database). See eval/README.md.
 eval-workload:
 	@$(GO) run ./eval/runner -track workload
+
+# Agent Eval diagnostic track: fixtures/v4/tasks-v5 (v0.1.10).
+eval-diagnostic:
+	@$(GO) run ./eval/runner -track diagnostic
+
+# Generate fixtures/v4/coverage/matrix.json from tasks-v5 metadata.
+eval-coverage:
+	@$(GO) run ./cmd/evalcoverage
 
 # Regenerate the checked-in fixtures/v4 workload artifacts from the
 # deterministic generator (a drift test locks them to the generator).

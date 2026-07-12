@@ -45,13 +45,18 @@ type taskResult struct {
 	Error           string            `json:"error,omitempty"`
 
 	// Workload-track fields (empty on the regression track).
-	Module                string   `json:"module,omitempty"`
-	Capabilities          []string `json:"capabilities,omitempty"`
-	SemanticTraps         []string `json:"semanticTraps,omitempty"`
-	EvidenceRowsFound     int      `json:"evidenceRowsFound,omitempty"`
-	EvidenceRowsTotal     int      `json:"evidenceRowsTotal,omitempty"`
-	Attribution           []string `json:"attribution,omitempty"`
-	AttributionConfidence string   `json:"attributionConfidence,omitempty"`
+	Module                string         `json:"module,omitempty"`
+	Capabilities          []string       `json:"capabilities,omitempty"`
+	SemanticTraps         []string       `json:"semanticTraps,omitempty"`
+	EvidenceRowsFound     int            `json:"evidenceRowsFound,omitempty"`
+	EvidenceRowsTotal     int            `json:"evidenceRowsTotal,omitempty"`
+	Attribution           []string       `json:"attribution,omitempty"`
+	AttributionConfidence string         `json:"attributionConfidence,omitempty"`
+	OracleMatched         string         `json:"oracleMatched,omitempty"`
+	PromptLevel           string         `json:"promptLevel,omitempty"`
+	ExpectedBehavior      string         `json:"expectedBehavior,omitempty"`
+	Dimensions            taskDimensions `json:"dimensions,omitempty"`
+	Role                  string         `json:"role,omitempty"`
 }
 
 type reportAggregate struct {

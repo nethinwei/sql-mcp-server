@@ -114,9 +114,11 @@ func modulePolicies(d *Dataset, module string) string {
 // parses it back.
 func renderCSV(r *ResultTable) string {
 	var b strings.Builder
-	b.WriteString(strings.Join(r.Columns, ",") + "\n")
+	b.WriteString(strings.Join(r.Columns, ","))
+	b.WriteByte('\n')
 	for _, row := range r.Rows {
-		b.WriteString(strings.Join(row, ",") + "\n")
+		b.WriteString(strings.Join(row, ","))
+		b.WriteByte('\n')
 	}
 	return b.String()
 }

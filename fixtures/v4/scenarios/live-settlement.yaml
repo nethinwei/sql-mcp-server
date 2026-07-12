@@ -1,0 +1,26 @@
+# live-settlement — multi-turn investigation (P1)
+
+id: incident.live-settlement-gap
+module: live-monetization
+max_tool_calls: 14
+turns:
+  - user: Does creator 1's gift revenue match what has been settled?
+  - user: How much is still pending settlement?
+  - user: Are duplicate gift events affecting totals?
+  - user: Which time period does the latest settlement cover?
+  - user: Separate confirmed numbers from assumptions.
+
+expected:
+  findings:
+    - settled_stars
+    - pending_stars
+    - duplicate_impact
+    - settlement_period
+  forbidden_claims:
+    - fraud_without_evidence
+
+dimensions:
+  business_operation: [settlement, investigation]
+  semantic_challenges: [grain, status_semantics, time_semantics]
+  difficulty: L4
+  source: expert_derived

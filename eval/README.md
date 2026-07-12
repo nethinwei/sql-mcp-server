@@ -1,15 +1,17 @@
 # Agent Eval
 
-Agent Eval 分为两轨（v0.1.9 起）：
+Agent Eval 分为三轨（`v0.1.10` 起新增诊断轨）：
 
 - **回归轨**（`make eval-pilot`）：v3 任务集与 fixture 冻结为
   回归基线——小、确定、每版本运行，只保证不退步，不再扩充；
-- **真实负载轨**（`make eval-workload`，任务与 fixture 见仓库根
-  [`fixtures/v4/`](../fixtures/v4/)）：基于
-  [真实业务负载模型](../docs/design/business-workload-model.md)的复杂
-  业务任务，低频运行，专职发现产品问题（见下文"真实负载轨"一节）。
+- **真实负载轨**（`make eval-workload`）：v4 的 21 个 Guided 业务任务；
+- **诊断轨**（`make eval-diagnostic`）：v5 任务集（guided + natural +
+  clarify/deny/qualify/unsupported + 治理 suite），规格见
+  [Diagnostic Evaluation 设计文档](../docs/design/diagnostic-evaluation.md)。
 
-两轨共用 `eval/runner`（`-track` 选择）、模型端点配置与结果目录。
+负载与诊断轨的任务与 fixture 见 [`fixtures/v4/`](../fixtures/v4/)。
+三轨共用 `eval/runner`（`-track regression|workload|diagnostic`）、模型
+端点配置与结果目录。覆盖矩阵：`make eval-coverage`。
 
 回归轨：32 个固定任务（[regression/tasks.yaml](regression/tasks.yaml)
 v3 = 24 个 v2 任务 + 8 个定向任务），在确定性 fixture 上机械评分，用于

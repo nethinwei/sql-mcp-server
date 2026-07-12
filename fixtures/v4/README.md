@@ -1,8 +1,11 @@
 # fixtures/v4 — 真实业务负载模型
 
 [真实业务负载模型设计文档](../../docs/design/business-workload-model.md)的
-参考实现：四个业务模块的确定性 fixture、可运行组合 profile、自然语言任务
-与预期结果，服务 Eval 真实负载轨（`make eval-workload`）。
+参考实现；`v0.1.10` 诊断 Eval 规格见
+[Diagnostic Evaluation 设计文档](../../docs/design/diagnostic-evaluation.md)。
+
+Eval 三轨：`make eval-workload`（v4 Guided 21 项）、`make eval-diagnostic`
+（v5 诊断任务集）。
 
 ## 目录
 
@@ -13,16 +16,17 @@ payment-orchestration/        支付编排模型（行业中立）
 ledger-settlement/            账务、结算与对账模型（行业中立）
 verticals/live-monetization/  直播与创作者经济行业扩展
 profiles/default.yaml         可直接运行的组合 profile（四模块全量实体）
-tasks/                        v4 任务集（跨模块聚合，v0.1.9 已交付 21 项）
-use-cases.md                  v0.1.10 目标：四模块各 Top 32 业务用例（草案）
+tasks/                        v4 任务集（v0.1.9 已交付 21 项 Guided）
+tasks-v5/                     v0.1.10 元数据、27 个正式扩展任务与 P1 草案
+scenarios/                    P1 多轮调查场景草案（默认轨不加载）
+coverage/                     能力维度与覆盖矩阵
+catalog/medium/               P1 medium 规模 profile（草案）
+use-cases.md                  选材参考草案（非验收门禁）
 ```
 
-每个模块目录含 `schema/`（各方言 DDL）、`seed/`（各方言种子数据）、
-`policies/`（Entity/RBAC/mask/relationship 配置示例）、`expected/`
-（任务预期结果 CSV）、`metadata/`（grain、时间、单位与状态说明）。
+每个模块目录含 `schema/`、`seed/`、`policies/`、`expected/`、`metadata/`。
 
-业务用例目录草案见 [use-cases.md](use-cases.md)（**v0.1.10 目标**，非
-`v0.1.9` 发布范围）：四模块各 32 条按真实运营场景频率排序的参考查询。
+选材参考见 [use-cases.md](use-cases.md)（频率未经生产验证，仅供讨论）。
 
 ## 确定性
 
