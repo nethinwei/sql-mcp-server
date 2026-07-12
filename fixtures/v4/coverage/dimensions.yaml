@@ -1,23 +1,22 @@
-# Capability dimensions for coverage matrix generation.
-# Task-level tags live in tasks-v5/guided-metadata.yaml and additions.yaml.
+# Controlled vocabulary and release gates for the v5 diagnostic task set.
 semantic_challenges:
-  - grain
-  - time_semantics
-  - status_semantics
-  - unit_semantics
-  - version_semantics
   - async_consistency
-  - snapshot_vs_flow
-  - soft_delete
-  - users_vs_customers
+  - grain
   - minor_units
   - relation_selection
+  - snapshot_vs_flow
+  - soft_delete
+  - status_semantics
+  - time_semantics
+  - unit_semantics
+  - users_vs_customers
+  - version_semantics
 
 governance_challenges:
-  - tenant_isolation
   - field_acl
-  - masking
   - inference_risk
+  - masking
+  - tenant_isolation
 
 expected_behaviors:
   - answer
@@ -30,3 +29,16 @@ prompt_levels:
   - guided
   - natural
   - ambiguous
+
+high_priority_semantic:
+  - grain
+  - status_semantics
+  - time_semantics
+  - unit_semantics
+  - version_semantics
+
+high_risk_governance:
+  - field_acl
+  - inference_risk
+  - masking
+  - tenant_isolation

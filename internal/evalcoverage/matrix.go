@@ -26,6 +26,8 @@ type dimensionsFile struct {
 	GovernanceChallenges []string `yaml:"governance_challenges"`
 	ExpectedBehaviors    []string `yaml:"expected_behaviors"`
 	PromptLevels         []string `yaml:"prompt_levels"`
+	HighPrioritySemantic []string `yaml:"high_priority_semantic"`
+	HighRiskGovernance   []string `yaml:"high_risk_governance"`
 }
 
 type taskFile struct {
@@ -35,6 +37,11 @@ type taskFile struct {
 type guidedMeta struct {
 	Tasks map[string]Task `yaml:"tasks"`
 }
+
+const (
+	minDiagnosticTasks = 35
+	maxDiagnosticTasks = 50
+)
 
 // Matrix summarizes coverage counts per capability dimension.
 type Matrix struct {
@@ -90,6 +97,9 @@ func LoadTasks(v4MetaPath, additionsPath, dimensionsPath string) ([]Task, error)
 	if err := validateTasks(out, dimensions); err != nil {
 		return nil, err
 	}
+	if err := validateReleaseGates(out, dimensions); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -110,12 +120,38 @@ func validateTasks(tasks []Task, dimensions dimensionsFile) error {
 	governance := stringSet(dimensions.GovernanceChallenges)
 	behaviors := stringSet(dimensions.ExpectedBehaviors)
 	levels := stringSet(dimensions.PromptLevels)
+	if err := validateVocabulary("semantic challenge", dimensions.SemanticChallenges); err != nil {
+		return err
+	}
+	if err := validateVocabulary("governance challenge", dimensions.GovernanceChallenges); err != nil {
+		return err
+	}
+	if err := validateValues("dimensions", "high-priority semantic challenge",
+		dimensions.HighPrioritySemantic, semantic); err != nil {
+		return err
+	}
+	if err := validateValues("dimensions", "high-risk governance challenge",
+		dimensions.HighRiskGovernance, governance); err != nil {
+		return err
+	}
+	seen := map[string]bool{}
 	for _, task := range tasks {
+		if task.ID == "" {
+			return fmt.Errorf("task missing id")
+		}
+		if seen[task.ID] {
+			return fmt.Errorf("duplicate task id %q", task.ID)
+		}
+		seen[task.ID] = true
 		if !behaviors[task.ExpectedBehavior] {
 			return fmt.Errorf("task %q: unknown expected behavior %q", task.ID, task.ExpectedBehavior)
 		}
 		if !levels[task.PromptLevel] {
 			return fmt.Errorf("task %q: unknown prompt level %q", task.ID, task.PromptLevel)
+		}
+		if len(task.Dimensions.SemanticChallenges) == 0 &&
+			len(task.Dimensions.GovernanceChallenges) == 0 {
+			return fmt.Errorf("task %q: missing semantic or governance dimensions", task.ID)
 		}
 		if err := validateValues(task.ID, "semantic challenge",
 			task.Dimensions.SemanticChallenges, semantic); err != nil {
@@ -125,6 +161,62 @@ func validateTasks(tasks []Task, dimensions dimensionsFile) error {
 			task.Dimensions.GovernanceChallenges, governance); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateReleaseGates(tasks []Task, dimensions dimensionsFile) error {
+	if len(tasks) < minDiagnosticTasks || len(tasks) > maxDiagnosticTasks {
+		return fmt.Errorf("task count %d outside release range %d..%d",
+			len(tasks), minDiagnosticTasks, maxDiagnosticTasks)
+	}
+	behaviorCount := map[string]int{}
+	levelCount := map[string]int{}
+	nonGuidedSemantic := map[string]bool{}
+	negativeGovernance := map[string]bool{}
+	for _, task := range tasks {
+		behaviorCount[task.ExpectedBehavior]++
+		levelCount[task.PromptLevel]++
+		if task.PromptLevel != "guided" {
+			for _, value := range task.Dimensions.SemanticChallenges {
+				nonGuidedSemantic[value] = true
+			}
+		}
+		if task.ExpectedBehavior == "deny" || task.Violation {
+			for _, value := range task.Dimensions.GovernanceChallenges {
+				negativeGovernance[value] = true
+			}
+		}
+	}
+	for _, behavior := range dimensions.ExpectedBehaviors {
+		if behaviorCount[behavior] == 0 {
+			return fmt.Errorf("expected behavior %q has no formal task", behavior)
+		}
+	}
+	for _, level := range dimensions.PromptLevels {
+		if levelCount[level] == 0 {
+			return fmt.Errorf("prompt level %q has no formal task", level)
+		}
+	}
+	for _, value := range dimensions.HighPrioritySemantic {
+		if !nonGuidedSemantic[value] {
+			return fmt.Errorf("high-priority semantic challenge %q has no non-guided task", value)
+		}
+	}
+	for _, value := range dimensions.HighRiskGovernance {
+		if !negativeGovernance[value] {
+			return fmt.Errorf("high-risk governance challenge %q has no negative task", value)
+		}
+	}
+	return nil
+}
+
+func validateVocabulary(kind string, values []string) error {
+	if len(values) == 0 {
+		return fmt.Errorf("%s vocabulary is empty", kind)
+	}
+	if len(stringSet(values)) != len(values) {
+		return fmt.Errorf("%s vocabulary contains duplicates", kind)
 	}
 	return nil
 }

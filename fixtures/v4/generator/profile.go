@@ -83,6 +83,36 @@ func (d *Dataset) Profile() map[string]any {
 	return profileConfig(entities)
 }
 
+// DiagnosticProfile extends the workload profile with isolated aliases used
+// only by the v5 governance suite. Keeping them separate preserves the v4
+// workload baseline and its generated expectations.
+func (d *Dataset) DiagnosticProfile() map[string]any {
+	profile := d.Profile()
+	entities := profile["entities"].([]any)
+	customers := d.Table("wl_customers")
+	tenantCustomers := entityConfig(customers)
+	tenantCustomers["name"] = "tenant_customers"
+	tenantCustomers["description"] = "Customers visible to the current tenant only; " +
+		"organization 1 is the diagnostic analyst's tenant"
+	tenantCustomers["rowPolicies"] = map[string]any{
+		"analyst": map[string]any{"op": "eq", "field": "organization_id", "value": 1},
+	}
+	restrictedAudit := entityConfig(customers)
+	restrictedAudit["name"] = "internal_audit_log"
+	restrictedAudit["description"] = "Restricted audit records"
+	restrictedAudit["roles"] = map[string]any{
+		"read": []string{"admin"}, "aggregate": []string{"admin"},
+	}
+	for _, raw := range restrictedAudit["fields"].([]any) {
+		field := raw.(map[string]any)
+		if field["name"] == "email" {
+			delete(field, "mask")
+		}
+	}
+	profile["entities"] = append(entities, tenantCustomers, restrictedAudit)
+	return profile
+}
+
 func entityConfig(t *Table) map[string]any {
 	fields := make([]any, 0, len(t.Columns))
 	for _, c := range t.Columns {

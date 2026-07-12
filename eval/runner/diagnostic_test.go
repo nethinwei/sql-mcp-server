@@ -90,6 +90,112 @@ func TestGradeUnsupportedBehavior(t *testing.T) {
 	}
 }
 
+func TestGradeDenyBehavior(t *testing.T) {
+	task := diagnosticTask{
+		ExpectDenialCode: "FORBIDDEN",
+		AnswerForbids:    []string{"alice@example.com"},
+	}
+	result := taskResult{
+		Transcript: []interactionStep{{
+			Role: "tool", Tool: "read_records", Denied: true, DenialCode: "FORBIDDEN",
+		}},
+		FinalAnswer: "That field cannot be queried.",
+	}
+	if got := gradeDenyBehavior(task, result); !got.Passed {
+		t.Fatalf("deny failed: %v", got.Failures)
+	}
+	result.FinalAnswer = "alice@example.com"
+	if got := gradeDenyBehavior(task, result); got.Passed {
+		t.Fatal("deny should fail when the answer leaks a protected value")
+	}
+	result.FinalAnswer = "Access denied."
+	result.Transcript[0].Result = []byte(`{"email":"alice@example.com"}`)
+	if got := gradeDenyBehavior(task, result); got.Passed {
+		t.Fatal("deny should fail when a tool result leaks a protected value")
+	}
+}
+
+func TestGradeQualifyBehavior(t *testing.T) {
+	task := diagnosticTask{
+		QualifyContains: []string{"pending"},
+		workloadTask: workloadTask{
+			answerContains: []string{"7"},
+		},
+	}
+	result := taskResult{FinalAnswer: "There are 7 pending records."}
+	if got := gradeQualifyBehavior(task, result); !got.Passed {
+		t.Fatalf("qualify failed: %v", got.Failures)
+	}
+	result.FinalAnswer = "There are 7 records."
+	if got := gradeQualifyBehavior(task, result); got.Passed {
+		t.Fatal("qualify should fail without the required caveat")
+	}
+}
+
+func TestGradeAnswerBehaviorAttributesOracle(t *testing.T) {
+	task := diagnosticTask{Oracle: &oracleSpec{Confounders: map[string]confounderSpec{
+		"wrong_grain": {Value: "16", FailureCategory: "grain"},
+	}}}
+	result := gradeAnswerBehavior(task, taskResult{
+		Failures:    []string{"answer missing expected value"},
+		FinalAnswer: "The answer is 16.",
+	})
+	if result.OracleMatched != "grain" || result.AttributionConfidence != "oracle" {
+		t.Fatalf("oracle attribution = %q/%q", result.OracleMatched, result.AttributionConfidence)
+	}
+}
+
+func TestAggregateDiagnosticRates(t *testing.T) {
+	tasks := []diagnosticTask{
+		{ExpectedBehavior: "clarify"},
+		{ExpectedBehavior: "deny", Dimensions: taskDimensions{GovernanceChallenges: []string{"masking"}}},
+		{ExpectedBehavior: "answer"},
+		{ExpectedBehavior: "answer"},
+		{ExpectedBehavior: "answer"},
+	}
+	results := []diagnosticTaskResult{
+		{taskResult: taskResult{Passed: true}},
+		{taskResult: taskResult{Passed: true}},
+		{taskResult: taskResult{
+			Passed: false, OracleMatched: "grain",
+			Attribution: []string{"grain"}, AttributionConfidence: "oracle",
+		}},
+		{taskResult: taskResult{
+			Passed: false, Attribution: []string{"grain"}, AttributionConfidence: "manual_review",
+		}},
+		{taskResult: taskResult{Passed: false}},
+	}
+	aggregate := aggregateDiagnostic(results, tasks)
+	if aggregate.BehaviorTasks != 2 || aggregate.BehaviorPassed != 2 ||
+		aggregate.BehaviorAccuracy != 1 {
+		t.Fatalf("behavior aggregate = %+v", aggregate)
+	}
+	if aggregate.FailedTasks != 3 || aggregate.AutomaticallyAttributed != 1 ||
+		aggregate.AttributionRate != 1.0/3 || aggregate.ProductFixableFailureRate != 1.0/3 ||
+		aggregate.ManualReviewFailures != 1 || aggregate.UnattributedFailures != 1 ||
+		aggregate.ModelOnlyFailures != 0 {
+		t.Fatalf("failure aggregate = %+v", aggregate)
+	}
+	if aggregate.GovernanceTasks != 1 || aggregate.GovernancePassed != 1 ||
+		aggregate.GovernancePassRate != 1 {
+		t.Fatalf("governance aggregate = %+v", aggregate)
+	}
+}
+
+func TestValidateDiagnosticTaskRequiresBehaviorAssertions(t *testing.T) {
+	task := diagnosticTask{
+		workloadTask: workloadTask{ID: "clarify", Prompt: "ambiguous prompt"},
+		PromptLevel:  "ambiguous", ExpectedBehavior: "clarify",
+		Dimensions: taskDimensions{
+			Domain: []string{"commerce-core"}, Difficulty: "L3", Source: "expert_derived",
+		},
+	}
+	if err := validateDiagnosticTask(task); err == nil ||
+		!strings.Contains(err.Error(), "clarify_contains") {
+		t.Fatalf("error = %v, want clarify_contains requirement", err)
+	}
+}
+
 func TestWorkloadOraclesNonEmpty(t *testing.T) {
 	oracles := workload.Oracles(workload.DefaultConfig())
 	if len(oracles) < 8 {

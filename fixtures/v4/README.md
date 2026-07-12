@@ -15,7 +15,8 @@ commerce-core/                通用商业基础模型（行业中立）
 payment-orchestration/        支付编排模型（行业中立）
 ledger-settlement/            账务、结算与对账模型（行业中立）
 verticals/live-monetization/  直播与创作者经济行业扩展
-profiles/default.yaml         可直接运行的组合 profile（四模块全量实体）
+profiles/default.yaml         v4 负载轨组合 profile
+profiles/diagnostic.yaml      v5 诊断轨 profile（增加隔离治理别名）
 tasks/                        v4 任务集（v0.1.9 已交付 21 项 Guided）
 tasks-v5/                     v0.1.10 元数据、27 个正式扩展任务与 P1 草案
 scenarios/                    P1 多轮调查场景草案（默认轨不加载）
@@ -70,7 +71,9 @@ psql "$DSN" -f commerce-core/schema/postgres.sql -f commerce-core/seed/postgres.
 DATABASE_DSN="$DSN" sql-mcp-server -config fixtures/v4/profiles/default.yaml
 ```
 
-`make eval-workload` 自动完成以上装配（testcontainers）。
+`make eval-workload` 自动完成以上装配（testcontainers）；`make
+eval-diagnostic` 使用相同数据和 `profiles/diagnostic.yaml`，额外验证
+tenant row policy 与隐藏实体，不改变负载轨预期。
 
 ## 扩展新行业模块
 

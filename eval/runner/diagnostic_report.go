@@ -17,14 +17,23 @@ type diagnosticTaskResult struct {
 
 type diagnosticAggregate struct {
 	reportAggregate
-	BehaviorAccuracy       float64 `json:"behaviorAccuracy"`
-	OracleAttributionRate  float64 `json:"oracleAttributionRate"`
-	UnattributedFailures   int     `json:"unattributedFailures"`
-	ProductFixableFailures int     `json:"productFixableFailures"`
-	ModelOnlyFailures      int     `json:"modelOnlyFailures"`
-	ClarifyTasks           int     `json:"clarifyTasks"`
-	DenyTasks              int     `json:"denyTasks"`
-	GovernanceTasks        int     `json:"governanceTasks"`
+	BehaviorTasks             int     `json:"behaviorTasks"`
+	BehaviorPassed            int     `json:"behaviorPassed"`
+	BehaviorAccuracy          float64 `json:"behaviorAccuracy"`
+	FailedTasks               int     `json:"failedTasks"`
+	AutomaticallyAttributed   int     `json:"automaticallyAttributedFailures"`
+	AttributionRate           float64 `json:"attributionRate"`
+	OracleAttributionRate     float64 `json:"oracleAttributionRate"`
+	UnattributedFailures      int     `json:"unattributedFailures"`
+	ManualReviewFailures      int     `json:"manualReviewFailures"`
+	ProductFixableFailures    int     `json:"productFixableFailures"`
+	ProductFixableFailureRate float64 `json:"productFixableFailureRate"`
+	ModelOnlyFailures         int     `json:"modelOnlyFailures"`
+	ClarifyTasks              int     `json:"clarifyTasks"`
+	DenyTasks                 int     `json:"denyTasks"`
+	GovernanceTasks           int     `json:"governanceTasks"`
+	GovernancePassed          int     `json:"governancePassed"`
+	GovernancePassRate        float64 `json:"governancePassRate"`
 }
 
 type diagnosticReport struct {
@@ -138,9 +147,10 @@ func aggregateDiagnostic(results []diagnosticTaskResult, tasks []diagnosticTask)
 }
 
 type diagnosticFailureStats struct {
-	behaviorOK, behaviorTotal               int
-	oracleHits, failedTotal                 int
-	unattributed, productFixable, modelOnly int
+	behaviorOK, behaviorTotal                             int
+	oracleHits, automaticallyAttributed, failedTotal      int
+	governanceOK, governanceTotal                         int
+	unattributed, manualReview, productFixable, modelOnly int
 }
 
 func accumulateDiagnosticTask(
@@ -161,6 +171,10 @@ func accumulateDiagnosticTask(
 	}
 	if len(t.Dimensions.GovernanceChallenges) > 0 || t.Violation {
 		agg.GovernanceTasks++
+		stats.governanceTotal++
+		if result.Passed {
+			stats.governanceOK++
+		}
 	}
 	if result.Passed {
 		return
@@ -168,27 +182,45 @@ func accumulateDiagnosticTask(
 	stats.failedTotal++
 	if result.OracleMatched != "" {
 		stats.oracleHits++
+		stats.automaticallyAttributed++
 		stats.productFixable++
 		return
 	}
 	if len(result.Attribution) > 0 && result.AttributionConfidence == "mechanical" {
+		stats.automaticallyAttributed++
 		stats.productFixable++
 		return
 	}
 	if len(result.Attribution) == 0 {
 		stats.unattributed++
+		return
+	}
+	if result.AttributionConfidence == "manual_review" {
+		stats.manualReview++
+		return
 	}
 	stats.modelOnly++
 }
 
 func finalizeDiagnosticAggregate(agg *diagnosticAggregate, stats diagnosticFailureStats) {
+	agg.BehaviorTasks = stats.behaviorTotal
+	agg.BehaviorPassed = stats.behaviorOK
+	agg.FailedTasks = stats.failedTotal
+	agg.AutomaticallyAttributed = stats.automaticallyAttributed
+	agg.GovernancePassed = stats.governanceOK
 	if stats.behaviorTotal > 0 {
 		agg.BehaviorAccuracy = float64(stats.behaviorOK) / float64(stats.behaviorTotal)
 	}
 	if stats.failedTotal > 0 {
+		agg.AttributionRate = float64(stats.automaticallyAttributed) / float64(stats.failedTotal)
 		agg.OracleAttributionRate = float64(stats.oracleHits) / float64(stats.failedTotal)
+		agg.ProductFixableFailureRate = float64(stats.productFixable) / float64(stats.failedTotal)
+	}
+	if stats.governanceTotal > 0 {
+		agg.GovernancePassRate = float64(stats.governanceOK) / float64(stats.governanceTotal)
 	}
 	agg.UnattributedFailures = stats.unattributed
+	agg.ManualReviewFailures = stats.manualReview
 	agg.ProductFixableFailures = stats.productFixable
 	agg.ModelOnlyFailures = stats.modelOnly
 }

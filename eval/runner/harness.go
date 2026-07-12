@@ -160,6 +160,9 @@ func runConversation(
 		}
 		messages = append(messages, message)
 		for _, call := range message.ToolCalls {
+			if toolCalls >= maxToolCalls {
+				return result, nil
+			}
 			step, content := executeToolCall(ctx, session, call)
 			result.Steps = append(result.Steps, step)
 			toolCalls++

@@ -53,6 +53,11 @@ func Artifacts(cfg Config) map[string]string {
 	}
 	yamlHeader := strings.ReplaceAll(header, "--", "#")
 	out["profiles/default.yaml"] = yamlHeader + string(profile)
+	diagnosticProfile, err := yaml.Marshal(d.DiagnosticProfile())
+	if err != nil {
+		panic(err)
+	}
+	out["profiles/diagnostic.yaml"] = yamlHeader + string(diagnosticProfile)
 
 	for _, module := range modules {
 		out[moduleDir(module)+"/policies/entities.yaml"] =

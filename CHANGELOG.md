@@ -9,6 +9,25 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+## 0.1.10 - 2026-07-12
+
+### Added
+
+- Diagnostic Eval v5：48 个正式任务、guided/natural/ambiguous prompt 分层、
+  answer/clarify/deny/qualify/unsupported 五行为、同源 counterfactual
+  oracle 与治理 suite。
+- `make eval-coverage` 生成受控维度覆盖矩阵并由 drift/发布门禁锁定；
+  `make eval-diagnostic` 输出行为准确度、治理通过率、归因率、人工复核、
+  product-fixable 与过程成本。
+- 诊断专用治理 profile，不改变 v4 真实负载基线。
+
+### Changed
+
+- Eval 单任务工具调用硬上限现在对同一模型响应中的批量 tool call 同样生效。
+- deepseek-v4-flash 三轮诊断结果为 41/48、43/48、43/48；Tool Contract
+  转 go（进入设计评估），其余分流结论见
+  [`docs/releases/v0.1.10.md`](docs/releases/v0.1.10.md)。
+
 ## 0.1.9 - 2026-07-12
 
 ### Added
