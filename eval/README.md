@@ -14,7 +14,7 @@ Agent Eval 分为两轨（v0.1.9 起）：
 回归轨：32 个固定任务（[regression/tasks.yaml](regression/tasks.yaml)
 v3 = 24 个 v2 任务 + 8 个定向任务），在确定性 fixture 上机械评分，用于
 回答一个问题——**当前工具契约下，Agent 的主要失败源是什么**，并对后续
-投入方向（主路线图休眠项 Eval-Driven Agent Improvement）形成 go/no-go
+投入方向（主路线图 Dormant 项 Eval-Driven Agent Improvement）形成 go/no-go
 结论。
 
 v3（v0.1.7 校准）新增大 schema（catalog 扩到 26 个实体，20 个 decoy）、

@@ -9,6 +9,33 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+## 0.1.9 - 2026-07-12
+
+### Added
+
+- 真实业务负载模型（`fixtures/v4/`，[设计文档](docs/design/business-workload-model.md)）：
+  四个业务模块（commerce-core、payment-orchestration、ledger-settlement、
+  live-monetization）共 45 个实体的确定性生成器（seed/scale/异常注入/
+  双方言渲染）、可运行组合 profile 与 `make fixtures-v4` 再生成（drift
+  测试锁定）。
+- Eval 真实负载轨（`make eval-workload`）：21 个业务任务、生成器同源
+  预期注入、数字边界匹配 + 证据行覆盖双通道评分、十类失败归因、
+  `EVAL_DSN` dogfooding 模式；三轮正式运行 21/21（deepseek-v4-flash），
+  结论见
+  [`eval/results/2026-07-12-deepseek-v4-flash-workload-v4.md`](eval/results/2026-07-12-deepseek-v4-flash-workload-v4.md)。
+- 跨 Provider workload 一致性（`internal/conformance.RunWorkload`）：
+  45 张表 checksum 差分，三库接入 `make test-integration` 并全绿。
+- 文档一致性检查（`make docs-check`）：内部链接与版本引用一致性，进入
+  `ci-local` 与主 CI。
+
+### Changed
+
+- Eval 双轨化：v3 任务集与 fixture 冻结为回归轨并移至
+  `eval/regression/`（内容不变；自动化引用需改路径），迁移后回归验证
+  32/32。
+
+详见 [`docs/releases/v0.1.9.md`](docs/releases/v0.1.9.md)。
+
 ## 0.1.8 - 2026-07-12
 
 ### Added

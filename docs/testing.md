@@ -134,7 +134,10 @@ make modelscope-check
 
 ```sh
 make bench-overhead   # data-plane overhead p50/p95/p99（需要 Docker）
-make eval-pilot       # 需要 Docker 与 EVAL_API_KEY/EVAL_MODEL，见 eval/README.md
+make eval-pilot       # Eval 回归轨（v3 冻结基线），需要 Docker 与 EVAL_API_KEY/EVAL_MODEL
+make eval-workload    # Eval 真实负载轨（fixtures/v4），环境同上；EVAL_DSN 切换 dogfooding 模式
+make docs-check       # 文档内部链接与版本引用一致性（无外部依赖）
+make fixtures-v4      # 再生成 fixtures/v4 产物（drift 测试锁定一致性）
 ```
 
 测试标签不是自动由 `go test ./...` 覆盖，不能用默认单元测试通过推断真实

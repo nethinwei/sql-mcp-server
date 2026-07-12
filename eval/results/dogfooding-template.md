@@ -19,11 +19,11 @@
 
 | # | 现象 | 归因 | 服务端可解决？ | 对应 Roadmap 方向 |
 | - | ---- | ---- | -------------- | ----------------- |
-| 1 | <...> | <十类之一> | <是/否/待定> | <休眠项分流出口 / 契约收紧 / 无> |
+| 1 | <...> | <十类之一> | <是/否/待定> | <Dormant 项分流出口 / 契约收紧 / 无> |
 
 ## 结论
 
-- 为休眠方向提供的证据：<Semantic Metadata / Catalog Discovery /
+- 为 Dormant 方向提供的证据：<Semantic Metadata / Catalog Discovery /
   Governed Query Expressiveness 各 go|no-go|继续观察 + 判据>
 - 接入摩擦记录（进入 [Roadmap Metrics](../../docs/roadmap/metrics.md)
   采用漏斗指标）：<安装 / 首个 Entity / 发现与调用 / 首次失败>

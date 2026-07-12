@@ -1,7 +1,7 @@
 # 发布说明索引
 
-当前 GA 为 `v0.1.8`（[发布说明](v0.1.8.md)、
-[GitHub Release](https://github.com/nethinwei/sql-mcp-server/releases/tag/v0.1.8)）。
+当前 GA 为 `v0.1.9`（[发布说明](v0.1.9.md)、
+[GitHub Release](https://github.com/nethinwei/sql-mcp-server/releases/tag/v0.1.9)）。
 
 本目录中的发布说明描述各版本发布时点的能力、迁移和证据状态。当前运行时行为以
 [配置参考](../configuration.md)、[安全模型](../security.md)和
@@ -10,6 +10,10 @@
 
 ## 版本
 
+- [`v0.1.9`](v0.1.9.md)（2026-07-12）：Real Business Workload Model——
+  四模块业务 reference model 与确定性生成器（`fixtures/v4/`）、Eval
+  双轨化（v3 冻结回归轨 + v4 真实负载轨，三轮 21/21）、十类失败归因、
+  跨 Provider workload 一致性差分与文档一致性 CI 检查；
 - [`v0.1.8`](v0.1.8.md)（2026-07-12）：IR Semantics and Provider
   Conformance——读路径 IR 语义规范、reference interpreter、三库
   differential conformance suite（85 用例全绿），及无谓词聚合 hint 契约
