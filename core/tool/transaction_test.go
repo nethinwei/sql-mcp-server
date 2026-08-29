@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/cache"
+	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
 )
 
 type failingCommitTx struct {
@@ -21,6 +23,76 @@ type failingCommitTx struct {
 func (t *failingCommitTx) Commit() error {
 	t.Committed = true
 	return t.err
+}
+
+// nonTransactionalDialect simulates an engine (e.g. Hologres) whose
+// transactions cover DDL only, so data statements cannot be atomic.
+type nonTransactionalDialect struct{ testdialect.Postgres }
+
+func (nonTransactionalDialect) Capabilities() dialect.Capabilities {
+	c := testdialect.Postgres{}.Capabilities()
+	c.Transaction = false
+	return c
+}
+
+func TestBeginTransactionFailsClosedWithoutTransactionCapability(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{
+		Name: "events", DataSource: "hg",
+		Role: entity.RoleAccess{entity.ActionRead: {"reader"}},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	beginCalls := 0
+	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+		beginCalls++
+		return &store.FakeTx{}, nil
+	}}
+	manager := NewTransactionManager(time.Minute, 2)
+	defer manager.Close()
+	base := Context{
+		Role: "reader", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
+		Transactions: manager, TxBeginners: map[string]store.TxBeginner{"hg": db},
+		Sources: map[string]DataSource{"hg": {DB: db, Dialect: nonTransactionalDialect{}}},
+	}
+	_, err := (BeginTransactionTool{}).Run(
+		context.Background(), json.RawMessage(`{"datasource":"hg"}`), base,
+	)
+	if !errors.Is(err, ErrTransactionUnsupported) {
+		t.Fatalf("routed datasource error = %v, want ErrTransactionUnsupported", err)
+	}
+	denial, ok := DenialFor(err, "decision-1")
+	if !ok || denial.Code != CodeTransactionUnsupported || denial.Retryable {
+		t.Fatalf("denial = %+v, ok = %v", denial, ok)
+	}
+
+	// Single-datasource deployments route through the context default dialect.
+	single := base
+	single.TxBeginners = map[string]store.TxBeginner{"default": db}
+	single.Sources = nil
+	single.Dialect = nonTransactionalDialect{}
+	_, err = (BeginTransactionTool{}).Run(context.Background(), json.RawMessage(`{}`), single)
+	if !errors.Is(err, ErrTransactionUnsupported) {
+		t.Fatalf("default datasource error = %v, want ErrTransactionUnsupported", err)
+	}
+	if beginCalls != 0 {
+		t.Fatalf("BeginTx called %d times despite unsupported transactions", beginCalls)
+	}
+
+	// Dialects with the capability keep working through the same route.
+	defaultReg, _ := entity.NewRegistry([]entity.Entity{{
+		Name: "events", DataSource: "default",
+		Role: entity.RoleAccess{entity.ActionRead: {"reader"}},
+	}})
+	capable := single
+	capable.Registry = defaultReg
+	capable.Authorizer = rbac.NewRoleAuthorizer(defaultReg)
+	capable.Dialect = testdialect.Postgres{}
+	if _, err := (BeginTransactionTool{}).Run(context.Background(), json.RawMessage(`{}`), capable); err != nil {
+		t.Fatalf("capable dialect begin error = %v", err)
+	}
+	if beginCalls != 1 {
+		t.Fatalf("BeginTx calls = %d, want 1", beginCalls)
+	}
 }
 
 func TestTransactionBindingCapacityAndCloseRollback(t *testing.T) {

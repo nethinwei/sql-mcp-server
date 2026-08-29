@@ -23,6 +23,7 @@ MCP Registry 仍处于 preview；`server.json` schema 和 publisher 版本固定
 | PostgreSQL | `postgres:16-alpine` | PostgreSQL 16 |
 | MySQL | `mysql:8` | MySQL 8.x |
 | OceanBase | `oceanbase/oceanbase-ce:4.3.5.6-106000012026040916` | OceanBase CE 4.3.5.6，MySQL 模式 |
+| Hologres | 未实测：无官方容器镜像，integration 由 `HOLOGRES_TEST_DSN` 门控，未设置时 skip | PostgreSQL wire 协议（服务端 lineage 11）；实测后在此登记实例版本 |
 
 未列出的数据库版本可能可用，但 v0.1.4 不宣称已验证。升级测试镜像必须同时运行
 对应 provider integration，并更新本页和

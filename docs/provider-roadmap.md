@@ -104,6 +104,13 @@ Databricks SQL、广泛国产数据库铺开和“接入几十个 JDBC/ADBC 数�
 > 技术前置已满足，但不自动获得 `v0.1.11` 承诺；须与诊断结果触发的 Tool
 > Contract 设计评估共同复审。SQLite 保持 `Next 2`。
 
+> **已登记例外**（Hologres 接入，2026-08）：Hologres provider 未等待完整
+> capability model 重构即立项，按「最小扩展」执行——仅在
+> `core/dialect.Capabilities` 上新增 `Transaction` bool（表达 Hologres 事务
+> 仅覆盖 DDL、必须 fail-closed 的语义），未引入范围/强度/证据维度。这是
+> 一次性的、有用户证据（真实接入需求 + 真实实例测试环境）的例外，不构成
+> 后续 provider 跳过 capability model 重构的先例。
+
 新增 Provider 前先扩展 capability model。当前实现
 （`core/dialect.Capabilities`）是平铺 bool，无法表达保证强度，且成本闸门装配
 直接消费这些 bool；将其重构为“范围 + 强度 + 证据”模型是任何新 Provider 或

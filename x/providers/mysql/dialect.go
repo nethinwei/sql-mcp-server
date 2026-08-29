@@ -22,6 +22,7 @@ func (Dialect) Capabilities() dialect.Capabilities {
 		Returning:        false,
 		Savepoint:        true,
 		KeysetCursor:     true,
+		Transaction:      true,
 		ExplainJSON:      true,
 		ExplainCost:      true,
 		ExplainAccurate:  false,

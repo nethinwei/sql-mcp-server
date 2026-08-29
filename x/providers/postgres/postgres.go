@@ -64,6 +64,13 @@ func NewWithTimeout(dsn string, timeout time.Duration) (*Provider, error) {
 	if _, configured := cfg.RuntimeParams["statement_timeout"]; !configured {
 		cfg.RuntimeParams["statement_timeout"] = strconv.FormatInt(timeout.Milliseconds(), 10)
 	}
+	return NewWithConfig(cfg)
+}
+
+// NewWithConfig opens PostgreSQL from an already-parsed pgx config and pings
+// it. Wire-compatible providers (e.g. Hologres) reuse it so they can inject
+// their own connection parameters and exec mode before the pool is opened.
+func NewWithConfig(cfg *pgx.ConnConfig) (*Provider, error) {
 	db := stdlib.OpenDB(*cfg)
 	if err := db.PingContext(context.Background()); err != nil {
 		_ = db.Close()

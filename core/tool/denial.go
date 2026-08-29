@@ -41,6 +41,9 @@ const (
 	CodeTransactionNotFound = "TRANSACTION_NOT_FOUND"
 	CodeTransactionScope    = "TRANSACTION_SCOPE"
 	CodeTransactionCapacity = "TRANSACTION_CAPACITY"
+	// CodeTransactionUnsupported rejects begin_transaction on datasources
+	// whose dialect cannot make data statements atomic (Capability Transaction).
+	CodeTransactionUnsupported = "TRANSACTION_UNSUPPORTED"
 )
 
 var sentinelDenials = []struct {
@@ -58,6 +61,7 @@ var sentinelDenials = []struct {
 	{ErrTransactionNotFound, CodeTransactionNotFound, false},
 	{ErrTransactionScope, CodeTransactionScope, false},
 	{ErrTransactionCapacity, CodeTransactionCapacity, true},
+	{ErrTransactionUnsupported, CodeTransactionUnsupported, false},
 }
 
 // DenialFor maps a business-level error to the rejection contract. ok is
@@ -72,6 +76,15 @@ func DenialFor(err error, decisionID string) (Denial, bool) {
 			Code: CodeBudgetExceeded, Reason: err.Error(), Retryable: true,
 			Hints: []string{
 				"narrow the request (fewer rows, fields, or bytes) or retry after the session budget resets",
+			},
+			DecisionID: decisionID,
+		}, true
+	}
+	if errors.Is(err, ErrTransactionUnsupported) {
+		return Denial{
+			Code: CodeTransactionUnsupported, Reason: err.Error(), Retryable: false,
+			Hints: []string{
+				"this datasource does not provide atomic transactions for data statements; issue tool calls without a transaction token",
 			},
 			DecisionID: decisionID,
 		}, true

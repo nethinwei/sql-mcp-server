@@ -10,6 +10,13 @@ type Capabilities struct {
 	Savepoint    bool
 	KeysetCursor bool // keyset pagination needs no degradation
 
+	// Lifecycle.
+	// Transaction reports whether explicit transactions give data statements
+	// (the only statements this server renders) atomic commit/rollback. false
+	// means the dialect must fail closed on begin_transaction (e.g. Hologres,
+	// whose transactions cover DDL only).
+	Transaction bool
+
 	// Gate layers (see cost.Gate assembly).
 	ExplainJSON      bool // supports EXPLAIN ... JSON output
 	ExplainCost      bool // EXPLAIN yields a numeric cost (SQLite does not)

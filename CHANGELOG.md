@@ -9,6 +9,24 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+### Added
+
+- Hologres provider（`driver: hologres`）：PostgreSQL wire 协议适配（pgx、
+  simple query protocol 默认、`statement_timeout`/`application_name` 注入）、
+  基于 `pg_catalog` 的表发现（隐藏 LIST 分区子表与内部 schema）、保守文本
+  EXPLAIN 解析器；首版范围为 read + aggregate，integration/conformance/
+  workload 用例由 `HOLOGRES_TEST_DSN` 门控（无官方容器镜像）。
+- `core/dialect.Capabilities.Transaction` 能力位：方言可将显式事务声明为
+  不支持，`begin_transaction` 对此类数据源 fail-closed。Hologres 事务仅
+  覆盖 DDL，为首个 `Transaction=false` 方言。
+
+### Changed
+
+- 契约兼容新增 denial code `TRANSACTION_UNSUPPORTED`（`retryable=false`，
+  附 hints）：按 [Tool Contract](docs/tool-contract.md) 分类为新增可选
+  code 的兼容变更；契约 golden 已随 `TRANSACTION_UNSUPPORTED: false`
+  更新。
+
 ## 0.1.10 - 2026-07-12
 
 ### Added

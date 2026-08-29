@@ -22,6 +22,11 @@ func SetupWorkload(ctx context.Context, db store.DB, d dialect.Dialect, cfg work
 	if dialectName == "oceanbase" {
 		dialectName = workload.DialectMySQL // identical rendering
 	}
+	if dialectName == "hologres" {
+		// The generator emits plain integer/text/PK DDL with no SERIAL,
+		// DEFAULT, or FK clauses, which Hologres renders unchanged.
+		dialectName = workload.DialectPostgres
+	}
 	for _, stmt := range workload.Generate(cfg).StatementsIn(dialectName, schema) {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("workload setup: %w", err)

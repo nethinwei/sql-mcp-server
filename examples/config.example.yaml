@@ -29,7 +29,7 @@ server:
 # Use "database" for one legacy/default source, or "databases" for named sources.
 databases:
   primary:
-    driver: postgres # postgres | mysql | oceanbase
+    driver: postgres # postgres | mysql | oceanbase | hologres
     # Every ${...} placeholder in a DSN is resolved at startup.
     dsn: "postgres://${PGUSER}:${PGPASSWORD}@${PGHOST}:5432/${PGDATABASE}?sslmode=require"
   analytics:
@@ -38,6 +38,12 @@ databases:
     dsn: "${MYSQL_USER}:${MYSQL_PASSWORD}@tcp(${MYSQL_HOST}:3306)/${MYSQL_DATABASE}?parseTime=true"
     # A whole DSN can instead come from a mounted secret:
     # dsn: "${file:/run/secrets/analytics_dsn}"
+  # warehouse:
+  #   driver: hologres
+  #   # Hologres speaks the PostgreSQL wire protocol on port 80 with RAM
+  #   # AccessKey credentials; keep the secret out of the file. Transactions
+  #   # cover DDL only, so begin_transaction fails closed for this source.
+  #   dsn: "postgres://${HG_AK_ID}:${HG_AK_SECRET}@${HG_ENDPOINT}:80/${HG_DATABASE}?sslmode=require"
 
 tools:
   describeEntities: true

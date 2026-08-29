@@ -9,7 +9,7 @@ import (
 
 func TestBuiltInDriversRegistered(t *testing.T) {
 	drivers := providerregistry.KnownDrivers()
-	for _, want := range []string{"mysql", "oceanbase", "postgres"} {
+	for _, want := range []string{"mysql", "oceanbase", "postgres", "hologres"} {
 		if !slices.Contains(drivers, want) {
 			t.Errorf("KnownDrivers() = %v, missing %q", drivers, want)
 		}

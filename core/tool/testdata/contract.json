@@ -359,6 +359,7 @@
     "TRANSACTION_CAPACITY": true,
     "TRANSACTION_NOT_FOUND": false,
     "TRANSACTION_SCOPE": false,
+    "TRANSACTION_UNSUPPORTED": false,
     "UNAUTHORIZED": false,
     "UNSAFE_WRITE": true
   },

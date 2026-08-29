@@ -84,17 +84,17 @@ func scan(schema string) relalg.Expr {
 }
 
 // SetupStatements returns the DDL and seed statements for the given dialect
-// family ("postgres" or the MySQL family used by MySQL and OceanBase). Each
-// statement must be executed separately: MySQL drivers reject
-// multi-statement strings by default.
+// family ("postgres" and its wire-compatible Hologres, or the MySQL family
+// used by MySQL and OceanBase). Each statement must be executed separately:
+// MySQL drivers reject multi-statement strings by default.
 func SetupStatements(dialectName, schema string) []string {
 	qualified := Qualified(schema)
 	var stmts []string
-	if schema != "" && dialectName != "postgres" {
+	if schema != "" && dialectName != "postgres" && dialectName != "hologres" {
 		stmts = append(stmts, "CREATE DATABASE IF NOT EXISTS "+schema)
 	}
 	stmts = append(stmts, "DROP TABLE IF EXISTS "+qualified)
-	if dialectName == "postgres" {
+	if dialectName == "postgres" || dialectName == "hologres" {
 		stmts = append(stmts, "CREATE TABLE "+qualified+
 			" (id integer PRIMARY KEY, cat text, val integer, price numeric(10,2), name text)")
 	} else {

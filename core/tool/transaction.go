@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
@@ -20,6 +21,11 @@ var (
 	ErrTransactionNotFound = errors.New("tool: transaction not found")
 	ErrTransactionScope    = errors.New("tool: transaction scope mismatch")
 	ErrTransactionCapacity = errors.New("tool: transaction capacity reached")
+	// ErrTransactionUnsupported fails closed when the target datasource's
+	// dialect cannot make data statements atomic (e.g. Hologres, whose
+	// transactions cover DDL only — commit/rollback would silently be no-ops
+	// for the statements this server renders).
+	ErrTransactionUnsupported = errors.New("tool: transactions unsupported for datasource")
 )
 
 type transactionHandle struct {
@@ -463,6 +469,9 @@ func (BeginTransactionTool) Run(ctx context.Context, input json.RawMessage, tc C
 	if err != nil {
 		return Result{}, err
 	}
+	if d := datasourceDialect(tc, datasource); d != nil && !d.Capabilities().Transaction {
+		return Result{}, ErrTransactionUnsupported
+	}
 	readOnly, err := resolveTransactionReadOnly(ctx, tc, datasource, in.ReadOnly)
 	if err != nil {
 		return Result{}, err
@@ -514,6 +523,15 @@ func resolveTxBeginner(tc Context, datasource string) (store.TxBeginner, string,
 		return nil, datasource, fmt.Errorf("%w: datasource %q", ErrInvalidInput, datasource)
 	}
 	return beginner, datasource, nil
+}
+
+// datasourceDialect returns the dialect of a datasource route, falling back to
+// the context default for single-datasource deployments without routes.
+func datasourceDialect(tc Context, datasource string) dialect.Dialect {
+	if source, ok := tc.Sources[datasource]; ok && source.Dialect != nil {
+		return source.Dialect
+	}
+	return tc.Dialect
 }
 
 func resolveTransactionReadOnly(
