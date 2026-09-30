@@ -93,20 +93,32 @@ tenant、daily 和敏感数据预算。
 评估 MCP OAuth 2.1、delegation chain、多实例 snapshot、shared budget、persistent
 session、signed snapshot、灾难恢复和短期数据库凭证。
 
-触发证据：真实企业部署证明单实例身份与配置分发是采用或安全阻碍。
+触发证据：真实企业部署证明单实例身份与配置分发是采用或安全阻碍。用户、
+角色与权限模型已随
+[管理面 1](../roadmap.md#管理面-1--users-roles-and-permissions)确立进入条件，
+管理后台的 OIDC/OAuth2 人员登录随
+[管理面 4](../roadmap.md#管理面-4--admin-api-login-and-schema-import)交付；
+MCP 客户端 OAuth 2.1、delegation chain、多实例分发等其余部分仍按本触发证据升级。
 
 ## L8. Data Governance and Durable Audit
 
 评估数据分类、sensitive egress budget、聚合隐私阈值、lineage，以及
 `best_effort`、`durable`、`fail_closed` 审计语义。
 
-触发证据：受监管部署提出明确保存期、完整性、可用性和故障处理要求。
+触发证据：受监管部署提出明确保存期、完整性、可用性和故障处理要求。`fail_closed`
+审计语义的最小子集随
+[管理面 2](../roadmap.md#管理面-2--trusted-sql-escape-hatch)交付，只作用于
+SQL 逃生通道，不改变受治理面的审计语义。
 
 ## L9. Management UI
 
 覆盖数据源、实体、策略、token/profile、发布、回滚、模拟和 decision trace。
 
-触发证据：最小控制面 API 至少稳定一个版本，且用户研究证明 UI 是主要采用障碍。
+触发证据：已由维护者需求确立（手写配置成本是主要采用障碍）。管理 API 与
+schema 导入并入
+[管理面 4](../roadmap.md#管理面-4--admin-api-login-and-schema-import)，
+UI 并入[管理面 5](../roadmap.md#管理面-5--admin-console-ui)，以管理面 3 的
+配置存储与 revision 为前置。
 
 ## L10. Query Learning and Reuse
 
@@ -120,8 +132,10 @@ session、signed snapshot、灾难恢复和短期数据库凭证。
 评估 `IdentityProvider`、`SecretProvider`、`AuditSink`、`BudgetStore`、
 `SnapshotStore`、`MaskingFunction`、`Provider` 和 `TelemetryHook` 等扩展点。
 
-触发证据：至少两个独立集成需要同一扩展边界。扩展必须经过统一 engine，禁止注册
-可执行任意 SQL 的 MCP tool。
+触发证据：至少两个独立集成需要同一扩展边界；`SnapshotStore` 以 `ConfigStore`
+形态随[管理面 3](../roadmap.md#管理面-3--structured-config-store-and-revisions)
+交付。扩展必须经过统一 engine，禁止注册可执行任意 SQL 的 MCP tool；唯一的任意
+SQL 入口是管理面 2 定义的内置 `execute_sql`，扩展点不得调用或包装它。
 
 ## L12. Governed Query Expressiveness
 
@@ -211,7 +225,7 @@ row-policy 依赖列变化。本方向把现有启动/reload 的 drift 检查扩
 闭包或改变策略语义（例如有限枚举列变为自由字符串）。
 
 触发证据：真实部署出现 schema 演进需求，或最小控制面进入条件满足（本方向
-是其前置，已提升为主路线图管理面阶段第 1 项）。
+是其前置，已列为主路线图管理面阶段的并行项）。
 
 ## L16. Data Inference and Policy Composition Safety
 
@@ -265,12 +279,16 @@ Relation 和 Policy。本方向提供安全的配置生成，核心原则是
 候选，授权永远是人的显式决定。
 
 触发证据：真实大 schema 用户的接入成本证据（此时其价值可能大于新增第五、
-第六种数据库）。
+第六种数据库）。从已接入数据源 introspection 生成未授权草稿的部分已作为
+[管理面 4](../roadmap.md#管理面-4--admin-api-login-and-schema-import)的首个交付形态；dbt manifest、
+数据字典等外部导入仍按本触发证据升级。
 
 ## 跨阶段非目标
 
-- 自然语言转任意 SQL、通用 SQL parser + sanitizer，以及 `RawSQL`/
-  `RawExpression` 等任意表达式逃生口；
+- 自然语言转任意 SQL、通用 SQL parser + sanitizer，以及在 IR 内引入
+  `RawSQL`/`RawExpression` 等任意表达式逃生口。受治理面始终不接受任意 SQL；
+  唯一例外是管理面 2 的独立 `execute_sql` 入口，它不进入 IR，只对被显式授予
+  `sql:execute@<datasource>` 权限的用户可见；
 - 自动暴露整个数据库或根据自省结果自动授权；
 - 未声明关系的任意 join、跨数据源 federated query 或完整 BI DSL（沿显式授权
   关系的受治理 join 与集合运算属于 L12，须按其门禁逐项升级）；
