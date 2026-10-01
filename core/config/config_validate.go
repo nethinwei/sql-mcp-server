@@ -32,7 +32,10 @@ func (c *Config) Validate() error {
 	if err := c.validateBudget(); err != nil {
 		return err
 	}
-	return c.validateEntities(databases)
+	if err := c.validateEntities(databases); err != nil {
+		return err
+	}
+	return c.validateAccess()
 }
 
 func (c *Config) resolvedDatabases() (map[string]DatabaseConfig, error) {
@@ -236,17 +239,22 @@ func (c *Config) validateEntity(
 	return validateEntityRelationships(e, entitySources, entityConfigs)
 }
 
-func validateEntityFieldACL(e EntityConfig) error {
-	visibleFields := make(map[string]bool, len(e.Fields)*2)
-	for _, field := range e.Fields {
+func visibleFieldNames(fields []FieldConfig) map[string]bool {
+	visible := make(map[string]bool, len(fields)*2)
+	for _, field := range fields {
 		if field.Exclude {
 			continue
 		}
-		visibleFields[field.Name] = true
+		visible[field.Name] = true
 		if field.Alias != "" {
-			visibleFields[field.Alias] = true
+			visible[field.Alias] = true
 		}
 	}
+	return visible
+}
+
+func validateEntityFieldACL(e EntityConfig) error {
+	visibleFields := visibleFieldNames(e.Fields)
 	for role, acl := range e.FieldACL {
 		if duplicate, ok := firstDuplicate(acl.Read); ok {
 			return fmt.Errorf(
@@ -390,7 +398,10 @@ func (c *Config) normalizeRoles() error {
 			return err
 		}
 	}
-	return c.normalizeBudgetRoles()
+	if err := c.normalizeBudgetRoles(); err != nil {
+		return err
+	}
+	return c.normalizeAccess()
 }
 
 func (c *Config) normalizeEntityRoles(e *EntityConfig) error {

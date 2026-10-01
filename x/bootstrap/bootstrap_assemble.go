@@ -34,6 +34,10 @@ func AssembleWithProviders(cfg *config.Config, providers map[string]Provider) (*
 	if err != nil {
 		return nil, err
 	}
+	policy, err := accessPolicy(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("assemble: %w", err)
+	}
 	feedback := newFeedbackStore(cfg)
 	sources, txBeginners, prepared, err := buildDataSources(cfg, providers, feedback)
 	if err != nil {
@@ -59,8 +63,8 @@ func AssembleWithProviders(cfg *config.Config, providers map[string]Provider) (*
 	}
 	defaultName, defaultSource := defaultDatasource(providers, sources)
 	return newAssembledApp(
-		cfg, providers, prepared, sources, txBeginners, reg, aud, cc, msk, feedback,
-		defaultSource, defaultName, eng, tools,
+		cfg, providers, prepared, sources, txBeginners, reg, rbac.NewGrantAuthorizer(reg, policy), aud, cc, msk,
+		feedback, defaultSource, defaultName, eng, tools,
 	), nil
 }
 
@@ -270,6 +274,7 @@ func newAssembledApp(
 	sources map[string]tool.DataSource,
 	txBeginners map[string]store.TxBeginner,
 	reg *entity.Registry,
+	authz rbac.Authorizer,
 	aud audit.Auditor,
 	cc cache.Cache[[]map[string]any],
 	msk mask.Masker,
@@ -286,7 +291,7 @@ func newAssembledApp(
 		Sources:      sources,
 		Dialect:      defaultSource.Dialect,
 		Registry:     reg,
-		Authorizer:   rbac.NewRoleAuthorizer(reg),
+		Authorizer:   authz,
 		Masker:       msk,
 		Feedback:     feedback,
 		Analyze:      defaultSource.Analyze,
@@ -295,7 +300,7 @@ func newAssembledApp(
 		Tools:        tools,
 		Auditor:      aud,
 		Cache:        cc,
-		Budget:       newBudgetManager(cfg.Budget),
+		Budget:       newBudgetManager(cfg.Budget, userBudgets(cfg)),
 		Transactions: tool.NewTransactionManager(cfg.Transactions.TTL, cfg.Transactions.MaxOpen),
 		TxBeginners:  txBeginners,
 	}
@@ -306,6 +311,8 @@ func newAssembledApp(
 func applyAssembledAppConfig(app *App, cfg *config.Config) {
 	app.ToolFlags = cfg.Tools
 	app.DefaultRole = cfg.Server.Role
+	app.DefaultUser = cfg.Server.User
+	app.Users, app.UserTokens = userDirectory(cfg)
 	app.QueryTimeout = cfg.Cost.QueryTimeout
 	app.MaxRows = cfg.Cost.MaxRows
 	app.MaxProcedureRows = cfg.Cost.MaxProcedureRows

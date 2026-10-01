@@ -349,6 +349,7 @@
     }
   },
   "errorCodes": {
+    "AMBIGUOUS_FIELD_SCOPE": true,
     "BUDGET_EXCEEDED": true,
     "COST_EXCEEDED": true,
     "DATABASE_ERROR": false,

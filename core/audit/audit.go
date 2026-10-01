@@ -22,9 +22,14 @@ var ErrSinkClosed = errors.New("audit: sink closed")
 // milliseconds under "durationMs". Cost is reserved: its inner structure is
 // not yet part of the frozen contract.
 type Event struct {
-	Time          time.Time       `json:"time"`
-	DecisionID    string          `json:"decisionId,omitempty"`
-	Role          string          `json:"role,omitempty"`
+	Time       time.Time `json:"time"`
+	DecisionID string    `json:"decisionId,omitempty"`
+	Role       string    `json:"role,omitempty"`
+	// User and Roles identify a configured user and its roles; Grants lists
+	// the covering grant IDs of the authorization decisions.
+	User          string          `json:"user,omitempty"`
+	Roles         []string        `json:"roles,omitempty"`
+	Grants        []string        `json:"grants,omitempty"`
 	Entity        string          `json:"entity,omitempty"`
 	Action        string          `json:"action,omitempty"`
 	Tool          string          `json:"tool"`

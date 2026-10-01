@@ -37,6 +37,10 @@ func configToEntity(ec config.EntityConfig) (entity.Entity, error) {
 	if err != nil {
 		return entity.Entity{}, err
 	}
+	tenantPolicy, err := filterConfigToPredicate(ec.TenantPolicy)
+	if err != nil {
+		return entity.Entity{}, fmt.Errorf("tenant policy for entity %q: %w", ec.Name, err)
+	}
 	keys := entityKeysFromConfig(ec.PrimaryKey)
 	relations := entityRelationsFromConfig(ec.Relationships)
 	return entity.Entity{
@@ -46,9 +50,10 @@ func configToEntity(ec config.EntityConfig) (entity.Entity, error) {
 			DMLTools: ec.MCP.DMLTools, CustomTool: ec.MCP.CustomTool,
 			TrustedProcedure: ec.MCP.TrustedProcedure,
 		},
-		RowPolicies: rowPolicies,
-		Relations:   relations,
-		Params:      ec.Params,
+		RowPolicies:  rowPolicies,
+		TenantPolicy: tenantPolicy,
+		Relations:    relations,
+		Params:       ec.Params,
 	}, nil
 }
 

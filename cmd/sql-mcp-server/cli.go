@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -39,6 +41,11 @@ func runCLI(ctx context.Context, args []string, stdout io.Writer) error {
 			return errors.New("usage: sql-mcp-server add entity [flags]")
 		}
 		return runAddEntity(args[1:])
+	case "user":
+		if len(args) == 0 || args[0] != "token" {
+			return errors.New("usage: sql-mcp-server user token")
+		}
+		return runUserToken(args[1:], stdout)
 	case "validate":
 		return runValidate(args, stdout)
 	case "export":
@@ -69,6 +76,7 @@ func runServe(ctx context.Context, args []string) error {
 	transport := fs.String("transport", "stdio", "transport: stdio | http")
 	addr := fs.String("addr", ":8080", "http listen address")
 	role := fs.String("role", "", "runtime role (overrides config)")
+	user := fs.String("user", "", "default user for requests without a user identity (overrides config)")
 	watch := fs.Bool("watch", false, "reload config when its contents change")
 	watchInterval := fs.Duration("watch-interval", time.Second, "config polling interval")
 	if err := fs.Parse(args); err != nil {
@@ -81,13 +89,19 @@ func runServe(ctx context.Context, args []string) error {
 	if *role != "" {
 		cfg.Server.Role = *role
 	}
+	if err := applyUserOverride(cfg, *user); err != nil {
+		return err
+	}
 	resolveServeEndpoint(fs, cfg, transport, addr)
 	metrics, hooks, otelShutdown, err := setupServeTelemetry(ctx)
 	if err != nil {
 		return err
 	}
 	defer otelShutdown()
-	build := serveReloadBuilder(*role, cfg.Server, cfg.Tools, toolDiscoverySignature(cfg.Entities), hooks)
+	build := serveReloadBuilder(
+		serveOverrides{role: *role, user: *user, usersConfigured: len(cfg.Users) > 0},
+		cfg.Server, cfg.Tools, toolDiscoverySignature(cfg.Entities), hooks,
+	)
 	app, err := bootstrap.Assemble(cfg)
 	if err != nil {
 		return err
@@ -135,8 +149,33 @@ func auditDroppedReader(runtime *bootstrap.Runtime) func() int64 {
 	}
 }
 
+// serveOverrides carries CLI flags re-applied to every reloaded config and
+// whether users were configured at startup.
+type serveOverrides struct {
+	role, user      string
+	usersConfigured bool
+}
+
+// applyUserOverride sets server.user from --user and checks that it names an
+// enabled user; config validation already covered the file value.
+func applyUserOverride(cfg *config.Config, user string) error {
+	user = strings.ToLower(strings.TrimSpace(user))
+	if user == "" {
+		return nil
+	}
+	u, ok := cfg.Users[user]
+	if !ok {
+		return fmt.Errorf("--user references unknown user %q", user)
+	}
+	if u.Disabled {
+		return fmt.Errorf("--user %q is disabled", user)
+	}
+	cfg.Server.User = user
+	return nil
+}
+
 func serveReloadBuilder(
-	role string,
+	overrides serveOverrides,
 	server config.ServerConfig,
 	tools config.ToolFlags,
 	discovery string,
@@ -150,8 +189,14 @@ func serveReloadBuilder(
 		if err := validateHotReloadConfig(server, tools, next, discovery); err != nil {
 			return nil, err
 		}
-		if role != "" {
-			next.Server.Role = role
+		if (len(next.Users) > 0) != overrides.usersConfigured {
+			return nil, errors.New("config reload requires restart when users are first configured or all removed")
+		}
+		if overrides.role != "" {
+			next.Server.Role = overrides.role
+		}
+		if err := applyUserOverride(next, overrides.user); err != nil {
+			return nil, err
 		}
 		app, err := bootstrap.Assemble(next)
 		if err != nil {
@@ -194,11 +239,20 @@ func serveTransport(
 			TLSCert:           cfg.Server.Auth.TLS.Cert, TLSKey: cfg.Server.Auth.TLS.Key,
 			ClientCA: cfg.Server.Auth.TLS.ClientCA, OnSessionClosed: runtime.RollbackSession,
 			SnapshotReady: runtime.SnapshotReady, DatabaseReady: runtime.DatabasesReady,
-			Metrics: metrics,
+			Metrics: metrics, Users: httpUsers(cfg, runtime), RevokedPrincipals: runtime.OnRevokedPrincipals,
 		})
 	default:
 		return errors.New("unknown transport: " + transport)
 	}
+}
+
+// httpUsers returns the runtime user directory when users are configured.
+// Users cannot be switched on or off by reload, so the startup view holds.
+func httpUsers(cfg *config.Config, runtime *bootstrap.Runtime) mcpserver.UserDirectory {
+	if len(cfg.Users) == 0 {
+		return nil
+	}
+	return runtime
 }
 
 func resolveServeEndpoint(fs *flag.FlagSet, cfg *config.Config, transport, addr *string) {
@@ -348,6 +402,21 @@ func appendYAMLPair(node *yaml.Node, key, value string) {
 		&yaml.Node{Kind: yaml.ScalarNode, Value: key},
 		&yaml.Node{Kind: yaml.ScalarNode, Value: value},
 	)
+}
+
+// runUserToken prints a new random bearer token once, with the tokenHash to
+// put under users.<name>.tokenHash. Only the hash belongs in configuration.
+func runUserToken(args []string, stdout io.Writer) error {
+	if len(args) != 0 {
+		return errors.New("user token accepts no arguments")
+	}
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return err
+	}
+	token := "smcp_" + base64.RawURLEncoding.EncodeToString(raw[:])
+	_, err := fmt.Fprintf(stdout, "token: %s\ntokenHash: %s\n", token, config.TokenHash(token))
+	return err
 }
 
 func runValidate(args []string, stdout io.Writer) error {

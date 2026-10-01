@@ -91,7 +91,7 @@ func registerTool(s *mcp.Server, t tool.Tool, acquire appAcquire) {
 			return nil, err
 		}
 		defer release()
-		role, subject := subjectFromContext(ctx, app.DefaultRole)
+		role, subject := callerIdentity(ctx, app)
 		tc := app.ToolContextForSubject(role, subject)
 		if req.Session != nil {
 			tc.Session = req.Session.ID()
@@ -143,7 +143,7 @@ func registerSchemaResource(s *mcp.Server, acquire appAcquire) {
 			return nil, err
 		}
 		defer release()
-		role, subject := subjectFromContext(ctx, app.DefaultRole)
+		role, subject := callerIdentity(ctx, app)
 		payload, err := authorizedSchema(ctx, app, role, subject)
 		if err != nil {
 			return nil, err
@@ -319,6 +319,7 @@ type subjectCtxKey struct{}
 type requestSubject struct {
 	role  string
 	attrs map[string]any
+	user  bool // role is a configured user's principal
 }
 
 // WithSubject attaches a per-request caller identity (role + attributes) to
@@ -356,24 +357,34 @@ func canonicalRole(role string) string {
 func withRequestSubject(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		role := r.Header.Get("X-MCP-Role")
-		var attrs map[string]any
-		if raw := r.Header.Get("X-MCP-Subject"); raw != "" {
-			dec := json.NewDecoder(bytes.NewBufferString(raw))
-			dec.UseNumber()
-			if err := dec.Decode(&attrs); err != nil || attrs == nil {
-				http.Error(w, "invalid X-MCP-Subject: expected a JSON object", http.StatusBadRequest)
-				return
-			}
-			if err := dec.Decode(&struct{}{}); err != io.EOF {
-				http.Error(w, "invalid X-MCP-Subject: expected a JSON object", http.StatusBadRequest)
-				return
-			}
+		attrs, err := parseSubjectHeader(r.Header.Get("X-MCP-Subject"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 		if role != "" || attrs != nil {
 			r = r.WithContext(WithSubject(r.Context(), role, attrs))
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// parseSubjectHeader decodes X-MCP-Subject; empty yields nil attributes.
+func parseSubjectHeader(raw string) (map[string]any, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	var attrs map[string]any
+	errInvalid := errors.New("invalid X-MCP-Subject: expected a JSON object")
+	dec := json.NewDecoder(bytes.NewBufferString(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&attrs); err != nil || attrs == nil {
+		return nil, errInvalid
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return nil, errInvalid
+	}
+	return attrs, nil
 }
 
 // HTTPConfig configures the streamable HTTP transport, including authentication
@@ -396,6 +407,13 @@ type HTTPConfig struct {
 	Metrics           http.Handler
 	SessionTimeout    time.Duration
 	OnSessionClosed   func(string)
+	// Users resolves configured users; nil means no users are configured.
+	// With users, bearer tokens may identify individual users and trusted
+	// proxies may send X-MCP-User.
+	Users UserDirectory
+	// RevokedPrincipals registers a callback receiving users removed or
+	// disabled by a reload; their sessions are dropped and rolled back.
+	RevokedPrincipals func(func([]string))
 	// SnapshotReady backs /readyz/snapshot: it returns nil when a
 	// configuration snapshot is published and servable. DatabaseReady backs
 	// /readyz/db: it returns nil when the configured databases are reachable.
@@ -407,7 +425,7 @@ type HTTPConfig struct {
 func (c HTTPConfig) tlsEnabled() bool  { return c.TLSCert != "" && c.TLSKey != "" }
 func (c HTTPConfig) mtlsEnabled() bool { return c.ClientCA != "" }
 func (c HTTPConfig) authConfigured() bool {
-	return c.Token != "" || c.mtlsEnabled()
+	return c.Token != "" || c.mtlsEnabled() || c.Users != nil
 }
 
 // isLoopbackAddr reports whether a listen address binds only the loopback

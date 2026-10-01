@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/audit"
@@ -82,11 +84,15 @@ type Result struct {
 	ReturnedRows         int64
 	ReturnedBytes        int64
 	EstimatedScannedRows int64
+	// Grants lists covering grant IDs for audit; it is not sent to clients.
+	Grants []string
 }
 
 // Context carries per-request dependencies (injected, no mutable global state).
 type Context struct {
-	Role                       string
+	Role                       string         // principal key: a role name, or "user:<name>" for a user
+	User                       string         // configured user name, empty on the role path
+	UserRoles                  []string       // the user's roles, for audit
 	Subject                    map[string]any // caller attributes for row-level ${subject.x} policies
 	Session                    string         // MCP session ID when the transport provides one
 	DecisionID                 string         // per-call ID correlating response, audit, and trace
@@ -206,6 +212,7 @@ func acquireToolBudget(
 			entityName, action := auditEntityAction(name, input, tc.Registry)
 			_ = tc.Auditor.Record(ctx, audit.Event{
 				Time: time.Now(), DecisionID: tc.DecisionID, Role: tc.Role,
+				User: tc.User, Roles: tc.UserRoles,
 				Entity: entityName, Action: action,
 				Tool: name, Input: auditInput, Allowed: false,
 				Code: denialCode(err), Error: err.Error(),
@@ -237,14 +244,14 @@ func budgetReservation(name string, tc Context) int64 {
 
 func invokeTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Result, error) {
 	if tc.Engine == nil {
-		return t.Run(ctx, input, tc)
+		return runTraced(ctx, t, input, tc)
 	}
 	key, err := engineSubmitKey(t, input, tc)
 	if err != nil {
 		return Result{}, err
 	}
 	val, err := tc.Engine.Submit(ctx, key, func(ctx context.Context) (any, error) {
-		return t.Run(ctx, input, tc)
+		return runTraced(ctx, t, input, tc)
 	})
 	if r, ok := val.(Result); ok {
 		return r, err
@@ -520,7 +527,40 @@ func toExceededError(d cost.Decision) error {
 func authorize(ctx context.Context, tc Context, req rbac.Request) (rbac.Decision, error) {
 	dec, err := tc.Authorizer.Authorize(ctx, req)
 	tc.Hooks.FireAuthorize(ctx, req, dec)
+	if trace, ok := ctx.Value(grantTraceKey{}).(*grantTrace); ok && dec.Allowed {
+		trace.add(dec.Grants)
+	}
 	return dec, err
+}
+
+type grantTraceKey struct{}
+
+// grantTrace collects covering grant IDs across the authorizations of one
+// tool run (including relation expansion) for the audit event.
+type grantTrace struct {
+	mu  sync.Mutex
+	ids []string
+}
+
+func (g *grantTrace) add(ids []string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, id := range ids {
+		if !slices.Contains(g.ids, id) {
+			g.ids = append(g.ids, id)
+		}
+	}
+}
+
+// runTraced runs the tool and attaches the covering grants to its result, so
+// singleflight followers sharing the result also audit them.
+func runTraced(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Result, error) {
+	trace := &grantTrace{}
+	res, err := t.Run(context.WithValue(ctx, grantTraceKey{}, trace), input, tc)
+	trace.mu.Lock()
+	res.Grants = trace.ids
+	trace.mu.Unlock()
+	return res, err
 }
 
 func checkGate(ctx context.Context, tc Context, compiled codegen.Compiled) (codegen.Compiled, error) {

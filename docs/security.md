@@ -6,41 +6,57 @@
 
 ## 信任边界
 
-stdio 模式使用进程启动时的默认角色，适合由本机 MCP 客户端管理的子进程。
+stdio 模式使用进程启动时的默认身份（`server.user`，未设置时为 `server.role`），
+适合由本机 MCP 客户端管理的子进程。
 
-HTTP 支持共享 bearer token 和 mTLS。监听非 loopback 地址时，如果既无 token
-也无 `clientCA`，服务拒绝启动；mTLS 还要求服务端证书和私钥。HTTP 请求体默认
+HTTP 支持共享 bearer token、每用户 token 和 mTLS。监听非 loopback 地址时，如果
+既无 token、也无已配置用户、也无 `clientCA`，服务拒绝启动；mTLS 还要求服务端证书和私钥。HTTP 请求体默认
 限制为 4 MiB，header 默认限制为 1 MiB，并设置 header/idle timeout。
 CLI 地址默认值 `:8080` 会监听所有接口，属于非 loopback，因此选择 HTTP 且未
 指定 loopback 地址或认证时会 fail closed。
 `/healthz` 与 `/readyz/*` 不鉴权（readiness 探针 fail closed，503 响应体不
-回显数据库细节）；`/metrics` 由 CLI 挂载，配置 token 时要求同一 Bearer
-token。
+回显数据库细节）；`/metrics` 由 CLI 挂载，配置共享 token 或用户时要求有效的
+Bearer token。
 
-共享 bearer token 以固定长度 SHA-256 摘要做恒时比较。角色在配置和请求入口
-统一 trim 并转为小写；规范化后碰撞的配置会拒绝启动。
+共享 bearer token 以固定长度 SHA-256 摘要做恒时比较。角色和用户名在配置和
+请求入口统一 trim 并转为小写；规范化后碰撞的配置会拒绝启动。
+
+配置 `users` 后，bearer token 先按 `sha256:` hash 匹配当前 snapshot 中的启用
+用户，命中即以该用户身份（主体 `user:<name>`，固定 `subject`）执行；等于共享
+token 时使用默认身份；都不命中返回 401。没有共享 token 时，只有 mTLS 或可信代理
+通道可以不带 token（使用默认身份），其余请求必须携带用户 token。用户 token 由
+`sql-mcp-server user token` 生成（256 bit 随机），配置只保存 hash；token 没有
+过期时间，轮换通过修改 `tokenHash` 并热重载完成。
 
 `X-MCP-Role` 和 `X-MCP-Subject` 不是身份认证机制。只有
 `server.auth.trustProxyHeaders: true` 时才读取它们，并且必须同时配置 mTLS
 `clientCA` 或非空 `trustedProxyCIDRs`。CIDR 模式只接受列表内来源地址；可信网关
 仍必须删除外部同名 header、完成认证并重新注入身份。畸形的
-`X-MCP-Subject` JSON 返回 HTTP 400。内置 bearer token 只验证共享 secret，
-不把 token 映射到独立角色或 subject。项目尚无 OAuth、CORS 策略或持久
-session store。
+`X-MCP-Subject` JSON 返回 HTTP 400。配置用户时，可信代理还可以发送
+`X-MCP-User`：它必须指向启用用户，且不能与 `X-MCP-Role` 同时出现；用户配置的
+`subject` 属性覆盖代理注入的同名属性。已用用户 token 认证的请求如果再携带任何
+代理身份 header，返回 HTTP 403。共享 bearer token 只验证共享 secret，不映射独立
+调用方。项目尚无 OAuth、CORS 策略或持久 session store。
 
 streamable HTTP session 创建时会记录规范化后的 role/subject；后续所有携带
 `Mcp-Session-Id` 的 POST/GET/DELETE 必须使用同一身份，否则返回 HTTP 403。
 session 关闭时绑定会同步清理。该绑定防止可信代理后的调用方借已有 session
-切换身份，但不替代网关认证。
+切换身份，但不替代网关认证。热重载删除或禁用用户后，其 session 绑定被解除并
+回滚在途事务，后续请求被拒绝。
 
 ## 授权与数据隔离
 
-- 每个实体按 action 配置角色：read/create/update/delete/execute/aggregate。
-- `fieldACL` 可进一步限制角色可读、可写字段。
+- 每个实体按 action 配置角色：read/create/update/delete/execute/aggregate；
+  顶层 `roles` 与用户直授 `grants` 以授权项形式表达同样的动作、字段和行范围。
+- `fieldACL`（或授权项 `fields`）可进一步限制可读、可写字段。
+- 用户拥有多个角色或直授权限时，一次请求只使用覆盖其全部字段的授权项，行范围
+  在这些授权项之间取 OR；不存在单一覆盖时返回 `AMBIGUOUS_FIELD_SCOPE`。字段与
+  行不会分别取并集，因此合并不会授予任一授权项都没有的"字段 × 行"组合。
 - 过滤、投影、group-by 和写入字段均先验证为可见字段；未知字段与被排除字段
   返回同类错误，避免借隐藏列建立侧信道。
 - `rowPolicies` 与用户 filter 以 AND 合并。`${subject.x}` 从请求 subject
   解析；属性缺失时生成 NULL 条件，因而不匹配普通行。
+- 实体 `tenantPolicy` 对所有主体始终 AND，不参与多角色合并。
 - mask 在所有结果路径（包括 aggregate/procedure）返回前执行。mask 字段只允许
   投影，禁止用于 filter、cursor、group-by、aggregate 和写谓词，避免等值/LIKE
   盲测与统计侧信道。内置规则为 `email`、`phone`、`idcard`、`secret`；配置未知

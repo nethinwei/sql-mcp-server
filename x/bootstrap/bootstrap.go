@@ -40,19 +40,24 @@ type Provider = coreprovider.Provider
 
 // App is the assembled application, ready to serve.
 type App struct {
-	Provider                   Provider
-	Providers                  map[string]Provider
-	Prepared                   map[string]*store.PreparedDB
-	Sources                    map[string]tool.DataSource
-	Dialect                    dialect.Dialect
-	Registry                   *entity.Registry
-	Authorizer                 rbac.Authorizer
-	Masker                     mask.Masker
-	Gate                       cost.Gate
-	Engine                     *engine.Engine
-	Tools                      *tool.Registry
-	ToolFlags                  config.ToolFlags
-	DefaultRole                string
+	Provider    Provider
+	Providers   map[string]Provider
+	Prepared    map[string]*store.PreparedDB
+	Sources     map[string]tool.DataSource
+	Dialect     dialect.Dialect
+	Registry    *entity.Registry
+	Authorizer  rbac.Authorizer
+	Masker      mask.Masker
+	Gate        cost.Gate
+	Engine      *engine.Engine
+	Tools       *tool.Registry
+	ToolFlags   config.ToolFlags
+	DefaultRole string
+	DefaultUser string
+	// Users maps an enabled user name to its identity; UserTokens maps a
+	// tokenHash to the user name. Both follow the snapshot on reload.
+	Users                      map[string]UserIdentity
+	UserTokens                 map[string]string
 	QueryTimeout               time.Duration
 	MaxRows                    int64
 	MaxProcedureRows           int64
@@ -121,6 +126,10 @@ func (a *App) ToolContext(role string) tool.Context {
 func (a *App) ToolContextForSubject(role string, subject map[string]any) tool.Context {
 	tc := a.ToolContext(role)
 	tc.Subject = subject
+	if name, ok := strings.CutPrefix(role, config.UserPrincipalPrefix); ok {
+		tc.User = name
+		tc.UserRoles = a.Users[name].Roles
+	}
 	return tc
 }
 
@@ -510,10 +519,13 @@ func validateMaskRules(m *mask.RuleMasker, entities []entity.Entity) error {
 	return nil
 }
 
-func newBudgetManager(c config.BudgetConfig) budget.Manager {
-	roles := make(map[string]budget.Limits, len(c.Roles))
+func newBudgetManager(c config.BudgetConfig, principals map[string]config.BudgetLimits) budget.Manager {
+	roles := make(map[string]budget.Limits, len(c.Roles)+len(principals))
 	for name, limits := range c.Roles {
 		roles[name] = toBudgetLimits(limits)
+	}
+	for principal, limits := range principals {
+		roles[principal] = toBudgetLimits(limits)
 	}
 	tenants := make(map[string]budget.Limits, len(c.Tenants))
 	for name, limits := range c.Tenants {

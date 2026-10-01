@@ -70,6 +70,7 @@ func recordReadFeedback(
 			if tc.Auditor != nil {
 				_ = tc.Auditor.Record(ctx, audit.Event{
 					Time: time.Now(), DecisionID: tc.DecisionID, Role: tc.Role,
+					User: tc.User, Roles: tc.UserRoles,
 					Entity: entityName, Action: "explain_analyze_sample",
 					Tool: "read_records", Allowed: false, Error: samplingErr.Error(),
 				})

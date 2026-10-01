@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/nethinwei/sql-mcp-server/core/budget"
@@ -166,5 +168,24 @@ func TestDecisionIDContextRoundtrip(t *testing.T) {
 	}
 	if DecisionIDFromContext(context.Background()) != "" {
 		t.Fatal("missing decision ID must yield empty string")
+	}
+}
+
+func TestDenialForAmbiguousFieldScope(t *testing.T) {
+	t.Parallel()
+	scopes := [][]string{{"id", "amount"}, {"id", "phone"}}
+	err := denyUnauthorized(rbac.Decision{Reason: "internal detail", FieldScopes: scopes})
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("ambiguous field scope must unwrap to ErrUnauthorized: %v", err)
+	}
+	d, ok := DenialFor(err, "dec-1")
+	if !ok || d.Code != CodeAmbiguousFieldScope || !d.Retryable || d.DecisionID != "dec-1" {
+		t.Fatalf("denial = %+v, ok=%v", d, ok)
+	}
+	if strings.Contains(d.Reason, "internal detail") {
+		t.Fatalf("reason must not echo the authorizer detail: %q", d.Reason)
+	}
+	if !reflect.DeepEqual(d.Constraints["fieldScopes"], scopes) || len(d.Hints) == 0 {
+		t.Fatalf("denial must carry field scopes and a hint: %+v", d)
 	}
 }

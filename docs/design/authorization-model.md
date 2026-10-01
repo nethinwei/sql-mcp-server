@@ -166,14 +166,17 @@ filter 语义也会变复杂，因此不在本版范围。
 ### 认证
 
 - 已配置 `users` 时，HTTP 请求的 bearer token 先按 SHA-256 在当前 snapshot
-  的用户表中查找（常数时间比较）：命中且未 `disabled` → 主体 `user:<name>`；
-  等于 `server.auth.token` → 兼容路径（`server.role`）；都不命中 → 401；
+  的用户表中查找：命中且未 `disabled` → 主体 `user:<name>`；等于
+  `server.auth.token`（常数时间比较）→ 默认身份；都不命中 → 401。没有共享
+  token 时，只有 mTLS 或可信代理通道可以不带 token；
 - 用户表跟随 snapshot 热重载，新增、吊销、轮换无需重启；`server.auth` 本身的
-  变化仍需重启（现有守卫不变）；
+  变化，以及首次启用用户或删除全部用户，仍需重启；
 - 可信代理模式新增 `X-MCP-User`：必须指向已配置且未禁用的用户，否则 403；
   同时带 `X-MCP-User` 与 `X-MCP-Role` 时拒绝；只带 `X-MCP-Role` 保持兼容行为；
-- stdio：新增 `server.user`（CLI `--user`），以指定用户身份运行；未设置时
-  使用 `server.role`（现状）；
+- 默认身份：新增 `server.user`（CLI `--user`），作为没有携带用户身份的请求
+  （stdio、共享 token 或可信通道的匿名请求）的默认用户，优先于 `server.role`；
+  未设置时使用 `server.role`（现状）。实现时与 `server.role` 的作用范围保持一致，
+  而非只作用于 stdio；
 - CLI 新增 `sql-mcp-server user token`：生成高熵随机 token，只打印一次明文
   以及对应的 `tokenHash`。
 

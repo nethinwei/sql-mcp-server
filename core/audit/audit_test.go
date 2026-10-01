@@ -162,3 +162,18 @@ func TestFileSinkPersistsAndCloses(t *testing.T) {
 		t.Fatalf("record after close error = %v", err)
 	}
 }
+
+func TestEventJSONUserFields(t *testing.T) {
+	t.Parallel()
+	got, err := json.Marshal(Event{
+		Role: "user:alice", User: "alice", Roles: []string{"analyst"}, Grants: []string{"role:analyst#0"}, Tool: "t",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"time":"0001-01-01T00:00:00Z","role":"user:alice","user":"alice","roles":["analyst"],` +
+		`"grants":["role:analyst#0"],"tool":"t","allowed":false,"returnedRows":0,"durationMs":0}`
+	if string(got) != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+}

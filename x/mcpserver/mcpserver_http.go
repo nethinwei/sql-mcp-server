@@ -41,18 +41,18 @@ func buildMCPHandler(s *mcp.Server, cfg HTTPConfig) http.Handler {
 		&mcp.StreamableHTTPOptions{EventStore: eventStore, SessionTimeout: cfg.SessionTimeout},
 	))
 	handler = bindSessionIdentity(identities, handler)
+	if cfg.RevokedPrincipals != nil {
+		cfg.RevokedPrincipals(revokeSessions(identities, cfg.OnSessionClosed))
+	}
 	if cfg.TrustProxyHeaders {
-		handler = withRequestSubject(handler)
+		handler = withProxyIdentity(cfg.Users, handler)
 		if !cfg.mtlsEnabled() {
 			networks, _ := parseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
 			handler = trustedProxyOnly(networks, handler)
 		}
 	}
 	handler = limitBody(cfg.MaxBodyBytes, handler)
-	if cfg.Token != "" {
-		handler = tokenAuth(cfg.Token, handler)
-	}
-	return handler
+	return principalAuth(cfg.Token, cfg.Users, cfg.mtlsEnabled() || cfg.TrustProxyHeaders, handler)
 }
 
 func buildHTTPMux(mcpHandler http.Handler, cfg HTTPConfig) *http.ServeMux {
@@ -68,11 +68,7 @@ func buildHTTPMux(mcpHandler http.Handler, cfg HTTPConfig) *http.ServeMux {
 	mux.Handle("/readyz/snapshot", readinessHandler(cfg.SnapshotReady))
 	mux.Handle("/readyz/db", readinessHandler(cfg.DatabaseReady))
 	if cfg.Metrics != nil {
-		metricsHandler := cfg.Metrics
-		if cfg.Token != "" {
-			metricsHandler = tokenAuth(cfg.Token, metricsHandler)
-		}
-		mux.Handle("/metrics", metricsHandler)
+		mux.Handle("/metrics", principalAuth(cfg.Token, cfg.Users, cfg.mtlsEnabled(), cfg.Metrics))
 	}
 	return mux
 }

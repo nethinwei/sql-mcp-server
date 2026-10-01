@@ -37,6 +37,33 @@ type Runtime struct {
 	current atomic.Pointer[appSnapshot]
 	reload  sync.Mutex
 	build   func(string) (*App, error)
+	revoked atomic.Pointer[func([]string)]
+}
+
+// OnRevokedPrincipals registers fn to receive the principal keys of users that
+// a successful reload removed or disabled, after the new snapshot is published.
+// Transports use it to drop those users' sessions and roll back their
+// transactions.
+func (r *Runtime) OnRevokedPrincipals(fn func([]string)) {
+	r.revoked.Store(&fn)
+}
+
+// UserByTokenHash resolves a tokenHash against the current snapshot.
+func (r *Runtime) UserByTokenHash(hash string) (UserIdentity, bool) {
+	app := r.Current()
+	if app == nil {
+		return UserIdentity{}, false
+	}
+	return app.UserByTokenHash(hash)
+}
+
+// UserByName resolves an enabled user against the current snapshot.
+func (r *Runtime) UserByName(name string) (UserIdentity, bool) {
+	app := r.Current()
+	if app == nil {
+		return UserIdentity{}, false
+	}
+	return app.UserByName(name)
 }
 
 // NewRuntime creates a runtime using Load followed by Assemble for reloads.
@@ -116,7 +143,23 @@ func (r *Runtime) Reload(path string) error {
 		return err
 	}
 	preserveReloadBudget(old.app, next)
-	return publishReload(r, old, next)
+	revoked := revokedPrincipals(old.app, next)
+	err = publishReload(r, old, next)
+	if fn := r.revoked.Load(); fn != nil && len(revoked) > 0 {
+		(*fn)(revoked)
+	}
+	return err
+}
+
+// revokedPrincipals lists users servable by old but no longer by next.
+func revokedPrincipals(old, next *App) []string {
+	var out []string
+	for name, id := range old.Users {
+		if _, ok := next.Users[name]; !ok {
+			out = append(out, id.Principal)
+		}
+	}
+	return out
 }
 
 func validateReloadBudget(old, next *App) error {

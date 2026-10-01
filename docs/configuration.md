@@ -16,6 +16,7 @@ schema drift 检查。
   `mysql` 和 `oceanbase`，扩展程序可注册其他名称。必须提供 `database` 或至少
   一个 `databases` 项。
 - `entities`：显式暴露的实体列表；可以为空。
+- `roles`、`users`：顶层角色与用户，见[用户、角色与权限](#用户角色与权限)。
 - `tools`、`cost`、`budget`、`cache`、`rateLimit`、`mask`、`audit`、
   `transactions`：执行控制。
 
@@ -47,6 +48,10 @@ mTLS；`cert`/`key` 只设置一个会校验失败。`trustProxyHeaders`、
 `trustedProxyCIDRs`、identity header 和非 loopback HTTP 的信任规则统一见
 [安全模型](security.md)。
 
+`server.user`（CLI `--user` 覆盖）指定没有携带用户身份的请求所使用的默认用户，
+优先于 `server.role`；它必须指向已配置且未禁用的用户。stdio 和走共享 token 的
+HTTP 请求都使用这一默认身份。
+
 ## 数据源与实体
 
 每个 database 需要 `driver` 和非空 `dsn`。DSN 可包含 `${ENV}` 或
@@ -75,9 +80,54 @@ mTLS；`cert`/`key` 只设置一个会校验失败。`trustProxyHeaders`、
 - `params`：procedure 参数的固定位置顺序；省略或空数组表示无参 procedure。
 - `relationships`：`name`、`target`、`cardinality`、`joinOn`。当前只支持同
   数据源且恰好一个 join pair 的一层展开。
+- `tenantPolicy`：租户约束，语法同 `rowPolicies` 的单条策略；对所有主体始终
+  AND，不参与多角色合并。引用的 `${subject.x}` 缺失时匹配零行。
 
 启动自省会拒绝数据库中缺失的 table/view 或字段；额外数据库列不报错，
 procedure 不参与 drift 检查。
+
+## 用户、角色与权限
+
+```yaml
+roles:
+  analyst:
+    description: 业务分析
+    grants:
+      - entity: orders
+        actions: [read, aggregate]
+        fields: {read: [id, amount, region]}   # 省略 = 全部可见字段
+        rows: {op: eq, field: region, value: CN} # 省略 = 不限制行
+users:
+  alice:
+    tokenHash: "sha256:<64 hex>"
+    roles: [analyst]
+    subject: {tenant_id: t1}
+    grants:
+      - entity: refunds
+        actions: [read]
+    disabled: false
+```
+
+- 角色名和用户名规范化为小写，只允许 `[a-z0-9][a-z0-9_-]*`。
+- `grants[].actions` 取值同实体 `roles`；`fields` 语义同 `fieldACL` 的一项，
+  `rows` 语法同 `rowPolicies` 的一项。
+- 用户的 `roles` 可以引用顶层 `roles`，也可以引用实体内 `roles`/`fieldACL`/
+  `rowPolicies` 中出现过的角色名；同名角色的授权合并。
+- 用户有效权限 = 各角色授权 ∪ 直授 `grants`。一次请求只使用**覆盖其全部字段**
+  的授权项，它们的行范围取 OR，再 AND 实体 `tenantPolicy`；没有单一授权项能
+  覆盖时返回 `AMBIGUOUS_FIELD_SCOPE`，约束中列出可选字段集。完整语义见
+  [授权模型设计](design/authorization-model.md)。
+- `tokenHash` 只保存 bearer token 的 `sha256:` hash，用
+  `sql-mcp-server user token` 生成随机 token 及其 hash；明文只打印一次，不进入
+  配置。hash 在用户之间、与 `server.auth.token` 之间都不能重复。
+- `subject` 是固定属性，供 `${subject.x}` 解析，优先于可信代理
+  `X-MCP-Subject` 中的同名属性。
+- `disabled: true` 的用户无法认证，也不能作为 `server.user`。
+- `permissions`（系统权限，如 `sql:execute@<datasource>`）为后续版本预留，
+  本版声明任何值都是校验错误。
+- 用户表随热重载生效：新增、禁用、删除、轮换 token 无需重启；删除或禁用用户后
+  其 HTTP 会话被解除并回滚在途事务。首次启用用户或删除全部用户需要重启。
+- 未配置 `users` 时行为与之前完全一致。
 
 ## 工具开关
 
@@ -139,11 +189,12 @@ procedure 不参与 drift 检查。
 
 ## Budget
 
-`budget.roles.<role>` 与 `budget.tenants.<tenant>` 接受：
+`budget.roles.<role>`、`budget.users.<user>` 与 `budget.tenants.<tenant>` 接受：
 `maxConcurrent`、`maxExecution`、`maxEstimatedScannedRows`、
 `maxReturnedRows`、`maxReturnedBytes`、`maxSessionCost`。旧
 `maxScannedRows` 仅作 deprecated alias。零值表示不限，tenant 命中时覆盖而非
-合并 role 限制。
+合并 role 限制。用户显式配置 `budget.users` 时优先；否则逐项取其各角色中
+最宽松的值（0 表示不限，任一角色未配置预算即视为不限）。
 
 tenant 从 subject 的 `tenant`、`tenant_id`、`tenantID` 中按顺序提取。预算是
 按 MCP session 隔离的单进程有界内存状态，session 关闭时清理；行数与 cost

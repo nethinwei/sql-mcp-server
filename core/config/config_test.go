@@ -299,7 +299,7 @@ func TestSchemaIsValidJSON(t *testing.T) {
 	}
 	schemaProps := []string{
 		"server", "database", "databases", "entities", "tools", "cost", "budget",
-		"cache", "rateLimit", "mask", "audit", "transactions",
+		"cache", "rateLimit", "mask", "audit", "transactions", "roles", "users",
 	}
 	for _, name := range schemaProps {
 		if _, ok := properties[name]; !ok {

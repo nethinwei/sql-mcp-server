@@ -41,6 +41,7 @@ const (
 	CodeTransactionNotFound = "TRANSACTION_NOT_FOUND"
 	CodeTransactionScope    = "TRANSACTION_SCOPE"
 	CodeTransactionCapacity = "TRANSACTION_CAPACITY"
+	CodeAmbiguousFieldScope = "AMBIGUOUS_FIELD_SCOPE"
 )
 
 var sentinelDenials = []struct {
@@ -66,6 +67,18 @@ func DenialFor(err error, decisionID string) (Denial, bool) {
 	var ce *cost.ExceededError
 	if errors.As(err, &ce) {
 		return costDenial(ce, decisionID), true
+	}
+	var ae *AmbiguousFieldScopeError
+	if errors.As(err, &ae) {
+		return Denial{
+			Code: CodeAmbiguousFieldScope, Reason: "requested fields span grants with different row scopes",
+			Retryable:   true,
+			Constraints: map[string]any{"fieldScopes": ae.FieldScopes},
+			Hints: []string{
+				"retry with explicit fields contained in one of constraints.fieldScopes",
+			},
+			DecisionID: decisionID,
+		}, true
 	}
 	if errors.Is(err, budget.ErrExceeded) {
 		return Denial{
@@ -121,11 +134,28 @@ func costDenial(ce *cost.ExceededError, decisionID string) Denial {
 // denyUnauthorized attaches the authorizer's reason to ErrUnauthorized so the
 // rejection contract can explain the denial instead of discarding it.
 func denyUnauthorized(dec rbac.Decision) error {
+	if len(dec.FieldScopes) > 0 {
+		return &AmbiguousFieldScopeError{Reason: dec.Reason, FieldScopes: dec.FieldScopes}
+	}
 	if dec.Reason == "" {
 		return ErrUnauthorized
 	}
 	return fmt.Errorf("%w: %s", ErrUnauthorized, dec.Reason)
 }
+
+// AmbiguousFieldScopeError reports that no single grant covers every field a
+// request uses. FieldScopes are field sets the caller can already read, so
+// exposing them is not a side channel. It unwraps to ErrUnauthorized.
+type AmbiguousFieldScopeError struct {
+	Reason      string
+	FieldScopes [][]string
+}
+
+func (e *AmbiguousFieldScopeError) Error() string {
+	return ErrUnauthorized.Error() + ": " + e.Reason
+}
+
+func (e *AmbiguousFieldScopeError) Unwrap() error { return ErrUnauthorized }
 
 // NewDecisionID returns a 128-bit random identifier correlating one tool
 // call's MCP response, audit event, and trace span.

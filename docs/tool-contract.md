@@ -30,6 +30,9 @@
    - `UNAUTHORIZED` 的 `reason` 为统一泛化文案，不携带实体、字段或角色细节
      （防止受限角色枚举隐藏 schema，见 TM-002）；详细拒绝原因仅写入审计
      事件，经 `decisionId` 关联；
+   - `AMBIGUOUS_FIELD_SCOPE`（retryable）：多角色用户请求的字段没有被任一
+     单个授权项完整覆盖；`constraints.fieldScopes` 列出调用方本就可读的各个字段
+     集合，显式指定其中一个集合内的字段即可重试；
    - `constraints`：可选的机器可读限制（估算行数、生效上限等）；
    - `hints`：修复建议，只能收紧或等价改写请求，不得扩权；
    - `decisionId`：贯穿 MCP 响应、审计事件（`DecisionID` 字段）与 trace
@@ -67,7 +70,11 @@
      `allowed=false` 且 `code` 为空表示内部或协议级失败（不回显给客户端）；
    - `input` 为脱敏后的工具输入（掩码字段替换、transaction 句柄哈希、超长
      截断）；可选字段（`decisionId`、`role`、`entity`、`action`、`input`、
-     `resultSummary`、`cost`、`code`、`error`）为空时省略；
+     `resultSummary`、`cost`、`code`、`error`、`user`、`roles`、`grants`）为空时
+     省略；
+   - `role` 是授权主体：角色名，或已配置用户的 `user:<name>`；`user`、`roles`
+     分别为用户名及其角色；`grants` 为本次授权使用的覆盖授权项 ID（v0.1.11
+     起新增，兼容变化）；
    - `cost` 的内部结构暂不属于定版契约，消费方不得依赖其字段名。
 
 ## 兼容 vs 破坏性变化

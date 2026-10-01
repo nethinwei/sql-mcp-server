@@ -9,6 +9,27 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+### Added
+
+- 用户、角色与权限模型：顶层 `roles`（授权项 grants）与 `users`（每用户
+  `tokenHash`、多角色、直授 grants、固定 subject、`disabled`），实体
+  `tenantPolicy` 租户硬边界，`budget.users`，`server.user`/`--user` 默认用户，
+  `sql-mcp-server user token` 生成 token 与 hash。多角色按请求选择覆盖集合并，
+  不对字段与行分别取并集。设计见 `docs/design/authorization-model.md`。
+- HTTP 每用户 bearer 认证与可信代理 `X-MCP-User`；热重载删除或禁用用户时解除其
+  会话并回滚在途事务。
+- 拒绝码 `AMBIGUOUS_FIELD_SCOPE`（retryable，`constraints.fieldScopes`）与审计
+  字段 `user`、`roles`、`grants`（兼容变化）。
+- 威胁 TM-009（多角色合并越权与租户打穿）、TM-010（用户身份伪造与吊销残留），
+  不变量 I25、I26。
+
+### Changed
+
+- 授权实现由 `RoleAuthorizer` 换为 `GrantAuthorizer`；`rbac.NewRoleAuthorizer`
+  保留为不带顶层策略的构造函数，未配置 `users`/`roles` 时行为不变。
+- 配置用户且没有共享 token 时，非 mTLS/可信代理通道的请求必须携带用户 token；
+  `/metrics` 同样要求有效 token。
+
 ## 0.1.10 - 2026-07-12
 
 ### Added

@@ -25,6 +25,8 @@ type Config struct {
 	Database     DatabaseConfig            `yaml:"database"     json:"database"`
 	Databases    map[string]DatabaseConfig `yaml:"databases"    json:"databases"`
 	Entities     []EntityConfig            `yaml:"entities"     json:"entities"`
+	Roles        map[string]RoleDefinition `yaml:"roles,omitempty" json:"roles,omitempty"`
+	Users        map[string]UserConfig     `yaml:"users,omitempty" json:"users,omitempty"`
 	Tools        ToolFlags                 `yaml:"tools"        json:"tools"`
 	Cost         CostConfig                `yaml:"cost"         json:"cost"`
 	Budget       BudgetConfig              `yaml:"budget"       json:"budget"`
@@ -74,6 +76,10 @@ type ServerConfig struct {
 	Role      string        `yaml:"role"      json:"role"`      // runtime role (may be overridden by --role flag)
 	Auth      AuthConfig    `yaml:"auth"      json:"auth"`      // http transport authentication
 	Secrets   SecretsConfig `yaml:"secrets"   json:"secrets"`
+
+	// User is the default user for requests without a user identity; it takes
+	// precedence over Role and may be overridden by the --user flag.
+	User string `yaml:"user,omitempty" json:"user,omitempty"`
 }
 
 // SecretsConfig restricts ${file:...} expansion to explicitly trusted roots.
@@ -130,9 +136,43 @@ type EntityConfig struct {
 	MCP           MCPFlags                  `yaml:"mcp"           json:"mcp"`
 	RowPolicies   RowPolicies               `yaml:"rowPolicies"   json:"rowPolicies"`
 	Relationships []RelationshipConfig      `yaml:"relationships" json:"relationships"`
+	// TenantPolicy is ANDed for every principal and never merged across grants.
+	TenantPolicy FilterConfig `yaml:"tenantPolicy,omitempty" json:"tenantPolicy,omitempty"`
 	// Params is the ordered formal-parameter list for a procedure entity, bound
 	// positionally by execute_entity. Required for procedures.
 	Params []string `yaml:"params"        json:"params"`
+}
+
+// RoleDefinition is a named set of grants declared at the top level. Entity
+// level roles/fieldACL/rowPolicies remain valid and merge into the same role.
+type RoleDefinition struct {
+	Description string        `yaml:"description,omitempty" json:"description,omitempty"`
+	Grants      []GrantConfig `yaml:"grants,omitempty"      json:"grants,omitempty"`
+	// Permissions holds system permissions such as "sql:execute@<datasource>".
+	// None is supported yet; any value fails validation.
+	Permissions []string `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+}
+
+// GrantConfig is one entity permission. A nil Fields grants every visible
+// field; a present Fields behaves like a fieldACL entry. Empty Rows grants all
+// rows.
+type GrantConfig struct {
+	Entity  string          `yaml:"entity"           json:"entity"`
+	Actions []string        `yaml:"actions"          json:"actions"`
+	Fields  *FieldACLConfig `yaml:"fields,omitempty" json:"fields,omitempty"`
+	Rows    FilterConfig    `yaml:"rows,omitempty"   json:"rows,omitempty"`
+}
+
+// UserConfig is one authenticated caller. TokenHash is "sha256:<hex>" of the
+// bearer token; the plaintext token never appears in configuration.
+type UserConfig struct {
+	Description string         `yaml:"description,omitempty" json:"description,omitempty"`
+	TokenHash   string         `yaml:"tokenHash,omitempty"   json:"tokenHash,omitempty"`
+	Roles       []string       `yaml:"roles,omitempty"       json:"roles,omitempty"`
+	Subject     map[string]any `yaml:"subject,omitempty"     json:"subject,omitempty"`
+	Grants      []GrantConfig  `yaml:"grants,omitempty"      json:"grants,omitempty"`
+	Permissions []string       `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+	Disabled    bool           `yaml:"disabled,omitempty"    json:"disabled,omitempty"`
 }
 
 // RelationshipConfig configures a same-data-source batch expansion.
@@ -326,6 +366,7 @@ func (c *AQEConfig) UnmarshalJSON(data []byte) error {
 type BudgetConfig struct {
 	Roles   map[string]BudgetLimits `yaml:"roles"   json:"roles"`
 	Tenants map[string]BudgetLimits `yaml:"tenants" json:"tenants"`
+	Users   map[string]BudgetLimits `yaml:"users,omitempty" json:"users,omitempty"`
 }
 
 // BudgetLimits is unlimited when all fields are zero.

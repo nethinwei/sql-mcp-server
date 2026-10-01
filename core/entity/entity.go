@@ -155,7 +155,10 @@ type Entity struct {
 	FieldAccess FieldAccess
 	MCP         MCPFlags
 	RowPolicies RowPolicies
-	Relations   []Relationship
+	// TenantPolicy is ANDed for every principal and never merged across
+	// grants; nil means the entity has no tenant boundary.
+	TenantPolicy relalg.Predicate
+	Relations    []Relationship
 	// Params is the ordered list of formal parameter names for a KindProcedure
 	// entity. execute_entity binds a caller's named args to positional CALL
 	// placeholders in this exact order; a stored procedure whose params are not
