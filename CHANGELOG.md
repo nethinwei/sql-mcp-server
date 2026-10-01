@@ -25,6 +25,11 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ### Changed
 
+- **最低 Go 版本升至 1.26**（`go.mod` 语言版本 `go 1.26.0`，toolchain、CI、发布
+  与镜像统一使用 Go 1.26.8），不再支持 Go 1.25。同时升级
+  `golang.org/x/crypto` v0.56.0、`golang.org/x/text` v0.41.0、
+  `google.golang.org/grpc` v1.83.1、`github.com/moby/go-archive` v0.3.0 等
+  依赖，修复 govulncheck 报告的标准库与依赖漏洞。
 - 授权实现由 `RoleAuthorizer` 换为 `GrantAuthorizer`；`rbac.NewRoleAuthorizer`
   保留为不带顶层策略的构造函数，未配置 `users`/`roles` 时行为不变。
 - 配置用户且没有共享 token 时，非 mTLS/可信代理通道的请求必须携带用户 token；

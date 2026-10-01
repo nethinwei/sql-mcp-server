@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
           cache: true
       - name: install golangci-lint
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go: ["1.25.12", "1.26.5"]
+        go: ["1.26.8"]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -53,7 +53,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
           cache: true
       - name: core coverage (>=80.0%)
         run: make coverage-check
@@ -70,7 +70,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
           cache: true
       - name: bounded security fuzz targets
         run: make test-fuzz-smoke
@@ -86,7 +86,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
           cache: true
       - name: integration tests (testcontainers)
         run: make test-integration-${{ matrix.db }}
@@ -99,7 +99,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
           cache: true
       - name: end-to-end tests (real DB + in-memory MCP client)
         run: make test-e2e
@@ -112,7 +112,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
           cache: true
       - name: stdio and streamable HTTP protocol smoke
         run: make smoke-protocol
@@ -125,7 +125,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
           cache: true
       - run: make modelscope-check
 
@@ -136,7 +136,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
           cache: true
       - name: govulncheck
         run: |
@@ -152,7 +152,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
           cache: true
       - name: install actionlint v1.7.12
         run: |

@@ -33,7 +33,7 @@ curl -fsS http://127.0.0.1:8080/healthz
 
 ## 安装与接入
 
-源码构建要求 Go 1.25.12+ 和一个[已验证数据库版本](docs/supported-versions.md)：
+源码构建要求 Go 1.26.8+ 和一个[已验证数据库版本](docs/supported-versions.md)：
 
 ```sh
 git clone https://github.com/nethinwei/sql-mcp-server.git
