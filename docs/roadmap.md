@@ -131,7 +131,8 @@
 - 配置只能以 YAML 文件存在，用户、角色、revision 等结构化状态无处持久化，
   部署迁移依赖手工搬运文件。
 
-阶段按依赖顺序推进：管理面 1 → 2 → 3 → 4 → 5；Schema drift 治理为并行项。
+阶段按依赖顺序推进：管理面 1 → 3 → 2 → 4 → 5（配置存储是管理后台的前置，
+先于逃生通道交付）；Schema drift 治理为并行项。
 同时只有一项进入 Committed。本阶段分别落地
 [企业身份](roadmap/directions.md#l7-enterprise-identity-and-scale)、
 [durable audit](roadmap/directions.md#l8-data-governance-and-durable-audit)、
@@ -182,7 +183,7 @@ delegation chain 仍属 L7）；不支持显式 deny 规则；stdio 保持进程
 
 ### 管理面 2 — Trusted SQL Escape Hatch
 
-预期 `v0.1.12`，前置：管理面 1。`execute` 已用于实体动作和
+预期 `v0.1.13`，前置：管理面 1。`execute` 已用于实体动作和
 `execute_entity`，新工具暂定名 `execute_sql`。
 
 **问题证据**：作为 SQL MCP Server，可信操作者需要完整 SQL 能力（排障、临时
@@ -222,8 +223,9 @@ delegation chain 仍属 L7）；不支持显式 deny 规则；stdio 保持进程
 
 ### 管理面 3 — Structured Config Store and Revisions
 
-预期 `v0.1.13`，前置：管理面 1。本项吸收原"最小控制面"范围，实现
-[Revision 与 Snapshot 设计](design/revision-snapshot.md)。
+预期 `v0.1.12`，前置：管理面 1。本项吸收原"最小控制面"范围，实现
+[Revision 与 Snapshot 设计](design/revision-snapshot.md)，详细设计见
+[配置存储与 Revision](design/config-store.md)。
 
 **问题证据**：见本阶段进入条件第四项。
 
