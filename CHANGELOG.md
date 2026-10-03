@@ -25,6 +25,8 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ### Changed
 
+- 升级 OpenTelemetry Go 依赖组至 v1.45.0，修复 OTLP 导出器配置日志可能泄露
+  endpoint URL 的问题（GO-2026-6505）。
 - **最低 Go 版本升至 1.26**（`go.mod` 语言版本 `go 1.26.0`，toolchain、CI、发布
   与镜像统一使用 Go 1.26.8），不再支持 Go 1.25。同时升级
   `golang.org/x/crypto` v0.56.0、`golang.org/x/text` v0.41.0、
