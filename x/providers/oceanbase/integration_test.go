@@ -119,23 +119,7 @@ func TestOBProviderQueryExecExplainIntrospect(t *testing.T) {
 		t.Fatalf("expected a known scan type, got ScanUnknown (raw=%s)", string(plan.Raw))
 	}
 
-	entities, err := prov.Introspector().Discover(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var users *entity.Entity
-	for i := range entities {
-		if entities[i].Name == "users" {
-			users = &entities[i]
-		}
-	}
-	if users == nil {
-		t.Fatalf("users not discovered: %+v", entities)
-	}
-	pk := users.PrimaryKey()
-	if len(pk) != 1 || pk[0] != "id" {
-		t.Fatalf("primary key = %v, want [id]", pk)
-	}
+	assertOBIntrospectUsers(t, ctx, prov)
 }
 
 func TestOBReadEnforceCap(t *testing.T) {
@@ -376,5 +360,35 @@ func TestOBUpdateUnsafeWriteAndPK(t *testing.T) {
 	}
 	if res.Content[0]["rowsAffected"] != int64(1) {
 		t.Fatalf("rowsAffected = %v, want 1", res.Content[0]["rowsAffected"])
+	}
+}
+
+func assertOBIntrospectUsers(t *testing.T, ctx context.Context, prov *oceanbase.Provider) {
+	t.Helper()
+	if _, err := prov.ExecContext(ctx,
+		"CREATE TABLE IF NOT EXISTS test.smcp_store_probe (id int PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	entities, err := prov.Introspector().Discover(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entities {
+		if config.IsStoreTable(e.Name) {
+			t.Fatalf("introspection must skip reserved store table %q", e.Name)
+		}
+	}
+	var users *entity.Entity
+	for i := range entities {
+		if entities[i].Name == "users" {
+			users = &entities[i]
+		}
+	}
+	if users == nil {
+		t.Fatalf("users not discovered: %+v", entities)
+	}
+	pk := users.PrimaryKey()
+	if len(pk) != 1 || pk[0] != "id" {
+		t.Fatalf("primary key = %v, want [id]", pk)
 	}
 }

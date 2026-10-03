@@ -225,6 +225,31 @@ Provider 适用范围使用以下口径：
   低熵 token 会降低强度；`X-MCP-User` 的真实反向代理 e2e 仍未实现。
 - **Provider**：transport/部署边界，与数据库无关。
 
+### TM-011 — 配置存储泄露、篡改与并发覆盖
+
+- **等级/状态**：high / 隔离、密钥规则、完整性与并发已由单元与三库 integration
+  验证。
+- **攻击**：把与业务同库的 `smcp_` store 表配置成实体或经 schema 导入读出配置
+  与用户 hash；让明文 DSN 密码或共享 token 进入 store；直接改写 store 中的
+  payload；两个运维同时发布互相覆盖。
+- **控制**：配置校验拒绝 `source` 使用 `smcp_` 前缀的实体，introspection 跳过
+  这些表；store 模式 import 与加载都要求 DSN 密码为占位符、共享 token 为空；
+  加载 revision 前重算 SHA-256，不一致拒绝并保留当前快照；发布与回滚在锁行上
+  串行化，并以期望的当前发布 id 做乐观并发检查。
+- **现有证据**：`core/config/config_access_test.go` 的保留前缀校验；
+  `x/bootstrap/bootstrap_store_test.go` 的明文密钥与篡改 payload 测试；
+  `cmd/sql-mcp-server/store_cmd_test.go` 的 import 拒绝测试；
+  `x/configstore` 的 SQLite 与 PostgreSQL/MySQL/OceanBase 一致性测试（含 8 路
+  并发发布只有一个成功）；三个 provider 的 introspection integration 断言跳过
+  `smcp_` 表。
+- **持续验证**：单元测试默认运行；三库 store 与 introspection 随
+  `make test-integration` 运行。
+- **剩余风险**：能直接写 store 表的数据库账号可以改写配置（hash 只防意外损坏
+  与不一致，不防有权限的改写）；store 不加密 payload，用户 token hash 与实体
+  元数据对 store 读者可见；没有 payload 签名。
+- **Provider**：store 覆盖 SQLite、PostgreSQL、MySQL、OceanBase；introspection
+  过滤覆盖 PostgreSQL、MySQL/OceanBase。
+
 ## 证据维护规则
 
 - 本账本每个 threat ID 到回归测试的映射由

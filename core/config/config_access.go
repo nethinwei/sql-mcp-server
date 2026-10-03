@@ -11,6 +11,16 @@ import (
 // and user names cannot contain ':', so the prefix never collides with a role.
 const UserPrincipalPrefix = "user:"
 
+// StoreTablePrefix prefixes every configuration store table. Entities may
+// not use such a source and introspection skips such tables, so the store is
+// never exposed through the governed data plane.
+const StoreTablePrefix = "smcp_"
+
+// IsStoreTable reports whether a table name is reserved for the store.
+func IsStoreTable(name string) bool {
+	return strings.HasPrefix(strings.ToLower(name), StoreTablePrefix)
+}
+
 // TokenHashPrefix is the only supported tokenHash algorithm.
 const TokenHashPrefix = "sha256:"
 

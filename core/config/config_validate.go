@@ -225,6 +225,14 @@ func (c *Config) validateEntity(
 	if duplicate, ok := firstDuplicate(e.Params); ok {
 		return fmt.Errorf("config: entity %q has duplicate parameter %q", e.Name, duplicate)
 	}
+	source := e.Source
+	if source == "" {
+		source = e.Name
+	}
+	if IsStoreTable(source) {
+		return fmt.Errorf("config: entity %q source %q uses the reserved store prefix %q", e.Name, source,
+			StoreTablePrefix)
+	}
 	if e.MCP.TrustedProcedure && e.Kind != "procedure" {
 		return fmt.Errorf("config: entity %q sets trustedProcedure but is not a procedure", e.Name)
 	}

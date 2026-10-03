@@ -7,6 +7,10 @@
 YAML 解码、默认值、静态校验、driver 注册检查、secret 解析、provider 连接和
 schema drift 检查。
 
+同一份配置也可以作为 revision 保存在配置存储中（`serve --store`），加载链路
+完全相同，另加 store 模式的密钥规则；见[运维指南](operations.md#配置存储)。
+实体的物理表名（`source`，缺省为 `name`）不能使用保留前缀 `smcp_`。
+
 ## 顶层
 
 - `version`：契约版本标记；当前值为字符串 `"1"`，加载器保存但暂不限制其取值。

@@ -38,6 +38,7 @@ type Runtime struct {
 	reload  sync.Mutex
 	build   func(string) (*App, error)
 	revoked atomic.Pointer[func([]string)]
+	stale   atomic.Pointer[StaleState]
 }
 
 // OnRevokedPrincipals registers fn to receive the principal keys of users that
@@ -126,12 +127,16 @@ func (r *Runtime) Acquire() (*App, func(), error) {
 // Reload performs parse/default/validate/secret-resolution/assembly before
 // atomically publishing the new App. Build failure preserves the old snapshot.
 func (r *Runtime) Reload(path string) error {
+	return r.reloadWith(func() (*App, error) { return r.build(path) })
+}
+
+func (r *Runtime) reloadWith(build func() (*App, error)) error {
 	r.reload.Lock()
 	defer r.reload.Unlock()
 	if r.current.Load() == nil {
 		return ErrRuntimeClosed
 	}
-	next, err := r.build(path)
+	next, err := build()
 	if err != nil {
 		return err
 	}

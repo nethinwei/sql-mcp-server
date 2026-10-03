@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -78,18 +79,17 @@ users:
 
 func TestReloadRejectsTogglingUsers(t *testing.T) {
 	t.Setenv("USERS_TEST_DSN", "postgres://localhost/test")
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte(usersConfigYAML), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := bootstrap.Load(path)
+	next, err := bootstrap.LoadBytes([]byte(usersConfigYAML))
 	if err != nil {
 		t.Fatal(err)
 	}
-	build := serveReloadBuilder(serveOverrides{usersConfigured: false}, cfg.Server, cfg.Tools,
-		toolDiscoverySignature(cfg.Entities), nil)
-	_, err = build(path)
-	if err == nil || !strings.Contains(err.Error(), "users are first configured or all removed") {
+	startup, err := bootstrap.LoadBytes([]byte(
+		"database:\n  driver: postgres\n  dsn: ${USERS_TEST_DSN}\nentities:\n  - name: orders\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = serveBuilder(startup, serveOverrides{}, nil)(next)
+	if !errors.Is(err, bootstrap.ErrRestartRequired) || !strings.Contains(err.Error(), "users") {
 		t.Fatalf("enabling users by reload must require restart: %v", err)
 	}
 }

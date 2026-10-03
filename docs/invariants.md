@@ -46,6 +46,11 @@ YAML presence 解码位于 `x/configyaml`，不会把 `yaml.v3` 引入核心。
   （`AMBIGUOUS_FIELD_SCOPE`），不对字段与行分别取并集。
 - **I26** 实体 `tenantPolicy` 对所有主体始终 AND，不参与授权项之间的 OR；用户
   配置的 subject 属性优先于可信代理注入的同名属性。
+- **I27** 配置存储表（`smcp_` 前缀）不能被任何实体的 `source` 引用，也不出现在
+  introspection 结果中。
+- **I28** 从 store 加载的 revision 必须先通过 content hash 校验与 store 模式密钥
+  规则，任一失败都保留当前快照；任一时刻至多一个 published revision，状态转换
+  以乐观并发串行化。
 
 MCP 工具是否在 tools/list 中还取决于全局 `tools` 开关；custom procedure tool
 由 `mcp.customTool` 独立注册，不受通用 `executeEntity` 开关控制。

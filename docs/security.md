@@ -133,3 +133,21 @@ DSN 支持 `${ENV}` 和 `${file:/path}`。文件必须位于
 变量或不可读文件会失败。
 `SecretResolver` 可由嵌入方替换，但仓库没有内置 Vault/云 secret manager
 客户端。示例不包含真实凭据。
+
+## 配置存储
+
+- store 模式（`serve --store`）下，revision payload 中每个 DSN 的密码都必须是
+  `${...}` 占位符，`server.auth.token` 必须为空；不满足时 import 失败，服务加载
+  revision 时也会再次检查（fail closed）。store 只保存 payload，不保存解析后的
+  DSN 或任何明文凭据。
+- store 的位置 DSN 来自启动参数或环境变量，其 `${file:...}` 只允许读取
+  `--secret-root` 列出的根目录。
+- store 表使用保留前缀 `smcp_`：配置校验拒绝 `source` 使用该前缀的实体，
+  PostgreSQL/MySQL/OceanBase 的 introspection 跳过这些表，因此 store 即使与
+  业务数据同库，也不会经由受治理的数据面暴露。
+- 每次加载 revision 前都重新计算 payload 的 SHA-256，与存储的 `content_hash`
+  不一致时拒绝加载并保留当前快照。
+- 发布与回滚在事务内以"期望的当前发布 id"做乐观并发检查，并在锁行上串行化；
+  任一时刻至多一个 published revision。
+- store 的写权限即配置的写权限：能写入 store 的账号可以改变授权与数据源，应只
+  授予运维人员，并与数据面账号分离。

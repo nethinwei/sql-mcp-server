@@ -71,9 +71,12 @@ draft ──publish──▶ published ──(另一个 revision 发布)──�
 ```
 
 - `publish <id>`：draft → published，原 published → superseded；
-- `rollback`：当前 published → rolled-back，并以**上一个 superseded
-  revision 的 payload 新建一个 revision 直接发布**（新 `id`，`parent_id` 指向
-  被恢复的 revision）。这样发布历史单调递增，轮询方只需比较最新发布 `id`；
+- `rollback`：当前 published → rolled-back，并以**目标 revision 的 payload
+  新建一个 revision 直接发布**（新 `id`，`parent_id` 指向被恢复的 revision）。
+  这样发布历史单调递增，轮询方只需比较最新发布 `id`。默认目标是"内容不同于
+  当前发布的最近一个 superseded revision"（实现时补充：若只取最近的
+  superseded，连续两次回滚会回到同一份内容）；`--to <id>` 可显式指定任一非
+  draft revision；
 - 发布与回滚在一个数据库事务中完成，并以"期望的当前 published id"做乐观
   并发检查，冲突时报错，不静默覆盖。
 
@@ -85,16 +88,18 @@ draft ──publish──▶ published ──(另一个 revision 发布)──�
 type Store interface {
     Create(ctx, Draft) (Revision, error)          // 写入 draft，返回 id 与 hash
     Get(ctx, id int64) (Revision, error)
-    List(ctx, ListOptions) ([]Summary, error)
+    List(ctx, limit int) ([]Revision, error)      // 摘要（不含 payload），新到旧
     Published(ctx) (Revision, error)              // 无发布时返回 ErrNoPublished
     Publish(ctx, id, expectedCurrent int64, meta) (Revision, error)
-    Rollback(ctx, expectedCurrent int64, meta) (Revision, error)
+    Rollback(ctx, expectedCurrent, target int64, meta) (Revision, error)
+    ImportHistory(ctx, []Revision) error          // 仅空 store，供 migrate --history
     Close() error
 }
 ```
 
-SQL 实现放在 `x/configstore`，各方言只在占位符、自增主键与 upsert 语法上
-不同。表名统一使用 `smcp_` 前缀：
+SQL 实现放在 `x/configstore`，各方言只在占位符与列类型上不同：id 由
+`smcp_store_meta` 中的计数行分配，publish/rollback 先更新锁行，借行锁在四种
+后端上统一串行化（实现时补充，避免各库自增语法与迁移后序列修正）。表名统一使用 `smcp_` 前缀：
 
 ```sql
 smcp_store_meta (key PRIMARY KEY, value)           -- schema_version 等
@@ -190,7 +195,7 @@ sql-mcp-server serve --store 'postgres:${file:/run/secrets/store_dsn}'
 | `store show --store S <id>` | 输出 payload |
 | `store diff --store S <a> [<b>]` | 统一 diff（缺省 b 为当前 published） |
 | `store publish --store S <id> [--restart-required]` | 发布 |
-| `store rollback --store S` | 回滚到上一个发布 |
+| `store rollback --store S [--to id] [--restart-required]` | 回滚（默认回到内容不同的上一个发布） |
 | `migrate --from X --to Y` | 在 `file:`、`sqlite:`、`postgres:` 等之间迁移 |
 
 `migrate` 规则：

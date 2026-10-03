@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"strings"
 
+	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 )
 
@@ -32,6 +33,9 @@ func (i pgIntrospector) Discover(ctx context.Context, sources []string) ([]entit
 		var t tbl
 		if err := trows.Scan(&t.schema, &t.name); err != nil {
 			return nil, err
+		}
+		if config.IsStoreTable(t.name) {
+			continue
 		}
 		tables = append(tables, t)
 	}

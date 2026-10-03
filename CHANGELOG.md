@@ -11,6 +11,15 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ### Added
 
+- 配置存储与 revision：`serve --store <driver>:<dsn>`（或 `SQL_MCP_STORE`）
+  从 SQLite（纯 Go `modernc.org/sqlite`）、PostgreSQL、MySQL 或 OceanBase 中的
+  已发布 revision 启动，`--watch` 轮询新发布并热重载，失败时保留旧快照并在
+  `/readyz/snapshot` 返回 `X-Snapshot-Stale`；新增 `store init/import/list/show/
+  diff/publish/rollback` 与 `migrate` 子命令。设计见
+  `docs/design/config-store.md`。
+- 实体 `source` 保留前缀 `smcp_`，introspection 跳过该前缀的表；威胁 TM-011、
+  不变量 I27、I28。
+
 - 用户、角色与权限模型：顶层 `roles`（授权项 grants）与 `users`（每用户
   `tokenHash`、多角色、直授 grants、固定 subject、`disabled`），实体
   `tenantPolicy` 租户硬边界，`budget.users`，`server.user`/`--user` 默认用户，
@@ -25,6 +34,8 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ### Changed
 
+- 热重载守卫从 CLI 下沉为 `bootstrap.CheckHotReload`，文件 reload、store reload
+  与 store publish 共用；事务 `ttl`/`maxOpen` 变化在 reload 构建阶段即被拒绝。
 - 升级 OpenTelemetry Go 依赖组至 v1.45.0，修复 OTLP 导出器配置日志可能泄露
   endpoint URL 的问题（GO-2026-6505）。
 - **最低 Go 版本升至 1.26**（`go.mod` 语言版本 `go 1.26.0`，toolchain、CI、发布

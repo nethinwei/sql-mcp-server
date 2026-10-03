@@ -132,5 +132,24 @@
     "gaps": [
       "token 无过期时间；X-MCP-User 的真实反向代理 e2e 未实现"
     ]
+  },
+  "TM-011": {
+    "severity": "high",
+    "tests": [
+      {"file": "core/config/config_access_test.go", "name": "TestValidateRejectsReservedStoreTables"},
+      {"file": "x/bootstrap/bootstrap_store_test.go", "name": "TestValidateStorePayloadRejectsPlaintextSecrets"},
+      {"file": "x/bootstrap/bootstrap_store_test.go", "name": "TestWatchStoreRejectsTamperedPayload"},
+      {"file": "cmd/sql-mcp-server/store_cmd_test.go", "name": "TestStoreImportRejectsPlaintextSecrets"},
+      {"file": "x/configstore/configstore_test.go", "name": "TestSQLiteStoreConformance"},
+      {"file": "x/configstore/integration_test.go", "name": "TestPostgresStoreConformance"},
+      {"file": "x/configstore/integration_test.go", "name": "TestMySQLStoreConformance"},
+      {"file": "x/configstore/integration_test.go", "name": "TestOceanBaseStoreConformance"},
+      {"file": "x/providers/mysql/integration_test.go", "name": "TestMySQLProviderQueryExecExplainIntrospect"},
+      {"file": "x/providers/oceanbase/integration_test.go", "name": "TestOBProviderQueryExecExplainIntrospect"},
+      {"file": "x/providers/postgres/integration_test.go", "name": "TestProviderQueryExecExplainIntrospect"}
+    ],
+    "gaps": [
+      "有 store 写权限的账号可改写配置；payload 未加密、未签名"
+    ]
   }
 }

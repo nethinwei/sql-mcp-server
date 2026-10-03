@@ -179,3 +179,18 @@ func TestValidateAccessAllowsLegacyColonRolesWithoutUsers(t *testing.T) {
 		t.Fatalf("legacy config without users must stay valid: %v", err)
 	}
 }
+
+func TestValidateRejectsReservedStoreTables(t *testing.T) {
+	t.Parallel()
+	for _, e := range []EntityConfig{{Name: "smcp_revisions"}, {Name: "revs", Source: "SMCP_Revisions"}} {
+		cfg := &Config{Database: DatabaseConfig{Driver: "postgres", DSN: "x"}, Entities: []EntityConfig{e}}
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "reserved store prefix") {
+			t.Errorf("entity %+v: err = %v", e, err)
+		}
+	}
+	cfg := &Config{Database: DatabaseConfig{Driver: "postgres", DSN: "x"},
+		Entities: []EntityConfig{{Name: "smcp_view", Source: "orders"}}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("only the physical source is reserved: %v", err)
+	}
+}

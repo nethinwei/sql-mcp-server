@@ -2,7 +2,9 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,5 +148,44 @@ func TestReloadReportsRevokedPrincipals(t *testing.T) {
 	}
 	if id, ok := runtime.UserByName("alice"); !ok || id.Principal != "user:alice" {
 		t.Fatalf("kept user = %+v %v", id, ok)
+	}
+}
+
+func TestCheckHotReloadRejectsRestartRequiredChanges(t *testing.T) {
+	t.Parallel()
+	base := func() *config.Config {
+		cfg := &config.Config{
+			Server:   config.ServerConfig{Transport: "http", Addr: ":8080", Auth: config.AuthConfig{Token: "a"}},
+			Database: config.DatabaseConfig{Driver: "postgres", DSN: "x"},
+			Entities: []config.EntityConfig{{Name: "p", Kind: "procedure",
+				MCP: config.MCPFlags{CustomTool: true, TrustedProcedure: true}}},
+		}
+		cfg.ApplyDefaults()
+		return cfg
+	}
+	if err := CheckHotReload(base(), base()); err != nil {
+		t.Fatalf("identical config: %v", err)
+	}
+	roleOnly := base()
+	roleOnly.Server.Role = "other"
+	roleOnly.Cost.MaxRows = 7
+	if err := CheckHotReload(base(), roleOnly); err != nil {
+		t.Fatalf("role and cost changes are hot-reloadable: %v", err)
+	}
+	cases := map[string]func(*config.Config){
+		"transport/address":      func(c *config.Config) { c.Server.Addr = ":9090" },
+		"auth/TLS":               func(c *config.Config) { c.Server.Auth.Token = "b" },
+		"tool set":               func(c *config.Config) { c.Tools.ReadRecords = !c.Tools.ReadRecords },
+		"custom procedure tools": func(c *config.Config) { c.Entities[0].MCP.CustomTool = false },
+		"users":                  func(c *config.Config) { c.Users = map[string]config.UserConfig{"alice": {}} },
+		"transaction":            func(c *config.Config) { c.Transactions.MaxOpen++ },
+	}
+	for want, mutate := range cases {
+		next := base()
+		mutate(next)
+		err := CheckHotReload(base(), next)
+		if !errors.Is(err, ErrRestartRequired) || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v", want, err)
+		}
 	}
 }

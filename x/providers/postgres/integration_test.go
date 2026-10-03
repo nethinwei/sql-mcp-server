@@ -107,9 +107,17 @@ func assertPGExplainPlans(t *testing.T, ctx context.Context, prov *pgprov.Provid
 
 func assertPGIntrospectUsers(t *testing.T, ctx context.Context, prov *pgprov.Provider) {
 	t.Helper()
+	if _, err := prov.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS smcp_store_probe (id int PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
 	entities, err := prov.Introspector().Discover(ctx, []string{"public"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, e := range entities {
+		if config.IsStoreTable(e.Name) {
+			t.Fatalf("introspection must skip reserved store table %q", e.Name)
+		}
 	}
 	var users *entity.Entity
 	for i := range entities {

@@ -420,6 +420,9 @@ type HTTPConfig struct {
 	// Probes fail closed: a nil probe or a probe error yields 503.
 	SnapshotReady func(context.Context) error
 	DatabaseReady func(context.Context) error
+	// SnapshotStale returns the ID of a published store revision that is not
+	// applied (0 when none); it adds X-Snapshot-Stale to /readyz/snapshot.
+	SnapshotStale func() int64
 }
 
 func (c HTTPConfig) tlsEnabled() bool  { return c.TLSCert != "" && c.TLSKey != "" }

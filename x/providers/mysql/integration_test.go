@@ -90,24 +90,7 @@ func TestMySQLProviderQueryExecExplainIntrospect(t *testing.T) {
 		t.Fatalf("ScanType = %v, want ScanFull for unfiltered scan", plan.ScanType)
 	}
 
-	// Introspect: discover the users table with a primary key.
-	entities, err := prov.Introspector().Discover(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var users *entity.Entity
-	for i := range entities {
-		if entities[i].Name == "users" {
-			users = &entities[i]
-		}
-	}
-	if users == nil {
-		t.Fatalf("users not discovered: %+v", entities)
-	}
-	pk := users.PrimaryKey()
-	if len(pk) != 1 || pk[0] != "id" {
-		t.Fatalf("primary key = %v, want [id]", pk)
-	}
+	assertMySQLIntrospectUsers(t, ctx, prov)
 }
 
 func TestMySQLReadEnforceCap(t *testing.T) {
@@ -386,5 +369,36 @@ func TestMySQLReadPKWhitelist(t *testing.T) {
 	}
 	if len(res.Content) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(res.Content))
+	}
+}
+
+func assertMySQLIntrospectUsers(t *testing.T, ctx context.Context, prov *mysql.Provider) {
+	t.Helper()
+	// Introspect: discover the users table with a primary key, never a
+	// reserved store table.
+	if _, err := prov.ExecContext(ctx, "CREATE TABLE smcp_store_probe (id int PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	entities, err := prov.Introspector().Discover(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entities {
+		if config.IsStoreTable(e.Name) {
+			t.Fatalf("introspection must skip reserved store table %q", e.Name)
+		}
+	}
+	var users *entity.Entity
+	for i := range entities {
+		if entities[i].Name == "users" {
+			users = &entities[i]
+		}
+	}
+	if users == nil {
+		t.Fatalf("users not discovered: %+v", entities)
+	}
+	pk := users.PrimaryKey()
+	if len(pk) != 1 || pk[0] != "id" {
+		t.Fatalf("primary key = %v, want [id]", pk)
 	}
 }

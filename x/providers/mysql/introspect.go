@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"strings"
 
+	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 )
@@ -37,7 +38,7 @@ func (i Introspector) Discover(ctx context.Context, sources []string) ([]entity.
 		if err := trows.Scan(&t.schema, &t.name); err != nil {
 			return nil, err
 		}
-		if len(sources) > 0 && !contains(sources, t.schema) {
+		if len(sources) > 0 && !contains(sources, t.schema) || config.IsStoreTable(t.name) {
 			continue
 		}
 		tables = append(tables, t)
