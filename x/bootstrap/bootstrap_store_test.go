@@ -96,9 +96,8 @@ func TestWatchStoreAppliesFailsStaticAndRecovers(t *testing.T) {
 
 	second := publishPayload(t, store, "ok-2")
 	waitFor(t, func() bool { return runtime.Current().DefaultRole == "ok-2" })
-	if runtime.AppliedRevision() != second.ID {
-		t.Fatalf("applied = %d, want %d", runtime.AppliedRevision(), second.ID)
-	}
+	// The snapshot switches before the applied revision is recorded.
+	waitFor(t, func() bool { return runtime.AppliedRevision() == second.ID })
 
 	broken := publishPayload(t, store, "broken")
 	waitFor(t, func() bool { s, ok := runtime.Stale(); return ok && s.RevisionID == broken.ID })

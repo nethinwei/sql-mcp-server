@@ -70,6 +70,7 @@ export default {
     procedure: '存储过程', userTag: '用户 {name}', legacyTag: '实体内角色', nobody: '无人可访问',
   },
   entity: {
+    renameTitle: '重命名实体', name: '名称', renameHint: '授权与其他实体的关系会一起更新，读取的表不变。',
     notFound: '工作区中没有实体 {name}', backToList: '返回实体列表', delete: '删除实体',
     basics: '基本信息', datasource: '数据源', table: '表', kind: '类型', primaryKey: '主键',
     kinds: { table: '表', view: '视图', procedure: '存储过程' },

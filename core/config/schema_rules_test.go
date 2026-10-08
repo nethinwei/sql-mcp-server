@@ -111,3 +111,36 @@ func TestRestartFieldChanges(t *testing.T) {
 		t.Fatalf("changes = %q", got)
 	}
 }
+
+// Switching on any optional block with nothing else set must load: every
+// field a rule requires once the block is on has to get a default. A rule
+// that needs user input (audit.path) belongs to the cases it lists instead.
+func TestOptionalBlocksLoadWithDefaults(t *testing.T) {
+	t.Parallel()
+	on := true
+	for name, mutate := range map[string]func(*Config){
+		"result cache":      func(c *Config) { c.Cache.Enabled = true },
+		"prepared cache":    func(c *Config) { c.Cache.PreparedMaxSize = 64 },
+		"rate limit rps":    func(c *Config) { c.RateLimit.RPS = 10 },
+		"aqe sampling":      func(c *Config) { c.Cost.AQE.SampleRate = 0.5 },
+		"http transport":    func(c *Config) { c.Server.Transport = "http" },
+		"explicit tools":    func(c *Config) { c.Tools = ExplicitToolFlags(ToolFlags{ReadRecords: true}) },
+		"cost switched on":  func(c *Config) { c.Cost.Enabled = &on },
+		"budget role entry": func(c *Config) { c.Budget.Roles = map[string]BudgetLimits{"reader": {}} },
+		"entity":            func(c *Config) { c.Entities = []EntityConfig{{Name: "orders", DataSource: "main"}} },
+		"role with a grant": func(c *Config) {
+			c.Entities = []EntityConfig{{Name: "orders", DataSource: "main", Fields: []FieldConfig{{Name: "id"}}}}
+			c.Roles = map[string]RoleDefinition{"r": {Grants: []GrantConfig{{Entity: "orders", Actions: []string{"read"}}}}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c := &Config{Databases: map[string]DatabaseConfig{"main": {Driver: "postgres", DSN: "x"}}}
+			mutate(c)
+			c.ApplyDefaults()
+			if err := c.Validate(); err != nil {
+				t.Fatalf("%s needs a default: %v", name, err)
+			}
+		})
+	}
+}

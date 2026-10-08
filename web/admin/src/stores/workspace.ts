@@ -370,18 +370,41 @@ export const useWorkspace = defineStore('workspace', {
       return dropped
     },
 
+    /**
+     * Adds or replaces an entity. Renaming it (previousName differs) keeps
+     * the table it reads (source defaults to the name) and moves every
+     * reference along: grants of roles and users, and relationships of other
+     * entities that target it.
+     */
     upsertEntity(e: EntityInput, previousName = e.name) {
+      if (previousName !== e.name && !e.source) e = { ...e, source: previousName }
       const i = this.entities.findIndex((x) => x.name === previousName)
       if (i >= 0) this.entities.splice(i, 1, e)
       else this.entities.push(e)
+      if (previousName !== e.name) {
+        const rename = (g: GrantInput) => (g.entity === previousName ? { ...g, entity: e.name } : g)
+        for (const r of this.roles) r.grants = (r.grants ?? []).map(rename)
+        for (const u of this.users) u.grants = (u.grants ?? []).map(rename)
+        for (const other of this.entities) {
+          if (other.relationships?.some((rel) => rel.target === previousName)) {
+            other.relationships = other.relationships.map((rel) =>
+              (rel.target === previousName ? { ...rel, target: e.name } : rel))
+          }
+        }
+      }
       this.persist()
     },
 
-    /** Removes an entity and every grant on it. */
+    /** Removes an entity, every grant on it and every relationship to it. */
     removeEntity(name: string) {
       this.entities = this.entities.filter((e) => e.name !== name)
       for (const r of this.roles) r.grants = dropGrantsOn(r.grants, name)
       for (const u of this.users) u.grants = dropGrantsOn(u.grants, name)
+      for (const other of this.entities) {
+        if (other.relationships?.some((rel) => rel.target === name)) {
+          other.relationships = other.relationships.filter((rel) => rel.target !== name)
+        }
+      }
       this.persist()
     },
 

@@ -163,6 +163,19 @@ describe('workspace', () => {
     expect(ws.user('alice')!.roles).toEqual([])
   })
 
+  it('moves references when an entity is renamed or removed', () => {
+    const ws = seeded()
+    ws.upsertEntity({ name: 'customers', fields: [{ name: 'id' }] })
+    ws.entity('orders')!.relationships = [{ name: 'customer', target: 'customers', cardinality: 'belongs-to', joinOn: { customer_id: 'id' } }]
+    ws.upsertEntity({ ...ws.entity('customers')!, name: 'clients' }, 'customers')
+    expect(ws.role('analyst')!.grants!.map((g) => g.entity)).toEqual(['orders', 'clients'])
+    expect(ws.entity('orders')!.relationships![0].target).toBe('clients')
+    expect(ws.entity('clients')!.source).toBe('customers')
+    ws.removeEntity('clients')
+    expect(ws.entity('orders')!.relationships).toEqual([])
+    expect(ws.role('analyst')!.grants!.map((g) => g.entity)).toEqual(['orders'])
+  })
+
   it('renames roles on their members and manages membership', () => {
     const ws = seeded()
     ws.upsertRole({ ...ws.role('analyst')!, name: 'cn_analyst' }, 'analyst')

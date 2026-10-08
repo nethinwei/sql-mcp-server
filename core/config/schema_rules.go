@@ -14,6 +14,15 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/mask"
 )
 
+// Loading runs three stages: strict decoding of the raw input (unknown keys
+// fail), ApplyDefaults, then Validate. Validate checks the `schema` tags
+// below last; they express unconditional single-field rules only. Rules that
+// depend on other fields or on a switch (softScore >= hardScore, a path when
+// audit is on, positive entry limits when the result cache is on) are named
+// checks in Validate. The console checks the tag rules as hints through the
+// generated schema; the server is authoritative. testdata/rules.json holds
+// cases both sides must agree on.
+//
 // Field rules live in `schema` struct tags so that validation, the generated
 // JSON Schema (schema.json), the console and the reference docs share one
 // source. Tag grammar, comma separated:

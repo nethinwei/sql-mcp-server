@@ -74,6 +74,7 @@ const en: typeof zh = {
     procedure: 'procedure', userTag: 'user {name}', legacyTag: 'entity-level roles', nobody: 'Nobody',
   },
   entity: {
+    renameTitle: 'Rename entity', name: 'Name', renameHint: 'Grants and relationships of other entities follow; the table it reads stays the same.',
     notFound: 'The workspace has no entity {name}', backToList: 'Back to entities', delete: 'Delete entity',
     basics: 'Basics', datasource: 'Datasource', table: 'Table', kind: 'Kind', primaryKey: 'Primary key',
     kinds: { table: 'table', view: 'view', procedure: 'procedure' },

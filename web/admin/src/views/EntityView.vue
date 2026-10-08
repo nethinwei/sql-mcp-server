@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
   NAlert, NButton, NCard, NDataTable, NDescriptions, NDescriptionsItem, NEmpty, NForm, NFormItem, NInput,
-  NPageHeader, NSelect, NSpace, NSwitch, NTag, NText, useDialog, useMessage, type DataTableColumns,
+  NModal, NPageHeader, NSelect, NSpace, NSwitch, NTag, NText, useDialog, useMessage, type DataTableColumns,
 } from 'naive-ui'
 import FilterBuilder from '@/components/FilterBuilder.vue'
 import { useWorkspace } from '@/stores/workspace'
@@ -108,6 +108,27 @@ function addRelationship() {
 }
 const targetFields = computed(() => ws.entity(newRel.value.target)?.fields?.map((f) => ({ label: f.name, value: f.name })) ?? [])
 
+// Renaming moves every reference (see workspace.upsertEntity) and keeps the
+// table the entity reads.
+const renaming = ref(false)
+const newName = ref('')
+const renameError = computed(() => {
+  const name = newName.value.trim()
+  if (!name) return t('common.required')
+  return name !== props.name && ws.entity(name) ? t('names.taken') : null
+})
+function startRename() {
+  newName.value = props.name
+  renaming.value = true
+}
+function rename() {
+  if (!entity.value || renameError.value) return
+  const name = newName.value.trim()
+  ws.upsertEntity({ ...entity.value, name }, props.name)
+  renaming.value = false
+  void router.replace({ name: 'entity', params: { name } })
+}
+
 function remove() {
   const affected = [...new Set(access.value.map((a) => `${t(a.kind === 'role' ? 'entity.accessRole' : 'entity.accessUser')} ${a.who}`))]
   dialog.warning({
@@ -132,9 +153,25 @@ function remove() {
       <template #title><span class="mono">{{ entity.name }}</span></template>
       <template #subtitle>{{ entity.description }}</template>
       <template #extra>
-        <n-button v-if="editable" size="small" type="error" ghost @click="remove">{{ t('entity.delete') }}</n-button>
+        <n-space v-if="editable">
+          <n-button size="small" @click="startRename">{{ t('common.rename') }}</n-button>
+          <n-button size="small" type="error" ghost @click="remove">{{ t('entity.delete') }}</n-button>
+        </n-space>
       </template>
     </n-page-header>
+
+    <n-modal v-model:show="renaming" preset="card" :title="t('entity.renameTitle')" class="dialog">
+      <n-form-item :label="t('entity.name')" :feedback="renameError ?? t('entity.renameHint')"
+        :validation-status="renameError ? 'error' : undefined">
+        <n-input v-model:value="newName" @keyup.enter="rename" />
+      </n-form-item>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="renaming = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" :disabled="Boolean(renameError)" @click="rename">{{ t('common.confirm') }}</n-button>
+        </n-space>
+      </template>
+    </n-modal>
 
     <n-card size="small" :title="t('entity.basics')">
       <n-descriptions :column="4" size="small" label-placement="top">

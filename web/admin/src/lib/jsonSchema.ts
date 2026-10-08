@@ -17,6 +17,7 @@ export type Schema = {
   'x-maximum'?: string
   properties?: Record<string, Schema>
   additionalProperties?: Schema | boolean
+  propertyNames?: { pattern?: string }
   items?: Schema
   enum?: unknown[]
   examples?: unknown[]
@@ -110,9 +111,49 @@ function typeMatches(want: string, got: string) {
   return want === got || (want === 'number' && got === 'integer')
 }
 
-export function validate(root: Schema, schema: Schema | undefined, value: unknown, path: Path = []): Problem[] {
+/**
+ * Whether v is unset in the server's terms: empty string, zero, false, null,
+ * an empty list, or an object whose values are all unset.
+ */
+export function isUnset(v: unknown): boolean {
+  if (v === undefined || v === null || v === '' || v === 0 || v === false) return true
+  if (Array.isArray(v)) return v.length === 0
+  if (typeof v === 'object') return Object.values(v as object).every(isUnset)
+  return false
+}
+
+const durationUnits: Record<string, number> = { ns: 1, us: 1e3, 'µs': 1e3, ms: 1e6, s: 1e9, m: 6e10, h: 3.6e12 }
+
+/** Parses a Go duration ("1h30m", "500ms", "0") into nanoseconds; NaN if invalid. */
+export function parseDuration(s: string): number {
+  if (s === '0') return 0
+  const re = /(-?\d+(?:\.\d*)?)(ns|us|µs|ms|s|m|h)/gy
+  let total = 0
+  let m: RegExpExecArray | null
+  let end = 0
+  while ((m = re.exec(s))) {
+    total += Number(m[1]) * durationUnits[m[2]]
+    end = re.lastIndex
+  }
+  return s && end === s.length ? total : NaN
+}
+
+/**
+ * Checks value against schema the way the server does (core/config
+ * schema_rules.go): an unset optional string skips enum, pattern and
+ * minLength; an object property that is entirely unset and not required is
+ * not checked; required means set, not merely present; map keys are
+ * lowercased before their pattern applies; duration bounds use Go syntax.
+ * The server stays authoritative and also checks conditional and
+ * cross-field rules this does not know about.
+ */
+export function validate(root: Schema, schema: Schema | undefined, value: unknown, path: Path = [], required = true): Problem[] {
   const s = resolve(root, schema)
   if (!s) return []
+  // Like the server: an unset optional string, or an unset optional object
+  // with fixed properties (a struct, not a map), is not checked.
+  const struct = Boolean(s.properties) && value !== null && typeof value === 'object' && !Array.isArray(value)
+  if (!required && isUnset(value) && (typeof value === 'string' || struct)) return []
   const out: Problem[] = []
   const got = typeOf(value)
   const problem = (code: string, params: Record<string, unknown> = {}) =>
@@ -129,6 +170,11 @@ export function validate(root: Schema, schema: Schema | undefined, value: unknow
   if (typeof value === 'string') {
     if (s.minLength !== undefined && value.length < s.minLength) problem('minLength', { min: s.minLength })
     if (s.pattern && !new RegExp(s.pattern).test(value)) problem('pattern', { pattern: s.pattern })
+    if (s['x-format'] === 'duration') {
+      const d = parseDuration(value)
+      if (s['x-minimum'] !== undefined && d < parseDuration(s['x-minimum'])) problem('minimum', { min: s['x-minimum'] })
+      if (s['x-maximum'] !== undefined && d > parseDuration(s['x-maximum'])) problem('maximum', { max: s['x-maximum'] })
+    }
   }
   if (Array.isArray(value)) {
     if (s.minItems !== undefined && value.length < s.minItems) problem('minItems', { min: s.minItems })
@@ -137,11 +183,17 @@ export function validate(root: Schema, schema: Schema | undefined, value: unknow
   if (got === 'object') {
     const obj = value as Record<string, unknown>
     for (const name of s.required ?? []) {
-      if (!(name in obj)) problem('required', { name })
+      if (isUnset(obj[name])) problem('required', { name })
     }
+    const keyPattern = s.propertyNames?.pattern ? new RegExp(s.propertyNames.pattern) : null
     for (const [k, v] of Object.entries(obj)) {
+      if (keyPattern && !keyPattern.test(k.trim().toLowerCase())) {
+        out.push({ path: [...path, k], code: 'pattern', params: { pattern: keyPattern.source }, onKey: true, severity: 'error' })
+      }
       const sub = child(root, s, k)
-      if (sub) out.push(...validate(root, sub, v, [...path, k]))
+      // Properties may be unset; map values and list items are always set.
+      const isProperty = Boolean(s.properties?.[k])
+      if (sub) out.push(...validate(root, sub, v, [...path, k], !isProperty || (s.required ?? []).includes(k)))
       else if (closed(s)) out.push({ path: [...path, k], code: 'unknown', params: { name: k }, onKey: true, severity: 'error' })
     }
   }
