@@ -9,6 +9,8 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+## 0.1.11 - 2026-10-08
+
 ### Added
 
 - 配置存储与 revision：`serve --store <driver>:<dsn>`（或 `SQL_MCP_STORE`）
@@ -54,6 +56,8 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ### Breaking
 
+升级步骤汇总见 [`docs/releases/v0.1.11.md`](docs/releases/v0.1.11.md#迁移)。
+
 - **配置中的未知字段直接拒绝加载**（此前静默忽略）：拼错的键（如
   `cost.maxRow`）会让 `validate`、启动、reload 与 store publish 失败，并报告
   行号与字段名；升级前先用 `sql-mcp-server validate` 检查现有配置。行过滤
@@ -76,8 +80,8 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 - 一个物理表或视图最多对应一个实体（[数据源模型](docs/design/datasource-model.md) I-1）。同一数据源中
   名称完全相同的重复在校验和发布时拒绝；按默认 schema、MySQL `lower_case_table_names` 和服务器身份
   （多个数据源指向同一个库）解析后的重复在启动和重载时拒绝。此前把同一张表配成两个实体（例如分别走
-  只读和读写两个 DSN）会产生两套策略和互不失效的缓存；迁移方式是只保留一个实体，多账号连接将在后续
-  版本以同一数据源的多个连接提供。
+  只读和读写两个 DSN）会产生两套策略和互不失效的缓存；迁移方式是只保留一个实体，多个账号改用同一数据源
+  的多个连接（`connections` 与 `routing`）。
 - 表的主键与唯一键以数据库为准：配置的 `primaryKey` 与数据库不一致时启动告警，并以数据库的键为准；
   此前在没有主键约束的表上声明 `primaryKey` 可让修改和删除通过写保护，现在不再生效。视图上声明的键只
   用于读取。`primaryKey` 与新增的 `uniqueKeys` 中的列必须是实体字段。
