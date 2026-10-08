@@ -218,3 +218,20 @@ func TestRestartChangesIgnoresEncodingOnlyDifferences(t *testing.T) {
 		t.Fatalf("real changes = %v", changed)
 	}
 }
+
+// A published revision that no longer loads (e.g. after a removed field) must
+// not lock the store: an explicit restart-required publish replaces it.
+func TestCheckPublishableRecoversFromUnloadablePublished(t *testing.T) {
+	t.Parallel()
+	valid := []byte("database:\n  driver: postgres\n  dsn: postgres://u@h/db\n" +
+		"entities:\n  - name: users\n    fields: [{name: id}]\n")
+	stale := append(append([]byte{}, valid...), "rateLimit:\n  removedField: 1\n"...)
+	current := revision.Revision{ID: 1, Payload: stale, ContentHash: revision.Hash(stale)}
+	target := revision.Revision{ID: 2, Payload: valid, ContentHash: revision.Hash(valid)}
+	if err := CheckPublishable(current, target, false); err == nil {
+		t.Fatal("publishing over an unloadable revision must require restart-required")
+	}
+	if err := CheckPublishable(current, target, true); err != nil {
+		t.Fatalf("restart-required publish over an unloadable revision: %v", err)
+	}
+}

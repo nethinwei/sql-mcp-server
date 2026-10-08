@@ -56,7 +56,11 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   上限为 0 被拒绝。
 - 删除从未生效的配置项 `rateLimit.cpuPool`（engine 没有 CPU 任务）与已弃用别名
   `budget.*.maxScannedRows`；由于未知字段直接拒绝，旧配置需删除前者、把后者改名为
-  `maxEstimatedScannedRows`。
+  `maxEstimatedScannedRows`。旧版本会把 `cpuPool` 默认值写进每个 store revision，
+  因此 store 部署升级后无法启动、也无法回滚到旧 revision：用 `store show <id>` 导出
+  当前 revision，删去该键后 `store import`，再 `store publish --restart-required`。
+  当前已发布 revision 无法加载时，发布只接受 `restartRequired`（此前无论如何都会
+  被拒绝，store 无法恢复）。
 - `read_records` 的 `offset` 必须与 `limit` 同时给出（此前 `offset` 被静默忽略），
   输入 schema 增加 `dependentRequired`；`describe_entities` 拒绝非法输入（此前忽略
   后列出全部实体）。删除永不产生的拒绝码 `NOT_IMPLEMENTED`。

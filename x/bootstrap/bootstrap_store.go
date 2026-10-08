@@ -63,7 +63,8 @@ func LoadRevision(rev revision.Revision) (*config.Config, error) {
 
 // CheckPublishable verifies that target loads under the store rules and,
 // when current is published (ID != 0), that switching to target needs no
-// restart unless restartRequired is set.
+// restart unless restartRequired is set. A current revision that no longer
+// loads can only be replaced with restartRequired.
 func CheckPublishable(current, target revision.Revision, restartRequired bool) error {
 	next, err := LoadRevision(target)
 	if err != nil {
@@ -74,7 +75,12 @@ func CheckPublishable(current, target revision.Revision, restartRequired bool) e
 	}
 	cur, err := LoadRevision(current)
 	if err != nil {
-		return fmt.Errorf("published revision %d: %w", current.ID, err)
+		// Nothing to compare against; replacing it takes a restart anyway.
+		if restartRequired {
+			return nil
+		}
+		return fmt.Errorf("published revision %d no longer loads (%w); publish with restart-required "+
+			"(CLI --restart-required, API restartRequired) to replace it", current.ID, err)
 	}
 	if err := CheckHotReload(cur, next); err != nil && !restartRequired {
 		return fmt.Errorf("%w; allow it with restart-required (CLI --restart-required, API restartRequired) "+
