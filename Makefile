@@ -20,15 +20,25 @@ BINARY := sql-mcp-server$(shell $(GO) env GOEXE)
 CORE_COVERAGE_MIN := 80.0
 CORE_PACKAGES := ./core/...
 
-.PHONY: fmt fmt-check vet build test test-fuzz-smoke test-integration test-e2e lint coverage \
+.PHONY: fmt web fmt-check vet build test test-fuzz-smoke test-integration test-e2e lint coverage \
 	coverage-check govulncheck workflow-check release-check release-quality \
 	release-snapshot release-metadata-check release-image-check release-preflight-fast \
 	release-preflight release-bump modelscope-check smoke-protocol bench-overhead eval-pilot \
-	eval-workload fixtures-v4 eval-diagnostic eval-coverage docs-check ci ci-local ci-full tidy
+	eval-workload fixtures-v4 eval-diagnostic eval-coverage docs-check ci ci-local ci-full tidy web-check
 
 # Format all Go sources in place (gofmt + 120-column line shortening).
 fmt:
 	$(GO) run ./internal/fmtcheck -w
+
+# Admin console (web/admin): installs locked dependencies, regenerates GraphQL
+# types, type-checks, tests and builds into x/admin/ui/dist/app for go:embed.
+web:
+	cd web/admin && pnpm install --frozen-lockfile && pnpm test && pnpm build
+
+# Fail unless the built console is in place for go:embed (release builds).
+web-check:
+	@test -f x/admin/ui/dist/app/index.html || \
+		{ echo "admin console not built: run make web before building a release" >&2; exit 1; }
 
 # Fail if any Go source is not gofmt-ed.
 fmt-check:

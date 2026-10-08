@@ -84,6 +84,7 @@
 - tool schema：新增可选输入字段、放宽枚举、补充 `description`；
 - Denial：新增可选字段、新增 `code` 取值、扩充 `constraints`/`hints` 内容；
 - export：新增字段（带默认值）导致的输出差异；
+- export：省略与缺省语义相同的空值（重新加载得到相同的生效配置）；
 - 审计事件：新增可选字段、新增 `action` 或 `code` 取值。
 
 **破坏性变化**（必须在 CHANGELOG `Breaking` 段明示，且遵循 semver）：

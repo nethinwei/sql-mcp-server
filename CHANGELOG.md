@@ -17,6 +17,14 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   `/readyz/snapshot` 返回 `X-Snapshot-Stale`；新增 `store init/import/list/show/
   diff/publish/rollback` 与 `migrate` 子命令。设计见
   `docs/design/config-store.md`。
+- 管理 API 与控制台（`serve --store ... --admin`，挂在 `/admin`）：GraphQL 管理
+  API（草稿、校验、差异、模拟、发布与回滚，发布带乐观并发检查）与嵌入二进制的
+  Vue 控制台（数据源导入、权限矩阵、可见范围预览、版本历史、运行状态、其他设置
+  编辑器）。本地管理员账号（argon2id，`sql-mcp-server admin` 子命令引导）；密码
+  校验全局限并发并限制排队，改密立即吊销该账号的所有会话；自己的密码任何登录者
+  可改，他人的密码需要 `admin:accounts`。schema 导入按 schema 加表名识别表，
+  外键记录被引用表的 schema（`entity.ForeignKey.RefSchema`）。发布产物（GoReleaser、
+  镜像）在构建前编译控制台。设计见 `docs/design/admin-api.md`。
 - 实体 `source` 保留前缀 `smcp_`，introspection 跳过该前缀的表；威胁 TM-011、
   不变量 I27、I28。
 
@@ -32,8 +40,28 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 - 威胁 TM-009（多角色合并越权与租户打穿）、TM-010（用户身份伪造与吊销残留），
   不变量 I25、I26。
 
+### Breaking
+
+- **配置中的未知字段直接拒绝加载**（此前静默忽略）：拼错的键（如
+  `cost.maxRow`）会让 `validate`、启动、reload 与 store publish 失败，并报告
+  行号与字段名；升级前先用 `sql-mcp-server validate` 检查现有配置。行过滤
+  （`rows`、`rowPolicies`、`tenantPolicy`）仍是自由结构。
+- 字段规则改由结构体 `schema` 标签统一校验，此前只写在 JSON Schema 里的约束开始
+  生效：`server.transport`、实体 `kind` 的取值，以及各字段的范围与格式；部分
+  校验错误的措辞随之改为 `config: <路径> ...` 形式。`config.Validate` 现在要求
+  先调用 `ApplyDefaults`（所有加载器都会这样做），未物化默认值的程序化配置会因
+  上限为 0 被拒绝。
+
 ### Changed
 
+- 配置规则单一来源：字段的类型、约束、默认值与“修改需重启”标记定义在
+  `core/config` 的结构体标签与 `ApplyDefaults` 中，字段说明在
+  `core/config/fields.yaml`（中英文）；`go generate ./core/config` 生成
+  `schema.json`（现含 `additionalProperties: false`、默认值、说明与 `x-restart`）
+  和 `docs/configuration.md` 的字段参考，测试保证一致。静态校验、热重载重启判定
+  （错误中改为列出配置路径）、管理控制台的提示与选项都从这里读取。
+- `ApplyDefaults` 把缺省即开启的 `cost.enabled`、`cost.requirePKForWrite`、
+  `rateLimit.enabled`、`mask.enabled` 物化为 `true`，导出结果随之写出这些键。
 - 热重载守卫从 CLI 下沉为 `bootstrap.CheckHotReload`，文件 reload、store reload
   与 store publish 共用；事务 `ttl`/`maxOpen` 变化在 reload 构建阶段即被拒绝。
 - 升级 OpenTelemetry Go 依赖组至 v1.45.0，修复 OTLP 导出器配置日志可能泄露

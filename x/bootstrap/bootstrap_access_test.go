@@ -173,12 +173,12 @@ func TestCheckHotReloadRejectsRestartRequiredChanges(t *testing.T) {
 		t.Fatalf("role and cost changes are hot-reloadable: %v", err)
 	}
 	cases := map[string]func(*config.Config){
-		"transport/address":      func(c *config.Config) { c.Server.Addr = ":9090" },
-		"auth/TLS":               func(c *config.Config) { c.Server.Auth.Token = "b" },
-		"tool set":               func(c *config.Config) { c.Tools.ReadRecords = !c.Tools.ReadRecords },
+		"server.addr":            func(c *config.Config) { c.Server.Addr = ":9090" },
+		"server.auth":            func(c *config.Config) { c.Server.Auth.Token = "b" },
+		"tools":                  func(c *config.Config) { c.Tools.ReadRecords = !c.Tools.ReadRecords },
 		"custom procedure tools": func(c *config.Config) { c.Entities[0].MCP.CustomTool = false },
 		"users":                  func(c *config.Config) { c.Users = map[string]config.UserConfig{"alice": {}} },
-		"transaction":            func(c *config.Config) { c.Transactions.MaxOpen++ },
+		"transactions.maxOpen":   func(c *config.Config) { c.Transactions.MaxOpen++ },
 	}
 	for want, mutate := range cases {
 		next := base()

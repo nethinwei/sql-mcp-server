@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -23,6 +22,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/hook"
 	"github.com/nethinwei/sql-mcp-server/version"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
+	"github.com/nethinwei/sql-mcp-server/x/configyaml"
 	"github.com/nethinwei/sql-mcp-server/x/mcpserver"
 	otelhooks "github.com/nethinwei/sql-mcp-server/x/otel"
 	"github.com/nethinwei/sql-mcp-server/x/telemetry"
@@ -49,6 +49,8 @@ func runCLI(ctx context.Context, args []string, stdout io.Writer) error {
 		return runStore(ctx, args, stdout)
 	case "migrate":
 		return runMigrate(ctx, args, stdout)
+	case "admin":
+		return runAdmin(ctx, args, stdout)
 	case "validate":
 		return runValidate(args, stdout)
 	case "export":
@@ -84,6 +86,7 @@ func runServe(ctx context.Context, args []string) error {
 	user := fs.String("user", "", "default user for requests without a user identity (overrides config)")
 	watch := fs.Bool("watch", false, "reload config when the file changes or a store revision is published")
 	watchInterval := fs.Duration("watch-interval", time.Second, "config polling interval (store default 5s)")
+	adminFlags := newServeAdminFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -115,7 +118,11 @@ func runServe(ctx context.Context, args []string) error {
 	if *watch {
 		go src.watch(ctx, runtime, build, *watchInterval, explicit["watch-interval"])
 	}
-	return serveTransport(ctx, runtime, cfg, *transport, *addr, metrics)
+	adminHandler, err := adminFlags.handler(src, runtime, cfg, *transport, *watch)
+	if err != nil {
+		return err
+	}
+	return serveTransport(ctx, runtime, cfg, *transport, *addr, metrics, adminHandler)
 }
 
 // newServeRuntime assembles the startup App; file reloads go through build.
@@ -239,6 +246,7 @@ func serveTransport(
 	cfg *config.Config,
 	transport, addr string,
 	metrics http.Handler,
+	adminHandler http.Handler,
 ) error {
 	srv := mcpserver.NewRuntimeServer(runtime)
 	switch transport {
@@ -257,6 +265,7 @@ func serveTransport(
 			ClientCA: cfg.Server.Auth.TLS.ClientCA, OnSessionClosed: runtime.RollbackSession,
 			SnapshotReady: runtime.SnapshotReady, DatabaseReady: runtime.DatabasesReady,
 			Metrics: metrics, Users: httpUsers(cfg, runtime), RevokedPrincipals: runtime.OnRevokedPrincipals,
+			Admin: adminHandler,
 			SnapshotStale: func() int64 {
 				if stale, ok := runtime.Stale(); ok {
 					return stale.RevisionID
@@ -451,16 +460,7 @@ func runExport(args []string, stdout io.Writer) error {
 // exportYAML is the deterministic export encoding, also used as the payload
 // of configuration store revisions.
 func exportYAML(cfg *config.Config) ([]byte, error) {
-	var buf bytes.Buffer
-	encoder := yaml.NewEncoder(&buf)
-	encoder.SetIndent(2)
-	if err := encoder.Encode(cfg); err != nil {
-		return nil, err
-	}
-	if err := encoder.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	return configyaml.Encode(cfg)
 }
 
 func runExplain(args []string, stdout io.Writer) error {

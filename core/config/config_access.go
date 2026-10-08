@@ -24,10 +24,6 @@ func IsStoreTable(name string) bool {
 // TokenHashPrefix is the only supported tokenHash algorithm.
 const TokenHashPrefix = "sha256:"
 
-var grantActions = map[string]bool{
-	"read": true, "create": true, "update": true, "delete": true, "execute": true, "aggregate": true,
-}
-
 // TokenHash returns the tokenHash form ("sha256:<hex>") of a bearer token.
 func TokenHash(token string) string {
 	sum := sha256.Sum256([]byte(token))
@@ -105,14 +101,8 @@ func canonicalAccessName(kind, name string) (string, error) {
 	if key == "" {
 		return "", fmt.Errorf("config: empty %s name", kind)
 	}
-	for i, r := range key {
-		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
-			continue
-		}
-		if i > 0 && (r == '-' || r == '_') {
-			continue
-		}
-		return "", fmt.Errorf("config: %s name %q must match [a-z0-9][a-z0-9_-]*", kind, key)
+	if !patterns["accessName"].MatchString(key) {
+		return "", fmt.Errorf("config: %s name %q must match %s", kind, key, patterns["accessName"])
 	}
 	return key, nil
 }
@@ -167,12 +157,9 @@ func (c *Config) validateUsers(entities map[string]EntityConfig) error {
 			return fmt.Errorf("config: server.user %q is disabled", c.Server.User)
 		}
 	}
-	for name, limits := range c.Budget.Users {
+	for name := range c.Budget.Users {
 		if _, ok := c.Users[name]; !ok {
 			return fmt.Errorf("config: budget references unknown user %q", name)
-		}
-		if err := validateBudgetLimits(limits); err != nil {
-			return fmt.Errorf("config: user budget %q: %w", name, err)
 		}
 	}
 	return nil
@@ -187,9 +174,6 @@ func validateUser(
 	hashes map[string]string,
 	entities map[string]EntityConfig,
 ) error {
-	if err := validateTokenHash(name, user.TokenHash); err != nil {
-		return err
-	}
 	if user.TokenHash != "" {
 		if other, exists := hashes[user.TokenHash]; exists {
 			return fmt.Errorf("config: user %q tokenHash collides with %s", name, other)
@@ -235,20 +219,6 @@ func (c *Config) knownRoles() map[string]bool {
 	return known
 }
 
-func validateTokenHash(user, hash string) error {
-	if hash == "" {
-		return nil
-	}
-	digest, ok := strings.CutPrefix(hash, TokenHashPrefix)
-	if !ok || len(digest) != sha256.Size*2 {
-		return fmt.Errorf("config: user %q tokenHash must be %s<64 hex>", user, TokenHashPrefix)
-	}
-	if _, err := hex.DecodeString(digest); err != nil {
-		return fmt.Errorf("config: user %q tokenHash must be %s<64 hex>", user, TokenHashPrefix)
-	}
-	return nil
-}
-
 func validatePermissions(kind, owner string, permissions []string) error {
 	if len(permissions) > 0 {
 		return fmt.Errorf(
@@ -266,16 +236,8 @@ func validateGrants(kind, owner string, grants []GrantConfig, entities map[strin
 		if !ok {
 			return fmt.Errorf("%s references unknown entity %q", where, grant.Entity)
 		}
-		if len(grant.Actions) == 0 {
-			return fmt.Errorf("%s on entity %q has no actions", where, grant.Entity)
-		}
 		if duplicate, ok := firstDuplicate(grant.Actions); ok {
 			return fmt.Errorf("%s on entity %q lists action %q twice", where, grant.Entity, duplicate)
-		}
-		for _, action := range grant.Actions {
-			if !grantActions[action] {
-				return fmt.Errorf("%s on entity %q has unknown action %q", where, grant.Entity, action)
-			}
 		}
 		if grant.Fields != nil {
 			if err := validateFieldList(e, grant.Fields.Read, grant.Fields.Write); err != nil {

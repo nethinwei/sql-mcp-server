@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -25,27 +24,59 @@ var ErrRestartRequired = errors.New("config change requires restart")
 // address, auth/TLS/trusted proxy, the tool set, custom procedure tools,
 // switching users on or off, and transaction ttl/maxOpen need a restart.
 func CheckHotReload(old, next *config.Config) error {
-	var changed []string
-	if next.Server.Transport != old.Server.Transport || next.Server.Addr != old.Server.Addr {
-		changed = append(changed, "transport/address")
+	if changed := RestartChanges(old, next); len(changed) > 0 {
+		return fmt.Errorf("%w: %s", ErrRestartRequired, strings.Join(changed, ", "))
 	}
-	if !reflect.DeepEqual(next.Server.Auth, old.Server.Auth) {
-		changed = append(changed, "auth/TLS/trusted proxy")
-	}
-	if !reflect.DeepEqual(next.Tools, old.Tools) {
-		changed = append(changed, "tool set")
-	}
+	return nil
+}
+
+// RestartChanges lists the changes from old to next that need a restart.
+func RestartChanges(old, next *config.Config) []string {
+	// Fields tagged `schema:"restart"`, by configuration path.
+	changed := config.RestartFieldChanges(old, next)
 	if procedureToolSignature(next.Entities) != procedureToolSignature(old.Entities) {
 		changed = append(changed, "custom procedure tools")
 	}
 	if (len(next.Users) > 0) != (len(old.Users) > 0) {
 		changed = append(changed, "users first configured or all removed")
 	}
-	if next.Transactions.TTL != old.Transactions.TTL || next.Transactions.MaxOpen != old.Transactions.MaxOpen {
-		changed = append(changed, "transaction ttl/maxOpen")
+	return changed
+}
+
+// LoadRevision verifies a revision's content hash and decodes its payload
+// under the store-mode secret rule.
+func LoadRevision(rev revision.Revision) (*config.Config, error) {
+	if err := rev.Verify(); err != nil {
+		return nil, err
 	}
-	if len(changed) > 0 {
-		return fmt.Errorf("%w: %s", ErrRestartRequired, strings.Join(changed, ", "))
+	cfg, err := LoadBytes(rev.Payload)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateStorePayload(cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// CheckPublishable verifies that target loads under the store rules and,
+// when current is published (ID != 0), that switching to target needs no
+// restart unless restartRequired is set.
+func CheckPublishable(current, target revision.Revision, restartRequired bool) error {
+	next, err := LoadRevision(target)
+	if err != nil {
+		return fmt.Errorf("revision %d: %w", target.ID, err)
+	}
+	if current.ID == 0 {
+		return nil
+	}
+	cur, err := LoadRevision(current)
+	if err != nil {
+		return fmt.Errorf("published revision %d: %w", current.ID, err)
+	}
+	if err := CheckHotReload(cur, next); err != nil && !restartRequired {
+		return fmt.Errorf("%w; allow it with restart-required (CLI --restart-required, API restartRequired) "+
+			"to apply it on the next restart", err)
 	}
 	return nil
 }
@@ -134,6 +165,8 @@ func dsnPasswords(dsn string) []string {
 type StaleState struct {
 	RevisionID int64
 	Err        string
+	// RestartRequired reports that the revision only applies after a restart.
+	RestartRequired bool
 }
 
 // Stale returns the unapplied published revision, if any.
@@ -143,6 +176,22 @@ func (r *Runtime) Stale() (StaleState, bool) {
 		return StaleState{}, false
 	}
 	return *s, true
+}
+
+// markStale records that revision id failed to apply. WatchStore retries
+// every tick (a transient failure may clear) but reports a revision's failure
+// only when it first appears or changes.
+func (r *Runtime) markStale(id int64, err error, report func(error)) {
+	if prev, ok := r.Stale(); !ok || prev.RevisionID != id || prev.Err != err.Error() {
+		report(fmt.Errorf("apply revision %d: %w", id, err))
+	}
+	r.stale.Store(&StaleState{RevisionID: id, Err: err.Error(), RestartRequired: errors.Is(err, ErrRestartRequired)})
+}
+
+// AppliedRevision returns the store revision the runtime serves as tracked by
+// WatchStore, or 0 before WatchStore starts.
+func (r *Runtime) AppliedRevision() int64 {
+	return r.applied.Load()
 }
 
 // ReloadWith publishes the App returned by build, with the same budget,
@@ -173,6 +222,7 @@ func (r *Runtime) WatchStore(
 			onError(err)
 		}
 	}
+	r.applied.Store(current)
 	for {
 		select {
 		case <-ctx.Done():
@@ -192,15 +242,11 @@ func (r *Runtime) WatchStore(
 			err = r.reloadWith(func() (*App, error) { return build(rev) })
 		}
 		if err != nil {
-			// Retry every tick (a transient failure may clear) but report a
-			// revision's failure only when it first appears or changes.
-			if prev, ok := r.Stale(); !ok || prev.RevisionID != rev.ID || prev.Err != err.Error() {
-				report(fmt.Errorf("apply revision %d: %w", rev.ID, err))
-			}
-			r.stale.Store(&StaleState{RevisionID: rev.ID, Err: err.Error()})
+			r.markStale(rev.ID, err, report)
 			continue
 		}
 		r.stale.Store(nil)
 		current = rev.ID
+		r.applied.Store(current)
 	}
 }

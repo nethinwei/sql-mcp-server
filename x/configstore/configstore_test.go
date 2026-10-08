@@ -114,3 +114,71 @@ func TestDialectHelpers(t *testing.T) {
 		t.Fatalf("sqliteDSN with query = %q", got)
 	}
 }
+
+func TestAdminAccounts(t *testing.T) {
+	ctx := context.Background()
+	spec := sqliteSpec(t)
+	if err := Init(ctx, spec, nil); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(ctx, spec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	a, err := store.CreateAdmin(ctx, AdminAccount{Username: "root", PasswordHash: "h1", Permissions: []string{"admin:*"}})
+	if err != nil || a.CreatedAt.IsZero() {
+		t.Fatalf("CreateAdmin = %+v, %v", a, err)
+	}
+	_, err = store.CreateAdmin(ctx, AdminAccount{Username: "root", PasswordHash: "h"})
+	if !errors.Is(err, ErrAdminExists) {
+		t.Fatalf("duplicate account err = %v", err)
+	}
+	a.PasswordHash, a.Permissions, a.Disabled = "h2", []string{"admin:read", "admin:write"}, true
+	got, err := store.UpdateAdmin(ctx, a)
+	if err != nil || got.PasswordHash != "h2" || len(got.Permissions) != 2 || !got.Disabled {
+		t.Fatalf("UpdateAdmin = %+v, %v", got, err)
+	}
+	if _, err := store.UpdateAdmin(ctx, AdminAccount{Username: "ghost"}); !errors.Is(err, ErrAdminNotFound) {
+		t.Fatalf("update missing err = %v", err)
+	}
+	if _, err := store.GetAdmin(ctx, "ghost"); !errors.Is(err, ErrAdminNotFound) {
+		t.Fatalf("get missing err = %v", err)
+	}
+	list, err := store.ListAdmins(ctx)
+	if err != nil || len(list) != 1 || list[0].Username != "root" {
+		t.Fatalf("ListAdmins = %+v, %v", list, err)
+	}
+}
+
+func TestOpenMigratesVersionOneStore(t *testing.T) {
+	ctx := context.Background()
+	spec := sqliteSpec(t)
+	s, err := connect(spec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ddl := range s.dialect.migrations[0] {
+		if _, err := s.db.ExecContext(ctx, ddl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, row := range [][2]any{{metaSchemaVersion, 1}, {metaNextID, 1}, {metaPublishLock, 0}} {
+		if _, err := s.exec(ctx, s.db, "INSERT INTO smcp_store_meta (meta_key, meta_value) VALUES (?, ?)",
+			row[0], row[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = s.Close()
+	store, err := Open(ctx, spec, nil)
+	if err != nil {
+		t.Fatalf("Open must migrate a version 1 store: %v", err)
+	}
+	defer store.Close()
+	if version, err := store.checkSchema(ctx); err != nil || version != SchemaVersion {
+		t.Fatalf("schema version after migration = %d, %v", version, err)
+	}
+	if _, err := store.CreateAdmin(ctx, AdminAccount{Username: "a", PasswordHash: "h"}); err != nil {
+		t.Fatalf("admin table must exist after migration: %v", err)
+	}
+}

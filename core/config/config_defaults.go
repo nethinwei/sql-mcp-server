@@ -53,7 +53,19 @@ func (c *Config) applyEntityDefaults() {
 	}
 }
 
+// enabled returns a pointer to true for switches whose unset value means on.
+func enabled() *bool {
+	on := true
+	return &on
+}
+
 func (c *Config) applyCostDefaults() {
+	if c.Cost.Enabled == nil {
+		c.Cost.Enabled = enabled()
+	}
+	if c.Cost.RequirePKForWrite == nil {
+		c.Cost.RequirePKForWrite = enabled()
+	}
 	if !c.Cost.present["maxRows"] && c.Cost.MaxRows == 0 {
 		c.Cost.MaxRows = 10000
 	}
@@ -129,6 +141,12 @@ func (c *Config) applyAQEDefaults() {
 }
 
 func (c *Config) applyRateLimitDefaults() {
+	if c.RateLimit.Enabled == nil {
+		c.RateLimit.Enabled = enabled()
+	}
+	if c.Mask.Enabled == nil {
+		c.Mask.Enabled = enabled()
+	}
 	if c.RateLimit.MaxInflight == 0 {
 		c.RateLimit.MaxInflight = 256
 	}

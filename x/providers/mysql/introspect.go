@@ -25,17 +25,17 @@ func NewIntrospector(db *sql.DB) introspect.Introspector {
 // to the requested schemas in memory) with their columns and primary keys.
 func (i Introspector) Discover(ctx context.Context, sources []string) ([]entity.Entity, error) {
 	trows, err := i.db.QueryContext(ctx,
-		`SELECT table_schema, table_name FROM information_schema.tables
+		`SELECT table_schema, table_name, COALESCE(table_comment, '') FROM information_schema.tables
 		 WHERE table_type = 'BASE TABLE'`)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = trows.Close() }()
-	type tbl struct{ schema, name string }
+	type tbl struct{ schema, name, comment string }
 	var tables []tbl
 	for trows.Next() {
 		var t tbl
-		if err := trows.Scan(&t.schema, &t.name); err != nil {
+		if err := trows.Scan(&t.schema, &t.name, &t.comment); err != nil {
 			return nil, err
 		}
 		if len(sources) > 0 && !contains(sources, t.schema) || config.IsStoreTable(t.name) {
@@ -52,9 +52,13 @@ func (i Introspector) Discover(ctx context.Context, sources []string) ([]entity.
 		if err != nil {
 			return nil, err
 		}
+		fks, err := i.foreignKeys(ctx, t.schema, t.name)
+		if err != nil {
+			return nil, err
+		}
 		entities = append(entities, entity.Entity{
-			Name: t.name, Source: t.name, Schema: t.schema,
-			Kind: entity.KindTable, Attributes: attrs, Keys: keys,
+			Name: t.name, Source: t.name, Schema: t.schema, Description: t.comment,
+			Kind: entity.KindTable, Attributes: attrs, Keys: keys, ForeignKeys: fks,
 		})
 	}
 	return entities, nil
@@ -62,7 +66,7 @@ func (i Introspector) Discover(ctx context.Context, sources []string) ([]entity.
 
 func (i Introspector) columns(ctx context.Context, schema, table string) ([]entity.Attribute, []entity.Key, error) {
 	crows, err := i.db.QueryContext(ctx,
-		`SELECT column_name, data_type, is_nullable
+		`SELECT column_name, data_type, is_nullable, COALESCE(column_comment, '')
 		 FROM information_schema.columns
 		 WHERE table_schema=? AND table_name=? ORDER BY ordinal_position`, schema, table)
 	if err != nil {
@@ -71,12 +75,12 @@ func (i Introspector) columns(ctx context.Context, schema, table string) ([]enti
 	defer func() { _ = crows.Close() }()
 	var attrs []entity.Attribute
 	for crows.Next() {
-		var name, dataType, nullable string
-		if err := crows.Scan(&name, &dataType, &nullable); err != nil {
+		var name, dataType, nullable, comment string
+		if err := crows.Scan(&name, &dataType, &nullable, &comment); err != nil {
 			return nil, nil, err
 		}
 		attrs = append(attrs, entity.Attribute{
-			Name:   name,
+			Name: name, Description: comment,
 			Domain: entity.Domain{Type: dataType, Nullable: strings.EqualFold(nullable, "YES")},
 		})
 	}
@@ -119,6 +123,33 @@ func (i Introspector) primaryKey(ctx context.Context, schema, table string) ([]e
 		return nil, nil
 	}
 	return []entity.Key{{Name: "pk", Columns: cols, Primary: true}}, nil
+}
+
+// foreignKeys lists foreign keys with columns in key order.
+func (i Introspector) foreignKeys(ctx context.Context, schema, table string) ([]entity.ForeignKey, error) {
+	rows, err := i.db.QueryContext(ctx,
+		`SELECT constraint_name, column_name, referenced_table_schema, referenced_table_name, referenced_column_name
+		 FROM information_schema.key_column_usage
+		 WHERE table_schema=? AND table_name=? AND referenced_table_name IS NOT NULL
+		 ORDER BY constraint_name, ordinal_position`, schema, table)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var fks []entity.ForeignKey
+	for rows.Next() {
+		var name, col, refSchema, refTable, refCol string
+		if err := rows.Scan(&name, &col, &refSchema, &refTable, &refCol); err != nil {
+			return nil, err
+		}
+		if n := len(fks); n == 0 || fks[n-1].Name != name {
+			fks = append(fks, entity.ForeignKey{Name: name, RefSchema: refSchema, RefRelation: refTable})
+		}
+		last := &fks[len(fks)-1]
+		last.Columns = append(last.Columns, col)
+		last.RefColumns = append(last.RefColumns, refCol)
+	}
+	return fks, rows.Err()
 }
 
 func contains(ss []string, s string) bool {

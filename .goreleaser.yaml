@@ -2,6 +2,12 @@ version: 2
 
 project_name: sql-mcp-server
 
+# The admin console is embedded with go:embed; build it before the binaries.
+before:
+  hooks:
+    - make web
+    - make web-check
+
 builds:
   - id: sql-mcp-server
     main: ./cmd/sql-mcp-server

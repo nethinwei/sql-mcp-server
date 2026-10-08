@@ -2,6 +2,7 @@
 package configyaml
 
 import (
+	"bytes"
 	"os"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
@@ -18,7 +19,11 @@ func Decode(data []byte) (*config.Config, error) {
 	var cfg config.Config
 	root := documentRoot(&document)
 	if root != nil {
-		if err := root.Decode(&cfg); err != nil {
+		// Unknown keys fail instead of being ignored, so a misspelt setting
+		// cannot silently keep its default.
+		decoder := yaml.NewDecoder(bytes.NewReader(data))
+		decoder.KnownFields(true)
+		if err := decoder.Decode(&cfg); err != nil {
 			return nil, err
 		}
 		cfg.ApplyPresence(collectPresence(root, len(cfg.Entities)))
@@ -98,4 +103,19 @@ func mappingValue(node *yaml.Node, key string) (*yaml.Node, bool) {
 		}
 	}
 	return nil, false
+}
+
+// Encode returns the deterministic export encoding of cfg. It is the payload
+// format of configuration store revisions.
+func Encode(cfg *config.Config) ([]byte, error) {
+	var buf bytes.Buffer
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(cfg); err != nil {
+		return nil, err
+	}
+	if err := encoder.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }

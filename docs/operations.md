@@ -107,9 +107,10 @@ watcher 轮询文件内容 hash。新配置必须完整通过加载、secret 解
 manager；事务 `ttl` 或 `maxOpen` 变化会拒绝 reload，必须重启，不会静默沿用
 旧限制。
 
-热重载明确拒绝 transport/address、auth、TLS、trusted proxy 和 tool-set 变化；
-这些变化以及新增/移除 custom procedure tool、首次启用或全部删除用户、事务
-`ttl`/`maxOpen` 变化都必须重启服务。文件模式与 store 模式共用同一份规则。详见
+热重载拒绝[字段参考](configuration.md#字段参考)中标记“修改需重启”的字段
+（`server.transport`、`server.addr`、`server.auth`、`tools`、事务
+`ttl`/`maxOpen`），以及新增/移除 custom procedure tool、首次启用或全部删除
+用户；这些变化必须重启服务。文件模式与 store 模式共用同一份规则。详见
 [architecture.md](architecture.md)。
 
 ## 配置存储

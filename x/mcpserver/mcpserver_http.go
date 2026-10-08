@@ -68,6 +68,9 @@ func buildHTTPMux(mcpHandler http.Handler, cfg HTTPConfig) *http.ServeMux {
 	})
 	mux.Handle("/readyz/snapshot", staleMarker(cfg.SnapshotStale, readinessHandler(cfg.SnapshotReady)))
 	mux.Handle("/readyz/db", readinessHandler(cfg.DatabaseReady))
+	if cfg.Admin != nil {
+		mux.Handle("/admin/", limitBody(cfg.MaxBodyBytes, cfg.Admin))
+	}
 	if cfg.Metrics != nil {
 		mux.Handle("/metrics", principalAuth(cfg.Token, cfg.Users, cfg.mtlsEnabled(), cfg.Metrics))
 	}

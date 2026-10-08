@@ -243,10 +243,12 @@ func securityConstraintCases() []struct {
 func TestValidateRejectsBareTemplatesWithMultipleDatasources(t *testing.T) {
 	t.Parallel()
 	base := func() *Config {
-		return &Config{Databases: map[string]DatabaseConfig{
+		c := &Config{Databases: map[string]DatabaseConfig{
 			"primary": {Driver: "postgres", DSN: "x"},
 			"replica": {Driver: "postgres", DSN: "y"},
 		}}
+		c.ApplyDefaults()
+		return c
 	}
 	for _, tc := range []struct {
 		name   string
@@ -282,6 +284,7 @@ func TestValidateRejectsBareTemplatesWithMultipleDatasources(t *testing.T) {
 			RejectTemplates: []string{"SELECT bad"},
 		},
 	}
+	single.ApplyDefaults()
 	if err := single.Validate(); err != nil {
 		t.Fatalf("single-datasource compatibility error = %v", err)
 	}

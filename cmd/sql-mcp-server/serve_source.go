@@ -27,7 +27,7 @@ const defaultStoreWatchInterval = 5 * time.Second
 type serveSource struct {
 	startup *config.Config
 	path    string
-	store   revision.Store
+	store   *configstore.SQLStore
 	rev     int64
 }
 
@@ -69,7 +69,7 @@ func openServeSource(
 		_ = store.Close()
 		return serveSource{}, err
 	}
-	cfg, err := loadRevision(rev)
+	cfg, err := bootstrap.LoadRevision(rev)
 	if err != nil {
 		_ = store.Close()
 		return serveSource{}, fmt.Errorf("published revision %d: %w", rev.ID, err)
@@ -97,22 +97,6 @@ func storeResolver(secretRoots string) configstore.Resolver {
 	return bootstrap.EnvFileResolver{AllowedRoots: roots}.Resolve
 }
 
-// loadRevision verifies a revision's hash and decodes its payload under the
-// store-mode secret rule.
-func loadRevision(rev revision.Revision) (*config.Config, error) {
-	if err := rev.Verify(); err != nil {
-		return nil, err
-	}
-	cfg, err := bootstrap.LoadBytes(rev.Payload)
-	if err != nil {
-		return nil, err
-	}
-	if err := bootstrap.ValidateStorePayload(cfg); err != nil {
-		return nil, err
-	}
-	return cfg, nil
-}
-
 // watch reloads on file changes or newly published store revisions.
 func (s serveSource) watch(
 	ctx context.Context,
@@ -129,7 +113,7 @@ func (s serveSource) watch(
 		interval = defaultStoreWatchInterval
 	}
 	err := runtime.WatchStore(ctx, s.store, s.rev, interval, func(rev revision.Revision) (*bootstrap.App, error) {
-		next, err := loadRevision(rev)
+		next, err := bootstrap.LoadRevision(rev)
 		if err != nil {
 			return nil, err
 		}

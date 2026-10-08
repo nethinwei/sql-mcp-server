@@ -420,6 +420,9 @@ type HTTPConfig struct {
 	// Probes fail closed: a nil probe or a probe error yields 503.
 	SnapshotReady func(context.Context) error
 	DatabaseReady func(context.Context) error
+	// Admin, when set, serves /admin/ with its own authentication; MCP bearer
+	// tokens do not apply there and admin sessions do not apply to /mcp.
+	Admin http.Handler
 	// SnapshotStale returns the ID of a published store revision that is not
 	// applied (0 when none); it adds X-Snapshot-Stale to /readyz/snapshot.
 	SnapshotStale func() int64

@@ -373,3 +373,17 @@ func assertExecuteConsumptionError(
 		t.Fatal("afterWrite ran before successful result consumption")
 	}
 }
+
+func TestProcedureToolSchemaRequiresEmptyListWithoutParams(t *testing.T) {
+	t.Parallel()
+	info := ProcedureTool{Entity: entity.Entity{Name: "ping", Kind: entity.KindProcedure}}.Info()
+	var schema struct {
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(info.InputSchema, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if schema.Required == nil || len(schema.Required) != 0 {
+		t.Fatalf("required = %v (%s), want []", schema.Required, info.InputSchema)
+	}
+}

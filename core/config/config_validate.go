@@ -2,15 +2,14 @@ package config
 
 import (
 	"fmt"
-	"math"
 	"net"
-	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/cost"
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
 )
 
-// Validate checks required fields. DSN placeholder resolution happens later in
+// Validate checks a configuration whose defaults are applied (ApplyDefaults;
+// every loader does this). DSN placeholder resolution happens later in
 // x/bootstrap; here we only require non-empty.
 func (c *Config) Validate() error {
 	if err := c.normalizeRoles(); err != nil {
@@ -29,13 +28,14 @@ func (c *Config) Validate() error {
 	if err := c.validateCostAndLimits(); err != nil {
 		return err
 	}
-	if err := c.validateBudget(); err != nil {
-		return err
-	}
 	if err := c.validateEntities(databases); err != nil {
 		return err
 	}
-	return c.validateAccess()
+	if err := c.validateAccess(); err != nil {
+		return err
+	}
+	// Per-field rules (ranges, enums, patterns) come from `schema` tags.
+	return c.validateRules()
 }
 
 func (c *Config) resolvedDatabases() (map[string]DatabaseConfig, error) {
@@ -88,9 +88,6 @@ func (c *Config) validateCostAndLimits() error {
 	if err := c.validateCostScores(); err != nil {
 		return err
 	}
-	if err := c.validateCostInputs(); err != nil {
-		return err
-	}
 	if err := c.validateAQEExplainAnalyze(); err != nil {
 		return err
 	}
@@ -101,57 +98,15 @@ func (c *Config) validateCostAndLimits() error {
 }
 
 func (c *Config) validateCostScores() error {
-	if c.Cost.SoftScore < 0 || c.Cost.SoftScore > 100 {
-		return fmt.Errorf("config: cost softScore must be between 0 and 100")
-	}
-	if c.Cost.HardScore < 0 || c.Cost.HardScore > 100 {
-		return fmt.Errorf("config: cost hardScore must be between 0 and 100")
-	}
 	if c.Cost.SoftScore < c.Cost.HardScore {
 		return fmt.Errorf("config: cost softScore must be greater than or equal to hardScore")
 	}
 	return nil
 }
 
-func (c *Config) validateCostInputs() error {
-	if len(c.Cost.present) > 0 && (c.Cost.MaxRows <= 0 || c.Cost.MaxBytes <= 0 || c.Cost.MaxProcedureRows <= 0 ||
-		c.Cost.MaxINListSize <= 0 || c.Cost.MaxFilterConditions <= 0 ||
-		c.Cost.MaxGroupByFields <= 0 || c.Cost.MaxAggregates <= 0 || c.Cost.MaxExpand <= 0) {
-		return fmt.Errorf("config: mandatory cost and input limits must be greater than zero")
-	}
-	if math.IsNaN(c.Cost.AQE.SampleRate) || c.Cost.AQE.SampleRate < 0 || c.Cost.AQE.SampleRate > 1 {
-		return fmt.Errorf("config: cost aqe sampleRate must be between 0 and 1")
-	}
-	if c.Cost.AQE.Timeout < 0 || c.Cost.AQE.Timeout > 5*time.Second {
-		return fmt.Errorf("config: cost aqe timeout must be between 0 and 5s")
-	}
-	return nil
-}
-
 func (c *Config) validateRuntimeLimits() error {
-	if c.RateLimit.IOPool < 0 || c.RateLimit.CPUPool < 0 {
-		return fmt.Errorf("config: rate-limit pools must not be negative")
-	}
-	if math.IsNaN(c.RateLimit.RPS) || c.RateLimit.RPS < 0 {
-		return fmt.Errorf("config: rate-limit rps must not be negative or NaN")
-	}
-	if c.Cost.QueryTimeout < 0 || c.Cache.TTL < 0 || c.RateLimit.RTTThreshold < 0 ||
-		c.RateLimit.BreakerCooldown < 0 || c.RateLimit.ConnMaxIdleTime < 0 ||
-		c.RateLimit.ConnMaxLifetime < 0 || c.Transactions.TTL < 0 ||
-		c.Transactions.BeginTimeout < 0 || c.Transactions.CommitTimeout < 0 ||
-		c.Transactions.RollbackTimeout < 0 {
-		return fmt.Errorf(
-			"config: mandatory timeouts must be greater than zero and optional timeouts must not be negative",
-		)
-	}
 	if c.Cache.Enabled && (c.Cache.MaxSize <= 0 || c.Cache.MaxEntryRows <= 0 || c.Cache.MaxEntryBytes <= 0) {
 		return fmt.Errorf("config: enabled cache requires positive maxSize, maxEntryRows, and maxEntryBytes")
-	}
-	if c.Cost.AQE.MaxFingerprints < 0 {
-		return fmt.Errorf("config: cost aqe maxFingerprints must be greater than zero")
-	}
-	if c.Transactions.MaxOpen < 0 {
-		return fmt.Errorf("config: transactions maxOpen must not be negative")
 	}
 	return nil
 }
@@ -168,20 +123,6 @@ func (c *Config) validateAQEExplainAnalyze() error {
 	}
 	if c.Cost.AQE.Timeout == 0 {
 		return fmt.Errorf("config: cost aqe timeout must be greater than 0 when EXPLAIN ANALYZE is enabled")
-	}
-	return nil
-}
-
-func (c *Config) validateBudget() error {
-	for scope, limits := range c.Budget.Roles {
-		if err := validateBudgetLimits(limits); err != nil {
-			return fmt.Errorf("config: role budget %q: %w", scope, err)
-		}
-	}
-	for scope, limits := range c.Budget.Tenants {
-		if err := validateBudgetLimits(limits); err != nil {
-			return fmt.Errorf("config: tenant budget %q: %w", scope, err)
-		}
 	}
 	return nil
 }
@@ -363,15 +304,6 @@ func validateRelationshipScope(
 	if targetSource != source {
 		return fmt.Errorf("config: cross-datasource relationship %q is not supported", relation.Name)
 	}
-	switch relation.Cardinality {
-	case "one", "one-to-one", "belongs-to", "many", "one-to-many", "has-many":
-	default:
-		return fmt.Errorf(
-			"config: relationship %q has invalid cardinality %q",
-			relation.Name,
-			relation.Cardinality,
-		)
-	}
 	return nil
 }
 
@@ -465,16 +397,7 @@ func (c *Config) normalizeBudgetRoles() error {
 }
 
 func validDriverName(name string) bool {
-	for i, r := range name {
-		if r >= 'a' && r <= 'z' {
-			continue
-		}
-		if i > 0 && ((r >= '0' && r <= '9') || r == '-' || r == '_') {
-			continue
-		}
-		return false
-	}
-	return name != ""
+	return patterns["driver"].MatchString(name)
 }
 
 func configuredFields(fields []FieldConfig) map[string]bool {
@@ -486,15 +409,6 @@ func configuredFields(fields []FieldConfig) map[string]bool {
 		}
 	}
 	return out
-}
-
-func validateBudgetLimits(limits BudgetLimits) error {
-	if limits.MaxConcurrent < 0 || limits.MaxExecution < 0 || limits.MaxEstimatedScannedRows < 0 ||
-		limits.MaxScannedRows < 0 || limits.MaxReturnedRows < 0 ||
-		limits.MaxReturnedBytes < 0 || limits.MaxSessionCost < 0 {
-		return fmt.Errorf("limits must not be negative")
-	}
-	return nil
 }
 
 func firstDuplicateField(fields []FieldConfig) (string, bool) {

@@ -18,6 +18,24 @@ func UserPrincipal(user string) string {
 	return config.UserPrincipalPrefix + user
 }
 
+// OfflineAuthorizer compiles cfg's entities, roles and users into an
+// authorizer without connecting to any database, for policy simulation.
+func OfflineAuthorizer(cfg *config.Config) (rbac.Authorizer, error) {
+	entities, err := configToEntities(cfg.Entities)
+	if err != nil {
+		return nil, err
+	}
+	reg, err := entityRegistryFromConfig(entities)
+	if err != nil {
+		return nil, err
+	}
+	policy, err := accessPolicy(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return rbac.NewGrantAuthorizer(reg, policy), nil
+}
+
 // accessPolicy compiles top-level roles and users into an rbac.Policy.
 // Entity-level role configuration is read by the authorizer from the registry.
 func accessPolicy(cfg *config.Config) (rbac.Policy, error) {

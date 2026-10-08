@@ -2,6 +2,7 @@ package mask
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -57,6 +58,16 @@ func (m *RuleMasker) Mask(rule string, value any) (any, error) {
 func (m *RuleMasker) Has(name string) bool {
 	_, ok := m.rules[name]
 	return ok
+}
+
+// BuiltinRules returns the names of the built-in mask rules, sorted.
+func BuiltinRules() []string {
+	names := make([]string, 0, len(builtins()))
+	for name := range builtins() {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func builtins() map[string]Rule {

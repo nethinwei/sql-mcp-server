@@ -369,6 +369,16 @@ func assertOBIntrospectUsers(t *testing.T, ctx context.Context, prov *oceanbase.
 		"CREATE TABLE IF NOT EXISTS test.smcp_store_probe (id int PRIMARY KEY)"); err != nil {
 		t.Fatal(err)
 	}
+	for _, stmt := range []string{
+		"CREATE TABLE IF NOT EXISTS test.customers (id int PRIMARY KEY COMMENT 'customer id', name text) " +
+			"COMMENT='customer master'",
+		"CREATE TABLE IF NOT EXISTS test.purchases (id int PRIMARY KEY, customer_id int, " +
+			"CONSTRAINT fk_purchases_customer FOREIGN KEY (customer_id) REFERENCES test.customers(id))",
+	} {
+		if _, err := prov.ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
 	entities, err := prov.Introspector().Discover(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -378,6 +388,7 @@ func assertOBIntrospectUsers(t *testing.T, ctx context.Context, prov *oceanbase.
 			t.Fatalf("introspection must skip reserved store table %q", e.Name)
 		}
 	}
+	assertCommentsAndForeignKeys(t, entities)
 	var users *entity.Entity
 	for i := range entities {
 		if entities[i].Name == "users" {
@@ -390,5 +401,29 @@ func assertOBIntrospectUsers(t *testing.T, ctx context.Context, prov *oceanbase.
 	pk := users.PrimaryKey()
 	if len(pk) != 1 || pk[0] != "id" {
 		t.Fatalf("primary key = %v, want [id]", pk)
+	}
+}
+
+// assertCommentsAndForeignKeys checks that introspection maps table and
+// column comments to descriptions and reports single-column foreign keys.
+func assertCommentsAndForeignKeys(t *testing.T, entities []entity.Entity) {
+	t.Helper()
+	byName := map[string]entity.Entity{}
+	for _, e := range entities {
+		byName[e.Name] = e
+	}
+	customers, purchases := byName["customers"], byName["purchases"]
+	if customers.Description != "customer master" || len(customers.Attributes) == 0 ||
+		customers.Attributes[0].Description != "customer id" {
+		t.Fatalf("comments not introspected: %+v", customers)
+	}
+	if len(purchases.ForeignKeys) != 1 {
+		t.Fatalf("foreign keys = %+v", purchases.ForeignKeys)
+	}
+	fk := purchases.ForeignKeys[0]
+	if fk.RefRelation != "customers" || fk.RefSchema != purchases.Schema || fk.RefSchema == "" ||
+		len(fk.Columns) != 1 || fk.Columns[0] != "customer_id" ||
+		len(fk.RefColumns) != 1 || fk.RefColumns[0] != "id" {
+		t.Fatalf("foreign key = %+v", fk)
 	}
 }

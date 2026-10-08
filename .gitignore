@@ -28,3 +28,8 @@ mem.pprof
 
 # codegraph index
 .codegraph/
+
+# Admin console build output and dependencies (built by `make web`).
+x/admin/ui/dist/app/
+web/admin/node_modules/
+web/admin/src/gql/

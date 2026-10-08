@@ -20,21 +20,21 @@ var (
 // marker; the current value is "1" and loaders currently preserve it without
 // rejecting other values.
 type Config struct {
-	Version      string                    `yaml:"version"      json:"version"`
-	Server       ServerConfig              `yaml:"server"       json:"server"`
-	Database     DatabaseConfig            `yaml:"database"     json:"database"`
-	Databases    map[string]DatabaseConfig `yaml:"databases"    json:"databases"`
-	Entities     []EntityConfig            `yaml:"entities"     json:"entities"`
-	Roles        map[string]RoleDefinition `yaml:"roles,omitempty" json:"roles,omitempty"`
-	Users        map[string]UserConfig     `yaml:"users,omitempty" json:"users,omitempty"`
-	Tools        ToolFlags                 `yaml:"tools"        json:"tools"`
-	Cost         CostConfig                `yaml:"cost"         json:"cost"`
-	Budget       BudgetConfig              `yaml:"budget"       json:"budget"`
-	Cache        CacheConfig               `yaml:"cache"        json:"cache"`
-	RateLimit    RateLimitConfig           `yaml:"rateLimit"    json:"rateLimit"`
-	Mask         MaskConfig                `yaml:"mask"         json:"mask"`
-	Audit        AuditConfig               `yaml:"audit"        json:"audit"`
-	Transactions TransactionConfig         `yaml:"transactions" json:"transactions"`
+	Version      string                    `yaml:"version"         json:"version"`
+	Server       ServerConfig              `yaml:"server"          json:"server"`
+	Database     DatabaseConfig            `yaml:"database"        json:"database" schema:"nodefault"`
+	Databases    map[string]DatabaseConfig `yaml:"databases"       json:"databases" schema:"nodefault"`
+	Entities     []EntityConfig            `yaml:"entities"        json:"entities"`
+	Roles        map[string]RoleDefinition `yaml:"roles,omitempty" json:"roles,omitempty" schema:"keys=@accessName"`
+	Users        map[string]UserConfig     `yaml:"users,omitempty" json:"users,omitempty" schema:"keys=@accessName"`
+	Tools        ToolFlags                 `yaml:"tools"           json:"tools" schema:"restart,nodefault"`
+	Cost         CostConfig                `yaml:"cost"            json:"cost"`
+	Budget       BudgetConfig              `yaml:"budget"          json:"budget"`
+	Cache        CacheConfig               `yaml:"cache"           json:"cache"`
+	RateLimit    RateLimitConfig           `yaml:"rateLimit"       json:"rateLimit"`
+	Mask         MaskConfig                `yaml:"mask"            json:"mask"`
+	Audit        AuditConfig               `yaml:"audit"           json:"audit"`
+	Transactions TransactionConfig         `yaml:"transactions"    json:"transactions"`
 }
 
 // Presence records fields whose explicit presence affects defaulting. Loaders
@@ -71,11 +71,14 @@ func copyPresence(src map[string]bool) map[string]bool {
 
 // ServerConfig holds transport and role settings.
 type ServerConfig struct {
-	Transport string        `yaml:"transport" json:"transport"` // "stdio" | "http"
-	Addr      string        `yaml:"addr"      json:"addr"`      // http listen address
-	Role      string        `yaml:"role"      json:"role"`      // runtime role (may be overridden by --role flag)
-	Auth      AuthConfig    `yaml:"auth"      json:"auth"`      // http transport authentication
-	Secrets   SecretsConfig `yaml:"secrets"   json:"secrets"`
+	Transport string `yaml:"transport" json:"transport" schema:"enum=@transport,restart"`
+	// Addr is the HTTP listen address.
+	Addr string `yaml:"addr" json:"addr" schema:"restart"`
+	// Role is the runtime role; the --role flag overrides it.
+	Role string `yaml:"role" json:"role"`
+	// Auth configures HTTP transport authentication.
+	Auth    AuthConfig    `yaml:"auth"    json:"auth" schema:"restart"`
+	Secrets SecretsConfig `yaml:"secrets" json:"secrets"`
 
 	// User is the default user for requests without a user identity; it takes
 	// precedence over Role and may be overridden by the --user flag.
@@ -110,8 +113,8 @@ type TLSConfig struct {
 // DatabaseConfig holds the connection target. DSN may contain ${ENV} or
 // ${file:/path} placeholders resolved by x/bootstrap.
 type DatabaseConfig struct {
-	Driver string `yaml:"driver" json:"driver"`
-	DSN    string `yaml:"dsn"    json:"dsn"`
+	Driver string `yaml:"driver" json:"driver" schema:"required,pattern=@driver"`
+	DSN    string `yaml:"dsn"    json:"dsn" schema:"required,minLength=1"`
 }
 
 // FilterConfig is a declarative filter (JSON object) for row-level policies,
@@ -121,26 +124,27 @@ type FilterConfig = map[string]any
 // RowPolicies maps a role name to its row-level filter.
 type RowPolicies map[string]FilterConfig
 
-// EntityConfig is the configuration view of one entity.
+// EntityConfig is the configuration view of one entity. Kind is table, view or
+// procedure.
 type EntityConfig struct {
-	Name          string                    `yaml:"name"          json:"name"`
-	Source        string                    `yaml:"source"        json:"source"`
-	DataSource    string                    `yaml:"datasource"    json:"datasource"`
-	Schema        string                    `yaml:"schema"        json:"schema"`
-	Kind          string                    `yaml:"kind"          json:"kind"` // table | view | procedure
-	Description   string                    `yaml:"description"   json:"description"`
-	PrimaryKey    []string                  `yaml:"primaryKey"    json:"primaryKey"`
-	Fields        []FieldConfig             `yaml:"fields"        json:"fields"`
-	Roles         RoleConfig                `yaml:"roles"         json:"roles"`
-	FieldACL      map[string]FieldACLConfig `yaml:"fieldACL"      json:"fieldACL"`
-	MCP           MCPFlags                  `yaml:"mcp"           json:"mcp"`
-	RowPolicies   RowPolicies               `yaml:"rowPolicies"   json:"rowPolicies"`
-	Relationships []RelationshipConfig      `yaml:"relationships" json:"relationships"`
+	Name          string                    `yaml:"name"                    json:"name" schema:"required,minLength=1"`
+	Source        string                    `yaml:"source,omitempty"        json:"source,omitempty"`
+	DataSource    string                    `yaml:"datasource,omitempty"    json:"datasource,omitempty"`
+	Schema        string                    `yaml:"schema,omitempty"        json:"schema,omitempty"`
+	Kind          string                    `yaml:"kind,omitempty" json:"kind,omitempty" schema:"enum=@entityKind"`
+	Description   string                    `yaml:"description,omitempty"   json:"description,omitempty"`
+	PrimaryKey    []string                  `yaml:"primaryKey,omitempty"    json:"primaryKey,omitempty"`
+	Fields        []FieldConfig             `yaml:"fields,omitempty"        json:"fields,omitempty"`
+	Roles         RoleConfig                `yaml:"roles,omitempty"         json:"roles,omitempty"`
+	FieldACL      map[string]FieldACLConfig `yaml:"fieldACL,omitempty"      json:"fieldACL,omitempty"`
+	MCP           MCPFlags                  `yaml:"mcp"                     json:"mcp"`
+	RowPolicies   RowPolicies               `yaml:"rowPolicies,omitempty"   json:"rowPolicies,omitempty"`
+	Relationships []RelationshipConfig      `yaml:"relationships,omitempty" json:"relationships,omitempty"`
 	// TenantPolicy is ANDed for every principal and never merged across grants.
-	TenantPolicy FilterConfig `yaml:"tenantPolicy,omitempty" json:"tenantPolicy,omitempty"`
+	TenantPolicy FilterConfig `yaml:"tenantPolicy,omitempty"  json:"tenantPolicy,omitempty"`
 	// Params is the ordered formal-parameter list for a procedure entity, bound
 	// positionally by execute_entity. Required for procedures.
-	Params []string `yaml:"params"        json:"params"`
+	Params []string `yaml:"params,omitempty"        json:"params,omitempty"`
 }
 
 // RoleDefinition is a named set of grants declared at the top level. Entity
@@ -157,8 +161,8 @@ type RoleDefinition struct {
 // field; a present Fields behaves like a fieldACL entry. Empty Rows grants all
 // rows.
 type GrantConfig struct {
-	Entity  string          `yaml:"entity"           json:"entity"`
-	Actions []string        `yaml:"actions"          json:"actions"`
+	Entity  string          `yaml:"entity"           json:"entity" schema:"required,minLength=1"`
+	Actions []string        `yaml:"actions"          json:"actions" schema:"required,minItems=1,enum=@grantAction"`
 	Fields  *FieldACLConfig `yaml:"fields,omitempty" json:"fields,omitempty"`
 	Rows    FilterConfig    `yaml:"rows,omitempty"   json:"rows,omitempty"`
 }
@@ -167,8 +171,8 @@ type GrantConfig struct {
 // bearer token; the plaintext token never appears in configuration.
 type UserConfig struct {
 	Description string         `yaml:"description,omitempty" json:"description,omitempty"`
-	TokenHash   string         `yaml:"tokenHash,omitempty"   json:"tokenHash,omitempty"`
-	Roles       []string       `yaml:"roles,omitempty"       json:"roles,omitempty"`
+	TokenHash   string         `yaml:"tokenHash,omitempty"   json:"tokenHash,omitempty" schema:"pattern=@tokenHash"`
+	Roles       []string       `yaml:"roles,omitempty"       json:"roles,omitempty" schema:"pattern=@accessName"`
 	Subject     map[string]any `yaml:"subject,omitempty"     json:"subject,omitempty"`
 	Grants      []GrantConfig  `yaml:"grants,omitempty"      json:"grants,omitempty"`
 	Permissions []string       `yaml:"permissions,omitempty" json:"permissions,omitempty"`
@@ -177,44 +181,44 @@ type UserConfig struct {
 
 // RelationshipConfig configures a same-data-source batch expansion.
 type RelationshipConfig struct {
-	Name        string            `yaml:"name"        json:"name"`
-	Target      string            `yaml:"target"      json:"target"`
-	Cardinality string            `yaml:"cardinality" json:"cardinality"`
-	JoinOn      map[string]string `yaml:"joinOn"      json:"joinOn"`
+	Name        string            `yaml:"name"        json:"name" schema:"required,minLength=1"`
+	Target      string            `yaml:"target"      json:"target" schema:"required,minLength=1"`
+	Cardinality string            `yaml:"cardinality" json:"cardinality" schema:"required,enum=@cardinality"`
+	JoinOn      map[string]string `yaml:"joinOn"      json:"joinOn" schema:"required"`
 }
 
 // FieldConfig configures one column.
 type FieldConfig struct {
-	Name        string `yaml:"name"        json:"name"`
-	Alias       string `yaml:"alias"       json:"alias"`
-	Description string `yaml:"description" json:"description"`
-	Mask        string `yaml:"mask"        json:"mask"` // mask rule name (see mask package)
-	Exclude     bool   `yaml:"exclude"     json:"exclude"`
+	Name        string `yaml:"name"                  json:"name" schema:"required,minLength=1"`
+	Alias       string `yaml:"alias,omitempty"       json:"alias,omitempty"`
+	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+	Mask        string `yaml:"mask,omitempty"        json:"mask,omitempty" schema:"examples=@maskRule"`
+	Exclude     bool   `yaml:"exclude,omitempty"     json:"exclude,omitempty"`
 }
 
 // RoleConfig lists allowed roles per action.
 type RoleConfig struct {
-	Read      []string `yaml:"read"      json:"read"`
-	Create    []string `yaml:"create"    json:"create"`
-	Update    []string `yaml:"update"    json:"update"`
-	Delete    []string `yaml:"delete"    json:"delete"`
-	Execute   []string `yaml:"execute"   json:"execute"`
-	Aggregate []string `yaml:"aggregate" json:"aggregate"`
+	Read      []string `yaml:"read,omitempty"      json:"read,omitempty"`
+	Create    []string `yaml:"create,omitempty"    json:"create,omitempty"`
+	Update    []string `yaml:"update,omitempty"    json:"update,omitempty"`
+	Delete    []string `yaml:"delete,omitempty"    json:"delete,omitempty"`
+	Execute   []string `yaml:"execute,omitempty"   json:"execute,omitempty"`
+	Aggregate []string `yaml:"aggregate,omitempty" json:"aggregate,omitempty"`
 }
 
 // FieldACLConfig restricts one role to named readable and writable fields.
 // Omitting a role leaves existing entity-level authorization behavior intact.
 type FieldACLConfig struct {
-	Read  []string `yaml:"read"  json:"read"`
-	Write []string `yaml:"write" json:"write"`
+	Read  []string `yaml:"read,omitempty"  json:"read,omitempty"`
+	Write []string `yaml:"write,omitempty" json:"write,omitempty"`
 }
 
 // MCPFlags controls entity participation in MCP. Zero value means "not set";
 // ApplyDefaults sets DMLTools=true for unset entities.
 type MCPFlags struct {
-	DMLTools         bool `yaml:"dmlTools"         json:"dmlTools"`
-	CustomTool       bool `yaml:"customTool"       json:"customTool"`
-	TrustedProcedure bool `yaml:"trustedProcedure" json:"trustedProcedure"`
+	DMLTools         bool `yaml:"dmlTools"                   json:"dmlTools"`
+	CustomTool       bool `yaml:"customTool,omitempty"       json:"customTool,omitempty"`
+	TrustedProcedure bool `yaml:"trustedProcedure,omitempty" json:"trustedProcedure,omitempty"`
 	dmlToolsSet      bool
 }
 
@@ -277,36 +281,36 @@ func (f *ToolFlags) UnmarshalJSON(data []byte) error {
 
 // TransactionConfig bounds explicit transaction lifetime and cardinality.
 type TransactionConfig struct {
-	TTL             time.Duration `yaml:"ttl"             json:"ttl"`
-	MaxOpen         int           `yaml:"maxOpen"         json:"maxOpen"`
-	BeginTimeout    time.Duration `yaml:"beginTimeout"    json:"beginTimeout"`
-	CommitTimeout   time.Duration `yaml:"commitTimeout"   json:"commitTimeout"`
-	RollbackTimeout time.Duration `yaml:"rollbackTimeout" json:"rollbackTimeout"`
+	TTL             time.Duration `yaml:"ttl"             json:"ttl" schema:"min=0,restart"`
+	MaxOpen         int           `yaml:"maxOpen"         json:"maxOpen" schema:"min=0,restart"`
+	BeginTimeout    time.Duration `yaml:"beginTimeout"    json:"beginTimeout" schema:"min=0"`
+	CommitTimeout   time.Duration `yaml:"commitTimeout"   json:"commitTimeout" schema:"min=0"`
+	RollbackTimeout time.Duration `yaml:"rollbackTimeout" json:"rollbackTimeout" schema:"min=0"`
 }
 
 // CostConfig configures the defense-in-depth cost gate. SoftScore/HardScore are
 // the 0-100 normalized thresholds (from cost.ScorePlan) for soft/hard reject.
 type CostConfig struct {
-	Enabled             *bool         `yaml:"enabled"             json:"enabled"`
-	SoftScore           int           `yaml:"softScore"           json:"softScore"`
-	HardScore           int           `yaml:"hardScore"           json:"hardScore"`
-	MaxRows             int64         `yaml:"maxRows"             json:"maxRows"`
-	MaxBytes            int64         `yaml:"maxBytes"            json:"maxBytes"`
-	MaxINListSize       int           `yaml:"maxINListSize"       json:"maxINListSize"`
-	MaxFilterConditions int           `yaml:"maxFilterConditions" json:"maxFilterConditions"`
-	MaxGroupByFields    int           `yaml:"maxGroupByFields"    json:"maxGroupByFields"`
-	MaxAggregates       int           `yaml:"maxAggregates"       json:"maxAggregates"`
-	MaxExpand           int           `yaml:"maxExpand"           json:"maxExpand"`
-	MaxProcedureRows    int64         `yaml:"maxProcedureRows"    json:"maxProcedureRows"`
-	RejectFullScan      bool          `yaml:"rejectFullScan"      json:"rejectFullScan"`
-	WhitelistPKPoint    bool          `yaml:"whitelistPKPoint"    json:"whitelistPKPoint"`
-	RequirePKForWrite   *bool         `yaml:"requirePKForWrite"   json:"requirePKForWrite"`
-	RequireKnownScan    bool          `yaml:"requireKnownScan"    json:"requireKnownScan"`
-	RequireFreshStats   bool          `yaml:"requireFreshStats"   json:"requireFreshStats"`
-	QueryTimeout        time.Duration `yaml:"queryTimeout"        json:"queryTimeout"`
-	AllowTemplates      []string      `yaml:"allowTemplates"      json:"allowTemplates"`
-	RejectTemplates     []string      `yaml:"rejectTemplates"     json:"rejectTemplates"`
-	AQE                 AQEConfig     `yaml:"aqe"                 json:"aqe"`
+	Enabled             *bool         `yaml:"enabled,omitempty"           json:"enabled,omitempty"`
+	SoftScore           int           `yaml:"softScore"                   json:"softScore" schema:"min=0,max=100"`
+	HardScore           int           `yaml:"hardScore"                   json:"hardScore" schema:"min=0,max=100"`
+	MaxRows             int64         `yaml:"maxRows"                     json:"maxRows" schema:"min=1"`
+	MaxBytes            int64         `yaml:"maxBytes"                    json:"maxBytes" schema:"min=1"`
+	MaxINListSize       int           `yaml:"maxINListSize"               json:"maxINListSize" schema:"min=1"`
+	MaxFilterConditions int           `yaml:"maxFilterConditions"         json:"maxFilterConditions" schema:"min=1"`
+	MaxGroupByFields    int           `yaml:"maxGroupByFields"            json:"maxGroupByFields" schema:"min=1"`
+	MaxAggregates       int           `yaml:"maxAggregates"               json:"maxAggregates" schema:"min=1"`
+	MaxExpand           int           `yaml:"maxExpand"                   json:"maxExpand" schema:"min=1"`
+	MaxProcedureRows    int64         `yaml:"maxProcedureRows"            json:"maxProcedureRows" schema:"min=1"`
+	RejectFullScan      bool          `yaml:"rejectFullScan"              json:"rejectFullScan"`
+	WhitelistPKPoint    bool          `yaml:"whitelistPKPoint"            json:"whitelistPKPoint"`
+	RequirePKForWrite   *bool         `yaml:"requirePKForWrite,omitempty" json:"requirePKForWrite,omitempty"`
+	RequireKnownScan    bool          `yaml:"requireKnownScan"            json:"requireKnownScan"`
+	RequireFreshStats   bool          `yaml:"requireFreshStats"           json:"requireFreshStats"`
+	QueryTimeout        time.Duration `yaml:"queryTimeout"                json:"queryTimeout" schema:"min=0"`
+	AllowTemplates      []string      `yaml:"allowTemplates"              json:"allowTemplates"`
+	RejectTemplates     []string      `yaml:"rejectTemplates"             json:"rejectTemplates"`
+	AQE                 AQEConfig     `yaml:"aqe"                         json:"aqe"`
 	present             map[string]bool
 }
 
@@ -332,14 +336,14 @@ func (c *CostConfig) UnmarshalJSON(data []byte) error {
 // AQEConfig controls bounded estimate feedback and optional read-only
 // EXPLAIN ANALYZE sampling.
 type AQEConfig struct {
-	WindowSize        int           `yaml:"windowSize"        json:"windowSize"`
-	AnomalyFactor     float64       `yaml:"anomalyFactor"     json:"anomalyFactor"`
-	AnomalyMinSamples int           `yaml:"anomalyMinSamples" json:"anomalyMinSamples"`
+	WindowSize        int           `yaml:"windowSize"        json:"windowSize" schema:"min=0"`
+	AnomalyFactor     float64       `yaml:"anomalyFactor"     json:"anomalyFactor" schema:"min=0"`
+	AnomalyMinSamples int           `yaml:"anomalyMinSamples" json:"anomalyMinSamples" schema:"min=0"`
 	ExplainAnalyze    bool          `yaml:"explainAnalyze"    json:"explainAnalyze"`
 	ReadOnly          bool          `yaml:"readOnly"          json:"readOnly"`
-	SampleRate        float64       `yaml:"sampleRate"        json:"sampleRate"`
-	Timeout           time.Duration `yaml:"timeout"           json:"timeout"`
-	MaxFingerprints   int           `yaml:"maxFingerprints"   json:"maxFingerprints"`
+	SampleRate        float64       `yaml:"sampleRate"        json:"sampleRate" schema:"min=0,max=1"`
+	Timeout           time.Duration `yaml:"timeout"           json:"timeout" schema:"min=0,max=5s"`
+	MaxFingerprints   int           `yaml:"maxFingerprints"   json:"maxFingerprints" schema:"min=1"`
 	present           map[string]bool
 }
 
@@ -371,13 +375,14 @@ type BudgetConfig struct {
 
 // BudgetLimits is unlimited when all fields are zero.
 type BudgetLimits struct {
-	MaxConcurrent           int           `yaml:"maxConcurrent"            json:"maxConcurrent"`
-	MaxExecution            time.Duration `yaml:"maxExecution"             json:"maxExecution"`
-	MaxEstimatedScannedRows int64         `yaml:"maxEstimatedScannedRows"  json:"maxEstimatedScannedRows"`
-	MaxScannedRows          int64         `yaml:"maxScannedRows,omitempty" json:"maxScannedRows,omitempty"` // deprecated
-	MaxReturnedRows         int64         `yaml:"maxReturnedRows"          json:"maxReturnedRows"`
-	MaxReturnedBytes        int64         `yaml:"maxReturnedBytes"         json:"maxReturnedBytes"`
-	MaxSessionCost          int64         `yaml:"maxSessionCost"           json:"maxSessionCost"`
+	MaxConcurrent           int           `yaml:"maxConcurrent"            json:"maxConcurrent" schema:"min=0"`
+	MaxExecution            time.Duration `yaml:"maxExecution"             json:"maxExecution" schema:"min=0"`
+	MaxEstimatedScannedRows int64         `yaml:"maxEstimatedScannedRows"  json:"maxEstimatedScannedRows" schema:"min=0"`
+	// MaxScannedRows is a deprecated alias of MaxEstimatedScannedRows.
+	MaxScannedRows   int64 `yaml:"maxScannedRows,omitempty" json:"maxScannedRows,omitempty" schema:"min=0"`
+	MaxReturnedRows  int64 `yaml:"maxReturnedRows"          json:"maxReturnedRows" schema:"min=0"`
+	MaxReturnedBytes int64 `yaml:"maxReturnedBytes"         json:"maxReturnedBytes" schema:"min=0"`
+	MaxSessionCost   int64 `yaml:"maxSessionCost"           json:"maxSessionCost" schema:"min=0"`
 }
 
 // EnabledOrDefault reports whether cost protection is on; nil means default
@@ -408,26 +413,26 @@ func (c CostConfig) RequirePKForWriteOrDefault() bool {
 // CacheConfig configures the read cache.
 type CacheConfig struct {
 	Enabled         bool          `yaml:"enabled"         json:"enabled"`
-	TTL             time.Duration `yaml:"ttl"             json:"ttl"`
-	MaxSize         int           `yaml:"maxSize"         json:"maxSize"`
-	MaxEntryRows    int           `yaml:"maxEntryRows"    json:"maxEntryRows"`
-	MaxEntryBytes   int64         `yaml:"maxEntryBytes"   json:"maxEntryBytes"`
-	PreparedMaxSize int           `yaml:"preparedMaxSize" json:"preparedMaxSize"`
+	TTL             time.Duration `yaml:"ttl"             json:"ttl" schema:"min=0"`
+	MaxSize         int           `yaml:"maxSize"         json:"maxSize" schema:"min=0"`
+	MaxEntryRows    int           `yaml:"maxEntryRows"    json:"maxEntryRows" schema:"min=0"`
+	MaxEntryBytes   int64         `yaml:"maxEntryBytes"   json:"maxEntryBytes" schema:"min=0"`
+	PreparedMaxSize int           `yaml:"preparedMaxSize" json:"preparedMaxSize" schema:"min=0"`
 }
 
 // RateLimitConfig configures the engine's concurrency and rate limits.
 type RateLimitConfig struct {
-	Enabled          *bool         `yaml:"enabled"          json:"enabled"`
-	RPS              float64       `yaml:"rps"              json:"rps"`
-	MaxInflight      int           `yaml:"maxInflight"      json:"maxInflight"`
-	IOPool           int           `yaml:"ioPool"           json:"ioPool"`
-	CPUPool          int           `yaml:"cpuPool"          json:"cpuPool"`
-	MinConcurrency   int           `yaml:"minConcurrency"   json:"minConcurrency"`
-	RTTThreshold     time.Duration `yaml:"rttThreshold"     json:"rttThreshold"`
-	BreakerThreshold int           `yaml:"breakerThreshold" json:"breakerThreshold"`
-	BreakerCooldown  time.Duration `yaml:"breakerCooldown"  json:"breakerCooldown"`
-	ConnMaxIdleTime  time.Duration `yaml:"connMaxIdleTime"  json:"connMaxIdleTime"`
-	ConnMaxLifetime  time.Duration `yaml:"connMaxLifetime"  json:"connMaxLifetime"`
+	Enabled          *bool         `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	RPS              float64       `yaml:"rps"               json:"rps" schema:"min=0"`
+	MaxInflight      int           `yaml:"maxInflight"       json:"maxInflight" schema:"min=0"`
+	IOPool           int           `yaml:"ioPool"            json:"ioPool" schema:"min=0"`
+	CPUPool          int           `yaml:"cpuPool"           json:"cpuPool" schema:"min=0,nodefault"`
+	MinConcurrency   int           `yaml:"minConcurrency"    json:"minConcurrency" schema:"min=0"`
+	RTTThreshold     time.Duration `yaml:"rttThreshold"      json:"rttThreshold" schema:"min=0"`
+	BreakerThreshold int           `yaml:"breakerThreshold"  json:"breakerThreshold" schema:"min=0"`
+	BreakerCooldown  time.Duration `yaml:"breakerCooldown"   json:"breakerCooldown" schema:"min=0"`
+	ConnMaxIdleTime  time.Duration `yaml:"connMaxIdleTime"   json:"connMaxIdleTime" schema:"min=0"`
+	ConnMaxLifetime  time.Duration `yaml:"connMaxLifetime"   json:"connMaxLifetime" schema:"min=0"`
 }
 
 // EnabledOrDefault reports whether rate limiting is on; nil means default true.
@@ -440,7 +445,7 @@ func (c RateLimitConfig) EnabledOrDefault() bool {
 
 // MaskConfig controls field masking. Enabled defaults to true when unset.
 type MaskConfig struct {
-	Enabled *bool `yaml:"enabled" json:"enabled"`
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 
 // EnabledOrDefault reports whether masking is on; nil means default true.
@@ -455,7 +460,7 @@ func (c MaskConfig) EnabledOrDefault() bool {
 type AuditConfig struct {
 	Enabled   bool   `yaml:"enabled"   json:"enabled"`
 	Path      string `yaml:"path"      json:"path"`
-	QueueSize int    `yaml:"queueSize" json:"queueSize"`
+	QueueSize int    `yaml:"queueSize" json:"queueSize" schema:"min=0"`
 }
 
 // DefaultToolFlags returns the safe default tool set: all tools enabled except

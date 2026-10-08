@@ -97,12 +97,12 @@ var accessRejectCases = []struct {
 		u := c.Users["Alice"]
 		u.TokenHash = "md5:abc"
 		c.Users["Alice"] = u
-	}, "tokenHash must be"},
+	}, "must match ^sha256:"},
 	{"non hex token hash", func(c *Config) {
 		u := c.Users["Alice"]
 		u.TokenHash = TokenHashPrefix + strings.Repeat("z", 64)
 		c.Users["Alice"] = u
-	}, "tokenHash must be"},
+	}, "must match ^sha256:"},
 	{"duplicate token hash", func(c *Config) {
 		c.Users["bob"] = UserConfig{TokenHash: TokenHash("alice-token")}
 	}, "collides"},
@@ -114,10 +114,10 @@ var accessRejectCases = []struct {
 	}, "unknown entity"},
 	{"grant without actions", func(c *Config) {
 		c.Roles["x"] = RoleDefinition{Grants: []GrantConfig{{Entity: "orders"}}}
-	}, "no actions"},
+	}, "actions needs at least 1 items"},
 	{"grant unknown action", func(c *Config) {
 		c.Roles["x"] = RoleDefinition{Grants: []GrantConfig{{Entity: "orders", Actions: []string{"drop"}}}}
-	}, "unknown action"},
+	}, `is "drop", want one of`},
 	{"grant duplicate action", func(c *Config) {
 		c.Roles["x"] = RoleDefinition{Grants: []GrantConfig{{Entity: "orders", Actions: []string{"read", "READ"}}}}
 	}, "twice"},
@@ -151,7 +151,7 @@ var accessRejectCases = []struct {
 	}, "budget references unknown user"},
 	{"negative budget user", func(c *Config) {
 		c.Budget.Users["ALICE"] = BudgetLimits{MaxReturnedRows: -1}
-	}, "must not be negative"},
+	}, "must be at least 0"},
 }
 
 func TestValidateAccessRejectsInvalidConfig(t *testing.T) {

@@ -69,7 +69,7 @@ func (t ProcedureTool) Info() Info {
 	schema, _ := json.Marshal(map[string]any{
 		"type":       "object",
 		"properties": properties,
-		"required":   t.Entity.Params,
+		"required":   append([]string{}, t.Entity.Params...), // never null
 	})
 	return Info{
 		Name:        ProcedureToolName(t.Entity.Name),

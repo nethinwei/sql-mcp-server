@@ -11,10 +11,27 @@ type dialect struct {
 	driver     string
 	dollarArgs bool
 	prepareDSN func(string) string
-	ddl        []string
+	// migrations[v-1] holds the DDL that brings a store to schema version v.
+	migrations [][]string
 }
 
-func storeDDL(text, longText string) []string {
+func storeMigrations(text, longText string) [][]string {
+	return [][]string{revisionDDL(text, longText), adminDDL()}
+}
+
+// adminDDL is schema version 2: administrator accounts for the admin API.
+func adminDDL() []string {
+	return []string{`CREATE TABLE IF NOT EXISTS smcp_admin_accounts (
+			username      VARCHAR(64)  NOT NULL PRIMARY KEY,
+			password_hash VARCHAR(255) NOT NULL,
+			permissions   VARCHAR(255) NOT NULL,
+			disabled      INT          NOT NULL,
+			created_us    BIGINT       NOT NULL,
+			updated_us    BIGINT       NOT NULL
+		)`}
+}
+
+func revisionDDL(text, longText string) []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS smcp_store_meta (
 			meta_key   VARCHAR(64) NOT NULL PRIMARY KEY,
@@ -38,23 +55,23 @@ var dialects = map[string]dialect{
 	"sqlite": {
 		driver:     "sqlite",
 		prepareDSN: sqliteDSN,
-		ddl:        storeDDL("TEXT", "TEXT"),
+		migrations: storeMigrations("TEXT", "TEXT"),
 	},
 	"postgres": {
 		driver:     "pgx",
 		dollarArgs: true,
 		prepareDSN: identity,
-		ddl:        storeDDL("TEXT", "TEXT"),
+		migrations: storeMigrations("TEXT", "TEXT"),
 	},
 	"mysql": {
 		driver:     "mysql",
 		prepareDSN: identity,
-		ddl:        storeDDL("TEXT", "LONGTEXT"),
+		migrations: storeMigrations("TEXT", "LONGTEXT"),
 	},
 	"oceanbase": {
 		driver:     "mysql",
 		prepareDSN: identity,
-		ddl:        storeDDL("TEXT", "LONGTEXT"),
+		migrations: storeMigrations("TEXT", "LONGTEXT"),
 	},
 }
 

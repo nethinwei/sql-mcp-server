@@ -79,6 +79,14 @@ jobs:
         with:
           syft-version: v1.46.0
       - uses: sigstore/cosign-installer@v4.1.2
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/admin/package.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: web/admin/pnpm-lock.yaml
       - uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser

@@ -22,8 +22,9 @@ import (
 // TablePrefix prefixes every store table; see config.StoreTablePrefix.
 const TablePrefix = config.StoreTablePrefix
 
-// SchemaVersion is the store table layout this build understands.
-const SchemaVersion = 1
+// SchemaVersion is the store table layout this build understands. Version 2
+// added administrator accounts.
+const SchemaVersion = 2
 
 // Errors returned when opening a store.
 var (
@@ -64,11 +65,36 @@ func Open(ctx context.Context, spec Spec, resolve Resolver) (*SQLStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkSchema(ctx); err != nil {
+	version, err := s.checkSchema(ctx)
+	if err == nil && version < SchemaVersion {
+		err = s.migrate(ctx, version)
+	}
+	if err != nil {
 		_ = s.db.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+// migrate upgrades the store schema from version to SchemaVersion, one
+// version at a time, recording each step in smcp_store_meta.
+func (s *SQLStore) migrate(ctx context.Context, version int64) error {
+	for v := version + 1; v <= SchemaVersion; v++ {
+		err := s.withTx(ctx, func(tx *sql.Tx) error {
+			for _, ddl := range s.dialect.migrations[v-1] {
+				if _, err := tx.ExecContext(ctx, ddl); err != nil {
+					return err
+				}
+			}
+			_, err := s.exec(ctx, tx, "UPDATE smcp_store_meta SET meta_value = ? WHERE meta_key = ?",
+				v, metaSchemaVersion)
+			return err
+		})
+		if err != nil {
+			return fmt.Errorf("configstore: migrate schema to version %d: %w", v, err)
+		}
+	}
+	return nil
 }
 
 // Init creates the store tables when absent; it is a no-op on an initialized
@@ -79,12 +105,21 @@ func Init(ctx context.Context, spec Spec, resolve Resolver) error {
 		return err
 	}
 	defer func() { _ = s.db.Close() }()
-	if err := s.checkSchema(ctx); err == nil || !errors.Is(err, ErrNotInitialized) {
+	version, err := s.checkSchema(ctx)
+	if err == nil {
+		if version < SchemaVersion {
+			return s.migrate(ctx, version)
+		}
+		return nil
+	}
+	if !errors.Is(err, ErrNotInitialized) {
 		return err
 	}
-	for _, ddl := range s.dialect.ddl {
-		if _, err := s.db.ExecContext(ctx, ddl); err != nil {
-			return fmt.Errorf("configstore: create tables: %w", err)
+	for _, step := range s.dialect.migrations {
+		for _, ddl := range step {
+			if _, err := s.db.ExecContext(ctx, ddl); err != nil {
+				return fmt.Errorf("configstore: create tables: %w", err)
+			}
 		}
 	}
 	for _, row := range [][2]any{{metaSchemaVersion, SchemaVersion}, {metaNextID, 1}, {metaPublishLock, 0}} {
@@ -123,20 +158,21 @@ const (
 	metaPublishLock   = "publish_lock"
 )
 
-func (s *SQLStore) checkSchema(ctx context.Context) error {
+func (s *SQLStore) checkSchema(ctx context.Context) (int64, error) {
 	var version int64
 	err := s.queryRow(ctx, s.db, "SELECT meta_value FROM smcp_store_meta WHERE meta_key = ?",
 		metaSchemaVersion).Scan(&version)
 	if err != nil {
 		if pingErr := s.db.PingContext(ctx); pingErr != nil {
-			return fmt.Errorf("configstore: connect: %w", pingErr)
+			return 0, fmt.Errorf("configstore: connect: %w", pingErr)
 		}
-		return ErrNotInitialized
+		return 0, ErrNotInitialized
 	}
 	if version > SchemaVersion {
-		return fmt.Errorf("%w: store has version %d, this build supports %d", ErrNewerSchema, version, SchemaVersion)
+		return version, fmt.Errorf("%w: store has version %d, this build supports %d",
+			ErrNewerSchema, version, SchemaVersion)
 	}
-	return nil
+	return version, nil
 }
 
 var _ revision.Store = (*SQLStore)(nil)

@@ -48,13 +48,19 @@ func (i pgIntrospector) Discover(ctx context.Context, sources []string) ([]entit
 		if err != nil {
 			return nil, err
 		}
+		comment, fks, err := i.tableMeta(ctx, t.schema, t.name)
+		if err != nil {
+			return nil, err
+		}
 		entities = append(entities, entity.Entity{
-			Name:       t.name,
-			Source:     t.name,
-			Schema:     t.schema,
-			Kind:       entity.KindTable,
-			Attributes: attrs,
-			Keys:       keys,
+			Name:        t.name,
+			Source:      t.name,
+			Schema:      t.schema,
+			Description: comment,
+			Kind:        entity.KindTable,
+			Attributes:  attrs,
+			Keys:        keys,
+			ForeignKeys: fks,
 		})
 	}
 	return entities, nil
@@ -62,7 +68,9 @@ func (i pgIntrospector) Discover(ctx context.Context, sources []string) ([]entit
 
 func (i pgIntrospector) columns(ctx context.Context, schema, table string) ([]entity.Attribute, []entity.Key, error) {
 	crows, err := i.db.QueryContext(ctx,
-		`SELECT column_name, data_type, is_nullable
+		`SELECT column_name, data_type, is_nullable,
+		        COALESCE(col_description(format('%I.%I', table_schema, table_name)::regclass,
+		                                 ordinal_position::int), '')
 		 FROM information_schema.columns
 		 WHERE table_schema=$1 AND table_name=$2 ORDER BY ordinal_position`, schema, table)
 	if err != nil {
@@ -71,12 +79,13 @@ func (i pgIntrospector) columns(ctx context.Context, schema, table string) ([]en
 	defer func() { _ = crows.Close() }()
 	var attrs []entity.Attribute
 	for crows.Next() {
-		var name, dataType, nullable string
-		if err := crows.Scan(&name, &dataType, &nullable); err != nil {
+		var name, dataType, nullable, comment string
+		if err := crows.Scan(&name, &dataType, &nullable, &comment); err != nil {
 			return nil, nil, err
 		}
 		attrs = append(attrs, entity.Attribute{
-			Name: name,
+			Name:        name,
+			Description: comment,
 			Domain: entity.Domain{
 				Type:     dataType,
 				Nullable: strings.EqualFold(nullable, "YES"),
@@ -121,4 +130,50 @@ func (i pgIntrospector) primaryKey(ctx context.Context, schema, table string) ([
 		return nil, nil
 	}
 	return []entity.Key{{Name: "pk", Columns: cols, Primary: true}}, nil
+}
+
+// tableMeta returns the table comment and foreign keys (columns in key order).
+func (i pgIntrospector) tableMeta(ctx context.Context, schema, table string) (string, []entity.ForeignKey, error) {
+	var comment string
+	if err := i.db.QueryRowContext(ctx,
+		`SELECT COALESCE(obj_description(format('%I.%I', $1::text, $2::text)::regclass, 'pg_class'), '')`,
+		schema, table).Scan(&comment); err != nil {
+		return "", nil, err
+	}
+	rows, err := i.db.QueryContext(ctx,
+		`SELECT con.conname, a.attname, rn.nspname, rc.relname, ra.attname
+		 FROM pg_constraint con
+		 CROSS JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(col, refcol, ord)
+		 JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.col
+		 JOIN pg_class rc ON rc.oid = con.confrelid
+		 JOIN pg_namespace rn ON rn.oid = rc.relnamespace
+		 JOIN pg_attribute ra ON ra.attrelid = con.confrelid AND ra.attnum = k.refcol
+		 WHERE con.contype = 'f' AND con.conrelid = format('%I.%I', $1::text, $2::text)::regclass
+		 ORDER BY con.conname, k.ord`, schema, table)
+	if err != nil {
+		return "", nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	fks, err := scanForeignKeys(rows)
+	return comment, fks, err
+}
+
+// scanForeignKeys groups (constraint, column, referenced schema, referenced
+// table, referenced column) rows, ordered by constraint and key position, into
+// foreign keys.
+func scanForeignKeys(rows *sql.Rows) ([]entity.ForeignKey, error) {
+	var fks []entity.ForeignKey
+	for rows.Next() {
+		var name, col, refSchema, refTable, refCol string
+		if err := rows.Scan(&name, &col, &refSchema, &refTable, &refCol); err != nil {
+			return nil, err
+		}
+		if n := len(fks); n == 0 || fks[n-1].Name != name {
+			fks = append(fks, entity.ForeignKey{Name: name, RefSchema: refSchema, RefRelation: refTable})
+		}
+		last := &fks[len(fks)-1]
+		last.Columns = append(last.Columns, col)
+		last.RefColumns = append(last.RefColumns, refCol)
+	}
+	return fks, rows.Err()
 }

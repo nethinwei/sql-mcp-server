@@ -1,0 +1,382 @@
+# Admin API for sql-mcp-server. The read model exposes every part of the
+# configuration as structured types; writes create revision drafts from a
+# base revision plus replaced sections, so the console can evolve without
+# server changes. Validation, diff and simulation accept unsaved drafts.
+#
+# Like the configuration encoding, the model omits empty values: optional text
+# is null when unset, and an empty string in an input means unset.
+
+scalar Time
+scalar JSON
+
+enum RevisionState {
+  DRAFT
+  PUBLISHED
+  SUPERSEDED
+  ROLLED_BACK
+}
+
+enum Action {
+  READ
+  CREATE
+  UPDATE
+  DELETE
+  EXECUTE
+  AGGREGATE
+}
+
+enum ImportStatus {
+  "No configured entity reads this table."
+  NEW
+  "An entity of the same datasource already reads this table."
+  CONFIGURED
+}
+
+type Query {
+  "The signed-in administrator."
+  me: AdminAccount!
+  "The serving process: the revision it applies and whether it follows publishes."
+  serverStatus: ServerStatus!
+  "The configuration JSON Schema, for editor completion and checks."
+  configSchema: JSON!
+  "The published revision, if any."
+  published: Revision
+  revision(id: ID!): Revision
+  "Revisions, newest first."
+  revisions(limit: Int = 50): [Revision!]!
+  "Introspect a configured datasource and propose zero-permission entities."
+  schemaImport(datasource: String!, schemas: [String!]): SchemaImport!
+  "Validate a draft without saving it."
+  validate(draft: DraftInput!): Validation!
+  "Unified diff from revision `from` to revision `to` or an unsaved draft (default: published)."
+  diff(from: ID!, to: ID, draft: DraftInput): String!
+  "Evaluate one authorization offline against a draft or a revision (default: published)."
+  simulate(input: SimulationInput!): Simulation!
+  "Every entity and applicable action for one principal, default projection."
+  visibility(input: VisibilityInput!): [EntityVisibility!]!
+  adminAccounts: [AdminAccount!]!
+}
+
+type Mutation {
+  "Save a draft revision."
+  createDraft(draft: DraftInput!, comment: String): Revision!
+  publish(input: PublishInput!): Revision!
+  "Roll back to `to`, or to the newest earlier published content."
+  rollback(input: RollbackInput!): Revision!
+  "A new random user token; only the hash belongs in a draft."
+  generateUserToken: UserToken!
+  createAdminAccount(input: AdminAccountInput!): AdminAccount!
+  updateAdminAccount(input: AdminAccountUpdate!): AdminAccount!
+  "Administrators with admin:accounts may reset anyone; others only themselves."
+  setAdminPassword(input: SetAdminPasswordInput!): AdminAccount!
+}
+
+type AdminAccount {
+  username: String!
+  permissions: [String!]!
+  disabled: Boolean!
+  createdAt: Time!
+  updatedAt: Time!
+}
+
+type Revision {
+  id: ID!
+  parent: ID
+  state: RevisionState!
+  contentHash: String!
+  author: String!
+  comment: String!
+  createdAt: Time!
+  publishedAt: Time
+  config: Configuration!
+  "The normalized YAML payload."
+  yaml: String!
+}
+
+type Configuration {
+  datasources: [Datasource!]!
+  entities: [Entity!]!
+  roles: [Role!]!
+  users: [User!]!
+  "Every other top-level section (server, tools, cost, budget, cache, ...) as YAML-shaped JSON."
+  settings: JSON!
+}
+
+type Datasource {
+  name: String!
+  driver: String!
+  "The DSN with passwords redacted."
+  dsn: String!
+}
+
+type Entity {
+  name: String!
+  source: String!
+  datasource: String!
+  schema: String
+  kind: String!
+  description: String
+  primaryKey: [String!]!
+  fields: [Field!]!
+  relationships: [Relationship!]!
+  tenantPolicy: JSON
+  "Entity-level roles, fieldACL and rowPolicies, kept for compatibility."
+  legacyAccess: JSON
+  mcp: EntityMCP!
+  params: [String!]!
+}
+
+type Field {
+  name: String!
+  alias: String
+  description: String
+  mask: String
+  exclude: Boolean!
+}
+
+type Relationship {
+  name: String!
+  target: String!
+  cardinality: String!
+  joinOn: JSON!
+}
+
+type EntityMCP {
+  dmlTools: Boolean!
+  customTool: Boolean!
+  trustedProcedure: Boolean!
+}
+
+type Role {
+  name: String!
+  description: String
+  grants: [Grant!]!
+  "Users that have this role."
+  members: [String!]!
+}
+
+type Grant {
+  entity: String!
+  actions: [Action!]!
+  "False grants every visible field; true limits to readFields/writeFields."
+  fieldsRestricted: Boolean!
+  readFields: [String!]!
+  writeFields: [String!]!
+  rows: JSON
+}
+
+type User {
+  name: String!
+  description: String
+  roles: [String!]!
+  grants: [Grant!]!
+  subject: JSON
+  disabled: Boolean!
+  hasToken: Boolean!
+}
+
+type SchemaImport {
+  datasource: String!
+  tables: [ImportTable!]!
+}
+
+type ImportTable {
+  schema: String!
+  table: String!
+  description: String!
+  status: ImportStatus!
+  "The configured entity name when status is CONFIGURED."
+  configuredAs: String
+  "Database columns the configured entity does not declare."
+  addedColumns: [String!]!
+  "Columns the configured entity declares that the database lacks."
+  missingColumns: [String!]!
+  columns: [ImportColumn!]!
+  "A zero-permission entity proposal; add it to a draft to configure it."
+  candidate: Entity!
+}
+
+type ImportColumn {
+  name: String!
+  type: String!
+  nullable: Boolean!
+  description: String!
+  primaryKey: Boolean!
+}
+
+type Validation {
+  ok: Boolean!
+  error: String
+  contentHash: String
+  "Changes against the published revision that need a restart."
+  restartRequired: [String!]!
+}
+
+type ServerStatus {
+  "Revision this process serves; null when it does not track the store."
+  appliedRevision: ID
+  "Whether the process applies newly published revisions (--watch)."
+  watching: Boolean!
+  "A published revision this process has not applied."
+  pending: PendingRevision
+}
+type PendingRevision {
+  id: ID!
+  "True when only a restart applies it; otherwise building it failed."
+  restartRequired: Boolean!
+  error: String!
+}
+input VisibilityInput {
+  draft: DraftInput
+  revision: ID
+  "A configured user name, or role:<name> to evaluate a role."
+  user: String!
+  subject: JSON
+}
+type EntityVisibility {
+  entity: String!
+  "One result per action that applies to the entity kind."
+  actions: [ActionVisibility!]!
+}
+type ActionVisibility {
+  action: Action!
+  result: Simulation!
+}
+type Simulation {
+  allowed: Boolean!
+  reason: String!
+  fields: [String!]!
+  "Effective row filter in rowPolicies JSON form; null means every row."
+  rowFilter: JSON
+  grants: [String!]!
+  "Set when no single grant covers the requested fields."
+  fieldScopes: [[String!]!]
+}
+
+type UserToken {
+  token: String!
+  tokenHash: String!
+}
+
+input DraftInput {
+  base: ID!
+  "Replaces the entities section when provided."
+  entities: [EntityInput!]
+  "Replaces the roles section when provided."
+  roles: [RoleInput!]
+  "Replaces the users section when provided; a missing tokenHash keeps the base user's hash."
+  users: [UserInput!]
+  "Replaces the given top-level sections; datasources, entities, roles and users are not allowed here."
+  settings: JSON
+}
+
+input EntityInput {
+  name: String!
+  source: String
+  datasource: String
+  schema: String
+  kind: String
+  description: String
+  primaryKey: [String!]
+  fields: [FieldInput!]
+  relationships: [RelationshipInput!]
+  tenantPolicy: JSON
+  legacyAccess: JSON
+  mcp: EntityMCPInput
+  params: [String!]
+}
+
+input FieldInput {
+  name: String!
+  alias: String
+  description: String
+  mask: String
+  exclude: Boolean
+}
+
+input RelationshipInput {
+  name: String!
+  target: String!
+  cardinality: String!
+  joinOn: JSON!
+}
+
+input EntityMCPInput {
+  dmlTools: Boolean
+  customTool: Boolean
+  trustedProcedure: Boolean
+}
+
+input RoleInput {
+  name: String!
+  description: String
+  grants: [GrantInput!]
+}
+
+input GrantInput {
+  entity: String!
+  actions: [Action!]!
+  fieldsRestricted: Boolean
+  readFields: [String!]
+  writeFields: [String!]
+  rows: JSON
+}
+
+input UserInput {
+  name: String!
+  description: String
+  roles: [String!]
+  grants: [GrantInput!]
+  subject: JSON
+  disabled: Boolean
+  tokenHash: String
+}
+
+input SimulationInput {
+  "Simulate against this unsaved draft..."
+  draft: DraftInput
+  "...or this revision; default: the published revision."
+  revision: ID
+  "A configured user name, or role:<name> to evaluate a role."
+  user: String!
+  entity: String!
+  action: Action!
+  "Requested fields; empty means the default projection."
+  fields: [String!]
+  "Extra subject attributes; configured user attributes win."
+  subject: JSON
+}
+
+input PublishInput {
+  "The draft to publish."
+  id: ID!
+  restartRequired: Boolean = false
+  """
+  The published revision the caller based its work on; when another revision
+  was published since, publish fails with extensions.code CONFLICT.
+  """
+  expectedPublished: ID
+}
+input RollbackInput {
+  "Revision to restore; default: the newest earlier published content."
+  to: ID
+  restartRequired: Boolean = false
+  comment: String
+}
+
+input AdminAccountInput {
+  username: String!
+  password: String!
+  permissions: [String!]!
+}
+
+input AdminAccountUpdate {
+  username: String!
+  permissions: [String!]
+  disabled: Boolean
+}
+
+input SetAdminPasswordInput {
+  username: String!
+  password: String!
+}

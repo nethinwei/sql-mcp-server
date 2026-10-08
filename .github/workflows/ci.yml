@@ -91,6 +91,23 @@ jobs:
       - name: integration tests (testcontainers)
         run: make test-integration-${{ matrix.db }}
 
+  console:
+    name: admin console (type-check, test, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/admin/package.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: web/admin/pnpm-lock.yaml
+      - name: build console
+        run: make web web-check
+
   e2e:
     name: e2e (mcp client)
     runs-on: ubuntu-latest

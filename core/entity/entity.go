@@ -100,8 +100,11 @@ type Key struct {
 
 // ForeignKey declares referential integrity to another relation.
 type ForeignKey struct {
-	Name        string
-	Columns     []string
+	Name    string
+	Columns []string
+	// RefSchema is the referenced relation's schema; it may differ from the
+	// referencing table's.
+	RefSchema   string
 	RefRelation string
 	RefColumns  []string
 }

@@ -275,27 +275,6 @@ func runStoreDiff(ctx context.Context, args []string, stdout io.Writer) error {
 	return err
 }
 
-// checkPublishable verifies that target loads under the store rules and, when
-// a revision is published, that switching to target needs no restart unless
-// restartRequired is set.
-func checkPublishable(current, target revision.Revision, restartRequired bool) error {
-	next, err := loadRevision(target)
-	if err != nil {
-		return fmt.Errorf("revision %d: %w", target.ID, err)
-	}
-	if current.ID == 0 {
-		return nil
-	}
-	cur, err := loadRevision(current)
-	if err != nil {
-		return fmt.Errorf("published revision %d: %w", current.ID, err)
-	}
-	if err := bootstrap.CheckHotReload(cur, next); err != nil && !restartRequired {
-		return fmt.Errorf("%w; publish with --restart-required to apply it on the next restart", err)
-	}
-	return nil
-}
-
 func runStorePublish(ctx context.Context, args []string, stdout io.Writer) error {
 	f := newStoreFlags("publish")
 	restart := f.fs.Bool("restart-required", false, "allow changes that only take effect after a restart")
@@ -320,7 +299,7 @@ func runStorePublish(ctx context.Context, args []string, stdout io.Writer) error
 	if err != nil && !errors.Is(err, revision.ErrNoPublished) {
 		return err
 	}
-	if err := checkPublishable(current, target, *restart); err != nil {
+	if err := bootstrap.CheckPublishable(current, target, *restart); err != nil {
 		return err
 	}
 	author := f.authorName()
@@ -364,7 +343,7 @@ func runStoreRollback(ctx context.Context, args []string, stdout io.Writer) erro
 	if err != nil {
 		return err
 	}
-	if err := checkPublishable(current, target, *restart); err != nil {
+	if err := bootstrap.CheckPublishable(current, target, *restart); err != nil {
 		return err
 	}
 	author := f.authorName()

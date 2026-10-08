@@ -28,7 +28,7 @@ func runServerConformance(t *testing.T, spec Spec) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, table := range []string{"smcp_revisions", "smcp_store_meta"} {
+		for _, table := range []string{"smcp_revisions", "smcp_store_meta", "smcp_admin_accounts"} {
 			if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
 				t.Fatal(err)
 			}

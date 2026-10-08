@@ -39,6 +39,7 @@ type Runtime struct {
 	build   func(string) (*App, error)
 	revoked atomic.Pointer[func([]string)]
 	stale   atomic.Pointer[StaleState]
+	applied atomic.Int64
 }
 
 // OnRevokedPrincipals registers fn to receive the principal keys of users that
