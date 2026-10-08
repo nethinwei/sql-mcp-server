@@ -28,12 +28,12 @@ func TestRunToolWiresHooksAndAudit(t *testing.T) {
 	var before, after bool
 	hooks := &hook.Hooks{
 		BeforeTool: func(ctx context.Context, _ string, _ json.RawMessage) context.Context { before = true; return ctx },
-		AfterTool:  func(_ context.Context, _ string, _ any, _ error) { after = true },
+		AfterTool:  func(_ context.Context, _ string, _ error) { after = true },
 	}
 	aud := &recorderAuditor{}
 	tc := Context{
 		Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
-		Authorizer: auth, Masker: mask.NewRuleMasker(nil), Hooks: hooks, Auditor: aud,
+		Authorizer: auth, Masker: mask.NewRuleMasker(), Hooks: hooks, Auditor: aud,
 	}
 	in, _ := json.Marshal(readInput{Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: int64(1)}}})
 	res, err := RunTool(context.Background(), ReadTool{}, in, tc)
@@ -99,7 +99,7 @@ func TestRunToolAuditRecordsEntityActionAndCode(t *testing.T) {
 	aud := &recorderAuditor{}
 	tc := Context{
 		Role: "intruder", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
-		Auditor: aud, Masker: mask.NewRuleMasker(nil),
+		Auditor: aud, Masker: mask.NewRuleMasker(),
 	}
 	in, _ := json.Marshal(readInput{Entity: "users"})
 	if _, err := RunTool(context.Background(), ReadTool{}, in, tc); !errors.Is(err, ErrUnauthorized) {
@@ -125,7 +125,7 @@ func TestRunToolAuditRecordsSuccessEntityAction(t *testing.T) {
 	aud := &recorderAuditor{}
 	tc := Context{
 		Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
-		Authorizer: rbac.NewRoleAuthorizer(reg), Auditor: aud, Masker: mask.NewRuleMasker(nil),
+		Authorizer: rbac.NewRoleAuthorizer(reg), Auditor: aud, Masker: mask.NewRuleMasker(),
 	}
 	in, _ := json.Marshal(readInput{Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: int64(1)}}})
 	if _, err := RunTool(context.Background(), ReadTool{}, in, tc); err != nil {
@@ -139,7 +139,7 @@ func TestRunToolAuditRecordsSuccessEntityAction(t *testing.T) {
 
 type denyingBudget struct{}
 
-func (denyingBudget) Acquire(context.Context, budget.Scope) (budget.Lease, error) {
+func (denyingBudget) AcquireWithReservation(context.Context, budget.Scope, budget.Reservation) (budget.Lease, error) {
 	return nil, budget.ErrExceeded
 }
 
@@ -159,7 +159,7 @@ func TestRunToolBudgetAcquireDenialFiresHooks(t *testing.T) {
 			return ctx
 		},
 		OnError:   func(context.Context, error) { events = append(events, "error") },
-		AfterTool: func(context.Context, string, any, error) { events = append(events, "after") },
+		AfterTool: func(context.Context, string, error) { events = append(events, "after") },
 	}
 	aud := &recorderAuditor{}
 	tc := Context{
@@ -279,9 +279,31 @@ func TestRunToolEnforcesReturnedByteLimit(t *testing.T) {
 	input := json.RawMessage(`{"entity":"users","fields":["id","email"]}`)
 	_, err := RunTool(context.Background(), ReadTool{}, input, Context{
 		Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Registry: registry,
-		Authorizer: rbac.NewRoleAuthorizer(registry), MaxReturnedBytes: 16,
+		Authorizer: rbac.NewRoleAuthorizer(registry), Limits: Limits{MaxReturnedBytes: 16},
 	})
 	if !errors.Is(err, budget.ErrExceeded) {
 		t.Fatalf("error = %v, want budget exceeded", err)
+	}
+}
+
+// A write has already taken effect when post-execution limits are checked, so
+// exceeding them must not report the committed write as failed (the agent
+// would retry and write twice).
+func TestRunToolPostExecutionLimitsDoNotFailWrites(t *testing.T) {
+	t.Parallel()
+	registry, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	writes := 0
+	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		writes++
+		return store.NewFakeRows([]string{"id"}, []any{int64(7)}), nil
+	}}
+	input := json.RawMessage(`{"entity":"users","values":{"email":"a@x.com"}}`)
+	res, err := RunTool(context.Background(), CreateTool{}, input, Context{
+		Role: "writer", DB: db, Dialect: testdialect.Postgres{}, Registry: registry,
+		Authorizer: rbac.NewRoleAuthorizer(registry), Limits: Limits{MaxReturnedBytes: 1},
+		Budget: budget.New(map[string]budget.Limits{"writer": {MaxReturnedBytes: 1}}, nil),
+	})
+	if err != nil || writes != 1 || len(res.Content) != 1 {
+		t.Fatalf("writes = %d, result = %+v, error = %v", writes, res, err)
 	}
 }

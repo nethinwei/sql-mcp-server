@@ -45,7 +45,10 @@ delete 和 procedure call。关系展开不是通用 SQL join：它只支持同�
 
 实体工具随后执行字段用途校验、RBAC/RLS、方言路由和三阶段成本检查：
 不可关闭的 Safety、可选 Estimate、不可关闭的 Enforcement。读缓存 key
-包含实体、SQL、参数、角色和 subject；写操作按实体失效缓存。
+包含物理关系（数据源与解析后的表）、SQL、参数、角色和 subject；写操作按物理关系
+失效缓存，视图、物化视图和外部表的条目在同一数据源的任何写入后失效，存储过程按
+`affects` 失效、未声明时失效整个数据源。一个物理关系最多对应一个实体，见
+[数据源模型设计](design/datasource-model.md)。
 
 ## 多数据源与事务
 
@@ -54,9 +57,8 @@ delete 和 procedure call。关系展开不是通用 SQL join：它只支持同�
 
 显式事务 token 为随机 256-bit 值，并绑定 MCP session、角色、subject 和
 数据源。事务有 TTL 和全局 `maxOpen` 上限；session 关闭、TTL 到期、应用关闭
-时会回滚未完成事务。当前 MCP 工具不暴露 savepoint，尽管底层 store/provider
-存在 savepoint 接口。事务读取在 engine/singleflight 之前校验 token 身份且不
-参与去重，避免不同 transport session 共享同一执行。
+时会回滚未完成事务；不支持 savepoint。事务读取在 engine/singleflight 之前校验
+token 身份且不参与去重，避免不同 transport session 共享同一执行。
 
 ## 热重载
 

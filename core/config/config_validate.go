@@ -2,15 +2,14 @@ package config
 
 import (
 	"fmt"
-	"math"
 	"net"
-	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/cost"
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
 )
 
-// Validate checks required fields. DSN placeholder resolution happens later in
+// Validate checks a configuration whose defaults are applied (ApplyDefaults;
+// every loader does this). DSN placeholder resolution happens later in
 // x/bootstrap; here we only require non-empty.
 func (c *Config) Validate() error {
 	if err := c.normalizeRoles(); err != nil {
@@ -29,10 +28,14 @@ func (c *Config) Validate() error {
 	if err := c.validateCostAndLimits(); err != nil {
 		return err
 	}
-	if err := c.validateBudget(); err != nil {
+	if err := c.validateEntities(databases); err != nil {
 		return err
 	}
-	return c.validateEntities(databases)
+	if err := c.validateAccess(); err != nil {
+		return err
+	}
+	// Per-field rules (ranges, enums, patterns) come from `schema` tags.
+	return c.validateRules()
 }
 
 func (c *Config) resolvedDatabases() (map[string]DatabaseConfig, error) {
@@ -67,8 +70,8 @@ func (c *Config) validateDatabases(databases map[string]DatabaseConfig) error {
 		if !validDriverName(db.Driver) {
 			return fmt.Errorf("%w: %q in database %q", ErrInvalidDriver, db.Driver, name)
 		}
-		if db.DSN == "" {
-			return fmt.Errorf("%w: database %q", ErrEmptyDSN, name)
+		if err := validateConnections(name, db); err != nil {
+			return err
 		}
 	}
 	datasources := make([]string, 0, len(databases))
@@ -81,11 +84,35 @@ func (c *Config) validateDatabases(databases map[string]DatabaseConfig) error {
 	return nil
 }
 
+// validateConnections checks that a database has a DSN or connections, not
+// both, and that several connections are routed explicitly: reads, writes and
+// procedure calls each name a connection, and a replica serves reads only.
+func validateConnections(name string, db DatabaseConfig) error {
+	switch {
+	case db.DSN == "" && len(db.Connections) == 0:
+		return fmt.Errorf("%w: database %q", ErrEmptyDSN, name)
+	case db.DSN != "" && len(db.Connections) > 0:
+		return fmt.Errorf("config: database %q sets both dsn and connections", name)
+	case len(db.Connections) == 0 && db.Routing != (RoutingConfig{}):
+		return fmt.Errorf("config: database %q sets routing without connections", name)
+	}
+	route := db.Route()
+	for action, conn := range map[string]string{"read": route.Read, "write": route.Write, "execute": route.Execute} {
+		target, ok := db.ConnectionsOrDSN()[conn]
+		switch {
+		case conn == "":
+			return fmt.Errorf("config: database %q routing.%s must name a connection", name, action)
+		case !ok:
+			return fmt.Errorf("config: database %q routing.%s names unknown connection %q", name, action, conn)
+		case target.Role == "replica" && action != "read":
+			return fmt.Errorf("config: database %q routes %s to replica %q; replicas serve reads only", name, action, conn)
+		}
+	}
+	return nil
+}
+
 func (c *Config) validateCostAndLimits() error {
 	if err := c.validateCostScores(); err != nil {
-		return err
-	}
-	if err := c.validateCostInputs(); err != nil {
 		return err
 	}
 	if err := c.validateAQEExplainAnalyze(); err != nil {
@@ -98,57 +125,15 @@ func (c *Config) validateCostAndLimits() error {
 }
 
 func (c *Config) validateCostScores() error {
-	if c.Cost.SoftScore < 0 || c.Cost.SoftScore > 100 {
-		return fmt.Errorf("config: cost softScore must be between 0 and 100")
-	}
-	if c.Cost.HardScore < 0 || c.Cost.HardScore > 100 {
-		return fmt.Errorf("config: cost hardScore must be between 0 and 100")
-	}
 	if c.Cost.SoftScore < c.Cost.HardScore {
 		return fmt.Errorf("config: cost softScore must be greater than or equal to hardScore")
 	}
 	return nil
 }
 
-func (c *Config) validateCostInputs() error {
-	if len(c.Cost.present) > 0 && (c.Cost.MaxRows <= 0 || c.Cost.MaxBytes <= 0 || c.Cost.MaxProcedureRows <= 0 ||
-		c.Cost.MaxINListSize <= 0 || c.Cost.MaxFilterConditions <= 0 ||
-		c.Cost.MaxGroupByFields <= 0 || c.Cost.MaxAggregates <= 0 || c.Cost.MaxExpand <= 0) {
-		return fmt.Errorf("config: mandatory cost and input limits must be greater than zero")
-	}
-	if math.IsNaN(c.Cost.AQE.SampleRate) || c.Cost.AQE.SampleRate < 0 || c.Cost.AQE.SampleRate > 1 {
-		return fmt.Errorf("config: cost aqe sampleRate must be between 0 and 1")
-	}
-	if c.Cost.AQE.Timeout < 0 || c.Cost.AQE.Timeout > 5*time.Second {
-		return fmt.Errorf("config: cost aqe timeout must be between 0 and 5s")
-	}
-	return nil
-}
-
 func (c *Config) validateRuntimeLimits() error {
-	if c.RateLimit.IOPool < 0 || c.RateLimit.CPUPool < 0 {
-		return fmt.Errorf("config: rate-limit pools must not be negative")
-	}
-	if math.IsNaN(c.RateLimit.RPS) || c.RateLimit.RPS < 0 {
-		return fmt.Errorf("config: rate-limit rps must not be negative or NaN")
-	}
-	if c.Cost.QueryTimeout < 0 || c.Cache.TTL < 0 || c.RateLimit.RTTThreshold < 0 ||
-		c.RateLimit.BreakerCooldown < 0 || c.RateLimit.ConnMaxIdleTime < 0 ||
-		c.RateLimit.ConnMaxLifetime < 0 || c.Transactions.TTL < 0 ||
-		c.Transactions.BeginTimeout < 0 || c.Transactions.CommitTimeout < 0 ||
-		c.Transactions.RollbackTimeout < 0 {
-		return fmt.Errorf(
-			"config: mandatory timeouts must be greater than zero and optional timeouts must not be negative",
-		)
-	}
 	if c.Cache.Enabled && (c.Cache.MaxSize <= 0 || c.Cache.MaxEntryRows <= 0 || c.Cache.MaxEntryBytes <= 0) {
 		return fmt.Errorf("config: enabled cache requires positive maxSize, maxEntryRows, and maxEntryBytes")
-	}
-	if c.Cost.AQE.MaxFingerprints < 0 {
-		return fmt.Errorf("config: cost aqe maxFingerprints must be greater than zero")
-	}
-	if c.Transactions.MaxOpen < 0 {
-		return fmt.Errorf("config: transactions maxOpen must not be negative")
 	}
 	return nil
 }
@@ -169,23 +154,10 @@ func (c *Config) validateAQEExplainAnalyze() error {
 	return nil
 }
 
-func (c *Config) validateBudget() error {
-	for scope, limits := range c.Budget.Roles {
-		if err := validateBudgetLimits(limits); err != nil {
-			return fmt.Errorf("config: role budget %q: %w", scope, err)
-		}
-	}
-	for scope, limits := range c.Budget.Tenants {
-		if err := validateBudgetLimits(limits); err != nil {
-			return fmt.Errorf("config: tenant budget %q: %w", scope, err)
-		}
-	}
-	return nil
-}
-
 func (c *Config) validateEntities(databases map[string]DatabaseConfig) error {
 	entitySources := make(map[string]string, len(c.Entities))
 	entityConfigs := make(map[string]EntityConfig, len(c.Entities))
+	relations := make(map[string]string, len(c.Entities))
 	for _, e := range c.Entities {
 		if e.Name == "" {
 			return ErrEmptyEntityName
@@ -199,6 +171,9 @@ func (c *Config) validateEntities(databases map[string]DatabaseConfig) error {
 		}
 		if _, ok := databases[source]; !ok {
 			return fmt.Errorf("config: entity %q references unknown datasource %q", e.Name, source)
+		}
+		if err := claimRelation(relations, source, e); err != nil {
+			return err
 		}
 		entitySources[e.Name] = source
 		entityConfigs[e.Name] = e
@@ -222,6 +197,14 @@ func (c *Config) validateEntity(
 	if duplicate, ok := firstDuplicate(e.Params); ok {
 		return fmt.Errorf("config: entity %q has duplicate parameter %q", e.Name, duplicate)
 	}
+	source := e.Source
+	if source == "" {
+		source = e.Name
+	}
+	if IsStoreTable(source) {
+		return fmt.Errorf("config: entity %q source %q uses the reserved store prefix %q", e.Name, source,
+			StoreTablePrefix)
+	}
 	if e.MCP.TrustedProcedure && e.Kind != "procedure" {
 		return fmt.Errorf("config: entity %q sets trustedProcedure but is not a procedure", e.Name)
 	}
@@ -233,20 +216,109 @@ func (c *Config) validateEntity(
 			return fmt.Errorf("config: entity %q row policy for role %q: %w", e.Name, role, err)
 		}
 	}
+	if err := validateProcedureAffects(e, entitySources, entityConfigs); err != nil {
+		return err
+	}
+	if err := validateKeys(e); err != nil {
+		return err
+	}
 	return validateEntityRelationships(e, entitySources, entityConfigs)
 }
 
-func validateEntityFieldACL(e EntityConfig) error {
-	visibleFields := make(map[string]bool, len(e.Fields)*2)
-	for _, field := range e.Fields {
+// validateKeys checks that the primary and unique keys name configured
+// fields, each once, and that no key is empty.
+func validateKeys(e EntityConfig) error {
+	fields := make(map[string]bool, len(e.Fields))
+	for _, f := range e.Fields {
+		fields[f.Name] = true
+	}
+	keys := e.UniqueKeys
+	if len(e.PrimaryKey) > 0 {
+		keys = append([][]string{e.PrimaryKey}, keys...)
+	}
+	for _, key := range keys {
+		if len(key) == 0 {
+			return fmt.Errorf("config: entity %q has an empty unique key", e.Name)
+		}
+		if duplicate, ok := firstDuplicate(key); ok {
+			return fmt.Errorf("config: entity %q key lists %q twice", e.Name, duplicate)
+		}
+		for _, column := range key {
+			if !fields[column] {
+				return fmt.Errorf("config: entity %q key column %q is not a configured field", e.Name, column)
+			}
+		}
+	}
+	return nil
+}
+
+// claimRelation enforces that at most one entity exposes a relation, so its
+// policies and cached reads exist once. Only identical names are caught here;
+// assembly also resolves default schemas and case folding against the live
+// database.
+func claimRelation(relations map[string]string, datasource string, e EntityConfig) error {
+	if e.Kind == "procedure" {
+		return nil
+	}
+	key := datasource + "\x00" + e.Schema + "\x00" + e.PhysicalSource()
+	if other, taken := relations[key]; taken {
+		relation := e.PhysicalSource()
+		if e.Schema != "" {
+			relation = e.Schema + "." + relation
+		}
+		return fmt.Errorf("config: entities %q and %q expose the same relation %s on datasource %q; "+
+			"keep one entity (use several connections for different accounts)", other, e.Name, relation, datasource)
+	}
+	relations[key] = e.Name
+	return nil
+}
+
+// validateProcedureAffects checks that a procedure's affects names
+// non-procedure entities on its own datasource, each once.
+func validateProcedureAffects(
+	e EntityConfig,
+	entitySources map[string]string,
+	entityConfigs map[string]EntityConfig,
+) error {
+	if len(e.Affects) == 0 {
+		return nil
+	}
+	if e.Kind != "procedure" {
+		return fmt.Errorf("config: entity %q sets affects but is not a procedure", e.Name)
+	}
+	if duplicate, ok := firstDuplicate(e.Affects); ok {
+		return fmt.Errorf("config: procedure %q lists %q twice in affects (duplicate)", e.Name, duplicate)
+	}
+	for _, name := range e.Affects {
+		target, ok := entityConfigs[name]
+		switch {
+		case !ok:
+			return fmt.Errorf("config: procedure %q affects unknown entity %q", e.Name, name)
+		case target.Kind == "procedure":
+			return fmt.Errorf("config: procedure %q affects %q, which is a procedure", e.Name, name)
+		case entitySources[name] != entitySources[e.Name]:
+			return fmt.Errorf("config: procedure %q affects %q on another datasource %q", e.Name, name, entitySources[name])
+		}
+	}
+	return nil
+}
+
+func visibleFieldNames(fields []FieldConfig) map[string]bool {
+	visible := make(map[string]bool, len(fields)*2)
+	for _, field := range fields {
 		if field.Exclude {
 			continue
 		}
-		visibleFields[field.Name] = true
+		visible[field.Name] = true
 		if field.Alias != "" {
-			visibleFields[field.Alias] = true
+			visible[field.Alias] = true
 		}
 	}
+	return visible
+}
+
+func validateEntityFieldACL(e EntityConfig) error {
+	visibleFields := visibleFieldNames(e.Fields)
 	for role, acl := range e.FieldACL {
 		if duplicate, ok := firstDuplicate(acl.Read); ok {
 			return fmt.Errorf(
@@ -347,15 +419,6 @@ func validateRelationshipScope(
 	if targetSource != source {
 		return fmt.Errorf("config: cross-datasource relationship %q is not supported", relation.Name)
 	}
-	switch relation.Cardinality {
-	case "one", "one-to-one", "belongs-to", "many", "one-to-many", "has-many":
-	default:
-		return fmt.Errorf(
-			"config: relationship %q has invalid cardinality %q",
-			relation.Name,
-			relation.Cardinality,
-		)
-	}
 	return nil
 }
 
@@ -364,8 +427,8 @@ func validateRelationshipJoin(
 	localFields map[string]bool,
 	entityConfigs map[string]EntityConfig,
 ) error {
-	if len(relation.JoinOn) != 1 {
-		return fmt.Errorf("config: relationship %q requires exactly one joinOn pair", relation.Name)
+	if len(relation.JoinOn) == 0 {
+		return fmt.Errorf("config: relationship %q requires at least one joinOn pair", relation.Name)
 	}
 	targetFields := configuredFields(entityConfigs[relation.Target].Fields)
 	for local, target := range relation.JoinOn {
@@ -390,7 +453,10 @@ func (c *Config) normalizeRoles() error {
 			return err
 		}
 	}
-	return c.normalizeBudgetRoles()
+	if err := c.normalizeBudgetRoles(); err != nil {
+		return err
+	}
+	return c.normalizeAccess()
 }
 
 func (c *Config) normalizeEntityRoles(e *EntityConfig) error {
@@ -446,16 +512,7 @@ func (c *Config) normalizeBudgetRoles() error {
 }
 
 func validDriverName(name string) bool {
-	for i, r := range name {
-		if r >= 'a' && r <= 'z' {
-			continue
-		}
-		if i > 0 && ((r >= '0' && r <= '9') || r == '-' || r == '_') {
-			continue
-		}
-		return false
-	}
-	return name != ""
+	return patterns["driver"].MatchString(name)
 }
 
 func configuredFields(fields []FieldConfig) map[string]bool {
@@ -467,15 +524,6 @@ func configuredFields(fields []FieldConfig) map[string]bool {
 		}
 	}
 	return out
-}
-
-func validateBudgetLimits(limits BudgetLimits) error {
-	if limits.MaxConcurrent < 0 || limits.MaxExecution < 0 || limits.MaxEstimatedScannedRows < 0 ||
-		limits.MaxScannedRows < 0 || limits.MaxReturnedRows < 0 ||
-		limits.MaxReturnedBytes < 0 || limits.MaxSessionCost < 0 {
-		return fmt.Errorf("limits must not be negative")
-	}
-	return nil
 }
 
 func firstDuplicateField(fields []FieldConfig) (string, bool) {

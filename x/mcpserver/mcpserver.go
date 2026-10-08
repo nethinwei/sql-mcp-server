@@ -57,10 +57,8 @@ func newServer(acquire appAcquire) *mcp.Server {
 	for _, t := range app.Tools.Enabled(app.ToolFlags) {
 		registerTool(s, t, acquire)
 	}
-	for _, e := range app.Registry.Entities() {
-		if e.Kind == entity.KindProcedure && e.MCP.CustomTool && e.MCP.TrustedProcedure {
-			registerTool(s, tool.ProcedureTool{Entity: e}, acquire)
-		}
+	for _, t := range tool.ProcedureTools(app.Registry) {
+		registerTool(s, t, acquire)
 	}
 	release()
 	registerSchemaResource(s, acquire)
@@ -91,7 +89,7 @@ func registerTool(s *mcp.Server, t tool.Tool, acquire appAcquire) {
 			return nil, err
 		}
 		defer release()
-		role, subject := subjectFromContext(ctx, app.DefaultRole)
+		role, subject := callerIdentity(ctx, app)
 		tc := app.ToolContextForSubject(role, subject)
 		if req.Session != nil {
 			tc.Session = req.Session.ID()
@@ -117,11 +115,8 @@ func currentTool(app *bootstrap.App, name string) (tool.Tool, bool) {
 		}
 		return nil, false
 	}
-	for _, e := range app.Registry.Entities() {
-		if e.Kind == entity.KindProcedure && e.MCP.CustomTool && e.MCP.TrustedProcedure &&
-			tool.ProcedureToolName(e.Name) == name {
-			return tool.ProcedureTool{Entity: e}, true
-		}
+	if t, ok := tool.FindProcedureTool(app.Registry, name); ok {
+		return t, true
 	}
 	return nil, false
 }
@@ -143,7 +138,7 @@ func registerSchemaResource(s *mcp.Server, acquire appAcquire) {
 			return nil, err
 		}
 		defer release()
-		role, subject := subjectFromContext(ctx, app.DefaultRole)
+		role, subject := callerIdentity(ctx, app)
 		payload, err := authorizedSchema(ctx, app, role, subject)
 		if err != nil {
 			return nil, err
@@ -187,31 +182,77 @@ func authorizedEntity(
 	if e.Kind == entity.KindProcedure || !e.MCP.DMLTools {
 		return nil, false, nil
 	}
-	read, err := app.Authorizer.Authorize(ctx, rbac.Request{
-		Role: role, Subject: subject, Entity: e.Name, Action: entity.ActionRead,
-	})
-	if err != nil {
-		return nil, false, err
+	// Read and aggregate grants may cover different fields, so each action
+	// reports its own fields and scopes; top-level fields describe them all.
+	actions := make([]string, 0, 2)
+	access := map[string]any{}
+	union := map[string]bool{}
+	for _, action := range []entity.Action{entity.ActionRead, entity.ActionAggregate} {
+		dec, err := app.Authorizer.Authorize(ctx, rbac.Request{
+			Role: role, Subject: subject, Entity: e.Name, Action: action,
+		})
+		if err != nil {
+			return nil, false, err
+		}
+		a := accessOf(e, dec)
+		if !a.allowed {
+			continue
+		}
+		actions = append(actions, action.String())
+		access[action.String()] = a.describe()
+		for _, f := range a.fields {
+			union[f] = true
+		}
 	}
-	aggregate, err := app.Authorizer.Authorize(ctx, rbac.Request{
-		Role: role, Subject: subject, Entity: e.Name, Action: entity.ActionAggregate,
-	})
-	if err != nil {
-		return nil, false, err
-	}
-	if !read.Allowed && !aggregate.Allowed {
+	if len(actions) == 0 {
 		return nil, false, nil
 	}
-	fieldNames := read.Fields
-	if !read.Allowed {
-		fieldNames = aggregate.Fields
-	}
 	return map[string]any{
-		"name": e.Name, "description": e.Description,
-		"fields":    authorizedEntityFields(e, fieldNames),
-		"actions":   authorizedEntityActions(read.Allowed, aggregate.Allowed),
+		"name": e.Name, "description": e.Description, "datasource": e.DatasourceName(),
+		"fields":    authorizedEntityFields(e, e.OrderedNames(union)),
+		"keys":      tool.VisibleKeys(e, e.OrderedNames(union)),
+		"actions":   actions,
+		"access":    access,
 		"rowScoped": e.RowPolicies[role] != nil,
 	}, true, nil
+}
+
+// entityAccess is what a role may do with an entity's fields for one action.
+// scopes is set when the fields are split across grants with incompatible
+// field scopes, so the default projection is denied but explicit field
+// selections within one scope are allowed.
+type entityAccess struct {
+	allowed bool
+	fields  []string
+	scopes  [][]string
+}
+
+func accessOf(e entity.Entity, dec rbac.Decision) entityAccess {
+	if dec.Allowed {
+		return entityAccess{allowed: true, fields: dec.Fields}
+	}
+	if !dec.Reachable() {
+		return entityAccess{}
+	}
+	union := map[string]bool{}
+	scopes := dec.Scopes()
+	for _, scope := range scopes {
+		for _, f := range scope {
+			union[f] = true
+		}
+	}
+	return entityAccess{allowed: true, fields: e.OrderedNames(union), scopes: scopes}
+}
+
+// describe is the resource entry for one action. When the fields are split
+// across grants, a call must select fields explicitly, all within one scope.
+func (a entityAccess) describe() map[string]any {
+	out := map[string]any{"fields": a.fields}
+	if a.scopes != nil {
+		out["explicitFieldsRequired"] = true
+		out["fieldScopes"] = a.scopes
+	}
+	return out
 }
 
 func authorizedEntityFields(e entity.Entity, fieldNames []string) []map[string]any {
@@ -221,21 +262,11 @@ func authorizedEntityFields(e entity.Entity, fieldNames []string) []map[string]a
 			fields = append(fields, map[string]any{
 				"name": attr.Name, "alias": attr.Alias, "type": attr.Domain.Type,
 				"description": attr.Description, "masked": attr.Mask != "",
+				"required": attr.Domain.Required(), "readOnly": !attr.Domain.Writable(),
 			})
 		}
 	}
 	return fields
-}
-
-func authorizedEntityActions(readAllowed, aggregateAllowed bool) []string {
-	actions := make([]string, 0, 2)
-	if readAllowed {
-		actions = append(actions, "read")
-	}
-	if aggregateAllowed {
-		actions = append(actions, "aggregate")
-	}
-	return actions
 }
 
 func registerPrompts(s *mcp.Server) {
@@ -257,10 +288,13 @@ func registerPrompts(s *mcp.Server) {
 	}
 	const (
 		safeReadPrompt = "Use the authorized-schema resource first. Call only read_records, " +
-			"select only visible fields, add the narrowest supported filter, and set a conservative limit. " +
+			"select only fields listed in access.read (all within one access.read.fieldScopes entry when " +
+			"explicitFieldsRequired is set), " +
+			"add the narrowest supported filter, and set a conservative limit. " +
 			"Never invent entities or fields."
 		safeAggregatePrompt = "Use the authorized-schema resource first. Call only aggregate_records " +
-			"with visible fields, a narrow filter, and the minimum grouping needed. " +
+			"with fields listed in access.aggregate (within one of its fieldScopes when explicitFieldsRequired " +
+			"is set), a narrow filter, and the minimum grouping needed. " +
 			"Do not request raw rows or bypass row scope."
 		rewriteQueryPrompt = "Rewrite the failed MCP tool input without weakening authorization or cost controls. " +
 			"Preserve intent, narrow filters, reduce fields and limits, and follow returned cost-gate hints. " +
@@ -276,13 +310,8 @@ func rawArgs(req *mcp.CallToolRequest) json.RawMessage {
 }
 
 func toMCPResult(r tool.Result) *mcp.CallToolResult {
-	out := &mcp.CallToolResult{IsError: r.IsError}
 	b, _ := json.Marshal(r.Content)
-	out.Content = []mcp.Content{&mcp.TextContent{Text: string(b)}}
-	if r.StructuredResult != nil {
-		out.StructuredContent = r.StructuredResult
-	}
-	return out
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(b)}}}
 }
 
 // toResult maps a core error to an MCP outcome. Business errors become
@@ -319,6 +348,7 @@ type subjectCtxKey struct{}
 type requestSubject struct {
 	role  string
 	attrs map[string]any
+	user  bool // role is a configured user's principal
 }
 
 // WithSubject attaches a per-request caller identity (role + attributes) to
@@ -356,24 +386,34 @@ func canonicalRole(role string) string {
 func withRequestSubject(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		role := r.Header.Get("X-MCP-Role")
-		var attrs map[string]any
-		if raw := r.Header.Get("X-MCP-Subject"); raw != "" {
-			dec := json.NewDecoder(bytes.NewBufferString(raw))
-			dec.UseNumber()
-			if err := dec.Decode(&attrs); err != nil || attrs == nil {
-				http.Error(w, "invalid X-MCP-Subject: expected a JSON object", http.StatusBadRequest)
-				return
-			}
-			if err := dec.Decode(&struct{}{}); err != io.EOF {
-				http.Error(w, "invalid X-MCP-Subject: expected a JSON object", http.StatusBadRequest)
-				return
-			}
+		attrs, err := parseSubjectHeader(r.Header.Get("X-MCP-Subject"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 		if role != "" || attrs != nil {
 			r = r.WithContext(WithSubject(r.Context(), role, attrs))
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// parseSubjectHeader decodes X-MCP-Subject; empty yields nil attributes.
+func parseSubjectHeader(raw string) (map[string]any, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	var attrs map[string]any
+	errInvalid := errors.New("invalid X-MCP-Subject: expected a JSON object")
+	dec := json.NewDecoder(bytes.NewBufferString(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&attrs); err != nil || attrs == nil {
+		return nil, errInvalid
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return nil, errInvalid
+	}
+	return attrs, nil
 }
 
 // HTTPConfig configures the streamable HTTP transport, including authentication
@@ -396,18 +436,31 @@ type HTTPConfig struct {
 	Metrics           http.Handler
 	SessionTimeout    time.Duration
 	OnSessionClosed   func(string)
+	// Users resolves configured users; nil means no users are configured.
+	// With users, bearer tokens may identify individual users and trusted
+	// proxies may send X-MCP-User.
+	Users UserDirectory
+	// RevokedPrincipals registers a callback receiving users removed or
+	// disabled by a reload; their sessions are dropped and rolled back.
+	RevokedPrincipals func(func([]string))
 	// SnapshotReady backs /readyz/snapshot: it returns nil when a
 	// configuration snapshot is published and servable. DatabaseReady backs
 	// /readyz/db: it returns nil when the configured databases are reachable.
 	// Probes fail closed: a nil probe or a probe error yields 503.
 	SnapshotReady func(context.Context) error
 	DatabaseReady func(context.Context) error
+	// Admin, when set, serves /admin/ with its own authentication; MCP bearer
+	// tokens do not apply there and admin sessions do not apply to /mcp.
+	Admin http.Handler
+	// SnapshotStale returns the ID of a published store revision that is not
+	// applied (0 when none); it adds X-Snapshot-Stale to /readyz/snapshot.
+	SnapshotStale func() int64
 }
 
 func (c HTTPConfig) tlsEnabled() bool  { return c.TLSCert != "" && c.TLSKey != "" }
 func (c HTTPConfig) mtlsEnabled() bool { return c.ClientCA != "" }
 func (c HTTPConfig) authConfigured() bool {
-	return c.Token != "" || c.mtlsEnabled()
+	return c.Token != "" || c.mtlsEnabled() || c.Users != nil
 }
 
 // isLoopbackAddr reports whether a listen address binds only the loopback
@@ -440,7 +493,7 @@ func validateHTTPSecurity(c HTTPConfig) error {
 	if !isLoopbackAddr(c.Addr) && !c.authConfigured() {
 		return fmt.Errorf(
 			"mcpserver: refusing to serve on non-loopback address %q without authentication: "+
-				"set server.auth.token or server.auth.tls.clientCA, or bind to 127.0.0.1",
+				"configure users, server.auth.token or server.auth.tls.clientCA, or bind to 127.0.0.1",
 			c.Addr,
 		)
 	}

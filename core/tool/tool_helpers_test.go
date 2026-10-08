@@ -38,7 +38,7 @@ func TestDecodeInputPreservesLargeInteger(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	predicate, err := filterToPredicate(input.Filter)
+	predicate, err := filterToPredicate(input.Filter, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

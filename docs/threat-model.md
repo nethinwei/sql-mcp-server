@@ -109,7 +109,8 @@ Provider 适用范围使用以下口径：
   token/session/role/subject/datasource、终态重用和状态机操作序列，并断言关闭后不遗留
   开放事务。
 - **剩余风险**：token 是进程内 capability，不是独立认证凭据；进程重启后状态丢失。
-  共享 bearer token 本身不映射独立调用方，身份可信度仍取决于 transport/代理。
+  共享 bearer token 本身不映射独立调用方，身份可信度仍取决于 transport/代理；
+  配置 `users` 后可改用每用户 token（见 TM-010）。
 - **Provider**：transaction manager 与 MCP 身份绑定属于共享层；目前只有 PostgreSQL
   MCP e2e，MySQL/OceanBase 为核心层验证，不能宣称三库端到端等价。
 
@@ -184,6 +185,70 @@ Provider 适用范围使用以下口径：
   资源；分布式限流和 durable audit 不在当前范围，应用限制不能替代上游连接限制。
 - **Provider**：transport/IR/engine 控制属于共享层；数据库 timeout 参数随 provider
   不同，连接级 timeout 的数据库触发路径尚未分别做 integration。
+
+### TM-009 — 多角色合并越权与租户打穿
+
+- **等级/状态**：critical / 覆盖规则与租户硬边界已由单元、随机化与 HTTP e2e 验证。
+- **攻击**：用户同时拥有字段集和行范围都不同的多个角色，或叠加直授权限，
+  期望字段与行分别取并集，从而读到任何单一授权项都没有授予的"字段 × 行"组合；
+  或借助一个不限行的角色打穿租户隔离。
+- **控制**：授权按请求选择覆盖集——只有覆盖本次请求所用全部字段的授权项参与，
+  行范围在覆盖集内取 OR；没有单一授权项覆盖时拒绝并返回
+  `AMBIGUOUS_FIELD_SCOPE`（只列出调用方本就可读的字段集）；实体 `tenantPolicy`
+  对所有主体始终 AND，不参与授权项之间的合并；用户配置的 subject 优先于代理头。
+- **现有证据**：`core/rbac/grant_test.go` 的跨授权项组合拒绝、租户硬边界、
+  直授/顶层/实体级授权合并测试与覆盖不变量随机化测试；
+  `x/mcpserver/e2e_users_test.go` 在真实 HTTP + PostgreSQL 上验证多角色用户
+  看不到其他角色行上的字段。
+- **持续验证**：覆盖不变量随机化测试在默认单元测试中运行；e2e 随
+  `make test-e2e` 运行。
+- **剩余风险**：未实现逐行逐列的精确并集，部分合法组合需要 Agent 显式指定字段；
+  create 不校验写入值满足租户约束（与现有 row policy 行为一致）。
+- **Provider**：授权属于共享层；e2e 只覆盖 PostgreSQL。
+
+### TM-010 — 用户身份伪造、提升与吊销残留
+
+- **等级/状态**：critical / 认证链路、代理头与吊销已由 handler 与 runtime 测试验证。
+- **攻击**：伪造或猜测用户 token；在已认证用户请求上附加 `X-MCP-User`/
+  `X-MCP-Role`/`X-MCP-Subject` 冒充他人或改写租户；利用被删除/禁用用户的旧会话
+  与在途事务继续访问。
+- **控制**：用户 token 只以 `sha256:` hash 保存，CLI 生成 256 bit 随机 token；
+  配置用户后，无共享 token 且非 mTLS/可信代理通道时必须携带用户 token；带用户
+  token 的请求出现任何代理身份头返回 403；`X-MCP-User` 必须指向启用用户且不能与
+  `X-MCP-Role` 同时出现；用户表跟随 snapshot，热重载删除或禁用用户后解除其会话
+  绑定并回滚在途事务；启用/关闭用户功能需要重启。
+- **现有证据**：`x/mcpserver/users_test.go` 的认证矩阵、代理头、身份冲突与会话
+  吊销测试；`x/bootstrap/bootstrap_access_test.go` 的吊销通知测试；
+  `core/config/config_access_test.go` 的 tokenHash 与名称校验测试。
+- **持续验证**：以上测试在默认单元测试中运行。
+- **剩余风险**：token 没有过期时间；hash 未加盐，依赖 token 本身的高熵，人工设置
+  低熵 token 会降低强度；`X-MCP-User` 的真实反向代理 e2e 仍未实现。
+- **Provider**：transport/部署边界，与数据库无关。
+
+### TM-011 — 配置存储泄露、篡改与并发覆盖
+
+- **等级/状态**：high / 隔离、密钥规则、完整性与并发已由单元与三库 integration
+  验证。
+- **攻击**：把与业务同库的 `smcp_` store 表配置成实体或经 schema 导入读出配置
+  与用户 hash；让明文 DSN 密码或共享 token 进入 store；直接改写 store 中的
+  payload；两个运维同时发布互相覆盖。
+- **控制**：配置校验拒绝 `source` 使用 `smcp_` 前缀的实体，introspection 跳过
+  这些表；store 模式 import 与加载都要求 DSN 密码为占位符、共享 token 为空；
+  加载 revision 前重算 SHA-256，不一致拒绝并保留当前快照；发布与回滚在锁行上
+  串行化，并以期望的当前发布 id 做乐观并发检查。
+- **现有证据**：`core/config/config_access_test.go` 的保留前缀校验；
+  `x/bootstrap/bootstrap_store_test.go` 的明文密钥与篡改 payload 测试；
+  `cmd/sql-mcp-server/store_cmd_test.go` 的 import 拒绝测试；
+  `x/configstore` 的 SQLite 与 PostgreSQL/MySQL/OceanBase 一致性测试（含 8 路
+  并发发布只有一个成功）；三个 provider 的 introspection integration 断言跳过
+  `smcp_` 表。
+- **持续验证**：单元测试默认运行；三库 store 与 introspection 随
+  `make test-integration` 运行。
+- **剩余风险**：能直接写 store 表的数据库账号可以改写配置（hash 只防意外损坏
+  与不一致，不防有权限的改写）；store 不加密 payload，用户 token hash 与实体
+  元数据对 store 读者可见；没有 payload 签名。
+- **Provider**：store 覆盖 SQLite、PostgreSQL、MySQL、OceanBase；introspection
+  过滤覆盖 PostgreSQL、MySQL/OceanBase。
 
 ## 证据维护规则
 

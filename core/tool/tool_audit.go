@@ -13,7 +13,7 @@ import (
 func recordToolAudit(
 	ctx context.Context,
 	tc Context,
-	name string,
+	info Info,
 	auditInput json.RawMessage,
 	res Result,
 	err error,
@@ -22,20 +22,22 @@ func recordToolAudit(
 	if tc.Auditor == nil {
 		return
 	}
-	entityName, action := auditEntityAction(name, auditInput, tc.Registry)
 	_ = tc.Auditor.Record(ctx, audit.Event{
 		Time:         time.Now(),
 		DecisionID:   tc.DecisionID,
 		Role:         tc.Role,
-		Entity:       entityName,
-		Action:       action,
-		Tool:         name,
+		User:         tc.User,
+		Roles:        tc.UserRoles,
+		Grants:       res.Grants,
+		Entity:       entityNameForTool(info.Name, auditInput, tc.Registry),
+		Action:       info.Action,
+		Tool:         info.Name,
 		Input:        auditInput,
 		Allowed:      err == nil,
 		Code:         denialCode(err),
 		Error:        errString(err),
 		Duration:     time.Since(start),
-		ReturnedRows: returnedRowsForAudit(res),
+		ReturnedRows: returnedRows(res),
 	})
 }
 
@@ -51,39 +53,9 @@ func denialCode(err error) string {
 	return ""
 }
 
-// auditEntityAction derives the logical entity and action of a tool call so
-// an audit line can be interpreted without replaying the input. The entity
-// comes from the input envelope (or procedure-tool resolution); the action is
-// determined by the tool name.
-func auditEntityAction(toolName string, input json.RawMessage, registry *entity.Registry) (string, string) {
-	return entityNameForTool(toolName, input, registry), actionForTool(toolName)
-}
-
-func actionForTool(toolName string) string {
-	switch toolName {
-	case "read_records":
-		return entity.ActionRead.String()
-	case "aggregate_records":
-		return entity.ActionAggregate.String()
-	case "create_record":
-		return entity.ActionCreate.String()
-	case "update_record":
-		return entity.ActionUpdate.String()
-	case "delete_record":
-		return entity.ActionDelete.String()
-	case "execute_entity":
-		return entity.ActionExecute.String()
-	case "describe_entities":
-		return "describe"
-	case "begin_transaction", "commit_transaction", "rollback_transaction":
-		return "transaction"
-	}
-	if strings.HasPrefix(toolName, "procedure_") {
-		return entity.ActionExecute.String()
-	}
-	return ""
-}
-
+// entityNameForTool derives the logical entity of a call from the input
+// envelope, or for a procedure tool from its name, so an audit line can be
+// interpreted without replaying the input.
 func entityNameForTool(toolName string, input json.RawMessage, registry *entity.Registry) string {
 	var envelope struct {
 		Entity string `json:"entity"`
@@ -94,10 +66,8 @@ func entityNameForTool(toolName string, input json.RawMessage, registry *entity.
 	if registry == nil || !strings.HasPrefix(toolName, "procedure_") {
 		return ""
 	}
-	for _, candidate := range registry.Entities() {
-		if candidate.Kind == entity.KindProcedure && ProcedureToolName(candidate.Name) == toolName {
-			return candidate.Name
-		}
+	if t, ok := FindProcedureTool(registry, toolName); ok {
+		return t.Entity.Name
 	}
 	return ""
 }

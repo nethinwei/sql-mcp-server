@@ -83,15 +83,33 @@ func (d *Dataset) Profile() map[string]any {
 	return profileConfig(entities)
 }
 
+// diagnosticViews are the views DiagnosticProfile's aliases read: a relation
+// backs at most one entity, so each alias of wl_customers is its own view.
+var diagnosticViews = map[string]string{
+	"tenant_customers":   "wl_tenant_customers",
+	"internal_audit_log": "wl_internal_audit_log",
+}
+
+// DiagnosticViews renders the views behind DiagnosticProfile's aliases; seed
+// them after Statements.
+func (d *Dataset) DiagnosticViews() []string {
+	return []string{
+		"CREATE VIEW " + diagnosticViews["tenant_customers"] + " AS SELECT * FROM wl_customers",
+		"CREATE VIEW " + diagnosticViews["internal_audit_log"] + " AS SELECT * FROM wl_customers",
+	}
+}
+
 // DiagnosticProfile extends the workload profile with isolated aliases used
-// only by the v5 governance suite. Keeping them separate preserves the v4
-// workload baseline and its generated expectations.
+// only by the v5 governance suite, each on its own view of wl_customers (see
+// DiagnosticViews). Keeping them separate preserves the v4 workload baseline
+// and its generated expectations.
 func (d *Dataset) DiagnosticProfile() map[string]any {
 	profile := d.Profile()
 	entities := profile["entities"].([]any)
 	customers := d.Table("wl_customers")
 	tenantCustomers := entityConfig(customers)
 	tenantCustomers["name"] = "tenant_customers"
+	tenantCustomers["source"], tenantCustomers["kind"] = diagnosticViews["tenant_customers"], "view"
 	tenantCustomers["description"] = "Customers visible to the current tenant only; " +
 		"organization 1 is the diagnostic analyst's tenant"
 	tenantCustomers["rowPolicies"] = map[string]any{
@@ -99,6 +117,7 @@ func (d *Dataset) DiagnosticProfile() map[string]any {
 	}
 	restrictedAudit := entityConfig(customers)
 	restrictedAudit["name"] = "internal_audit_log"
+	restrictedAudit["source"], restrictedAudit["kind"] = diagnosticViews["internal_audit_log"], "view"
 	restrictedAudit["description"] = "Restricted audit records"
 	restrictedAudit["roles"] = map[string]any{
 		"read": []string{"admin"}, "aggregate": []string{"admin"},

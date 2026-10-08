@@ -3,220 +3,1324 @@
   "title": "sql-mcp-server configuration",
   "type": "object",
   "anyOf": [
-    {"required": ["database"]},
-    {"required": ["databases"]}
+    {
+      "required": [
+        "database"
+      ]
+    },
+    {
+      "required": [
+        "databases"
+      ]
+    }
   ],
   "properties": {
-    "version": {"type": "string"},
+    "version": {
+      "title": "Config version",
+      "x-title-zh-CN": "配置版本",
+      "description": "Configuration contract marker, currently \"1\"; loaders keep it without restricting it yet.",
+      "x-description-zh-CN": "配置契约版本标记，当前为 \"1\"；加载器保存但暂不限制取值。",
+      "type": "string"
+    },
     "server": {
+      "title": "Server (listen, auth, TLS)",
+      "x-title-zh-CN": "服务（监听、认证、TLS）",
+      "description": "Transport, default identity and HTTP authentication.",
+      "x-description-zh-CN": "传输方式、默认身份与 HTTP 认证。",
       "type": "object",
       "properties": {
-        "transport": {"type": "string", "enum": ["stdio", "http"]},
-        "addr": {"type": "string"},
-        "role": {"type": "string"},
-        "secrets": {
-          "type": "object",
-          "properties": {
-            "allowedRoots": {"type": "array", "items": {"type": "string"}}
-          }
+        "transport": {
+          "description": "Transport; the CLI --transport flag wins.",
+          "x-description-zh-CN": "传输方式；CLI --transport 优先。",
+          "type": "string",
+          "default": "stdio",
+          "enum": [
+            "stdio",
+            "http"
+          ],
+          "x-restart": true
+        },
+        "addr": {
+          "description": "HTTP listen address; the CLI --addr flag wins, and :8080 applies when neither is set. Non-loopback addresses need a token or mTLS.",
+          "x-description-zh-CN": "HTTP 监听地址；CLI --addr 优先，两处都未设置时为 :8080。非 loopback 地址必须配置 token 或 mTLS。",
+          "type": "string",
+          "x-restart": true
+        },
+        "role": {
+          "description": "Default role for requests without a user identity; the CLI --role flag overrides it.",
+          "x-description-zh-CN": "没有用户身份的请求使用的默认角色；CLI --role 覆盖。",
+          "type": "string"
         },
         "auth": {
+          "description": "HTTP authentication. Trust rules for proxies and non-loopback listeners are in security.md.",
+          "x-description-zh-CN": "HTTP 认证。trustProxyHeaders、trustedProxyCIDRs 与非 loopback 的信任规则见 security.md。",
           "type": "object",
+          "x-restart": true,
           "properties": {
-            "token": {"type": "string"},
-            "trustProxyHeaders": {"type": "boolean"},
-            "trustedProxyCIDRs": {"type": "array", "items": {"type": "string"}},
+            "token": {
+              "description": "Shared bearer token, read literally (no ${ENV} expansion). Configured users use their own tokens.",
+              "x-description-zh-CN": "共享 bearer token，按字面读取（不做 ${ENV} 替换）。配置用户后各用户使用自己的 token。",
+              "type": "string"
+            },
+            "trustProxyHeaders": {
+              "description": "Trust identity headers (X-MCP-User / X-MCP-Role / X-MCP-Subject) from a proxy; needs mTLS or trustedProxyCIDRs as the trust boundary.",
+              "x-description-zh-CN": "信任代理传入的身份头（X-MCP-User / X-MCP-Role / X-MCP-Subject）；需要 mTLS 或 trustedProxyCIDRs 建立信任边界。",
+              "type": "boolean"
+            },
+            "trustedProxyCIDRs": {
+              "description": "Proxy address ranges allowed to send identity headers.",
+              "x-description-zh-CN": "允许传入身份头的代理地址段。",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
             "tls": {
+              "description": "TLS / mTLS. Set cert and key together.",
+              "x-description-zh-CN": "TLS / mTLS。cert 与 key 必须同时设置。",
               "type": "object",
               "properties": {
-                "cert": {"type": "string"},
-                "key": {"type": "string"},
-                "clientCA": {"type": "string"}
-              }
+                "cert": {
+                  "description": "TLS certificate file.",
+                  "x-description-zh-CN": "TLS 证书文件路径。",
+                  "type": "string"
+                },
+                "key": {
+                  "description": "TLS private key file.",
+                  "x-description-zh-CN": "TLS 私钥文件路径。",
+                  "type": "string"
+                },
+                "clientCA": {
+                  "description": "Enables mTLS; client certificates are required and verified.",
+                  "x-description-zh-CN": "设置后开启 mTLS，要求并校验客户端证书。",
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
             }
-          }
-        }
-      }
-    },
-    "database": {"$ref": "#/$defs/database"},
-    "databases": {
-      "type": "object",
-      "additionalProperties": {"$ref": "#/$defs/database"}
-    },
-    "entities": {
-      "type": "array",
-      "items": {"$ref": "#/$defs/entity"}
-    },
-    "tools": {
-      "type": "object",
-      "properties": {
-        "describeEntities": {"type": "boolean"},
-        "readRecords": {"type": "boolean"},
-        "createRecord": {"type": "boolean"},
-        "updateRecord": {"type": "boolean"},
-        "deleteRecord": {"type": "boolean"},
-        "executeEntity": {"type": "boolean"},
-        "aggregateRecords": {"type": "boolean"},
-        "beginTransaction": {"type": "boolean"},
-        "commitTransaction": {"type": "boolean"},
-        "rollbackTransaction": {"type": "boolean"}
-      }
-    },
-    "cost": {
-      "type": "object",
-      "properties": {
-        "enabled": {"type": "boolean"},
-        "softScore": {"type": "integer", "minimum": 0, "maximum": 100},
-        "hardScore": {"type": "integer", "minimum": 0, "maximum": 100},
-        "maxRows": {"type": "integer", "minimum": 1},
-        "maxBytes": {"type": "integer", "minimum": 1},
-        "maxINListSize": {"type": "integer", "minimum": 1},
-        "maxFilterConditions": {"type": "integer", "minimum": 1},
-        "maxGroupByFields": {"type": "integer", "minimum": 1},
-        "maxAggregates": {"type": "integer", "minimum": 1},
-        "maxExpand": {"type": "integer", "minimum": 1},
-        "maxProcedureRows": {"type": "integer", "minimum": 1},
-        "rejectFullScan": {"type": "boolean"},
-        "whitelistPKPoint": {"type": "boolean"},
-        "requirePKForWrite": {"type": "boolean"},
-        "requireKnownScan": {"type": "boolean"},
-        "requireFreshStats": {"type": "boolean"},
-        "queryTimeout": {"type": "string"},
-        "allowTemplates": {"type": "array", "items": {"type": "string"}},
-        "rejectTemplates": {"type": "array", "items": {"type": "string"}},
-        "aqe": {
+          },
+          "additionalProperties": false
+        },
+        "secrets": {
+          "description": "Limits for ${file:...} placeholders in DSNs.",
+          "x-description-zh-CN": "DSN 中 ${file:...} 占位符的读取限制。",
           "type": "object",
           "properties": {
-            "windowSize": {"type": "integer", "minimum": 0},
-            "anomalyFactor": {"type": "number", "minimum": 0},
-            "anomalyMinSamples": {"type": "integer", "minimum": 0},
-            "explainAnalyze": {"type": "boolean"},
-            "readOnly": {"type": "boolean"},
-            "sampleRate": {"type": "number", "minimum": 0, "maximum": 1},
-            "timeout": {"type": "string"},
-            "maxFingerprints": {"type": "integer", "minimum": 1}
-          }
+            "allowedRoots": {
+              "description": "Absolute directories secret files may be read from; symbolic links cannot escape them.",
+              "x-description-zh-CN": "允许读取 secret 文件的根目录（绝对路径）；符号链接不能逃逸这些目录。",
+              "type": "array",
+              "default": [
+                "/run/secrets",
+                "/var/run/secrets"
+              ],
+              "items": {
+                "type": "string",
+                "default": "/run/secrets"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "user": {
+          "description": "Default user for requests without a user identity; wins over role, and the CLI --user flag overrides it. Must be a configured, enabled user.",
+          "x-description-zh-CN": "没有用户身份的请求使用的默认用户，优先于 role；CLI --user 覆盖。必须是已配置且未禁用的用户。",
+          "type": "string"
         }
+      },
+      "additionalProperties": false
+    },
+    "database": {
+      "$ref": "#/$defs/database",
+      "description": "Legacy single datasource, migrated to the datasource named default. Either database or at least one databases entry is required.",
+      "x-description-zh-CN": "旧式单数据源配置，加载时迁移为名为 default 的数据源。需要 database 或至少一个 databases 项。"
+    },
+    "databases": {
+      "description": "Datasource name to connection.",
+      "x-description-zh-CN": "数据源名称到连接配置的映射。",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/database"
       }
+    },
+    "entities": {
+      "description": "Entities exposed to agents; may be empty. Startup introspection rejects tables, views or fields missing from the database.",
+      "x-description-zh-CN": "显式暴露给 Agent 的实体；可以为空。启动自省会拒绝数据库中缺失的表、视图或字段。",
+      "type": "array",
+      "default": [
+        {
+          "name": "x",
+          "fields": [
+            {
+              "name": "x"
+            }
+          ],
+          "roles": {},
+          "mcp": {
+            "dmlTools": true
+          },
+          "relationships": [
+            {
+              "name": "",
+              "target": "",
+              "cardinality": "",
+              "joinOn": null
+            }
+          ]
+        }
+      ],
+      "items": {
+        "$ref": "#/$defs/entity"
+      }
+    },
+    "roles": {
+      "description": "Top-level roles: name → grants. Names are lowercased.",
+      "x-description-zh-CN": "顶层角色：角色名 → 授权。名称规范化为小写。",
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/role"
+      }
+    },
+    "users": {
+      "description": "HTTP callers: name → user. Adding, removing, disabling and rotating tokens hot-reload; configuring the first user or removing all users needs a restart.",
+      "x-description-zh-CN": "通过 HTTP 访问的调用方：用户名 → 配置。增删、禁用、轮换 token 可热加载；首次配置用户或删除全部用户需要重启。",
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/user"
+      }
+    },
+    "tools": {
+      "title": "Tool switches",
+      "x-title-zh-CN": "工具开关",
+      "description": "Omitting the block enables every tool except deleteRecord; once the block is written, unlisted tools stay off.",
+      "x-description-zh-CN": "省略整个块时除 deleteRecord 外全部开启；一旦写出该块，未写的工具保持关闭。",
+      "type": "object",
+      "x-restart": true,
+      "properties": {
+        "describeEntities": {
+          "description": "Lists the entities and fields the caller can access.",
+          "x-description-zh-CN": "列出可访问的实体与字段。",
+          "type": "boolean"
+        },
+        "readRecords": {
+          "description": "read_records: read records by filter.",
+          "x-description-zh-CN": "read_records：按条件读取记录。",
+          "type": "boolean"
+        },
+        "createRecord": {
+          "description": "create_record: insert a record.",
+          "x-description-zh-CN": "create_record：新增记录。",
+          "type": "boolean"
+        },
+        "updateRecord": {
+          "description": "update_record: update a record by primary key.",
+          "x-description-zh-CN": "update_record：按主键修改记录。",
+          "type": "boolean"
+        },
+        "deleteRecord": {
+          "description": "delete_record: delete a record by primary key.",
+          "x-description-zh-CN": "delete_record：按主键删除记录。",
+          "type": "boolean"
+        },
+        "executeEntity": {
+          "description": "execute_entity: run procedure entities. Does not affect tools registered by mcp.customTool.",
+          "x-description-zh-CN": "execute_entity：执行存储过程实体。不影响实体 mcp.customTool 注册的独立工具。",
+          "type": "boolean"
+        },
+        "aggregateRecords": {
+          "description": "aggregate_records: grouped aggregates.",
+          "x-description-zh-CN": "aggregate_records：分组统计。",
+          "type": "boolean"
+        },
+        "beginTransaction": {
+          "description": "Begin a transaction.",
+          "x-description-zh-CN": "开启事务。",
+          "type": "boolean"
+        },
+        "commitTransaction": {
+          "description": "Commit a transaction.",
+          "x-description-zh-CN": "提交事务。",
+          "type": "boolean"
+        },
+        "rollbackTransaction": {
+          "description": "Roll back a transaction.",
+          "x-description-zh-CN": "回滚事务。",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "cost": {
+      "title": "Cost gate and input limits",
+      "x-title-zh-CN": "成本闸门与输入上限",
+      "description": "Pre-execution cost gate and input limits.",
+      "x-description-zh-CN": "执行前的成本闸门与输入上限。",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "EXPLAIN-based cost gate. Does not affect requirePKForWrite.",
+          "x-description-zh-CN": "是否启用基于 EXPLAIN 的成本闸门。不影响 requirePKForWrite。",
+          "type": "boolean",
+          "default": true
+        },
+        "softScore": {
+          "description": "Below this safety score (higher is safer) the call is soft-rejected with hints to narrow it; must be ≥ hardScore.",
+          "x-description-zh-CN": "安全分（越高越安全）低于它时软拒绝，并返回缩小查询的提示；需 ≥ hardScore。",
+          "type": "integer",
+          "default": 60,
+          "minimum": 0,
+          "maximum": 100
+        },
+        "hardScore": {
+          "description": "Reject below this safety score.",
+          "x-description-zh-CN": "安全分低于它时直接拒绝。",
+          "type": "integer",
+          "default": 40,
+          "minimum": 0,
+          "maximum": 100
+        },
+        "maxRows": {
+          "description": "Outer LIMIT for reads.",
+          "x-description-zh-CN": "读取 SQL 的外层 LIMIT。",
+          "type": "integer",
+          "default": 10000,
+          "minimum": 1
+        },
+        "maxBytes": {
+          "description": "Response size cap in bytes.",
+          "x-description-zh-CN": "单次响应的字节上限。",
+          "type": "integer",
+          "default": 16777216,
+          "minimum": 1
+        },
+        "maxINListSize": {
+          "description": "Maximum IN-list size; relationship expansion batches by it.",
+          "x-description-zh-CN": "IN 列表最多元素数，关系展开也按它分批。",
+          "type": "integer",
+          "default": 256,
+          "minimum": 1
+        },
+        "maxFilterConditions": {
+          "description": "Maximum filter conditions per request.",
+          "x-description-zh-CN": "一次请求最多过滤条件数。",
+          "type": "integer",
+          "default": 32,
+          "minimum": 1
+        },
+        "maxGroupByFields": {
+          "description": "Maximum group-by fields.",
+          "x-description-zh-CN": "最多分组字段数。",
+          "type": "integer",
+          "default": 8,
+          "minimum": 1
+        },
+        "maxAggregates": {
+          "description": "Maximum aggregate expressions.",
+          "x-description-zh-CN": "最多聚合表达式数。",
+          "type": "integer",
+          "default": 16,
+          "minimum": 1
+        },
+        "maxExpand": {
+          "description": "Maximum expanded relationships.",
+          "x-description-zh-CN": "最多展开的关系数。",
+          "type": "integer",
+          "default": 8,
+          "minimum": 1
+        },
+        "maxProcedureRows": {
+          "description": "Row cap for procedure results.",
+          "x-description-zh-CN": "存储过程结果行数上限。",
+          "type": "integer",
+          "default": 1000,
+          "minimum": 1
+        },
+        "rejectFullScan": {
+          "description": "Reject full table scans.",
+          "x-description-zh-CN": "拒绝全表扫描。",
+          "type": "boolean",
+          "default": true
+        },
+        "whitelistPKPoint": {
+          "description": "Primary-key point reads skip estimation (result caps still apply).",
+          "x-description-zh-CN": "主键点查询跳过估算（仍受结果上限约束）。",
+          "type": "boolean",
+          "default": true
+        },
+        "requirePKForWrite": {
+          "description": "Writes must filter by primary key; not turned off by cost.enabled.",
+          "x-description-zh-CN": "写操作必须带主键条件；不随 cost.enabled 关闭。",
+          "type": "boolean",
+          "default": true
+        },
+        "requireKnownScan": {
+          "description": "Reject when the scan type is unknown; on MySQL/OceanBase a failed EXPLAIN rejects.",
+          "x-description-zh-CN": "无法判断扫描方式时拒绝；MySQL/OceanBase 的 EXPLAIN 失败即拒绝。",
+          "type": "boolean",
+          "default": true
+        },
+        "requireFreshStats": {
+          "description": "Reject when table statistics are stale.",
+          "x-description-zh-CN": "统计信息过旧时拒绝。",
+          "type": "boolean"
+        },
+        "queryTimeout": {
+          "description": "Query timeout, also sent as the database statement timeout.",
+          "x-description-zh-CN": "查询超时，同时下发为数据库语句超时。",
+          "type": "string",
+          "x-format": "duration",
+          "x-minimum": "0",
+          "default": "30s",
+          "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
+        },
+        "allowTemplates": {
+          "description": "SQL templates that skip estimation; prefer fp:v2:\u003csha256\u003e fingerprints, and with several datasources write exact SQL as datasource:SQL. Safety checks still apply.",
+          "x-description-zh-CN": "跳过估算的 SQL 模板：推荐 fp:v2:\u003csha256\u003e 指纹；多数据源下精确 SQL 写成 datasource:SQL。不绕过安全检查。",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rejectTemplates": {
+          "description": "SQL templates that are always rejected; same forms as allowTemplates.",
+          "x-description-zh-CN": "总是拒绝的 SQL 模板，写法同 allowTemplates。",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "aqe": {
+          "description": "Adaptive estimation from execution feedback, with optional EXPLAIN ANALYZE sampling.",
+          "x-description-zh-CN": "基于实际执行反馈的自适应估算与可选的 EXPLAIN ANALYZE 采样。",
+          "type": "object",
+          "properties": {
+            "windowSize": {
+              "description": "Feedback samples kept per template.",
+              "x-description-zh-CN": "每个模板保留的反馈样本数。",
+              "type": "integer",
+              "default": 32,
+              "minimum": 0
+            },
+            "anomalyFactor": {
+              "description": "Actual/estimate ratio treated as an anomaly.",
+              "x-description-zh-CN": "实际与估算偏差超过该倍数视为异常。",
+              "type": "number",
+              "default": 3,
+              "minimum": 0
+            },
+            "anomalyMinSamples": {
+              "description": "Samples needed before flagging anomalies.",
+              "x-description-zh-CN": "判断异常前至少需要的样本数。",
+              "type": "integer",
+              "default": 5,
+              "minimum": 0
+            },
+            "explainAnalyze": {
+              "description": "Run EXPLAIN (ANALYZE, BUFFERS) on sampled reads. PostgreSQL only; cache hits are not sampled.",
+              "x-description-zh-CN": "对采样读取额外执行 EXPLAIN (ANALYZE, BUFFERS)。仅 PostgreSQL；缓存命中不采样。",
+              "type": "boolean"
+            },
+            "readOnly": {
+              "description": "Sample only in read-only transactions that roll back; must be true when sampling.",
+              "x-description-zh-CN": "采样只在只读事务中执行并回滚；启用采样时必须为 true。",
+              "type": "boolean",
+              "default": true
+            },
+            "sampleRate": {
+              "description": "Sampling ratio; 0 never samples, 1 samples every successful read.",
+              "x-description-zh-CN": "采样比例；0 不采样，1 每次成功读取都采样。",
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "timeout": {
+              "description": "Sampling timeout, separate from the main query; must be above 0 when sampling.",
+              "x-description-zh-CN": "采样超时，独立于主查询；启用采样时必须大于 0。",
+              "type": "string",
+              "x-format": "duration",
+              "x-minimum": "0",
+              "x-maximum": "5s",
+              "default": "1s",
+              "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
+            },
+            "maxFingerprints": {
+              "description": "Maximum templates tracked globally.",
+              "x-description-zh-CN": "全局最多跟踪的模板数。",
+              "type": "integer",
+              "default": 4096,
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     },
     "budget": {
+      "title": "Budgets",
+      "x-title-zh-CN": "预算",
+      "description": "Per-MCP-session resource budgets kept in bounded process memory; 0 means unlimited.",
+      "x-description-zh-CN": "按 MCP 会话隔离的资源预算，进程内有界状态；0 表示不限。",
       "type": "object",
       "properties": {
-        "roles": {"type": "object", "additionalProperties": {"$ref": "#/$defs/budgetLimits"}},
-        "tenants": {"type": "object", "additionalProperties": {"$ref": "#/$defs/budgetLimits"}}
-      }
+        "roles": {
+          "description": "Budgets by role: name → limits.",
+          "x-description-zh-CN": "按角色的预算：角色名 → 限额。",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/budgetLimits"
+          }
+        },
+        "tenants": {
+          "description": "Budgets by tenant; replace role limits when matched. The tenant comes from subject tenant / tenant_id / tenantID.",
+          "x-description-zh-CN": "按租户的预算，命中时覆盖而非合并角色限额。租户取自 subject 的 tenant / tenant_id / tenantID。",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/budgetLimits"
+          }
+        },
+        "users": {
+          "description": "Budgets by user; win over roles. Without one, each limit is the most permissive of the user's roles (a role without a budget means unlimited).",
+          "x-description-zh-CN": "按用户的预算，优先于角色；未配置时逐项取其各角色中最宽松的值（任一角色未配置即视为不限）。",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/budgetLimits"
+          }
+        }
+      },
+      "additionalProperties": false
     },
     "cache": {
+      "title": "Cache",
+      "x-title-zh-CN": "缓存",
+      "description": "Read result cache; entry count and size are always bounded. The defaults below apply once the cache is enabled.",
+      "x-description-zh-CN": "读取结果缓存；条目数和单条大小始终有界。下表默认值是启用缓存后的取值。",
       "type": "object",
       "properties": {
-        "enabled": {"type": "boolean"},
-        "ttl": {"type": "string"},
-        "maxSize": {"type": "integer", "minimum": 0},
-        "maxEntryRows": {"type": "integer", "minimum": 1},
-        "maxEntryBytes": {"type": "integer", "minimum": 1},
-        "preparedMaxSize": {"type": "integer", "minimum": 0}
-      }
+        "enabled": {
+          "description": "Enable the read cache.",
+          "x-description-zh-CN": "是否启用读取缓存。",
+          "type": "boolean"
+        },
+        "ttl": {
+          "description": "Entry lifetime.",
+          "x-description-zh-CN": "缓存有效期。",
+          "type": "string",
+          "x-format": "duration",
+          "x-minimum": "0",
+          "default": "30s",
+          "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
+        },
+        "maxSize": {
+          "description": "Maximum entries.",
+          "x-description-zh-CN": "最多缓存条目数。",
+          "type": "integer",
+          "default": 4096,
+          "minimum": 0
+        },
+        "maxEntryRows": {
+          "description": "Maximum rows per entry; defaults to cost.maxRows and must be positive when the result cache is enabled.",
+          "x-description-zh-CN": "单条缓存最多行数；默认等于 cost.maxRows，启用结果缓存时必须大于 0。",
+          "type": "integer",
+          "default": 10000,
+          "minimum": 0
+        },
+        "maxEntryBytes": {
+          "description": "Maximum bytes per entry; defaults to cost.maxBytes and must be positive when the result cache is enabled.",
+          "x-description-zh-CN": "单条缓存最多字节数；默认等于 cost.maxBytes，启用结果缓存时必须大于 0。",
+          "type": "integer",
+          "default": 16777216,
+          "minimum": 0
+        },
+        "preparedMaxSize": {
+          "description": "Prepared statement cache size, independent of the result cache; 0 disables it.",
+          "x-description-zh-CN": "预编译语句缓存条目数，与结果缓存相互独立；0 表示不缓存。",
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
     },
     "rateLimit": {
+      "title": "Rate limits and breakers",
+      "x-title-zh-CN": "限流与熔断",
+      "description": "Concurrency control, rate limiting, circuit breaking and the connection pool.",
+      "x-description-zh-CN": "并发控制、限流、熔断与连接池。",
       "type": "object",
       "properties": {
-        "enabled": {"type": "boolean"},
-        "rps": {"type": "number", "minimum": 0},
-        "maxInflight": {"type": "integer", "minimum": 0},
-        "ioPool": {"type": "integer", "minimum": 0},
-        "cpuPool": {"type": "integer", "minimum": 0},
-        "minConcurrency": {"type": "integer", "minimum": 0},
-        "rttThreshold": {"type": "string"},
-        "breakerThreshold": {"type": "integer", "minimum": 0},
-        "breakerCooldown": {"type": "string"},
-        "connMaxIdleTime": {"type": "string"},
-        "connMaxLifetime": {"type": "string"}
-      }
+        "enabled": {
+          "description": "Enable rate limiting.",
+          "x-description-zh-CN": "是否启用。",
+          "type": "boolean",
+          "default": true
+        },
+        "rps": {
+          "description": "Requests per second (token bucket); 0 limits concurrency only.",
+          "x-description-zh-CN": "每秒请求数上限（令牌桶）；0 表示只做并发限制。",
+          "type": "number",
+          "minimum": 0
+        },
+        "maxInflight": {
+          "description": "Requests in flight.",
+          "x-description-zh-CN": "同时进行的请求上限。",
+          "type": "integer",
+          "default": 256,
+          "minimum": 0
+        },
+        "ioPool": {
+          "description": "IO worker pool size, used by ordinary execution.",
+          "x-description-zh-CN": "IO 工作池大小；普通执行使用它。",
+          "type": "integer",
+          "default": 16,
+          "minimum": 0
+        },
+        "minConcurrency": {
+          "description": "Lower bound of adaptive concurrency.",
+          "x-description-zh-CN": "自适应并发的下限。",
+          "type": "integer",
+          "default": 1,
+          "minimum": 0
+        },
+        "rttThreshold": {
+          "description": "Reduce concurrency when latency exceeds this; 0s disables it.",
+          "x-description-zh-CN": "延迟超过该值时降低并发；0s 不触发。",
+          "type": "string",
+          "x-format": "duration",
+          "x-minimum": "0",
+          "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
+        },
+        "breakerThreshold": {
+          "description": "Consecutive failures that open the breaker.",
+          "x-description-zh-CN": "连续失败多少次后熔断。",
+          "type": "integer",
+          "default": 5,
+          "minimum": 0
+        },
+        "breakerCooldown": {
+          "description": "Time before retrying after the breaker opens.",
+          "x-description-zh-CN": "熔断后多久重试。",
+          "type": "string",
+          "x-format": "duration",
+          "x-minimum": "0",
+          "default": "5s",
+          "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
+        },
+        "connMaxIdleTime": {
+          "description": "Maximum idle time of a database connection.",
+          "x-description-zh-CN": "数据库连接最长空闲时间。",
+          "type": "string",
+          "x-format": "duration",
+          "x-minimum": "0",
+          "default": "5m",
+          "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
+        },
+        "connMaxLifetime": {
+          "description": "Maximum lifetime of a database connection.",
+          "x-description-zh-CN": "数据库连接最长存活时间。",
+          "type": "string",
+          "x-format": "duration",
+          "x-minimum": "0",
+          "default": "30m",
+          "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
+        }
+      },
+      "additionalProperties": false
     },
-    "mask": {"type": "object", "properties": {"enabled": {"type": "boolean"}}},
-    "audit": {
+    "mask": {
+      "title": "Masking",
+      "x-title-zh-CN": "脱敏",
+      "description": "Field masking.",
+      "x-description-zh-CN": "字段脱敏。",
       "type": "object",
       "properties": {
-        "enabled": {"type": "boolean"},
-        "path": {"type": "string"},
-        "queueSize": {"type": "integer", "minimum": 0}
-      }
+        "enabled": {
+          "description": "Mask fields that declare a mask rule.",
+          "x-description-zh-CN": "是否对配置了 mask 的字段脱敏。",
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "audit": {
+      "title": "Audit",
+      "x-title-zh-CN": "审计",
+      "description": "Audit log, appended as JSON Lines.",
+      "x-description-zh-CN": "审计日志，以 JSON Lines 追加写入。",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Write the audit log; path is required when enabled.",
+          "x-description-zh-CN": "是否写审计日志；启用时必须设置 path。",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "Audit log file.",
+          "x-description-zh-CN": "审计日志文件路径。",
+          "type": "string"
+        },
+        "queueSize": {
+          "description": "Asynchronous write queue length; events are dropped and counted when it is full.",
+          "x-description-zh-CN": "异步写入队列长度；队列满时丢弃事件并计数。",
+          "type": "integer",
+          "default": 1024,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
     },
     "transactions": {
+      "title": "Transactions",
+      "x-title-zh-CN": "事务",
+      "description": "Limits of the transaction tools. begin takes datasource, isolation and readOnly; only roles with write access may ask for readOnly false.",
+      "x-description-zh-CN": "事务工具的限制。begin 可指定 datasource、isolation 与 readOnly；只有具备写权限的角色能请求 readOnly false。",
       "type": "object",
       "properties": {
-        "ttl": {"type": "string"},
-        "maxOpen": {"type": "integer", "minimum": 0},
-        "beginTimeout": {"type": "string"},
-        "commitTimeout": {"type": "string"},
-        "rollbackTimeout": {"type": "string"}
-      }
+        "ttl": {
+          "description": "Maximum transaction lifetime.",
+          "x-description-zh-CN": "事务最长存活时间。",
+          "type": "string",
+          "x-format": "duration",
+          "x-minimum": "0",
+          "default": "5m",
+          "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$",
+          "x-restart": true
+        },
+        "maxOpen": {
+          "description": "Open transactions per role/subject.",
+          "x-description-zh-CN": "每个角色/subject 同时打开的事务上限。",
+          "type": "integer",
+          "default": 128,
+          "minimum": 0,
+          "x-restart": true
+        },
+        "beginTimeout": {
+          "description": "Begin timeout.",
+          "x-description-zh-CN": "开启事务超时。",
+          "type": "string",
+          "x-format": "duration",
+          "x-minimum": "0",
+          "default": "5s",
+          "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
+        },
+        "commitTimeout": {
+          "description": "Commit timeout.",
+          "x-description-zh-CN": "提交超时。",
+          "type": "string",
+          "x-format": "duration",
+          "x-minimum": "0",
+          "default": "30s",
+          "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
+        },
+        "rollbackTimeout": {
+          "description": "Rollback timeout.",
+          "x-description-zh-CN": "回滚超时。",
+          "type": "string",
+          "x-format": "duration",
+          "x-minimum": "0",
+          "default": "30s",
+          "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
+        }
+      },
+      "additionalProperties": false
     }
   },
+  "additionalProperties": false,
   "$defs": {
     "database": {
+      "description": "One datasource connection. validate checks that the driver is registered without connecting.",
+      "x-description-zh-CN": "一个数据源连接。validate 会确认 driver 已注册，但不会建立连接。",
       "type": "object",
-      "required": ["driver", "dsn"],
+      "required": [
+        "driver"
+      ],
       "properties": {
         "driver": {
+          "description": "Database driver; postgres, mysql and oceanbase are built in, and extensions may register more.",
+          "x-description-zh-CN": "数据库驱动；内置 postgres、mysql、oceanbase，扩展程序可注册其他名称。",
           "type": "string",
-          "pattern": "^[a-z][a-z0-9_-]*$",
-          "description": "Registered provider name."
+          "pattern": "^[a-z][a-z0-9_-]*$"
         },
-        "dsn": {"type": "string", "minLength": 1}
-      }
-    },
-    "budgetLimits": {
-      "type": "object",
-      "properties": {
-        "maxConcurrent": {"type": "integer", "minimum": 0},
-        "maxExecution": {"type": "string"},
-        "maxEstimatedScannedRows": {"type": "integer", "minimum": 0},
-        "maxScannedRows": {"type": "integer", "minimum": 0},
-        "maxReturnedRows": {"type": "integer", "minimum": 0},
-        "maxReturnedBytes": {"type": "integer", "minimum": 0},
-        "maxSessionCost": {"type": "integer", "minimum": 0}
-      }
+        "dsn": {
+          "description": "Connection string; may contain ${ENV} or ${file:/path} placeholders (only DSNs expand them, and file paths must be under server.secrets.allowedRoots). Shorthand for a single connection; set either this or connections.",
+          "x-description-zh-CN": "连接串，可包含 ${ENV} 或 ${file:/path} 占位符（仅 DSN 解析占位符；file 路径须在 server.secrets.allowedRoots 下）。单个连接的简写，与 connections 二选一。",
+          "type": "string"
+        },
+        "connections": {
+          "description": "Several connections to the same database (such as accounts with different privileges, or read replicas), by name; set either this or dsn. Several connections need routing.",
+          "x-description-zh-CN": "同一数据库的多个连接（如权限不同的账号、只读副本），按名称索引；与 dsn 二选一。多个连接时须配置 routing。",
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "dsn"
+            ],
+            "properties": {
+              "dsn": {
+                "description": "Connection string, with the same placeholder rules as dsn.",
+                "x-description-zh-CN": "连接串，占位符规则同 dsn。",
+                "type": "string",
+                "minLength": 1
+              },
+              "role": {
+                "description": "primary (the default) or replica; a replica serves reads only.",
+                "x-description-zh-CN": "primary（默认）或 replica；replica 只承担读取。",
+                "type": "string",
+                "enum": [
+                  "primary",
+                  "replica"
+                ]
+              },
+              "pooler": {
+                "description": "transaction when the connection goes through a transaction-mode pooler (pgbouncer, ProxySQL); no session state such as prepared statements is kept, and statement timeouts come from request cancellation.",
+                "x-description-zh-CN": "连接经过事务模式的连接池（pgbouncer、ProxySQL）时设为 transaction：不使用预编译语句等会话状态，语句超时改由请求上下文取消。",
+                "type": "string",
+                "enum": [
+                  "transaction"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "routing": {
+          "description": "The connection each kind of action uses; may be omitted with a single connection.",
+          "x-description-zh-CN": "各类动作使用的连接；只有一个连接时可省略。",
+          "type": "object",
+          "properties": {
+            "read": {
+              "description": "Connection for reads, aggregates, EXPLAIN and read-only transactions.",
+              "x-description-zh-CN": "读取、聚合、EXPLAIN 与只读事务使用的连接。",
+              "type": "string"
+            },
+            "write": {
+              "description": "Connection for creates, updates, deletes and read-write transactions; not a replica.",
+              "x-description-zh-CN": "新增、修改、删除与读写事务使用的连接；不能是 replica。",
+              "type": "string"
+            },
+            "execute": {
+              "description": "Connection for procedure calls; not a replica.",
+              "x-description-zh-CN": "存储过程使用的连接；不能是 replica。",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "readAfterWrite": {
+          "description": "For this long after a session writes, its reads use the write connection, so it reads its own writes despite replica lag; 0 disables it.",
+          "x-description-zh-CN": "同一会话写入后，在这段时间内的读取改走 write 连接，以便在副本上读到自己的写入；0 表示不切换。",
+          "type": "string",
+          "x-format": "duration",
+          "x-minimum": "0",
+          "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
+        }
+      },
+      "additionalProperties": false
     },
     "entity": {
+      "description": "One table, view (including materialized views) or stored procedure. A physical table or view backs at most one entity: identical names on one datasource fail validation, and duplicates resolved through the default schema, case folding or server identity (several datasources on one database) fail at startup. Of a PostgreSQL partitioned table only the parent is exposed; partitions are not imported.",
+      "x-description-zh-CN": "一个表、视图（含物化视图）或存储过程。一个物理表或视图最多对应一个实体：同一数据源中名称完全相同的重复在校验时拒绝，按默认 schema、大小写规则和服务器身份（多个数据源指向同一库）解析后的重复在启动时拒绝。PostgreSQL 分区表只暴露父表，子分区不导入。",
       "type": "object",
-      "required": ["name"],
+      "required": [
+        "name"
+      ],
       "properties": {
-        "name": {"type": "string", "minLength": 1},
-        "source": {"type": "string"},
-        "datasource": {"type": "string"},
-        "schema": {"type": "string"},
-        "kind": {"type": "string", "enum": ["table", "view", "procedure"]},
-        "description": {"type": "string"},
-        "primaryKey": {"type": "array", "items": {"type": "string"}},
-        "params": {"type": "array", "items": {"type": "string"}},
+        "name": {
+          "description": "Logical MCP name.",
+          "x-description-zh-CN": "MCP 逻辑名。",
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "description": "Table, view or procedure in the database; defaults to name. The smcp_ prefix is reserved.",
+          "x-description-zh-CN": "数据库中的表、视图或过程名；省略时等于 name。不能使用保留前缀 smcp_。",
+          "type": "string"
+        },
+        "datasource": {
+          "description": "Datasource; default when omitted.",
+          "x-description-zh-CN": "所在数据源；省略时为 default。",
+          "type": "string"
+        },
+        "schema": {
+          "description": "Database schema.",
+          "x-description-zh-CN": "数据库 schema。",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Entity kind; table when omitted.",
+          "x-description-zh-CN": "实体类型；省略时为 table。",
+          "type": "string",
+          "enum": [
+            "table",
+            "view",
+            "procedure"
+          ]
+        },
+        "description": {
+          "description": "Entity description shown to agents; the table comment in the database (read at startup and reload) when empty.",
+          "x-description-zh-CN": "给 Agent 看的实体说明；留空时使用数据库中的表注释（启动或重载时读取）。",
+          "type": "string"
+        },
+        "primaryKey": {
+          "description": "Primary key fields. For a table the database's primary key is authoritative and a differing value here is reported at startup; a key declared on a view serves reads only (keyset paging, single-row reads) and never admits an update or delete past write protection.",
+          "x-description-zh-CN": "主键字段。表以数据库中的主键为准，这里写的与之不同时启动告警；视图上声明的键只用于读取（keyset 分页、单行读取），不会让修改或删除通过写保护。",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "uniqueKeys": {
+          "description": "Unique keys (each a field list) that, like the primary key, identify one row. For a table the database's unique constraints and indexes are authoritative (except partial, expression and prefix indexes and keys with a nullable column); unique keys declared on a view serve reads only.",
+          "x-description-zh-CN": "唯一键（每个为字段列表），与主键一样可唯一定位一行。表以数据库中的唯一约束与唯一索引为准（部分索引、表达式索引、前缀索引、含可空列的键除外）；视图上声明的唯一键只用于读取。",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
         "fields": {
+          "description": "Exposed fields.",
+          "x-description-zh-CN": "暴露的字段。",
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["name"],
+            "required": [
+              "name"
+            ],
             "properties": {
-              "name": {"type": "string"},
-              "alias": {"type": "string"},
-              "description": {"type": "string"},
-              "mask": {"type": "string"},
-              "exclude": {"type": "boolean"}
-            }
+              "name": {
+                "description": "Database column.",
+                "x-description-zh-CN": "数据库列名。",
+                "type": "string",
+                "minLength": 1
+              },
+              "alias": {
+                "description": "Name exposed to agents; the column name when omitted.",
+                "x-description-zh-CN": "对 Agent 暴露的名称；省略时用列名。",
+                "type": "string"
+              },
+              "description": {
+                "description": "Field description shown to agents; the column comment in the database (read at startup and reload) when empty.",
+                "x-description-zh-CN": "给 Agent 看的字段说明；留空时使用数据库中的列注释（启动或重载时读取）。",
+                "type": "string"
+              },
+              "mask": {
+                "description": "Masking rule, built in or registered by an extension; unknown rules fail startup. Masked fields only appear in read results, never in filters, cursors, grouping, aggregates or write predicates.",
+                "x-description-zh-CN": "脱敏规则：内置规则或扩展程序注册的规则，未知规则会拒绝启动。脱敏字段只能出现在读取结果中，不能用于过滤、游标、分组、聚合或写谓词。",
+                "type": "string",
+                "examples": [
+                  "email",
+                  "idcard",
+                  "phone",
+                  "secret"
+                ]
+              },
+              "exclude": {
+                "description": "Hide the field from agents.",
+                "x-description-zh-CN": "隐藏该字段，Agent 不可见。",
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
           }
         },
-        "roles": {"type": "object"},
-        "fieldACL": {"type": "object"},
-        "rowPolicies": {"type": "object"},
-        "relationships": {"type": "array"},
-        "mcp": {
+        "roles": {
+          "description": "Legacy entity-level access: action → allowed roles. Merges into top-level roles of the same name.",
+          "x-description-zh-CN": "旧式实体级授权：动作 → 允许的角色。与顶层 roles 合并到同名角色。",
           "type": "object",
           "properties": {
-            "dmlTools": {"type": "boolean"},
-            "customTool": {"type": "boolean"},
-            "trustedProcedure": {"type": "boolean"}
+            "read": {
+              "description": "Roles that may read.",
+              "x-description-zh-CN": "可读取的角色。",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "create": {
+              "description": "Roles that may create.",
+              "x-description-zh-CN": "可新增的角色。",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "update": {
+              "description": "Roles that may update.",
+              "x-description-zh-CN": "可修改的角色。",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "delete": {
+              "description": "Roles that may delete.",
+              "x-description-zh-CN": "可删除的角色。",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "execute": {
+              "description": "Roles that may execute the procedure.",
+              "x-description-zh-CN": "可执行存储过程的角色。",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "aggregate": {
+              "description": "Roles that may aggregate.",
+              "x-description-zh-CN": "可聚合统计的角色。",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "fieldACL": {
+          "description": "Legacy per-role field allowlists: role → readable and writable fields.",
+          "x-description-zh-CN": "旧式角色级字段白名单：角色 → 可读、可写字段。",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "read": {
+                "description": "Readable fields.",
+                "x-description-zh-CN": "可读字段。",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "write": {
+                "description": "Writable fields.",
+                "x-description-zh-CN": "可写字段。",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "mcp": {
+          "description": "How the entity takes part in MCP.",
+          "x-description-zh-CN": "实体在 MCP 中的暴露方式。",
+          "type": "object",
+          "properties": {
+            "dmlTools": {
+              "description": "Whether the generic entity tools (read, write, aggregate) include it; true when omitted, and an explicit false is kept.",
+              "x-description-zh-CN": "是否加入通用实体工具（读、写、聚合）；省略时为 true，显式 false 会保留。",
+              "type": "boolean",
+              "default": true
+            },
+            "customTool": {
+              "description": "Registers a dedicated MCP tool for the procedure; independent of tools.executeEntity. Changes need a restart.",
+              "x-description-zh-CN": "存储过程额外注册独立 MCP 工具；与 tools.executeEntity 无关。修改需要重启。",
+              "type": "boolean"
+            },
+            "trustedProcedure": {
+              "description": "A DBA reviewed the procedure's privileges and internal cost. It runs only when true and its CALL fingerprint is in allowTemplates.",
+              "x-description-zh-CN": "DBA 已审核该过程的权限与内部成本。只有为 true 且 CALL 指纹命中 allowTemplates 时才能执行。",
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "rowPolicies": {
+          "description": "Legacy per-role row scope: role → filter ({op, field, value} or and/or groups).",
+          "x-description-zh-CN": "旧式角色级行范围：角色 → 过滤条件（{op, field, value} 或 and/or 组合）。",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        },
+        "relationships": {
+          "description": "Expandable relationships. Only one level within the same datasource is supported.",
+          "x-description-zh-CN": "可展开的关系。当前只支持同数据源内的一层展开。",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "target",
+              "cardinality",
+              "joinOn"
+            ],
+            "properties": {
+              "name": {
+                "description": "Relationship name used when expanding.",
+                "x-description-zh-CN": "关系名，展开时使用。",
+                "type": "string",
+                "minLength": 1
+              },
+              "target": {
+                "description": "Target entity.",
+                "x-description-zh-CN": "目标实体名。",
+                "type": "string",
+                "minLength": 1
+              },
+              "cardinality": {
+                "description": "Cardinality; belongs-to/one expand to an object, has-many/many to a list.",
+                "x-description-zh-CN": "基数；belongs-to/one 展开为单个对象，has-many/many 展开为列表。",
+                "type": "string",
+                "enum": [
+                  "one",
+                  "one-to-one",
+                  "belongs-to",
+                  "many",
+                  "one-to-many",
+                  "has-many"
+                ]
+              },
+              "joinOn": {
+                "description": "Join pairs: this entity's field → the target's field; a multi-column foreign key lists every pair, all of which must match.",
+                "x-description-zh-CN": "连接键：本实体字段 → 目标实体字段；多列外键写多对，全部相等才关联。",
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "tenantPolicy": {
+          "description": "Tenant boundary with row-filter syntax; always ANDed for every principal and never merged across roles. A missing ${subject.x} matches no rows.",
+          "x-description-zh-CN": "租户硬边界，语法同一条行过滤；对所有主体始终 AND，不参与多角色合并。引用的 ${subject.x} 缺失时匹配零行。",
+          "type": "object"
+        },
+        "params": {
+          "description": "Positional parameters of the procedure; omitted or empty means none.",
+          "x-description-zh-CN": "存储过程参数的固定位置顺序；省略或空表示无参。",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "affects": {
+          "description": "Entities the procedure writes (on its datasource), for read-cache invalidation; when omitted, every cached read of the datasource is invalidated after it runs.",
+          "x-description-zh-CN": "存储过程会写入的实体（须与过程同一数据源），用于读缓存失效；省略时过程执行后失效该数据源的全部缓存。",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allowCascade": {
+          "description": "Allow cascading writes: deleting this entity's rows or updating their referenced columns makes foreign keys (CASCADE, SET NULL, SET DEFAULT) rewrite rows of other tables. By default the caller needs delete or update permission without a row scope on every cascaded entity, and a cascade into a table no entity exposes is rejected. true skips the check and leaves the cascade to the administrator.",
+          "x-description-zh-CN": "允许级联写入：删除本实体的行或修改其被引用列时，外键的 CASCADE、SET NULL、SET DEFAULT 会改写其他表的行。默认要求调用方对每个被级联的实体都有对应的删除或修改权限，且不带行范围限制；被级联的表未暴露为实体时拒绝。设为 true 则不做该检查，由管理员对级联负责。",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "role": {
+      "description": "One role.",
+      "x-description-zh-CN": "一个角色。",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Role description.",
+          "x-description-zh-CN": "角色说明。",
+          "type": "string"
+        },
+        "grants": {
+          "description": "The role's grants.",
+          "x-description-zh-CN": "角色的授权项。",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/grant"
+          }
+        },
+        "permissions": {
+          "description": "System permissions (such as sql:execute@\u003cdatasource\u003e), reserved; any value fails validation in this version.",
+          "x-description-zh-CN": "系统权限（如 sql:execute@\u003cdatasource\u003e），为后续版本预留；本版声明任何值都会校验失败。",
+          "type": "array",
+          "items": {
+            "type": "string"
           }
         }
-      }
+      },
+      "additionalProperties": false
+    },
+    "grant": {
+      "description": "One entity grant. A request uses only the grants covering all its fields; their row scopes are ORed and then ANDed with the entity tenantPolicy.",
+      "x-description-zh-CN": "一条实体授权。一次请求只使用覆盖其全部字段的授权项，它们的行范围取 OR，再 AND 实体 tenantPolicy。",
+      "type": "object",
+      "required": [
+        "entity",
+        "actions"
+      ],
+      "properties": {
+        "entity": {
+          "description": "Entity granted.",
+          "x-description-zh-CN": "授权的实体名。",
+          "type": "string",
+          "minLength": 1
+        },
+        "actions": {
+          "description": "Allowed actions.",
+          "x-description-zh-CN": "允许的动作。",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "enum": [
+              "read",
+              "create",
+              "update",
+              "delete",
+              "execute",
+              "aggregate"
+            ]
+          }
+        },
+        "fields": {
+          "description": "Field scope; every visible field (including ones added later) when omitted.",
+          "x-description-zh-CN": "字段范围；省略表示全部可见字段（含以后新增的字段）。",
+          "type": "object",
+          "properties": {
+            "read": {
+              "description": "Readable fields.",
+              "x-description-zh-CN": "可读字段。",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "write": {
+              "description": "Writable fields.",
+              "x-description-zh-CN": "可写字段。",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "rows": {
+          "description": "Row scope with row-filter syntax; unrestricted when omitted.",
+          "x-description-zh-CN": "行范围，语法同行过滤；省略表示不限制。",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "user": {
+      "description": "One user. Effective access is the union of the role grants and direct grants.",
+      "x-description-zh-CN": "一个用户。有效权限为各角色授权与直授 grants 的并集。",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "User description.",
+          "x-description-zh-CN": "用户说明。",
+          "type": "string"
+        },
+        "tokenHash": {
+          "description": "sha256 hash of the bearer token, from sql-mcp-server user token; the plaintext never enters the configuration. Must differ between users and from server.auth.token.",
+          "x-description-zh-CN": "bearer token 的 sha256 hash，由 sql-mcp-server user token 生成；明文不进入配置。各用户之间、与 server.auth.token 之间不能重复。",
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "roles": {
+          "description": "The user's roles: top-level roles or role names used in entity-level access.",
+          "x-description-zh-CN": "用户拥有的角色，可以是顶层角色或实体级授权中出现的角色名。",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          }
+        },
+        "subject": {
+          "description": "Fixed subject attributes for ${subject.x}; wins over the same attributes in a proxy's X-MCP-Subject.",
+          "x-description-zh-CN": "固定的主体属性，供 ${subject.x} 解析；优先于代理 X-MCP-Subject 中的同名属性。",
+          "type": "object"
+        },
+        "grants": {
+          "description": "Grants for this user only.",
+          "x-description-zh-CN": "只给这个用户的直授授权。",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/grant"
+          }
+        },
+        "permissions": {
+          "description": "System permissions, reserved; any value fails validation in this version.",
+          "x-description-zh-CN": "系统权限，为后续版本预留；本版声明任何值都会校验失败。",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "disabled": {
+          "description": "A disabled user cannot authenticate or be server.user; its sessions end immediately.",
+          "x-description-zh-CN": "禁用后无法认证，也不能作为 server.user；会话立即解除。",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "budgetLimits": {
+      "description": "A set of budget limits; 0 means unlimited.",
+      "x-description-zh-CN": "一组预算限额；0 表示不限。",
+      "type": "object",
+      "properties": {
+        "maxConcurrent": {
+          "description": "Concurrent requests.",
+          "x-description-zh-CN": "同时执行的请求数上限。",
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxExecution": {
+          "description": "Execution time per call.",
+          "x-description-zh-CN": "单次执行时长上限。",
+          "type": "string",
+          "x-format": "duration",
+          "x-minimum": "0",
+          "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
+        },
+        "maxEstimatedScannedRows": {
+          "description": "Estimated (and actual) scanned rows per call.",
+          "x-description-zh-CN": "单次调用的估算（及实际）扫描行数上限。",
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxReturnedRows": {
+          "description": "Rows returned per call.",
+          "x-description-zh-CN": "单次调用返回行数上限。",
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxReturnedBytes": {
+          "description": "Bytes returned per call.",
+          "x-description-zh-CN": "单次调用返回字节上限。",
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxSessionCost": {
+          "description": "Cost per session.",
+          "x-description-zh-CN": "会话累计成本上限。",
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

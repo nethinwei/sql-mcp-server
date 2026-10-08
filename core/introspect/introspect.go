@@ -2,6 +2,8 @@ package introspect
 
 import (
 	"context"
+	"slices"
+	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 )
@@ -10,6 +12,99 @@ import (
 // parameters) from a live database. Implementations live in x/providers.
 type Introspector interface {
 	Discover(ctx context.Context, sources []string) ([]entity.Entity, error)
+}
+
+// SchemaLister is implemented by introspectors that can name the schemas of
+// their database: all user schemas, and the default one where unqualified
+// table names resolve ("" when there is none). Discover with no schemas scans
+// the default one.
+type SchemaLister interface {
+	Schemas(ctx context.Context) (all []string, current string, err error)
+}
+
+// Catalog is a set of discovered tables and the schema unqualified table names
+// resolve to. Every lookup of the table an entity reads goes through it, so
+// drift checks, comment defaults and imports agree with the generated SQL.
+type Catalog struct {
+	Tables []entity.Entity
+	// Default is where an entity without a schema reads; when unknown, such
+	// an entity matches a table name unique in the catalog.
+	Default string
+	// FoldCase matches schema and table names case-insensitively, as the
+	// database compares them (see Physical.FoldCase).
+	FoldCase bool
+}
+
+func (c Catalog) sameName(a, b string) bool {
+	if c.FoldCase {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+// Lookup finds the table named by schema (empty for the default) and table.
+func (c Catalog) Lookup(schema, table string) (entity.Entity, bool) {
+	if schema == "" {
+		schema = c.Default
+	}
+	var found []entity.Entity
+	for _, t := range c.Tables {
+		if !c.sameName(tableName(t), table) {
+			continue
+		}
+		if schema != "" && c.sameName(t.Schema, schema) {
+			return t, true
+		}
+		found = append(found, t)
+	}
+	if schema == "" && len(found) == 1 {
+		return found[0], true
+	}
+	return entity.Entity{}, false
+}
+
+// LoadCatalog discovers the named schemas and, with withDefault, the default
+// one, and records which schema is the default.
+func LoadCatalog(ctx context.Context, in Introspector, schemas []string, withDefault bool) (Catalog, error) {
+	var cat Catalog
+	lister, ok := in.(SchemaLister)
+	if !ok {
+		// The default schema is unknown: discover it on its own, and match
+		// unqualified names by unique name.
+		return loadWithoutDefault(ctx, in, schemas, withDefault)
+	}
+	_, current, err := lister.Schemas(ctx)
+	if err != nil {
+		return cat, err
+	}
+	cat.Default = current
+	if withDefault && current != "" && !slices.Contains(schemas, current) {
+		schemas = append(slices.Clone(schemas), current)
+	}
+	if len(schemas) == 0 {
+		return cat, nil
+	}
+	cat.Tables, err = in.Discover(ctx, schemas)
+	return cat, err
+}
+
+func loadWithoutDefault(ctx context.Context, in Introspector, schemas []string, withDefault bool) (Catalog, error) {
+	var cat Catalog
+	if len(schemas) > 0 {
+		tables, err := in.Discover(ctx, schemas)
+		if err != nil {
+			return cat, err
+		}
+		cat.Tables = tables
+	}
+	if withDefault {
+		tables, err := in.Discover(ctx, nil)
+		if err != nil {
+			return cat, err
+		}
+		cat.Tables = append(cat.Tables, tables...)
+	}
+	return cat, nil
 }
 
 // Drift describes differences between configured and discovered schemas.
@@ -23,44 +118,52 @@ type Drift struct {
 	TypeChanged []string
 }
 
-// DetectDrift compares configured entities against discovered ones. A missing
-// entity is reported by name; missing/extra fields are reported as
-// "entity.field". It is pure and deterministic.
-func DetectDrift(configured, discovered []entity.Entity) Drift {
+// Reconcile matches configured table and view entities to their tables in the
+// catalog. It returns the entities with each field's domain (type,
+// nullability, defaults) and empty entity and field descriptions taken from
+// the database (a configured description overrides a comment), and the drift:
+// missing entities by name, missing and extra fields as "entity.field".
+// Procedures are returned unchanged. It is pure and deterministic.
+func Reconcile(configured []entity.Entity, c Catalog) ([]entity.Entity, Drift) {
+	out := make([]entity.Entity, len(configured))
 	d := Drift{}
-	disc := indexByName(discovered)
-	for _, ce := range configured {
-		physicalName := ce.Source
-		if physicalName == "" {
-			physicalName = ce.Name
+	for i, ce := range configured {
+		out[i] = ce
+		if ce.Kind == entity.KindProcedure {
+			continue
 		}
-		de, ok := disc[physicalName]
+		physical := ce.Source
+		if physical == "" {
+			physical = ce.Name
+		}
+		de, ok := c.Lookup(ce.Schema, physical)
 		if !ok {
 			d.Missing = append(d.Missing, ce.Name)
 			continue
 		}
-		cf := indexAttrs(ce.Attributes)
-		df := indexAttrs(de.Attributes)
-		for f := range cf {
-			if _, ok := df[f]; !ok {
-				d.Missing = append(d.Missing, ce.Name+"."+f)
+		out[i] = inherit(ce, de)
+		columns := indexAttrs(de.Attributes)
+		for _, a := range ce.Attributes {
+			if _, ok := columns[a.Name]; !ok {
+				d.Missing = append(d.Missing, ce.Name+"."+a.Name)
 			}
 		}
-		for f := range df {
-			if _, ok := cf[f]; !ok {
-				d.Extra = append(d.Extra, ce.Name+"."+f)
+		fields := indexAttrs(ce.Attributes)
+		for _, a := range de.Attributes {
+			if _, ok := fields[a.Name]; !ok {
+				d.Extra = append(d.Extra, ce.Name+"."+a.Name)
 			}
 		}
 	}
-	return d
+	return out, d
 }
 
-func indexByName(es []entity.Entity) map[string]entity.Entity {
-	m := make(map[string]entity.Entity, len(es))
-	for _, e := range es {
-		m[e.Name] = e
+// tableName is a discovered table's physical name.
+func tableName(de entity.Entity) string {
+	if de.Source != "" {
+		return de.Source
 	}
-	return m
+	return de.Name
 }
 
 func indexAttrs(as []entity.Attribute) map[string]struct{} {
@@ -69,4 +172,25 @@ func indexAttrs(as []entity.Attribute) map[string]struct{} {
 		m[a.Name] = struct{}{}
 	}
 	return m
+}
+
+func inherit(ce, de entity.Entity) entity.Entity {
+	if ce.Description == "" {
+		ce.Description = de.Description
+	}
+	columns := make(map[string]entity.Attribute, len(de.Attributes))
+	for _, a := range de.Attributes {
+		columns[a.Name] = a
+	}
+	attrs := make([]entity.Attribute, len(ce.Attributes))
+	for i, a := range ce.Attributes {
+		column := columns[a.Name]
+		if a.Description == "" {
+			a.Description = column.Description
+		}
+		a.Domain = column.Domain
+		attrs[i] = a
+	}
+	ce.Attributes = attrs
+	return ce
 }

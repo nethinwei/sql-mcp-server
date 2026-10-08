@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -41,18 +42,18 @@ func buildMCPHandler(s *mcp.Server, cfg HTTPConfig) http.Handler {
 		&mcp.StreamableHTTPOptions{EventStore: eventStore, SessionTimeout: cfg.SessionTimeout},
 	))
 	handler = bindSessionIdentity(identities, handler)
+	if cfg.RevokedPrincipals != nil {
+		cfg.RevokedPrincipals(revokeSessions(identities, cfg.OnSessionClosed))
+	}
 	if cfg.TrustProxyHeaders {
-		handler = withRequestSubject(handler)
+		handler = withProxyIdentity(cfg.Users, handler)
 		if !cfg.mtlsEnabled() {
 			networks, _ := parseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
 			handler = trustedProxyOnly(networks, handler)
 		}
 	}
 	handler = limitBody(cfg.MaxBodyBytes, handler)
-	if cfg.Token != "" {
-		handler = tokenAuth(cfg.Token, handler)
-	}
-	return handler
+	return principalAuth(cfg.Token, cfg.Users, cfg.mtlsEnabled() || cfg.TrustProxyHeaders, handler)
 }
 
 func buildHTTPMux(mcpHandler http.Handler, cfg HTTPConfig) *http.ServeMux {
@@ -65,14 +66,13 @@ func buildHTTPMux(mcpHandler http.Handler, cfg HTTPConfig) *http.ServeMux {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
-	mux.Handle("/readyz/snapshot", readinessHandler(cfg.SnapshotReady))
+	mux.Handle("/readyz/snapshot", staleMarker(cfg.SnapshotStale, readinessHandler(cfg.SnapshotReady)))
 	mux.Handle("/readyz/db", readinessHandler(cfg.DatabaseReady))
+	if cfg.Admin != nil {
+		mux.Handle("/admin/", limitBody(cfg.MaxBodyBytes, cfg.Admin))
+	}
 	if cfg.Metrics != nil {
-		metricsHandler := cfg.Metrics
-		if cfg.Token != "" {
-			metricsHandler = tokenAuth(cfg.Token, metricsHandler)
-		}
-		mux.Handle("/metrics", metricsHandler)
+		mux.Handle("/metrics", principalAuth(cfg.Token, cfg.Users, cfg.mtlsEnabled(), cfg.Metrics))
 	}
 	return mux
 }
@@ -99,6 +99,22 @@ func readinessHandler(probe func(context.Context) error) http.Handler {
 		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+	})
+}
+
+// staleMarker adds X-Snapshot-Stale with the ID of a published store
+// revision the server has not applied. The probe stays 200 so orchestrators
+// keep routing to an instance that serves its last good snapshot; only the
+// revision ID is exposed because the endpoint is unauthenticated.
+func staleMarker(stale func() int64, next http.Handler) http.Handler {
+	if stale == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if id := stale(); id > 0 {
+			w.Header().Set("X-Snapshot-Stale", strconv.FormatInt(id, 10))
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 

@@ -38,24 +38,6 @@ func TestResolveServeEndpointUsesConfigUnlessFlagExplicit(t *testing.T) {
 	}
 }
 
-func TestValidateHotReloadConfigRejectsListenerSecurityAndTools(t *testing.T) {
-	server := config.ServerConfig{Transport: "http", Addr: ":8080", Auth: config.AuthConfig{Token: "a"}}
-	tools := config.ExplicitToolFlags(config.DefaultToolFlags())
-	next := &config.Config{Server: server, Tools: tools}
-	if err := validateHotReloadConfig(server, tools, next); err != nil {
-		t.Fatal(err)
-	}
-	next.Server.Auth.Token = "b"
-	if err := validateHotReloadConfig(server, tools, next); err == nil {
-		t.Fatal("auth change must require restart")
-	}
-	next.Server = server
-	next.Tools.ReadRecords = false
-	if err := validateHotReloadConfig(server, tools, next); err == nil {
-		t.Fatal("tool-set change must require restart")
-	}
-}
-
 func TestParseCommandPreservesLegacyFlags(t *testing.T) {
 	command, args := parseCommand([]string{"--config", "custom.yaml"})
 	if command != "serve" || len(args) != 2 || args[0] != "--config" {

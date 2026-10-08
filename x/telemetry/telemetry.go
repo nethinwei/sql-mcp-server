@@ -95,7 +95,7 @@ func (m *Metrics) Hooks() *hook.Hooks {
 		BeforeTool: func(ctx context.Context, _ string, _ json.RawMessage) context.Context {
 			return context.WithValue(ctx, startTimeCtxKey{}, time.Now())
 		},
-		AfterTool: func(ctx context.Context, name string, _ any, err error) {
+		AfterTool: func(ctx context.Context, name string, err error) {
 			var elapsed time.Duration
 			if start, ok := ctx.Value(startTimeCtxKey{}).(time.Time); ok {
 				elapsed = time.Since(start)

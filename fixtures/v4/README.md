@@ -16,7 +16,7 @@ payment-orchestration/        支付编排模型（行业中立）
 ledger-settlement/            账务、结算与对账模型（行业中立）
 verticals/live-monetization/  直播与创作者经济行业扩展
 profiles/default.yaml         v4 负载轨组合 profile
-profiles/diagnostic.yaml      v5 诊断轨 profile（增加隔离治理别名）
+profiles/diagnostic.yaml      v5 诊断轨 profile（增加隔离治理别名，各自读取 wl_customers 上的独立视图）
 tasks/                        v4 任务集（v0.1.9 已交付 21 项 Guided）
 tasks-v5/                     v0.1.10 元数据、27 个正式扩展任务与 P1 草案
 scenarios/                    P1 多轮调查场景草案（默认轨不加载）

@@ -28,7 +28,7 @@ func NewHooks() *hook.Hooks {
 			}
 			return ctx
 		},
-		AfterTool: func(ctx context.Context, _ string, _ any, _ error) {
+		AfterTool: func(ctx context.Context, _ string, _ error) {
 			trace.SpanFromContext(ctx).End()
 		},
 		OnError: func(ctx context.Context, err error) {

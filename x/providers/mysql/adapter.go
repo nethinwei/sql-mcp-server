@@ -5,35 +5,25 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"regexp"
 	"strconv"
-	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
+	"github.com/nethinwei/sql-mcp-server/x/providers/sqladapter"
 )
-
-// savepointName validates a savepoint name (not parameterized in SQL).
-var savepointName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
-
-// Adapter wraps *sql.DB for the MySQL protocol, satisfying store.DB and
-// store.TxBeginner. Shared with the oceanbase provider.
-type Adapter struct {
-	db *sql.DB
-}
 
 // NewAdapter opens a MySQL-compatible database and pings it (fail-fast). It
 // injects sql_safe_updates=1 as a DB-native backstop against full-table
-// UPDATE/DELETE (defense in depth alongside the cost gate's WriteGuard); a DSN
-// that sets sql_safe_updates explicitly is respected.
-func NewAdapter(dsn string) (*Adapter, error) {
-	return NewAdapterWithTimeout(dsn, 30*time.Second, "")
-}
-
-// NewAdapterWithTimeout opens a MySQL-compatible database with a DB-native
-// statement timeout. oceanBaseVariable may be "ob_query_timeout".
-func NewAdapterWithTimeout(dsn string, timeout time.Duration, oceanBaseVariable string) (*Adapter, error) {
+// UPDATE/DELETE (defense in depth alongside the cost gate's WriteGuard) and a
+// DB-native statement timeout: max_execution_time, or the named OceanBase
+// variable when oceanBaseVariable is set. DSN values set explicitly are
+// respected. Behind a transaction-mode pooler arguments are interpolated by
+// the driver instead of server-side prepared statements, which a pooler may
+// not keep. The adapter is shared with the oceanbase provider.
+func NewAdapter(dsn string, opts providerregistry.Options, oceanBaseVariable string) (*sqladapter.Pool, error) {
+	timeout := opts.Timeout
 	cfg, err := mysqldriver.ParseDSN(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("mysql: parse dsn: %w", err)
@@ -46,6 +36,9 @@ func NewAdapterWithTimeout(dsn string, timeout time.Duration, oceanBaseVariable 
 	}
 	if timeout <= 0 {
 		return nil, errors.New("mysql: statement timeout must be positive")
+	}
+	if opts.Pooler == providerregistry.PoolerTransaction {
+		cfg.InterpolateParams = true
 	}
 	if oceanBaseVariable == "" {
 		if _, ok := cfg.Params["max_execution_time"]; !ok {
@@ -62,139 +55,44 @@ func NewAdapterWithTimeout(dsn string, timeout time.Duration, oceanBaseVariable 
 		_ = db.Close()
 		return nil, fmt.Errorf("mysql: ping failed: %w", err)
 	}
-	return &Adapter{db: db}, nil
+	return sqladapter.New(db, newTextRows, classify), nil
 }
 
-// DB exposes the underlying pool (for providers that need it).
-func (a *Adapter) DB() *sql.DB { return a.db }
-
-// QueryContext implements store.DB.
-func (a *Adapter) QueryContext(ctx context.Context, query string, args ...any) (store.Rows, error) {
-	rows, err := a.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	return rowsAdapter{Rows: rows}, nil
+// binaryTypes are the column types whose values are bytes, not text.
+var binaryTypes = map[string]bool{
+	"BINARY": true, "VARBINARY": true, "BIT": true, "GEOMETRY": true,
+	"BLOB": true, "TINYBLOB": true, "MEDIUMBLOB": true, "LONGBLOB": true,
 }
 
-// ExecContext implements store.DB.
-func (a *Adapter) ExecContext(ctx context.Context, query string, args ...any) (store.Result, error) {
-	res, err := a.db.ExecContext(ctx, query, args...)
-	if err != nil {
-		return store.Result{}, err
-	}
-	li, _ := res.LastInsertId()
-	ra, _ := res.RowsAffected()
-	return store.Result{LastInsertID: li, RowsAffected: ra}, nil
+// textRows returns text columns as strings. The driver scans them (and
+// DECIMAL) into []byte, which would otherwise serialize to clients as base64.
+type textRows struct {
+	*sql.Rows
+	binary []bool
 }
 
-// PrepareContext implements store.Preparer for MySQL and OceanBase.
-func (a *Adapter) PrepareContext(ctx context.Context, query string) (store.Prepared, error) {
-	stmt, err := a.db.PrepareContext(ctx, query)
-	if err != nil {
-		return nil, err
+func newTextRows(rows *sql.Rows) store.Rows { return &textRows{Rows: rows} }
+
+func (r *textRows) Scan(dest ...any) error {
+	if err := r.Rows.Scan(dest...); err != nil {
+		return err
 	}
-	return stmtAdapter{Stmt: stmt}, nil
-}
-
-// BeginTx implements store.TxBeginner.
-func (a *Adapter) BeginTx(ctx context.Context, opts *store.TxOptions) (store.Tx, error) {
-	tx, err := a.db.BeginTx(ctx, toSqlOpts(opts))
-	if err != nil {
-		return nil, err
+	if r.binary == nil {
+		types, err := r.ColumnTypes()
+		if err != nil {
+			return err
+		}
+		r.binary = make([]bool, len(types))
+		for i, t := range types {
+			r.binary[i] = binaryTypes[t.DatabaseTypeName()]
+		}
 	}
-	return &txAdapter{tx: tx}, nil
-}
-
-// Close closes the pool.
-func (a *Adapter) Close() error { return a.db.Close() }
-
-type rowsAdapter struct{ *sql.Rows }
-
-func (r rowsAdapter) Next() bool                 { return r.Rows.Next() }
-func (r rowsAdapter) Scan(dest ...any) error     { return r.Rows.Scan(dest...) }
-func (r rowsAdapter) Columns() ([]string, error) { return r.Rows.Columns() }
-func (r rowsAdapter) Close() error               { return r.Rows.Close() }
-func (r rowsAdapter) Err() error                 { return r.Rows.Err() }
-
-type stmtAdapter struct{ *sql.Stmt }
-
-func (s stmtAdapter) QueryContext(ctx context.Context, args ...any) (store.Rows, error) {
-	rows, err := s.Stmt.QueryContext(ctx, args...)
-	if err != nil {
-		return nil, err
+	for i, d := range dest {
+		if p, ok := d.(*any); ok && i < len(r.binary) && !r.binary[i] {
+			if b, ok := (*p).([]byte); ok {
+				*p = string(b)
+			}
+		}
 	}
-	return rowsAdapter{Rows: rows}, nil
-}
-
-func (s stmtAdapter) ExecContext(ctx context.Context, args ...any) (store.Result, error) {
-	result, err := s.Stmt.ExecContext(ctx, args...)
-	if err != nil {
-		return store.Result{}, err
-	}
-	li, _ := result.LastInsertId()
-	ra, _ := result.RowsAffected()
-	return store.Result{LastInsertID: li, RowsAffected: ra}, nil
-}
-
-type txAdapter struct{ tx *sql.Tx }
-
-func (t *txAdapter) QueryContext(ctx context.Context, query string, args ...any) (store.Rows, error) {
-	rows, err := t.tx.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	return rowsAdapter{Rows: rows}, nil
-}
-
-func (t *txAdapter) ExecContext(ctx context.Context, query string, args ...any) (store.Result, error) {
-	res, err := t.tx.ExecContext(ctx, query, args...)
-	if err != nil {
-		return store.Result{}, err
-	}
-	li, _ := res.LastInsertId()
-	ra, _ := res.RowsAffected()
-	return store.Result{LastInsertID: li, RowsAffected: ra}, nil
-}
-
-func (t *txAdapter) Commit() error   { return t.tx.Commit() }
-func (t *txAdapter) Rollback() error { return t.tx.Rollback() }
-
-func (t *txAdapter) Savepoint(ctx context.Context, name string) (store.Savepoint, error) {
-	if !savepointName.MatchString(name) {
-		return store.Savepoint{}, fmt.Errorf("mysql: invalid savepoint name %q", name)
-	}
-	if _, err := t.tx.ExecContext(ctx, "SAVEPOINT "+name); err != nil {
-		return store.Savepoint{}, err
-	}
-	return store.Savepoint{Name: name}, nil
-}
-
-func (t *txAdapter) RollbackTo(ctx context.Context, sp store.Savepoint) error {
-	if !savepointName.MatchString(sp.Name) {
-		return fmt.Errorf("mysql: invalid savepoint name %q", sp.Name)
-	}
-	_, err := t.tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT "+sp.Name)
-	return err
-}
-
-func toSqlOpts(o *store.TxOptions) *sql.TxOptions {
-	if o == nil {
-		return nil
-	}
-	return &sql.TxOptions{Isolation: toSqlIsolation(o.Isolation), ReadOnly: o.ReadOnly}
-}
-
-func toSqlIsolation(l store.IsolationLevel) sql.IsolationLevel {
-	switch l {
-	case store.LevelReadUncommitted:
-		return sql.LevelReadUncommitted
-	case store.LevelReadCommitted:
-		return sql.LevelReadCommitted
-	case store.LevelRepeatableRead:
-		return sql.LevelRepeatableRead
-	case store.LevelSerializable:
-		return sql.LevelSerializable
-	}
-	return sql.LevelDefault
+	return nil
 }

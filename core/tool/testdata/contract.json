@@ -204,6 +204,11 @@
       "type": "object"
     },
     "read_records": {
+      "dependentRequired": {
+        "offset": [
+          "limit"
+        ]
+      },
       "properties": {
         "cursor": {
           "description": "Keyset pagination: last row's primary-key column values to resume after",
@@ -349,13 +354,15 @@
     }
   },
   "errorCodes": {
+    "AMBIGUOUS_FIELD_SCOPE": true,
     "BUDGET_EXCEEDED": true,
+    "CONSTRAINT_VIOLATION": true,
     "COST_EXCEEDED": true,
     "DATABASE_ERROR": false,
+    "DATASOURCE_FORBIDDEN": false,
     "DML_TOOLS_DISABLED": false,
     "ENTITY_NOT_FOUND": false,
     "INVALID_INPUT": true,
-    "NOT_IMPLEMENTED": false,
     "TRANSACTION_CAPACITY": true,
     "TRANSACTION_NOT_FOUND": false,
     "TRANSACTION_SCOPE": false,

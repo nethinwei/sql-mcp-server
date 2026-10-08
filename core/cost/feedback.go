@@ -54,30 +54,15 @@ type MemoryStore struct {
 	keys              []string
 }
 
-// NewMemoryStore returns an in-memory FeedbackStore.
-func NewMemoryStore() *MemoryStore { return NewMemoryStoreWithWindow(32) }
-
-// NewMemoryStoreWithWindow returns a store retaining at most size samples per
-// fingerprint.
-func NewMemoryStoreWithWindow(size int) *MemoryStore {
-	return NewMemoryStoreWithBounds(size, defaultMaxFingerprintKeys)
+// NewMemoryStore returns an in-memory FeedbackStore with default bounds.
+func NewMemoryStore() *MemoryStore {
+	return NewAdaptiveMemoryStoreWithBounds(32, defaultMaxFingerprintKeys, 3, 5, nil)
 }
 
-// NewMemoryStoreWithBounds returns a store bounded both per fingerprint and
-// across all fingerprints. When full, the oldest inserted fingerprint is
-// evicted.
-func NewMemoryStoreWithBounds(windowSize, maxKeys int) *MemoryStore {
-	return NewAdaptiveMemoryStoreWithBounds(windowSize, maxKeys, 3, 5, nil)
-}
-
-// NewAdaptiveMemoryStore additionally invalidates a plan when a new actual-row
-// count exceeds the prior window average by factor.
-func NewAdaptiveMemoryStore(size int, factor float64, minSamples int, invalidator PlanInvalidator) *MemoryStore {
-	return NewAdaptiveMemoryStoreWithBounds(size, defaultMaxFingerprintKeys, factor, minSamples, invalidator)
-}
-
-// NewAdaptiveMemoryStoreWithBounds additionally bounds the number of distinct
-// fingerprints retained by the adaptive store.
+// NewAdaptiveMemoryStoreWithBounds returns a store retaining at most size
+// samples per fingerprint and maxKeys fingerprints (the oldest inserted is
+// evicted first). Once minSamples are recorded, an actual-row count exceeding
+// the window average by factor invalidates the cached plan.
 func NewAdaptiveMemoryStoreWithBounds(
 	size, maxKeys int,
 	factor float64,

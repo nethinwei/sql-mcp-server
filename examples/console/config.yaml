@@ -1,0 +1,291 @@
+# Initial configuration imported into the config store for the console demo
+# (data: init.sql). Entities, roles and users are then managed in the admin
+# console; datasources stay in this file (the console never handles
+# credentials). The finance and ops schemas are left out on purpose: import
+# them from the console.
+#
+# Descriptions: an entity or field without one uses the database comment, so
+# only overrides are written here (sales.orders.amount, for example).
+version: "1"
+
+server:
+  transport: http
+  addr: "0.0.0.0:8080"
+
+databases:
+  shop:
+    driver: postgres
+    dsn: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}/shop?sslmode=disable"
+  analytics:
+    driver: postgres
+    dsn: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}/analytics?sslmode=disable"
+
+tools:
+  describeEntities: true
+  readRecords: true
+  aggregateRecords: true
+  createRecord: true
+  updateRecord: true
+
+cost:
+  enabled: true
+  maxRows: 200
+  rejectFullScan: true
+  whitelistPKPoint: true
+  queryTimeout: 5s
+
+budget:
+  roles:
+    analyst:
+      maxConcurrent: 4
+      maxExecution: 10s
+      maxEstimatedScannedRows: 100000
+      maxReturnedRows: 500
+    support:
+      maxConcurrent: 2
+      maxExecution: 5s
+      maxEstimatedScannedRows: 5000
+      maxReturnedRows: 50
+
+entities:
+  # crm
+  - name: tenants
+    datasource: shop
+    schema: crm
+    source: tenants
+    primaryKey: [id]
+    fields:
+      - {name: id}
+      - {name: name}
+      - {name: plan}
+      - {name: created_at}
+
+  - name: customers
+    datasource: shop
+    schema: crm
+    source: customers
+    primaryKey: [id]
+    # Hard tenant boundary: every caller only ever sees its own tenant.
+    tenantPolicy: {op: eq, field: tenant_id, value: "${subject.tenant_id}"}
+    fields:
+      - {name: id}
+      - {name: tenant_id}
+      - {name: name}
+      - {name: email, mask: email}
+      - {name: phone, mask: phone}
+      - {name: id_card, mask: idcard}
+      - {name: region}
+      - {name: vip_level}
+      - {name: created_at}
+    relationships:
+      - {name: orders, target: orders, cardinality: many, joinOn: {id: customer_id}}
+      - {name: tickets, target: support_tickets, cardinality: many, joinOn: {id: customer_id}}
+
+  - name: support_tickets
+    datasource: shop
+    schema: crm
+    source: support_tickets
+    primaryKey: [id]
+    tenantPolicy: {op: eq, field: tenant_id, value: "${subject.tenant_id}"}
+    fields:
+      - {name: id}
+      - {name: tenant_id}
+      - {name: customer_id}
+      - {name: subject}
+      - {name: status}
+      - {name: priority}
+      - {name: created_at}
+      - {name: closed_at}
+    relationships:
+      - {name: customer, target: customers, cardinality: belongs-to, joinOn: {customer_id: id}}
+
+  # sales
+  - name: products
+    datasource: shop
+    schema: sales
+    source: products
+    primaryKey: [id]
+    fields:
+      - {name: id}
+      - {name: tenant_id}
+      - {name: sku}
+      - {name: name}
+      - {name: category}
+      - {name: price}
+      - {name: cost_price}
+      - {name: active}
+
+  - name: orders
+    datasource: shop
+    schema: sales
+    source: orders
+    primaryKey: [id]
+    fields:
+      - {name: id}
+      - {name: tenant_id}
+      - {name: customer_id}
+      - {name: status}
+      - {name: amount, description: "订单实付金额（元，含税，已扣优惠）"}
+      - {name: currency}
+      - {name: region}
+      - {name: channel}
+      - {name: created_at, alias: createdAt}
+      - {name: paid_at, alias: paidAt}
+    relationships:
+      - {name: customer, target: customers, cardinality: belongs-to, joinOn: {customer_id: id}}
+      - {name: items, target: order_items, cardinality: many, joinOn: {id: order_id}}
+      - {name: refunds, target: refunds, cardinality: many, joinOn: {id: order_id}}
+
+  - name: order_items
+    datasource: shop
+    schema: sales
+    source: order_items
+    primaryKey: [id]
+    fields:
+      - {name: id}
+      - {name: order_id}
+      - {name: product_id}
+      - {name: quantity}
+      - {name: unit_price}
+      - {name: discount}
+    relationships:
+      - {name: order, target: orders, cardinality: belongs-to, joinOn: {order_id: id}}
+      - {name: product, target: products, cardinality: belongs-to, joinOn: {product_id: id}}
+
+  - name: refunds
+    datasource: shop
+    schema: sales
+    source: refunds
+    primaryKey: [id]
+    fields:
+      - {name: id}
+      - {name: order_id}
+      - {name: amount}
+      - {name: reason}
+      - {name: status}
+      - {name: created_at}
+    relationships:
+      - {name: order, target: orders, cardinality: belongs-to, joinOn: {order_id: id}}
+
+  # archive: same table name as sales.orders, a different schema
+  - name: archive_orders
+    datasource: shop
+    schema: archive
+    source: orders
+    primaryKey: [id]
+    fields:
+      - {name: id}
+      - {name: tenant_id}
+      - {name: customer_id}
+      - {name: amount}
+      - {name: created_at}
+
+  # analytics: a second datasource
+  - name: daily_kpi
+    datasource: analytics
+    schema: public
+    source: daily_kpi
+    primaryKey: [day, tenant_id]
+    fields:
+      - {name: day}
+      - {name: tenant_id}
+      - {name: gmv}
+      - {name: orders}
+      - {name: new_buyers}
+      - {name: refund_rate}
+
+roles:
+  analyst:
+    description: 平台经营分析：跨租户的交易与经营指标，不含个人信息与成本价
+    grants:
+      - entity: orders
+        actions: [read, aggregate]
+        fields: {read: [id, tenant_id, status, amount, currency, region, channel, created_at, paid_at]}
+      - entity: order_items
+        actions: [read, aggregate]
+      - entity: products
+        actions: [read, aggregate]
+        fields: {read: [id, tenant_id, sku, name, category, price, active]}
+      - entity: refunds
+        actions: [read, aggregate]
+      - entity: daily_kpi
+        actions: [read, aggregate]
+      - entity: archive_orders
+        actions: [aggregate]
+
+  support:
+    description: 商家客服：本租户的客户（个人信息脱敏）、订单与工单
+    grants:
+      - entity: customers
+        actions: [read]
+        fields: {read: [id, name, email, phone, region]}
+      - entity: support_tickets
+        actions: [read, update]
+        fields: {read: [id, customer_id, subject, status, priority, created_at, closed_at], write: [status, priority]}
+      - entity: orders
+        actions: [read]
+        fields: {read: [id, customer_id, status, amount, created_at, paid_at]}
+        rows:
+          and:
+            - {op: eq, field: tenant_id, value: "${subject.tenant_id}"}
+            - {op: ne, field: status, value: cancelled}
+      # refunds has no tenant column, so support may file refunds but not list them.
+      - entity: refunds
+        actions: [create]
+        fields: {write: [order_id, amount, reason, status]}
+
+  marketing:
+    description: 会员运营：客户分层，不可见联系方式
+    grants:
+      - entity: customers
+        actions: [read, aggregate]
+        fields: {read: [id, name, region, vip_level, created_at]}
+
+  finance:
+    description: 平台财务：跨租户的订单、退款与成本价
+    grants:
+      - entity: orders
+        actions: [read, aggregate]
+        rows: {op: in, field: status, value: [paid, shipped, completed]}
+      - entity: refunds
+        actions: [read, aggregate]
+      - entity: products
+        actions: [read]
+
+# MCP callers. LOCAL EXAMPLE ONLY: the matching tokens are listed in README.md;
+# generate your own with `sql-mcp-server user token` or in the console.
+users:
+  bi-agent:
+    description: 平台 BI 分析 Agent（跨租户，看不到客户个人信息）
+    tokenHash: "sha256:4f2018d77b836ba3533a8ef8b738b502ad814f473a8eb3fa87533d887ecd8ebc"
+    roles: [analyst]
+  support-agent:
+    description: 客服 Agent（示例商户 A）
+    tokenHash: "sha256:21cf41095d5ddc9b68589384b2bb7e855400ff1ea9f99517c8baa975e30676ac"
+    roles: [support]
+    subject: {tenant_id: 1}
+  support-agent-t2:
+    description: 客服 Agent（示例商户 B），用于对比租户隔离
+    tokenHash: "sha256:dfad97dce503c2883a306f5b294866512aa7f3bcb8af23ebba97fba43045184f"
+    roles: [support]
+    subject: {tenant_id: 2}
+  crm-agent:
+    description: 示例商户 A 的 CRM Agent，同时有客服与会员运营角色，两者可读字段不同
+    tokenHash: "sha256:83c98225d57d8c44e6925825bc733e9afa066579bd85d71c54b7ea0d92796993"
+    roles: [support, marketing]
+    subject: {tenant_id: 1}
+  finance-bot:
+    description: 平台对账机器人
+    tokenHash: "sha256:c58f00de71ecb3fc587ce7d18acc4f395112c2c267d3ea84dfd225cd506df3b6"
+    roles: [finance]
+    grants:
+      - entity: archive_orders
+        actions: [read, aggregate]
+  legacy-bot:
+    description: 已停用的旧报表脚本
+    tokenHash: "sha256:218fdd3ff94b4e8b0d9367791623c5691f451b82de37fb5831dcce72bc4e2479"
+    roles: [analyst]
+    disabled: true
+  new-agent:
+    description: 待接入，还没有 token
+    roles: [analyst]

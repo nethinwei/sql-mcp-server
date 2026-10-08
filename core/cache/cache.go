@@ -8,19 +8,25 @@ import (
 
 const defaultMaxSize = 1024
 
-// Key identifies a cached entry. Scope separates authorization/RLS identities.
+// Key identifies a cached entry: the relation it reads (Relation of
+// Database; empty for data derived from other relations of the database,
+// such as a view), the statement, and Scope, which separates authorization
+// and row-level identities.
 type Key struct {
-	Entity string
-	SQL    string
-	Args   string
-	Scope  string
+	Database string
+	Relation string
+	SQL      string
+	Args     string
+	Scope    string
 }
 
-// Cache is a generic read cache with per-table invalidation.
+// Cache is a generic read cache with per-relation invalidation.
 type Cache[T any] interface {
 	Get(ctx context.Context, k Key) (T, bool)
 	Set(ctx context.Context, k Key, v T) error
-	Invalidate(entity string) error
+	// Invalidate drops the entries reading relation of database and every
+	// derived entry of database; an empty relation drops all of database.
+	Invalidate(database, relation string) error
 }
 
 // NoopCache is a Cache that stores nothing.
@@ -33,7 +39,7 @@ func (NoopCache[T]) Get(_ context.Context, _ Key) (T, bool) { var z T; return z,
 func (NoopCache[T]) Set(_ context.Context, _ Key, _ T) error { return nil }
 
 // Invalidate is a no-op.
-func (NoopCache[T]) Invalidate(_ string) error { return nil }
+func (NoopCache[T]) Invalidate(_, _ string) error { return nil }
 
 type entry[T any] struct {
 	v   T
@@ -95,12 +101,12 @@ func (c *TTLCache[T]) Set(_ context.Context, k Key, v T) error {
 	return nil
 }
 
-// Invalidate removes all entries whose Key.Entity matches.
-func (c *TTLCache[T]) Invalidate(entity string) error {
+// Invalidate implements Cache.
+func (c *TTLCache[T]) Invalidate(database, relation string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for k := range c.m {
-		if k.Entity == entity {
+		if k.Database == database && (relation == "" || k.Relation == "" || k.Relation == relation) {
 			delete(c.m, k)
 		}
 	}

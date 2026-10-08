@@ -50,7 +50,7 @@ func connectMySQLWithRetry(t *testing.T, dsn string) *mysql.Provider {
 	t.Helper()
 	var lastErr error
 	for range 20 {
-		provider, err := mysql.New(dsn)
+		provider, err := mysql.NewWithTimeout(dsn, 30*time.Second)
 		if err == nil {
 			return provider
 		}
@@ -90,24 +90,7 @@ func TestMySQLProviderQueryExecExplainIntrospect(t *testing.T) {
 		t.Fatalf("ScanType = %v, want ScanFull for unfiltered scan", plan.ScanType)
 	}
 
-	// Introspect: discover the users table with a primary key.
-	entities, err := prov.Introspector().Discover(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var users *entity.Entity
-	for i := range entities {
-		if entities[i].Name == "users" {
-			users = &entities[i]
-		}
-	}
-	if users == nil {
-		t.Fatalf("users not discovered: %+v", entities)
-	}
-	pk := users.PrimaryKey()
-	if len(pk) != 1 || pk[0] != "id" {
-		t.Fatalf("primary key = %v, want [id]", pk)
-	}
+	assertMySQLIntrospectUsers(t, ctx, prov)
 }
 
 func TestMySQLReadEnforceCap(t *testing.T) {
@@ -124,7 +107,7 @@ func TestMySQLReadEnforceCap(t *testing.T) {
 		}},
 		Tools: config.DefaultToolFlags(),
 		// MySQL uses conservative EXPLAIN: unfiltered full scans are rejected.
-		Cost: config.CostConfig{Enabled: config.Bool(true), SoftScore: 90, HardScore: 95, MaxRows: 1},
+		Cost: config.CostConfig{Enabled: new(true), SoftScore: 90, HardScore: 95, MaxRows: 1},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -147,6 +130,9 @@ func TestMySQLReadEnforceCap(t *testing.T) {
 	}
 	if len(res.Content) > 1 {
 		t.Fatalf("EnforceCap should limit to 1 row, got %d", len(res.Content))
+	}
+	if email, ok := res.Content[0]["email"].(string); !ok || email != "alice@x.com" {
+		t.Fatalf("text column = %#v (%T), want string", res.Content[0]["email"], res.Content[0]["email"])
 	}
 }
 
@@ -177,7 +163,7 @@ func newMySQLRLSApp(t *testing.T, prov *mysql.Provider) *bootstrap.App {
 			},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(false), MaxRows: 10000},
+		Cost:  config.CostConfig{Enabled: new(false), MaxRows: 10000},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -251,7 +237,7 @@ func assertMySQLQuotedIdentifierRLS(t *testing.T, ctx context.Context, prov *mys
 			},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(false), MaxRows: 10000},
+		Cost:  config.CostConfig{Enabled: new(false), MaxRows: 10000},
 	}
 	quotedCfg.ApplyDefaults()
 	quotedApp, err := bootstrap.AssembleWithProvider(quotedCfg, prov)
@@ -284,7 +270,7 @@ func TestMySQLUpdateUnsafeWriteAndPK(t *testing.T) {
 			Roles:  config.RoleConfig{Update: []string{"writer"}},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(false)},
+		Cost:  config.CostConfig{Enabled: new(false)},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -328,7 +314,7 @@ func TestMySQLExecuteProcedure(t *testing.T) {
 		}},
 		Tools: config.DefaultToolFlags(),
 		Cost: config.CostConfig{
-			Enabled:        config.Bool(false),
+			Enabled:        new(false),
 			AllowTemplates: []string{"CALL `count_users`()"},
 		},
 	}
@@ -362,7 +348,7 @@ func TestMySQLReadPKWhitelist(t *testing.T) {
 		}},
 		Tools: config.DefaultToolFlags(),
 		Cost: config.CostConfig{
-			Enabled:          config.Bool(true),
+			Enabled:          new(true),
 			SoftScore:        40,
 			HardScore:        70,
 			MaxRows:          10000,
@@ -386,5 +372,70 @@ func TestMySQLReadPKWhitelist(t *testing.T) {
 	}
 	if len(res.Content) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(res.Content))
+	}
+}
+
+func assertMySQLIntrospectUsers(t *testing.T, ctx context.Context, prov *mysql.Provider) {
+	t.Helper()
+	// Introspect: discover the users table with a primary key, never a
+	// reserved store table.
+	if _, err := prov.ExecContext(ctx, "CREATE TABLE smcp_store_probe (id int PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		"CREATE TABLE customers (id int PRIMARY KEY COMMENT 'customer id', name text) COMMENT='customer master'",
+		"CREATE TABLE purchases (id int PRIMARY KEY, customer_id int, " +
+			"CONSTRAINT fk_purchases_customer FOREIGN KEY (customer_id) REFERENCES customers(id))",
+	} {
+		if _, err := prov.ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	entities, err := prov.Introspector().Discover(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entities {
+		if config.IsStoreTable(e.Name) {
+			t.Fatalf("introspection must skip reserved store table %q", e.Name)
+		}
+	}
+	assertCommentsAndForeignKeys(t, entities)
+	var users *entity.Entity
+	for i := range entities {
+		if entities[i].Name == "users" {
+			users = &entities[i]
+		}
+	}
+	if users == nil {
+		t.Fatalf("users not discovered: %+v", entities)
+	}
+	pk := users.PrimaryKey()
+	if len(pk) != 1 || pk[0] != "id" {
+		t.Fatalf("primary key = %v, want [id]", pk)
+	}
+}
+
+// assertCommentsAndForeignKeys checks that introspection maps table and
+// column comments to descriptions and reports single-column foreign keys.
+func assertCommentsAndForeignKeys(t *testing.T, entities []entity.Entity) {
+	t.Helper()
+	byName := map[string]entity.Entity{}
+	for _, e := range entities {
+		byName[e.Name] = e
+	}
+	customers, purchases := byName["customers"], byName["purchases"]
+	if customers.Description != "customer master" || len(customers.Attributes) == 0 ||
+		customers.Attributes[0].Description != "customer id" {
+		t.Fatalf("comments not introspected: %+v", customers)
+	}
+	if len(purchases.ForeignKeys) != 1 {
+		t.Fatalf("foreign keys = %+v", purchases.ForeignKeys)
+	}
+	fk := purchases.ForeignKeys[0]
+	if fk.RefRelation != "customers" || fk.RefSchema != purchases.Schema || fk.RefSchema == "" ||
+		len(fk.Columns) != 1 || fk.Columns[0] != "customer_id" ||
+		len(fk.RefColumns) != 1 || fk.RefColumns[0] != "id" {
+		t.Fatalf("foreign key = %+v", fk)
 	}
 }

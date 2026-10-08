@@ -31,7 +31,7 @@ func (s StaticRule) Check(_ context.Context, c codegen.Compiled) (Decision, erro
 	if matchesBaseline(s.RejectTemplates, s.Datasource, s.DialectName, c, s.LegacyExactSQL) {
 		return Decision{Allow: false, Hints: []string{"query matches a rejected template"}}, nil
 	}
-	if s.PKWhitelist && c.IsPKPoint {
+	if s.PKWhitelist && c.IsKeyPoint {
 		p := Plan{ScanType: ScanPoint, StatsFresh: true}
 		return Decision{Allow: true, Bypass: true, Plan: &p, Score: ptrScore(ScorePlan(p))}, nil
 	}
@@ -48,26 +48,6 @@ type Estimate struct {
 	Threshold  Threshold
 	Feedback   FeedbackStore
 	FailClosed bool
-}
-
-// EstimateOption configures NewEstimate.
-type EstimateOption func(*Estimate)
-
-// WithFailClosed rejects EXPLAIN errors and unknown plans.
-func WithFailClosed() EstimateOption {
-	return func(e *Estimate) { e.FailClosed = true }
-}
-
-// NewEstimate constructs an Estimate. Existing struct literals remain valid;
-// the default behavior continues to degrade EXPLAIN failures.
-func NewEstimate(ex Explainer, th Threshold, feedback FeedbackStore, opts ...EstimateOption) Estimate {
-	e := Estimate{Explainer: ex, Threshold: th, Feedback: feedback}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&e)
-		}
-	}
-	return e
 }
 
 // Name implements Layer.
@@ -166,7 +146,8 @@ func (e EnforceCap) Check(_ context.Context, c codegen.Compiled) (Decision, erro
 }
 
 // WriteGuard is a deterministic write-safety layer, independent of EXPLAIN. A
-// write (UPDATE/DELETE) whose predicate is not a full primary-key point lookup
+// write (UPDATE/DELETE) whose predicate is not a point lookup on an identity
+// key the database enforces (primary or unique key)
 // is hard-rejected. This backstops databases whose row estimates are
 // unreliable (MySQL/OceanBase), where an unbounded WHERE could touch millions
 // of rows. Point writes are already bypassed by StaticRule's PK whitelist;
@@ -194,13 +175,13 @@ func (WriteGuard) Check(_ context.Context, c codegen.Compiled) (Decision, error)
 			return Decision{Allow: true}, nil
 		}
 	}
-	if c.IsPKPoint {
+	if c.IsKeyPoint {
 		return Decision{Allow: true}, nil
 	}
 	return Decision{
 		Allow: false,
 		Hints: []string{
-			"scope the write with a primary-key equality filter (e.g. id = ...)",
+			"scope the write with an equality filter on a primary or unique key (e.g. id = ...)",
 			"or add the exact statement to allowTemplates after review",
 		},
 	}, nil

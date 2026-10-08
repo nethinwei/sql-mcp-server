@@ -8,7 +8,7 @@ import (
 )
 
 func describeFields(ctx context.Context, tc Context, e entity.Entity) ([]string, bool, error) {
-	actions := describeEntityActions(e)
+	actions := entity.ActionsFor(e.Kind)
 	allowedEntity := false
 	fields := make(map[string]bool)
 	for _, action := range actions {
@@ -18,7 +18,7 @@ func describeFields(ctx context.Context, tc Context, e entity.Entity) ([]string,
 		if err != nil {
 			return nil, false, err
 		}
-		if !dec.Allowed {
+		if !dec.Reachable() {
 			continue
 		}
 		allowedEntity = true
@@ -26,17 +26,7 @@ func describeFields(ctx context.Context, tc Context, e entity.Entity) ([]string,
 			return nil, false, err
 		}
 	}
-	return orderedDescribeFields(e, fields), allowedEntity, nil
-}
-
-func describeEntityActions(e entity.Entity) []entity.Action {
-	if e.Kind == entity.KindProcedure {
-		return []entity.Action{entity.ActionExecute}
-	}
-	return []entity.Action{
-		entity.ActionRead, entity.ActionCreate, entity.ActionUpdate,
-		entity.ActionDelete, entity.ActionAggregate,
-	}
+	return e.OrderedNames(fields), allowedEntity, nil
 }
 
 func collectDescribeFields(
@@ -88,14 +78,4 @@ func describeFieldRequests(tc Context, entityName string, action entity.Action, 
 	default:
 		return []rbac.Request{request}
 	}
-}
-
-func orderedDescribeFields(e entity.Entity, fields map[string]bool) []string {
-	out := make([]string, 0, len(fields))
-	for _, attr := range e.Attributes {
-		if fields[attr.Name] {
-			out = append(out, attr.Name)
-		}
-	}
-	return out
 }

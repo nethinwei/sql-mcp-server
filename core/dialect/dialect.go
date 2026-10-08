@@ -1,23 +1,12 @@
 package dialect
 
 // Capabilities declares what a database supports. It drives codegen rendering
-// (e.g. RETURNING fallback) and which Gate layers are assembled (e.g. whether
-// the Estimate layer is enabled, which DB-native limits apply). See the cost
-// gate design.
+// (RETURNING or a second statement for the inserted key) and whether the cost
+// gate assembles the Estimate layer. See the cost gate design.
 type Capabilities struct {
-	// Rendering.
-	Returning    bool // INSERT ... RETURNING (PG/OB-Oracle have; MySQL lacks -> second SELECT for last id)
-	Savepoint    bool
-	KeysetCursor bool // keyset pagination needs no degradation
-
-	// Gate layers (see cost.Gate assembly).
-	ExplainJSON      bool // supports EXPLAIN ... JSON output
-	ExplainCost      bool // EXPLAIN yields a numeric cost (SQLite does not)
-	ExplainAccurate  bool // estimate trustworthiness (PG high; MySQL/OB medium; SQLite low)
-	StatementTimeout bool // native timeout exists; core does not SET it across pooled connections
-	ScanRowCap       bool // ob max_read_size / mysql max_join_size (runtime scan-row hard cap)
-	SQLSafeUpdates   bool // mysql/ob sql_safe_updates (prevents full-table writes)
-	ResourceManager  bool // ob tenant / oracle resource isolation
+	Returning       bool // INSERT ... RETURNING (PG has; MySQL lacks -> exec + last insert id)
+	ExplainCost     bool // EXPLAIN yields a numeric cost (SQLite does not)
+	ExplainAccurate bool // estimate trustworthiness (PG high; MySQL/OB medium; SQLite low)
 }
 
 // Dialect abstracts the SQL differences core codegen needs. Implementations are
@@ -26,6 +15,5 @@ type Dialect interface {
 	Name() string
 	QuoteIdent(name string) string
 	Placeholder(index int) string
-	ExplainSQL(query string) string
 	Capabilities() Capabilities
 }

@@ -17,7 +17,7 @@ func TestNilSafeNoPanic(t *testing.T) {
 	if ctx == nil {
 		t.Fatal("ctx should be returned")
 	}
-	h.FireAfterTool(context.Background(), "x", nil, nil)
+	h.FireAfterTool(context.Background(), "x", nil)
 	h.FireOnError(context.Background(), errors.New("e"))
 	h.FireCostGate(context.Background(), cost.Plan{}, cost.Score{}, "allow")
 	h.FireAuthorize(context.Background(), rbac.Request{}, rbac.Decision{})

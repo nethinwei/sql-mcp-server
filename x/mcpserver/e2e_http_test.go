@@ -153,7 +153,7 @@ func e2eSubjectScopedConfig(auditPath string) *config.Config {
 		}},
 		Tools: config.DefaultToolFlags(),
 		Cost: config.CostConfig{
-			Enabled: config.Bool(true), SoftScore: 60, HardScore: 40, MaxRows: 10000,
+			Enabled: new(true), SoftScore: 60, HardScore: 40, MaxRows: 10000,
 			RejectFullScan: true, WhitelistPKPoint: true,
 		},
 	}

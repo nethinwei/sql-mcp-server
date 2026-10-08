@@ -23,7 +23,7 @@ func TestMemoryStoreAverage(t *testing.T) {
 }
 
 func TestMemoryStoreBoundedStatistics(t *testing.T) {
-	s := NewMemoryStoreWithWindow(2)
+	s := NewAdaptiveMemoryStoreWithBounds(2, defaultMaxFingerprintKeys, 3, 5, nil)
 	s.Record(Feedback{Template: "fp", EstimatedRows: 1, ActualRows: 10, Duration: time.Second})
 	s.Record(Feedback{Template: "fp", EstimatedRows: 2, ActualRows: 20, Duration: 2 * time.Second})
 	s.Record(Feedback{Template: "fp", EstimatedRows: 3, ActualRows: 30, Duration: 3 * time.Second})
@@ -34,7 +34,7 @@ func TestMemoryStoreBoundedStatistics(t *testing.T) {
 }
 
 func TestMemoryStoreBoundsFingerprintKeysFIFO(t *testing.T) {
-	s := NewMemoryStoreWithBounds(2, 2)
+	s := NewAdaptiveMemoryStoreWithBounds(2, 2, 3, 5, nil)
 	s.Record(Feedback{Template: "first", ActualRows: 1})
 	s.Record(Feedback{Template: "second", ActualRows: 2})
 	s.Record(Feedback{Template: "first", ActualRows: 3})
@@ -86,7 +86,7 @@ func (r *recordingInvalidator) InvalidatePlan(key string) { r.keys = append(r.ke
 
 func TestFeedbackAnomalyInvalidatesPlan(t *testing.T) {
 	invalidator := &recordingInvalidator{}
-	store := NewAdaptiveMemoryStore(4, 2, 2, invalidator)
+	store := NewAdaptiveMemoryStoreWithBounds(4, defaultMaxFingerprintKeys, 2, 2, invalidator)
 	store.Record(Feedback{Template: "fp", ActualRows: 10})
 	store.Record(Feedback{Template: "fp", ActualRows: 10})
 	store.Record(Feedback{Template: "fp", ActualRows: 30})

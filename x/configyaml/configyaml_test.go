@@ -3,6 +3,7 @@ package configyaml
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -204,5 +205,110 @@ func TestLoad(t *testing.T) {
 	}
 	if cfg.Databases["default"].Driver != "postgres" {
 		t.Fatalf("loaded databases = %+v", cfg.Databases)
+	}
+}
+
+func TestEncodeOmitsEmptyEntityValues(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Decode([]byte(validDatabase + `entities:
+  - name: orders
+    fields:
+      - name: id
+      - name: secret
+        exclude: true
+    params: []
+    fieldACL: {}
+    roles: {read: []}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := Encode(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, noise := range []string{`alias: ""`, `description: ""`, `mask: ""`, "exclude: false", "params:", "fieldACL:",
+		"\n    roles:", "rowPolicies:", "relationships:", "customTool:", "trustedProcedure:", `schema: ""`, `source: ""`,
+		": null"} {
+		if strings.Contains(string(out), noise) {
+			t.Errorf("encoding contains empty value %q:\n%s", noise, out)
+		}
+	}
+	if !strings.Contains(string(out), "exclude: true") {
+		t.Errorf("encoding lost exclude: true:\n%s", out)
+	}
+}
+
+// Values whose absence means something else must survive omitempty.
+func TestEncodeRoundTripsPresenceSensitiveValues(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Decode([]byte(validDatabase + `tools: {}
+cost: {enabled: false}
+mask: {enabled: false}
+entities:
+  - name: hidden
+    mcp: {dmlTools: false}
+    fieldACL:
+      viewer: {read: [], write: []}
+roles:
+  nothing:
+    grants:
+      - entity: hidden
+        actions: [read]
+        fields: {read: []}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := Encode(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := Decode(out)
+	if err != nil {
+		t.Fatalf("decode encoded: %v\n%s", err, out)
+	}
+	e := again.Entities[0]
+	switch {
+	case e.MCP.DMLTools:
+		t.Errorf("explicit dmlTools false became true:\n%s", out)
+	case again.Tools != cfg.Tools:
+		t.Errorf("explicit tools block changed: %+v", again.Tools)
+	}
+	if again.Cost.EnabledOrDefault() || again.Mask.Enabled == nil || *again.Mask.Enabled {
+		t.Errorf("explicit enabled: false lost:\n%s", out)
+	}
+	if _, ok := e.FieldACL["viewer"]; !ok {
+		t.Errorf("empty fieldACL entry dropped:\n%s", out)
+	}
+	if g := again.Roles["nothing"].Grants[0]; g.Fields == nil {
+		t.Errorf("grant restricted to no fields became unrestricted:\n%s", out)
+	}
+}
+
+func TestDecodeRejectsUnknownFields(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct{ yaml, want string }{
+		"top level": {validDatabase + "tool: {}\n", "field tool not found"},
+		"nested":    {validDatabase + "cost:\n  maxRow: 5\n", "line 3: field maxRow not found"},
+		"entity":    {validDatabase + "entities:\n  - name: orders\n    feilds: []\n", "field feilds not found"},
+		"grant": {validDatabase + "entities:\n  - name: orders\nroles:\n  r:\n    grants:\n" +
+			"      - {entity: orders, actions: [read], row: {}}\n", "field row not found"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Decode([]byte(tc.yaml))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+	// Row filters stay free-form maps.
+	if _, err := Decode([]byte(validDatabase + "entities:\n  - name: orders\n    fields: [{name: region}]\n" +
+		"    tenantPolicy: {field: region, op: eq, value: CN}\n")); err != nil {
+		t.Fatalf("filter maps must accept their own keys: %v", err)
 	}
 }

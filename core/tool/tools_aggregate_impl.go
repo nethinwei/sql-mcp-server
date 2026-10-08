@@ -14,7 +14,7 @@ import (
 )
 
 func runAggregate(ctx context.Context, tc Context, in aggregateInput) (Result, error) {
-	ctx, cancel := withTimeout(ctx, tc)
+	ctx, cancel := withTimeout(ctx, tc, 0)
 	defer cancel()
 	tc.Transaction = in.Transaction
 	plan, err := prepareAggregate(ctx, tc, in)
@@ -47,11 +47,11 @@ func prepareAggregate(ctx context.Context, tc Context, in aggregateInput) (aggre
 	if err != nil {
 		return aggregatePlan{}, err
 	}
-	tc, err = routeEntity(tc, res.Entity)
+	tc, err = routeEntity(tc, res.Entity, entity.ActionAggregate)
 	if err != nil {
 		return aggregatePlan{}, err
 	}
-	pred, err := filterToPredicate(in.Filter)
+	pred, err := filterToPredicate(in.Filter, tc.MaxFilterConditions)
 	if err != nil {
 		return aggregatePlan{}, err
 	}

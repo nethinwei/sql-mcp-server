@@ -9,8 +9,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/nethinwei/sql-mcp-server/core/budget"
 )
 
 // ErrRuntimeClosed is returned when a closed runtime is used.
@@ -37,17 +35,35 @@ type Runtime struct {
 	current atomic.Pointer[appSnapshot]
 	reload  sync.Mutex
 	build   func(string) (*App, error)
+	revoked atomic.Pointer[func([]string)]
+	stale   atomic.Pointer[StaleState]
+	applied atomic.Int64
 }
 
-// NewRuntime creates a runtime using Load followed by Assemble for reloads.
-func NewRuntime(app *App) *Runtime {
-	return NewRuntimeWithBuilder(app, func(path string) (*App, error) {
-		cfg, err := Load(path)
-		if err != nil {
-			return nil, err
-		}
-		return Assemble(cfg)
-	})
+// OnRevokedPrincipals registers fn to receive the principal keys of users that
+// a successful reload removed or disabled, after the new snapshot is published.
+// Transports use it to drop those users' sessions and roll back their
+// transactions.
+func (r *Runtime) OnRevokedPrincipals(fn func([]string)) {
+	r.revoked.Store(&fn)
+}
+
+// UserByTokenHash resolves a tokenHash against the current snapshot.
+func (r *Runtime) UserByTokenHash(hash string) (UserIdentity, bool) {
+	app := r.Current()
+	if app == nil {
+		return UserIdentity{}, false
+	}
+	return app.UserByTokenHash(hash)
+}
+
+// UserByName resolves an enabled user against the current snapshot.
+func (r *Runtime) UserByName(name string) (UserIdentity, bool) {
+	app := r.Current()
+	if app == nil {
+		return UserIdentity{}, false
+	}
+	return app.UserByName(name)
 }
 
 // NewRuntimeWithBuilder creates a runtime with an injected reload builder.
@@ -99,34 +115,44 @@ func (r *Runtime) Acquire() (*App, func(), error) {
 // Reload performs parse/default/validate/secret-resolution/assembly before
 // atomically publishing the new App. Build failure preserves the old snapshot.
 func (r *Runtime) Reload(path string) error {
+	return r.reloadWith(func() (*App, error) { return r.build(path) })
+}
+
+func (r *Runtime) reloadWith(build func() (*App, error)) error {
 	r.reload.Lock()
 	defer r.reload.Unlock()
 	if r.current.Load() == nil {
 		return ErrRuntimeClosed
 	}
-	next, err := r.build(path)
+	next, err := build()
 	if err != nil {
 		return err
 	}
 	old := r.current.Load()
-	if err := validateReloadBudget(old.app, next); err != nil {
-		return err
-	}
 	if err := preserveReloadTransactions(old.app, next); err != nil {
 		return err
 	}
 	preserveReloadBudget(old.app, next)
-	return publishReload(r, old, next)
+	if old.app.Writes != nil {
+		next.Writes = old.app.Writes // sessions keep reading their own writes across a reload
+	}
+	revoked := revokedPrincipals(old.app, next)
+	err = publishReload(r, old, next)
+	if fn := r.revoked.Load(); fn != nil && len(revoked) > 0 {
+		(*fn)(revoked)
+	}
+	return err
 }
 
-func validateReloadBudget(old, next *App) error {
-	_, oldBudgetOK := old.Budget.(*budget.MemoryManager)
-	_, nextBudgetOK := next.Budget.(*budget.MemoryManager)
-	if old.Budget != nil && (!oldBudgetOK || !nextBudgetOK) && next.Budget != old.Budget {
-		_ = next.Close()
-		return errors.New("bootstrap: budget manager does not support state-preserving reload")
+// revokedPrincipals lists users servable by old but no longer by next.
+func revokedPrincipals(old, next *App) []string {
+	var out []string
+	for name, id := range old.Users {
+		if _, ok := next.Users[name]; !ok {
+			out = append(out, id.Principal)
+		}
 	}
-	return nil
+	return out
 }
 
 func preserveReloadTransactions(old, next *App) error {
@@ -156,18 +182,14 @@ func preserveReloadTransactions(old, next *App) error {
 	return nil
 }
 
+// preserveReloadBudget keeps the accumulated session state across a reload,
+// adopting the new configured limits.
 func preserveReloadBudget(old, next *App) {
-	if old.Budget == nil {
+	if old.Budget == nil || next.Budget == nil {
 		return
 	}
-	oldBudget, oldBudgetOK := old.Budget.(*budget.MemoryManager)
-	nextBudget, nextBudgetOK := next.Budget.(*budget.MemoryManager)
-	if !oldBudgetOK || !nextBudgetOK {
-		return
-	}
-	roles, tenants := nextBudget.ConfiguredLimits()
-	oldBudget.UpdateLimits(roles, tenants)
-	next.Budget = oldBudget
+	old.Budget.UpdateLimits(next.Budget.ConfiguredLimits())
+	next.Budget = old.Budget
 }
 
 func publishReload(r *Runtime, old *appSnapshot, next *App) error {
@@ -256,9 +278,10 @@ func (r *Runtime) RollbackSession(session string) {
 	if app.Transactions != nil {
 		app.Transactions.RollbackSession(session)
 	}
-	if manager, ok := app.Budget.(budget.SessionManager); ok {
-		manager.CloseSession(session)
+	if app.Budget != nil {
+		app.Budget.CloseSession(session)
 	}
+	app.Writes.Forget(session)
 }
 
 // Close stops new acquisitions, drains leases, and closes the current App.

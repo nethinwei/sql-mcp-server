@@ -190,7 +190,8 @@ func startWorkloadDatabase(ctx context.Context, cfg workload.Config) (string, fu
 		return "", func() {}, err
 	}
 	defer func() { _ = provider.Close() }()
-	statements := workload.Generate(cfg).Statements(workload.DialectPostgres)
+	dataset := workload.Generate(cfg)
+	statements := append(dataset.Statements(workload.DialectPostgres), dataset.DiagnosticViews()...)
 	// ANALYZE keeps the cost gate's row estimates honest on small tables.
 	statements = append(statements, "ANALYZE")
 	for _, stmt := range statements {

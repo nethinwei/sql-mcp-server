@@ -19,7 +19,10 @@ YAML presence 解码位于 `x/configyaml`，不会把 `yaml.v3` 引入核心。
 - **I4** 标记为 `CostGated` 的实体工具在执行生成 SQL 前调用成本 gate。
 - **I5** 成本 gate 在实体 action/字段授权通过后调用。
 - **I6** 读取返回字段不得超出授权 decision 的字段集合。
-- **I7** 有行级策略时，有效谓词为用户谓词与角色谓词的 AND。
+- **I7** 有效谓词为 `用户谓词 AND (覆盖集内各授权项行范围的 OR) AND tenantPolicy`；
+  覆盖集中任一授权项不限行时中间项为 TRUE。只有单个角色时即"用户谓词 AND 角色
+  谓词"。授权主体是角色名或 `user:<name>`，缓存、singleflight、事务和预算均按
+  主体隔离。
 - **I8** 通用实体工具只能访问 `entity.MCP.DMLTools` 开启的实体。
 - **I15** filter、group-by、set、values 和 cursor 字段必须是可见实体字段；
   隐藏字段不能作为谓词或写目标。
@@ -38,6 +41,16 @@ YAML presence 解码位于 `x/configyaml`，不会把 `yaml.v3` 引入核心。
 - **I23** begin、commit、rollback 各自受 deadline；commit 失败必须尝试 rollback。
 - **I24** 不能将返回行数冒充实际扫描行数；跨方言只承诺 EXPLAIN 估算上限，并在
   计划未知或 EXPLAIN 失败时 fail closed。
+- **I25** 多角色/直授合并时，每个返回的行和列都至少被一个授权项同时覆盖：
+  只有覆盖请求所用全部字段的授权项参与行范围合并，没有单一授权项覆盖时拒绝
+  （`AMBIGUOUS_FIELD_SCOPE`），不对字段与行分别取并集。
+- **I26** 实体 `tenantPolicy` 对所有主体始终 AND，不参与授权项之间的 OR；用户
+  配置的 subject 属性优先于可信代理注入的同名属性。
+- **I27** 配置存储表（`smcp_` 前缀）不能被任何实体的 `source` 引用，也不出现在
+  introspection 结果中。
+- **I28** 从 store 加载的 revision 必须先通过 content hash 校验与 store 模式密钥
+  规则，任一失败都保留当前快照；任一时刻至多一个 published revision，状态转换
+  以乐观并发串行化。
 
 MCP 工具是否在 tools/list 中还取决于全局 `tools` 开关；custom procedure tool
 由 `mcp.customTool` 独立注册，不受通用 `executeEntity` 开关控制。

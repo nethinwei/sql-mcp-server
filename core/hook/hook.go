@@ -12,7 +12,7 @@ import (
 // a nil Hooks or nil field is a no-op.
 type Hooks struct {
 	BeforeTool  func(ctx context.Context, name string, input json.RawMessage) context.Context
-	AfterTool   func(ctx context.Context, name string, result any, err error)
+	AfterTool   func(ctx context.Context, name string, err error)
 	OnError     func(ctx context.Context, err error)
 	OnCostGate  func(ctx context.Context, plan cost.Plan, score cost.Score, decision string)
 	OnAuthorize func(ctx context.Context, req rbac.Request, dec rbac.Decision)
@@ -27,11 +27,11 @@ func (h *Hooks) FireBeforeTool(ctx context.Context, name string, input json.RawM
 }
 
 // FireAfterTool runs AfterTool if set.
-func (h *Hooks) FireAfterTool(ctx context.Context, name string, result any, err error) {
+func (h *Hooks) FireAfterTool(ctx context.Context, name string, err error) {
 	if h == nil || h.AfterTool == nil {
 		return
 	}
-	h.AfterTool(ctx, name, result, err)
+	h.AfterTool(ctx, name, err)
 }
 
 // FireOnError runs OnError if set.
@@ -69,9 +69,9 @@ func Join(hooks ...*Hooks) *Hooks {
 			}
 			return ctx
 		},
-		AfterTool: func(ctx context.Context, name string, result any, err error) {
+		AfterTool: func(ctx context.Context, name string, err error) {
 			for _, h := range hooks {
-				h.FireAfterTool(ctx, name, result, err)
+				h.FireAfterTool(ctx, name, err)
 			}
 		},
 		OnError: func(ctx context.Context, err error) {

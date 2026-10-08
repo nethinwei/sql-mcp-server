@@ -22,14 +22,7 @@ func configToEntities(ecs []config.EntityConfig) ([]entity.Entity, error) {
 }
 
 func configToEntity(ec config.EntityConfig) (entity.Entity, error) {
-	source := ec.Source
-	if source == "" {
-		source = ec.Name
-	}
-	dataSource := ec.DataSource
-	if dataSource == "" {
-		dataSource = "default"
-	}
+	source, dataSource := ec.PhysicalSource(), ec.DatasourceName()
 	attrs := entityAttributesFromConfig(ec.Fields)
 	role := entityRoleFromConfig(ec.Roles)
 	fieldAccess := entityFieldAccessFromConfig(ec.FieldACL)
@@ -37,7 +30,11 @@ func configToEntity(ec config.EntityConfig) (entity.Entity, error) {
 	if err != nil {
 		return entity.Entity{}, err
 	}
-	keys := entityKeysFromConfig(ec.PrimaryKey)
+	tenantPolicy, err := filterConfigToPredicate(ec.TenantPolicy)
+	if err != nil {
+		return entity.Entity{}, fmt.Errorf("tenant policy for entity %q: %w", ec.Name, err)
+	}
+	keys := entityKeysFromConfig(ec.PrimaryKey, ec.UniqueKeys)
 	relations := entityRelationsFromConfig(ec.Relationships)
 	return entity.Entity{
 		Name: ec.Name, Source: source, DataSource: dataSource, Schema: ec.Schema, Description: ec.Description,
@@ -46,9 +43,12 @@ func configToEntity(ec config.EntityConfig) (entity.Entity, error) {
 			DMLTools: ec.MCP.DMLTools, CustomTool: ec.MCP.CustomTool,
 			TrustedProcedure: ec.MCP.TrustedProcedure,
 		},
-		RowPolicies: rowPolicies,
-		Relations:   relations,
-		Params:      ec.Params,
+		RowPolicies:  rowPolicies,
+		AllowCascade: ec.AllowCascade,
+		TenantPolicy: tenantPolicy,
+		Relations:    relations,
+		Params:       ec.Params,
+		Affects:      ec.Affects,
 	}, nil
 }
 
@@ -94,11 +94,15 @@ func entityRowPoliciesFromConfig(policies config.RowPolicies) (entity.RowPolicie
 	return rowPolicies, nil
 }
 
-func entityKeysFromConfig(primaryKey []string) []entity.Key {
-	if len(primaryKey) == 0 {
-		return nil
+func entityKeysFromConfig(primaryKey []string, uniqueKeys [][]string) []entity.Key {
+	var keys []entity.Key
+	if len(primaryKey) > 0 {
+		keys = append(keys, entity.Key{Name: "pk", Columns: primaryKey, Primary: true})
 	}
-	return []entity.Key{{Name: "pk", Columns: primaryKey, Primary: true}}
+	for i, columns := range uniqueKeys {
+		keys = append(keys, entity.Key{Name: fmt.Sprintf("uk%d", i+1), Columns: columns})
+	}
+	return keys
 }
 
 func entityRelationsFromConfig(relations []config.RelationshipConfig) []entity.Relationship {

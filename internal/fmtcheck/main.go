@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -64,6 +65,10 @@ func formatTree(root string) error {
 	return cmd.Run()
 }
 
+// generatedRe is the Go convention for generated files
+// (https://go.dev/s/generatedcode); such files are not hand-formatted.
+var generatedRe = regexp.MustCompile(`(?m)^// Code generated .* DO NOT EDIT\.$`)
+
 func checkTree(root string) ([]issue, error) {
 	var issues []issue
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
@@ -82,6 +87,9 @@ func checkTree(root string) ([]issue, error) {
 		source, err := os.ReadFile(path)
 		if err != nil {
 			return err
+		}
+		if generatedRe.Match(source) {
+			return nil
 		}
 		fileIssues, err := checkFile(path, source)
 		if err != nil {

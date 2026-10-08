@@ -15,19 +15,7 @@ func (Dialect) Name() string { return "mysql" }
 func (Dialect) QuoteIdent(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
-func (Dialect) Placeholder(_ int) string   { return "?" }
-func (Dialect) ExplainSQL(q string) string { return "EXPLAIN FORMAT=JSON " + q }
+func (Dialect) Placeholder(_ int) string { return "?" }
 func (Dialect) Capabilities() dialect.Capabilities {
-	return dialect.Capabilities{
-		Returning:        false,
-		Savepoint:        true,
-		KeysetCursor:     true,
-		ExplainJSON:      true,
-		ExplainCost:      true,
-		ExplainAccurate:  false,
-		StatementTimeout: true,
-		ScanRowCap:       true,
-		SQLSafeUpdates:   true,
-		ResourceManager:  false,
-	}
+	return dialect.Capabilities{ExplainCost: true}
 }

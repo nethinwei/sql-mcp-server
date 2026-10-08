@@ -10,8 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"reflect"
-	"sort"
 	"strings"
 	"time"
 
@@ -22,6 +20,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/hook"
 	"github.com/nethinwei/sql-mcp-server/version"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
+	"github.com/nethinwei/sql-mcp-server/x/configyaml"
 	"github.com/nethinwei/sql-mcp-server/x/mcpserver"
 	otelhooks "github.com/nethinwei/sql-mcp-server/x/otel"
 	"github.com/nethinwei/sql-mcp-server/x/telemetry"
@@ -39,6 +38,17 @@ func runCLI(ctx context.Context, args []string, stdout io.Writer) error {
 			return errors.New("usage: sql-mcp-server add entity [flags]")
 		}
 		return runAddEntity(args[1:])
+	case "user":
+		if len(args) == 0 || args[0] != "token" {
+			return errors.New("usage: sql-mcp-server user token")
+		}
+		return runUserToken(args[1:], stdout)
+	case "store":
+		return runStore(ctx, args, stdout)
+	case "migrate":
+		return runMigrate(ctx, args, stdout)
+	case "admin":
+		return runAdmin(ctx, args, stdout)
 	case "validate":
 		return runValidate(args, stdout)
 	case "export":
@@ -66,20 +76,29 @@ func parseCommand(args []string) (string, []string) {
 func runServe(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	configPath := fs.String("config", "config.yaml", "config file path")
+	storeFlag := fs.String("store", "", "configuration store <driver>:<dsn> instead of --config (env SQL_MCP_STORE)")
+	secretRoots := fs.String("secret-root", "", "comma-separated allowed roots for ${file:...} in the store DSN")
 	transport := fs.String("transport", "stdio", "transport: stdio | http")
 	addr := fs.String("addr", ":8080", "http listen address")
 	role := fs.String("role", "", "runtime role (overrides config)")
-	watch := fs.Bool("watch", false, "reload config when its contents change")
-	watchInterval := fs.Duration("watch-interval", time.Second, "config polling interval")
+	user := fs.String("user", "", "default user for requests without a user identity (overrides config)")
+	watch := fs.Bool("watch", false, "reload config when the file changes or a store revision is published")
+	watchInterval := fs.Duration("watch-interval", time.Second, "config polling interval (store default 5s)")
+	adminFlags := newServeAdminFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg, err := bootstrap.Load(*configPath)
+	explicit := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	src, err := openServeSource(ctx, *configPath, *storeFlag, *secretRoots, explicit["config"])
 	if err != nil {
 		return err
 	}
-	if *role != "" {
-		cfg.Server.Role = *role
+	defer src.close()
+	cfg := src.startup
+	overrides := serveOverrides{role: *role, user: *user}
+	if err := overrides.apply(cfg); err != nil {
+		return err
 	}
 	resolveServeEndpoint(fs, cfg, transport, addr)
 	metrics, hooks, otelShutdown, err := setupServeTelemetry(ctx)
@@ -87,19 +106,41 @@ func runServe(ctx context.Context, args []string) error {
 		return err
 	}
 	defer otelShutdown()
-	build := serveReloadBuilder(*role, cfg.Server, cfg.Tools, toolDiscoverySignature(cfg.Entities), hooks)
-	app, err := bootstrap.Assemble(cfg)
+	build := serveBuilder(cfg, overrides, hooks)
+	runtime, err := newServeRuntime(cfg, build, hooks)
 	if err != nil {
 		return err
 	}
-	app.Hooks = hooks
-	runtime := bootstrap.NewRuntimeWithBuilder(app, build)
 	defer func() { _ = runtime.Close() }()
 	metrics.SetAuditDropped(auditDroppedReader(runtime))
 	if *watch {
-		go serveConfigWatcher(ctx, runtime, *configPath, *watchInterval)
+		go src.watch(ctx, runtime, build, *watchInterval, explicit["watch-interval"])
 	}
-	return serveTransport(ctx, runtime, cfg, *transport, *addr, metrics)
+	adminHandler, err := adminFlags.handler(src, runtime, cfg, *transport, *watch)
+	if err != nil {
+		return err
+	}
+	return serveTransport(ctx, runtime, cfg, *transport, *addr, metrics, adminHandler)
+}
+
+// newServeRuntime assembles the startup App; file reloads go through build.
+func newServeRuntime(
+	cfg *config.Config,
+	build func(*config.Config) (*bootstrap.App, error),
+	hooks *hook.Hooks,
+) (*bootstrap.Runtime, error) {
+	app, err := bootstrap.Assemble(cfg)
+	if err != nil {
+		return nil, err
+	}
+	app.Hooks = hooks
+	return bootstrap.NewRuntimeWithBuilder(app, func(path string) (*bootstrap.App, error) {
+		next, err := bootstrap.Load(path)
+		if err != nil {
+			return nil, err
+		}
+		return build(next)
+	}), nil
 }
 
 // setupServeTelemetry wires the serve-only observability stack: JSON logs on
@@ -135,23 +176,49 @@ func auditDroppedReader(runtime *bootstrap.Runtime) func() int64 {
 	}
 }
 
-func serveReloadBuilder(
-	role string,
-	server config.ServerConfig,
-	tools config.ToolFlags,
-	discovery string,
+// serveOverrides carries CLI flags re-applied to every reloaded config.
+type serveOverrides struct {
+	role, user string
+}
+
+func (o serveOverrides) apply(cfg *config.Config) error {
+	if o.role != "" {
+		cfg.Server.Role = o.role
+	}
+	return applyUserOverride(cfg, o.user)
+}
+
+// applyUserOverride sets server.user from --user and checks that it names an
+// enabled user; config validation already covered the file value.
+func applyUserOverride(cfg *config.Config, user string) error {
+	user = strings.ToLower(strings.TrimSpace(user))
+	if user == "" {
+		return nil
+	}
+	u, ok := cfg.Users[user]
+	if !ok {
+		return fmt.Errorf("--user references unknown user %q", user)
+	}
+	if u.Disabled {
+		return fmt.Errorf("--user %q is disabled", user)
+	}
+	cfg.Server.User = user
+	return nil
+}
+
+// serveBuilder returns the reload builder shared by file and store mode: it
+// rejects changes that need a restart, re-applies CLI overrides and assembles.
+func serveBuilder(
+	startup *config.Config,
+	overrides serveOverrides,
 	hooks *hook.Hooks,
-) func(string) (*bootstrap.App, error) {
-	return func(path string) (*bootstrap.App, error) {
-		next, err := bootstrap.Load(path)
-		if err != nil {
+) func(*config.Config) (*bootstrap.App, error) {
+	return func(next *config.Config) (*bootstrap.App, error) {
+		if err := bootstrap.CheckHotReload(startup, next); err != nil {
 			return nil, err
 		}
-		if err := validateHotReloadConfig(server, tools, next, discovery); err != nil {
+		if err := overrides.apply(next); err != nil {
 			return nil, err
-		}
-		if role != "" {
-			next.Server.Role = role
 		}
 		app, err := bootstrap.Assemble(next)
 		if err != nil {
@@ -177,6 +244,7 @@ func serveTransport(
 	cfg *config.Config,
 	transport, addr string,
 	metrics http.Handler,
+	adminHandler http.Handler,
 ) error {
 	srv := mcpserver.NewRuntimeServer(runtime)
 	switch transport {
@@ -194,11 +262,27 @@ func serveTransport(
 			TLSCert:           cfg.Server.Auth.TLS.Cert, TLSKey: cfg.Server.Auth.TLS.Key,
 			ClientCA: cfg.Server.Auth.TLS.ClientCA, OnSessionClosed: runtime.RollbackSession,
 			SnapshotReady: runtime.SnapshotReady, DatabaseReady: runtime.DatabasesReady,
-			Metrics: metrics,
+			Metrics: metrics, Users: httpUsers(cfg, runtime), RevokedPrincipals: runtime.OnRevokedPrincipals,
+			Admin: adminHandler,
+			SnapshotStale: func() int64 {
+				if stale, ok := runtime.Stale(); ok {
+					return stale.RevisionID
+				}
+				return 0
+			},
 		})
 	default:
 		return errors.New("unknown transport: " + transport)
 	}
+}
+
+// httpUsers returns the runtime user directory when users are configured.
+// Users cannot be switched on or off by reload, so the startup view holds.
+func httpUsers(cfg *config.Config, runtime *bootstrap.Runtime) mcpserver.UserDirectory {
+	if len(cfg.Users) == 0 {
+		return nil
+	}
+	return runtime
 }
 
 func resolveServeEndpoint(fs *flag.FlagSet, cfg *config.Config, transport, addr *string) {
@@ -210,37 +294,6 @@ func resolveServeEndpoint(fs *flag.FlagSet, cfg *config.Config, transport, addr 
 	if !explicit["addr"] && cfg.Server.Addr != "" {
 		*addr = cfg.Server.Addr
 	}
-}
-
-func validateHotReloadConfig(
-	server config.ServerConfig,
-	tools config.ToolFlags,
-	next *config.Config,
-	discovery ...string,
-) error {
-	if next.Server.Transport != server.Transport ||
-		next.Server.Addr != server.Addr ||
-		!reflect.DeepEqual(next.Server.Auth, server.Auth) ||
-		!reflect.DeepEqual(next.Tools, tools) {
-		return errors.New(
-			"config reload requires restart for transport, address, auth/TLS/trusted proxy, or tool-set changes",
-		)
-	}
-	if len(discovery) > 0 && toolDiscoverySignature(next.Entities) != discovery[0] {
-		return errors.New("config reload requires restart when custom procedure tools change")
-	}
-	return nil
-}
-
-func toolDiscoverySignature(entities []config.EntityConfig) string {
-	names := make([]string, 0)
-	for _, entity := range entities {
-		if entity.Kind == "procedure" && entity.MCP.CustomTool && entity.MCP.TrustedProcedure {
-			names = append(names, entity.Name)
-		}
-	}
-	sort.Strings(names)
-	return strings.Join(names, "\x00")
 }
 
 func runInit(args []string) error {
@@ -350,6 +403,20 @@ func appendYAMLPair(node *yaml.Node, key, value string) {
 	)
 }
 
+// runUserToken prints a new random bearer token once, with the tokenHash to
+// put under users.<name>.tokenHash. Only the hash belongs in configuration.
+func runUserToken(args []string, stdout io.Writer) error {
+	if len(args) != 0 {
+		return errors.New("user token accepts no arguments")
+	}
+	token, err := config.NewUserToken()
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "token: %s\ntokenHash: %s\n", token, config.TokenHash(token))
+	return err
+}
+
 func runValidate(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	path := fs.String("config", "config.yaml", "config file path")
@@ -379,12 +446,18 @@ func runExport(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	encoder := yaml.NewEncoder(stdout)
-	encoder.SetIndent(2)
-	if err := encoder.Encode(cfg); err != nil {
+	data, err := exportYAML(cfg)
+	if err != nil {
 		return err
 	}
-	return encoder.Close()
+	_, err = stdout.Write(data)
+	return err
+}
+
+// exportYAML is the deterministic export encoding, also used as the payload
+// of configuration store revisions.
+func exportYAML(cfg *config.Config) ([]byte, error) {
+	return configyaml.Encode(cfg)
 }
 
 func runExplain(args []string, stdout io.Writer) error {

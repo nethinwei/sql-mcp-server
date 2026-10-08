@@ -1,0 +1,86 @@
+[
+  {
+    "name": "minimal configuration",
+    "config": {"database": {"driver": "postgres", "dsn": "x"}}
+  },
+  {
+    "name": "empty optional strings mean unset",
+    "config": {"database": {"driver": "postgres", "dsn": "x"},
+      "server": {"transport": ""},
+      "entities": [{"name": "orders", "kind": "", "schema": "", "fields": [{"name": "id", "mask": ""}]}]}
+  },
+  {
+    "name": "an entirely unset object is not checked",
+    "config": {"database": {}, "databases": {"main": {"driver": "postgres", "dsn": "x"}}}
+  },
+  {
+    "name": "prepared statement cache without the result cache",
+    "config": {"database": {"driver": "postgres", "dsn": "x"}, "cache": {"preparedMaxSize": 128}}
+  },
+  {
+    "name": "role names are case-insensitive",
+    "config": {"database": {"driver": "postgres", "dsn": "x"},
+      "entities": [{"name": "orders", "fields": [{"name": "id"}]}],
+      "roles": {"Analyst": {"grants": [{"entity": "orders", "actions": ["read"]}]}}}
+  },
+  {
+    "name": "duration within its bounds",
+    "config": {"database": {"driver": "postgres", "dsn": "x"}, "cost": {"aqe": {"timeout": "2s"}}}
+  },
+  {
+    "name": "unknown field",
+    "config": {"database": {"driver": "postgres", "dsn": "x"}, "cost": {"maxRow": 5}},
+    "error": "field maxRow not found",
+    "path": ["cost", "maxRow"]
+  },
+  {
+    "name": "number above its maximum",
+    "config": {"database": {"driver": "postgres", "dsn": "x"}, "cost": {"softScore": 101}},
+    "error": "cost.softScore must be at most 100",
+    "path": ["cost", "softScore"]
+  },
+  {
+    "name": "value outside its enumeration",
+    "config": {"database": {"driver": "postgres", "dsn": "x"}, "server": {"transport": "tcp"}},
+    "error": "server.transport is \"tcp\"",
+    "path": ["server", "transport"]
+  },
+  {
+    "name": "duration above its maximum",
+    "config": {"database": {"driver": "postgres", "dsn": "x"}, "cost": {"aqe": {"timeout": "6s"}}},
+    "error": "cost.aqe.timeout must be at most 5s",
+    "path": ["cost", "aqe", "timeout"]
+  },
+  {
+    "name": "role name outside the name format",
+    "config": {"database": {"driver": "postgres", "dsn": "x"}, "roles": {"bad name!": {}}},
+    "error": "must match",
+    "path": ["roles", "bad name!"]
+  },
+  {
+    "name": "grant without actions",
+    "config": {"database": {"driver": "postgres", "dsn": "x"},
+      "entities": [{"name": "orders", "fields": [{"name": "id"}]}],
+      "roles": {"r": {"grants": [{"entity": "orders", "actions": []}]}}},
+    "error": "actions needs at least 1 items",
+    "path": ["roles", "r", "grants", 0, "actions"]
+  },
+  {
+    "name": "entity without a name",
+    "config": {"database": {"driver": "postgres", "dsn": "x"}, "entities": [{"source": "orders"}]},
+    "error": "empty entity name",
+    "path": ["entities", 0]
+  },
+  {
+    "name": "soft score below the hard score (cross-field, server only)",
+    "config": {"database": {"driver": "postgres", "dsn": "x"}, "cost": {"softScore": 30, "hardScore": 40}},
+    "error": "softScore must be greater than or equal to hardScore",
+    "path": null
+  },
+  {
+    "name": "audit enabled without a path (conditional, server only)",
+    "config": {"database": {"driver": "postgres", "dsn": "x"}, "audit": {"enabled": true}},
+    "error": "audit path is required",
+    "path": null
+  }
+]

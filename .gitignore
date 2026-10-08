@@ -1,6 +1,7 @@
 # binaries
 /sql-mcp-server
 /sql-mcp-server.exe
+/fmtcheck
 /cmd/sql-mcp-server/sql-mcp-server
 /dist/
 
@@ -28,3 +29,8 @@ mem.pprof
 
 # codegraph index
 .codegraph/
+
+# Admin console build output and dependencies (built by `make web`).
+x/admin/ui/dist/app/
+web/admin/node_modules/
+web/admin/src/gql/

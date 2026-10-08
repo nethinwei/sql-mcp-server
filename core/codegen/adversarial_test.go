@@ -32,7 +32,7 @@ func TestAdversarialValueIdentifierIsolation(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			compiled, err := NewRenderer(test.dialect).Compile(relalg.Select{
+			compiled, err := Renderer{Dialect: test.dialect}.Compile(relalg.Select{
 				Input: relalg.Scan{Relation: relalg.RelationRef{Name: test.table}},
 				Predicate: relalg.Condition{
 					Field: test.field, Op: relalg.OpEq, Value: test.value,
@@ -63,7 +63,7 @@ func FuzzCompileNoInjectionAndQuoting(f *testing.F) {
 			d = testdialect.MySQL{}
 			placeholder = "?"
 		}
-		compiled, err := NewRenderer(d).Compile(relalg.Select{
+		compiled, err := Renderer{Dialect: d}.Compile(relalg.Select{
 			Input: relalg.Scan{Relation: relalg.RelationRef{Name: table}},
 			Predicate: relalg.Condition{
 				Field: field, Op: relalg.OpEq, Value: value,

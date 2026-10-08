@@ -4,7 +4,6 @@ package providerregistry
 import (
 	"errors"
 	"fmt"
-	"sort"
 	"sync"
 	"time"
 
@@ -14,8 +13,21 @@ import (
 // ErrUnsupportedDriver is returned when no factory is registered for a driver.
 var ErrUnsupportedDriver = errors.New("providerregistry: unsupported driver")
 
+// Options configures an opened provider.
+type Options struct {
+	// Timeout is the statement timeout the provider sets natively.
+	Timeout time.Duration
+	// Pooler is "transaction" when the connection goes through a
+	// transaction-mode pooler, which keeps no session state: the provider
+	// must not rely on named prepared statements or startup settings.
+	Pooler string
+}
+
+// PoolerTransaction is the transaction-mode pooler setting.
+const PoolerTransaction = "transaction"
+
 // Factory opens a database provider.
-type Factory func(dsn string, timeout time.Duration) (provider.Provider, error)
+type Factory func(dsn string, opts Options) (provider.Provider, error)
 
 var (
 	mu        sync.RWMutex
@@ -40,14 +52,14 @@ func Register(name string, factory Factory) {
 }
 
 // New opens the provider registered under driver.
-func New(driver, dsn string, timeout time.Duration) (provider.Provider, error) {
+func New(driver, dsn string, opts Options) (provider.Provider, error) {
 	mu.RLock()
 	factory, ok := factories[driver]
 	mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnsupportedDriver, driver)
 	}
-	return factory(dsn, timeout)
+	return factory(dsn, opts)
 }
 
 // IsRegistered reports whether driver has a registered factory.
@@ -56,16 +68,4 @@ func IsRegistered(driver string) bool {
 	defer mu.RUnlock()
 	_, ok := factories[driver]
 	return ok
-}
-
-// KnownDrivers returns registered names in deterministic order.
-func KnownDrivers() []string {
-	mu.RLock()
-	names := make([]string, 0, len(factories))
-	for name := range factories {
-		names = append(names, name)
-	}
-	mu.RUnlock()
-	sort.Strings(names)
-	return names
 }

@@ -1,0 +1,39 @@
+# sql-mcp-server with the config store and the admin console.
+# One-time setup and usage: docs/console.md#docker-部署.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: shop
+      POSTGRES_PASSWORD: shop
+      POSTGRES_DB: shop
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      # TCP, not the socket: the server started during init.sql only listens on
+      # the socket, so this passes once initialization has finished.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U shop -d shop"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  mcp:
+    image: ${SQL_MCP_IMAGE:-sql-mcp-server:local}
+    build: ../..
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      POSTGRES_USER: shop
+      POSTGRES_PASSWORD: shop
+      POSTGRES_HOST: db:5432
+      SQL_MCP_STORE: sqlite:/var/lib/sql-mcp-server/config.db
+    command: ["serve", "--admin", "--watch"]
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - store:/var/lib/sql-mcp-server
+    ports:
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  store:

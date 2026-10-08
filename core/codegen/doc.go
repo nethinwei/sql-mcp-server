@@ -4,6 +4,6 @@
 //
 // A Renderer holds a dialect.Dialect. Compile produces a Compiled value
 // carrying the SQL, args, read-only flag, affected tables, and (when the
-// caller supplies primary-key columns via WithPrimaryKey) an IsPKPoint flag
-// for the cost gate's whitelist.
+// caller supplies identity keys via WithPrimaryKey or WithIdentityKeys) an
+// IsKeyPoint flag for the cost gate's whitelist and write guard.
 package codegen

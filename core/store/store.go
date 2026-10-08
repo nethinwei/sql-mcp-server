@@ -48,9 +48,6 @@ type TxOptions struct {
 	ReadOnly  bool
 }
 
-// Savepoint names a savepoint within a transaction.
-type Savepoint struct{ Name string }
-
 // Tx is a transaction boundary. ACID is an inseparable part of the relational
 // model; tools may execute multiple writes within a Tx. Every Tx must end in
 // Commit or Rollback (invariant I10).
@@ -59,8 +56,6 @@ type Tx interface {
 	ExecContext(ctx context.Context, query string, args ...any) (Result, error)
 	Commit() error
 	Rollback() error
-	Savepoint(ctx context.Context, name string) (Savepoint, error)
-	RollbackTo(ctx context.Context, sp Savepoint) error
 }
 
 // TxBeginner begins a transaction. *sql.DB satisfies it via an adapter.

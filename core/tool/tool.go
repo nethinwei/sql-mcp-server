@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/audit"
@@ -41,12 +43,15 @@ var (
 	ErrDMLToolsDisabled = errors.New("tool: entity DML tools disabled")
 	// ErrUnsafeWrite is returned when an update/delete lacks a PK-scoped filter.
 	ErrUnsafeWrite = errors.New("tool: unsafe write without primary-key filter")
-	// ErrNotImplemented is returned by stub tools.
-	ErrNotImplemented = errors.New("tool: not implemented")
 	// ErrDuplicateTool is returned by NewRegistry for duplicate tool names.
 	ErrDuplicateTool = errors.New("tool: duplicate name")
 	// ErrDatabase identifies errors returned by the database driver.
 	ErrDatabase = errors.New("tool: database error")
+	// ErrConstraintViolation is a write rejected by a database constraint.
+	ErrConstraintViolation = errors.New("tool: constraint violation")
+	// ErrDatasourceForbidden is a statement the datasource's account may not
+	// run: a missing database privilege or a read-only server.
+	ErrDatasourceForbidden = errors.New("tool: the datasource connection is not permitted to do this")
 )
 
 type databaseError struct{ err error }
@@ -57,13 +62,23 @@ func (e *databaseError) Is(target error) bool {
 	return target == ErrDatabase
 }
 
-// WrapDBError classifies a database driver error while preserving its cause.
+// WrapDBError classifies a database driver error while preserving its cause:
+// a refused privilege becomes ErrDatasourceForbidden, anything else
+// ErrDatabase. Neither reports the driver message to clients.
 func WrapDBError(err error) error {
-	if err == nil || errors.Is(err, ErrDatabase) {
+	if err == nil || errors.Is(err, ErrDatabase) || errors.Is(err, ErrDatasourceForbidden) {
 		return err
+	}
+	if errors.Is(err, store.ErrPermissionDenied) {
+		return &forbiddenError{err: err}
 	}
 	return &databaseError{err: err}
 }
+
+type forbiddenError struct{ err error }
+
+func (e *forbiddenError) Error() string   { return ErrDatasourceForbidden.Error() }
+func (e *forbiddenError) Unwrap() []error { return []error{ErrDatasourceForbidden, e.err} }
 
 // Info is a tool's static metadata, mapped to an MCP tool definition.
 type Info struct {
@@ -71,35 +86,59 @@ type Info struct {
 	Description string
 	InputSchema json.RawMessage
 	ReadOnly    bool
+	// Action is the audited action; read, aggregate and execute also size the
+	// budget reservation.
+	Action string
 }
 
-// Result is a tool's outcome. Content holds structured rows/text; IsError marks
-// a business-level error the agent can act on.
+// Result is a tool's outcome: the rows returned to the agent plus usage for
+// budgets and audit.
 type Result struct {
 	Content              []map[string]any
-	IsError              bool
-	StructuredResult     any
 	ReturnedRows         int64
 	ReturnedBytes        int64
 	EstimatedScannedRows int64
+	// Grants lists covering grant IDs for audit; it is not sent to clients.
+	Grants []string
 }
 
 // Context carries per-request dependencies (injected, no mutable global state).
 type Context struct {
-	Role                       string
-	Subject                    map[string]any // caller attributes for row-level ${subject.x} policies
-	Session                    string         // MCP session ID when the transport provides one
-	DecisionID                 string         // per-call ID correlating response, audit, and trace
-	DB                         store.DB
-	Dialect                    dialect.Dialect
-	Registry                   *entity.Registry
-	Authorizer                 rbac.Authorizer
-	Masker                     mask.Masker
-	Gate                       cost.Gate
-	Cache                      cache.Cache[[]map[string]any]
-	Engine                     *engine.Engine
-	Auditor                    audit.Auditor
-	Hooks                      *hook.Hooks
+	Role       string         // principal key: a role name, or "user:<name>" for a user
+	User       string         // configured user name, empty on the role path
+	UserRoles  []string       // the user's roles, for audit
+	Subject    map[string]any // caller attributes for row-level ${subject.x} policies
+	Session    string         // MCP session ID when the transport provides one
+	DecisionID string         // per-call ID correlating response, audit, and trace
+	DB         store.DB
+	Dialect    dialect.Dialect
+	Registry   *entity.Registry
+	Authorizer rbac.Authorizer
+	Masker     mask.Masker
+	Gate       cost.Gate
+	Cache      cache.Cache[[]map[string]any]
+	Engine     *engine.Engine
+	Auditor    audit.Auditor
+	Hooks      *hook.Hooks
+	Limits
+	Feedback     cost.FeedbackStore
+	Analyze      cost.AnalyzePolicy
+	DataSource   string
+	Sources      map[string]DataSource
+	Budget       budget.Manager
+	BudgetLimits budget.Limits
+	Transactions *TransactionManager
+	Writes       *WriteTracker
+	TxBeginners  map[string]store.TxBeginner
+	Transaction  string
+	// followsWrite is set by routeEntity while reads follow the session's
+	// recent write (see followsWrite).
+	followsWrite bool
+}
+
+// Limits are the configured per-call limits; zero means unlimited (or, for
+// the transaction timeouts, the query Timeout).
+type Limits struct {
 	Timeout                    time.Duration
 	MaxRows                    int64
 	MaxProcedureRows           int64
@@ -114,23 +153,20 @@ type Context struct {
 	TransactionBeginTimeout    time.Duration
 	TransactionCommitTimeout   time.Duration
 	TransactionRollbackTimeout time.Duration
-	Feedback                   cost.FeedbackStore
-	Analyze                    cost.AnalyzePolicy
-	DataSource                 string
-	Sources                    map[string]DataSource
-	Budget                     budget.Manager
-	BudgetLimits               budget.Limits
-	Transactions               *TransactionManager
-	TxBeginners                map[string]store.TxBeginner
-	Transaction                string
 }
 
-// DataSource is the per-entity execution route.
+// DataSource is the per-entity execution route: DB is the read connection;
+// Write and Execute, when set, serve writes and procedure calls (see
+// connectionFor), and ReadTx begins read-only transactions.
 type DataSource struct {
-	DB      store.DB
-	Dialect dialect.Dialect
-	Gate    cost.Gate
-	Analyze cost.AnalyzePolicy
+	DB             store.DB
+	Write          store.DB
+	Execute        store.DB
+	ReadTx         store.TxBeginner
+	ReadAfterWrite time.Duration
+	Dialect        dialect.Dialect
+	Gate           cost.Gate
+	Analyze        cost.AnalyzePolicy
 }
 
 // Tool is a single DML capability.
@@ -153,7 +189,8 @@ type CostGated interface {
 // Tool.Run directly, keeping the wiring in the core where it is unit-testable.
 // A nil Engine/Auditor/Hooks each degrade to a no-op.
 func RunTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Result, error) {
-	name := t.Info().Name
+	info := t.Info()
+	name := info.Name
 	start := time.Now()
 	if tc.DecisionID == "" {
 		tc.DecisionID = NewDecisionID()
@@ -164,53 +201,29 @@ func RunTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Re
 	// observable (span + decision.id); OnError fires before AfterTool so the
 	// error is recorded before the span ends.
 	ctx = tc.Hooks.FireBeforeTool(ctx, name, input)
-	lease, ctx, tc, err := acquireToolBudget(ctx, name, input, tc, auditInput)
-	if err != nil {
-		tc.Hooks.FireOnError(ctx, err)
-		tc.Hooks.FireAfterTool(ctx, name, nil, err)
-		return Result{}, err
+	lease, ctx, tc, err := acquireToolBudget(ctx, info.Action, tc)
+	var res Result
+	if err == nil {
+		res, err = invokeTool(ctx, t, input, tc)
+		res, err = finalizeToolResult(res, err, info.ReadOnly, tc, lease, start)
 	}
-	res, err := invokeTool(ctx, t, input, tc)
-	res, err = finalizeToolResult(res, err, tc, lease, start)
 	if err != nil {
 		tc.Hooks.FireOnError(ctx, err)
 	}
-	tc.Hooks.FireAfterTool(ctx, name, res.StructuredResult, err)
-	recordToolAudit(ctx, tc, name, auditInput, res, err, start)
+	tc.Hooks.FireAfterTool(ctx, name, err)
+	recordToolAudit(ctx, tc, info, auditInput, res, err, start)
 	return res, err
 }
 
-func acquireToolBudget(
-	ctx context.Context,
-	name string,
-	input json.RawMessage,
-	tc Context,
-	auditInput json.RawMessage,
-) (budget.Lease, context.Context, Context, error) {
+func acquireToolBudget(ctx context.Context, action string, tc Context) (budget.Lease, context.Context, Context, error) {
 	if tc.Budget == nil {
 		return nil, ctx, tc, nil
 	}
 	scope := budget.Scope{
 		Role: tc.Role, Tenant: tenantKey(tc.Subject), Session: tc.Session,
 	}
-	var lease budget.Lease
-	var err error
-	if manager, ok := tc.Budget.(budget.ReservingManager); ok {
-		reserved := budgetReservation(name, tc)
-		lease, err = manager.AcquireWithReservation(ctx, scope, budget.Reservation{Cost: reserved})
-	} else {
-		lease, err = tc.Budget.Acquire(ctx, scope)
-	}
+	lease, err := tc.Budget.AcquireWithReservation(ctx, scope, budget.Reservation{Cost: budgetReservation(action, tc)})
 	if err != nil {
-		if tc.Auditor != nil {
-			entityName, action := auditEntityAction(name, input, tc.Registry)
-			_ = tc.Auditor.Record(ctx, audit.Event{
-				Time: time.Now(), DecisionID: tc.DecisionID, Role: tc.Role,
-				Entity: entityName, Action: action,
-				Tool: name, Input: auditInput, Allowed: false,
-				Code: denialCode(err), Error: err.Error(),
-			})
-		}
 		return nil, ctx, tc, err
 	}
 	ctx = lease.Context()
@@ -218,15 +231,14 @@ func acquireToolBudget(
 	return lease, ctx, tc, nil
 }
 
-func budgetReservation(name string, tc Context) int64 {
+// budgetReservation is the session cost held while a call runs: its row cap
+// for row-returning actions, otherwise 1.
+func budgetReservation(action string, tc Context) int64 {
 	reserved := int64(1)
-	switch name {
-	case "read_records", "aggregate_records":
+	switch action {
+	case entity.ActionRead.String(), entity.ActionAggregate.String():
 		reserved = tc.MaxRows
-	case "execute_entity":
-		reserved = tc.MaxProcedureRows
-	}
-	if strings.HasPrefix(name, "procedure_") {
+	case entity.ActionExecute.String():
 		reserved = tc.MaxProcedureRows
 	}
 	if reserved <= 0 {
@@ -237,14 +249,14 @@ func budgetReservation(name string, tc Context) int64 {
 
 func invokeTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Result, error) {
 	if tc.Engine == nil {
-		return t.Run(ctx, input, tc)
+		return runTraced(ctx, t, input, tc)
 	}
 	key, err := engineSubmitKey(t, input, tc)
 	if err != nil {
 		return Result{}, err
 	}
 	val, err := tc.Engine.Submit(ctx, key, func(ctx context.Context) (any, error) {
-		return t.Run(ctx, input, tc)
+		return runTraced(ctx, t, input, tc)
 	})
 	if r, ok := val.(Result); ok {
 		return r, err
@@ -258,7 +270,12 @@ func engineSubmitKey(t Tool, input json.RawMessage, tc Context) (string, error) 
 	}
 	transaction := transactionFromInput(input)
 	if transaction == "" {
-		return t.Info().Name + "\x00" + scopeKey(tc.Role, tc.Subject) + "\x00" + string(input), nil
+		key := t.Info().Name + "\x00" + scopeKey(tc.Role, tc.Subject) + "\x00" + string(input)
+		if tc.Writes.Wrote(tc.Session) {
+			// Its reads may follow its writes; do not share another session's.
+			key += "\x00session=" + tc.Session
+		}
+		return key, nil
 	}
 	if tc.Transactions == nil {
 		return "", ErrTransactionNotFound
@@ -266,16 +283,20 @@ func engineSubmitKey(t Tool, input json.RawMessage, tc Context) (string, error) 
 	return "", tc.Transactions.Validate(transaction, tc.Session, tc.Role, tc.Subject)
 }
 
+// finalizeToolResult accounts usage against the lease. Exceeding a limit after
+// execution fails a read, but not a write: the write has already taken effect,
+// and reporting it as failed would invite a duplicate retry.
 func finalizeToolResult(
 	res Result,
 	err error,
+	readOnly bool,
 	tc Context,
 	lease budget.Lease,
 	start time.Time,
 ) (Result, error) {
 	if encoded, encodeErr := json.Marshal(res.Content); encodeErr == nil {
 		res.ReturnedBytes = int64(len(encoded))
-		if tc.MaxReturnedBytes > 0 && res.ReturnedBytes > tc.MaxReturnedBytes && err == nil {
+		if readOnly && tc.MaxReturnedBytes > 0 && res.ReturnedBytes > tc.MaxReturnedBytes && err == nil {
 			err = fmt.Errorf("%w: result size %d bytes exceeds limit %d",
 				budget.ErrExceeded, res.ReturnedBytes, tc.MaxReturnedBytes)
 		}
@@ -283,10 +304,7 @@ func finalizeToolResult(
 	if lease == nil {
 		return res, err
 	}
-	returnedRows := res.ReturnedRows
-	if returnedRows == 0 {
-		returnedRows = int64(len(res.Content))
-	}
+	returnedRows := returnedRows(res)
 	budgetErr := lease.Complete(budget.Usage{
 		EstimatedScannedRows: res.EstimatedScannedRows,
 		ReturnedRows:         returnedRows,
@@ -294,13 +312,14 @@ func finalizeToolResult(
 		Duration:             time.Since(start),
 		Cost:                 returnedRows + time.Since(start).Milliseconds(),
 	})
-	if err == nil && budgetErr != nil {
+	if readOnly && err == nil && budgetErr != nil {
 		err = budgetErr
 	}
 	return res, err
 }
 
-func returnedRowsForAudit(res Result) int64 {
+// returnedRows is the row count a tool reported, or its result size.
+func returnedRows(res Result) int64 {
 	if res.ReturnedRows > 0 {
 		return res.ReturnedRows
 	}
@@ -308,25 +327,10 @@ func returnedRowsForAudit(res Result) int64 {
 }
 
 func sensitiveFields(toolName string, input json.RawMessage, registry *entity.Registry) map[string]bool {
-	var envelope struct {
-		Entity string `json:"entity"`
-	}
-	if registry == nil || decodeEnvelope(input, &envelope) != nil {
+	if registry == nil {
 		return nil
 	}
-	entityName := envelope.Entity
-	if entityName == "" {
-		for _, candidate := range registry.Entities() {
-			if candidate.Kind == entity.KindProcedure && ProcedureToolName(candidate.Name) == toolName {
-				entityName = candidate.Name
-				break
-			}
-		}
-	}
-	if entityName == "" {
-		return nil
-	}
-	resolved, ok := registry.Resolve(entityName)
+	resolved, ok := registry.Resolve(entityNameForTool(toolName, input, registry))
 	if !ok {
 		return nil
 	}
@@ -369,7 +373,12 @@ func errString(err error) string {
 
 // ---- helpers ----
 
-func filterToPredicate(conds []condJSON) (relalg.Predicate, error) {
+// filterToPredicate validates a filter (at most maxConds conditions when
+// positive) and converts it to a conjunction.
+func filterToPredicate(conds []condJSON, maxConds int) (relalg.Predicate, error) {
+	if maxConds > 0 && len(conds) > maxConds {
+		return nil, fmt.Errorf("%w: too many filter conditions", ErrInvalidInput)
+	}
 	if len(conds) == 0 {
 		return nil, nil
 	}
@@ -520,7 +529,40 @@ func toExceededError(d cost.Decision) error {
 func authorize(ctx context.Context, tc Context, req rbac.Request) (rbac.Decision, error) {
 	dec, err := tc.Authorizer.Authorize(ctx, req)
 	tc.Hooks.FireAuthorize(ctx, req, dec)
+	if trace, ok := ctx.Value(grantTraceKey{}).(*grantTrace); ok && dec.Allowed {
+		trace.add(dec.Grants)
+	}
 	return dec, err
+}
+
+type grantTraceKey struct{}
+
+// grantTrace collects covering grant IDs across the authorizations of one
+// tool run (including relation expansion) for the audit event.
+type grantTrace struct {
+	mu  sync.Mutex
+	ids []string
+}
+
+func (g *grantTrace) add(ids []string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, id := range ids {
+		if !slices.Contains(g.ids, id) {
+			g.ids = append(g.ids, id)
+		}
+	}
+}
+
+// runTraced runs the tool and attaches the covering grants to its result, so
+// singleflight followers sharing the result also audit them.
+func runTraced(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Result, error) {
+	trace := &grantTrace{}
+	res, err := t.Run(context.WithValue(ctx, grantTraceKey{}, trace), input, tc)
+	trace.mu.Lock()
+	res.Grants = trace.ids
+	trace.mu.Unlock()
+	return res, err
 }
 
 func checkGate(ctx context.Context, tc Context, compiled codegen.Compiled) (codegen.Compiled, error) {
@@ -549,9 +591,6 @@ func checkGateDetailed(
 		score = *dec.Score
 	}
 	maxEstimated := tc.BudgetLimits.MaxEstimatedScannedRows
-	if maxEstimated == 0 {
-		maxEstimated = tc.BudgetLimits.MaxScannedRows
-	}
 	if dec.Plan != nil && maxEstimated > 0 &&
 		dec.Plan.EstimatedRows > maxEstimated {
 		return compiled, dec.Plan, fmt.Errorf("%w: estimated scanned rows %d exceed limit %d",
@@ -582,9 +621,7 @@ func maskRow(m mask.Masker, attrs []entity.Attribute, row map[string]any) {
 	}
 	for f, v := range row {
 		if rule, ok := rules[f]; ok {
-			if mv, err := m.Mask(rule, v); err == nil {
-				row[f] = mv
-			}
+			row[f] = m.Mask(rule, v)
 		}
 	}
 }
@@ -663,6 +700,17 @@ func validateUnmaskedFields(res entity.Resolved, fields ...string) error {
 	return nil
 }
 
+// validateWritable rejects writes to columns the database computes
+// (generated columns, identity ALWAYS) before they reach the database.
+func validateWritable(res entity.Resolved, fields ...string) error {
+	for _, f := range fields {
+		if a, ok := res.Entity.AttributeByName(f); ok && !a.Domain.Writable() {
+			return fmt.Errorf("%w: field %q is computed by the database and cannot be written", ErrInvalidInput, f)
+		}
+	}
+	return nil
+}
+
 func resolveDMLEntity(tc Context, name string) (entity.Resolved, error) {
 	res, ok := tc.Registry.Resolve(name)
 	if !ok {
@@ -674,60 +722,12 @@ func resolveDMLEntity(tc Context, name string) (entity.Resolved, error) {
 	return res, nil
 }
 
-func routeEntity(tc Context, e entity.Entity) (Context, error) {
-	name := e.DataSource
-	if name == "" {
-		name = "default"
+// withTimeout bounds ctx by timeout, or by tc.Timeout when timeout is zero; a
+// zero result leaves ctx unbounded. The cancel func is always non-nil.
+func withTimeout(ctx context.Context, tc Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout == 0 {
+		timeout = tc.Timeout
 	}
-	tc.DataSource = name
-	if len(tc.Sources) == 0 {
-		return tc, nil
-	}
-	source, ok := tc.Sources[name]
-	if !ok {
-		return tc, fmt.Errorf("%w: datasource %q", ErrEntityNotFound, name)
-	}
-	tc.DB, tc.Dialect, tc.Gate, tc.Analyze = source.DB, source.Dialect, source.Gate, source.Analyze
-	if tc.Transaction != "" {
-		if tc.Transactions == nil {
-			return tc, ErrTransactionNotFound
-		}
-		db, err := tc.Transactions.DB(tc.Transaction, tc.Session, tc.Role, tc.Subject, name)
-		if err != nil {
-			return tc, err
-		}
-		tc.DB = db
-	}
-	return tc, nil
-}
-
-func afterWrite(tc Context, e entity.Entity, transaction string) error {
-	if transaction == "" {
-		if tc.Cache != nil {
-			return tc.Cache.Invalidate(e.Name)
-		}
-		return nil
-	}
-	if tc.Transactions == nil {
-		return ErrTransactionNotFound
-	}
-	datasource := e.DataSource
-	if datasource == "" {
-		datasource = "default"
-	}
-	return tc.Transactions.MarkDirty(transaction, tc.Session, tc.Role, tc.Subject, datasource, e.Name)
-}
-
-// withTimeout returns a context bounded by tc.Timeout, or ctx unchanged when
-// no timeout is configured. The cancel func is always non-nil.
-func withTimeout(ctx context.Context, tc Context) (context.Context, context.CancelFunc) {
-	if tc.Timeout > 0 {
-		return context.WithTimeout(ctx, tc.Timeout)
-	}
-	return ctx, func() {}
-}
-
-func withSpecificTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	if timeout > 0 {
 		return context.WithTimeout(ctx, timeout)
 	}

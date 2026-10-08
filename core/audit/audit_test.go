@@ -22,7 +22,7 @@ func TestAsyncAuditorRecordsToSink(t *testing.T) {
 		mu.Unlock()
 		return nil
 	}
-	a := NewAsyncAuditor(sink, 8)
+	a := NewAsyncAuditorWithClose(sink, nil, 8)
 	_ = a.Record(context.Background(), Event{Tool: "read_records", Role: "reader", Cost: &cost.Plan{}})
 	a.Close()
 	mu.Lock()
@@ -36,7 +36,7 @@ func TestAsyncAuditorDropsWhenFull(t *testing.T) {
 	t.Parallel()
 	block := make(chan struct{})
 	sink := func(_ Event) error { <-block; return nil } // block flusher
-	a := NewAsyncAuditor(sink, 2)
+	a := NewAsyncAuditorWithClose(sink, nil, 2)
 	_ = a.Record(context.Background(), Event{Tool: "x"})
 	_ = a.Record(context.Background(), Event{Tool: "x"}) // queue full now
 	// queue full; next records should drop
@@ -60,7 +60,7 @@ func TestNoopAuditor(t *testing.T) {
 
 func TestRecordNonBlocking(t *testing.T) {
 	t.Parallel()
-	a := NewAsyncAuditor(nil, 1)
+	a := NewAsyncAuditorWithClose(nil, nil, 1)
 	start := time.Now()
 	_ = a.Record(context.Background(), Event{})
 	_ = a.Record(context.Background(), Event{}) // dropped, not blocked
@@ -160,5 +160,20 @@ func TestFileSinkPersistsAndCloses(t *testing.T) {
 	}
 	if err := sink.Record(Event{}); err != ErrSinkClosed {
 		t.Fatalf("record after close error = %v", err)
+	}
+}
+
+func TestEventJSONUserFields(t *testing.T) {
+	t.Parallel()
+	got, err := json.Marshal(Event{
+		Role: "user:alice", User: "alice", Roles: []string{"analyst"}, Grants: []string{"role:analyst#0"}, Tool: "t",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"time":"0001-01-01T00:00:00Z","role":"user:alice","user":"alice","roles":["analyst"],` +
+		`"grants":["role:analyst#0"],"tool":"t","allowed":false,"returnedRows":0,"durationMs":0}`
+	if string(got) != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
 	}
 }

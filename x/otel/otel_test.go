@@ -18,7 +18,7 @@ func TestNewHooksNoPanicWithoutProvider(t *testing.T) {
 	// With no tracer provider configured, otel uses a no-op tracer; callbacks
 	// must still be safe to invoke.
 	ctx := h.FireBeforeTool(context.Background(), "read_records", nil)
-	h.FireAfterTool(ctx, "read_records", nil, nil)
+	h.FireAfterTool(ctx, "read_records", nil)
 	h.FireOnError(ctx, errors.New("e"))
 	h.FireCostGate(ctx, cost.Plan{}, cost.Score{}, "allow")
 	h.FireAuthorize(ctx, rbac.Request{Role: "reader", Entity: "users"}, rbac.Decision{})

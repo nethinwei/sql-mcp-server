@@ -10,6 +10,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
+	"github.com/nethinwei/sql-mcp-server/core/entity"
 )
 
 // ---- read_records ----
@@ -20,6 +21,7 @@ type ReadTool struct{}
 func (ReadTool) Info() Info {
 	return Info{
 		Name:        "read_records",
+		Action:      entity.ActionRead.String(),
 		Description: "Read records from an entity",
 		InputSchema: schemaRead,
 		ReadOnly:    true,
@@ -33,8 +35,8 @@ func (ReadTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Res
 	if err := decodeInput(input, &in); err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
-	if tc.MaxFilterConditions > 0 && len(in.Filter) > tc.MaxFilterConditions {
-		return Result{}, fmt.Errorf("%w: too many filter conditions", ErrInvalidInput)
+	if in.Offset > 0 && in.Limit == 0 {
+		return Result{}, fmt.Errorf("%w: offset requires limit", ErrInvalidInput)
 	}
 	if tc.MaxExpand > 0 && len(in.Expand) > tc.MaxExpand {
 		return Result{}, fmt.Errorf("%w: too many relationships", ErrInvalidInput)
@@ -70,6 +72,7 @@ func recordReadFeedback(
 			if tc.Auditor != nil {
 				_ = tc.Auditor.Record(ctx, audit.Event{
 					Time: time.Now(), DecisionID: tc.DecisionID, Role: tc.Role,
+					User: tc.User, Roles: tc.UserRoles,
 					Entity: entityName, Action: "explain_analyze_sample",
 					Tool: "read_records", Allowed: false, Error: samplingErr.Error(),
 				})

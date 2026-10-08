@@ -20,22 +20,11 @@ func TestDialectPlaceholder(t *testing.T) {
 	}
 }
 
-func TestDialectExplainSQL(t *testing.T) {
-	t.Parallel()
-	q := "SELECT * FROM t"
-	if got := (Dialect{}).ExplainSQL(q); got != "EXPLAIN FORMAT=JSON "+q {
-		t.Errorf("ExplainSQL = %q", got)
-	}
-}
-
 func TestDialectCapabilities(t *testing.T) {
 	t.Parallel()
 	caps := (Dialect{}).Capabilities()
 	if caps.ExplainAccurate {
 		t.Error("mysql estimate should not be accurate")
-	}
-	if !caps.SQLSafeUpdates {
-		t.Error("mysql should support sql_safe_updates")
 	}
 	if caps.Returning {
 		t.Error("mysql should not support RETURNING")

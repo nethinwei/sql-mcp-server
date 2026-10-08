@@ -1,7 +1,6 @@
 package config
 
 import (
-	"runtime"
 	"strings"
 	"time"
 )
@@ -26,7 +25,7 @@ func (c *Config) ApplyDefaults() {
 func (c *Config) applyServerDefaults() {
 	c.Server.Role = canonicalRole(c.Server.Role)
 	if len(c.Server.Secrets.AllowedRoots) == 0 {
-		c.Server.Secrets.AllowedRoots = []string{"/run/secrets", "/var/run/secrets"}
+		c.Server.Secrets.AllowedRoots = DefaultSecretRoots()
 	}
 	if c.Server.Transport == "" {
 		c.Server.Transport = "stdio"
@@ -53,7 +52,19 @@ func (c *Config) applyEntityDefaults() {
 	}
 }
 
+// enabled returns a pointer to true for switches whose unset value means on.
+func enabled() *bool {
+	on := true
+	return &on
+}
+
 func (c *Config) applyCostDefaults() {
+	if c.Cost.Enabled == nil {
+		c.Cost.Enabled = enabled()
+	}
+	if c.Cost.RequirePKForWrite == nil {
+		c.Cost.RequirePKForWrite = enabled()
+	}
 	if !c.Cost.present["maxRows"] && c.Cost.MaxRows == 0 {
 		c.Cost.MaxRows = 10000
 	}
@@ -129,14 +140,17 @@ func (c *Config) applyAQEDefaults() {
 }
 
 func (c *Config) applyRateLimitDefaults() {
+	if c.RateLimit.Enabled == nil {
+		c.RateLimit.Enabled = enabled()
+	}
+	if c.Mask.Enabled == nil {
+		c.Mask.Enabled = enabled()
+	}
 	if c.RateLimit.MaxInflight == 0 {
 		c.RateLimit.MaxInflight = 256
 	}
 	if c.RateLimit.IOPool == 0 {
 		c.RateLimit.IOPool = 16
-	}
-	if c.RateLimit.CPUPool == 0 {
-		c.RateLimit.CPUPool = runtime.NumCPU()
 	}
 	if c.RateLimit.MinConcurrency == 0 {
 		c.RateLimit.MinConcurrency = 1

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -14,6 +15,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
+	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
@@ -107,10 +109,29 @@ func assertPGExplainPlans(t *testing.T, ctx context.Context, prov *pgprov.Provid
 
 func assertPGIntrospectUsers(t *testing.T, ctx context.Context, prov *pgprov.Provider) {
 	t.Helper()
+	if _, err := prov.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS smcp_store_probe (id int PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		"CREATE TABLE IF NOT EXISTS customers (id int PRIMARY KEY, name text)",
+		"COMMENT ON TABLE customers IS 'customer master'",
+		"COMMENT ON COLUMN customers.id IS 'customer id'",
+		"CREATE TABLE IF NOT EXISTS purchases (id int PRIMARY KEY, customer_id int REFERENCES customers(id))",
+	} {
+		if _, err := prov.ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
 	entities, err := prov.Introspector().Discover(ctx, []string{"public"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, e := range entities {
+		if config.IsStoreTable(e.Name) {
+			t.Fatalf("introspection must skip reserved store table %q", e.Name)
+		}
+	}
+	assertCommentsAndForeignKeys(t, entities)
 	var users *entity.Entity
 	for i := range entities {
 		if entities[i].Name == "users" {
@@ -140,7 +161,7 @@ func TestCostGateEndToEnd(t *testing.T) {
 		}},
 		Tools: config.DefaultToolFlags(),
 		Cost: config.CostConfig{
-			Enabled: config.Bool(true), SoftScore: 40, HardScore: 70, MaxRows: 10000,
+			Enabled: new(true), SoftScore: 40, HardScore: 70, MaxRows: 10000,
 			RejectFullScan: true, WhitelistPKPoint: true,
 		},
 	}
@@ -201,7 +222,7 @@ func newPGRLSApp(t *testing.T, prov *pgprov.Provider) *bootstrap.App {
 		Tools: config.DefaultToolFlags(),
 		// This test targets RLS/masking; mandatory EnforceCap remains active
 		// while optional EXPLAIN scoring is disabled.
-		Cost: config.CostConfig{Enabled: config.Bool(false), MaxRows: 10000},
+		Cost: config.CostConfig{Enabled: new(false), MaxRows: 10000},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -276,7 +297,7 @@ func assertPGQuotedIdentifierRLS(t *testing.T, ctx context.Context, prov *pgprov
 			},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(false), MaxRows: 10000},
+		Cost:  config.CostConfig{Enabled: new(false), MaxRows: 10000},
 	}
 	quotedCfg.ApplyDefaults()
 	quotedApp, err := bootstrap.AssembleWithProvider(quotedCfg, prov)
@@ -309,7 +330,7 @@ func TestUpdateUnsafeWriteAndPK(t *testing.T) {
 			Roles:  config.RoleConfig{Update: []string{"writer"}},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(false)},
+		Cost:  config.CostConfig{Enabled: new(false)},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -355,7 +376,7 @@ func TestEnforceCapLimitsRows(t *testing.T) {
 		Tools: config.DefaultToolFlags(),
 		// Optional Estimate is disabled; mandatory EnforceCap remains active.
 		Cost: config.CostConfig{
-			Enabled: config.Bool(false), MaxRows: 1,
+			Enabled: new(false), MaxRows: 1,
 		},
 	}
 	cfg.ApplyDefaults()
@@ -390,7 +411,7 @@ func TestPGExecuteProcedure(t *testing.T) {
 		}},
 		Tools: config.DefaultToolFlags(),
 		Cost: config.CostConfig{
-			Enabled:        config.Bool(false),
+			Enabled:        new(false),
 			AllowTemplates: []string{`CALL "noop_proc"()`},
 		},
 	}
@@ -404,5 +425,50 @@ func TestPGExecuteProcedure(t *testing.T) {
 	_, err = tool.ExecuteTool{}.Run(ctx, in, tc)
 	if err != nil {
 		t.Fatalf("execute should succeed, got %v", err)
+	}
+}
+
+// assertCommentsAndForeignKeys checks that introspection maps table and
+// column comments to descriptions and reports single-column foreign keys.
+func assertCommentsAndForeignKeys(t *testing.T, entities []entity.Entity) {
+	t.Helper()
+	byName := map[string]entity.Entity{}
+	for _, e := range entities {
+		byName[e.Name] = e
+	}
+	customers, purchases := byName["customers"], byName["purchases"]
+	if customers.Description != "customer master" || len(customers.Attributes) == 0 ||
+		customers.Attributes[0].Description != "customer id" {
+		t.Fatalf("comments not introspected: %+v", customers)
+	}
+	if len(purchases.ForeignKeys) != 1 {
+		t.Fatalf("foreign keys = %+v", purchases.ForeignKeys)
+	}
+	fk := purchases.ForeignKeys[0]
+	if fk.RefRelation != "customers" || fk.RefSchema != purchases.Schema || fk.RefSchema == "" ||
+		len(fk.Columns) != 1 || fk.Columns[0] != "customer_id" ||
+		len(fk.RefColumns) != 1 || fk.RefColumns[0] != "id" {
+		t.Fatalf("foreign key = %+v", fk)
+	}
+}
+
+func TestPostgresListsUserSchemas(t *testing.T) {
+	prov, cleanup := setupPG(t)
+	defer cleanup()
+	ctx := context.Background()
+	if _, err := prov.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS crm"); err != nil {
+		t.Fatal(err)
+	}
+	lister, ok := prov.Introspector().(introspect.SchemaLister)
+	if !ok {
+		t.Fatal("postgres introspector must list schemas")
+	}
+	schemas, current, err := lister.Schemas(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current != "public" || !slices.Contains(schemas, "crm") || !slices.Contains(schemas, "public") ||
+		slices.Contains(schemas, "pg_catalog") || slices.Contains(schemas, "information_schema") {
+		t.Fatalf("schemas = %v", schemas)
 	}
 }

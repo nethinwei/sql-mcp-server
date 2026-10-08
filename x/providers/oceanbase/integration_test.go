@@ -48,7 +48,7 @@ func connectOBWithRetry(t *testing.T, dsn string) *oceanbase.Provider {
 	var prov *oceanbase.Provider
 	var err error
 	for i := 0; i < 40; i++ {
-		prov, err = oceanbase.New(dsn)
+		prov, err = oceanbase.NewWithTimeout(dsn, 30*time.Second)
 		if err == nil {
 			return prov
 		}
@@ -119,23 +119,7 @@ func TestOBProviderQueryExecExplainIntrospect(t *testing.T) {
 		t.Fatalf("expected a known scan type, got ScanUnknown (raw=%s)", string(plan.Raw))
 	}
 
-	entities, err := prov.Introspector().Discover(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var users *entity.Entity
-	for i := range entities {
-		if entities[i].Name == "users" {
-			users = &entities[i]
-		}
-	}
-	if users == nil {
-		t.Fatalf("users not discovered: %+v", entities)
-	}
-	pk := users.PrimaryKey()
-	if len(pk) != 1 || pk[0] != "id" {
-		t.Fatalf("primary key = %v, want [id]", pk)
-	}
+	assertOBIntrospectUsers(t, ctx, prov)
 }
 
 func TestOBReadEnforceCap(t *testing.T) {
@@ -151,7 +135,7 @@ func TestOBReadEnforceCap(t *testing.T) {
 			Roles:  config.RoleConfig{Read: []string{"reader"}},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(true), SoftScore: 90, HardScore: 95, MaxRows: 1},
+		Cost:  config.CostConfig{Enabled: new(true), SoftScore: 90, HardScore: 95, MaxRows: 1},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -204,7 +188,7 @@ func newOBRLSApp(t *testing.T, prov *oceanbase.Provider) *bootstrap.App {
 			},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(false), MaxRows: 10000},
+		Cost:  config.CostConfig{Enabled: new(false), MaxRows: 10000},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -276,7 +260,7 @@ func assertOBQuotedIdentifierRLS(t *testing.T, ctx context.Context, prov *oceanb
 			},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(false), MaxRows: 10000},
+		Cost:  config.CostConfig{Enabled: new(false), MaxRows: 10000},
 	}
 	quotedCfg.ApplyDefaults()
 	quotedApp, err := bootstrap.AssembleWithProvider(quotedCfg, prov)
@@ -317,7 +301,7 @@ func TestOBExecuteProcedure(t *testing.T) {
 		}},
 		Tools: config.DefaultToolFlags(),
 		Cost: config.CostConfig{
-			Enabled:        config.Bool(false),
+			Enabled:        new(false),
 			AllowTemplates: []string{"CALL `test`.`count_users`()"},
 		},
 	}
@@ -350,7 +334,7 @@ func TestOBUpdateUnsafeWriteAndPK(t *testing.T) {
 			Roles:  config.RoleConfig{Update: []string{"writer"}},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(false)},
+		Cost:  config.CostConfig{Enabled: new(false)},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -376,5 +360,70 @@ func TestOBUpdateUnsafeWriteAndPK(t *testing.T) {
 	}
 	if res.Content[0]["rowsAffected"] != int64(1) {
 		t.Fatalf("rowsAffected = %v, want 1", res.Content[0]["rowsAffected"])
+	}
+}
+
+func assertOBIntrospectUsers(t *testing.T, ctx context.Context, prov *oceanbase.Provider) {
+	t.Helper()
+	if _, err := prov.ExecContext(ctx,
+		"CREATE TABLE IF NOT EXISTS test.smcp_store_probe (id int PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		"CREATE TABLE IF NOT EXISTS test.customers (id int PRIMARY KEY COMMENT 'customer id', name text) " +
+			"COMMENT='customer master'",
+		"CREATE TABLE IF NOT EXISTS test.purchases (id int PRIMARY KEY, customer_id int, " +
+			"CONSTRAINT fk_purchases_customer FOREIGN KEY (customer_id) REFERENCES test.customers(id))",
+	} {
+		if _, err := prov.ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	entities, err := prov.Introspector().Discover(ctx, []string{"test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entities {
+		if config.IsStoreTable(e.Name) {
+			t.Fatalf("introspection must skip reserved store table %q", e.Name)
+		}
+	}
+	assertCommentsAndForeignKeys(t, entities)
+	var users *entity.Entity
+	for i := range entities {
+		if entities[i].Name == "users" {
+			users = &entities[i]
+		}
+	}
+	if users == nil {
+		t.Fatalf("users not discovered: %+v", entities)
+	}
+	pk := users.PrimaryKey()
+	if len(pk) != 1 || pk[0] != "id" {
+		t.Fatalf("primary key = %v, want [id]", pk)
+	}
+}
+
+// assertCommentsAndForeignKeys checks that introspection maps table and
+// column comments to descriptions and reports single-column foreign keys.
+func assertCommentsAndForeignKeys(t *testing.T, entities []entity.Entity) {
+	t.Helper()
+	byName := map[string]entity.Entity{}
+	for _, e := range entities {
+		byName[e.Name] = e
+	}
+	customers, purchases := byName["customers"], byName["purchases"]
+	if customers.Description != "customer master" || len(customers.Attributes) == 0 ||
+		customers.Attributes[0].Description != "customer id" {
+		t.Fatalf("comments not introspected: %+v", customers)
+	}
+	if len(purchases.ForeignKeys) != 1 {
+		t.Fatalf("foreign keys = %+v", purchases.ForeignKeys)
+	}
+	fk := purchases.ForeignKeys[0]
+	if fk.RefRelation != "customers" || fk.RefSchema != purchases.Schema || fk.RefSchema == "" ||
+		len(fk.Columns) != 1 || fk.Columns[0] != "customer_id" ||
+		len(fk.RefColumns) != 1 || fk.RefColumns[0] != "id" {
+		t.Fatalf("foreign key = %+v", fk)
 	}
 }

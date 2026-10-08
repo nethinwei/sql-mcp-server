@@ -2,8 +2,10 @@ package bootstrap
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +23,9 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/tool"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
+	"github.com/nethinwei/sql-mcp-server/x/providers/oceanbase"
 	"github.com/nethinwei/sql-mcp-server/x/providers/postgres"
+	"github.com/nethinwei/sql-mcp-server/x/providers/sqladapter"
 )
 
 func TestRecordProviderFailureClassification(t *testing.T) {
@@ -238,25 +242,25 @@ func TestResolveSecrets(t *testing.T) {
 	t.Parallel()
 	os.Setenv("TEST_DSN_VAR", "postgres://x")
 	defer os.Unsetenv("TEST_DSN_VAR")
-	got, err := resolveSecrets("host=${TEST_DSN_VAR}")
+	got, err := (EnvFileResolver{}).Resolve("host=${TEST_DSN_VAR}")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != "host=postgres://x" {
 		t.Fatalf("got %q", got)
 	}
-	if _, err := resolveSecrets("${MISSING_VAR_ZZZ}"); err == nil {
+	if _, err := (EnvFileResolver{}).Resolve("${MISSING_VAR_ZZZ}"); err == nil {
 		t.Fatal("expected error for missing env")
 	}
 }
 
 func TestNewProviderUnsupported(t *testing.T) {
 	t.Parallel()
-	if _, err := newProvider("oracle", "", time.Second); err == nil {
+	if _, err := providerregistry.New("oracle", "", providerregistry.Options{Timeout: time.Second}); err == nil {
 		t.Fatal("expected error for unsupported driver")
 	}
 	// mysql with an invalid DSN fails fast at ping (still an error).
-	if _, err := newProvider("mysql", "", time.Second); err == nil {
+	if _, err := providerregistry.New("mysql", "", providerregistry.Options{Timeout: time.Second}); err == nil {
 		t.Fatal("expected error for invalid mysql dsn")
 	}
 }
@@ -264,31 +268,36 @@ func TestNewProviderUnsupported(t *testing.T) {
 func TestNewProviderUsesRegistry(t *testing.T) {
 	const driver = "bootstrap-registry-test"
 	want := &fakeProvider{}
-	providerregistry.Register(driver, func(string, time.Duration) (coreprovider.Provider, error) {
+	providerregistry.Register(driver, func(string, providerregistry.Options) (coreprovider.Provider, error) {
 		return want, nil
 	})
-	got, err := newProvider(driver, "ignored", time.Second)
+	got, err := providerregistry.New(driver, "ignored", providerregistry.Options{Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != want {
-		t.Fatalf("newProvider() = %p, want %p", got, want)
+		t.Fatalf("providerregistry.New() = %p, want %p", got, want)
 	}
 }
 
 func TestRedactDSN(t *testing.T) {
 	t.Parallel()
-	cases := []struct{ in, want string }{
-		{"postgres://user:secret@host:5432/db", "postgres://user:%2A%2A%2A@host:5432/db"},
-		{"postgresql://u:p@h/db", "postgresql://u:%2A%2A%2A@h/db"},
-		{"user:secret@tcp(127.0.0.1:3306)/db", "user:***@tcp(127.0.0.1:3306)/db"},
-		{"postgres://user@host/db", "postgres://user@host/db"},
-		{"postgres://user:secret@host/db?password=other", "postgres://user:%2A%2A%2A@host/db?password=***"},
-		{"user=x password=secret host=db", "user=x password=*** host=db"},
+	cases := []struct{ driver, in, want string }{
+		{"postgres", "postgres://user:secret@host:5432/db", "postgres://user:***@host:5432/db"},
+		{"postgres", "postgresql://u:p@h/db", "postgresql://u:***@h/db"},
+		{"mysql", "user:secret@tcp(127.0.0.1:3306)/db", "user:***@tcp(127.0.0.1:3306)/db"},
+		{"oceanbase", "user:p@ss@tcp(h:2881)/db", "user:***@tcp(h:2881)/db"},
+		{"postgres", "postgres://user@host/db", "postgres://user@host/db"},
+		{"postgres", "postgres://user:secret@host/db?password=other", "postgres://user:***@host/db?password=***"},
+		{"postgres", "user=x password=secret host=db", "user=x password=*** host=db"},
+		{"postgres", "postgres://u@h/db?%70assword=secret&x=1", "postgres://u@h/db?%70assword=***&x=1"},
+		{"postgres", "user=x password = secret host=db", "user=x password = *** host=db"},
+		{"postgres", "password='a b\\' c' host=db", "password=*** host=db"},
+		{"unknown", "host=db password = secret", "host=db password = ***"},
 	}
 	for _, c := range cases {
-		if got := RedactDSN(c.in); got != c.want {
-			t.Errorf("RedactDSN(%q) = %q, want %q", c.in, got, c.want)
+		if got := RedactDSN(c.driver, c.in); got != c.want {
+			t.Errorf("RedactDSN(%q, %q) = %q, want %q", c.driver, c.in, got, c.want)
 		}
 	}
 }
@@ -413,7 +422,7 @@ func assertDatasourceRejectsFullScan(t *testing.T, gate cost.Gate, d dialect.Dia
 func TestAssembleKeepsMandatorySafetyWhenCostEstimateDisabled(t *testing.T) {
 	cfg := &config.Config{
 		Database: config.DatabaseConfig{Driver: "postgres", DSN: "x"},
-		Cost:     config.CostConfig{Enabled: config.Bool(false)},
+		Cost:     config.CostConfig{Enabled: new(false)},
 		Entities: []config.EntityConfig{{
 			Name: "users", PrimaryKey: []string{"id"},
 			Fields: []config.FieldConfig{{Name: "id"}, {Name: "status"}},
@@ -530,5 +539,153 @@ func TestAssembleWiresAnalyzePolicyPerDatasource(t *testing.T) {
 	defer app.Close()
 	if !app.Analyze.Config.Enabled || app.Sources["default"].Analyze.Config.SampleRate != 0.5 {
 		t.Fatalf("analyze wiring = %+v / %+v", app.Analyze, app.Sources["default"].Analyze)
+	}
+}
+
+type fakeIntrospector []entity.Entity
+
+func (f fakeIntrospector) Discover(context.Context, []string) ([]entity.Entity, error) { return f, nil }
+
+type commentedProvider struct {
+	*fakeProvider
+	tables fakeIntrospector
+}
+
+func (p commentedProvider) Introspector() introspect.Introspector { return p.tables }
+
+// Database comments are the default descriptions; configured ones win.
+func TestAssembleInheritsDatabaseComments(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Databases: map[string]config.DatabaseConfig{"main": {Driver: "postgres", DSN: "x"}},
+		Entities: []config.EntityConfig{{Name: "users", DataSource: "main", Fields: []config.FieldConfig{
+			{Name: "id"}, {Name: "region", Description: "销售区域（手写）"},
+		}}},
+	}
+	cfg.ApplyDefaults()
+	prov := commentedProvider{&fakeProvider{dialect: postgres.Dialect{}}, fakeIntrospector{{
+		Name: "users", Source: "users", Schema: "public", Description: "用户表",
+		Attributes: []entity.Attribute{{Name: "id", Description: "主键"}, {Name: "region", Description: "销售大区"}},
+	}}}
+	app, err := AssembleWithProviders(cfg, map[string]Provider{"main": prov})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	res, _ := app.Registry.Resolve("users")
+	if res.Entity.Description != "用户表" || res.Attributes[0].Description != "主键" ||
+		res.Attributes[1].Description != "销售区域（手写）" {
+		t.Fatalf("descriptions = %q %+v", res.Entity.Description, res.Attributes)
+	}
+}
+
+// listingIntrospector knows its default schema and scans the named schemas.
+type listingIntrospector struct{ tables []entity.Entity }
+
+func (l listingIntrospector) Discover(_ context.Context, schemas []string) ([]entity.Entity, error) {
+	var out []entity.Entity
+	for _, t := range l.tables {
+		if slices.Contains(schemas, t.Schema) {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+func (l listingIntrospector) Schemas(context.Context) ([]string, string, error) {
+	return []string{"crm", "public"}, "public", nil
+}
+
+type listingProvider struct {
+	*fakeProvider
+	in listingIntrospector
+}
+
+func (p listingProvider) Introspector() introspect.Introspector { return p.in }
+
+// An entity without a schema reads the default schema even when another
+// entity names a different one, and takes that table's comments.
+func TestAssembleResolvesUnqualifiedEntitiesInTheDefaultSchema(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Databases: map[string]config.DatabaseConfig{"main": {Driver: "postgres", DSN: "x"}},
+		Entities: []config.EntityConfig{
+			{Name: "customers", DataSource: "main", Fields: []config.FieldConfig{{Name: "id"}}},
+			{Name: "crm_customers", Source: "customers", Schema: "crm", DataSource: "main",
+				Fields: []config.FieldConfig{{Name: "id"}}},
+		},
+	}
+	cfg.ApplyDefaults()
+	table := func(schema, comment string) entity.Entity {
+		return entity.Entity{Name: "customers", Source: "customers", Schema: schema, Description: comment,
+			Attributes: []entity.Attribute{{Name: "id"}}}
+	}
+	prov := listingProvider{&fakeProvider{dialect: postgres.Dialect{}},
+		listingIntrospector{[]entity.Entity{table("crm", "CRM 客户"), table("public", "公共客户")}}}
+	app, err := AssembleWithProviders(cfg, map[string]Provider{"main": prov})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	plain, _ := app.Registry.Resolve("customers")
+	crm, _ := app.Registry.Resolve("crm_customers")
+	if plain.Entity.Description != "公共客户" || crm.Entity.Description != "CRM 客户" {
+		t.Fatalf("descriptions = %q / %q", plain.Entity.Description, crm.Entity.Description)
+	}
+}
+
+// A failed assembly leaves the providers to the caller and opens no audit
+// sink: configuration errors are detected before any resource is acquired.
+func TestAssembleFailureAcquiresNoResources(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for name, mutate := range map[string]func(*config.Config){
+		"unknown mask rule": func(c *config.Config) { c.Entities[0].Fields[0].Mask = "nope" },
+		"unwritable audit":  func(c *config.Config) { c.Audit.Path = dir + "/missing/audit.log" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := &config.Config{
+				Database: config.DatabaseConfig{Driver: "postgres", DSN: "x"},
+				Audit:    config.AuditConfig{Enabled: true, Path: dir + "/" + strings.ReplaceAll(name, " ", "-")},
+				Entities: []config.EntityConfig{{Name: "users", Fields: []config.FieldConfig{{Name: "id"}}}},
+			}
+			mutate(cfg)
+			cfg.ApplyDefaults()
+			provider := &fakeProvider{dialect: postgres.Dialect{}}
+			if _, err := AssembleWithProviders(cfg, map[string]Provider{"default": provider}); err == nil {
+				t.Fatal("assembly succeeded")
+			}
+			if provider.closed != 0 {
+				t.Fatalf("provider closed %d times; the caller owns it on failure", provider.closed)
+			}
+			if _, err := os.Stat(cfg.Audit.Path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("audit sink opened despite failed assembly: %v", err)
+			}
+		})
+	}
+}
+
+// configurePool must reach the pool of every built-in provider; an embedded
+// field shadowing DB() once made it a silent no-op.
+func TestConfigurePoolReachesBuiltInProviders(t *testing.T) {
+	t.Parallel()
+	for driver, wrap := range map[string]func(*sqladapter.Pool) Provider{
+		"pgx":   func(p *sqladapter.Pool) Provider { return &postgres.Provider{Pool: p} },
+		"mysql": func(p *sqladapter.Pool) Provider { return &mysql.Provider{Pool: p} },
+		"ob":    func(p *sqladapter.Pool) Provider { return &oceanbase.Provider{Pool: p} },
+	} {
+		name := driver
+		if name == "ob" {
+			name = "mysql"
+		}
+		db, err := sql.Open(name, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		configurePool(wrap(sqladapter.New(db, nil, nil)), 7, time.Minute, time.Hour)
+		if got := db.Stats().MaxOpenConnections; got != 7 {
+			t.Errorf("%s: MaxOpenConnections = %d, want 7", driver, got)
+		}
+		_ = db.Close()
 	}
 }

@@ -9,40 +9,45 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/provider"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
+	"github.com/nethinwei/sql-mcp-server/x/providers/sqladapter"
 )
 
 func init() {
-	providerregistry.Register("mysql", func(dsn string, timeout time.Duration) (provider.Provider, error) {
-		return NewWithTimeout(dsn, timeout)
+	providerregistry.Register("mysql", func(dsn string, opts providerregistry.Options) (provider.Provider, error) {
+		return Open(dsn, opts)
 	})
 }
 
 // Provider adapts a MySQL database to the core interfaces.
 type Provider struct {
-	*Adapter
+	*sqladapter.Pool
 	dialect      dialect.Dialect
 	explainer    cost.Explainer
 	introspector introspect.Introspector
 }
 
-// New opens a MySQL database and assembles the core adapters.
-func New(dsn string) (*Provider, error) {
-	return NewWithTimeout(dsn, 30*time.Second)
-}
-
 // NewWithTimeout opens MySQL with a DB-native SELECT timeout.
 func NewWithTimeout(dsn string, timeout time.Duration) (*Provider, error) {
-	ad, err := NewAdapterWithTimeout(dsn, timeout, "")
+	return Open(dsn, providerregistry.Options{Timeout: timeout})
+}
+
+// Open opens MySQL with opts (see NewAdapter).
+func Open(dsn string, opts providerregistry.Options) (*Provider, error) {
+	ad, err := NewAdapter(dsn, opts, "")
 	if err != nil {
 		return nil, err
 	}
 	return &Provider{
-		Adapter:      ad,
+		Pool:         ad,
 		dialect:      Dialect{},
-		explainer:    mysqlExplainer{db: ad.db},
-		introspector: NewIntrospector(ad.db),
+		explainer:    mysqlExplainer{db: ad.DB()},
+		introspector: NewIntrospector(ad.DB()),
 	}, nil
 }
+
+// bootstrap sizes and pings the pool through DB(); keep it reachable (an
+// embedded field named DB would shadow it).
+var _ interface{ DB() *sql.DB } = (*Provider)(nil)
 
 // Dialect returns the MySQL dialect.
 func (p *Provider) Dialect() dialect.Dialect { return p.dialect }
@@ -52,6 +57,3 @@ func (p *Provider) Explainer() cost.Explainer { return p.explainer }
 
 // Introspector returns the schema introspector.
 func (p *Provider) Introspector() introspect.Introspector { return p.introspector }
-
-// compile-time assertion that *sql.DB is available to the explainer/introspector.
-var _ = (*sql.DB)(nil)

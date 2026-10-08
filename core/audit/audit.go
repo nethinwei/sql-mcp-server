@@ -22,9 +22,14 @@ var ErrSinkClosed = errors.New("audit: sink closed")
 // milliseconds under "durationMs". Cost is reserved: its inner structure is
 // not yet part of the frozen contract.
 type Event struct {
-	Time          time.Time       `json:"time"`
-	DecisionID    string          `json:"decisionId,omitempty"`
-	Role          string          `json:"role,omitempty"`
+	Time       time.Time `json:"time"`
+	DecisionID string    `json:"decisionId,omitempty"`
+	Role       string    `json:"role,omitempty"`
+	// User and Roles identify a configured user and its roles; Grants lists
+	// the covering grant IDs of the authorization decisions.
+	User          string          `json:"user,omitempty"`
+	Roles         []string        `json:"roles,omitempty"`
+	Grants        []string        `json:"grants,omitempty"`
 	Entity        string          `json:"entity,omitempty"`
 	Action        string          `json:"action,omitempty"`
 	Tool          string          `json:"tool"`
@@ -76,12 +81,8 @@ type AsyncAuditor struct {
 	closed    atomic.Bool
 }
 
-// NewAsyncAuditor starts a flusher goroutine. Call Close to drain and stop.
-func NewAsyncAuditor(sink Sink, queueSize int) *AsyncAuditor {
-	return NewAsyncAuditorWithClose(sink, nil, queueSize)
-}
-
-// NewAsyncAuditorWithClose starts an auditor and closes the sink after draining.
+// NewAsyncAuditorWithClose starts a flusher goroutine and closes the sink (when
+// closeSink is non-nil) after draining. Call Close to drain and stop.
 func NewAsyncAuditorWithClose(sink Sink, closeSink func() error, queueSize int) *AsyncAuditor {
 	if queueSize <= 0 {
 		queueSize = 1024

@@ -18,7 +18,10 @@ import (
 type ExecuteTool struct{}
 
 func (ExecuteTool) Info() Info {
-	return Info{Name: "execute_entity", Description: "Execute a stored procedure", InputSchema: schemaExecute}
+	return Info{
+		Name: "execute_entity", Description: "Execute a stored procedure", InputSchema: schemaExecute,
+		Action: entity.ActionExecute.String(),
+	}
 }
 func (ExecuteTool) Enabled(f config.ToolFlags) bool { return f.ExecuteEntity }
 func (ExecuteTool) CostGated()                      {}
@@ -60,6 +63,28 @@ func ProcedureToolName(entityName string) string {
 	return "procedure_" + base + "_" + hex.EncodeToString(sum[:4])
 }
 
+// ProcedureTools returns the procedures exposed as their own tools: trusted
+// procedures configured with a custom tool.
+func ProcedureTools(reg *entity.Registry) []ProcedureTool {
+	var out []ProcedureTool
+	for _, e := range reg.Entities() {
+		if e.Kind == entity.KindProcedure && e.MCP.CustomTool && e.MCP.TrustedProcedure {
+			out = append(out, ProcedureTool{Entity: e})
+		}
+	}
+	return out
+}
+
+// FindProcedureTool returns the exposed procedure tool named name.
+func FindProcedureTool(reg *entity.Registry, name string) (ProcedureTool, bool) {
+	for _, t := range ProcedureTools(reg) {
+		if ProcedureToolName(t.Entity.Name) == name {
+			return t, true
+		}
+	}
+	return ProcedureTool{}, false
+}
+
 // Info implements Tool.
 func (t ProcedureTool) Info() Info {
 	properties := make(map[string]any, len(t.Entity.Params))
@@ -69,10 +94,11 @@ func (t ProcedureTool) Info() Info {
 	schema, _ := json.Marshal(map[string]any{
 		"type":       "object",
 		"properties": properties,
-		"required":   t.Entity.Params,
+		"required":   append([]string{}, t.Entity.Params...), // never null
 	})
 	return Info{
 		Name:        ProcedureToolName(t.Entity.Name),
+		Action:      entity.ActionExecute.String(),
 		Description: "Execute stored procedure " + t.Entity.Name,
 		InputSchema: schema,
 	}

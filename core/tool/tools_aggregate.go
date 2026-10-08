@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/entity"
 )
 
 // ---- aggregate_records ----
@@ -16,6 +17,7 @@ type AggregateTool struct{}
 func (AggregateTool) Info() Info {
 	return Info{
 		Name:        "aggregate_records",
+		Action:      entity.ActionAggregate.String(),
 		Description: "Aggregate records of an entity",
 		InputSchema: schemaAggregate,
 		ReadOnly:    true,
@@ -27,9 +29,6 @@ func (AggregateTool) Run(ctx context.Context, input json.RawMessage, tc Context)
 	var in aggregateInput
 	if err := decodeInput(input, &in); err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
-	}
-	if tc.MaxFilterConditions > 0 && len(in.Filter) > tc.MaxFilterConditions {
-		return Result{}, fmt.Errorf("%w: too many filter conditions", ErrInvalidInput)
 	}
 	if tc.MaxGroupByFields > 0 && len(in.GroupBy) > tc.MaxGroupByFields {
 		return Result{}, fmt.Errorf("%w: too many group-by fields", ErrInvalidInput)

@@ -1,0 +1,75 @@
+# Sets every editable field so the draft round trip in graph_test covers it;
+# TestRoundTripFixtureCoversEveryField fails when a configuration field is
+# missing here.
+databases:
+  shop:
+    driver: postgres
+    dsn: ${SHOP_DSN}
+entities:
+  - name: customers
+    source: customer_master
+    datasource: shop
+    schema: crm
+    kind: view
+    description: Customer master
+    primaryKey: [id]
+    fields:
+      - name: id
+      - {name: region, alias: area, description: Sales region}
+      - {name: phone, mask: phone}
+      - {name: secret_col, exclude: true}
+    roles:
+      read: [legacy_reader]
+      create: [legacy_writer]
+      update: [legacy_writer]
+      delete: [legacy_writer]
+      execute: [legacy_writer]
+      aggregate: [legacy_reader]
+    fieldACL:
+      legacy_reader: {read: [id, region], write: [region]}
+    rowPolicies:
+      legacy_reader: {field: region, op: eq, value: CN}
+    tenantPolicy: {field: region, op: eq, value: "${subject.tenant}"}
+    mcp: {dmlTools: false}
+    relationships:
+      - name: orders
+        target: orders
+        cardinality: has-many
+        joinOn: {id: customer_id}
+  - name: orders
+    datasource: shop
+    uniqueKeys: [[customer_id]]
+    allowCascade: true
+    fields:
+      - name: id
+      - name: customer_id
+  - name: refresh
+    datasource: shop
+    kind: procedure
+    params: [tenant]
+    affects: [orders]
+    mcp: {customTool: true, trustedProcedure: true}
+roles:
+  analyst:
+    description: Business analyst
+    grants:
+      - entity: orders
+        actions: [read, aggregate]
+        fields: {read: [id], write: [customer_id]}
+        rows: {or: [{field: customer_id, op: gt, value: 10}, {field: id, op: is_null}]}
+users:
+  alice:
+    description: BI agent
+    tokenHash: sha256:1111111111111111111111111111111111111111111111111111111111111111
+    roles: [analyst]
+    subject: {tenant: t1, level: 3}
+    grants:
+      - entity: refresh
+        actions: [execute]
+    disabled: true
+cost:
+  maxRows: 500
+  allowTemplates: ["shop:CALL refresh(?)"]
+budget:
+  users:
+    alice: {maxConcurrent: 2}

@@ -9,6 +9,190 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+### Added
+
+- 配置存储与 revision：`serve --store <driver>:<dsn>`（或 `SQL_MCP_STORE`）
+  从 SQLite（纯 Go `modernc.org/sqlite`）、PostgreSQL、MySQL 或 OceanBase 中的
+  已发布 revision 启动，`--watch` 轮询新发布并热重载，失败时保留旧快照并在
+  `/readyz/snapshot` 返回 `X-Snapshot-Stale`；新增 `store init/import/list/show/
+  diff/publish/rollback` 与 `migrate` 子命令。设计见
+  `docs/design/config-store.md`。
+- 管理 API 与控制台（`serve --store ... --admin`，挂在 `/admin`）：GraphQL 管理
+  API（草稿、校验、差异、模拟、发布与回滚，发布带乐观并发检查）与嵌入二进制的
+  Vue 控制台（数据源导入、权限矩阵、可见范围预览、版本历史、运行状态、其他设置
+  编辑器）。本地管理员账号（argon2id，`sql-mcp-server admin` 子命令引导）；密码
+  校验全局限并发并限制排队，改密立即吊销该账号的所有会话；自己的密码任何登录者
+  可改，他人的密码需要 `admin:accounts`。schema 导入按 schema 加表名识别表，
+  外键记录被引用表的 schema（`entity.ForeignKey.RefSchema`）。发布产物（GoReleaser、
+  镜像）在构建前编译控制台。设计见 `docs/design/admin-api.md`。
+- 实体 `source` 保留前缀 `smcp_`，introspection 跳过该前缀的表；威胁 TM-011、
+  不变量 I27、I28。
+
+- 用户、角色与权限模型：顶层 `roles`（授权项 grants）与 `users`（每用户
+  `tokenHash`、多角色、直授 grants、固定 subject、`disabled`），实体
+  `tenantPolicy` 租户硬边界，`budget.users`，`server.user`/`--user` 默认用户，
+  `sql-mcp-server user token` 生成 token 与 hash。多角色按请求选择覆盖集合并，
+  不对字段与行分别取并集。设计见 `docs/design/authorization-model.md`。
+- HTTP 每用户 bearer 认证与可信代理 `X-MCP-User`；热重载删除或禁用用户时解除其
+  会话并回滚在途事务。
+- 拒绝码 `AMBIGUOUS_FIELD_SCOPE`（retryable，`constraints.fieldScopes`）与审计
+  字段 `user`、`roles`、`grants`（兼容变化）。
+- 威胁 TM-009（多角色合并越权与租户打穿）、TM-010（用户身份伪造与吊销残留），
+  不变量 I25、I26。
+
+- 一个数据源可配置多个连接（`connections`，`role: primary|replica`）并按动作路由
+  （`routing.read/write/execute`）；`readAfterWrite` 让同一会话写入后的一段时间内读走写连接；
+  只读事务走读连接，读写事务固定在写连接。原有 `dsn` 简写等价于名为 `default` 的单连接。
+  连接可声明 `pooler: transaction`（pgbouncer 等事务模式代理），关闭预编译语句与依赖会话的
+  超时参数。同一数据源各连接解析出的默认 schema 不同时，未设 `schema` 的实体启动即报错。
+  见 [数据源模型](docs/design/datasource-model.md)。
+- 连接权限感知：启动与重载时按路由连接探测表级、列级与过程的权限和服务器只读状态，
+  授权超出连接能力时记录告警；管理 API 新增 `capabilities` 查询，`validate` 返回 `warnings`
+  （不阻断发布），控制台权限矩阵把连接无权执行的动作置灰并提示原因，审查页列出告警。
+- 拒绝码 `DATASOURCE_FORBIDDEN`（不可重试）：数据库以权限不足或只读拒绝语句时返回，不计入
+  熔断（兼容变化）。
+
+### Breaking
+
+- **配置中的未知字段直接拒绝加载**（此前静默忽略）：拼错的键（如
+  `cost.maxRow`）会让 `validate`、启动、reload 与 store publish 失败，并报告
+  行号与字段名；升级前先用 `sql-mcp-server validate` 检查现有配置。行过滤
+  （`rows`、`rowPolicies`、`tenantPolicy`）仍是自由结构。
+- MySQL/OceanBase 未设 `schema` 的实体解析到连接的当前数据库（与生成的 SQL 一致），
+  不再在所有数据库中按表名查找；DSN 未指定数据库时这类实体启动即报缺失（此前能
+  启动，但查询会因未选择数据库而失败）。请为实体设置 `schema` 或在 DSN 中指定数据库。
+- 字段规则改由结构体 `schema` 标签统一校验，此前只写在 JSON Schema 里的约束开始
+  生效：`server.transport`、实体 `kind` 的取值，以及各字段的范围与格式；部分
+  校验错误的措辞随之改为 `config: <路径> ...` 形式。`config.Validate` 现在要求
+  先调用 `ApplyDefaults`（所有加载器都会这样做），未物化默认值的程序化配置会因
+  上限为 0 被拒绝。
+- 删除从未生效的配置项 `rateLimit.cpuPool`（engine 没有 CPU 任务）与已弃用别名
+  `budget.*.maxScannedRows`；由于未知字段直接拒绝，旧配置需删除前者、把后者改名为
+  `maxEstimatedScannedRows`。旧版本会把 `cpuPool` 默认值写进每个 store revision，
+  因此 store 部署升级后无法启动、也无法回滚到旧 revision：用 `store show <id>` 导出
+  当前 revision，删去该键后 `store import`，再 `store publish --restart-required`。
+  当前已发布 revision 无法加载时，发布只接受 `restartRequired`（此前无论如何都会
+  被拒绝，store 无法恢复）。
+- 一个物理表或视图最多对应一个实体（[数据源模型](docs/design/datasource-model.md) I-1）。同一数据源中
+  名称完全相同的重复在校验和发布时拒绝；按默认 schema、MySQL `lower_case_table_names` 和服务器身份
+  （多个数据源指向同一个库）解析后的重复在启动和重载时拒绝。此前把同一张表配成两个实体（例如分别走
+  只读和读写两个 DSN）会产生两套策略和互不失效的缓存；迁移方式是只保留一个实体，多账号连接将在后续
+  版本以同一数据源的多个连接提供。
+- 表的主键与唯一键以数据库为准：配置的 `primaryKey` 与数据库不一致时启动告警，并以数据库的键为准；
+  此前在没有主键约束的表上声明 `primaryKey` 可让修改和删除通过写保护，现在不再生效。视图上声明的键只
+  用于读取。`primaryKey` 与新增的 `uniqueKeys` 中的列必须是实体字段。
+- 外键级联写入（`ON DELETE CASCADE`、`SET NULL`、`SET DEFAULT`、`ON UPDATE CASCADE`）需要调用方对级联链上
+  每一层的实体拥有不带行范围的删除或修改权限（修改须能写被改写的外键列），级联到未暴露的表时拒绝；实体可用 `allowCascade: true`
+  显式放开（[数据源模型](docs/design/datasource-model.md) I-6）。
+- `read_records` 的 `cursor` 必须是游标键（主键，或第一个身份唯一键）的前缀；此前无法使用时被静默
+  忽略，会重复返回第一页。
+- `read_records` 的 `offset` 必须与 `limit` 同时给出（此前 `offset` 被静默忽略），
+  输入 schema 增加 `dependentRequired`；`describe_entities` 拒绝非法输入（此前忽略
+  后列出全部实体）。删除永不产生的拒绝码 `NOT_IMPLEMENTED`。
+- Go API：删除仅测试使用的 `bootstrap.NewRuntime`、`mysql.New`、`mysql.NewAdapter`、
+  `oceanbase.New`、`providerregistry.KnownDrivers`、`config.Bool`（用 `new(v)`）等；
+  `store.Tx` 去掉无调用方的 `Savepoint`/`RollbackTo`，`dialect.Dialect` 去掉
+  `ExplainSQL`，`dialect.Capabilities` 只保留被读取的字段；`hook.Hooks.AfterTool`
+  去掉恒为 nil 的 result 参数；`budget.Manager` 收敛为单一的预留接口。
+  `providerregistry.Factory` 与 `providerregistry.New` 改为接收 `providerregistry.Options`
+  （超时与 pooler），`tool.DataSource` 按动作拆分连接。
+
+### Changed
+
+- 配置规则单一来源：字段的类型、约束、默认值与“修改需重启”标记定义在
+  `core/config` 的结构体标签与 `ApplyDefaults` 中，字段说明在
+  `core/config/fields.yaml`（中英文）；`go generate ./core/config` 生成
+  `schema.json`（现含 `additionalProperties: false`、默认值、说明与 `x-restart`）
+  和 `docs/configuration.md` 的字段参考，测试保证一致。静态校验、热重载重启判定
+  （错误中改为列出配置路径）、管理控制台的提示与选项都从这里读取。
+- `ApplyDefaults` 把缺省即开启的 `cost.enabled`、`cost.requirePKForWrite`、
+  `rateLimit.enabled`、`mask.enabled` 物化为 `true`，导出结果随之写出这些键。
+- 热重载守卫从 CLI 下沉为 `bootstrap.CheckHotReload`，文件 reload、store reload
+  与 store publish 共用；事务 `ttl`/`maxOpen` 变化在 reload 构建阶段即被拒绝。
+- 升级 OpenTelemetry Go 依赖组至 v1.45.0，修复 OTLP 导出器配置日志可能泄露
+  endpoint URL 的问题（GO-2026-6505）。
+- **最低 Go 版本升至 1.26**（`go.mod` 语言版本 `go 1.26.0`，toolchain、CI、发布
+  与镜像统一使用 Go 1.26.8），不再支持 Go 1.25。同时升级
+  `golang.org/x/crypto` v0.56.0、`golang.org/x/text` v0.41.0、
+  `google.golang.org/grpc` v1.83.1、`github.com/moby/go-archive` v0.3.0 等
+  依赖，修复 govulncheck 报告的标准库与依赖漏洞。
+- 授权实现由 `RoleAuthorizer` 换为 `GrantAuthorizer`；`rbac.NewRoleAuthorizer`
+  保留为不带顶层策略的构造函数，未配置 `users`/`roles` 时行为不变。
+- 配置用户且没有共享 token 时，非 mTLS/可信代理通道的请求必须携带用户 token；
+  `/metrics` 同样要求有效 token。
+- 写操作（create/update/delete）只按实际读写的字段选择覆盖 grant，不再因默认读
+  投影跨 grant 不兼容而返回 `AMBIGUOUS_FIELD_SCOPE`。
+- `describe_entities` 与 `sql-mcp://schema` 资源不再隐藏字段范围分散在多个 grant
+  中的实体（共用 `rbac.Decision.Reachable`）：返回可访问字段的并集。资源新增
+  `access.read`/`access.aggregate`，按动作分别给出可用字段，字段分散时另给
+  `explicitFieldsRequired` 与 `fieldScopes`，提示需在单个范围内显式选择字段。
+- 自定义过程工具的参数变化（改变注册给客户端的工具 schema）需要重启，不再热重载。
+- store 模式的明文密码检查与 DSN 脱敏改为按驱动语法解析连接串（PostgreSQL
+  keyword/value 允许 `password = x` 与引号值，URI 参数名按 URL 解码识别，如
+  `%70assword`），二者共用同一解析；空密码（免密认证）视为无凭据；`bootstrap.RedactDSN`
+  增加 driver 参数。
+- 管理 API 拒绝非对象的 `tenantPolicy`，不再将其静默清空。
+- 实体与字段的说明留空时使用数据库表注释与列注释（启动与重载时随漂移检查读取，
+  不增加查询），写在配置中的说明覆盖注释；控制台导入表时不再把注释复制进配置，
+  以灰色缺省值显示注释（新增管理 API 查询 `tableComments`）。
+- 表解析规则统一为 `introspect.Catalog`：未设 `schema` 的实体读取默认 schema
+  （PostgreSQL `current_schema()`、MySQL/OceanBase 当前数据库，即生成的 SQL 实际
+  访问的表），设了 `schema` 的按 schema 与表名精确匹配。启动漂移检查、注释继承
+  （合并为 `introspect.Reconcile`，取代 `DetectDrift`）、控制台导入与注释查询共用
+  该规则：不同 schema 的同名表不再互相覆盖而误报缺列，混用带 schema 与不带 schema
+  的实体时也不会继承到另一张表的注释。新增可选接口 `introspect.SchemaLister`
+  （PostgreSQL、MySQL/OceanBase 实现）。
+- 控制台导入表不填 schema 时扫描全部用户 schema（此前 PostgreSQL 只扫 `public`，
+  表都在其他 schema 时扫描结果为空）；扫描结果返回 `defaultSchema`，删除控制台
+  未使用、由前端按工作区计算的 `addedColumns`/`missingColumns`。
+- 控制台交互：页头区分“本地未保存 / 已保存草稿 #N / 与版本一致”，已保存的草稿
+  直接发布、不重复保存；发布审查先展示“授权规则变化”（按顶层授权与实体级旧式授
+  权比较每个用户被授予/不再授予的实体动作与范围变化，去重且无限制规则覆盖其他规则，
+  不代表最终权限，可一键模拟；实体与字段可见性；租户策略与用户 subject 的变化标出
+  可能受影响的用户），YAML 差异折叠展示，校验与差异绑定其内容快照、工作区变化后自动重新校验；发布成功
+  但本地同步失败时单独提示并可重新同步；保存草稿绑定提交
+  时的内容快照，请求期间的编辑保持未保存，发布期间及配置回读期间的编辑（含撤销）在
+  发布后按提交快照重新叠加；其他设置与其他页面同一流程：合法 JSON 输入即进入工作区，
+  只有无效 JSON 留在缓冲区并在审查页与离开时提示，重新应用到新版本时按字段三方
+  合并并报告冲突字段；权限模拟记录本次条件，条件变化后标记结果过期；可见范围
+  分“允许 / 需选择字段 / 拒绝”，点击字段范围带入单次模拟（权限模拟、角色与用户页均可，链接携带用户、实体、
+  动作、字段与配置来源，模拟页优先采用链接指定的来源；用户、实体与字段选项
+  随所选配置——工作区或已发布版本——变化）；导入页按数据源保存
+  扫描结果并丢弃过期响应；同步字段改为可逐项选择的预览（列出受影响的引用，可
+  默认隐藏新列）；字段授权编辑器支持全选、清空、复制可读字段与计数；本地工作区
+  所基于的版本在服务端已变化时自动重新载入并保留未保存修改。
+- 修复多数据源配置下 `create_record` 空指针 panic（插入时读取了未路由上下文的
+  方言）。
+- 修复 `kind: view` 的实体启动即报“缺失”：自省此前只扫描基础表。现在纳入视图和 PostgreSQL 物化视图
+  （导入页同样可见，候选实体标为 view）；PostgreSQL 子分区不再导入，只暴露分区父表；MySQL 视图不再
+  带上占位注释 `VIEW`。
+- 读缓存按物理关系（数据源与解析后的表）记录和失效，而不是按实体名；视图、物化视图和外部表的条目在
+  同一数据源任何写入后失效。存储过程新增 `affects`，声明它写入的实体；未声明时执行后失效整个数据源的
+  缓存（此前只失效过程自身，其写入的表会继续返回旧数据）。
+- 唯一键与列属性：自省读取唯一约束与唯一索引（部分、表达式、前缀索引与含可空列的键会显示但不用作身份），
+  以及默认值、自增、生成列。按唯一键等值定位单行的修改和删除可以通过写保护，游标分页在没有主键时使用
+  唯一键；生成列（含 identity ALWAYS）不可写；不支持 RETURNING 的 MySQL 新增后返回该行的键（含复合主键）。
+  `describe_entities` 与 `sql-mcp://schema` 增加字段 `required`、`readOnly` 和实体的可见身份键 `keys`
+  （兼容变化）。
+- 新拒绝码 `CONSTRAINT_VIOLATION`（retryable）：唯一、外键、非空、检查与排他约束冲突给出类别和调用方
+  可见的字段，不回显约束名与数据库原文；此前归为 `DATABASE_ERROR`。
+- 外键：多列外键在导入时生成多对 `joinOn` 的关联，`expand` 支持多列关联；关联值按数值与字符串归一化
+  匹配，修复 int4 外键引用 int8 主键等类型不同时展开结果为空的问题。读取级联动作与触发器：有触发器或
+  规则的表写入后失效整个数据源的缓存，级联写入同时失效被级联实体的缓存。
+- `describe_entities` 与 `sql-mcp://schema` 的实体增加 `datasource`（兼容变化），控制台实体列表与权限
+  矩阵显示“数据源 · schema.表”，以区分不同库中的同名表。
+- 修复单库且数据源名不是 `default` 时，省略 `datasource` 的 `begin_transaction`
+  把事务绑定到 `default`，导致事务内所有读写报 `TRANSACTION_SCOPE`。
+- 修复 MySQL/OceanBase 文本列（及 DECIMAL）以字节串返回、经 JSON 序列化成 base64
+  的问题：非二进制列按字符串返回。
+- 脱敏改为 fail-closed：无法按格式脱敏的值（无 `@` 的 email、不足 8 位或非标量的
+  phone/idcard）整体替换为 `***`，不再原样返回明文。
+- 写操作（create/update/delete/存储过程）执行后再超出返回字节或会话预算时只计账，
+  不再把已生效的写报告为失败（避免 agent 重试造成重复写）；存储过程即使结果超限也会
+  失效相关缓存。
+- 装配失败时不再泄漏审计 sink 与 engine，也不再替调用方关闭 provider：所有配置
+  校验先于资源获取。
+
 ## 0.1.10 - 2026-07-12
 
 ### Added

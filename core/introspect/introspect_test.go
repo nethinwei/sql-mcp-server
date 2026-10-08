@@ -7,6 +7,11 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 )
 
+func detectDrift(configured, discovered []entity.Entity) Drift {
+	_, d := Reconcile(configured, Catalog{Tables: discovered})
+	return d
+}
+
 func TestDetectDriftFieldLevel(t *testing.T) {
 	t.Parallel()
 	cfg := []entity.Entity{{
@@ -17,7 +22,7 @@ func TestDetectDriftFieldLevel(t *testing.T) {
 		Name:       "users",
 		Attributes: []entity.Attribute{{Name: "id"}, {Name: "email"}},
 	}}
-	d := DetectDrift(cfg, disc)
+	d := detectDrift(cfg, disc)
 	if !slices.Contains(d.Missing, "users.phone") {
 		t.Fatalf("expected users.phone in Missing, got %v", d.Missing)
 	}
@@ -28,7 +33,7 @@ func TestDetectDriftFieldLevel(t *testing.T) {
 
 func TestDetectDriftMissingEntity(t *testing.T) {
 	t.Parallel()
-	d := DetectDrift([]entity.Entity{{Name: "ghost"}}, nil)
+	d := detectDrift([]entity.Entity{{Name: "ghost"}}, nil)
 	if !slices.Contains(d.Missing, "ghost") {
 		t.Fatalf("expected ghost in Missing, got %v", d.Missing)
 	}
@@ -37,7 +42,7 @@ func TestDetectDriftMissingEntity(t *testing.T) {
 func TestDetectDriftNoDrift(t *testing.T) {
 	t.Parallel()
 	e := []entity.Entity{{Name: "users", Attributes: []entity.Attribute{{Name: "id"}}}}
-	d := DetectDrift(e, e)
+	d := detectDrift(e, e)
 	if len(d.Missing) != 0 || len(d.Extra) != 0 {
 		t.Fatalf("expected no drift, got %+v", d)
 	}
@@ -52,8 +57,64 @@ func TestDetectDriftUsesPhysicalSource(t *testing.T) {
 	discovered := []entity.Entity{{
 		Name: "users", Attributes: []entity.Attribute{{Name: "id"}},
 	}}
-	drift := DetectDrift(configured, discovered)
+	drift := detectDrift(configured, discovered)
 	if len(drift.Missing) != 0 {
 		t.Fatalf("physical source reported missing: %+v", drift)
+	}
+}
+
+// An entity without a schema reads the default schema, as the generated SQL
+// does, even when only other schemas were named elsewhere in the config.
+func TestCatalogResolvesTheDefaultSchema(t *testing.T) {
+	t.Parallel()
+	cat := Catalog{Default: "public", Tables: []entity.Entity{
+		{Name: "customers", Source: "customers", Schema: "crm", Description: "CRM 客户",
+			Attributes: []entity.Attribute{{Name: "id", Description: "CRM 主键"}}},
+		{Name: "customers", Source: "customers", Schema: "public", Description: "公共客户",
+			Attributes: []entity.Attribute{{Name: "id", Description: "公共主键"}}},
+	}}
+	got, d := Reconcile([]entity.Entity{
+		{Name: "customers", Attributes: []entity.Attribute{{Name: "id"}}},
+		{Name: "crm_customers", Source: "customers", Schema: "crm", Attributes: []entity.Attribute{{Name: "id"}}},
+	}, cat)
+	if len(d.Missing)+len(d.Extra) != 0 {
+		t.Fatalf("drift = %+v", d)
+	}
+	if got[0].Description != "公共客户" || got[0].Attributes[0].Description != "公共主键" ||
+		got[1].Description != "CRM 客户" {
+		t.Fatalf("descriptions = %q / %q", got[0].Description, got[1].Description)
+	}
+	if _, ok := (Catalog{Default: "public", Tables: cat.Tables[:1]}).Lookup("", "customers"); ok {
+		t.Fatal("an unqualified name must not resolve to a table outside the default schema")
+	}
+}
+
+// Without a known default schema, only a name unique in the catalog resolves.
+func TestCatalogWithoutDefaultNeedsUniqueName(t *testing.T) {
+	t.Parallel()
+	tables := []entity.Entity{{Name: "orders", Schema: "sales"}, {Name: "orders", Schema: "archive"}}
+	if _, ok := (Catalog{Tables: tables}).Lookup("", "orders"); ok {
+		t.Fatal("ambiguous name resolved")
+	}
+	if e, ok := (Catalog{Tables: tables[:1]}).Lookup("", "orders"); !ok || e.Schema != "sales" {
+		t.Fatalf("unique name = %+v, %v", e, ok)
+	}
+}
+
+func TestReconcileKeepsConfiguredDescriptionsAndProcedures(t *testing.T) {
+	t.Parallel()
+	cat := Catalog{Default: "public", Tables: []entity.Entity{{Name: "users", Schema: "public", Description: "用户",
+		Attributes: []entity.Attribute{{Name: "id", Description: "主键"}, {Name: "region", Description: "大区"}}}}}
+	configured := []entity.Entity{
+		{Name: "users", Attributes: []entity.Attribute{{Name: "id"}, {Name: "region", Description: "手写"}}},
+		{Name: "refresh", Kind: entity.KindProcedure},
+	}
+	got, d := Reconcile(configured, cat)
+	if len(d.Missing) != 0 || got[0].Description != "用户" || got[0].Attributes[0].Description != "主键" ||
+		got[0].Attributes[1].Description != "手写" {
+		t.Fatalf("got %+v, drift %+v", got[0], d)
+	}
+	if configured[0].Attributes[0].Description != "" {
+		t.Fatal("input mutated")
 	}
 }

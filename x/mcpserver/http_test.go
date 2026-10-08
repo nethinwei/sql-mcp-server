@@ -435,3 +435,24 @@ func TestNewServerRegistersProcedureCustomTools(t *testing.T) {
 	}
 	t.Fatalf("custom procedure tool %q not registered", want)
 }
+
+func TestSnapshotReadinessMarksStaleRevision(t *testing.T) {
+	t.Parallel()
+	var stale int64
+	mux := buildHTTPMux(http.NotFoundHandler(), HTTPConfig{
+		SnapshotReady: func(context.Context) error { return nil },
+		SnapshotStale: func() int64 { return stale },
+	})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz/snapshot", nil))
+	if rec.Code != http.StatusOK || rec.Header().Get("X-Snapshot-Stale") != "" {
+		t.Fatalf("fresh snapshot: code=%d header=%q", rec.Code, rec.Header().Get("X-Snapshot-Stale"))
+	}
+	stale = 42
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz/snapshot", nil))
+	if rec.Code != http.StatusOK || rec.Header().Get("X-Snapshot-Stale") != "42" {
+		t.Fatalf("stale snapshot must stay ready and be marked: code=%d header=%q",
+			rec.Code, rec.Header().Get("X-Snapshot-Stale"))
+	}
+}

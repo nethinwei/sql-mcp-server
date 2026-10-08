@@ -13,7 +13,7 @@ import (
 )
 
 func runExecute(ctx context.Context, tc Context, in executeInput, requireDMLTools bool) (Result, error) {
-	ctx, cancel := withTimeout(ctx, tc)
+	ctx, cancel := withTimeout(ctx, tc, 0)
 	defer cancel()
 	tc.Transaction = in.Transaction
 	res, tc, dec, err := prepareExecute(ctx, tc, in, requireDMLTools)
@@ -25,10 +25,12 @@ func runExecute(ctx context.Context, tc Context, in executeInput, requireDMLTool
 		return Result{}, err
 	}
 	out, err := collectProcedureRows(ctx, tc, res, dec, compiled)
-	if err != nil {
-		return Result{}, err
+	// The procedure may have written even when its result is unusable, so the
+	// cache is invalidated either way (after the rows are closed).
+	if writeErr := afterWrite(tc, res.Entity, in.Transaction); err == nil {
+		err = writeErr
 	}
-	if err := afterWrite(tc, res.Entity, in.Transaction); err != nil {
+	if err != nil {
 		return Result{}, err
 	}
 	return Result{Content: out, ReturnedRows: int64(len(out))}, nil
@@ -57,7 +59,7 @@ func prepareExecute(
 	if !res.Entity.MCP.TrustedProcedure {
 		return entity.Resolved{}, tc, rbac.Decision{}, ErrUnauthorized
 	}
-	routed, err := routeEntity(tc, res.Entity)
+	routed, err := routeEntity(tc, res.Entity, entity.ActionExecute)
 	if err != nil {
 		return entity.Resolved{}, tc, rbac.Decision{}, err
 	}
@@ -101,14 +103,14 @@ func collectProcedureRows(
 ) ([]map[string]any, error) {
 	rows, err := tc.DB.QueryContext(ctx, compiled.SQL, compiled.Args...)
 	if err != nil {
-		return nil, WrapDBError(err)
+		return nil, writeError(res, err)
 	}
 	defer func() { _ = rows.Close() }()
 	allowedFields := allowedProcedureFields(res, dec)
 	out := make([]map[string]any, 0)
 	for row, err := range store.Iter(rows) {
 		if err != nil {
-			return nil, WrapDBError(err)
+			return nil, writeError(res, err)
 		}
 		filterProcedureRow(row, allowedFields)
 		if tc.Masker != nil {

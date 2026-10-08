@@ -53,7 +53,7 @@ func (*recordingCache) Get(context.Context, cache.Key) ([]map[string]any, bool) 
 	return nil, false
 }
 func (*recordingCache) Set(context.Context, cache.Key, []map[string]any) error { return nil }
-func (c *recordingCache) Invalidate(string) error {
+func (c *recordingCache) Invalidate(string, string) error {
 	c.invalidations++
 	if c.events != nil {
 		*c.events = append(*c.events, "invalidate")

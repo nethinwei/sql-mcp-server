@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
           cache: true
       - name: install golangci-lint
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go: ["1.25.12", "1.26.5"]
+        go: ["1.26.8"]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -53,7 +53,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
           cache: true
       - name: core coverage (>=80.0%)
         run: make coverage-check
@@ -70,7 +70,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
           cache: true
       - name: bounded security fuzz targets
         run: make test-fuzz-smoke
@@ -86,10 +86,27 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
           cache: true
       - name: integration tests (testcontainers)
         run: make test-integration-${{ matrix.db }}
+
+  console:
+    name: admin console (type-check, test, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/admin/package.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: web/admin/pnpm-lock.yaml
+      - name: build console
+        run: make web web-check
 
   e2e:
     name: e2e (mcp client)
@@ -99,7 +116,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
           cache: true
       - name: end-to-end tests (real DB + in-memory MCP client)
         run: make test-e2e
@@ -112,7 +129,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
           cache: true
       - name: stdio and streamable HTTP protocol smoke
         run: make smoke-protocol
@@ -125,7 +142,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
           cache: true
       - run: make modelscope-check
 
@@ -136,7 +153,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
           cache: true
       - name: govulncheck
         run: |
@@ -152,7 +169,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
           cache: true
       - name: install actionlint v1.7.12
         run: |
@@ -163,6 +180,15 @@ jobs:
       - uses: anchore/sbom-action/download-syft@v0.24.0
         with:
           syft-version: v1.46.0
+      # goreleaser's before hook builds the embedded admin console.
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/admin/package.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: web/admin/pnpm-lock.yaml
       - uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser

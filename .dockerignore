@@ -8,3 +8,5 @@ sql-mcp-server.exe
 docs
 examples
 **/*_test.go
+**/node_modules
+x/admin/ui/dist/app

@@ -89,13 +89,6 @@ func TestFakeRowsScanValues(t *testing.T) {
 func TestFakeTx(t *testing.T) {
 	t.Parallel()
 	tx := &FakeTx{}
-	sp, err := tx.Savepoint(context.Background(), "s1")
-	if err != nil || sp.Name != "s1" {
-		t.Fatalf("savepoint: %v %v", sp, err)
-	}
-	if err := tx.RollbackTo(context.Background(), sp); err != nil {
-		t.Fatal(err)
-	}
 	if err := tx.Commit(); err != nil || !tx.Committed {
 		t.Fatal("commit failed")
 	}

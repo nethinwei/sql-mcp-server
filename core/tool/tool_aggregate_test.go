@@ -78,7 +78,7 @@ func TestAggregateToolMasksResultRows(t *testing.T) {
 	}}
 	tc := Context{
 		Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
-		Authorizer: rbac.NewRoleAuthorizer(reg), Masker: mask.NewRuleMasker(nil),
+		Authorizer: rbac.NewRoleAuthorizer(reg), Masker: mask.NewRuleMasker(),
 	}
 	result, err := (AggregateTool{}).Run(
 		context.Background(),

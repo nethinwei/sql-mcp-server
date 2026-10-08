@@ -360,7 +360,7 @@ func assertExecuteConsumptionError(
 	tc := Context{
 		Role: "caller", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
 		Authorizer: rbac.NewRoleAuthorizer(reg), Cache: cc, BudgetLimits: tcse.limits,
-		MaxProcedureRows: tcse.maxProcedureRows,
+		Limits: Limits{MaxProcedureRows: tcse.maxProcedureRows},
 	}
 	_, err := (ExecuteTool{}).Run(context.Background(), json.RawMessage(`{"entity":"sp","args":{"x":1}}`), tc)
 	if !errors.Is(err, tcse.want) {
@@ -369,7 +369,23 @@ func assertExecuteConsumptionError(
 	if !tcse.rows.Closed() {
 		t.Fatal("rows were not closed")
 	}
-	if cc.invalidations != 0 {
-		t.Fatal("afterWrite ran before successful result consumption")
+	// The procedure ran and may have written, so the cache is invalidated
+	// even though its result could not be returned.
+	if cc.invalidations != 1 {
+		t.Fatalf("invalidations = %d, want 1", cc.invalidations)
+	}
+}
+
+func TestProcedureToolSchemaRequiresEmptyListWithoutParams(t *testing.T) {
+	t.Parallel()
+	info := ProcedureTool{Entity: entity.Entity{Name: "ping", Kind: entity.KindProcedure}}.Info()
+	var schema struct {
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(info.InputSchema, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if schema.Required == nil || len(schema.Required) != 0 {
+		t.Fatalf("required = %v (%s), want []", schema.Required, info.InputSchema)
 	}
 }

@@ -11,13 +11,7 @@ import (
 // scan-row hard cap independent of estimates) + tenant resource isolation.
 type Dialect struct{}
 
-func (Dialect) Name() string                  { return "oceanbase" }
-func (Dialect) QuoteIdent(name string) string { return mysql.Dialect{}.QuoteIdent(name) }
-func (Dialect) Placeholder(i int) string      { return mysql.Dialect{}.Placeholder(i) }
-func (Dialect) ExplainSQL(q string) string    { return mysql.Dialect{}.ExplainSQL(q) }
-func (Dialect) Capabilities() dialect.Capabilities {
-	c := mysql.Dialect{}.Capabilities()
-	c.ExplainAccurate = false
-	c.ResourceManager = true
-	return c
-}
+func (Dialect) Name() string                       { return "oceanbase" }
+func (Dialect) QuoteIdent(name string) string      { return mysql.Dialect{}.QuoteIdent(name) }
+func (Dialect) Placeholder(i int) string           { return mysql.Dialect{}.Placeholder(i) }
+func (Dialect) Capabilities() dialect.Capabilities { return mysql.Dialect{}.Capabilities() }

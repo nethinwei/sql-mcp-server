@@ -5,10 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -28,7 +29,6 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
-	"github.com/nethinwei/sql-mcp-server/x/configyaml"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 )
 
@@ -40,80 +40,70 @@ type Provider = coreprovider.Provider
 
 // App is the assembled application, ready to serve.
 type App struct {
-	Provider                   Provider
-	Providers                  map[string]Provider
-	Prepared                   map[string]*store.PreparedDB
-	Sources                    map[string]tool.DataSource
-	Dialect                    dialect.Dialect
-	Registry                   *entity.Registry
-	Authorizer                 rbac.Authorizer
-	Masker                     mask.Masker
-	Gate                       cost.Gate
-	Engine                     *engine.Engine
-	Tools                      *tool.Registry
-	ToolFlags                  config.ToolFlags
-	DefaultRole                string
-	QueryTimeout               time.Duration
-	MaxRows                    int64
-	MaxProcedureRows           int64
-	MaxReturnedBytes           int64
-	MaxINListSize              int
-	MaxFilterConditions        int
-	MaxGroupByFields           int
-	MaxAggregates              int
-	MaxExpand                  int
-	CacheMaxEntryRows          int
-	CacheMaxEntryBytes         int64
-	TransactionBeginTimeout    time.Duration
-	TransactionCommitTimeout   time.Duration
-	TransactionRollbackTimeout time.Duration
-	Auditor                    audit.Auditor
-	Hooks                      *hook.Hooks
-	Cache                      cache.Cache[[]map[string]any]
-	Feedback                   cost.FeedbackStore
-	Analyze                    cost.AnalyzePolicy
-	Budget                     budget.Manager
-	Transactions               *tool.TransactionManager
-	TxBeginners                map[string]store.TxBeginner
-	closeMu                    sync.Mutex
-	closed                     bool
+	Provider Provider
+	// Providers holds each datasource's read connection, which also serves
+	// introspection and EXPLAIN; Connections holds every connection.
+	Providers   map[string]Provider
+	Connections Connections
+	// Capabilities are what the routed connections may do per entity action,
+	// as the databases reported when the App was assembled.
+	Capabilities EntityCapabilities
+	Prepared     map[string]*store.PreparedDB
+	Sources      map[string]tool.DataSource
+	Dialect      dialect.Dialect
+	Registry     *entity.Registry
+	Authorizer   rbac.Authorizer
+	Masker       mask.Masker
+	Gate         cost.Gate
+	Engine       *engine.Engine
+	Tools        *tool.Registry
+	ToolFlags    config.ToolFlags
+	DefaultRole  string
+	DefaultUser  string
+	// Users maps an enabled user name to its identity; UserTokens maps a
+	// tokenHash to the user name. Both follow the snapshot on reload.
+	Users        map[string]UserIdentity
+	UserTokens   map[string]string
+	Limits       tool.Limits
+	Auditor      audit.Auditor
+	Hooks        *hook.Hooks
+	Cache        cache.Cache[[]map[string]any]
+	Feedback     cost.FeedbackStore
+	Analyze      cost.AnalyzePolicy
+	Budget       *budget.MemoryManager
+	Transactions *tool.TransactionManager
+	Writes       *tool.WriteTracker
+	TxBeginners  map[string]store.TxBeginner
+	closeMu      sync.Mutex
+	closed       bool
 }
 
 // ToolContext builds a per-request tool.Context for the given role.
 func (a *App) ToolContext(role string) tool.Context {
-	return tool.Context{
-		Role:                       role,
-		DB:                         a.Provider,
-		Dialect:                    a.Dialect,
-		Registry:                   a.Registry,
-		Authorizer:                 a.Authorizer,
-		Masker:                     a.Masker,
-		Gate:                       a.Gate,
-		Cache:                      a.Cache,
-		Engine:                     a.Engine,
-		Auditor:                    a.Auditor,
-		Hooks:                      a.Hooks,
-		Timeout:                    a.QueryTimeout,
-		MaxRows:                    a.MaxRows,
-		MaxProcedureRows:           a.MaxProcedureRows,
-		MaxReturnedBytes:           a.MaxReturnedBytes,
-		MaxINListSize:              a.MaxINListSize,
-		MaxFilterConditions:        a.MaxFilterConditions,
-		MaxGroupByFields:           a.MaxGroupByFields,
-		MaxAggregates:              a.MaxAggregates,
-		MaxExpand:                  a.MaxExpand,
-		CacheMaxEntryRows:          a.CacheMaxEntryRows,
-		CacheMaxEntryBytes:         a.CacheMaxEntryBytes,
-		TransactionBeginTimeout:    a.TransactionBeginTimeout,
-		TransactionCommitTimeout:   a.TransactionCommitTimeout,
-		TransactionRollbackTimeout: a.TransactionRollbackTimeout,
-		Feedback:                   a.Feedback,
-		Analyze:                    a.Analyze,
-		Sources:                    a.Sources,
-		Budget:                     a.Budget,
-		Transactions:               a.Transactions,
-		TxBeginners:                a.TxBeginners,
+	tc := tool.Context{
+		Role:         role,
+		DB:           a.Provider,
+		Dialect:      a.Dialect,
+		Registry:     a.Registry,
+		Authorizer:   a.Authorizer,
+		Masker:       a.Masker,
+		Gate:         a.Gate,
+		Cache:        a.Cache,
+		Engine:       a.Engine,
+		Auditor:      a.Auditor,
+		Hooks:        a.Hooks,
+		Limits:       a.Limits,
+		Feedback:     a.Feedback,
+		Analyze:      a.Analyze,
+		Sources:      a.Sources,
+		Transactions: a.Transactions,
+		Writes:       a.Writes,
+		TxBeginners:  a.TxBeginners,
 	}
+	if a.Budget != nil { // a nil *MemoryManager must stay a nil interface
+		tc.Budget = a.Budget
+	}
+	return tc
 }
 
 // ToolContextForSubject builds a per-request tool.Context for a role plus
@@ -121,6 +111,10 @@ func (a *App) ToolContext(role string) tool.Context {
 func (a *App) ToolContextForSubject(role string, subject map[string]any) tool.Context {
 	tc := a.ToolContext(role)
 	tc.Subject = subject
+	if name, ok := strings.CutPrefix(role, config.UserPrincipalPrefix); ok {
+		tc.User = name
+		tc.UserRoles = a.Users[name].Roles
+	}
 	return tc
 }
 
@@ -151,13 +145,8 @@ func (a *App) CloseContext(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
-	for _, provider := range a.Providers {
+	for _, provider := range a.allProviders() {
 		if err := provider.Close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	if len(a.Providers) == 0 && a.Provider != nil {
-		if err := a.Provider.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -176,11 +165,7 @@ func (a *App) Close() error {
 // the provider's native connection ping when exposed and falls back to a
 // trivial query otherwise.
 func (a *App) Ping(ctx context.Context) error {
-	providers := a.Providers
-	if len(providers) == 0 && a.Provider != nil {
-		providers = map[string]Provider{"default": a.Provider}
-	}
-	for name, p := range providers {
+	for name, p := range a.namedProviders() {
 		if err := pingProvider(ctx, p); err != nil {
 			return fmt.Errorf("bootstrap: database %q not ready: %w", name, err)
 		}
@@ -188,8 +173,48 @@ func (a *App) Ping(ctx context.Context) error {
 	return nil
 }
 
+// poolExposer is a provider backed by a database/sql pool, which bootstrap
+// sizes (configurePool) and pings natively (pingProvider).
+type poolExposer interface{ DB() *sql.DB }
+
+// namedProviders lists every distinct provider by datasource (and
+// connection, when a datasource has several).
+func (a *App) namedProviders() map[string]Provider {
+	out := map[string]Provider{}
+	seen := map[Provider]bool{}
+	add := func(name string, p Provider) {
+		if p == nil {
+			return
+		}
+		if comparable := reflect.TypeOf(p).Comparable(); comparable && seen[p] {
+			return
+		} else if comparable {
+			seen[p] = true
+		}
+		out[name] = p
+	}
+	for datasource, byName := range a.Connections {
+		for connection, p := range byName {
+			add(datasource+"/"+connection, p)
+		}
+	}
+	for datasource, p := range a.Providers {
+		add(datasource, p)
+	}
+	add("default", a.Provider)
+	return out
+}
+
+func (a *App) allProviders() []Provider {
+	out := make([]Provider, 0)
+	for _, p := range a.namedProviders() {
+		out = append(out, p)
+	}
+	return out
+}
+
 func pingProvider(ctx context.Context, p Provider) error {
-	if native, ok := p.(interface{ DB() *sql.DB }); ok {
+	if native, ok := p.(poolExposer); ok {
 		return native.DB().PingContext(ctx)
 	}
 	rows, err := p.QueryContext(ctx, "SELECT 1")
@@ -201,16 +226,11 @@ func pingProvider(ctx context.Context, p Provider) error {
 
 // Load reads and validates a YAML config file.
 func Load(path string) (*config.Config, error) {
-	cfg, err := configyaml.Load(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
-	for name, database := range cfg.Databases {
-		if !providerregistry.IsRegistered(database.Driver) {
-			return nil, fmt.Errorf("%w: %q in database %q", ErrUnsupportedDriver, database.Driver, name)
-		}
-	}
-	return cfg, nil
+	return LoadBytes(data)
 }
 
 // ValidateFile parses, defaults, validates, and resolves secrets without
@@ -223,13 +243,11 @@ func ValidateFile(path string, resolver SecretResolver) error {
 	if resolver == nil {
 		resolver = EnvFileResolver{AllowedRoots: cfg.Server.Secrets.AllowedRoots}
 	}
-	databases := cfg.Databases
-	if len(databases) == 0 {
-		databases = map[string]config.DatabaseConfig{"default": cfg.Database}
-	}
-	for name, database := range databases {
-		if _, err := resolver.Resolve(database.DSN); err != nil {
-			return fmt.Errorf("database %q: %w", name, err)
+	for name, database := range cfg.Databases {
+		for connection, c := range database.ConnectionsOrDSN() {
+			if _, err := resolver.Resolve(c.DSN); err != nil {
+				return fmt.Errorf("database %q connection %q: %w", name, connection, err)
+			}
 		}
 	}
 	return nil
@@ -246,36 +264,62 @@ func Assemble(cfg *config.Config) (*App, error) {
 // secret managers (Vault, AWS Secrets Manager, etc.) without coupling core to
 // any specific backend.
 func AssembleWithResolver(cfg *config.Config, r SecretResolver) (*App, error) {
-	databases := cfg.Databases
-	if len(databases) == 0 {
-		databases = map[string]config.DatabaseConfig{"default": cfg.Database}
+	if len(cfg.Databases) == 0 {
+		return nil, errors.New("assemble: no database configured")
 	}
-	providers := make(map[string]Provider, len(databases))
-	for name, database := range databases {
-		dsn, err := r.Resolve(database.DSN)
-		if err != nil {
-			closeProviders(providers)
-			return nil, err
-		}
-		provider, err := newProvider(database.Driver, dsn, cfg.Cost.QueryTimeout)
-		if err != nil {
-			closeProviders(providers)
-			return nil, err
-		}
-		providers[name] = provider
-	}
-	app, err := AssembleWithProviders(cfg, providers)
+	connections, err := openConnections(cfg, r)
 	if err != nil {
-		closeProviders(providers)
+		return nil, err
+	}
+	app, err := AssembleWithConnections(cfg, connections)
+	if err != nil {
+		closeConnections(connections)
 		return nil, err
 	}
 	return app, nil
+}
+
+// openConnections opens every connection of every database.
+func openConnections(cfg *config.Config, r SecretResolver) (Connections, error) {
+	connections := make(Connections, len(cfg.Databases))
+	for name, database := range cfg.Databases {
+		connections[name] = map[string]Provider{}
+		for connection, c := range database.ConnectionsOrDSN() {
+			dsn, err := r.Resolve(c.DSN)
+			if err != nil {
+				closeConnections(connections)
+				return nil, fmt.Errorf("database %q connection %q: %w", name, connection, err)
+			}
+			provider, err := providerregistry.New(database.Driver, dsn,
+				providerregistry.Options{Timeout: cfg.Cost.QueryTimeout, Pooler: c.Pooler})
+			if err != nil {
+				closeConnections(connections)
+				return nil, fmt.Errorf("database %q connection %q: %w", name, connection, err)
+			}
+			connections[name][connection] = provider
+		}
+	}
+	return connections, nil
 }
 
 // AssembleWithProvider wires the application using an injected provider (for
 // testing with fakes).
 func AssembleWithProvider(cfg *config.Config, prov Provider) (*App, error) {
 	return AssembleWithProviders(cfg, map[string]Provider{"default": prov})
+}
+
+// AssembleWithProviders wires one provider per datasource, serving every
+// connection the datasource configures. It is intended for tests and
+// embedders; ownership transfers to the returned App on success.
+func AssembleWithProviders(cfg *config.Config, providers map[string]Provider) (*App, error) {
+	connections := make(Connections, len(providers))
+	for datasource, p := range providers {
+		connections[datasource] = map[string]Provider{}
+		for connection := range cfg.Databases[datasource].ConnectionsOrDSN() {
+			connections[datasource][connection] = p
+		}
+	}
+	return AssembleWithConnections(cfg, connections)
 }
 
 func recordProviderFailure(err error) bool {
@@ -286,7 +330,8 @@ func recordProviderFailure(err error) bool {
 		errors.Is(err, budget.ErrExceeded), errors.Is(err, cost.ErrCostExceeded),
 		errors.Is(err, tool.ErrUnauthorized), errors.Is(err, tool.ErrEntityNotFound),
 		errors.Is(err, tool.ErrInvalidInput), errors.Is(err, tool.ErrDMLToolsDisabled),
-		errors.Is(err, tool.ErrUnsafeWrite), errors.Is(err, tool.ErrNotImplemented),
+		errors.Is(err, tool.ErrUnsafeWrite), errors.Is(err, tool.ErrConstraintViolation),
+		errors.Is(err, tool.ErrDatasourceForbidden),
 		errors.Is(err, tool.ErrTransactionNotFound), errors.Is(err, tool.ErrTransactionScope),
 		errors.Is(err, tool.ErrTransactionCapacity):
 		return false
@@ -295,21 +340,19 @@ func recordProviderFailure(err error) bool {
 	}
 }
 
-func closeProviders(providers map[string]Provider) {
-	for _, provider := range providers {
+// Connections are opened providers by datasource and connection name.
+type Connections map[string]map[string]Provider
+
+func closeConnections(connections Connections) {
+	for _, provider := range (&App{Connections: connections}).allProviders() {
 		_ = provider.Close()
 	}
-}
-
-func newProvider(driver, dsn string, timeout time.Duration) (Provider, error) {
-	return providerregistry.New(driver, dsn, timeout)
 }
 
 // configurePool bounds the DB connection pool to the IO pool size so workers
 // never wait on a connection they already hold a slot for.
 func configurePool(p Provider, maxOpen int, connMaxIdle, connMaxLifetime time.Duration) {
-	type dbExposer interface{ DB() *sql.DB }
-	e, ok := p.(dbExposer)
+	e, ok := p.(poolExposer)
 	if !ok || maxOpen <= 0 {
 		return
 	}
@@ -324,43 +367,50 @@ func configurePool(p Provider, maxOpen int, connMaxIdle, connMaxLifetime time.Du
 	}
 }
 
-// checkDrift introspects the live schema and fails fast if a configured entity
-// or field is missing from the database. Extra DB columns are not fatal.
-func checkDrift(ctx context.Context, prov Provider, entities []entity.Entity) error {
+// reconcileEntities matches entities to their tables in the live schema. It
+// fails fast if a configured entity or field is missing from the database
+// (extra DB columns are not fatal) and returns the entities with database
+// comments as their default descriptions.
+func reconcileEntities(
+	ctx context.Context,
+	datasource string,
+	prov Provider,
+	entities []entity.Entity,
+) ([]entity.Entity, error) {
 	if prov.Introspector() == nil {
-		return nil
+		return identifyRelations(entities, introspect.Physical{Server: "datasource:" + datasource}, nil), nil
 	}
 	schemas := make([]string, 0)
-	seen := make(map[string]bool)
+	unqualified := false
 	for _, e := range entities {
-		if e.Schema != "" && !seen[e.Schema] {
-			seen[e.Schema] = true
+		if e.Kind == entity.KindProcedure {
+			continue
+		}
+		if e.Schema == "" {
+			unqualified = true
+		} else if !slices.Contains(schemas, e.Schema) {
 			schemas = append(schemas, e.Schema)
 		}
 	}
-	discovered, err := prov.Introspector().Discover(ctx, schemas)
+	physical, err := physicalOf(ctx, datasource, prov.Introspector())
 	if err != nil {
-		return fmt.Errorf("introspect: %w", err)
+		return nil, fmt.Errorf("introspect: %w", err)
 	}
-	// Procedures are not discovered as base tables; check drift only for
-	// table/view entities.
-	var tables []entity.Entity
-	for _, e := range entities {
-		if e.Kind != entity.KindProcedure {
-			tables = append(tables, e)
-		}
+	cat, err := introspect.LoadCatalog(ctx, prov.Introspector(), schemas, unqualified)
+	if err != nil {
+		return nil, fmt.Errorf("introspect: %w", err)
 	}
-	drift := introspect.DetectDrift(tables, discovered)
+	cat.FoldCase = physical.FoldCase
+	reconciled, drift := introspect.Reconcile(entities, cat)
 	if len(drift.Missing) > 0 {
-		return fmt.Errorf("schema drift (configured but missing in DB): %v", drift.Missing)
+		return nil, fmt.Errorf("schema drift (configured but missing in DB): %v", drift.Missing)
 	}
-	return nil
+	return identifyRelations(reconciled, physical, &cat), nil
 }
 
 // toThreshold maps config.CostConfig to cost.Threshold.
 func toThreshold(c config.CostConfig) cost.Threshold {
 	return cost.Threshold{
-		Enabled:                   c.EnabledOrDefault(),
 		SoftScore:                 c.SoftScore,
 		HardScore:                 c.HardScore,
 		MaxRows:                   c.MaxRows,
@@ -377,14 +427,11 @@ func toThreshold(c config.CostConfig) cost.Threshold {
 	}
 }
 
-// resolveSecrets replaces ${ENV} and ${file:/path} placeholders. A missing env
-// var or unreadable file fails fast rather than yielding an empty DSN.
 var secretRe = regexp.MustCompile(`\$\{([^}]+)\}`)
 
-func resolveSecrets(s string) (string, error) {
-	return resolveSecretsWithRoots(s, []string{"/run/secrets", "/var/run/secrets"})
-}
-
+// resolveSecretsWithRoots replaces ${ENV} and ${file:/path} placeholders. A
+// missing env var or unreadable file fails fast rather than yielding an empty
+// DSN.
 func resolveSecretsWithRoots(s string, allowedRoots []string) (string, error) {
 	var firstErr error
 	out := secretRe.ReplaceAllStringFunc(s, func(m string) string {
@@ -460,41 +507,9 @@ type EnvFileResolver struct {
 func (r EnvFileResolver) Resolve(s string) (string, error) {
 	roots := r.AllowedRoots
 	if len(roots) == 0 {
-		roots = []string{"/run/secrets", "/var/run/secrets"}
+		roots = config.DefaultSecretRoots()
 	}
 	return resolveSecretsWithRoots(s, roots)
-}
-
-var (
-	pgPassRe    = regexp.MustCompile(`(://[^:/@]+:)[^@]+(@)`)
-	mysqlPassRe = regexp.MustCompile(`^([^:@]+:)[^@]+(@tcp)`)
-	keyPassRe   = regexp.MustCompile(`(?i)(^|[?;&\s])(password|pwd)=([^&;\s]+)`)
-)
-
-// RedactDSN returns dsn with any password replaced by ***, for safe logging.
-// It handles PostgreSQL URI form (scheme://user:pass@host) and MySQL DSN form
-// (user:pass@tcp(host)); DSNs without a password are returned unchanged.
-func RedactDSN(dsn string) string {
-	redacted := dsn
-	if parsed, err := url.Parse(dsn); err == nil && parsed.Scheme != "" {
-		if parsed.User != nil {
-			if _, hasPassword := parsed.User.Password(); hasPassword {
-				parsed.User = url.UserPassword(parsed.User.Username(), "***")
-			}
-		}
-		query := parsed.Query()
-		for _, key := range []string{"password", "pwd"} {
-			if query.Has(key) {
-				query.Set(key, "***")
-			}
-		}
-		parsed.RawQuery = query.Encode()
-		redacted = parsed.String()
-	} else if pgPassRe.MatchString(redacted) {
-		redacted = pgPassRe.ReplaceAllString(redacted, "${1}***${2}")
-	}
-	redacted = mysqlPassRe.ReplaceAllString(redacted, "${1}***${2}")
-	return keyPassRe.ReplaceAllString(redacted, "${1}${2}=***")
 }
 
 // validateMaskRules fails fast if a configured mask rule is unknown, so a typo
@@ -510,10 +525,13 @@ func validateMaskRules(m *mask.RuleMasker, entities []entity.Entity) error {
 	return nil
 }
 
-func newBudgetManager(c config.BudgetConfig) budget.Manager {
-	roles := make(map[string]budget.Limits, len(c.Roles))
+func newBudgetManager(c config.BudgetConfig, principals map[string]config.BudgetLimits) *budget.MemoryManager {
+	roles := make(map[string]budget.Limits, len(c.Roles)+len(principals))
 	for name, limits := range c.Roles {
 		roles[name] = toBudgetLimits(limits)
+	}
+	for principal, limits := range principals {
+		roles[principal] = toBudgetLimits(limits)
 	}
 	tenants := make(map[string]budget.Limits, len(c.Tenants))
 	for name, limits := range c.Tenants {
@@ -523,13 +541,9 @@ func newBudgetManager(c config.BudgetConfig) budget.Manager {
 }
 
 func toBudgetLimits(c config.BudgetLimits) budget.Limits {
-	maxEstimated := c.MaxEstimatedScannedRows
-	if maxEstimated == 0 {
-		maxEstimated = c.MaxScannedRows
-	}
 	return budget.Limits{
 		MaxConcurrent: c.MaxConcurrent, MaxExecution: c.MaxExecution,
-		MaxEstimatedScannedRows: maxEstimated, MaxReturnedRows: c.MaxReturnedRows,
+		MaxEstimatedScannedRows: c.MaxEstimatedScannedRows, MaxReturnedRows: c.MaxReturnedRows,
 		MaxReturnedBytes: c.MaxReturnedBytes, MaxSessionCost: c.MaxSessionCost,
 	}
 }

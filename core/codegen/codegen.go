@@ -30,7 +30,7 @@ type Compiled struct {
 	Kind           Kind
 	SQL            string
 	Args           []any
-	IsPKPoint      bool     // all primary-key columns matched by equality (gate whitelist)
+	IsKeyPoint     bool     // every column of an identity key matched by equality (gate whitelist)
 	PrimaryKey     []string // primary-key columns, when supplied via WithPrimaryKey
 	ReadOnly       bool
 	AffectedTables []string // tables touched by a write (cache invalidation)
@@ -41,13 +41,24 @@ type CompileOption func(*compileConfig)
 
 type compileConfig struct {
 	pkCols           []string
+	identityKeys     [][]string
+	identitySet      bool
 	maxINCardinality int
 }
 
-// WithPrimaryKey supplies primary-key columns so Compile can detect a primary
-// key point lookup and set Compiled.IsPKPoint.
+// WithPrimaryKey supplies the primary-key columns: returned by an insert that
+// supports RETURNING, and the identity key unless WithIdentityKeys says
+// otherwise.
 func WithPrimaryKey(cols ...string) CompileOption {
 	return func(c *compileConfig) { c.pkCols = cols }
+}
+
+// WithIdentityKeys supplies the column sets that identify at most one row
+// (the primary key and qualifying unique keys) so Compile can detect a point
+// lookup on any of them; none means no lookup is a point. Without it the
+// primary key is the only one.
+func WithIdentityKeys(keys ...[]string) CompileOption {
+	return func(c *compileConfig) { c.identityKeys, c.identitySet = keys, true }
 }
 
 // WithMaxINCardinality sets the maximum accepted IN/NOT IN list size. Values
@@ -62,13 +73,8 @@ type Renderer struct {
 	Dialect dialect.Dialect
 }
 
-// NewRenderer returns a Renderer for the given dialect.
-func NewRenderer(d dialect.Dialect) Renderer {
-	return Renderer{Dialect: d}
-}
-
 // Compile renders e into a Compiled value. It applies inline lightweight
-// transforms (IsPKPoint detection) and capability-driven rendering (e.g.
+// transforms (IsKeyPoint detection) and capability-driven rendering (e.g.
 // RETURNING). It does not run a separate optimizer: the IR is deliberately
 // limited (no join/subquery), so predicate pushdown has nothing to push over.
 func (r Renderer) Compile(e relalg.Expr, opts ...CompileOption) (Compiled, error) {
@@ -96,9 +102,16 @@ func (r Renderer) Compile(e relalg.Expr, opts ...CompileOption) (Compiled, error
 		ReadOnly:       b.readOnly,
 		AffectedTables: b.tables,
 	}
-	if len(cfg.pkCols) > 0 {
-		c.IsPKPoint = isPKPoint(predicateOf(e), cfg.pkCols)
-		c.PrimaryKey = cfg.pkCols
+	c.PrimaryKey = cfg.pkCols
+	keys := cfg.identityKeys
+	if !cfg.identitySet && len(cfg.pkCols) > 0 {
+		keys = [][]string{cfg.pkCols}
+	}
+	for _, key := range keys {
+		if isKeyPoint(predicateOf(e), key) {
+			c.IsKeyPoint = true
+			break
+		}
 	}
 	return c, nil
 }
@@ -242,8 +255,8 @@ func predicateOf(e relalg.Expr) relalg.Predicate {
 	return relalg.And{Preds: preds}
 }
 
-// isPKPoint reports whether p matches every primary-key column by equality.
-func isPKPoint(p relalg.Predicate, pkCols []string) bool {
+// isKeyPoint reports whether p matches every column of key by equality.
+func isKeyPoint(p relalg.Predicate, pkCols []string) bool {
 	if len(pkCols) == 0 {
 		return false
 	}

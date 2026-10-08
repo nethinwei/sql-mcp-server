@@ -6,41 +6,57 @@
 
 ## 信任边界
 
-stdio 模式使用进程启动时的默认角色，适合由本机 MCP 客户端管理的子进程。
+stdio 模式使用进程启动时的默认身份（`server.user`，未设置时为 `server.role`），
+适合由本机 MCP 客户端管理的子进程。
 
-HTTP 支持共享 bearer token 和 mTLS。监听非 loopback 地址时，如果既无 token
-也无 `clientCA`，服务拒绝启动；mTLS 还要求服务端证书和私钥。HTTP 请求体默认
+HTTP 支持共享 bearer token、每用户 token 和 mTLS。监听非 loopback 地址时，如果
+既无 token、也无已配置用户、也无 `clientCA`，服务拒绝启动；mTLS 还要求服务端证书和私钥。HTTP 请求体默认
 限制为 4 MiB，header 默认限制为 1 MiB，并设置 header/idle timeout。
 CLI 地址默认值 `:8080` 会监听所有接口，属于非 loopback，因此选择 HTTP 且未
 指定 loopback 地址或认证时会 fail closed。
 `/healthz` 与 `/readyz/*` 不鉴权（readiness 探针 fail closed，503 响应体不
-回显数据库细节）；`/metrics` 由 CLI 挂载，配置 token 时要求同一 Bearer
-token。
+回显数据库细节）；`/metrics` 由 CLI 挂载，配置共享 token 或用户时要求有效的
+Bearer token。
 
-共享 bearer token 以固定长度 SHA-256 摘要做恒时比较。角色在配置和请求入口
-统一 trim 并转为小写；规范化后碰撞的配置会拒绝启动。
+共享 bearer token 以固定长度 SHA-256 摘要做恒时比较。角色和用户名在配置和
+请求入口统一 trim 并转为小写；规范化后碰撞的配置会拒绝启动。
+
+配置 `users` 后，bearer token 先按 `sha256:` hash 匹配当前 snapshot 中的启用
+用户，命中即以该用户身份（主体 `user:<name>`，固定 `subject`）执行；等于共享
+token 时使用默认身份；都不命中返回 401。没有共享 token 时，只有 mTLS 或可信代理
+通道可以不带 token（使用默认身份），其余请求必须携带用户 token。用户 token 由
+`sql-mcp-server user token` 生成（256 bit 随机），配置只保存 hash；token 没有
+过期时间，轮换通过修改 `tokenHash` 并热重载完成。
 
 `X-MCP-Role` 和 `X-MCP-Subject` 不是身份认证机制。只有
 `server.auth.trustProxyHeaders: true` 时才读取它们，并且必须同时配置 mTLS
 `clientCA` 或非空 `trustedProxyCIDRs`。CIDR 模式只接受列表内来源地址；可信网关
 仍必须删除外部同名 header、完成认证并重新注入身份。畸形的
-`X-MCP-Subject` JSON 返回 HTTP 400。内置 bearer token 只验证共享 secret，
-不把 token 映射到独立角色或 subject。项目尚无 OAuth、CORS 策略或持久
-session store。
+`X-MCP-Subject` JSON 返回 HTTP 400。配置用户时，可信代理还可以发送
+`X-MCP-User`：它必须指向启用用户，且不能与 `X-MCP-Role` 同时出现；用户配置的
+`subject` 属性覆盖代理注入的同名属性。已用用户 token 认证的请求如果再携带任何
+代理身份 header，返回 HTTP 403。共享 bearer token 只验证共享 secret，不映射独立
+调用方。项目尚无 OAuth、CORS 策略或持久 session store。
 
 streamable HTTP session 创建时会记录规范化后的 role/subject；后续所有携带
 `Mcp-Session-Id` 的 POST/GET/DELETE 必须使用同一身份，否则返回 HTTP 403。
 session 关闭时绑定会同步清理。该绑定防止可信代理后的调用方借已有 session
-切换身份，但不替代网关认证。
+切换身份，但不替代网关认证。热重载删除或禁用用户后，其 session 绑定被解除并
+回滚在途事务，后续请求被拒绝。
 
 ## 授权与数据隔离
 
-- 每个实体按 action 配置角色：read/create/update/delete/execute/aggregate。
-- `fieldACL` 可进一步限制角色可读、可写字段。
+- 每个实体按 action 配置角色：read/create/update/delete/execute/aggregate；
+  顶层 `roles` 与用户直授 `grants` 以授权项形式表达同样的动作、字段和行范围。
+- `fieldACL`（或授权项 `fields`）可进一步限制可读、可写字段。
+- 用户拥有多个角色或直授权限时，一次请求只使用覆盖其全部字段的授权项，行范围
+  在这些授权项之间取 OR；不存在单一覆盖时返回 `AMBIGUOUS_FIELD_SCOPE`。字段与
+  行不会分别取并集，因此合并不会授予任一授权项都没有的"字段 × 行"组合。
 - 过滤、投影、group-by 和写入字段均先验证为可见字段；未知字段与被排除字段
   返回同类错误，避免借隐藏列建立侧信道。
 - `rowPolicies` 与用户 filter 以 AND 合并。`${subject.x}` 从请求 subject
   解析；属性缺失时生成 NULL 条件，因而不匹配普通行。
+- 实体 `tenantPolicy` 对所有主体始终 AND，不参与多角色合并。
 - mask 在所有结果路径（包括 aggregate/procedure）返回前执行。mask 字段只允许
   投影，禁止用于 filter、cursor、group-by、aggregate 和写谓词，避免等值/LIKE
   盲测与统计侧信道。内置规则为 `email`、`phone`、`idcard`、`secret`；配置未知
@@ -51,15 +67,32 @@ session 关闭时绑定会同步清理。该绑定防止可信代理后的调用
 
 行级策略不是数据库原生 RLS；保护依赖所有访问都经过本服务的工具执行路径。
 
+数据库账号是第二道边界：一个数据源可以配置多个连接（例如只读账号、读写账号、只读
+副本），读、写、执行按 `routing` 分别走对应连接，读写事务固定在写连接上。有效能力是
+授权、路由连接的数据库权限与实体类型三者的交集。启动和重载时探测的连接权限只用于
+告警和控制台提示，不改变授权结果；数据库拒绝的语句返回 `DATASOURCE_FORBIDDEN`，
+不计入熔断，也不回显数据库原文。建议按最小权限给读连接只读账号。
+
 ## SQL 与写保护
 
 工具不接受原始 SQL。值使用 placeholder 参数化；表、字段和 procedure 标识符
 来自配置实体并由方言引用。
 
 update/delete 必须有用户 filter 或行级 filter。`requirePKForWrite` 默认开启时，
-非完整主键点写由 `WriteGuard` 拒绝；allow fingerprint 不绕过该 mandatory
-保护。`delete_record` 默认不注册。MySQL 协议 provider
-还会在 DSN 未显式指定时加入 `sql_safe_updates=1`。
+不是按身份键等值定位单行的写由 `WriteGuard` 拒绝；allow fingerprint 不绕过该
+mandatory 保护。身份键是主键与能唯一定位一行的唯一键（列全部非空，且不是部分、
+表达式或前缀索引），表的身份键以数据库为准；视图、外部表上声明的键只用于读，不能
+让写入通过 `WriteGuard`；可延迟约束在事务内不算身份键。`delete_record` 默认不
+注册。MySQL 协议 provider 还会在 DSN 未显式指定时加入 `sql_safe_updates=1`。
+
+外键的 `CASCADE`、`SET NULL`、`SET DEFAULT` 会让一次写入改写其他表的行，并可能
+继续级联下去。删除（或修改被引用列）前，调用方必须对级联链上每一层的实体拥有对应
+的删除或修改权限（修改权限须覆盖被改写的外键列），且该权限不带行范围限制；级联到
+未暴露为实体的表时拒绝，除非实体声明 `allowCascade: true`（从该实体起不再检查）。
+写入后按整条级联链失效缓存，链上有未暴露的表时失效整个数据源的缓存；多个数据源指向同一
+物理库时，失效同时作用于这些数据源（包括它们基于被写表的视图）。数据库生成的列（生成列、
+identity ALWAYS）不可写，在发到数据库前拒绝。违反约束返回 `CONSTRAINT_VIOLATION`，只给出类别和调用方可见的
+字段，不回显约束名与数据库原文。
 
 ## 成本闸门
 
@@ -105,7 +138,8 @@ PostgreSQL 估算。v0.1 可显式开启 PostgreSQL 只读 `EXPLAIN ANALYZE` 采
 缓存和 singleflight key 包含角色及完整 subject，避免跨身份共享结果。显式事务
 在进入 engine 前先验证 token 的 session/角色/subject，并禁用 singleflight。
 expand 读取不进入结果缓存，以免父子任一实体写入后留下陈旧组合。显式事务
-完全绕过全局读缓存；事务写仅在成功 commit 后按实体失效缓存，rollback 不失效。
+完全绕过全局读缓存；事务写仅在成功 commit 后按物理关系失效缓存，rollback 不失效。
+一个物理表最多对应一个实体，因此同一张表不会有两套策略或两份互不失效的缓存。
 审计使用有界异步队列，满时丢弃并计数；它是 best-effort，不是不可抵赖日志。
 输入按实体 mask 字段脱敏、transaction token 哈希并限制大小；文件以 `0600`
 创建并使用长驻 writer。运营者仍应保护并轮转日志。
@@ -117,3 +151,21 @@ DSN 支持 `${ENV}` 和 `${file:/path}`。文件必须位于
 变量或不可读文件会失败。
 `SecretResolver` 可由嵌入方替换，但仓库没有内置 Vault/云 secret manager
 客户端。示例不包含真实凭据。
+
+## 配置存储
+
+- store 模式（`serve --store`）下，revision payload 中每个 DSN 的密码都必须是
+  `${...}` 占位符，`server.auth.token` 必须为空；不满足时 import 失败，服务加载
+  revision 时也会再次检查（fail closed）。store 只保存 payload，不保存解析后的
+  DSN 或任何明文凭据。
+- store 的位置 DSN 来自启动参数或环境变量，其 `${file:...}` 只允许读取
+  `--secret-root` 列出的根目录。
+- store 表使用保留前缀 `smcp_`：配置校验拒绝 `source` 使用该前缀的实体，
+  PostgreSQL/MySQL/OceanBase 的 introspection 跳过这些表，因此 store 即使与
+  业务数据同库，也不会经由受治理的数据面暴露。
+- 每次加载 revision 前都重新计算 payload 的 SHA-256，与存储的 `content_hash`
+  不一致时拒绝加载并保留当前快照。
+- 发布与回滚在事务内以"期望的当前发布 id"做乐观并发检查，并在锁行上串行化；
+  任一时刻至多一个 published revision。
+- store 的写权限即配置的写权限：能写入 store 的账号可以改变授权与数据源，应只
+  授予运维人员，并与数据面账号分离。

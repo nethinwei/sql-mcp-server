@@ -1,0 +1,33 @@
+# gqlgen configuration; regenerate with `go generate ./x/admin/graph`.
+schema:
+  - schema.graphqls
+exec:
+  filename: generated.go
+  package: graph
+model:
+  filename: models_gen.go
+  package: graph
+resolver:
+  layout: follow-schema
+  dir: .
+  package: graph
+  filename_template: "{name}.resolvers.go"
+omit_slice_element_pointers: true
+models:
+  ID:
+    model:
+      - github.com/99designs/gqlgen/graphql.ID
+  JSON:
+    model:
+      - github.com/99designs/gqlgen/graphql.Any
+  Time:
+    model:
+      - github.com/99designs/gqlgen/graphql.Time
+  Revision:
+    model:
+      - github.com/nethinwei/sql-mcp-server/x/admin/graph.Revision
+    fields:
+      config:
+        resolver: true
+      yaml:
+        resolver: true
