@@ -180,6 +180,15 @@ jobs:
       - uses: anchore/sbom-action/download-syft@v0.24.0
         with:
           syft-version: v1.46.0
+      # goreleaser's before hook builds the embedded admin console.
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/admin/package.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: web/admin/pnpm-lock.yaml
       - uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser

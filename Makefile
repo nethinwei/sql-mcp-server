@@ -31,9 +31,10 @@ fmt:
 	$(GO) run ./internal/fmtcheck -w
 
 # Admin console (web/admin): installs locked dependencies, regenerates GraphQL
-# types, type-checks, tests and builds into x/admin/ui/dist/app for go:embed.
+# types (gitignored, needed by the tests), tests, type-checks and builds into
+# x/admin/ui/dist/app for go:embed.
 web:
-	cd web/admin && pnpm install --frozen-lockfile && pnpm test && pnpm build
+	cd web/admin && pnpm install --frozen-lockfile && pnpm codegen && pnpm test && pnpm build
 
 # Fail unless the built console is in place for go:embed (release builds).
 web-check:
