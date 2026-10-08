@@ -88,3 +88,45 @@ func TestWriteInvalidatesEveryCascadeLevel(t *testing.T) {
 		t.Errorf("accounts targets = %+v, want the whole database", got)
 	}
 }
+
+func TestWriteInvalidatesDatasourcesReachingTheSameDatabase(t *testing.T) {
+	t.Parallel()
+	// ro and rw reach the same database; archive another one.
+	rel := func(server, table string) string { return server + "\x00shop\x00public\x00" + table }
+	customers := entity.Entity{Name: "customers", Source: "customers", DataSource: "rw", Relation: rel("pg1", "customers"),
+		Cascades: []entity.Cascade{{Table: "orders", Entity: "orders", OnDelete: entity.FKCascade}}}
+	orders := entity.Entity{Name: "orders", Source: "orders", DataSource: "ro", Relation: rel("pg1", "orders")}
+	daily := entity.Entity{Name: "daily", Source: "daily", DataSource: "ro", Relation: rel("pg1", "daily"),
+		Kind: entity.KindView, Derived: true}
+	archived := entity.Entity{Name: "archived", Source: "orders", DataSource: "archive", Relation: rel("pg2", "orders")}
+	audited := entity.Entity{Name: "audited", Source: "audited", DataSource: "rw", Relation: rel("pg1", "audited"),
+		SideEffects: true}
+	all := []entity.Entity{customers, orders, daily, archived, audited}
+	reg, err := entity.NewRegistry(all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for writer, gone := range map[string][]string{
+		"customers": {"customers", "orders", "daily"},
+		"audited":   {"customers", "orders", "daily", "audited"},
+	} {
+		c := cache.NewTTLCache[[]map[string]any](time.Minute, 0)
+		key := func(e entity.Entity) cache.Key {
+			return cache.Key{Database: e.DatasourceName(), Relation: cacheRelation(e), SQL: e.Name}
+		}
+		byName := map[string]entity.Entity{}
+		for _, e := range all {
+			byName[e.Name] = e
+			_ = c.Set(context.Background(), key(e), []map[string]any{{}})
+		}
+		if err := afterWrite(Context{Registry: reg, Cache: c}, byName[writer], ""); err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range all {
+			_, cached := c.Get(context.Background(), key(e))
+			if cached == slices.Contains(gone, e.Name) {
+				t.Errorf("write to %s: cached read of %s kept = %v", writer, e.Name, cached)
+			}
+		}
+	}
+}

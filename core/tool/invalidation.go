@@ -1,6 +1,10 @@
 package tool
 
 import (
+	"maps"
+	"slices"
+	"strings"
+
 	"github.com/nethinwei/sql-mcp-server/core/cache"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 )
@@ -27,20 +31,22 @@ func cacheRelation(e entity.Entity) string {
 // triggers or rules anything in its database, and a procedure the entities it
 // declares it affects, otherwise anything in its database. When a cascade
 // reaches a relation no entity exposes, what it cascades to further is
-// unknown, so the whole database is invalidated.
+// unknown, so the whole database is invalidated. Each target is repeated for
+// every datasource reaching the same database (see peerTargets).
 func writeTargets(reg *entity.Registry, e entity.Entity) []CacheTarget {
-	database := e.DatasourceName()
-	whole := []CacheTarget{{Database: database}}
+	whole := func(w entity.Entity) []CacheTarget {
+		return peerTargets(reg, []CacheTarget{{Database: w.DatasourceName()}})
+	}
 	writes := []entity.Entity{e}
 	if e.Kind == entity.KindProcedure {
 		if len(e.Affects) == 0 {
-			return whole
+			return whole(e)
 		}
 		writes = writes[:0]
 		for _, name := range e.Affects {
 			affected, ok := reg.Resolve(name)
 			if !ok {
-				return whole
+				return whole(e)
 			}
 			writes = append(writes, affected.Entity)
 		}
@@ -55,18 +61,50 @@ func writeTargets(reg *entity.Registry, e entity.Entity) []CacheTarget {
 		}
 		seen[w.Name] = true
 		if w.SideEffects { // triggers or rules may write anything in the database
-			return whole
+			return whole(w)
 		}
-		targets = append(targets, CacheTarget{Database: database, Relation: cacheRelation(w)})
+		targets = append(targets, CacheTarget{Database: w.DatasourceName(), Relation: cacheRelation(w)})
 		for _, c := range w.Cascades {
 			child, ok := reg.Resolve(c.Entity)
 			if !ok {
-				return whole
+				return whole(w)
 			}
 			writes = append(writes, child.Entity)
 		}
 	}
-	return targets
+	return peerTargets(reg, targets)
+}
+
+// peerTargets repeats each target for every other datasource reaching the
+// same physical database: their views may read the written relation, and
+// their cached reads are keyed by their own datasource name.
+func peerTargets(reg *entity.Registry, targets []CacheTarget) []CacheTarget {
+	if reg == nil {
+		return targets
+	}
+	databases := map[string]string{} // datasource → physical database
+	for _, e := range reg.Entities() {
+		if e.Kind != entity.KindProcedure {
+			databases[e.DatasourceName()] = physicalDatabase(e)
+		}
+	}
+	out := slices.Clone(targets)
+	for _, t := range targets {
+		database, known := databases[t.Database]
+		for _, peer := range slices.Sorted(maps.Keys(databases)) {
+			if known && peer != t.Database && databases[peer] == database {
+				out = append(out, CacheTarget{Database: peer, Relation: t.Relation})
+			}
+		}
+	}
+	return out
+}
+
+// physicalDatabase is the server and catalog part of an entity's relation key
+// (see introspect.Physical.RelationKey).
+func physicalDatabase(e entity.Entity) string {
+	parts := strings.SplitN(e.RelationKey(), "\x00", 3)
+	return parts[0] + "\x00" + parts[1]
 }
 
 func afterWrite(tc Context, e entity.Entity, transaction string) error {
