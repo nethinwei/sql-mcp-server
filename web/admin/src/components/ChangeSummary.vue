@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { NSpace, NTable, NTag, NText } from 'naive-ui'
+import { NButton, NSpace, NTable, NTag, NText } from 'naive-ui'
 import { isEmpty, type Access, type Summary } from '@/lib/changeSummary'
 import { simulationRoute } from '@/lib/simulation'
 
@@ -34,7 +34,11 @@ const label = (a: Access) => `${a.entity} · ${t(`grants.actions.${a.action}`)}`
         </thead>
         <tbody>
           <tr v-for="u in summary.users" :key="u.user">
-            <td class="mono">{{ u.user }}</td>
+            <td>
+              <n-button text type="primary" class="mono" :title="t('review.simulateUser')" @click="simulate(u.user)">
+                {{ u.user }}
+              </n-button>
+            </td>
             <td><n-tag v-for="a in u.gained" :key="label(a)" size="small" type="success" :bordered="false" class="tag">+ {{ label(a) }}</n-tag></td>
             <td><n-tag v-for="a in u.lost" :key="label(a)" size="small" type="error" :bordered="false" class="tag">− {{ label(a) }}</n-tag></td>
             <td>

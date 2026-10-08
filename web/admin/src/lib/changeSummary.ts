@@ -1,9 +1,12 @@
 import type { Action, EntityInput, GrantInput, RoleInput, UserInput } from '@/gql/graphql'
 
-// A business-level summary of what a configuration change does, shown before
-// the YAML diff at review: who gains or loses which entity actions, whose
-// field or row scope changes, and which entities and fields change
-// visibility. Access is derived from top-level grants (a user's direct grants
+// A summary of how a change edits the authorization rules, shown before the
+// YAML diff at review: per user, the entity actions its rules grant or stop
+// granting and the actions whose field or row scope changes, and which
+// entities and fields change visibility. It compares rules, not effective
+// access (the server's simulation is authoritative for that): an action's
+// scopes are deduplicated, and an unrestricted rule covers the others, so
+// adding a rule that changes nothing reports nothing. Access is derived from top-level grants (a user's direct grants
 // plus its roles' grants) and entity-level legacy access (roles, fieldACL and
 // rowPolicies of the user's roles). Changes this cannot evaluate, because they
 // depend on data or on subject values (tenant policies, user subjects), are
@@ -58,6 +61,9 @@ export interface Summary {
 const key = (a: Access) => `${a.entity}\u0000${a.action}`
 const json = (v: unknown) => JSON.stringify(v ?? null)
 
+const unrestricted = 'unrestricted'
+const sorted = (v: unknown) => (Array.isArray(v) ? [...(v as string[])].sort() : null)
+
 interface Legacy {
   roles?: Partial<Record<string, string[]>>
   fieldACL?: Record<string, unknown>
@@ -71,33 +77,34 @@ interface Legacy {
  */
 function accessOf(cfg: Config, user: UserInput): Map<string, string> {
   if (user.disabled) return new Map()
-  const scopes = new Map<string, string[]>()
-  const add = (entity: string, action: string, scope: string) => {
+  const scopes = new Map<string, Set<string>>()
+  const add = (entity: string, action: string, read: unknown, write: unknown, rows: unknown) => {
     const k = key({ entity, action: action as Action })
-    scopes.set(k, [...(scopes.get(k) ?? []), scope])
+    const scope = read == null && write == null && rows == null ? unrestricted : json([sorted(read), sorted(write), rows])
+    scopes.set(k, (scopes.get(k) ?? new Set()).add(scope))
   }
   const grants: GrantInput[] = [
     ...(user.grants ?? []),
     ...(user.roles ?? []).flatMap((r) => cfg.roles.find((x) => x.name === r)?.grants ?? []),
   ]
   for (const g of grants) {
-    const scope = json([
-      g.fieldsRestricted ? [...(g.readFields ?? [])].sort() : null,
-      g.fieldsRestricted ? [...(g.writeFields ?? [])].sort() : null,
-      g.rows ?? null,
-    ])
-    for (const action of g.actions) add(g.entity, action, scope)
+    for (const action of g.actions) {
+      add(g.entity, action, g.fieldsRestricted ? g.readFields ?? [] : null,
+        g.fieldsRestricted ? g.writeFields ?? [] : null, g.rows ?? null)
+    }
   }
   const roles = new Set((user.roles ?? []).map((r) => r.toLowerCase()))
   for (const e of cfg.entities) {
     const legacy = (e.legacyAccess ?? {}) as Legacy
     for (const [action, holders] of Object.entries(legacy.roles ?? {})) {
       for (const role of (holders ?? []).map((r) => r.toLowerCase()).filter((r) => roles.has(r))) {
-        add(e.name, action.toUpperCase(), json(['legacy', role, legacy.fieldACL?.[role], legacy.rowPolicies?.[role]]))
+        const acl = legacy.fieldACL?.[role] as { read?: string[]; write?: string[] } | undefined
+        add(e.name, action.toUpperCase(), acl ? acl.read ?? [] : null, acl ? acl.write ?? [] : null,
+          legacy.rowPolicies?.[role] ?? null)
       }
     }
   }
-  return new Map([...scopes].map(([k, s]) => [k, JSON.stringify(s.sort())]))
+  return new Map([...scopes].map(([k, set]) => [k, set.has(unrestricted) ? unrestricted : json([...set].sort())]))
 }
 
 function access(k: string): Access {

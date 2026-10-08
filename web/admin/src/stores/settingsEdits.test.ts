@@ -9,46 +9,50 @@ describe('settings edits', () => {
   function setup() {
     const ws = useWorkspace()
     ws.setSettings({ cost: { maxRows: 10 }, cache: { enabled: false } })
+    ws.baseline = JSON.stringify({ entities: [], roles: [], users: [], settings: ws.settings })
     const edits = useSettingsEdits()
     edits.sync()
     return { ws, edits }
   }
 
-  it('keeps other sections being edited when one is applied', () => {
+  it('puts valid JSON into the workspace as it is typed', () => {
     const { ws, edits } = setup()
-    edits.texts.cost = '{"maxRows": 20}'
-    edits.texts.cache = '{"enabled": true}'
-    expect(edits.pending).toEqual(['cost', 'cache'])
-    expect(edits.apply(['cost'])).toBe(true)
-    edits.sync()
+    edits.edit('cost', '{"maxRows": 20}')
     expect(ws.settings.cost).toEqual({ maxRows: 20 })
-    expect(edits.texts.cache).toBe('{"enabled": true}')
-    expect(edits.pending).toEqual(['cache'])
-  })
-
-  it('follows workspace changes only in sections not being edited', () => {
-    const { ws, edits } = setup()
-    edits.texts.cache = '{"enabled": true}'
-    ws.setSettings({ cost: { maxRows: 30 }, cache: { enabled: false, ttl: '1m' } })
-    edits.sync()
-    expect(JSON.parse(edits.texts.cost)).toEqual({ maxRows: 30 })
-    expect(edits.texts.cache).toBe('{"enabled": true}')
-  })
-
-  it('does not report unedited sections when the workspace moves on', () => {
-    const { ws, edits } = setup()
-    ws.setSettings({ cost: { maxRows: 99 }, cache: { enabled: true } })
+    expect(ws.changes).toEqual([{ kind: 'settings', name: 'settings', type: 'modified' }])
     expect(edits.pending).toEqual([])
+  })
+
+  it('keeps invalid JSON pending and out of the workspace', () => {
+    const { ws, edits } = setup()
+    edits.edit('cache', '{oops')
+    expect(edits.pending).toEqual(['cache'])
+    expect(ws.settings.cache).toEqual({ enabled: false })
+    ws.setSettings({ cost: { maxRows: 30 }, cache: { enabled: true } })
+    edits.sync()
+    expect(edits.texts.cache).toBe('{oops')
+    expect(JSON.parse(edits.texts.cost)).toEqual({ maxRows: 30 })
+  })
+
+  it('keeps the user formatting when the value is unchanged and follows other changes', () => {
+    const { ws, edits } = setup()
+    edits.edit('cost', '{ "maxRows":   10 }')
+    edits.sync()
+    expect(edits.texts.cost).toBe('{ "maxRows":   10 }')
+    ws.setSettings({ cost: { maxRows: 99 }, cache: { enabled: false } })
     edits.sync()
     expect(JSON.parse(edits.texts.cost)).toEqual({ maxRows: 99 })
+    expect(edits.pending).toEqual([])
   })
 
-  it('applies nothing when any section is invalid', () => {
+  it('reverts a section to the base revision', () => {
     const { ws, edits } = setup()
-    edits.texts.cost = '{"maxRows": 20}'
-    edits.texts.cache = '{oops'
-    expect(edits.apply(['cost', 'cache'])).toBe(false)
-    expect(ws.settings.cost).toEqual({ maxRows: 10 })
-    expect(edits.errors.cache).toBeTruthy()
+    edits.edit('cost', '{"maxRows": 20}')
+    edits.edit('cache', '{oops')
+    edits.revert('cost')
+    edits.revert('cache')
+    expect(ws.settings).toEqual({ cost: { maxRows: 10 }, cache: { enabled: false } })
+    expect(edits.pending).toEqual([])
+    expect(ws.dirty).toBe(false)
   })
 })

@@ -22,7 +22,7 @@ export interface Datasource {
 }
 
 /** What the workspace edits; also the shape persisted to localStorage. */
-interface Sections {
+export interface Sections {
   entities: EntityInput[]
   roles: RoleInput[]
   users: UserInput[]
@@ -40,6 +40,8 @@ export interface Change {
   kind: 'entity' | 'role' | 'user' | 'settings'
   name: string
   type: 'added' | 'removed' | 'modified'
+  /** For a settings conflict, the field paths changed on both sides. */
+  paths?: string[]
 }
 
 interface State extends Sections {
@@ -93,6 +95,28 @@ export function toGrantInput(g: GrantPartsFragment): GrantInput {
   }
 }
 
+/** The editable sections of a loaded revision. */
+export function revisionSections(rev: NonNullable<WorkspaceResult['revision']>): Sections {
+  const cfg = rev.config
+  return {
+    entities: cfg.entities.map(toEntityInput),
+    roles: cfg.roles.map((r) => ({
+      name: r.name,
+      description: r.description ?? undefined,
+      grants: r.grants.map(toGrantInput),
+    })),
+    users: cfg.users.map((u) => ({
+      name: u.name,
+      description: u.description ?? undefined,
+      roles: [...u.roles],
+      subject: u.subject ?? undefined,
+      disabled: u.disabled,
+      grants: u.grants.map(toGrantInput),
+    })),
+    settings: { ...(cfg.settings as Record<string, unknown>) },
+  }
+}
+
 function sections(s: State): Sections {
   return { entities: s.entities, roles: s.roles, users: s.users, settings: s.settings }
 }
@@ -129,6 +153,28 @@ export function merge3(base: unknown, local: unknown, next: unknown): { value: u
     else value[key] = l[key]
   }
   return { value, conflict }
+}
+
+const isObject = (v: unknown): v is Item => typeof v === 'object' && v !== null && !Array.isArray(v)
+
+/**
+ * Three-way merge of nested settings, field by field: a field changed on one
+ * side takes that side; changed on both to different values it keeps the
+ * local value and is reported by path. Arrays and scalars are single fields.
+ */
+export function mergeDeep(base: unknown, local: unknown, next: unknown, path = ''): { value: unknown; conflicts: string[] } {
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+  if (same(local, base)) return { value: next, conflicts: [] }
+  if (same(next, base) || same(next, local)) return { value: local, conflicts: [] }
+  if (!isObject(base) || !isObject(local) || !isObject(next)) return { value: local, conflicts: [path || '.'] }
+  const value: Item = {}
+  const conflicts: string[] = []
+  for (const key of new Set([...Object.keys(base), ...Object.keys(local), ...Object.keys(next)])) {
+    const m = mergeDeep(base[key], local[key], next[key], path ? `${path}.${key}` : key)
+    if (m.value !== undefined) value[key] = m.value
+    conflicts.push(...m.conflicts)
+  }
+  return { value, conflicts }
 }
 
 /** The item a change refers to in sections, or undefined when absent. */
@@ -194,6 +240,10 @@ export const useWorkspace = defineStore('workspace', {
     },
     dirty(): boolean {
       return this.changes.length > 0
+    },
+    /** A key of the current content, as snapshot() records it. */
+    content(state): string {
+      return canonical(sections(state))
     },
     /** The saved draft holding exactly the unsaved changes, or null. */
     savedDraftId(state): string | null {
@@ -280,11 +330,16 @@ export const useWorkspace = defineStore('workspace', {
       const newBase = JSON.parse(this.baseline) as Sections
       const conflicts: Change[] = []
       for (const c of changes) {
+        if (c.kind === 'settings') {
+          const m = mergeDeep(oldBase.settings, local.settings, newBase.settings)
+          if (m.conflicts.length) conflicts.push({ ...c, paths: m.conflicts })
+          this.settings = (m.value ?? {}) as Record<string, unknown>
+          continue
+        }
         const merged = merge3(pick(oldBase, c), pick(local, c), pick(newBase, c))
         if (merged.conflict) conflicts.push(c)
         const mine = merged.value as never
-        if (c.kind === 'settings') this.settings = mine
-        else if (c.type === 'removed') {
+        if (c.type === 'removed') {
           if (c.kind === 'entity') this.removeEntity(c.name)
           else if (c.kind === 'role') this.removeRole(c.name)
           else this.removeUser(c.name)
@@ -306,21 +361,7 @@ export const useWorkspace = defineStore('workspace', {
       this.baseHash = rev.contentHash
       this.datasources = cfg.datasources.map((d) => ({ ...d }))
       this.baseTokens = Object.fromEntries(cfg.users.map((u) => [u.name, u.hasToken]))
-      this.entities = cfg.entities.map(toEntityInput)
-      this.roles = cfg.roles.map((r) => ({
-        name: r.name,
-        description: r.description ?? undefined,
-        grants: r.grants.map(toGrantInput),
-      }))
-      this.users = cfg.users.map((u) => ({
-        name: u.name,
-        description: u.description ?? undefined,
-        roles: [...u.roles],
-        subject: u.subject ?? undefined,
-        disabled: u.disabled,
-        grants: u.grants.map(toGrantInput),
-      }))
-      this.settings = { ...(cfg.settings as Record<string, unknown>) }
+      Object.assign(this, revisionSections(rev))
       this.baseline = JSON.stringify(sections(this.$state))
       this.savedDraft = null
       this.persist()

@@ -8,18 +8,17 @@ import {
 } from 'naive-ui'
 import VisibilityTable from '@/components/VisibilityTable.vue'
 import { canonical, useWorkspace } from '@/stores/workspace'
-import { useStatus } from '@/stores/status'
 import { run } from '@/api/client'
 import { SimulateQuery } from '@/api/ops'
 import { describeFilter, type Filter } from '@/lib/filter'
 import { parseSimulationQuery } from '@/lib/simulation'
+import { useSimulationConfig } from '@/lib/simulationConfig'
 import type { Action, SimulateQuery as SimulateResult } from '@/gql/graphql'
 
 type Simulation = SimulateResult['simulate']
 
 const { t } = useI18n()
 const ws = useWorkspace()
-const status = useStatus()
 const route = useRoute()
 const message = useMessage()
 // A link may name who, the configuration and one call to run (see lib/simulation).
@@ -32,14 +31,15 @@ const source = ref<'workspace' | 'published'>(
 const who = ref<string | null>(linked.who ?? null)
 const tab = ref<'overview' | 'single'>('overview')
 
+// Options, requests and the reported version all come from the chosen
+// configuration (see lib/simulationConfig).
+const { config, loading: configLoading, error: configError } = useSimulationConfig(source)
+const sourceLabel = computed(() => config.value?.label ?? '')
 const whoOptions = computed(() => [
-  { type: 'group', label: t('simulate.group.users'), key: 'u', children: ws.users.map((u) => ({ label: u.name, value: u.name })) },
-  { type: 'group', label: t('simulate.group.roles'), key: 'r', children: ws.roles.map((r) => ({ label: t('simulate.roleOption', { name: r.name }), value: `role:${r.name}` })) },
+  { type: 'group', label: t('simulate.group.users'), key: 'u', children: (config.value?.users ?? []).map((u) => ({ label: u.name, value: u.name })) },
+  { type: 'group', label: t('simulate.group.roles'), key: 'r', children: (config.value?.roles ?? []).map((r) => ({ label: t('simulate.roleOption', { name: r.name }), value: `role:${r.name}` })) },
 ])
-/** The configuration a simulation runs against, as shown with its result. */
-const sourceLabel = computed(() => source.value === 'workspace'
-  ? t(ws.dirty ? 'simulate.sourceWorkspace' : 'simulate.sourceWorkspaceClean', { id: ws.baseId ?? '' })
-  : t('simulate.sourcePublished', { id: status.publishedId ?? '' }))
+const entityOptions = computed(() => (config.value?.entities ?? []).map((e) => ({ label: e.name, value: e.name })))
 
 // Single check.
 const entity = ref<string | null>(null)
@@ -49,7 +49,21 @@ const busy = ref(false)
 const actions: Action[] = ['READ', 'AGGREGATE', 'CREATE', 'UPDATE', 'DELETE', 'EXECUTE']
 const actionOptions = computed(() => actions.map((a) => ({ label: t(`grants.actions.${a}`), value: a })))
 const fieldOptions = computed(() =>
-  (ws.entity(entity.value ?? '')?.fields ?? []).filter((f) => !f.exclude).map((f) => ({ label: f.name, value: f.name })))
+  (config.value?.entities.find((e) => e.name === entity.value)?.fields ?? []).filter((f) => !f.exclude)
+    .map((f) => ({ label: f.name, value: f.name })))
+
+// Switching configuration drops picks it does not have.
+watch(config, (c) => {
+  if (!c) return
+  const missing: string[] = []
+  const exists = (w: string) => (w.startsWith('role:')
+    ? c.roles.some((r) => `role:${r.name}` === w) : c.users.some((u) => u.name === w))
+  if (who.value && !exists(who.value)) { missing.push(who.value); who.value = null }
+  if (entity.value && !c.entities.some((e) => e.name === entity.value)) { missing.push(entity.value); entity.value = null }
+  const known = new Set(fieldOptions.value.map((o) => o.value))
+  if (fields.value.some((f) => !known.has(f))) fields.value = fields.value.filter((f) => known.has(f))
+  if (missing.length) message.warning(t('simulate.notInConfig', { list: missing.join(', '), source: c.label }))
+})
 let keepFields = false
 watch(entity, () => {
   if (!keepFields) fields.value = []
@@ -63,7 +77,7 @@ watch(entity, () => {
  */
 const conditions = computed(() => JSON.stringify({
   who: who.value, source: source.value,
-  config: source.value === 'workspace' ? canonical(ws.draft) : status.publishedId,
+  config: config.value?.draft ? canonical(config.value.draft) : config.value?.revision,
   entity: entity.value, action: action.value, fields: [...fields.value].sort(),
 }))
 interface Outcome {
@@ -79,7 +93,7 @@ const result = ref<Outcome | null>(null)
 const stale = computed(() => Boolean(result.value && result.value.key !== conditions.value))
 
 async function check() {
-  if (!who.value || !entity.value) return
+  if (!who.value || !entity.value || !config.value) return
   const key = conditions.value
   const asked = {
     who: who.value, entity: entity.value, action: action.value, fields: [...fields.value], source: sourceLabel.value,
@@ -88,7 +102,7 @@ async function check() {
   try {
     const input = {
       user: asked.who, entity: asked.entity, action: asked.action, fields: asked.fields.length ? asked.fields : null,
-      draft: source.value === 'workspace' ? ws.draft : null,
+      draft: config.value?.draft ?? null,
     }
     const sim = (await run(SimulateQuery, { input })).simulate
     if (key === conditions.value) result.value = { sim, key, ...asked }
@@ -110,8 +124,15 @@ async function pick(e: string, a: Action, scope: string[]) {
   await check()
 }
 
+// A linked call runs once its configuration is available.
 onMounted(() => {
-  if (linked.entity && linked.action) void pick(linked.entity, linked.action, linked.fields ?? [])
+  const { entity: e, action: a } = linked
+  if (!e || !a) return
+  const stop = watch(config, (c) => {
+    if (!c) return
+    void Promise.resolve().then(stop)
+    void pick(e, a, linked.fields ?? [])
+  }, { immediate: true })
 })
 </script>
 
@@ -130,14 +151,14 @@ onMounted(() => {
 
     <n-tabs v-model:value="tab" type="line" animated>
       <n-tab-pane name="overview" :tab="t('simulate.overview')">
-        <visibility-table :who="who" :draft="source === 'workspace' ? ws.draft : null" @pick="pick" />
+        <n-alert v-if="configError" type="error" :show-icon="false">{{ configError }}</n-alert>
+        <visibility-table v-else-if="config" :who="who" :draft="config.draft" @pick="pick" />
       </n-tab-pane>
       <n-tab-pane name="single" :tab="t('simulate.single')">
         <n-space vertical>
           <n-form inline label-placement="left">
             <n-form-item :label="t('simulate.entity')">
-              <n-select v-model:value="entity" filterable style="width: 200px"
-                :options="ws.entities.map((e) => ({ label: e.name, value: e.name }))" />
+              <n-select v-model:value="entity" filterable style="width: 200px" :options="entityOptions" />
             </n-form-item>
             <n-form-item :label="t('simulate.action')">
               <n-select v-model:value="action" :options="actionOptions" style="width: 110px" />
@@ -147,7 +168,7 @@ onMounted(() => {
                 :placeholder="t('simulate.defaultProjection')" style="width: 300px" />
             </n-form-item>
             <n-form-item>
-              <n-button type="primary" :disabled="!who || !entity" :loading="busy" @click="check">
+              <n-button type="primary" :disabled="!who || !entity || !config" :loading="busy || configLoading" @click="check">
                 {{ stale ? t('simulate.rerun') : t('simulate.run') }}
               </n-button>
             </n-form-item>

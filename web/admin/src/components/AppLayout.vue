@@ -80,7 +80,9 @@ function onVisible() {
 const outdated = computed(() =>
   status.publishedId !== null && ws.basePublished !== null && status.publishedId !== ws.basePublished)
 const conflictList = computed(() =>
-  status.conflicts.map((c) => `${t(`changes.kind.${c.kind}`)} ${c.kind === 'settings' ? t('changes.settingsName') : c.name}`)
+  status.conflicts.map((c) => c.kind === 'settings'
+    ? `${t('changes.settingsName')}（${(c.paths ?? []).join(', ')}）`
+    : `${t(`changes.kind.${c.kind}`)} ${c.name}`)
     .join(t('common.listSep')))
 
 async function rebase() {

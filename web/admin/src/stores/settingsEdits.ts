@@ -1,85 +1,85 @@
 import { defineStore } from 'pinia'
 import { useWorkspace } from '@/stores/workspace'
 
-// Edit buffers of the settings page, one per top-level section. They live in
-// a store so that leaving the page keeps unapplied text, and a section only
-// follows workspace changes while it is not being edited. A buffer is pending
-// when the user changed it, not when the workspace moved on (loading another
-// revision leaves unedited buffers clean; they take the new value on sync).
+// Text buffers of the settings page, one per top-level section. Settings are
+// edited like everything else: valid JSON goes into the workspace as it is
+// typed (and so into the change list, review and rebase merging); only text
+// that is not valid JSON stays here, pending, until it is fixed or reverted.
+// The buffers live in a store so that leaving the page keeps such text.
 
 const pretty = (v: unknown) => JSON.stringify(v, null, 2)
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
 export const useSettingsEdits = defineStore('settingsEdits', {
   state: () => ({
     texts: {} as Record<string, string>,
-    /** The workspace value each buffer started from. */
-    based: {} as Record<string, string>,
     errors: {} as Record<string, string>,
   }),
 
   getters: {
-    /** Sections the user edited and has not applied. */
+    /** Sections whose text is not valid JSON, so not in the workspace. */
     pending(state): string[] {
-      const ws = useWorkspace()
-      return Object.keys(state.texts).filter((k) => k in ws.settings && state.texts[k] !== state.based[k])
+      return Object.keys(state.errors)
     },
   },
 
   actions: {
-    /** Follows the workspace: unedited sections take its value, edited ones are kept. */
+    /**
+     * Follows the workspace: each valid buffer shows its section (keeping the
+     * user's formatting when the value is the same); invalid text is kept.
+     */
     sync() {
       const ws = useWorkspace()
       for (const key of Object.keys(this.texts)) {
-        if (!(key in ws.settings)) {
-          delete this.texts[key]
-          delete this.based[key]
-          delete this.errors[key]
-        }
+        if (!(key in ws.settings) && !(key in this.errors)) delete this.texts[key]
       }
       for (const [key, value] of Object.entries(ws.settings)) {
-        const now = pretty(value)
-        if (!(key in this.texts) || this.texts[key] === this.based[key]) {
-          this.texts[key] = now
-          this.based[key] = now
-          delete this.errors[key]
+        if (key in this.errors) continue
+        if (key in this.texts) {
+          try {
+            if (same(JSON.parse(this.texts[key]), value)) continue
+          } catch {
+            // Not valid any more: replaced below.
+          }
         }
+        this.texts[key] = pretty(value)
       }
     },
 
-    restore(key: string) {
-      const ws = useWorkspace()
-      this.texts[key] = this.based[key] = pretty(ws.settings[key])
-      delete this.errors[key]
-    },
-
-    parse(key: string): { ok: true; value: unknown } | { ok: false } {
+    /** Takes typed text; valid JSON updates the workspace section. */
+    edit(key: string, text: string) {
+      this.texts[key] = text
+      let value: unknown
       try {
-        const value: unknown = JSON.parse(this.texts[key])
-        delete this.errors[key]
-        return { ok: true, value }
+        value = JSON.parse(text)
       } catch (e) {
         this.errors[key] = e instanceof Error ? e.message : String(e)
-        return { ok: false }
+        return
       }
+      delete this.errors[key]
+      const ws = useWorkspace()
+      if (!same(ws.settings[key], value)) ws.setSettings({ ...ws.settings, [key]: value })
     },
 
-    /**
-     * Applies the named sections to the workspace at once; nothing is applied
-     * when any of them is not valid JSON. Returns whether it applied.
-     */
-    apply(keys: string[]): boolean {
-      const parsed: Record<string, unknown> = {}
-      let ok = true
-      for (const key of keys) {
-        const r = this.parse(key)
-        if (r.ok) parsed[key] = r.value
-        else ok = false
-      }
-      if (!ok) return false
+    /** Puts a section back to the revision the workspace is based on. */
+    revert(key: string) {
       const ws = useWorkspace()
-      for (const key of keys) this.based[key] = this.texts[key] = pretty(parsed[key])
-      ws.setSettings({ ...ws.settings, ...parsed })
-      return true
+      const base = (JSON.parse(ws.baseline || '{}') as { settings?: Record<string, unknown> }).settings ?? {}
+      const settings = { ...ws.settings }
+      if (key in base) settings[key] = base[key]
+      else delete settings[key]
+      delete this.errors[key]
+      ws.setSettings(settings)
+      this.texts[key] = pretty(settings[key])
+    },
+
+    format(key: string) {
+      if (key in this.errors) return
+      try {
+        this.texts[key] = pretty(JSON.parse(this.texts[key]))
+      } catch {
+        // Validity is tracked by edit().
+      }
     },
   },
 })

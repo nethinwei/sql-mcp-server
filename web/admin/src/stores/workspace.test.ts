@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { merge3, useWorkspace } from './workspace'
+import { merge3, mergeDeep, useWorkspace } from './workspace'
 import type { WorkspaceQuery } from '@/gql/graphql'
 
 function seeded() {
@@ -188,6 +188,19 @@ describe('workspace', () => {
     const ws = seeded()
     expect(ws.draft.base).toBe('2')
     expect(ws.draft.entities).toHaveLength(2)
+  })
+})
+
+describe('mergeDeep', () => {
+  it('merges settings field by field and reports fields changed on both sides', () => {
+    const base = { cost: { maxRows: 10, softScore: 5 }, cache: { enabled: false } }
+    const local = { cost: { maxRows: 20, softScore: 5 }, cache: { enabled: true } }
+    const next = { cost: { maxRows: 10, softScore: 8 }, cache: { enabled: false, ttl: '1m' }, audit: { enabled: true } }
+    expect(mergeDeep(base, local, next)).toEqual({
+      value: { cost: { maxRows: 20, softScore: 8 }, cache: { enabled: true, ttl: '1m' }, audit: { enabled: true } },
+      conflicts: [],
+    })
+    expect(mergeDeep(base, local, { ...next, cost: { maxRows: 30, softScore: 5 } }).conflicts).toEqual(['cost.maxRows'])
   })
 })
 

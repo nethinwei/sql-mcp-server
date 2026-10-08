@@ -31,6 +31,13 @@ describe('summarize', () => {
     ])
   })
 
+  it('ignores a rule that duplicates or is covered by an unrestricted one', () => {
+    const next = clone(base)
+    next.users[0].grants = [{ entity: 'orders', actions: ['READ'] }]
+    next.roles[0].grants!.push({ entity: 'orders', actions: ['READ'], fieldsRestricted: true, readFields: ['id'] })
+    expect(isEmpty(summarize(base, next))).toBe(true)
+  })
+
   it('reports a narrowed field or row scope as rescoped', () => {
     const next = clone(base)
     next.roles[0].grants![0] = { entity: 'orders', actions: ['READ'], fieldsRestricted: true, readFields: ['id'] }
