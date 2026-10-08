@@ -161,6 +161,9 @@ input DraftInput {
   resolver；草稿合并、schema 导入映射、离线 simulate；
 - `x/mcpserver`：`HTTPConfig.Admin` 挂载到 `/admin/`；
 - `x/admin/accounts`：账号业务规则（API 与 CLI 共用）；
+- `x/configedit`：草稿合并（把 DTO 映射来的类型化分区写入 base 配置，统一做默认值、
+  校验、store 规则与编码，并处理 tokenHash 保留）；读模型如实返回配置值（如未写
+  `source`/`datasource`/`kind` 时为 null），往返测试保证读出后原样保存不改变配置；
 - `x/revisionops`：revision 操作（payload 规范化、草稿、发布及乐观并发检查、
   回滚、diff 与审计），`store`/`migrate` CLI 与管理 API 共用，入口只处理参数、
   身份与输出；

@@ -2379,11 +2379,11 @@ func (ec *executionContext) _Entity_source(ctx context.Context, field graphql.Co
 			return obj.Source, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
 		},
 		true,
-		true,
+		false,
 	)
 }
 func (ec *executionContext) fieldContext_Entity_source(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -2402,11 +2402,11 @@ func (ec *executionContext) _Entity_datasource(ctx context.Context, field graphq
 			return obj.Datasource, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
 		},
 		true,
-		true,
+		false,
 	)
 }
 func (ec *executionContext) fieldContext_Entity_datasource(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -2448,11 +2448,11 @@ func (ec *executionContext) _Entity_kind(ctx context.Context, field graphql.Coll
 			return obj.Kind, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
 		},
 		true,
-		true,
+		false,
 	)
 }
 func (ec *executionContext) fieldContext_Entity_kind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -7441,12 +7441,12 @@ func (ec *executionContext) _Entity(ctx context.Context, sel ast.SelectionSet, o
 			}
 		case "source":
 			out.Values[i] = ec._Entity_source(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
+			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
 		case "datasource":
 			out.Values[i] = ec._Entity_datasource(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
+			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
 		case "schema":
@@ -7456,7 +7456,7 @@ func (ec *executionContext) _Entity(ctx context.Context, sel ast.SelectionSet, o
 			}
 		case "kind":
 			out.Values[i] = ec._Entity_kind(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
+			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
 		case "description":

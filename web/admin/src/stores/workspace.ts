@@ -50,10 +50,10 @@ const storageKey = 'smcp.console.workspace.v1'
 export function toEntityInput(e: EntityPartsFragment): EntityInput {
   return {
     name: e.name,
-    source: e.source,
-    datasource: e.datasource,
+    source: e.source ?? undefined,
+    datasource: e.datasource ?? undefined,
     schema: e.schema ?? undefined,
-    kind: e.kind,
+    kind: e.kind ?? undefined,
     description: e.description ?? undefined,
     primaryKey: [...e.primaryKey],
     params: [...e.params],
@@ -88,7 +88,7 @@ function sections(s: State): Sections {
 
 // Optional text where empty and unset mean the same, as in the server model;
 // tokenHash is excluded on purpose: an empty hash revokes the token.
-const optionalText = new Set(['source', 'schema', 'description', 'alias', 'mask'])
+const optionalText = new Set(['source', 'datasource', 'schema', 'kind', 'description', 'alias', 'mask'])
 
 /** Canonical JSON for change detection: unset optional text is omitted. */
 export function canonical(value: unknown): string {

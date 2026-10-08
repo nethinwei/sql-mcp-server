@@ -6,11 +6,10 @@ import (
 	"fmt"
 	"strconv"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
+	"github.com/nethinwei/sql-mcp-server/x/configedit"
 	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 )
 
@@ -42,81 +41,26 @@ type draft struct {
 	payload []byte
 }
 
-// buildDraft merges in into its base revision and runs the same chain as
-// `store import`: decode, defaults, validation, store secret rule and the
-// deterministic encoding.
+// buildDraft applies in to its base revision through configedit, the same
+// chain as `store import`: decode, defaults, validation, store secret rule and
+// the deterministic encoding.
 func (r *Resolver) buildDraft(ctx context.Context, in DraftInput) (draft, error) {
 	base, err := r.revisionByID(ctx, in.Base)
 	if err != nil {
 		return draft{}, err
 	}
-	baseCfg, err := bootstrap.LoadRevision(base)
-	if err != nil {
+	if err := base.Verify(); err != nil {
 		return draft{}, fmt.Errorf("base revision %d: %w", base.ID, err)
 	}
-	doc, err := yamlDocument(base.Payload)
+	edit, err := toEdit(in)
 	if err != nil {
 		return draft{}, err
 	}
-	if err := applyDraftSections(doc, in, baseCfg); err != nil {
-		return draft{}, err
-	}
-	data, err := yaml.Marshal(doc)
-	if err != nil {
-		return draft{}, err
-	}
-	cfg, err := bootstrap.LoadBytes(data)
-	if err != nil {
-		return draft{}, err
-	}
-	payload, err := revisionops.Normalize(cfg)
+	cfg, payload, err := configedit.Apply(base.Payload, edit)
 	if err != nil {
 		return draft{}, err
 	}
 	return draft{base: base, cfg: cfg, payload: payload}, nil
-}
-
-func applyDraftSections(doc map[string]any, in DraftInput, baseCfg *config.Config) error {
-	if in.Entities != nil {
-		entities := make([]any, 0, len(in.Entities))
-		for _, e := range in.Entities {
-			d, err := entityDoc(e)
-			if err != nil {
-				return err
-			}
-			entities = append(entities, d)
-		}
-		doc["entities"] = entities
-	}
-	if in.Roles != nil {
-		roles, err := roleDocs(in.Roles)
-		if err != nil {
-			return err
-		}
-		doc["roles"] = roles
-	}
-	if in.Users != nil {
-		users, err := userDocs(in.Users, baseCfg.Users)
-		if err != nil {
-			return err
-		}
-		doc["users"] = users
-	}
-	if in.Settings != nil {
-		settings, ok := normalizeJSON(in.Settings).(map[string]any)
-		if !ok {
-			return errors.New("settings must be an object of top-level sections")
-		}
-		for key, val := range settings {
-			if key == "datasources" || key == "database" || key == "databases" ||
-				key == "entities" || key == "roles" || key == "users" {
-				return fmt.Errorf("settings cannot change %q; datasources are managed by the CLI and "+
-					"entities, roles and users have their own draft fields", key)
-			}
-			doc[key] = val
-		}
-	}
-	return nil
 }
 
 // restartChanges compares a configuration with the published one.

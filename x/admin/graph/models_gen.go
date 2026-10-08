@@ -64,11 +64,14 @@ type DraftInput struct {
 }
 
 type Entity struct {
-	Name          string         `json:"name"`
-	Source        string         `json:"source"`
-	Datasource    string         `json:"datasource"`
-	Schema        *string        `json:"schema,omitempty"`
-	Kind          string         `json:"kind"`
+	Name string `json:"name"`
+	// The table, view or procedure; null means the entity name.
+	Source *string `json:"source,omitempty"`
+	// null means the datasource named default.
+	Datasource *string `json:"datasource,omitempty"`
+	Schema     *string `json:"schema,omitempty"`
+	// table, view or procedure; null means table.
+	Kind          *string        `json:"kind,omitempty"`
 	Description   *string        `json:"description,omitempty"`
 	PrimaryKey    []string       `json:"primaryKey"`
 	Fields        []Field        `json:"fields"`

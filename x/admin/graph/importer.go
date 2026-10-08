@@ -178,8 +178,8 @@ func columnDiff(d entity.Entity, e config.EntityConfig) (added, missing []string
 // administrator grants access explicitly.
 func candidateEntity(datasource string, d entity.Entity, names map[string]string) Entity {
 	out := Entity{
-		Name: names[tableKey(d.Schema, d.Source)], Source: d.Source, Datasource: datasource,
-		Schema: optional(d.Schema), Kind: "table",
+		Name: names[tableKey(d.Schema, d.Source)], Source: optional(d.Source), Datasource: optional(datasource),
+		Schema:      optional(d.Schema),
 		Description: optional(d.Description), PrimaryKey: orEmpty(d.PrimaryKey()), Params: []string{},
 		Fields: make([]Field, 0, len(d.Attributes)), Relationships: []Relationship{},
 		Mcp: &EntityMcp{DmlTools: true},

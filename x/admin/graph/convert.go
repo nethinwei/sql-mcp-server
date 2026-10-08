@@ -1,7 +1,9 @@
 package graph
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
+	"github.com/nethinwei/sql-mcp-server/x/configedit"
 	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 )
 
@@ -82,22 +85,14 @@ func orEmpty(s []string) []string {
 
 func toEntity(e config.EntityConfig) Entity {
 	out := Entity{
-		Name: e.Name, Source: e.Source, Datasource: e.DataSource, Schema: optional(e.Schema), Kind: e.Kind,
+		Name: e.Name, Source: optional(e.Source), Datasource: optional(e.DataSource), Schema: optional(e.Schema),
+		Kind:        optional(e.Kind),
 		Description: optional(e.Description), PrimaryKey: orEmpty(e.PrimaryKey), Params: orEmpty(e.Params),
 		Fields:        make([]Field, 0, len(e.Fields)),
 		Relationships: make([]Relationship, 0, len(e.Relationships)),
 		Mcp: &EntityMcp{
 			DmlTools: e.MCP.DMLTools, CustomTool: e.MCP.CustomTool, TrustedProcedure: e.MCP.TrustedProcedure,
 		},
-	}
-	if out.Source == "" {
-		out.Source = e.Name
-	}
-	if out.Datasource == "" {
-		out.Datasource = "default"
-	}
-	if out.Kind == "" {
-		out.Kind = "table"
 	}
 	for _, f := range e.Fields {
 		out.Fields = append(out.Fields, Field{
@@ -239,154 +234,153 @@ func normalizeJSON(v any) any {
 	return v
 }
 
-// entityDoc renders an entity input as a YAML document node, writing only
-// the keys the client set so presence-sensitive defaults keep their meaning.
-func entityDoc(in EntityInput) (map[string]any, error) {
-	doc := map[string]any{"name": in.Name}
-	for key, val := range map[string]*string{
-		"source": in.Source, "datasource": in.Datasource, "schema": in.Schema,
-		"kind": in.Kind, "description": in.Description,
-	} {
-		if val != nil {
-			doc[key] = *val
+// toEdit maps a draft input to a configuration edit. Every input field must
+// reach the edit; graph_test's round trip fails for one that does not.
+func toEdit(in DraftInput) (configedit.Edit, error) {
+	var edit configedit.Edit
+	if in.Entities != nil {
+		edit.Entities = make([]config.EntityConfig, 0, len(in.Entities))
+		for _, e := range in.Entities {
+			ec, err := entityConfig(e)
+			if err != nil {
+				return configedit.Edit{}, err
+			}
+			edit.Entities = append(edit.Entities, ec)
 		}
 	}
-	if in.PrimaryKey != nil {
-		doc["primaryKey"] = in.PrimaryKey
-	}
-	if in.Params != nil {
-		doc["params"] = in.Params
-	}
-	if in.Fields != nil {
-		fields := make([]any, 0, len(in.Fields))
-		for _, f := range in.Fields {
-			fields = append(fields, fieldDoc(f))
+	if in.Roles != nil {
+		edit.Roles = make([]configedit.Role, 0, len(in.Roles))
+		for _, r := range in.Roles {
+			grants, err := grantConfigs(r.Grants)
+			if err != nil {
+				return configedit.Edit{}, fmt.Errorf("role %q: %w", r.Name, err)
+			}
+			edit.Roles = append(edit.Roles, configedit.Role{Name: r.Name, RoleDefinition: config.RoleDefinition{
+				Description: deref(r.Description), Grants: grants,
+			}})
 		}
-		doc["fields"] = fields
 	}
-	if in.Relationships != nil {
-		rels := make([]any, 0, len(in.Relationships))
-		for _, r := range in.Relationships {
-			rels = append(rels, map[string]any{
-				"name": r.Name, "target": r.Target, "cardinality": r.Cardinality, "joinOn": normalizeJSON(r.JoinOn),
-			})
+	if in.Users != nil {
+		edit.Users = make([]configedit.User, 0, len(in.Users))
+		for _, u := range in.Users {
+			user, err := userConfig(u)
+			if err != nil {
+				return configedit.Edit{}, fmt.Errorf("user %q: %w", u.Name, err)
+			}
+			edit.Users = append(edit.Users, user)
 		}
-		doc["relationships"] = rels
+	}
+	if in.Settings != nil {
+		settings, ok := normalizeJSON(in.Settings).(map[string]any)
+		if !ok {
+			return configedit.Edit{}, errors.New("settings must be an object of top-level sections")
+		}
+		edit.Settings = settings
+	}
+	return edit, nil
+}
+
+func entityConfig(in EntityInput) (config.EntityConfig, error) {
+	e := config.EntityConfig{
+		Name: in.Name, Source: deref(in.Source), DataSource: deref(in.Datasource), Schema: deref(in.Schema),
+		Kind: deref(in.Kind), Description: deref(in.Description), PrimaryKey: in.PrimaryKey, Params: in.Params,
+	}
+	for _, f := range in.Fields {
+		e.Fields = append(e.Fields, config.FieldConfig{
+			Name: f.Name, Alias: deref(f.Alias), Description: deref(f.Description), Mask: deref(f.Mask),
+			Exclude: derefBool(f.Exclude),
+		})
+	}
+	for _, r := range in.Relationships {
+		joinOn, err := decodeJSON[map[string]string](r.JoinOn)
+		if err != nil {
+			return config.EntityConfig{}, fmt.Errorf("entity %q relationship %q joinOn: %w", in.Name, r.Name, err)
+		}
+		e.Relationships = append(e.Relationships, config.RelationshipConfig{
+			Name: r.Name, Target: r.Target, Cardinality: r.Cardinality, JoinOn: joinOn,
+		})
 	}
 	if in.TenantPolicy != nil {
-		doc["tenantPolicy"] = normalizeJSON(in.TenantPolicy)
+		e.TenantPolicy, _ = normalizeJSON(in.TenantPolicy).(map[string]any)
 	}
-	return doc, entityAccessAndMCPDoc(doc, in)
-}
-
-// entityAccessAndMCPDoc adds legacyAccess keys and the mcp flags to doc.
-func entityAccessAndMCPDoc(doc map[string]any, in EntityInput) error {
 	if in.LegacyAccess != nil {
-		legacy, ok := normalizeJSON(in.LegacyAccess).(map[string]any)
-		if !ok {
-			return fmt.Errorf("entity %q legacyAccess must be an object", in.Name)
+		legacy, err := decodeJSON[struct {
+			Roles       config.RoleConfig                `json:"roles"`
+			FieldACL    map[string]config.FieldACLConfig `json:"fieldACL"`
+			RowPolicies config.RowPolicies               `json:"rowPolicies"`
+		}](in.LegacyAccess)
+		if err != nil {
+			return config.EntityConfig{}, fmt.Errorf("entity %q legacyAccess: %w", in.Name, err)
 		}
-		for key, val := range legacy {
-			if key != "roles" && key != "fieldACL" && key != "rowPolicies" {
-				return fmt.Errorf("entity %q legacyAccess has unknown key %q", in.Name, key)
-			}
-			doc[key] = val
-		}
+		e.Roles, e.FieldACL, e.RowPolicies = legacy.Roles, legacy.FieldACL, legacy.RowPolicies
 	}
 	if in.Mcp != nil {
-		mcp := map[string]any{}
-		for key, val := range map[string]*bool{
-			"dmlTools": in.Mcp.DmlTools, "customTool": in.Mcp.CustomTool, "trustedProcedure": in.Mcp.TrustedProcedure,
-		} {
-			if val != nil {
-				mcp[key] = *val
-			}
+		// An explicit dmlTools differs from an unset one, which defaults on.
+		if in.Mcp.DmlTools != nil {
+			e.MCP = config.MCPFlagsWithDMLTools(*in.Mcp.DmlTools)
 		}
-		doc["mcp"] = mcp
+		e.MCP.CustomTool, e.MCP.TrustedProcedure = derefBool(in.Mcp.CustomTool), derefBool(in.Mcp.TrustedProcedure)
 	}
-	return nil
+	return e, nil
 }
 
-func fieldDoc(f FieldInput) map[string]any {
-	doc := map[string]any{"name": f.Name}
-	for key, val := range map[string]*string{"alias": f.Alias, "description": f.Description, "mask": f.Mask} {
-		if val != nil {
-			doc[key] = *val
-		}
-	}
-	if f.Exclude != nil {
-		doc["exclude"] = *f.Exclude
-	}
-	return doc
-}
-
-func grantDoc(g GrantInput) map[string]any {
-	actions := make([]string, 0, len(g.Actions))
-	for _, a := range g.Actions {
-		actions = append(actions, strings.ToLower(string(a)))
-	}
-	doc := map[string]any{"entity": g.Entity, "actions": actions}
-	restricted := g.ReadFields != nil || g.WriteFields != nil
-	if g.FieldsRestricted != nil {
-		restricted = *g.FieldsRestricted
-	}
-	if restricted {
-		doc["fields"] = map[string]any{"read": orEmpty(g.ReadFields), "write": orEmpty(g.WriteFields)}
-	}
-	if g.Rows != nil {
-		doc["rows"] = normalizeJSON(g.Rows)
-	}
-	return doc
-}
-
-func grantDocs(gs []GrantInput) []any {
-	out := make([]any, 0, len(gs))
+func grantConfigs(gs []GrantInput) ([]config.GrantConfig, error) {
+	out := make([]config.GrantConfig, 0, len(gs))
 	for _, g := range gs {
-		out = append(out, grantDoc(g))
+		actions := make([]string, 0, len(g.Actions))
+		for _, a := range g.Actions {
+			actions = append(actions, strings.ToLower(string(a)))
+		}
+		gc := config.GrantConfig{Entity: g.Entity, Actions: actions}
+		restricted := g.ReadFields != nil || g.WriteFields != nil
+		if g.FieldsRestricted != nil {
+			restricted = *g.FieldsRestricted
+		}
+		if restricted {
+			gc.Fields = &config.FieldACLConfig{Read: orEmpty(g.ReadFields), Write: orEmpty(g.WriteFields)}
+		}
+		if g.Rows != nil {
+			rows, ok := normalizeJSON(g.Rows).(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("grant on %q: rows must be an object", g.Entity)
+			}
+			gc.Rows = rows
+		}
+		out = append(out, gc)
 	}
-	return out
+	return out, nil
 }
 
-func roleDocs(roles []RoleInput) (map[string]any, error) {
-	out := make(map[string]any, len(roles))
-	for _, r := range roles {
-		if _, dup := out[r.Name]; dup {
-			return nil, fmt.Errorf("role %q listed twice", r.Name)
+// userConfig maps a user input; a user without tokenHash keeps the token of
+// the same-named base user.
+func userConfig(u UserInput) (configedit.User, error) {
+	grants, err := grantConfigs(u.Grants)
+	if err != nil {
+		return configedit.User{}, err
+	}
+	out := configedit.User{Name: u.Name, KeepToken: u.TokenHash == nil, UserConfig: config.UserConfig{
+		Description: deref(u.Description), TokenHash: deref(u.TokenHash), Roles: u.Roles, Grants: grants,
+		Disabled: derefBool(u.Disabled),
+	}}
+	if u.Subject != nil {
+		subject, ok := normalizeJSON(u.Subject).(map[string]any)
+		if !ok {
+			return configedit.User{}, errors.New("subject must be an object")
 		}
-		doc := map[string]any{"grants": grantDocs(r.Grants)}
-		if r.Description != nil {
-			doc["description"] = *r.Description
-		}
-		out[r.Name] = doc
+		out.Subject = subject
 	}
 	return out, nil
 }
 
-// userDocs renders users; a user without tokenHash keeps the hash of the
-// same-named user in base.
-func userDocs(users []UserInput, base map[string]config.UserConfig) (map[string]any, error) {
-	out := make(map[string]any, len(users))
-	for _, u := range users {
-		if _, dup := out[u.Name]; dup {
-			return nil, fmt.Errorf("user %q listed twice", u.Name)
-		}
-		doc := map[string]any{"roles": orEmpty(u.Roles), "grants": grantDocs(u.Grants)}
-		if u.Description != nil {
-			doc["description"] = *u.Description
-		}
-		if u.Subject != nil {
-			doc["subject"] = normalizeJSON(u.Subject)
-		}
-		if u.Disabled != nil {
-			doc["disabled"] = *u.Disabled
-		}
-		switch {
-		case u.TokenHash != nil:
-			doc["tokenHash"] = *u.TokenHash
-		case base[strings.ToLower(u.Name)].TokenHash != "":
-			doc["tokenHash"] = base[strings.ToLower(u.Name)].TokenHash
-		}
-		out[u.Name] = doc
+// decodeJSON converts a JSON scalar value into T, rejecting unknown fields.
+func decodeJSON[T any](v any) (T, error) {
+	var out T
+	data, err := json.Marshal(v)
+	if err != nil {
+		return out, err
 	}
-	return out, nil
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	err = dec.Decode(&out)
+	return out, err
 }

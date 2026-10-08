@@ -111,10 +111,13 @@ type Datasource {
 
 type Entity {
   name: String!
-  source: String!
-  datasource: String!
+  "The table, view or procedure; null means the entity name."
+  source: String
+  "null means the datasource named default."
+  datasource: String
   schema: String
-  kind: String!
+  "table, view or procedure; null means table."
+  kind: String
   description: String
   primaryKey: [String!]!
   fields: [Field!]!
