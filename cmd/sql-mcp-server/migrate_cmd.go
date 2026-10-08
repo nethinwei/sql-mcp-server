@@ -12,6 +12,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
+	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 )
 
 // runMigrate copies configuration between a YAML file ("file:<path>") and
@@ -127,23 +128,16 @@ func (e migrateEndpoint) write(ctx context.Context, payload []byte, author, comm
 		}
 		return file.Close()
 	}
-	current, err := e.store.Published(ctx)
-	if err != nil && !errors.Is(err, revision.ErrNoPublished) {
-		return err
-	}
-	if current.ID != 0 && current.ContentHash == revision.Hash(payload) {
-		return nil
-	}
-	draft, err := e.store.Create(ctx, revision.Draft{
-		ParentID: current.ID, Payload: payload, Author: author, Comment: comment,
+	ops := revisionOps(e.store)
+	draft, unchanged, err := ops.Draft(ctx, revisionops.DraftRequest{
+		Payload: payload, Author: author, Comment: comment, SkipIfPublished: true,
 	})
-	if err != nil {
+	if err != nil || unchanged {
 		return err
 	}
-	rev, err := e.store.Publish(ctx, draft.ID, current.ID, revision.Meta{Author: author})
-	if err == nil {
-		auditStore("migrate", rev, author)
-	}
+	// The target store need not be serving yet, so restart-only changes are
+	// allowed; they apply when a server starts from it.
+	_, err = ops.Publish(ctx, revisionops.PublishRequest{ID: draft.ID, RestartRequired: true, Author: author})
 	return err
 }
 

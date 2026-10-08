@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"os/user"
 	"strconv"
@@ -14,11 +13,10 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/pmezard/go-difflib/difflib"
-
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
+	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 )
 
 const storeUsage = "usage: sql-mcp-server store <init|import|list|show|diff|publish|rollback> [flags]"
@@ -87,9 +85,9 @@ func runStore(ctx context.Context, args []string, stdout io.Writer) error {
 	return run(ctx, args[1:], stdout)
 }
 
-// auditStore logs a store mutation to the structured stderr log.
-func auditStore(op string, rev revision.Revision, author string) {
-	slog.Info("config store "+op, "op", op, "revision", rev.ID, "contentHash", rev.ContentHash, "author", author)
+// revisionOps returns the revision operations shared with the admin API.
+func revisionOps(store revision.Store) revisionops.Service {
+	return revisionops.Service{Store: store, Via: "cli"}
 }
 
 func runStoreInit(ctx context.Context, args []string, stdout io.Writer) error {
@@ -117,10 +115,7 @@ func storePayload(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := bootstrap.ValidateStorePayload(cfg); err != nil {
-		return nil, err
-	}
-	return exportYAML(cfg)
+	return revisionops.Normalize(cfg)
 }
 
 func runStoreImport(ctx context.Context, args []string, stdout io.Writer) error {
@@ -144,22 +139,16 @@ func runStoreImport(ctx context.Context, args []string, stdout io.Writer) error 
 		return err
 	}
 	defer func() { _ = store.Close() }()
-	current, err := store.Published(ctx)
-	if err != nil && !errors.Is(err, revision.ErrNoPublished) {
-		return err
-	}
-	if current.ID != 0 && current.ContentHash == revision.Hash(payload) {
-		_, err = fmt.Fprintf(stdout, "unchanged: matches published revision %d\n", current.ID)
-		return err
-	}
-	author := f.authorName()
-	rev, err := store.Create(ctx, revision.Draft{
-		ParentID: current.ID, Payload: payload, Author: author, Comment: *comment,
+	rev, unchanged, err := revisionOps(store).Draft(ctx, revisionops.DraftRequest{
+		Payload: payload, Author: f.authorName(), Comment: *comment, SkipIfPublished: true,
 	})
 	if err != nil {
 		return err
 	}
-	auditStore("import", rev, author)
+	if unchanged {
+		_, err = fmt.Fprintf(stdout, "unchanged: matches published revision %d\n", rev.ID)
+		return err
+	}
 	_, err = fmt.Fprintf(stdout, "draft %d %s\n", rev.ID, rev.ContentHash)
 	return err
 }
@@ -239,6 +228,7 @@ func runStoreShow(ctx context.Context, args []string, stdout io.Writer) error {
 
 func runStoreDiff(ctx context.Context, args []string, stdout io.Writer) error {
 	f := newStoreFlags("diff")
+	raw := f.fs.Bool("raw", false, "compare stored bytes instead of the current encoding")
 	if err := f.fs.Parse(args); err != nil {
 		return err
 	}
@@ -264,10 +254,11 @@ func runStoreDiff(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	text, err := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
-		A: difflib.SplitLines(string(a.Payload)), B: difflib.SplitLines(string(b.Payload)),
-		FromFile: fmt.Sprintf("revision %d", a.ID), ToFile: fmt.Sprintf("revision %d", b.ID), Context: 3,
-	})
+	diff := revisionops.Diff
+	if *raw {
+		diff = revisionops.RawDiff
+	}
+	text, err := diff(fmt.Sprintf("revision %d", a.ID), a.Payload, fmt.Sprintf("revision %d", b.ID), b.Payload)
 	if err != nil {
 		return err
 	}
@@ -295,19 +286,12 @@ func runStorePublish(ctx context.Context, args []string, stdout io.Writer) error
 	if err != nil {
 		return err
 	}
-	current, err := store.Published(ctx)
-	if err != nil && !errors.Is(err, revision.ErrNoPublished) {
-		return err
-	}
-	if err := bootstrap.CheckPublishable(current, target, *restart); err != nil {
-		return err
-	}
-	author := f.authorName()
-	rev, err := store.Publish(ctx, target.ID, current.ID, revision.Meta{Author: author})
+	rev, err := revisionOps(store).Publish(ctx, revisionops.PublishRequest{
+		ID: target.ID, RestartRequired: *restart, Author: f.authorName(),
+	})
 	if err != nil {
 		return err
 	}
-	auditStore("publish", rev, author)
 	_, err = fmt.Fprintf(stdout, "published %d %s\n", rev.ID, rev.ContentHash)
 	return err
 }
@@ -327,32 +311,13 @@ func runStoreRollback(ctx context.Context, args []string, stdout io.Writer) erro
 		return err
 	}
 	defer func() { _ = store.Close() }()
-	current, err := store.Published(ctx)
+	res, err := revisionOps(store).Rollback(ctx, revisionops.RollbackRequest{
+		To: *to, RestartRequired: *restart, Author: f.authorName(), Comment: *comment,
+	})
 	if err != nil {
 		return err
 	}
-	all, err := store.List(ctx, 0)
-	if err != nil {
-		return err
-	}
-	chosen, err := revision.RollbackTarget(all, current, *to)
-	if err != nil {
-		return err
-	}
-	target, err := store.Get(ctx, chosen.ID)
-	if err != nil {
-		return err
-	}
-	if err := bootstrap.CheckPublishable(current, target, *restart); err != nil {
-		return err
-	}
-	author := f.authorName()
-	rev, err := store.Rollback(ctx, current.ID, target.ID, revision.Meta{Author: author, Comment: *comment})
-	if err != nil {
-		return err
-	}
-	auditStore("rollback", rev, author)
 	_, err = fmt.Fprintf(stdout, "rolled back %d; published %d (content of %d) %s\n",
-		current.ID, rev.ID, target.ID, rev.ContentHash)
+		res.From, res.Published.ID, res.Target, res.Published.ContentHash)
 	return err
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
+	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 )
 
 // structuredKeys are the top-level sections exposed as structured types;
@@ -20,7 +21,7 @@ var structuredKeys = []string{"database", "databases", "entities", "roles", "use
 // toConfiguration builds the read model of a configuration. payload is its
 // YAML, the source of the settings sections, read in the current encoding.
 func toConfiguration(cfg *config.Config, payload []byte) (*Configuration, error) {
-	doc, err := yamlDocument(reencode(payload))
+	doc, err := yamlDocument(revisionops.Reencode(payload))
 	if err != nil {
 		return nil, err
 	}

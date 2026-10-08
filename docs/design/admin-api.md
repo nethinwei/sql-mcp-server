@@ -161,6 +161,9 @@ input DraftInput {
   resolver；草稿合并、schema 导入映射、离线 simulate；
 - `x/mcpserver`：`HTTPConfig.Admin` 挂载到 `/admin/`；
 - `x/admin/accounts`：账号业务规则（API 与 CLI 共用）；
+- `x/revisionops`：revision 操作（payload 规范化、草稿、发布及乐观并发检查、
+  回滚、diff 与审计），`store`/`migrate` CLI 与管理 API 共用，入口只处理参数、
+  身份与输出；
 - `cmd/sql-mcp-server`：`--admin`、`--admin-playground`，`admin create/passwd/
   set/list` 子命令。
 

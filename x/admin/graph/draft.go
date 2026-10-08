@@ -6,13 +6,12 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/pmezard/go-difflib/difflib"
 	"gopkg.in/yaml.v3"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
-	"github.com/nethinwei/sql-mcp-server/x/configyaml"
+	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 )
 
 func parseID(id string) (int64, error) {
@@ -21,6 +20,11 @@ func parseID(id string) (int64, error) {
 		return 0, fmt.Errorf("invalid revision id %q", id)
 	}
 	return n, nil
+}
+
+// ops returns the revision operations shared with the `store` CLI.
+func (r *Resolver) ops() revisionops.Service {
+	return revisionops.Service{Store: r.Store, Via: "admin-api"}
 }
 
 func (r *Resolver) revisionByID(ctx context.Context, id string) (revision.Revision, error) {
@@ -65,10 +69,7 @@ func (r *Resolver) buildDraft(ctx context.Context, in DraftInput) (draft, error)
 	if err != nil {
 		return draft{}, err
 	}
-	if err := bootstrap.ValidateStorePayload(cfg); err != nil {
-		return draft{}, err
-	}
-	payload, err := configyaml.Encode(cfg)
+	payload, err := revisionops.Normalize(cfg)
 	if err != nil {
 		return draft{}, err
 	}
@@ -132,27 +133,4 @@ func (r *Resolver) restartChanges(ctx context.Context, next *config.Config) ([]s
 		return nil, err
 	}
 	return orEmpty(bootstrap.RestartChanges(cur, next)), nil
-}
-
-// unifiedDiff compares two payloads in the current encoding, so revisions
-// stored by an older encoder differ only where their content does.
-func unifiedDiff(fromName string, from []byte, toName string, to []byte) (string, error) {
-	return difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
-		A: difflib.SplitLines(string(reencode(from))), B: difflib.SplitLines(string(reencode(to))),
-		FromFile: fromName, ToFile: toName, Context: 3,
-	})
-}
-
-// reencode returns payload in the current encoding, or unchanged when it no
-// longer decodes.
-func reencode(payload []byte) []byte {
-	cfg, err := configyaml.Decode(payload)
-	if err != nil {
-		return payload
-	}
-	out, err := configyaml.Encode(cfg)
-	if err != nil {
-		return payload
-	}
-	return out
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
+	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 )
 
 // CreateDraft is the resolver for the createDraft field.
@@ -27,83 +28,59 @@ func (r *mutationResolver) CreateDraft(ctx context.Context, draft DraftInput, co
 	if err != nil {
 		return nil, err
 	}
-	rev, err := r.Store.Create(ctx, revision.Draft{
-		ParentID: d.base.ID, Payload: d.payload, Author: p.Username, Comment: deref(comment),
+	rev, _, err := r.ops().Draft(ctx, revisionops.DraftRequest{
+		Payload: d.payload, Parent: d.base.ID, Author: p.Username, Comment: deref(comment),
 	})
 	if err != nil {
 		return nil, err
 	}
-	auditAdmin(ctx, "createDraft", rev)
 	return toRevision(rev), nil
 }
 
 // Publish is the resolver for the publish field.
 func (r *mutationResolver) Publish(ctx context.Context, input PublishInput) (*Revision, error) {
-	id, restartRequired, expectedPublished := input.ID, input.RestartRequired, input.ExpectedPublished
 	p, err := auth.Require(ctx, auth.PermPublish)
 	if err != nil {
 		return nil, err
 	}
-	target, err := r.revisionByID(ctx, id)
+	id, err := parseID(input.ID)
 	if err != nil {
 		return nil, err
 	}
-	current, err := r.Store.Published(ctx)
-	if err != nil && !errors.Is(err, revision.ErrNoPublished) {
-		return nil, err
+	req := revisionops.PublishRequest{ID: id, RestartRequired: derefBool(input.RestartRequired), Author: p.Username}
+	if input.ExpectedPublished != nil {
+		expected, err := parseID(*input.ExpectedPublished)
+		if err != nil {
+			return nil, err
+		}
+		req.ExpectedPublished = &expected
 	}
-	if err := checkExpectedPublished(current, expectedPublished); err != nil {
-		return nil, err
-	}
-	if err := bootstrap.CheckPublishable(current, target, derefBool(restartRequired)); err != nil {
-		return nil, err
-	}
-	rev, err := r.Store.Publish(ctx, target.ID, current.ID, revision.Meta{Author: p.Username})
+	rev, err := r.ops().Publish(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, apiError(err)
 	}
-	auditAdmin(ctx, "publish", rev)
 	return toRevision(rev), nil
 }
 
 // Rollback is the resolver for the rollback field.
 func (r *mutationResolver) Rollback(ctx context.Context, input RollbackInput) (*Revision, error) {
-	to, restartRequired, comment := input.To, input.RestartRequired, input.Comment
 	p, err := auth.Require(ctx, auth.PermPublish)
 	if err != nil {
 		return nil, err
 	}
-	current, err := r.Store.Published(ctx)
-	if err != nil {
-		return nil, err
+	req := revisionops.RollbackRequest{
+		RestartRequired: derefBool(input.RestartRequired), Author: p.Username, Comment: deref(input.Comment),
 	}
-	var targetID int64
-	if to != nil {
-		if targetID, err = parseID(*to); err != nil {
+	if input.To != nil {
+		if req.To, err = parseID(*input.To); err != nil {
 			return nil, err
 		}
 	}
-	all, err := r.Store.List(ctx, 0)
+	res, err := r.ops().Rollback(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	chosen, err := revision.RollbackTarget(all, current, targetID)
-	if err != nil {
-		return nil, err
-	}
-	target, err := r.Store.Get(ctx, chosen.ID)
-	if err != nil {
-		return nil, err
-	}
-	if err := bootstrap.CheckPublishable(current, target, derefBool(restartRequired)); err != nil {
-		return nil, err
-	}
-	rev, err := r.Store.Rollback(ctx, current.ID, target.ID, revision.Meta{Author: p.Username, Comment: deref(comment)})
-	if err != nil {
-		return nil, err
-	}
-	auditAdmin(ctx, "rollback", rev)
-	return toRevision(rev), nil
+	return toRevision(res.Published), nil
 }
 
 // GenerateUserToken is the resolver for the generateUserToken field.
@@ -297,19 +274,19 @@ func (r *queryResolver) Diff(ctx context.Context, from string, to *string, draft
 		if err != nil {
 			return "", err
 		}
-		return unifiedDiff(fmt.Sprintf("revision %d", a.ID), a.Payload, "draft", d.payload)
+		return revisionops.Diff(fmt.Sprintf("revision %d", a.ID), a.Payload, "draft", d.payload)
 	case to != nil:
 		b, err := r.revisionByID(ctx, *to)
 		if err != nil {
 			return "", err
 		}
-		return unifiedDiff(fmt.Sprintf("revision %d", a.ID), a.Payload, fmt.Sprintf("revision %d", b.ID), b.Payload)
+		return revisionops.Diff(fmt.Sprintf("revision %d", a.ID), a.Payload, fmt.Sprintf("revision %d", b.ID), b.Payload)
 	default:
 		b, err := r.Store.Published(ctx)
 		if err != nil {
 			return "", err
 		}
-		return unifiedDiff(fmt.Sprintf("revision %d", a.ID), a.Payload, fmt.Sprintf("revision %d", b.ID), b.Payload)
+		return revisionops.Diff(fmt.Sprintf("revision %d", a.ID), a.Payload, fmt.Sprintf("revision %d", b.ID), b.Payload)
 	}
 }
 

@@ -8,11 +8,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
+	"github.com/nethinwei/sql-mcp-server/x/configstore"
+	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 )
 
 const storeTestConfig = `database:
@@ -193,4 +196,42 @@ func TestOpenServeSource(t *testing.T) {
 		t.Fatalf("SQL_MCP_STORE must select store mode: %v", err)
 	}
 	envSrc.close()
+}
+
+// `store diff` compares the current encoding like the admin API, so a
+// revision written by an older encoder differs only in content; --raw keeps
+// the byte comparison.
+func TestStoreDiffMatchesAdminAPI(t *testing.T) {
+	dir, spec := newTestStore(t)
+	id := importDraft(t, spec, writeStoreConfig(t, dir, "v1.yaml", 5))
+	mustRun(t, "store", "publish", "--store", spec, id)
+	current := mustRun(t, "store", "show", "--store", spec, "published")
+
+	// The same content as an older encoder wrote it: empty values spelled out.
+	spelled := "      - name: id\n        alias: \"\"\n        exclude: false\n"
+	old := strings.Replace(current, "      - name: id\n", spelled, 1)
+	parsed, err := configstore.ParseSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := configstore.Open(context.Background(), parsed, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev, err := store.Create(context.Background(), revision.Draft{Payload: []byte(old)})
+	_ = store.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := strconv.FormatInt(rev.ID, 10)
+	if diff := mustRun(t, "store", "diff", "--store", spec, ref); diff != "" {
+		t.Fatalf("encoding-only difference shown as a change:\n%s", diff)
+	}
+	want, err := revisionops.Diff("revision "+ref, []byte(old), "revision "+id, []byte(current))
+	if err != nil || want != "" {
+		t.Fatalf("shared diff = %q, %v", want, err)
+	}
+	if raw := mustRun(t, "store", "diff", "--raw", "--store", spec, ref); !strings.Contains(raw, `-        alias: ""`) {
+		t.Fatalf("--raw must compare stored bytes:\n%s", raw)
+	}
 }

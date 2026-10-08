@@ -193,7 +193,7 @@ sql-mcp-server serve --store 'postgres:${file:/run/secrets/store_dsn}'
 | `store import --store S --config F [--comment C]` | 校验并规范化 F，写成 draft；与当前 published 的 hash 相同时提示并不创建 |
 | `store list --store S` | 列出 revision 摘要 |
 | `store show --store S <id>` | 输出 payload |
-| `store diff --store S <a> [<b>]` | 统一 diff（缺省 b 为当前 published） |
+| `store diff --store S [--raw] <a> [<b>]` | 统一 diff（缺省 b 为当前 published）；两侧先按当前编码重编码，与管理 API 一致，`--raw` 比较存储的原始字节 |
 | `store publish --store S <id> [--restart-required]` | 发布 |
 | `store rollback --store S [--to id] [--restart-required]` | 回滚（默认回到内容不同的上一个发布） |
 | `migrate --from X --to Y` | 在 `file:`、`sqlite:`、`postgres:` 等之间迁移 |

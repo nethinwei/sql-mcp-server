@@ -7,13 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strconv"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
-	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
+	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
@@ -37,12 +36,6 @@ func newUserToken() (string, error) {
 }
 
 // auditAdmin logs a store mutation made through the admin API.
-func auditAdmin(ctx context.Context, op string, rev revision.Revision) {
-	p, _ := auth.PrincipalFrom(ctx)
-	slog.Info("config store "+op, "op", op, "revision", rev.ID, "contentHash", rev.ContentHash,
-		"author", p.Username, "via", "admin-api")
-}
-
 func hasDatasource(cfg *config.Config, name string) bool {
 	if len(cfg.Databases) == 0 {
 		return name == "default" && cfg.Database.Driver != ""
@@ -86,27 +79,18 @@ func (r *Resolver) simulationConfig(ctx context.Context, draft *DraftInput, id *
 	return bootstrap.LoadRevision(rev)
 }
 
-// codeConflict marks an error the client resolves by rebasing on the newly
-// published revision.
-const codeConflict = "CONFLICT"
-
-// checkExpectedPublished fails with code CONFLICT when the published revision
-// is no longer the one the caller based its work on.
-func checkExpectedPublished(current revision.Revision, expected *string) error {
-	if expected == nil {
-		return nil
+// apiError maps service errors that the console resolves itself to a
+// GraphQL error with extensions.code: a publish conflict becomes CONFLICT
+// with the newly published revision.
+func apiError(err error) error {
+	var conflict *revisionops.ConflictError
+	if errors.As(err, &conflict) {
+		return &gqlerror.Error{
+			Message:    err.Error(),
+			Extensions: map[string]any{"code": "CONFLICT", "published": strconv.FormatInt(conflict.Published, 10)},
+		}
 	}
-	want, err := parseID(*expected)
-	if err != nil {
-		return err
-	}
-	if want == current.ID {
-		return nil
-	}
-	return &gqlerror.Error{
-		Message:    fmt.Sprintf("%v: revision %d was published after revision %d", revision.ErrConflict, current.ID, want),
-		Extensions: map[string]any{"code": codeConflict, "published": strconv.FormatInt(current.ID, 10)},
-	}
+	return err
 }
 
 func serverStatus(status func() RuntimeState) *ServerStatus {
