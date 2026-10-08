@@ -1,20 +1,26 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
-  NAlert, NButton, NCard, NEmpty, NInput, NSpace, NSpin, NTag, NText, useDialog, useMessage,
+  NAlert, NButton, NCard, NCollapse, NCollapseItem, NEmpty, NInput, NSpace, NSpin, NTag, NText, useDialog,
+  useMessage,
 } from 'naive-ui'
 import DiffView from '@/components/DiffView.vue'
+import ChangeSummary from '@/components/ChangeSummary.vue'
+import { summarize, type Config } from '@/lib/changeSummary'
 import { useWorkspace, type Change } from '@/stores/workspace'
 import { ApiError, run } from '@/api/client'
 import { useStatus } from '@/stores/status'
+import { useSettingsEdits } from '@/stores/settingsEdits'
 import { CreateDraftMutation, DiffQuery, PublishMutation, ValidateQuery } from '@/api/ops'
+import type { DraftInput } from '@/gql/graphql'
 import { can } from '@/api/session'
 
 const { t } = useI18n()
 const status = useStatus()
 const ws = useWorkspace()
+const settingsEdits = useSettingsEdits()
 const router = useRouter()
 const dialog = useDialog()
 const message = useMessage()
@@ -26,6 +32,7 @@ const diff = ref('')
 const comment = ref('')
 
 const restartList = () => restart.value.join(t('common.listSep'))
+const summary = computed(() => summarize(JSON.parse(ws.baseline) as Config, ws.$state))
 
 async function check() {
   if (!ws.baseId) return
@@ -47,8 +54,8 @@ function revertAndCheck(c: Change) {
   if (ws.dirty) void check()
 }
 
-async function saveDraft() {
-  const { createDraft } = await run(CreateDraftMutation, { draft: ws.draft, comment: comment.value || null }, true)
+async function saveDraft(draft: DraftInput) {
+  const { createDraft } = await run(CreateDraftMutation, { draft, comment: comment.value || null }, true)
   return createDraft
 }
 
@@ -69,23 +76,31 @@ function conflict(id: string) {
 
 async function save(publish: boolean) {
   saving.value = true
+  // What is saved is the workspace at the click; edits made while the
+  // requests run stay unsaved (and survive publishing, re-applied on top).
+  const snap = ws.snapshot()
+  const reuse = ws.savedDraftId
   try {
     if (publish) {
       await status.refresh()
       if (status.publishedId && status.publishedId !== ws.basePublished) return conflict(status.publishedId)
     }
-    const draft = await saveDraft()
+    // A draft already holding this content is published as is.
+    const id = reuse ?? (await saveDraft(snap.draft)).id
     if (!publish) {
-      message.success(t('review.savedDraft', { id: draft.id }))
+      ws.markDraftSaved(id, snap.content)
+      message.success(t('review.savedDraft', { id }))
       return
     }
     await run(PublishMutation, {
-      input: { id: draft.id, restartRequired: restart.value.length > 0, expectedPublished: ws.basePublished },
+      input: { id, restartRequired: restart.value.length > 0, expectedPublished: ws.basePublished },
     }, true)
-    await ws.load(draft.id)
+    // Edits made since the click (including undoing part of it) are measured
+    // from the snapshot when the published configuration arrives, and kept.
+    await ws.rebase(id, snap.sections)
     void status.refresh()
-    message.success(t(restart.value.length ? 'review.publishedRestart' : 'review.published', { id: draft.id }))
-    void router.push({ name: 'revisions' })
+    message.success(t(restart.value.length ? 'review.publishedRestart' : 'review.published', { id }))
+    void router.push({ name: 'revisions', query: { id } })
   } catch (e) {
     if (e instanceof ApiError && e.code === 'CONFLICT') return conflict(String(e.extensions.published))
     message.error(e instanceof Error ? e.message : String(e))
@@ -109,6 +124,13 @@ onMounted(check)
 </script>
 
 <template>
+  <n-alert v-if="settingsEdits.pending.length" type="warning" class="settings-pending"
+    :title="t('review.settingsPendingTitle')">
+    {{ t('review.settingsPendingBody', { list: settingsEdits.pending.join(', ') }) }}
+    <div class="alert-actions">
+      <n-button size="small" @click="router.push({ name: 'settings' })">{{ t('review.toSettings') }}</n-button>
+    </div>
+  </n-alert>
   <n-empty v-if="!ws.dirty" :description="t('review.nothing')">
     <template #extra><n-button @click="router.push({ name: 'overview' })">{{ t('review.backToOverview') }}</n-button></template>
   </n-empty>
@@ -135,18 +157,38 @@ onMounted(check)
         {{ t('review.okBody') }}
       </n-alert>
 
-      <n-card v-if="!error" size="small" :title="t('review.diffTitle', { id: ws.baseId })">
-        <diff-view :diff="diff" />
+      <n-card size="small" :title="t('review.summaryTitle')">
+        <change-summary :summary="summary" />
       </n-card>
+
+      <n-card v-if="!error" size="small">
+        <n-collapse>
+          <n-collapse-item :title="t('review.diffTitle', { id: ws.baseId })" name="diff">
+            <diff-view :diff="diff" />
+          </n-collapse-item>
+        </n-collapse>
+      </n-card>
+
+      <n-alert v-if="ws.savedDraftId" type="info" :title="t('review.savedDraftTitle', { id: ws.savedDraftId })">
+        {{ t('review.savedDraftBody') }}
+        <div class="alert-actions">
+          <n-button size="small" @click="router.push({ name: 'revisions', query: { id: ws.savedDraftId } })">
+            {{ t('review.viewDraft') }}
+          </n-button>
+        </div>
+      </n-alert>
 
       <n-card size="small">
         <n-space vertical>
-          <n-input v-model:value="comment" :placeholder="t('review.comment')" :disabled="Boolean(error)" />
+          <n-input v-model:value="comment" :placeholder="t('review.comment')"
+            :disabled="Boolean(error) || Boolean(ws.savedDraftId)" />
           <n-space justify="end">
             <n-text v-if="!can('admin:publish')" depth="3" style="font-size: 12px">{{ t('review.noPublish') }}</n-text>
-            <n-button :disabled="Boolean(error)" :loading="saving" @click="save(false)">{{ t('review.saveDraft') }}</n-button>
+            <n-button :disabled="Boolean(error) || Boolean(ws.savedDraftId)" :loading="saving" @click="save(false)">
+              {{ ws.savedDraftId ? t('review.draftSaved', { id: ws.savedDraftId }) : t('review.saveDraft') }}
+            </n-button>
             <n-button v-if="can('admin:publish')" type="primary" :disabled="Boolean(error)" :loading="saving" @click="publish">
-              {{ t('review.saveAndPublish') }}
+              {{ ws.savedDraftId ? t('review.publishDraft', { id: ws.savedDraftId }) : t('review.saveAndPublish') }}
             </n-button>
           </n-space>
         </n-space>
@@ -154,3 +196,7 @@ onMounted(check)
     </n-space>
   </n-spin>
 </template>
+
+<style scoped>
+.settings-pending { margin-bottom: 16px; }
+</style>

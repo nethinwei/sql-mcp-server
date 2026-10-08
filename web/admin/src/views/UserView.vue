@@ -10,17 +10,21 @@ import { CloseOutline } from '@vicons/ionicons5'
 import GrantMatrix from '@/components/GrantMatrix.vue'
 import SecretOnce from '@/components/SecretOnce.vue'
 import VisibilityTable from '@/components/VisibilityTable.vue'
+import { simulationRoute } from '@/lib/simulation'
 import { useWorkspace } from '@/stores/workspace'
 import { run } from '@/api/client'
 import { GenerateUserTokenMutation } from '@/api/ops'
 import { can } from '@/api/session'
-import type { GrantInput } from '@/gql/graphql'
+import type { Action, GrantInput } from '@/gql/graphql'
 
 const props = defineProps<{ name: string }>()
 const { t } = useI18n()
 const ws = useWorkspace()
 const route = useRoute()
 const router = useRouter()
+// A field scope picked in the preview opens it as a single simulation.
+const simulatePick = (who: string, entity: string, action: Action, fields: string[]) =>
+  router.push(simulationRoute({ who, source: 'workspace', entity, action, fields }))
 const dialog = useDialog()
 const message = useMessage()
 const editable = computed(() => can('admin:write'))
@@ -103,7 +107,9 @@ onMounted(() => { if (route.query.token && editable.value && tokenState.value ==
       <template #title><span class="mono">{{ user.name }}</span></template>
       <template #extra>
         <n-space>
-          <n-button size="small" @click="router.push({ name: 'simulate', query: { user: user.name } })">{{ t('users.viewAccess') }}</n-button>
+          <n-button size="small" @click="router.push(simulationRoute({ who: name, source: 'workspace' }))">
+            {{ t('users.viewAccess') }}
+          </n-button>
           <n-button v-if="editable" size="small" type="error" ghost @click="remove">{{ t('users.delete') }}</n-button>
         </n-space>
       </template>
@@ -169,7 +175,8 @@ onMounted(() => { if (route.query.token && editable.value && tokenState.value ==
     </n-card>
 
     <n-card size="small" :title="t('visibility.userTitle')">
-      <visibility-table :who="user.name" :draft="ws.draft" live compact />
+      <visibility-table :who="user.name" :draft="ws.draft" live compact
+        @pick="(e, a, f) => simulatePick(name, e, a, f)" />
     </n-card>
   </n-space>
 </template>

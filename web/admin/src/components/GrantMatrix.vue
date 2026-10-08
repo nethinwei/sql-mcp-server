@@ -168,6 +168,15 @@ const editingFields = computed(() =>
         .map((f) => ({ name: f.name, description: f.description ?? '' }))
     : [],
 )
+// Bulk selection acts on the fields the filter shows (all of them without a filter).
+const fieldTotal = computed(() => (editing.value?.row.entity.fields ?? []).filter((f) => !f.exclude).length)
+function selectShown(list: string[]): string[] {
+  return [...new Set([...list, ...editingFields.value.map((f) => f.name)])]
+}
+function clearShown(list: string[]): string[] {
+  const shown = new Set(editingFields.value.map((f) => f.name))
+  return list.filter((n) => !shown.has(n))
+}
 const editingWrites = computed(() =>
   Boolean(editing.value?.row.grant?.actions.some((a) => a === 'CREATE' || a === 'UPDATE')),
 )
@@ -277,7 +286,16 @@ const editingWrites = computed(() =>
           <n-input v-model:value="fieldFilter" size="small" :placeholder="t('grants.filterFields')" clearable class="field-filter" />
           <n-grid :cols="editingWrites ? 2 : 1" :x-gap="24">
             <n-gi>
-              <n-text strong>{{ t('grants.readable') }}</n-text>
+              <div class="col-head">
+                <n-text strong>{{ t('grants.readable') }}</n-text>
+                <n-text depth="3" class="count">{{ t('grants.selectedCount', { n: draftRead.length, total: fieldTotal }) }}</n-text>
+                <n-button size="tiny" quaternary @click="draftRead = selectShown(draftRead)">
+                  {{ fieldFilter ? t('grants.selectShown') : t('grants.selectAll') }}
+                </n-button>
+                <n-button size="tiny" quaternary @click="draftRead = clearShown(draftRead)">
+                  {{ fieldFilter ? t('grants.clearShown') : t('grants.clearAll') }}
+                </n-button>
+              </div>
               <n-checkbox-group v-model:value="draftRead" class="fieldlist">
                 <n-checkbox v-for="f in editingFields" :key="f.name" :value="f.name">
                   <span class="mono">{{ f.name }}</span>
@@ -286,7 +304,17 @@ const editingWrites = computed(() =>
               </n-checkbox-group>
             </n-gi>
             <n-gi v-if="editingWrites">
-              <n-text strong>{{ t('grants.writable') }}</n-text>
+              <div class="col-head">
+                <n-text strong>{{ t('grants.writable') }}</n-text>
+                <n-text depth="3" class="count">{{ t('grants.selectedCount', { n: draftWrite.length, total: fieldTotal }) }}</n-text>
+                <n-button size="tiny" quaternary @click="draftWrite = selectShown(draftWrite)">
+                  {{ fieldFilter ? t('grants.selectShown') : t('grants.selectAll') }}
+                </n-button>
+                <n-button size="tiny" quaternary @click="draftWrite = clearShown(draftWrite)">
+                  {{ fieldFilter ? t('grants.clearShown') : t('grants.clearAll') }}
+                </n-button>
+                <n-button size="tiny" quaternary @click="draftWrite = [...draftRead]">{{ t('grants.copyReadable') }}</n-button>
+              </div>
               <n-checkbox-group v-model:value="draftWrite" class="fieldlist">
                 <n-checkbox v-for="f in editingFields" :key="f.name" :value="f.name">
                   <span class="mono">{{ f.name }}</span>
@@ -334,5 +362,6 @@ tr.granted td.name .entity { font-weight: 600; }
 .field-filter { margin-bottom: 10px; }
 .fieldlist { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; max-height: 360px; overflow: auto; }
 .field-desc { margin-left: 6px; font-size: 12px; }
+.col-head { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 :global(.editor) { width: 720px; max-width: calc(100vw - 32px); }
 </style>

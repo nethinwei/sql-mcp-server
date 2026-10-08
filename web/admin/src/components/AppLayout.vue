@@ -16,6 +16,7 @@ import ThemeSwitch from './ThemeSwitch.vue'
 import LocaleSwitch from './LocaleSwitch.vue'
 import { useWorkspace } from '@/stores/workspace'
 import { useStatus } from '@/stores/status'
+import { useSettingsEdits } from '@/stores/settingsEdits'
 import { can, logout, session } from '@/api/session'
 import logo from '@/assets/logo.svg'
 
@@ -91,9 +92,27 @@ async function rebase() {
   }
 }
 
+// The workspace is kept in localStorage, but unapplied settings text is not.
+const settingsEdits = useSettingsEdits()
+function onBeforeUnload(e: BeforeUnloadEvent) {
+  if (settingsEdits.pending.length) e.preventDefault()
+}
+
 let timer: number | undefined
 onMounted(async () => {
-  if (!ws.baseId) {
+  window.addEventListener('beforeunload', onBeforeUnload)
+  if (ws.baseId) {
+    try {
+      const moved = await ws.verifyBase()
+      if (moved) {
+        status.conflicts = moved.conflicts
+        status.rebasedOnto = moved.conflicts.length ? moved.id : null
+        message.warning(t('layout.baseReloaded', { id: moved.id }))
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : String(e))
+    }
+  } else {
     try {
       nothingPublished.value = !(await ws.loadPublished())
     } catch (e) {
@@ -105,6 +124,7 @@ onMounted(async () => {
   document.addEventListener('visibilitychange', onVisible)
 })
 onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', onBeforeUnload)
   window.clearInterval(timer)
   document.removeEventListener('visibilitychange', onVisible)
 })

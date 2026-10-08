@@ -1,8 +1,10 @@
 import { defineStore } from 'pinia'
 import { run } from '@/api/client'
-import { PublishedQuery, WorkspaceQuery } from '@/api/ops'
+import { PublishedQuery, RevisionHashQuery, WorkspaceQuery } from '@/api/ops'
+import { filterFields, type Filter } from '@/lib/filter'
 import type {
   Action,
+  FieldInput,
   WorkspaceQuery as WorkspaceResult,
   DraftInput,
   EntityInput,
@@ -27,6 +29,13 @@ interface Sections {
   settings: Record<string, unknown>
 }
 
+/** A place that names one field of an entity. */
+export interface FieldReference {
+  kind: 'role' | 'user' | 'relationship' | 'primaryKey' | 'tenantPolicy'
+  /** The role, user or entity holding the reference. */
+  name: string
+}
+
 export interface Change {
   kind: 'entity' | 'role' | 'user' | 'settings'
   name: string
@@ -42,6 +51,8 @@ interface State extends Sections {
   /** Users that had a token in the base revision. */
   baseTokens: Record<string, boolean>
   baseline: string
+  /** The draft last saved from this workspace and the content it holds. */
+  savedDraft: { id: string; content: string } | null
   loading: boolean
 }
 
@@ -143,6 +154,19 @@ function diffNamed<T extends { name: string }>(kind: Change['kind'], base: T[], 
   return out
 }
 
+/** Item changes from base to now. */
+function changesBetween(base: Sections, now: Sections): Change[] {
+  const out = [
+    ...diffNamed('entity', base.entities, now.entities),
+    ...diffNamed('role', base.roles, now.roles),
+    ...diffNamed('user', base.users, now.users),
+  ]
+  if (JSON.stringify(base.settings) !== JSON.stringify(now.settings)) {
+    out.push({ kind: 'settings', name: 'settings', type: 'modified' })
+  }
+  return out
+}
+
 function dropGrantsOn(grants: GrantInput[] | null | undefined, entity: string): GrantInput[] {
   return (grants ?? []).filter((g) => g.entity !== entity)
 }
@@ -155,6 +179,7 @@ export const useWorkspace = defineStore('workspace', {
     datasources: [],
     baseTokens: {},
     baseline: '',
+    savedDraft: null,
     loading: false,
     entities: [],
     roles: [],
@@ -165,19 +190,14 @@ export const useWorkspace = defineStore('workspace', {
   getters: {
     changes(state): Change[] {
       if (!state.baseline) return []
-      const base = JSON.parse(state.baseline) as Sections
-      const out = [
-        ...diffNamed('entity', base.entities, state.entities),
-        ...diffNamed('role', base.roles, state.roles),
-        ...diffNamed('user', base.users, state.users),
-      ]
-      if (JSON.stringify(base.settings) !== JSON.stringify(state.settings)) {
-        out.push({ kind: 'settings', name: 'settings', type: 'modified' })
-      }
-      return out
+      return changesBetween(JSON.parse(state.baseline) as Sections, sections(state))
     },
     dirty(): boolean {
       return this.changes.length > 0
+    },
+    /** The saved draft holding exactly the unsaved changes, or null. */
+    savedDraftId(state): string | null {
+      return this.dirty && state.savedDraft?.content === canonical(sections(state)) ? state.savedDraft.id : null
     },
     draft(state): DraftInput {
       return {
@@ -196,6 +216,26 @@ export const useWorkspace = defineStore('workspace', {
       roles: state.roles.filter((r) => (r.grants ?? []).some((g) => g.entity === entity)).map((r) => r.name),
       users: state.users.filter((u) => (u.grants ?? []).some((g) => g.entity === entity)).map((u) => u.name),
     }),
+    /** Where roles, users and entities name a field of entity. */
+    fieldReferences: (state) => (entity: string, field: string): FieldReference[] => {
+      const out: FieldReference[] = []
+      const inGrant = (g: GrantInput) => g.entity === entity && (
+        (g.readFields ?? []).includes(field) || (g.writeFields ?? []).includes(field) ||
+        filterFields(g.rows as Filter | undefined).includes(field))
+      for (const r of state.roles) if ((r.grants ?? []).some(inGrant)) out.push({ kind: 'role', name: r.name })
+      for (const u of state.users) if ((u.grants ?? []).some(inGrant)) out.push({ kind: 'user', name: u.name })
+      for (const e of state.entities) {
+        const joins = (e.relationships ?? []).some((rel) => {
+          const on = (rel.joinOn ?? {}) as Record<string, string>
+          return (e.name === entity && field in on) || (rel.target === entity && Object.values(on).includes(field))
+        })
+        if (joins) out.push({ kind: 'relationship', name: e.name })
+        if (e.name !== entity) continue
+        if ((e.primaryKey ?? []).includes(field)) out.push({ kind: 'primaryKey', name: e.name })
+        if (filterFields(e.tenantPolicy as Filter | undefined).includes(field)) out.push({ kind: 'tenantPolicy', name: e.name })
+      }
+      return out
+    },
     hasToken: (state) => (user: UserInput) =>
       user.tokenHash != null ? user.tokenHash !== '' : Boolean(state.baseTokens[user.name]),
   },
@@ -218,19 +258,24 @@ export const useWorkspace = defineStore('workspace', {
      * workspace changed differently: the local value wins, and reverting the
      * item takes id's version.
      */
-    async rebase(id: string): Promise<Change[]> {
+    async rebase(id: string, from?: string): Promise<Change[]> {
       this.loading = true
       try {
-        return this.rebaseOnto(await run(WorkspaceQuery, { id }), id)
+        return this.rebaseOnto(await run(WorkspaceQuery, { id }), id, from)
       } finally {
         this.loading = false
       }
     },
 
-    rebaseOnto(data: WorkspaceResult, id: string): Change[] {
-      const oldBase = JSON.parse(this.baseline) as Sections
+    /**
+     * from (a snapshot's sections) replaces the baseline as the point the
+     * local edits are measured from: after publishing a snapshot, only edits
+     * made since it, including undoing part of it, are re-applied.
+     */
+    rebaseOnto(data: WorkspaceResult, id: string, from?: string): Change[] {
+      const oldBase = JSON.parse(from ?? this.baseline) as Sections
       const local = JSON.parse(JSON.stringify(sections(this.$state))) as Sections
-      const changes = this.changes
+      const changes = changesBetween(oldBase, local)
       this.apply(data, id)
       const newBase = JSON.parse(this.baseline) as Sections
       const conflicts: Change[] = []
@@ -277,6 +322,23 @@ export const useWorkspace = defineStore('workspace', {
       }))
       this.settings = { ...(cfg.settings as Record<string, unknown>) }
       this.baseline = JSON.stringify(sections(this.$state))
+      this.savedDraft = null
+      this.persist()
+    },
+
+    /**
+     * A copy of the workspace to submit, with its content key. Saving binds
+     * the draft id to this content, so edits made while the request is in
+     * flight stay unsaved.
+     */
+    snapshot(): { draft: DraftInput; content: string; sections: string } {
+      const draft = JSON.parse(JSON.stringify(this.draft)) as DraftInput
+      return { draft, content: canonical(sections(this.$state)), sections: JSON.stringify(sections(this.$state)) }
+    },
+
+    /** Records that draft id holds content (from snapshot). */
+    markDraftSaved(id: string, content: string) {
+      this.savedDraft = { id, content }
       this.persist()
     },
 
@@ -286,6 +348,26 @@ export const useWorkspace = defineStore('workspace', {
       if (!data.published) return false
       await this.load(data.published.id)
       return true
+    },
+
+    /**
+     * Checks a restored workspace against the server: when its base revision
+     * no longer exists or holds other content (the store was replaced), the
+     * base is reloaded, re-applying unsaved changes onto it. Returns the
+     * revision the workspace was moved onto and the conflicting changes, or
+     * null when the base is current.
+     */
+    async verifyBase(): Promise<{ id: string; conflicts: Change[] } | null> {
+      if (!this.baseId) return null
+      const { revision } = await run(RevisionHashQuery, { id: this.baseId })
+      if (revision?.contentHash === this.baseHash) return null
+      const target = revision?.id ?? (await run(PublishedQuery, {})).published?.id
+      if (!target) return null
+      if (!this.dirty) {
+        await this.load(target)
+        return { id: target, conflicts: [] }
+      }
+      return { id: target, conflicts: await this.rebase(target) }
     },
 
     /** Restores a persisted workspace, if any. */
@@ -405,6 +487,28 @@ export const useWorkspace = defineStore('workspace', {
           other.relationships = other.relationships.filter((rel) => rel.target !== name)
         }
       }
+      this.persist()
+    },
+
+    /**
+     * Adds and removes fields of an entity. Removed fields also leave the
+     * read and write lists of grants on it; relationships, the primary key,
+     * row scopes and the tenant policy that name them are left for the
+     * caller to show (see fieldReferences), since the server rejects them.
+     */
+    syncFields(entity: string, added: FieldInput[], removed: string[]) {
+      const e = this.entity(entity)
+      if (!e) return
+      const gone = new Set(removed)
+      const fields = (e.fields ?? []).filter((f) => !gone.has(f.name))
+      this.upsertEntity({ ...e, fields: [...fields, ...added.filter((f) => !fields.some((x) => x.name === f.name))] })
+      const prune = (g: GrantInput) => (g.entity !== entity ? g : {
+        ...g,
+        readFields: (g.readFields ?? []).filter((f) => !gone.has(f)),
+        writeFields: (g.writeFields ?? []).filter((f) => !gone.has(f)),
+      })
+      for (const r of this.roles) r.grants = (r.grants ?? []).map(prune)
+      for (const u of this.users) u.grants = (u.grants ?? []).map(prune)
       this.persist()
     },
 

@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, h, ref } from 'vue'
+import { computed, h, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   NAlert, NButton, NCard, NCheckbox, NCheckboxGroup, NDataTable, NEmpty, NForm, NFormItem, NGrid, NGi, NInput,
-  NModal, NSelect, NSpace, NTag, NText, NTooltip, useMessage, type DataTableColumns, type DataTableRowKey,
+  NModal, NSelect, NSpace, NSwitch, NTag, NText, NTooltip, useMessage, type DataTableColumns, type DataTableRowKey,
 } from 'naive-ui'
 import { useWorkspace, toEntityInput } from '@/stores/workspace'
 import { run } from '@/api/client'
@@ -19,46 +19,64 @@ type Status = { label: string; type: 'success' | 'info' | 'warning' | 'default';
 const { t } = useI18n()
 const ws = useWorkspace()
 const message = useMessage()
+// Each datasource keeps its own scan: schemas, results, search and selection,
+// so switching back and forth loses nothing, and a scan that returns after
+// switching fills in its own datasource only.
+interface Scan {
+  schemas: string
+  tables: Table[]
+  defaultSchema: string | null
+  scanned: boolean
+  scanning: boolean
+  checked: DataTableRowKey[]
+  search: string
+  /** Bumped per request; a response for an older request is dropped. */
+  seq: number
+}
+const scans = reactive<Record<string, Scan>>({})
+function scanOf(ds: string): Scan {
+  scans[ds] ??= {
+    schemas: '', tables: [], defaultSchema: null, scanned: false, scanning: false, checked: [], search: '', seq: 0,
+  }
+  return scans[ds]
+}
 const selectedDs = ref<string | null>(ws.datasources[0]?.name ?? null)
-const schemas = ref('')
-const tables = ref<Table[]>([])
-const defaultSchema = ref<string | null>(null)
-const scanning = ref(false)
-const scanned = ref(false)
-const checked = ref<DataTableRowKey[]>([])
-const search = ref('')
+if (selectedDs.value) scanOf(selectedDs.value)
+const cur = computed(() => (selectedDs.value ? scans[selectedDs.value] : undefined))
 const entityCount = (ds: string) => {
   const n = ws.entities.filter((e) => (e.datasource ?? 'default') === ds).length
   return t('datasources.entityCount', { count: n }, n)
 }
 
 function selectDatasource(name: string) {
+  scanOf(name)
   selectedDs.value = name
-  scanned.value = false
-  tables.value = []
-  checked.value = []
 }
 
 async function scan() {
-  if (!selectedDs.value) return
-  scanning.value = true
+  const ds = selectedDs.value
+  if (!ds) return
+  const s = scanOf(ds)
+  const mine = ++s.seq
+  s.scanning = true
   try {
-    const list = schemas.value.split(',').map((s) => s.trim()).filter(Boolean)
-    const data = await run(SchemaImportQuery, { datasource: selectedDs.value, schemas: list.length ? list : null })
-    tables.value = data.schemaImport.tables
-    defaultSchema.value = data.schemaImport.defaultSchema ?? null
-    scanned.value = true
-    checked.value = []
+    const list = s.schemas.split(',').map((x) => x.trim()).filter(Boolean)
+    const data = await run(SchemaImportQuery, { datasource: ds, schemas: list.length ? list : null })
+    if (mine !== s.seq) return
+    s.tables = data.schemaImport.tables
+    s.defaultSchema = data.schemaImport.defaultSchema ?? null
+    s.scanned = true
+    s.checked = []
   } catch (e) {
-    message.error(e instanceof Error ? e.message : String(e))
+    if (mine === s.seq) message.error(e instanceof Error ? e.message : String(e))
   } finally {
-    scanning.value = false
+    if (mine === s.seq) s.scanning = false
   }
 }
 
 const key = (tb: Table) => `${tb.schema}.${tb.table}`
 const inWorkspace = (tb: Table) =>
-  ws.entities.find((e) => readsTable(e, selectedDs.value ?? '', tb, tables.value, defaultSchema.value))
+  ws.entities.find((e) => readsTable(e, selectedDs.value ?? '', tb, cur.value?.tables ?? [], cur.value?.defaultSchema))
 
 /** Status of a table against the workspace (not just the published config). */
 function status(tb: Table): Status {
@@ -76,8 +94,8 @@ function status(tb: Table): Status {
 }
 
 const visible = computed(() => {
-  const q = search.value.trim().toLowerCase()
-  return tables.value.filter((tb) => !q || tb.table.toLowerCase().includes(q) || tb.description.toLowerCase().includes(q))
+  const q = (cur.value?.search ?? '').trim().toLowerCase()
+  return (cur.value?.tables ?? []).filter((tb) => !q || tb.table.toLowerCase().includes(q) || tb.description.toLowerCase().includes(q))
 })
 
 type Column = Table['columns'][number]
@@ -146,7 +164,7 @@ const columns = computed<DataTableColumns<Table>>(() => [
   {
     title: '', key: 'action', width: 110,
     render: (tb) => status(tb).drift && can('admin:write')
-      ? h(NButton, { size: 'tiny', onClick: () => syncFields(tb) }, () => t('datasources.syncFields'))
+      ? h(NButton, { size: 'tiny', onClick: () => openSync(tb) }, () => t('datasources.syncFields'))
       : null,
   },
 ])
@@ -169,11 +187,13 @@ function openImport() {
 }
 
 function addSelected() {
-  const chosen = tables.value.filter((tb) => checked.value.includes(key(tb)))
+  const s = cur.value
+  if (!s) return
+  const chosen = s.tables.filter((tb) => s.checked.includes(key(tb)))
   const candidates = uniqueCandidates(chosen.map((tb) => toEntityInput(tb.candidate)), ws.entities.map((e) => e.name))
   const added = candidates.map((e) => e.name)
   const dropped = ws.importEntities(candidates, grantRoles.value, grantActions.value)
-  checked.value = []
+  s.checked = []
   importing.value = false
   const note = dropped ? t('datasources.droppedNote', { dropped }) : ''
   message.success(grantRoles.value.length
@@ -183,13 +203,46 @@ function addSelected() {
       : t('datasources.added', { count: chosen.length }, chosen.length))
 }
 
-function syncFields(tb: Table) {
+// Field sync: a preview of the columns to add and the fields to remove, with
+// what references each removed field, applied item by item.
+interface SyncPlan {
+  entity: string
+  added: Table['columns']
+  removed: string[]
+}
+const syncing = ref<SyncPlan | null>(null)
+const syncOpen = ref(false)
+const syncAdd = ref<string[]>([])
+const syncRemove = ref<string[]>([])
+const hideNew = ref(false)
+
+function openSync(tb: Table) {
   const e = inWorkspace(tb)
   if (!e) return
-  const existing = new Map((e.fields ?? []).map((f) => [f.name, f]))
-  const fields = tb.columns.map((c) => existing.get(c.name) ?? { name: c.name, description: c.description })
-  ws.upsertEntity({ ...e, fields })
-  message.success(t('datasources.synced', { name: e.name }))
+  const declared = new Set((e.fields ?? []).map((f) => f.name))
+  const plan: SyncPlan = {
+    entity: e.name,
+    added: tb.columns.filter((c) => !declared.has(c.name)),
+    removed: [...declared].filter((n) => !tb.columns.some((c) => c.name === n)),
+  }
+  syncing.value = plan
+  syncAdd.value = plan.added.map((c) => c.name)
+  syncRemove.value = [...plan.removed]
+  hideNew.value = false
+  syncOpen.value = true
+}
+
+/** References of a field to remove; grant field lists follow automatically. */
+const references = (field: string) => (syncing.value ? ws.fieldReferences(syncing.value.entity, field) : [])
+
+function applySync() {
+  const plan = syncing.value
+  if (!plan) return
+  const added = plan.added.filter((c) => syncAdd.value.includes(c.name))
+    .map((c) => (hideNew.value ? { name: c.name, exclude: true } : { name: c.name }))
+  ws.syncFields(plan.entity, added, syncRemove.value)
+  syncOpen.value = false
+  message.success(t('datasources.synced', { name: plan.entity, added: added.length, removed: syncRemove.value.length }))
 }
 </script>
 
@@ -211,30 +264,71 @@ function syncFields(tb: Table) {
     </n-grid>
     <n-alert type="default" :show-icon="false">{{ t('datasources.cliOnly') }}</n-alert>
 
-    <n-card v-if="selectedDs" size="small" :title="t('datasources.importTitle', { name: selectedDs })">
+    <n-card v-if="selectedDs && cur" size="small" :title="t('datasources.importTitle', { name: selectedDs })">
       <template #header-extra>
         <n-space :wrap="false">
-          <n-input v-model:value="schemas" size="small" :placeholder="t('datasources.schemas')" class="schemas" />
-          <n-button size="small" type="primary" :loading="scanning" :disabled="!can('admin:write')" @click="scan">
-            {{ scanned ? t('datasources.rescan') : t('datasources.scan') }}
+          <n-input v-model:value="cur.schemas" size="small" :placeholder="t('datasources.schemas')" class="schemas" />
+          <n-button size="small" type="primary" :loading="cur.scanning" :disabled="!can('admin:write')" @click="scan">
+            {{ cur.scanned ? t('datasources.rescan') : t('datasources.scan') }}
           </n-button>
         </n-space>
       </template>
-      <n-empty v-if="!scanned" :description="t('datasources.scanHint')" />
+      <n-empty v-if="!cur.scanned" :description="t('datasources.scanHint')" />
       <template v-else>
         <div class="toolbar">
-          <n-input v-model:value="search" size="small" :placeholder="t('datasources.searchTables')" clearable class="search" />
-          <n-button type="primary" size="small" :disabled="!checked.length" @click="openImport">
-            {{ t('datasources.addSelected', { count: checked.length }) }}
+          <n-input v-model:value="cur.search" size="small" :placeholder="t('datasources.searchTables')" clearable class="search" />
+          <n-button type="primary" size="small" :disabled="!cur.checked.length" @click="openImport">
+            {{ t('datasources.addSelected', { count: cur.checked.length }) }}
           </n-button>
         </div>
-        <n-data-table v-model:checked-row-keys="checked" :columns="columns" :data="visible" :row-key="key"
+        <n-data-table v-model:checked-row-keys="cur.checked" :columns="columns" :data="visible" :row-key="key"
           size="small" :max-height="560" />
       </template>
     </n-card>
 
+    <n-modal v-model:show="syncOpen" preset="card" class="dialog" :title="t('datasources.syncTitle', { name: syncing?.entity ?? '' })">
+      <template v-if="syncing">
+        <n-space vertical :size="14">
+          <div v-if="syncing.added.length">
+            <n-text strong>{{ t('datasources.syncAdded', { n: syncing.added.length }) }}</n-text>
+            <n-checkbox-group v-model:value="syncAdd" class="sync-list">
+              <n-checkbox v-for="c in syncing.added" :key="c.name" :value="c.name">
+                <span class="mono">{{ c.name }}</span>
+                <n-text depth="3" class="sync-meta">{{ c.type }}{{ c.description ? ' · ' + c.description : '' }}</n-text>
+              </n-checkbox>
+            </n-checkbox-group>
+            <div class="sync-switch">
+              <n-switch v-model:value="hideNew" size="small" />
+              <n-text class="sync-meta">{{ t('datasources.syncHideNew') }}</n-text>
+            </div>
+          </div>
+          <div v-if="syncing.removed.length">
+            <n-text strong>{{ t('datasources.syncRemoved', { n: syncing.removed.length }) }}</n-text>
+            <n-checkbox-group v-model:value="syncRemove" class="sync-list">
+              <n-checkbox v-for="f in syncing.removed" :key="f" :value="f">
+                <span class="mono">{{ f }}</span>
+                <n-tag v-for="r in references(f)" :key="r.kind + r.name" size="tiny" :bordered="false" class="ref"
+                  :type="r.kind === 'role' || r.kind === 'user' ? 'default' : 'warning'">
+                  {{ t(`datasources.ref.${r.kind}`, { name: r.name }) }}
+                </n-tag>
+              </n-checkbox>
+            </n-checkbox-group>
+            <n-text depth="3" class="sync-meta">{{ t('datasources.syncRefsHint') }}</n-text>
+          </div>
+        </n-space>
+      </template>
+      <template #footer>
+        <n-space justify="end">
+          <n-button @click="syncOpen = false">{{ t('common.cancel') }}</n-button>
+          <n-button type="primary" :disabled="!syncAdd.length && !syncRemove.length" @click="applySync">
+            {{ t('datasources.syncApply', { added: syncAdd.length, removed: syncRemove.length }) }}
+          </n-button>
+        </n-space>
+      </template>
+    </n-modal>
+
     <n-modal v-model:show="importing" preset="card" class="dialog"
-      :title="t('datasources.importDialog', { count: checked.length }, checked.length)">
+      :title="t('datasources.importDialog', { count: cur?.checked.length ?? 0 }, cur?.checked.length ?? 0)">
       <n-form label-placement="top">
         <n-form-item :label="t('datasources.grantRoles')" :feedback="roleError ?? ''"
           :validation-status="roleError ? 'error' : undefined">
@@ -271,6 +365,10 @@ function syncFields(tb: Table) {
 .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
 .search { width: 240px; }
 .grant-hint { font-size: 13px; }
+.sync-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; max-height: 260px; overflow: auto; }
+.sync-meta { margin-left: 6px; font-size: 12px; }
+.sync-switch { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
+.ref { margin-left: 6px; }
 :deep(.cols) { margin: 2px 0 2px 36px; width: auto; }
 :deep(.strong) { font-weight: 600; }
 :deep(.schema) { margin-left: 6px; font-size: 12px; }

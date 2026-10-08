@@ -7,15 +7,19 @@ import {
 } from 'naive-ui'
 import GrantMatrix from '@/components/GrantMatrix.vue'
 import VisibilityTable from '@/components/VisibilityTable.vue'
+import { simulationRoute } from '@/lib/simulation'
 import { useWorkspace } from '@/stores/workspace'
 import { nameError } from '@/lib/names'
 import { can } from '@/api/session'
-import type { GrantInput } from '@/gql/graphql'
+import type { Action, GrantInput } from '@/gql/graphql'
 
 const props = defineProps<{ name: string }>()
 const { t } = useI18n()
 const ws = useWorkspace()
 const router = useRouter()
+// A field scope picked in the preview opens it as a single simulation.
+const simulatePick = (who: string, entity: string, action: Action, fields: string[]) =>
+  router.push(simulationRoute({ who, source: 'workspace', entity, action, fields }))
 const dialog = useDialog()
 const editable = computed(() => can('admin:write'))
 
@@ -104,7 +108,8 @@ function remove() {
           <n-select v-model:value="previewAs" size="small" :options="previewOptions" class="preview-as" />
         </n-space>
       </template>
-      <visibility-table :who="previewAs" :draft="ws.draft" live compact />
+      <visibility-table :who="previewAs" :draft="ws.draft" live compact
+        @pick="(e, a, f) => simulatePick(previewAs, e, a, f)" />
     </n-card>
 
     <n-modal v-model:show="renaming" preset="card" :title="t('roles.renameTitle')" class="dialog">

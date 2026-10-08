@@ -55,6 +55,10 @@ export const RevisionsQuery = graphql(`
   query Revisions($limit: Int) { revisions(limit: $limit) { ...RevisionParts } }
 `)
 
+export const RevisionHashQuery = graphql(`
+  query RevisionHash($id: ID!) { revision(id: $id) { id contentHash } }
+`)
+
 export const RevisionYamlQuery = graphql(`
   query RevisionYaml($id: ID!) { revision(id: $id) { id yaml } }
 `)

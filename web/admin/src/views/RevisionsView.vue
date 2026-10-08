@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useQuery } from '@urql/vue'
+import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
   NButton, NCard, NCode, NDescriptions, NDescriptionsItem, NEmpty, NGrid, NGi, NSpace, NSpin, NTabPane, NTabs,
@@ -21,7 +22,9 @@ const message = useMessage()
 const list = useQuery({ query: RevisionsQuery, variables: { limit: 100 } })
 const revisions = computed(() => list.data.value?.revisions ?? [])
 const published = computed(() => revisions.value.find((r) => r.state === 'PUBLISHED'))
-const selectedId = ref<string | null>(null)
+// ?id= opens a revision directly, e.g. a draft just saved at review.
+const route = useRoute()
+const selectedId = ref<string | null>(typeof route.query.id === 'string' ? route.query.id : null)
 const selected = computed(() => revisions.value.find((r) => r.id === selectedId.value) ?? revisions.value[0])
 
 const stateType: Record<string, 'success' | 'default' | 'warning' | 'info'> = {

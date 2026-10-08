@@ -190,3 +190,114 @@ describe('workspace', () => {
     expect(ws.draft.entities).toHaveLength(2)
   })
 })
+
+describe('saved drafts', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  it('reports the draft only while the workspace still holds its content', () => {
+    const ws = seeded()
+    ws.role('analyst')!.description = 'changed'
+    expect(ws.savedDraftId).toBeNull()
+    ws.markDraftSaved('7', ws.snapshot().content)
+    expect(ws.savedDraftId).toBe('7')
+    ws.role('analyst')!.description = 'changed again'
+    expect(ws.savedDraftId).toBeNull()
+    ws.role('analyst')!.description = 'changed'
+    expect(ws.savedDraftId).toBe('7')
+  })
+})
+
+describe('saving while editing', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  it('binds the draft to the submitted content, not to edits made meanwhile', () => {
+    const ws = seeded()
+    ws.role('analyst')!.description = 'A'
+    const snap = ws.snapshot()
+    ws.role('analyst')!.description = 'B'
+    expect(snap.draft.roles![0].description).toBe('A')
+    ws.markDraftSaved('8', snap.content)
+    expect(ws.savedDraftId).toBeNull()
+    ws.role('analyst')!.description = 'A'
+    expect(ws.savedDraftId).toBe('8')
+  })
+})
+
+describe('publishing while editing', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  it('keeps an undo made while the publish ran', () => {
+    const ws = useWorkspace()
+    const rev = (id: string) => loaded(id, {
+      entities: ['orders'], roles: [{ name: 'analyst', grants: [{ entity: 'orders', actions: ['READ'] }] }], users: [],
+    })
+    ws.apply(rev('3'), '3')
+    ws.role('analyst')!.description = 'B'
+    const snap = ws.snapshot()
+    ws.role('analyst')!.description = undefined
+    const published = rev('4')
+    ;(published.revision!.config.roles[0] as { description?: string }).description = 'B'
+
+    const conflicts = ws.rebaseOnto(published, '4', snap.sections)
+    expect(conflicts).toEqual([])
+    expect(ws.baseId).toBe('4')
+    expect(ws.role('analyst')!.description).toBeUndefined()
+    expect(ws.changes).toEqual([{ kind: 'role', name: 'analyst', type: 'modified' }])
+  })
+
+  it('is clean after publishing without edits, and keeps edits made meanwhile', () => {
+    const rev = (id: string, description?: string) => {
+      const data = loaded(id, {
+        entities: ['orders'], roles: [{ name: 'analyst', grants: [{ entity: 'orders', actions: ['READ'] }] }], users: [],
+      })
+      ;(data.revision!.config.roles[0] as { description?: string }).description = description
+      return data
+    }
+    const ws = useWorkspace()
+    ws.apply(rev('3'), '3')
+    ws.role('analyst')!.description = 'B'
+    let snap = ws.snapshot()
+    ws.rebaseOnto(rev('4', 'B'), '4', snap.sections)
+    expect(ws.dirty).toBe(false)
+
+    ws.role('analyst')!.description = 'C'
+    snap = ws.snapshot()
+    ws.upsertEntity({ name: 'refunds' })
+    ws.rebaseOnto(rev('5', 'C'), '5', snap.sections)
+    expect(ws.role('analyst')!.description).toBe('C')
+    expect(ws.changes).toEqual([{ kind: 'entity', name: 'refunds', type: 'added' }])
+  })
+
+  it('measures from the baseline without a snapshot', () => {
+    const ws = seeded()
+    ws.role('analyst')!.description = 'mine'
+    expect(ws.changes).toEqual([{ kind: 'role', name: 'analyst', type: 'modified' }])
+  })
+})
+
+describe('fields', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  it('lists where a field is named', () => {
+    const ws = seeded()
+    ws.upsertEntity({ name: 'orders', primaryKey: ['id'], fields: [{ name: 'id' }, { name: 'customer_id' }],
+      relationships: [{ name: 'customer', target: 'customers', cardinality: 'belongs-to', joinOn: { customer_id: 'id' } }] })
+    ws.upsertRole({ name: 'analyst', grants: [{ entity: 'orders', actions: ['READ'], fieldsRestricted: true,
+      readFields: ['id'], writeFields: [], rows: { op: 'gt', field: 'customer_id', value: 0 } }] })
+    expect(ws.fieldReferences('orders', 'customer_id').map((r) => `${r.kind}:${r.name}`))
+      .toEqual(['role:analyst', 'relationship:orders'])
+    expect(ws.fieldReferences('orders', 'id').map((r) => `${r.kind}:${r.name}`))
+      .toEqual(['role:analyst', 'primaryKey:orders'])
+    expect(ws.fieldReferences('customers', 'id').map((r) => `${r.kind}:${r.name}`)).toEqual(['relationship:orders'])
+  })
+
+  it('adds and removes fields and prunes grant field lists', () => {
+    const ws = seeded()
+    ws.upsertRole({ name: 'analyst', grants: [{ entity: 'orders', actions: ['READ'], fieldsRestricted: true,
+      readFields: ['id', 'gone'], writeFields: ['gone'] }] })
+    ws.upsertEntity({ name: 'orders', fields: [{ name: 'id' }, { name: 'gone' }] })
+    ws.syncFields('orders', [{ name: 'region', exclude: true }], ['gone'])
+    expect(ws.entity('orders')!.fields).toEqual([{ name: 'id' }, { name: 'region', exclude: true }])
+    expect(ws.role('analyst')!.grants![0]).toMatchObject({ readFields: ['id'], writeFields: [] })
+  })
+})

@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { NBadge, NButton, NEmpty, NIcon, NList, NListItem, NPopover, NSpace, NTag, NText, useDialog } from 'naive-ui'
+import { NButton, NEmpty, NIcon, NList, NListItem, NPopover, NSpace, NTag, NText, useDialog } from 'naive-ui'
 import { ArrowUndoOutline } from '@vicons/ionicons5'
 import { useWorkspace, type Change } from '@/stores/workspace'
 import { can } from '@/api/session'
@@ -24,6 +24,13 @@ const routeFor = (c: Change) =>
 const displayName = (c: Change) => (c.kind === 'settings' ? t('changes.settingsName') : c.name)
 
 const count = computed(() => ws.changes.length)
+// Where the edits are: only in this browser, saved as a draft revision, or
+// nothing pending (the runtime badge then tells what the server applies).
+const state = computed(() => ws.savedDraftId
+  ? { type: 'info' as const, label: t('changes.draftSaved', { id: ws.savedDraftId }) }
+  : count.value
+    ? { type: 'warning' as const, label: t('changes.unsavedCount', { count: count.value }, count.value) }
+    : { type: 'default' as const, label: ws.baseId ? t('changes.inSyncWith', { id: ws.baseId }) : t('changes.none') })
 
 function discard() {
   dialog.warning({
@@ -40,14 +47,13 @@ function discard() {
   <n-space align="center" :size="10" :wrap="false">
     <n-popover trigger="click" placement="bottom-end" :width="360">
       <template #trigger>
-        <n-badge :value="count" :max="99" :show="count > 0">
-          <n-button size="small" :type="count ? 'warning' : 'default'" secondary>
-            {{ count ? t('changes.unsaved') : t('changes.none') }}
-          </n-button>
-        </n-badge>
+        <n-button size="small" :type="state.type" secondary>{{ state.label }}</n-button>
       </template>
       <n-empty v-if="!count" :description="t('changes.inSync')" size="small" />
       <template v-else>
+        <n-text depth="3" class="where">
+          {{ ws.savedDraftId ? t('changes.whereDraft', { id: ws.savedDraftId }) : t('changes.whereLocal') }}
+        </n-text>
         <n-list hoverable clickable :show-divider="false" class="list">
           <n-list-item v-for="c in ws.changes" :key="c.kind + c.name"
             @click="routeFor(c) && router.push(routeFor(c)!)">
@@ -65,6 +71,8 @@ function discard() {
           </n-list-item>
         </n-list>
         <n-space justify="end" style="margin-top: 8px">
+          <n-button v-if="ws.savedDraftId" size="small" quaternary
+            @click="router.push({ name: 'revisions', query: { id: ws.savedDraftId } })">{{ t('review.viewDraft') }}</n-button>
           <n-button size="small" quaternary type="error" @click="discard">{{ t('changes.discardAll') }}</n-button>
         </n-space>
       </template>
@@ -78,5 +86,6 @@ function discard() {
 
 <style scoped>
 .list { max-height: 360px; overflow: auto; }
+.where { display: block; font-size: 12px; margin-bottom: 6px; }
 .item { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 </style>
