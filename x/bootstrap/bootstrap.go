@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -39,20 +40,26 @@ type Provider = coreprovider.Provider
 
 // App is the assembled application, ready to serve.
 type App struct {
-	Provider    Provider
+	Provider Provider
+	// Providers holds each datasource's read connection, which also serves
+	// introspection and EXPLAIN; Connections holds every connection.
 	Providers   map[string]Provider
-	Prepared    map[string]*store.PreparedDB
-	Sources     map[string]tool.DataSource
-	Dialect     dialect.Dialect
-	Registry    *entity.Registry
-	Authorizer  rbac.Authorizer
-	Masker      mask.Masker
-	Gate        cost.Gate
-	Engine      *engine.Engine
-	Tools       *tool.Registry
-	ToolFlags   config.ToolFlags
-	DefaultRole string
-	DefaultUser string
+	Connections Connections
+	// Capabilities are what the routed connections may do per entity action,
+	// as the databases reported when the App was assembled.
+	Capabilities EntityCapabilities
+	Prepared     map[string]*store.PreparedDB
+	Sources      map[string]tool.DataSource
+	Dialect      dialect.Dialect
+	Registry     *entity.Registry
+	Authorizer   rbac.Authorizer
+	Masker       mask.Masker
+	Gate         cost.Gate
+	Engine       *engine.Engine
+	Tools        *tool.Registry
+	ToolFlags    config.ToolFlags
+	DefaultRole  string
+	DefaultUser  string
 	// Users maps an enabled user name to its identity; UserTokens maps a
 	// tokenHash to the user name. Both follow the snapshot on reload.
 	Users        map[string]UserIdentity
@@ -65,6 +72,7 @@ type App struct {
 	Analyze      cost.AnalyzePolicy
 	Budget       *budget.MemoryManager
 	Transactions *tool.TransactionManager
+	Writes       *tool.WriteTracker
 	TxBeginners  map[string]store.TxBeginner
 	closeMu      sync.Mutex
 	closed       bool
@@ -89,6 +97,7 @@ func (a *App) ToolContext(role string) tool.Context {
 		Analyze:      a.Analyze,
 		Sources:      a.Sources,
 		Transactions: a.Transactions,
+		Writes:       a.Writes,
 		TxBeginners:  a.TxBeginners,
 	}
 	if a.Budget != nil { // a nil *MemoryManager must stay a nil interface
@@ -136,13 +145,8 @@ func (a *App) CloseContext(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
-	for _, provider := range a.Providers {
+	for _, provider := range a.allProviders() {
 		if err := provider.Close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	if len(a.Providers) == 0 && a.Provider != nil {
-		if err := a.Provider.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -161,11 +165,7 @@ func (a *App) Close() error {
 // the provider's native connection ping when exposed and falls back to a
 // trivial query otherwise.
 func (a *App) Ping(ctx context.Context) error {
-	providers := a.Providers
-	if len(providers) == 0 && a.Provider != nil {
-		providers = map[string]Provider{"default": a.Provider}
-	}
-	for name, p := range providers {
+	for name, p := range a.namedProviders() {
 		if err := pingProvider(ctx, p); err != nil {
 			return fmt.Errorf("bootstrap: database %q not ready: %w", name, err)
 		}
@@ -176,6 +176,42 @@ func (a *App) Ping(ctx context.Context) error {
 // poolExposer is a provider backed by a database/sql pool, which bootstrap
 // sizes (configurePool) and pings natively (pingProvider).
 type poolExposer interface{ DB() *sql.DB }
+
+// namedProviders lists every distinct provider by datasource (and
+// connection, when a datasource has several).
+func (a *App) namedProviders() map[string]Provider {
+	out := map[string]Provider{}
+	seen := map[Provider]bool{}
+	add := func(name string, p Provider) {
+		if p == nil {
+			return
+		}
+		if comparable := reflect.TypeOf(p).Comparable(); comparable && seen[p] {
+			return
+		} else if comparable {
+			seen[p] = true
+		}
+		out[name] = p
+	}
+	for datasource, byName := range a.Connections {
+		for connection, p := range byName {
+			add(datasource+"/"+connection, p)
+		}
+	}
+	for datasource, p := range a.Providers {
+		add(datasource, p)
+	}
+	add("default", a.Provider)
+	return out
+}
+
+func (a *App) allProviders() []Provider {
+	out := make([]Provider, 0)
+	for _, p := range a.namedProviders() {
+		out = append(out, p)
+	}
+	return out
+}
 
 func pingProvider(ctx context.Context, p Provider) error {
 	if native, ok := p.(poolExposer); ok {
@@ -208,8 +244,10 @@ func ValidateFile(path string, resolver SecretResolver) error {
 		resolver = EnvFileResolver{AllowedRoots: cfg.Server.Secrets.AllowedRoots}
 	}
 	for name, database := range cfg.Databases {
-		if _, err := resolver.Resolve(database.DSN); err != nil {
-			return fmt.Errorf("database %q: %w", name, err)
+		for connection, c := range database.ConnectionsOrDSN() {
+			if _, err := resolver.Resolve(c.DSN); err != nil {
+				return fmt.Errorf("database %q connection %q: %w", name, connection, err)
+			}
 		}
 	}
 	return nil
@@ -229,32 +267,59 @@ func AssembleWithResolver(cfg *config.Config, r SecretResolver) (*App, error) {
 	if len(cfg.Databases) == 0 {
 		return nil, errors.New("assemble: no database configured")
 	}
-	providers := make(map[string]Provider, len(cfg.Databases))
-	for name, database := range cfg.Databases {
-		dsn, err := r.Resolve(database.DSN)
-		if err != nil {
-			closeProviders(providers)
-			return nil, err
-		}
-		provider, err := providerregistry.New(database.Driver, dsn, cfg.Cost.QueryTimeout)
-		if err != nil {
-			closeProviders(providers)
-			return nil, err
-		}
-		providers[name] = provider
-	}
-	app, err := AssembleWithProviders(cfg, providers)
+	connections, err := openConnections(cfg, r)
 	if err != nil {
-		closeProviders(providers)
+		return nil, err
+	}
+	app, err := AssembleWithConnections(cfg, connections)
+	if err != nil {
+		closeConnections(connections)
 		return nil, err
 	}
 	return app, nil
+}
+
+// openConnections opens every connection of every database.
+func openConnections(cfg *config.Config, r SecretResolver) (Connections, error) {
+	connections := make(Connections, len(cfg.Databases))
+	for name, database := range cfg.Databases {
+		connections[name] = map[string]Provider{}
+		for connection, c := range database.ConnectionsOrDSN() {
+			dsn, err := r.Resolve(c.DSN)
+			if err != nil {
+				closeConnections(connections)
+				return nil, fmt.Errorf("database %q connection %q: %w", name, connection, err)
+			}
+			provider, err := providerregistry.New(database.Driver, dsn,
+				providerregistry.Options{Timeout: cfg.Cost.QueryTimeout, Pooler: c.Pooler})
+			if err != nil {
+				closeConnections(connections)
+				return nil, fmt.Errorf("database %q connection %q: %w", name, connection, err)
+			}
+			connections[name][connection] = provider
+		}
+	}
+	return connections, nil
 }
 
 // AssembleWithProvider wires the application using an injected provider (for
 // testing with fakes).
 func AssembleWithProvider(cfg *config.Config, prov Provider) (*App, error) {
 	return AssembleWithProviders(cfg, map[string]Provider{"default": prov})
+}
+
+// AssembleWithProviders wires one provider per datasource, serving every
+// connection the datasource configures. It is intended for tests and
+// embedders; ownership transfers to the returned App on success.
+func AssembleWithProviders(cfg *config.Config, providers map[string]Provider) (*App, error) {
+	connections := make(Connections, len(providers))
+	for datasource, p := range providers {
+		connections[datasource] = map[string]Provider{}
+		for connection := range cfg.Databases[datasource].ConnectionsOrDSN() {
+			connections[datasource][connection] = p
+		}
+	}
+	return AssembleWithConnections(cfg, connections)
 }
 
 func recordProviderFailure(err error) bool {
@@ -265,7 +330,8 @@ func recordProviderFailure(err error) bool {
 		errors.Is(err, budget.ErrExceeded), errors.Is(err, cost.ErrCostExceeded),
 		errors.Is(err, tool.ErrUnauthorized), errors.Is(err, tool.ErrEntityNotFound),
 		errors.Is(err, tool.ErrInvalidInput), errors.Is(err, tool.ErrDMLToolsDisabled),
-		errors.Is(err, tool.ErrUnsafeWrite),
+		errors.Is(err, tool.ErrUnsafeWrite), errors.Is(err, tool.ErrConstraintViolation),
+		errors.Is(err, tool.ErrDatasourceForbidden),
 		errors.Is(err, tool.ErrTransactionNotFound), errors.Is(err, tool.ErrTransactionScope),
 		errors.Is(err, tool.ErrTransactionCapacity):
 		return false
@@ -274,8 +340,11 @@ func recordProviderFailure(err error) bool {
 	}
 }
 
-func closeProviders(providers map[string]Provider) {
-	for _, provider := range providers {
+// Connections are opened providers by datasource and connection name.
+type Connections map[string]map[string]Provider
+
+func closeConnections(connections Connections) {
+	for _, provider := range (&App{Connections: connections}).allProviders() {
 		_ = provider.Close()
 	}
 }
@@ -302,9 +371,14 @@ func configurePool(p Provider, maxOpen int, connMaxIdle, connMaxLifetime time.Du
 // fails fast if a configured entity or field is missing from the database
 // (extra DB columns are not fatal) and returns the entities with database
 // comments as their default descriptions.
-func reconcileEntities(ctx context.Context, prov Provider, entities []entity.Entity) ([]entity.Entity, error) {
+func reconcileEntities(
+	ctx context.Context,
+	datasource string,
+	prov Provider,
+	entities []entity.Entity,
+) ([]entity.Entity, error) {
 	if prov.Introspector() == nil {
-		return entities, nil
+		return identifyRelations(entities, introspect.Physical{Server: "datasource:" + datasource}, nil), nil
 	}
 	schemas := make([]string, 0)
 	unqualified := false
@@ -318,15 +392,20 @@ func reconcileEntities(ctx context.Context, prov Provider, entities []entity.Ent
 			schemas = append(schemas, e.Schema)
 		}
 	}
+	physical, err := physicalOf(ctx, datasource, prov.Introspector())
+	if err != nil {
+		return nil, fmt.Errorf("introspect: %w", err)
+	}
 	cat, err := introspect.LoadCatalog(ctx, prov.Introspector(), schemas, unqualified)
 	if err != nil {
 		return nil, fmt.Errorf("introspect: %w", err)
 	}
+	cat.FoldCase = physical.FoldCase
 	reconciled, drift := introspect.Reconcile(entities, cat)
 	if len(drift.Missing) > 0 {
 		return nil, fmt.Errorf("schema drift (configured but missing in DB): %v", drift.Missing)
 	}
-	return reconciled, nil
+	return identifyRelations(reconciled, physical, &cat), nil
 }
 
 // toThreshold maps config.CostConfig to cost.Threshold.

@@ -13,8 +13,8 @@ import (
 )
 
 func init() {
-	providerregistry.Register("mysql", func(dsn string, timeout time.Duration) (provider.Provider, error) {
-		return NewWithTimeout(dsn, timeout)
+	providerregistry.Register("mysql", func(dsn string, opts providerregistry.Options) (provider.Provider, error) {
+		return Open(dsn, opts)
 	})
 }
 
@@ -28,7 +28,12 @@ type Provider struct {
 
 // NewWithTimeout opens MySQL with a DB-native SELECT timeout.
 func NewWithTimeout(dsn string, timeout time.Duration) (*Provider, error) {
-	ad, err := NewAdapterWithTimeout(dsn, timeout, "")
+	return Open(dsn, providerregistry.Options{Timeout: timeout})
+}
+
+// Open opens MySQL with opts (see NewAdapter).
+func Open(dsn string, opts providerregistry.Options) (*Provider, error) {
+	ad, err := NewAdapter(dsn, opts, "")
 	if err != nil {
 		return nil, err
 	}

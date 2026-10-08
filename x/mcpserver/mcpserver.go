@@ -208,8 +208,9 @@ func authorizedEntity(
 		return nil, false, nil
 	}
 	return map[string]any{
-		"name": e.Name, "description": e.Description,
+		"name": e.Name, "description": e.Description, "datasource": e.DatasourceName(),
 		"fields":    authorizedEntityFields(e, e.OrderedNames(union)),
+		"keys":      tool.VisibleKeys(e, e.OrderedNames(union)),
 		"actions":   actions,
 		"access":    access,
 		"rowScoped": e.RowPolicies[role] != nil,
@@ -261,6 +262,7 @@ func authorizedEntityFields(e entity.Entity, fieldNames []string) []map[string]a
 			fields = append(fields, map[string]any{
 				"name": attr.Name, "alias": attr.Alias, "type": attr.Domain.Type,
 				"description": attr.Description, "masked": attr.Mask != "",
+				"required": attr.Domain.Required(), "readOnly": !attr.Domain.Writable(),
 			})
 		}
 	}

@@ -133,6 +133,9 @@ func (r *Runtime) reloadWith(build func() (*App, error)) error {
 		return err
 	}
 	preserveReloadBudget(old.app, next)
+	if old.app.Writes != nil {
+		next.Writes = old.app.Writes // sessions keep reading their own writes across a reload
+	}
 	revoked := revokedPrincipals(old.app, next)
 	err = publishReload(r, old, next)
 	if fn := r.revoked.Load(); fn != nil && len(revoked) > 0 {
@@ -278,6 +281,7 @@ func (r *Runtime) RollbackSession(session string) {
 	if app.Budget != nil {
 		app.Budget.CloseSession(session)
 	}
+	app.Writes.Forget(session)
 }
 
 // Close stops new acquisitions, drains leases, and closes the current App.

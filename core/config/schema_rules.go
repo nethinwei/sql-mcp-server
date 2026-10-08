@@ -44,10 +44,12 @@ import (
 // absent object in the schema.
 
 var enums = map[string][]string{
-	"transport":   {"stdio", "http"},
-	"entityKind":  {"table", "view", "procedure"},
-	"grantAction": {"read", "create", "update", "delete", "execute", "aggregate"},
-	"cardinality": {"one", "one-to-one", "belongs-to", "many", "one-to-many", "has-many"},
+	"transport":      {"stdio", "http"},
+	"entityKind":     {"table", "view", "procedure"},
+	"grantAction":    {"read", "create", "update", "delete", "execute", "aggregate"},
+	"cardinality":    {"one", "one-to-one", "belongs-to", "many", "one-to-many", "has-many"},
+	"connectionRole": {"primary", "replica"},
+	"pooler":         {"transaction"},
 }
 
 // suggestions are offered to editors but not enforced: extensions may add

@@ -54,6 +54,12 @@ type Query {
   tableComments(tables: [TableRef!]!): [TableComments]!
   "Validate a draft without saving it."
   validate(draft: DraftInput!): Validation!
+  """
+  What the routed datasource connections may do per entity action, as the
+  databases reported when the serving snapshot was assembled. It informs; each
+  database decides its statements.
+  """
+  capabilities: [EntityCapability!]!
   "Unified diff from revision `from` to revision `to` or an unsaved draft (default: published)."
   diff(from: ID!, to: ID, draft: DraftInput): String!
   "Evaluate one authorization offline against a draft or a revision (default: published)."
@@ -111,8 +117,29 @@ type Configuration {
 type Datasource {
   name: String!
   driver: String!
+  "The read connection's DSN with passwords redacted."
+  dsn: String!
+  connections: [DatasourceConnection!]!
+  "The connection reads, writes and procedure calls use."
+  routing: DatasourceRouting!
+  "How long a session reads from the write connection after writing (a Go duration); empty when off."
+  readAfterWrite: String
+}
+
+type DatasourceConnection {
+  name: String!
   "The DSN with passwords redacted."
   dsn: String!
+  "primary or replica."
+  role: String!
+  "transaction behind a transaction-mode pooler; null otherwise."
+  pooler: String
+}
+
+type DatasourceRouting {
+  read: String!
+  write: String!
+  execute: String!
 }
 
 type Entity {
@@ -126,6 +153,8 @@ type Entity {
   kind: String
   description: String
   primaryKey: [String!]!
+  "Unique keys, each a field list, that identify one row like the primary key."
+  uniqueKeys: [[String!]!]!
   fields: [Field!]!
   relationships: [Relationship!]!
   tenantPolicy: JSON
@@ -133,6 +162,10 @@ type Entity {
   legacyAccess: JSON
   mcp: EntityMCP!
   params: [String!]!
+  "Entities a procedure writes; empty invalidates its datasource's cached reads."
+  affects: [String!]!
+  "Admit deletes and key updates that foreign keys cascade to other tables without checking permissions there."
+  allowCascade: Boolean!
 }
 
 type Field {
@@ -202,8 +235,32 @@ type ImportTable {
   "The configured entity name when status is CONFIGURED."
   configuredAs: String
   columns: [ImportColumn!]!
+  "The primary key and unique keys, including those that cannot identify a row."
+  keys: [ImportKey!]!
+  foreignKeys: [ImportForeignKey!]!
+  "Triggers or rules: a write may change other tables."
+  sideEffects: Boolean!
   "A zero-permission entity proposal; add it to a draft to configure it."
   candidate: Entity!
+}
+
+type ImportKey {
+  name: String!
+  columns: [String!]!
+  primary: Boolean!
+  "Why the key cannot identify a row (partial, expression, prefix, nullable); null when it can."
+  reason: String
+}
+
+type ImportForeignKey {
+  name: String!
+  columns: [String!]!
+  refSchema: String!
+  refTable: String!
+  refColumns: [String!]!
+  "Referential action that writes referencing rows (cascade, set_null, set_default); null when it only checks."
+  onDelete: String
+  onUpdate: String
 }
 
 input TableRef {
@@ -237,6 +294,25 @@ type Validation {
   contentHash: String
   "Changes against the published revision that need a restart."
   restartRequired: [String!]!
+  "Grants the routed datasource connections cannot run (they do not block publishing)."
+  warnings: [String!]!
+}
+
+enum Privilege {
+  GRANTED
+  DENIED
+  UNKNOWN
+}
+
+type EntityCapability {
+  entity: String!
+  action: Action!
+  privilege: Privilege!
+  "The connection the action routes to."
+  connection: String!
+  "Columns granted at column level when the table-level privilege is not."
+  columns: [String!]
+  reason: String
 }
 
 type ServerStatus {
@@ -305,12 +381,15 @@ input EntityInput {
   kind: String
   description: String
   primaryKey: [String!]
+  uniqueKeys: [[String!]!]
   fields: [FieldInput!]
   relationships: [RelationshipInput!]
   tenantPolicy: JSON
   legacyAccess: JSON
   mcp: EntityMCPInput
   params: [String!]
+  affects: [String!]
+  allowCascade: Boolean
 }
 
 input FieldInput {

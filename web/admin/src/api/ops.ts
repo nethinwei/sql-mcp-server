@@ -5,7 +5,7 @@ import { graphql } from '@/gql'
 
 export const EntityPartsFragment = graphql(`
   fragment EntityParts on Entity {
-    name source datasource schema kind description primaryKey params tenantPolicy legacyAccess
+    name source datasource schema kind description primaryKey uniqueKeys params affects allowCascade tenantPolicy legacyAccess
     mcp { dmlTools customTool trustedProcedure }
     fields { name alias description mask exclude }
     relationships { name target cardinality joinOn }
@@ -14,6 +14,14 @@ export const EntityPartsFragment = graphql(`
 
 export const GrantPartsFragment = graphql(`
   fragment GrantParts on Grant { entity actions fieldsRestricted readFields writeFields rows }
+`)
+
+export const DatasourcePartsFragment = graphql(`
+  fragment DatasourceParts on Datasource {
+    name driver dsn readAfterWrite
+    connections { name dsn role pooler }
+    routing { read write execute }
+  }
 `)
 
 export const RevisionPartsFragment = graphql(`
@@ -26,7 +34,7 @@ export const WorkspaceQuery = graphql(`
     revision(id: $id) {
       ...RevisionParts
       config {
-        datasources { name driver dsn }
+        datasources { ...DatasourceParts }
         entities { ...EntityParts }
         roles { name description members grants { ...GrantParts } }
         users { name description roles subject disabled hasToken grants { ...GrantParts } }
@@ -56,7 +64,9 @@ export const RevisionsQuery = graphql(`
 `)
 
 export const RevisionHashQuery = graphql(`
-  query RevisionHash($id: ID!) { revision(id: $id) { id contentHash } }
+  query RevisionHash($id: ID!) {
+    revision(id: $id) { id contentHash config { datasources { ...DatasourceParts } } }
+  }
 `)
 
 export const RevisionYamlQuery = graphql(`
@@ -70,6 +80,9 @@ export const SchemaImportQuery = graphql(`
       tables {
         schema table description status configuredAs
         columns { name type nullable description primaryKey }
+        keys { name columns primary reason }
+        foreignKeys { name columns refSchema refTable refColumns onDelete onUpdate }
+        sideEffects
         candidate { ...EntityParts }
       }
     }
@@ -83,7 +96,11 @@ export const TableCommentsQuery = graphql(`
 `)
 
 export const ValidateQuery = graphql(`
-  query Validate($draft: DraftInput!) { validate(draft: $draft) { ok error contentHash restartRequired } }
+  query Validate($draft: DraftInput!) { validate(draft: $draft) { ok error contentHash restartRequired warnings } }
+`)
+
+export const CapabilitiesQuery = graphql(`
+  query Capabilities { capabilities { entity action privilege connection columns reason } }
 `)
 
 export const DiffQuery = graphql(`

@@ -464,3 +464,31 @@ func mustJSON(s string) any {
 	}
 	return v
 }
+
+func TestCapabilitiesAndValidationWarnings(t *testing.T) {
+	h := newHarness(t)
+	h.resolver.Capabilities = func() bootstrap.EntityCapabilities {
+		return bootstrap.EntityCapabilities{"customers": {
+			entity.ActionRead:   {Privilege: introspect.PrivilegeDenied, Connection: "ro", Reason: "no SELECT"},
+			entity.ActionUpdate: {Privilege: introspect.PrivilegeGranted, Connection: "rw", Columns: []string{"region"}},
+		}}
+	}
+	c := h.client(auth.PermAll)
+	var caps struct {
+		Capabilities []struct {
+			Entity, Action, Privilege, Connection string
+			Columns                               []string
+		}
+	}
+	mustPost(t, c, `{ capabilities { entity action privilege connection columns } }`, &caps)
+	if len(caps.Capabilities) != 2 || caps.Capabilities[0].Action != "READ" ||
+		caps.Capabilities[0].Privilege != "DENIED" || caps.Capabilities[1].Columns[0] != "region" {
+		t.Fatalf("capabilities = %+v", caps.Capabilities)
+	}
+	var resp struct{ Validate struct{ Warnings []string } }
+	mustPost(t, c, `query($d: DraftInput!) { validate(draft: $d) { warnings } }`, &resp,
+		client.Var("d", map[string]any{"base": "1"}))
+	if len(resp.Validate.Warnings) != 1 || !strings.Contains(resp.Validate.Warnings[0], `connection "ro"`) {
+		t.Fatalf("warnings = %q", resp.Validate.Warnings)
+	}
+}

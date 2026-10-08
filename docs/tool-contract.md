@@ -33,6 +33,13 @@
    - `AMBIGUOUS_FIELD_SCOPE`（retryable）：多角色用户请求的字段没有被任一
      单个授权项完整覆盖；`constraints.fieldScopes` 列出调用方本就可读的各个字段
      集合，显式指定其中一个集合内的字段即可重试；
+   - `CONSTRAINT_VIOLATION`（retryable）：写入违反数据库约束；
+     `constraints.kind` 为 `unique`、`foreign_key`、`not_null`、`check` 或
+     `exclusion`，`constraints.fields` 只列出调用方可见的相关字段，不含约束名与
+     数据库原文；
+   - `DATASOURCE_FORBIDDEN`（不可重试）：动作路由到的数据源连接没有对应的数据库权限
+     （包括连接到只读服务器），授权本身允许；需要管理员补权限或调整路由，修改请求无法
+     绕过；
    - `constraints`：可选的机器可读限制（估算行数、生效上限等）；
    - `hints`：修复建议，只能收紧或等价改写请求，不得扩权；
    - `decisionId`：贯穿 MCP 响应、审计事件（`DecisionID` 字段）与 trace

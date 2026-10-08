@@ -356,8 +356,10 @@
   "errorCodes": {
     "AMBIGUOUS_FIELD_SCOPE": true,
     "BUDGET_EXCEEDED": true,
+    "CONSTRAINT_VIOLATION": true,
     "COST_EXCEEDED": true,
     "DATABASE_ERROR": false,
+    "DATASOURCE_FORBIDDEN": false,
     "DML_TOOLS_DISABLED": false,
     "ENTITY_NOT_FOUND": false,
     "INVALID_INPUT": true,

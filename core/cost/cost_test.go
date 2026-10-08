@@ -134,7 +134,7 @@ func TestEnforceCapHandlesKindsWithoutWrappingCall(t *testing.T) {
 func TestStaticRulePKWhitelist(t *testing.T) {
 	t.Parallel()
 	sr := StaticRule{PKWhitelist: true}
-	d, _ := sr.Check(context.Background(), codegen.Compiled{IsPKPoint: true})
+	d, _ := sr.Check(context.Background(), codegen.Compiled{IsKeyPoint: true})
 	if !d.Allow || !d.Bypass || d.Plan == nil {
 		t.Fatalf("PK point should be whitelisted with bypass, got %+v", d)
 	}
@@ -143,7 +143,7 @@ func TestStaticRulePKWhitelist(t *testing.T) {
 func TestStaticRuleRejectPrecedesPKWhitelist(t *testing.T) {
 	t.Parallel()
 	sr := StaticRule{PKWhitelist: true, LegacyExactSQL: true, RejectTemplates: []string{"SELECT blocked"}}
-	d, err := sr.Check(context.Background(), codegen.Compiled{SQL: "SELECT blocked", IsPKPoint: true})
+	d, err := sr.Check(context.Background(), codegen.Compiled{SQL: "SELECT blocked", IsKeyPoint: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestChainGateShortCircuits(t *testing.T) {
 			Threshold: Threshold{RejectFullScan: true},
 		},
 	)
-	d, _ := g.Check(context.Background(), codegen.Compiled{IsPKPoint: false})
+	d, _ := g.Check(context.Background(), codegen.Compiled{IsKeyPoint: false})
 	if d.Allow {
 		t.Fatal("expected reject")
 	}
@@ -258,7 +258,7 @@ func TestChainGatePKWhitelistSkipsEstimate(t *testing.T) {
 			Threshold: Threshold{RejectFullScan: true},
 		},
 	)
-	d, _ := g.Check(context.Background(), codegen.Compiled{IsPKPoint: true})
+	d, _ := g.Check(context.Background(), codegen.Compiled{IsKeyPoint: true})
 	if !d.Allow {
 		t.Fatalf("PK whitelist should bypass estimate, got %+v", d)
 	}
@@ -275,7 +275,7 @@ func TestChainGateBypassStillRunsEnforcement(t *testing.T) {
 		EnforceCap{HardRows: 25},
 	)
 	d, err := g.Check(context.Background(), codegen.Compiled{
-		Kind: codegen.KindRead, SQL: "SELECT * FROM t", ReadOnly: true, IsPKPoint: true,
+		Kind: codegen.KindRead, SQL: "SELECT * FROM t", ReadOnly: true, IsKeyPoint: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -328,7 +328,7 @@ func TestWriteGuard(t *testing.T) {
 	if d, _ := wg.Check(context.Background(), codegen.Compiled{ReadOnly: true}); !d.Allow {
 		t.Fatal("read should pass the write guard")
 	}
-	if d, _ := wg.Check(context.Background(), codegen.Compiled{IsPKPoint: true}); !d.Allow {
+	if d, _ := wg.Check(context.Background(), codegen.Compiled{IsKeyPoint: true}); !d.Allow {
 		t.Fatal("PK point write should pass")
 	}
 	d, _ := wg.Check(context.Background(), codegen.Compiled{SQL: "UPDATE t SET x=1 WHERE status='a'"})
@@ -417,14 +417,14 @@ func TestNewGateFromCapabilitiesWriteGuardMySQL(t *testing.T) {
 	// writes deterministically.
 	caps := testdialect.MySQL{}.Capabilities()
 	g := NewGateFromCapabilities(caps, nil, Threshold{RequirePKForWrite: true, MaxRows: 1000}, nil)
-	d, err := g.Check(context.Background(), codegen.Compiled{SQL: "UPDATE t SET x=1", IsPKPoint: false})
+	d, err := g.Check(context.Background(), codegen.Compiled{SQL: "UPDATE t SET x=1", IsKeyPoint: false})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if d.Allow {
 		t.Fatal("non-PK write must be rejected by WriteGuard on MySQL")
 	}
-	dpk, err := g.Check(context.Background(), codegen.Compiled{SQL: "UPDATE t SET x=1 WHERE id=1", IsPKPoint: true})
+	dpk, err := g.Check(context.Background(), codegen.Compiled{SQL: "UPDATE t SET x=1 WHERE id=1", IsKeyPoint: true})
 	if err != nil {
 		t.Fatal(err)
 	}

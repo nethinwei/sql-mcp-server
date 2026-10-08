@@ -28,4 +28,7 @@ type Resolver struct {
 	Introspect Introspection
 	// Status reports the serving process; nil reports nothing applied.
 	Status func() RuntimeState
+	// Capabilities reports the serving snapshot's capabilities; nil reports
+	// none.
+	Capabilities func() bootstrap.EntityCapabilities
 }

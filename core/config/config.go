@@ -110,11 +110,64 @@ type TLSConfig struct {
 	ClientCA string `yaml:"clientCA" json:"clientCA"`
 }
 
-// DatabaseConfig holds the connection target. DSN may contain ${ENV} or
-// ${file:/path} placeholders resolved by x/bootstrap.
+// DatabaseConfig is one database (a datasource): one connection given by
+// DSN, or several connections, such as accounts with different privileges or
+// read replicas, with Routing choosing one per kind of action. DSNs may
+// contain ${ENV} or ${file:/path} placeholders resolved by x/bootstrap.
 type DatabaseConfig struct {
-	Driver string `yaml:"driver" json:"driver" schema:"required,pattern=@driver"`
-	DSN    string `yaml:"dsn"    json:"dsn" schema:"required,minLength=1"`
+	Driver      string        `yaml:"driver"                json:"driver" schema:"required,pattern=@driver"`
+	DSN         string        `yaml:"dsn,omitempty"         json:"dsn,omitempty"`
+	Connections Connections   `yaml:"connections,omitempty" json:"connections,omitempty" schema:"keys=@accessName"`
+	Routing     RoutingConfig `yaml:"routing,omitempty"     json:"routing,omitempty"`
+	// ReadAfterWrite routes a session's reads to the write connection for
+	// this long after it writes, so it reads its own writes on a replica.
+	ReadAfterWrite time.Duration `yaml:"readAfterWrite,omitempty" json:"readAfterWrite,omitempty" schema:"min=0"`
+}
+
+// Connections are a database's connections by name.
+type Connections map[string]ConnectionConfig
+
+// ConnectionConfig is one way to reach a database: an endpoint and account.
+type ConnectionConfig struct {
+	DSN string `yaml:"dsn" json:"dsn" schema:"required,minLength=1"`
+	// Role is primary (the default) or replica; a replica serves reads only.
+	Role string `yaml:"role,omitempty" json:"role,omitempty" schema:"enum=@connectionRole"`
+	// Pooler is "transaction" behind a transaction-mode pooler (pgbouncer,
+	// ProxySQL): no session state such as prepared statements is kept.
+	Pooler string `yaml:"pooler,omitempty" json:"pooler,omitempty" schema:"enum=@pooler"`
+}
+
+// RoutingConfig names the connection each kind of action uses: Read for
+// reads, aggregates, EXPLAIN and read-only transactions; Write for creates,
+// updates, deletes and read-write transactions; Execute for procedures.
+type RoutingConfig struct {
+	Read    string `yaml:"read,omitempty"    json:"read,omitempty"`
+	Write   string `yaml:"write,omitempty"   json:"write,omitempty"`
+	Execute string `yaml:"execute,omitempty" json:"execute,omitempty"`
+}
+
+// DefaultConnection names the single connection a DSN shorthand declares.
+const DefaultConnection = "default"
+
+// ConnectionsOrDSN returns the database's connections: the DSN shorthand as
+// one primary connection named DefaultConnection, or Connections.
+func (d DatabaseConfig) ConnectionsOrDSN() Connections {
+	if len(d.Connections) > 0 {
+		return d.Connections
+	}
+	return Connections{DefaultConnection: {DSN: d.DSN}}
+}
+
+// Route returns the connections for reads, writes and procedure calls; a
+// single connection without routing serves every route.
+func (d DatabaseConfig) Route() RoutingConfig {
+	connections := d.ConnectionsOrDSN()
+	if len(connections) == 1 && d.Routing == (RoutingConfig{}) {
+		for name := range connections {
+			return RoutingConfig{Read: name, Write: name, Execute: name}
+		}
+	}
+	return d.Routing
 }
 
 // FilterConfig is a declarative filter (JSON object) for row-level policies,
@@ -134,6 +187,7 @@ type EntityConfig struct {
 	Kind          string                    `yaml:"kind,omitempty" json:"kind,omitempty" schema:"enum=@entityKind"`
 	Description   string                    `yaml:"description,omitempty"   json:"description,omitempty"`
 	PrimaryKey    []string                  `yaml:"primaryKey,omitempty"    json:"primaryKey,omitempty"`
+	UniqueKeys    [][]string                `yaml:"uniqueKeys,omitempty"    json:"uniqueKeys,omitempty"`
 	Fields        []FieldConfig             `yaml:"fields,omitempty"        json:"fields,omitempty"`
 	Roles         RoleConfig                `yaml:"roles,omitempty"         json:"roles,omitempty"`
 	FieldACL      map[string]FieldACLConfig `yaml:"fieldACL,omitempty"      json:"fieldACL,omitempty"`
@@ -145,6 +199,12 @@ type EntityConfig struct {
 	// Params is the ordered formal-parameter list for a procedure entity, bound
 	// positionally by execute_entity. Required for procedures.
 	Params []string `yaml:"params,omitempty"        json:"params,omitempty"`
+	// Affects lists the entities a procedure writes, for cache invalidation;
+	// empty invalidates every cached read of its datasource.
+	Affects []string `yaml:"affects,omitempty"       json:"affects,omitempty"`
+	// AllowCascade admits deletes and key updates that foreign keys cascade
+	// to other relations without the caller's permissions on them.
+	AllowCascade bool `yaml:"allowCascade,omitempty"  json:"allowCascade,omitempty"`
 }
 
 // PhysicalSource is the table or procedure the entity reads: Source, or the

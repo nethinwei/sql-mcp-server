@@ -40,6 +40,18 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 - 威胁 TM-009（多角色合并越权与租户打穿）、TM-010（用户身份伪造与吊销残留），
   不变量 I25、I26。
 
+- 一个数据源可配置多个连接（`connections`，`role: primary|replica`）并按动作路由
+  （`routing.read/write/execute`）；`readAfterWrite` 让同一会话写入后的一段时间内读走写连接；
+  只读事务走读连接，读写事务固定在写连接。原有 `dsn` 简写等价于名为 `default` 的单连接。
+  连接可声明 `pooler: transaction`（pgbouncer 等事务模式代理），关闭预编译语句与依赖会话的
+  超时参数。同一数据源各连接解析出的默认 schema 不同时，未设 `schema` 的实体启动即报错。
+  见 [数据源模型](docs/design/datasource-model.md)。
+- 连接权限感知：启动与重载时按路由连接探测表级、列级与过程的权限和服务器只读状态，
+  授权超出连接能力时记录告警；管理 API 新增 `capabilities` 查询，`validate` 返回 `warnings`
+  （不阻断发布），控制台权限矩阵把连接无权执行的动作置灰并提示原因，审查页列出告警。
+- 拒绝码 `DATASOURCE_FORBIDDEN`（不可重试）：数据库以权限不足或只读拒绝语句时返回，不计入
+  熔断（兼容变化）。
+
 ### Breaking
 
 - **配置中的未知字段直接拒绝加载**（此前静默忽略）：拼错的键（如
@@ -61,6 +73,19 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   当前 revision，删去该键后 `store import`，再 `store publish --restart-required`。
   当前已发布 revision 无法加载时，发布只接受 `restartRequired`（此前无论如何都会
   被拒绝，store 无法恢复）。
+- 一个物理表或视图最多对应一个实体（[数据源模型](docs/design/datasource-model.md) I-1）。同一数据源中
+  名称完全相同的重复在校验和发布时拒绝；按默认 schema、MySQL `lower_case_table_names` 和服务器身份
+  （多个数据源指向同一个库）解析后的重复在启动和重载时拒绝。此前把同一张表配成两个实体（例如分别走
+  只读和读写两个 DSN）会产生两套策略和互不失效的缓存；迁移方式是只保留一个实体，多账号连接将在后续
+  版本以同一数据源的多个连接提供。
+- 表的主键与唯一键以数据库为准：配置的 `primaryKey` 与数据库不一致时启动告警，并以数据库的键为准；
+  此前在没有主键约束的表上声明 `primaryKey` 可让修改和删除通过写保护，现在不再生效。视图上声明的键只
+  用于读取。`primaryKey` 与新增的 `uniqueKeys` 中的列必须是实体字段。
+- 外键级联写入（`ON DELETE CASCADE`、`SET NULL`、`SET DEFAULT`、`ON UPDATE CASCADE`）需要调用方对级联链上
+  每一层的实体拥有不带行范围的删除或修改权限（修改须能写被改写的外键列），级联到未暴露的表时拒绝；实体可用 `allowCascade: true`
+  显式放开（[数据源模型](docs/design/datasource-model.md) I-6）。
+- `read_records` 的 `cursor` 必须是游标键（主键，或第一个身份唯一键）的前缀；此前无法使用时被静默
+  忽略，会重复返回第一页。
 - `read_records` 的 `offset` 必须与 `limit` 同时给出（此前 `offset` 被静默忽略），
   输入 schema 增加 `dependentRequired`；`describe_entities` 拒绝非法输入（此前忽略
   后列出全部实体）。删除永不产生的拒绝码 `NOT_IMPLEMENTED`。
@@ -69,6 +94,8 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   `store.Tx` 去掉无调用方的 `Savepoint`/`RollbackTo`，`dialect.Dialect` 去掉
   `ExplainSQL`，`dialect.Capabilities` 只保留被读取的字段；`hook.Hooks.AfterTool`
   去掉恒为 nil 的 result 参数；`budget.Manager` 收敛为单一的预留接口。
+  `providerregistry.Factory` 与 `providerregistry.New` 改为接收 `providerregistry.Options`
+  （超时与 pooler），`tool.DataSource` 按动作拆分连接。
 
 ### Changed
 
@@ -136,6 +163,24 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   所基于的版本在服务端已变化时自动重新载入并保留未保存修改。
 - 修复多数据源配置下 `create_record` 空指针 panic（插入时读取了未路由上下文的
   方言）。
+- 修复 `kind: view` 的实体启动即报“缺失”：自省此前只扫描基础表。现在纳入视图和 PostgreSQL 物化视图
+  （导入页同样可见，候选实体标为 view）；PostgreSQL 子分区不再导入，只暴露分区父表；MySQL 视图不再
+  带上占位注释 `VIEW`。
+- 读缓存按物理关系（数据源与解析后的表）记录和失效，而不是按实体名；视图、物化视图和外部表的条目在
+  同一数据源任何写入后失效。存储过程新增 `affects`，声明它写入的实体；未声明时执行后失效整个数据源的
+  缓存（此前只失效过程自身，其写入的表会继续返回旧数据）。
+- 唯一键与列属性：自省读取唯一约束与唯一索引（部分、表达式、前缀索引与含可空列的键会显示但不用作身份），
+  以及默认值、自增、生成列。按唯一键等值定位单行的修改和删除可以通过写保护，游标分页在没有主键时使用
+  唯一键；生成列（含 identity ALWAYS）不可写；不支持 RETURNING 的 MySQL 新增后返回该行的键（含复合主键）。
+  `describe_entities` 与 `sql-mcp://schema` 增加字段 `required`、`readOnly` 和实体的可见身份键 `keys`
+  （兼容变化）。
+- 新拒绝码 `CONSTRAINT_VIOLATION`（retryable）：唯一、外键、非空、检查与排他约束冲突给出类别和调用方
+  可见的字段，不回显约束名与数据库原文；此前归为 `DATABASE_ERROR`。
+- 外键：多列外键在导入时生成多对 `joinOn` 的关联，`expand` 支持多列关联；关联值按数值与字符串归一化
+  匹配，修复 int4 外键引用 int8 主键等类型不同时展开结果为空的问题。读取级联动作与触发器：有触发器或
+  规则的表写入后失效整个数据源的缓存，级联写入同时失效被级联实体的缓存。
+- `describe_entities` 与 `sql-mcp://schema` 的实体增加 `datasource`（兼容变化），控制台实体列表与权限
+  矩阵显示“数据源 · schema.表”，以区分不同库中的同名表。
 - 修复单库且数据源名不是 `default` 时，省略 `datasource` 的 `begin_transaction`
   把事务绑定到 `default`，导致事务内所有读写报 `TRANSACTION_SCOPE`。
 - 修复 MySQL/OceanBase 文本列（及 DECIMAL）以字节串返回、经 JSON 序列化成 base64

@@ -24,8 +24,8 @@ import (
 var ErrPing = errors.New("postgres: ping failed")
 
 func init() {
-	providerregistry.Register("postgres", func(dsn string, timeout time.Duration) (provider.Provider, error) {
-		return NewWithTimeout(dsn, timeout)
+	providerregistry.Register("postgres", func(dsn string, opts providerregistry.Options) (provider.Provider, error) {
+		return Open(dsn, opts)
 	})
 }
 
@@ -47,7 +47,15 @@ func New(dsn string) (*Provider, error) {
 
 // NewWithTimeout opens PostgreSQL with a DB-native statement timeout.
 func NewWithTimeout(dsn string, timeout time.Duration) (*Provider, error) {
-	if timeout <= 0 {
+	return Open(dsn, providerregistry.Options{Timeout: timeout})
+}
+
+// Open opens PostgreSQL with opts. The statement timeout is a startup
+// parameter, except behind a transaction-mode pooler, which neither forwards
+// it nor keeps named prepared statements: there statements run unprepared and
+// time out through request cancellation.
+func Open(dsn string, opts providerregistry.Options) (*Provider, error) {
+	if opts.Timeout <= 0 {
 		return nil, errors.New("postgres: statement timeout must be positive")
 	}
 	cfg, err := pgx.ParseConfig(dsn)
@@ -57,8 +65,10 @@ func NewWithTimeout(dsn string, timeout time.Duration) (*Provider, error) {
 	if cfg.RuntimeParams == nil {
 		cfg.RuntimeParams = map[string]string{}
 	}
-	if _, configured := cfg.RuntimeParams["statement_timeout"]; !configured {
-		cfg.RuntimeParams["statement_timeout"] = strconv.FormatInt(timeout.Milliseconds(), 10)
+	if opts.Pooler == providerregistry.PoolerTransaction {
+		cfg.DefaultQueryExecMode = pgx.QueryExecModeExec
+	} else if _, configured := cfg.RuntimeParams["statement_timeout"]; !configured {
+		cfg.RuntimeParams["statement_timeout"] = strconv.FormatInt(opts.Timeout.Milliseconds(), 10)
 	}
 	db := stdlib.OpenDB(*cfg)
 	if err := db.PingContext(context.Background()); err != nil {
@@ -66,7 +76,7 @@ func NewWithTimeout(dsn string, timeout time.Duration) (*Provider, error) {
 		return nil, fmt.Errorf("%w: %v", ErrPing, err)
 	}
 	p := &Provider{
-		Pool:         sqladapter.New(db, nil),
+		Pool:         sqladapter.New(db, nil, classify),
 		dialect:      Dialect{},
 		explainer:    pgExplainer{db: db},
 		introspector: pgIntrospector{db: db},

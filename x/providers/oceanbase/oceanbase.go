@@ -14,8 +14,8 @@ import (
 )
 
 func init() {
-	providerregistry.Register("oceanbase", func(dsn string, timeout time.Duration) (provider.Provider, error) {
-		return NewWithTimeout(dsn, timeout)
+	providerregistry.Register("oceanbase", func(dsn string, opts providerregistry.Options) (provider.Provider, error) {
+		return Open(dsn, opts)
 	})
 }
 
@@ -30,7 +30,12 @@ type Provider struct {
 // NewWithTimeout opens an OceanBase database (MySQL-protocol DSN) with a
 // DB-native query timeout and assembles the core adapters.
 func NewWithTimeout(dsn string, timeout time.Duration) (*Provider, error) {
-	ad, err := mysql.NewAdapterWithTimeout(dsn, timeout, "ob_query_timeout")
+	return Open(dsn, providerregistry.Options{Timeout: timeout})
+}
+
+// Open opens OceanBase with opts (see mysql.NewAdapter).
+func Open(dsn string, opts providerregistry.Options) (*Provider, error) {
+	ad, err := mysql.NewAdapter(dsn, opts, "ob_query_timeout")
 	if err != nil {
 		return nil, err
 	}

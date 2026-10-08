@@ -6,6 +6,7 @@ import { NButton, NDataTable, NEmpty, NInput, NSelect, NSpace, NTag, NText, type
 import { useWorkspace } from '@/stores/workspace'
 import type { EntityInput } from '@/gql/graphql'
 import { loadTableComments, tableComments } from '@/lib/tableComments'
+import { physicalLocation } from '@/lib/names'
 
 const { t } = useI18n()
 const ws = useWorkspace()
@@ -36,7 +37,10 @@ const columns = computed<DataTableColumns<EntityInput>>(() => [
     // A database comment (the runtime default) is shown in grey.
     render: (e) => e.description || h(NText, { depth: 3 }, () => description(e)),
   },
-  { title: t('entities.datasource'), key: 'datasource', width: 120, render: (e) => e.datasource ?? 'default' },
+  {
+    title: t('entities.location'), key: 'datasource', minWidth: 180,
+    render: (e) => h(NText, { depth: 2, class: 'mono' }, () => physicalLocation(e)),
+  },
   { title: t('entities.fields'), key: 'fields', width: 80, render: (e) => (e.fields ?? []).filter((f) => !f.exclude).length },
   {
     title: t('entities.whoCanAccess'), key: 'access', width: 280,

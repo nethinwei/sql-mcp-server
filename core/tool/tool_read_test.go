@@ -529,3 +529,104 @@ func TestReadRejectsOffsetWithoutLimit(t *testing.T) {
 		t.Fatalf("error = %v, want invalid input", err)
 	}
 }
+
+func TestReadCursorUsesIdentityKey(t *testing.T) {
+	t.Parallel()
+	base := entity.Entity{
+		Name: "codes", Source: "codes", MCP: entity.MCPFlags{DMLTools: true},
+		Attributes: []entity.Attribute{{Name: "code"}, {Name: "label"}},
+		Role:       entity.RoleAccess{entity.ActionRead: {"reader"}},
+	}
+	byUnique := base
+	byUnique.Keys = []entity.Key{{Name: "codes_code_key", Columns: []string{"code"}}}
+	keyless := base
+	keyless.Name, keyless.Source = "notes", "notes"
+	reg, _ := entity.NewRegistry([]entity.Entity{byUnique, keyless})
+	var sql string
+	db := &store.FakeDB{QueryFn: func(_ context.Context, q string, _ ...any) (store.Rows, error) {
+		sql = q
+		return store.NewFakeRows([]string{"code"}), nil
+	}}
+	tc := Context{
+		Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
+	}
+	run := func(input string) error {
+		_, err := (ReadTool{}).Run(context.Background(), json.RawMessage(input), tc)
+		return err
+	}
+	if err := run(`{"entity":"codes","cursor":{"code":"a"},"limit":10}`); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sql, `"code" > $1`) || !strings.Contains(sql, `ORDER BY "code"`) {
+		t.Fatalf("keyset on the unique key: %s", sql)
+	}
+	for input, why := range map[string]string{
+		`{"entity":"notes","cursor":{"code":"a"},"limit":10}`:  "an entity without an identity key",
+		`{"entity":"codes","cursor":{"label":"a"},"limit":10}`: "a cursor naming a non-key field",
+	} {
+		if err := run(input); !errors.Is(err, ErrInvalidInput) {
+			t.Errorf("%s: error = %v, want invalid input", why, err)
+		}
+	}
+}
+
+func TestExpandMatchesMultiColumnAndDifferentlyTypedKeys(t *testing.T) {
+	t.Parallel()
+	orders := entity.Entity{
+		Name: "orders", Source: "orders", MCP: entity.MCPFlags{DMLTools: true},
+		Attributes: []entity.Attribute{{Name: "tenant_id"}, {Name: "id"}},
+		Role:       entity.RoleAccess{entity.ActionRead: {"r"}},
+		Relations: []entity.Relationship{{
+			Name: "lines", Target: "lines", Cardinality: "has-many",
+			JoinOn: map[string]string{"tenant_id": "tenant_id", "id": "order_id"},
+		}},
+	}
+	lines := entity.Entity{
+		Name: "lines", Source: "lines", MCP: entity.MCPFlags{DMLTools: true},
+		Attributes: []entity.Attribute{{Name: "tenant_id"}, {Name: "order_id"}, {Name: "sku"}},
+		Role:       entity.RoleAccess{entity.ActionRead: {"r"}},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{orders, lines})
+	var childSQL string
+	db := &store.FakeDB{QueryFn: func(_ context.Context, q string, _ ...any) (store.Rows, error) {
+		if strings.Contains(q, `"lines"`) {
+			childSQL = q
+			// int64 keys from an int8 column, against int32 parent values.
+			return store.NewFakeRows([]string{"tenant_id", "order_id", "sku"},
+				[]any{int64(1), int64(10), "a"}, []any{int64(2), int64(10), "b"}), nil
+		}
+		return store.NewFakeRows([]string{"tenant_id", "id"},
+			[]any{int32(1), int32(10)}, []any{int32(2), int32(10)}, []any{nil, int32(10)}), nil
+	}}
+	tc := Context{
+		Role: "r", DB: db, Dialect: testdialect.Postgres{}, Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
+	}
+	res, err := (ReadTool{}).Run(context.Background(), json.RawMessage(`{"entity":"orders","expand":["lines"]}`), tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(childSQL, `("order_id" = $1 AND "tenant_id" = $2) OR`) {
+		t.Fatalf("child query = %s", childSQL)
+	}
+	for i, want := range []string{"a", "b", ""} {
+		got := res.Content[i]["lines"].([]map[string]any)
+		if want == "" && len(got) != 0 || want != "" && (len(got) != 1 || got[0]["sku"] != want) {
+			t.Errorf("row %d lines = %v, want sku %q (a NULL key matches nothing)", i, got, want)
+		}
+	}
+}
+
+func TestJoinKeysDoNotCollide(t *testing.T) {
+	t.Parallel()
+	a, _ := joinKey("x\x1fs:y", "z")
+	b, _ := joinKey("x", "y\x1fs:z")
+	c, _ := joinKey("x", `y",s:"z`)
+	if a == b || b == c || a == c {
+		t.Fatalf("distinct tuples share a key: %q %q %q", a, b, c)
+	}
+	n, _ := joinKey(int32(7), []byte("k"))
+	m, _ := joinKey(int64(7), "k")
+	if n != m {
+		t.Fatalf("driver typing changed the key: %q vs %q", n, m)
+	}
+}

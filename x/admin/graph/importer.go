@@ -48,7 +48,8 @@ func buildSchemaImport(datasource string, cat introspect.Catalog, cfg *config.Co
 	for _, d := range cat.Tables {
 		table := ImportTable{
 			Schema: d.Schema, Table: d.Source, Description: d.Description, Status: ImportStatusNew,
-			Columns: importColumns(d),
+			Columns: importColumns(d), Keys: importKeys(d), ForeignKeys: importForeignKeys(d),
+			SideEffects: d.SideEffects,
 		}
 		if e, ok := configured[tableKey(d.Schema, d.Source)]; ok {
 			name := e.Name
@@ -122,6 +123,36 @@ func importColumns(d entity.Entity) []ImportColumn {
 	return out
 }
 
+func importKeys(d entity.Entity) []ImportKey {
+	out := make([]ImportKey, 0, len(d.Keys))
+	for _, k := range d.Keys {
+		out = append(out, ImportKey{Name: k.Name, Columns: k.Columns, Primary: k.Primary, Reason: optional(k.Reason)})
+	}
+	return out
+}
+
+func importForeignKeys(d entity.Entity) []ImportForeignKey {
+	out := make([]ImportForeignKey, 0, len(d.ForeignKeys))
+	for _, fk := range d.ForeignKeys {
+		out = append(out, ImportForeignKey{
+			Name: fk.Name, Columns: fk.Columns, RefSchema: fk.RefSchema, RefTable: fk.RefRelation,
+			RefColumns: fk.RefColumns, OnDelete: optional(fk.OnDelete), OnUpdate: optional(fk.OnUpdate),
+		})
+	}
+	return out
+}
+
+// identityUniqueKeys lists the unique keys of d that identify a row.
+func identityUniqueKeys(d entity.Entity) [][]string {
+	out := [][]string{}
+	for _, k := range d.Keys {
+		if !k.Primary && k.Reason == "" {
+			out = append(out, k.Columns)
+		}
+	}
+	return out
+}
+
 // candidateEntity proposes an entity with every column, the primary key and a
 // belongs-to relationship per single-column foreign key. Table and column
 // comments are not copied: at runtime they are the default descriptions, so
@@ -132,9 +163,12 @@ func candidateEntity(datasource string, d entity.Entity, names map[string]string
 	out := Entity{
 		Name: names[tableKey(d.Schema, d.Source)], Source: optional(d.Source), Datasource: optional(datasource),
 		Schema:     optional(d.Schema),
-		PrimaryKey: orEmpty(d.PrimaryKey()), Params: []string{},
+		PrimaryKey: orEmpty(d.PrimaryKey()), UniqueKeys: identityUniqueKeys(d), Params: []string{}, Affects: []string{},
 		Fields: make([]Field, 0, len(d.Attributes)), Relationships: []Relationship{},
 		Mcp: &EntityMcp{DmlTools: true},
+	}
+	if d.Kind == entity.KindView {
+		out.Kind = optional("view")
 	}
 	for _, a := range d.Attributes {
 		out.Fields = append(out.Fields, Field{Name: a.Name})
@@ -145,12 +179,16 @@ func candidateEntity(datasource string, d entity.Entity, names map[string]string
 			refSchema = d.Schema
 		}
 		target, ok := names[tableKey(refSchema, fk.RefRelation)]
-		if !ok || len(fk.Columns) != 1 {
+		if !ok {
 			continue
+		}
+		joinOn := make(map[string]any, len(fk.Columns))
+		for i, column := range fk.Columns {
+			joinOn[column] = fk.RefColumns[i]
 		}
 		out.Relationships = append(out.Relationships, Relationship{
 			Name: uniqueRelationshipName(out.Relationships, target), Target: target, Cardinality: "belongs-to",
-			JoinOn: map[string]any{fk.Columns[0]: fk.RefColumns[0]},
+			JoinOn: joinOn,
 		})
 	}
 	return out
@@ -212,7 +250,29 @@ func importCatalog(ctx context.Context, in introspect.Introspector, schemas []st
 		}
 		schemas = all
 	}
-	return introspect.LoadCatalog(ctx, in, schemas, len(schemas) == 0)
+	return loadCatalog(ctx, in, schemas, len(schemas) == 0)
+}
+
+// loadCatalog loads a catalog that matches names the way the database
+// compares them, as assembly does.
+func loadCatalog(
+	ctx context.Context,
+	in introspect.Introspector,
+	schemas []string,
+	withDefault bool,
+) (introspect.Catalog, error) {
+	cat, err := introspect.LoadCatalog(ctx, in, schemas, withDefault)
+	if err != nil {
+		return cat, err
+	}
+	if namer, ok := in.(introspect.PhysicalNamer); ok {
+		physical, err := namer.Physical(ctx)
+		if err != nil {
+			return cat, err
+		}
+		cat.FoldCase = physical.FoldCase
+	}
+	return cat, nil
 }
 
 // referencedCatalog scans the schemas refs name, and the default schema when
@@ -227,7 +287,7 @@ func referencedCatalog(ctx context.Context, in introspect.Introspector, refs []T
 			schemas = append(schemas, schema)
 		}
 	}
-	return introspect.LoadCatalog(ctx, in, schemas, unqualified)
+	return loadCatalog(ctx, in, schemas, unqualified)
 }
 
 // lookupTableComments resolves each table's comments with one catalog per

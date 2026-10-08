@@ -53,12 +53,26 @@ func (a Action) String() string {
 	return "unknown"
 }
 
-// Domain is a column's value domain as introspected from the database. It is
-// informational: shown to agents and the console, not enforced.
+// Domain is a column's value domain as introspected from the database.
 type Domain struct {
 	Type     string
 	Nullable bool
+	// Default reports that the database supplies a value when an insert
+	// omits the column (a default expression, a sequence, an identity BY
+	// DEFAULT or auto_increment).
+	Default bool
+	// Generated reports that the database computes the value (a generated
+	// column or an identity ALWAYS): the column cannot be written.
+	Generated bool
+	// AutoIncrement reports a value taken from a sequence on insert.
+	AutoIncrement bool
 }
+
+// Writable reports whether creates and updates may set the column.
+func (d Domain) Writable() bool { return !d.Generated }
+
+// Required reports whether a create must supply the column.
+func (d Domain) Required() bool { return !d.Nullable && !d.Default && !d.Generated }
 
 // Attribute is one column of a relation, with projection and masking controls.
 type Attribute struct {
@@ -70,11 +84,28 @@ type Attribute struct {
 	Mask        string // optional mask rule name (see mask package)
 }
 
-// Key is a candidate key; Primary marks the primary key.
+// Reasons a unique key does not identify a row.
+const (
+	KeyPartial    = "partial"    // a partial unique index (WHERE ...)
+	KeyExpression = "expression" // an index on expressions, such as lower(email)
+	KeyPrefix     = "prefix"     // a MySQL prefix index, such as email(10)
+	KeyNullable   = "nullable"   // a nullable column: several rows may hold NULL
+)
+
+// Key is a primary or unique key. A unique key that cannot identify a row
+// is kept for display, with Reason saying why.
 type Key struct {
 	Name    string
 	Columns []string
 	Primary bool
+	// Declared marks a key the database does not guarantee, configured on a
+	// view or foreign table: it serves reads, never the write-safety check.
+	Declared bool
+	// Deferrable reports a constraint checked at commit: inside a
+	// transaction it may be violated, so it identifies no row there.
+	Deferrable bool
+	// Reason is empty for a key that identifies at most one row.
+	Reason string
 }
 
 // ForeignKey declares referential integrity to another relation.
@@ -86,6 +117,42 @@ type ForeignKey struct {
 	RefSchema   string
 	RefRelation string
 	RefColumns  []string
+	// OnDelete and OnUpdate are the referential actions: one of the FK*
+	// constants, empty when the database reports none.
+	OnDelete string
+	OnUpdate string
+}
+
+// Cascade is a foreign key of another relation that writes its rows when
+// rows of the referenced relation change.
+type Cascade struct {
+	// Schema and Table name the referencing relation; Relation is its
+	// relation key and Entity the entity exposing it ("" when none does),
+	// both set at assembly.
+	Schema   string
+	Table    string
+	Relation string
+	Entity   string
+	// Columns are the referenced columns of this relation; ForeignColumns
+	// the referencing columns of the other, in the same order.
+	Columns        []string
+	ForeignColumns []string
+	OnDelete       string
+	OnUpdate       string
+}
+
+// Referential actions of a foreign key that write the referencing rows.
+const (
+	FKCascade    = "cascade"
+	FKSetNull    = "set_null"
+	FKSetDefault = "set_default"
+)
+
+// ReferentialWrite reports whether a referential action changes the
+// referencing rows (cascade, set null or set default) rather than only
+// checking them.
+func ReferentialWrite(action string) bool {
+	return action == FKCascade || action == FKSetNull || action == FKSetDefault
 }
 
 // RoleAccess maps each action to the roles allowed to perform it.
@@ -141,6 +208,25 @@ type Entity struct {
 	// grants; nil means the entity has no tenant boundary.
 	TenantPolicy relalg.Predicate
 	Relations    []Relationship
+	// Derived marks a relation whose data comes from other relations (a view,
+	// a materialized view or a foreign table): a write to any table of its
+	// datasource may change it.
+	Derived bool
+	// Relation identifies the physical relation (set at assembly, see
+	// RelationKey); at most one entity exposes a relation.
+	Relation string
+	// Affects lists the entities a procedure writes; empty means unknown.
+	Affects []string
+	// Cascades are the foreign keys of other relations whose referential
+	// actions write their rows when this entity's rows are deleted or their
+	// referenced columns updated (I-6).
+	Cascades []Cascade
+	// AllowCascade admits such writes without checking the caller's
+	// permissions on the cascaded entities.
+	AllowCascade bool
+	// SideEffects reports triggers or rules on the relation: a write may
+	// change other relations of the datasource.
+	SideEffects bool
 	// Params is the ordered list of formal parameter names for a KindProcedure
 	// entity. execute_entity binds a caller's named args to positional CALL
 	// placeholders in this exact order; a stored procedure whose params are not
@@ -166,12 +252,51 @@ func (e Entity) DatasourceName() string {
 	return e.DataSource
 }
 
+// RelationKey identifies the physical relation the entity exposes: Relation
+// when assembly resolved it, otherwise its configured datasource, schema and
+// source.
+func (e Entity) RelationKey() string {
+	if e.Relation != "" {
+		return e.Relation
+	}
+	source := e.Source
+	if source == "" {
+		source = e.Name
+	}
+	return "datasource:" + e.DatasourceName() + "\x00\x00" + e.Schema + "\x00" + source
+}
+
 // PrimaryKey returns the columns of the primary key, or nil if none is declared.
 func (e Entity) PrimaryKey() []string {
 	for _, k := range e.Keys {
 		if k.Primary {
 			return k.Columns
 		}
+	}
+	return nil
+}
+
+// IdentityKeys returns the column sets that identify at most one row,
+// primary key first. enforced drops declared keys, as a write needs;
+// inTransaction drops deferrable keys.
+func (e Entity) IdentityKeys(enforced, inTransaction bool) [][]string {
+	var out [][]string
+	for _, primary := range []bool{true, false} {
+		for _, k := range e.Keys {
+			if k.Primary != primary || k.Reason != "" || enforced && k.Declared || inTransaction && k.Deferrable {
+				continue
+			}
+			out = append(out, k.Columns)
+		}
+	}
+	return out
+}
+
+// CursorKey returns the key keyset pagination orders by: the primary key,
+// otherwise the first identity key; nil when the entity has none.
+func (e Entity) CursorKey() []string {
+	if keys := e.IdentityKeys(false, false); len(keys) > 0 {
+		return keys[0]
 	}
 	return nil
 }

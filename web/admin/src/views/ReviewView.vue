@@ -28,6 +28,7 @@ const checking = ref(false)
 const saving = ref(false)
 const error = ref<string | null>(null)
 const restart = ref<string[]>([])
+const warnings = ref<string[]>([])
 const diff = ref('')
 const comment = ref('')
 
@@ -52,6 +53,7 @@ async function check() {
     if (mine !== seq) return
     error.value = v.ok ? null : v.error ?? t('review.validateFailed')
     restart.value = v.restartRequired
+    warnings.value = v.warnings
     diff.value = d
     checkedContent.value = snap.content
   } catch (e) {
@@ -204,6 +206,12 @@ onMounted(check)
         {{ t('review.okBody') }}
       </n-alert>
 
+      <n-alert v-if="!checkStale && !error && !checking && warnings.length" type="warning"
+        :title="t('review.capabilityTitle')">
+        {{ t('review.capabilityBody') }}
+        <ul class="warnings"><li v-for="w in warnings" :key="w" class="mono">{{ w }}</li></ul>
+      </n-alert>
+
       <n-card size="small" :title="t('review.summaryTitle')">
         <change-summary :summary="summary" />
       </n-card>
@@ -258,4 +266,5 @@ onMounted(check)
 
 <style scoped>
 .settings-pending { margin-bottom: 16px; }
+.warnings { margin: 8px 0 0; padding-left: 20px; }
 </style>

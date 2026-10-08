@@ -45,6 +45,8 @@ func startE2EPostgres(t *testing.T) (*pgprov.Provider, func()) {
 	}
 	_, _ = prov.ExecContext(ctx, "CREATE TABLE users (id serial PRIMARY KEY, email text, tenant_id integer)")
 	_, _ = prov.ExecContext(ctx, "INSERT INTO users (email, tenant_id) VALUES ('alice@x.com', 7), ('bob@x.com', 8)")
+	// A separate table: one relation backs at most one entity.
+	_, _ = prov.ExecContext(ctx, "CREATE TABLE admin_users (id serial PRIMARY KEY, email text)")
 	return prov, func() {
 		_ = prov.Close()
 		_ = container.Terminate(context.Background())
@@ -68,7 +70,7 @@ func e2eTestConfig() *config.Config {
 				},
 			},
 			{
-				Name: "admin_users", Source: "users", Kind: "table", PrimaryKey: []string{"id"},
+				Name: "admin_users", Source: "admin_users", Kind: "table", PrimaryKey: []string{"id"},
 				Fields: []config.FieldConfig{{Name: "id"}, {Name: "email"}},
 				Roles:  config.RoleConfig{Read: []string{"admin"}},
 			},

@@ -47,6 +47,11 @@ var (
 	ErrDuplicateTool = errors.New("tool: duplicate name")
 	// ErrDatabase identifies errors returned by the database driver.
 	ErrDatabase = errors.New("tool: database error")
+	// ErrConstraintViolation is a write rejected by a database constraint.
+	ErrConstraintViolation = errors.New("tool: constraint violation")
+	// ErrDatasourceForbidden is a statement the datasource's account may not
+	// run: a missing database privilege or a read-only server.
+	ErrDatasourceForbidden = errors.New("tool: the datasource connection is not permitted to do this")
 )
 
 type databaseError struct{ err error }
@@ -57,13 +62,23 @@ func (e *databaseError) Is(target error) bool {
 	return target == ErrDatabase
 }
 
-// WrapDBError classifies a database driver error while preserving its cause.
+// WrapDBError classifies a database driver error while preserving its cause:
+// a refused privilege becomes ErrDatasourceForbidden, anything else
+// ErrDatabase. Neither reports the driver message to clients.
 func WrapDBError(err error) error {
-	if err == nil || errors.Is(err, ErrDatabase) {
+	if err == nil || errors.Is(err, ErrDatabase) || errors.Is(err, ErrDatasourceForbidden) {
 		return err
+	}
+	if errors.Is(err, store.ErrPermissionDenied) {
+		return &forbiddenError{err: err}
 	}
 	return &databaseError{err: err}
 }
+
+type forbiddenError struct{ err error }
+
+func (e *forbiddenError) Error() string   { return ErrDatasourceForbidden.Error() }
+func (e *forbiddenError) Unwrap() []error { return []error{ErrDatasourceForbidden, e.err} }
 
 // Info is a tool's static metadata, mapped to an MCP tool definition.
 type Info struct {
@@ -113,8 +128,12 @@ type Context struct {
 	Budget       budget.Manager
 	BudgetLimits budget.Limits
 	Transactions *TransactionManager
+	Writes       *WriteTracker
 	TxBeginners  map[string]store.TxBeginner
 	Transaction  string
+	// followsWrite is set by routeEntity while reads follow the session's
+	// recent write (see followsWrite).
+	followsWrite bool
 }
 
 // Limits are the configured per-call limits; zero means unlimited (or, for
@@ -136,12 +155,18 @@ type Limits struct {
 	TransactionRollbackTimeout time.Duration
 }
 
-// DataSource is the per-entity execution route.
+// DataSource is the per-entity execution route: DB is the read connection;
+// Write and Execute, when set, serve writes and procedure calls (see
+// connectionFor), and ReadTx begins read-only transactions.
 type DataSource struct {
-	DB      store.DB
-	Dialect dialect.Dialect
-	Gate    cost.Gate
-	Analyze cost.AnalyzePolicy
+	DB             store.DB
+	Write          store.DB
+	Execute        store.DB
+	ReadTx         store.TxBeginner
+	ReadAfterWrite time.Duration
+	Dialect        dialect.Dialect
+	Gate           cost.Gate
+	Analyze        cost.AnalyzePolicy
 }
 
 // Tool is a single DML capability.
@@ -245,7 +270,12 @@ func engineSubmitKey(t Tool, input json.RawMessage, tc Context) (string, error) 
 	}
 	transaction := transactionFromInput(input)
 	if transaction == "" {
-		return t.Info().Name + "\x00" + scopeKey(tc.Role, tc.Subject) + "\x00" + string(input), nil
+		key := t.Info().Name + "\x00" + scopeKey(tc.Role, tc.Subject) + "\x00" + string(input)
+		if tc.Writes.Wrote(tc.Session) {
+			// Its reads may follow its writes; do not share another session's.
+			key += "\x00session=" + tc.Session
+		}
+		return key, nil
 	}
 	if tc.Transactions == nil {
 		return "", ErrTransactionNotFound
@@ -670,6 +700,17 @@ func validateUnmaskedFields(res entity.Resolved, fields ...string) error {
 	return nil
 }
 
+// validateWritable rejects writes to columns the database computes
+// (generated columns, identity ALWAYS) before they reach the database.
+func validateWritable(res entity.Resolved, fields ...string) error {
+	for _, f := range fields {
+		if a, ok := res.Entity.AttributeByName(f); ok && !a.Domain.Writable() {
+			return fmt.Errorf("%w: field %q is computed by the database and cannot be written", ErrInvalidInput, f)
+		}
+	}
+	return nil
+}
+
 func resolveDMLEntity(tc Context, name string) (entity.Resolved, error) {
 	res, ok := tc.Registry.Resolve(name)
 	if !ok {
@@ -679,43 +720,6 @@ func resolveDMLEntity(tc Context, name string) (entity.Resolved, error) {
 		return entity.Resolved{}, ErrDMLToolsDisabled
 	}
 	return res, nil
-}
-
-func routeEntity(tc Context, e entity.Entity) (Context, error) {
-	name := e.DatasourceName()
-	tc.DataSource = name
-	if len(tc.Sources) == 0 {
-		return tc, nil
-	}
-	source, ok := tc.Sources[name]
-	if !ok {
-		return tc, fmt.Errorf("%w: datasource %q", ErrEntityNotFound, name)
-	}
-	tc.DB, tc.Dialect, tc.Gate, tc.Analyze = source.DB, source.Dialect, source.Gate, source.Analyze
-	if tc.Transaction != "" {
-		if tc.Transactions == nil {
-			return tc, ErrTransactionNotFound
-		}
-		db, err := tc.Transactions.DB(tc.Transaction, tc.Session, tc.Role, tc.Subject, name)
-		if err != nil {
-			return tc, err
-		}
-		tc.DB = db
-	}
-	return tc, nil
-}
-
-func afterWrite(tc Context, e entity.Entity, transaction string) error {
-	if transaction == "" {
-		if tc.Cache != nil {
-			return tc.Cache.Invalidate(e.Name)
-		}
-		return nil
-	}
-	if tc.Transactions == nil {
-		return ErrTransactionNotFound
-	}
-	return tc.Transactions.MarkDirty(transaction, tc.Session, tc.Role, tc.Subject, e.DatasourceName(), e.Name)
 }
 
 // withTimeout bounds ctx by timeout, or by tc.Timeout when timeout is zero; a

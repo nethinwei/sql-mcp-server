@@ -13,7 +13,7 @@ func TestDiagnosticProfileAddsIsolatedTenantEntity(t *testing.T) {
 		t.Fatalf("diagnostic entity count = %d, want %d", len(entities), defaultCount+2)
 	}
 	tenant := entities[len(entities)-2].(map[string]any)
-	if tenant["name"] != "tenant_customers" || tenant["source"] != "wl_customers" {
+	if tenant["name"] != "tenant_customers" || tenant["source"] != "wl_tenant_customers" || tenant["kind"] != "view" {
 		t.Fatalf("tenant entity = %#v", tenant)
 	}
 	policies := tenant["rowPolicies"].(map[string]any)
@@ -22,7 +22,7 @@ func TestDiagnosticProfileAddsIsolatedTenantEntity(t *testing.T) {
 		t.Fatalf("analyst row policy = %#v", analyst)
 	}
 	restricted := entities[len(entities)-1].(map[string]any)
-	if restricted["name"] != "internal_audit_log" {
+	if restricted["name"] != "internal_audit_log" || restricted["source"] != "wl_internal_audit_log" {
 		t.Fatalf("restricted entity = %#v", restricted)
 	}
 }

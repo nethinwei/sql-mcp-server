@@ -100,41 +100,80 @@ const visible = computed(() => {
 
 type Column = Table['columns'][number]
 
+// tableConstraints lists the keys (saying why a unique key cannot identify a
+// row), the foreign keys with the actions that write referencing rows, and
+// triggers, under the column list.
+function tableConstraints(tb: Table) {
+  const cols = (c: readonly string[]) => `(${c.join(', ')})`
+  const lines = [
+    ...tb.keys.map((k) => h('div', { class: 'constraint' }, [
+      h(NTag, { size: 'tiny', bordered: false, type: k.reason ? 'default' : 'info' },
+        () => t(k.primary ? 'datasources.primaryKey' : 'datasources.uniqueKey')),
+      h('span', { class: 'mono' }, ` ${cols(k.columns)} `),
+      k.reason
+        ? h(NText, { depth: 3 }, () => t('datasources.notIdentity', { reason: t(`datasources.keyReason.${k.reason}`) }))
+        : null,
+    ])),
+    ...tb.foreignKeys.map((fk) => h('div', { class: 'constraint' }, [
+      h(NTag, { size: 'tiny', bordered: false }, () => t('datasources.foreignKey')),
+      h('span', { class: 'mono' },
+        ` ${cols(fk.columns)} → ${fk.refSchema}.${fk.refTable} ${cols(fk.refColumns)}`),
+      ...[['onDelete', fk.onDelete], ['onUpdate', fk.onUpdate]].filter(([, a]) => a).map(([on, a]) =>
+        h(NTag, { size: 'tiny', bordered: false, type: 'warning', class: 'action' },
+          () => t(`datasources.${on}`, { action: t(`datasources.fkAction.${a}`) }))),
+    ])),
+    tb.sideEffects ? h(NText, { type: 'warning', class: 'constraint' }, () => t('datasources.sideEffects')) : null,
+  ]
+  return lines.some(Boolean) ? h('div', { class: 'constraints' }, lines) : null
+}
+
 // The expanded table lists one column per row, like the column view of a
-// database client.
-const columnDetail = computed<DataTableColumns<Column>>(() => [
-  { title: '#', key: 'index', width: 44, render: (_, i) => h(NText, { depth: 3 }, () => i + 1) },
-  {
-    title: t('datasources.columnName'), key: 'name', minWidth: 140,
-    render: (c) => h('span', { class: 'mono' + (c.primaryKey ? ' strong' : '') }, c.name),
-  },
-  {
-    title: t('datasources.columnType'), key: 'type', minWidth: 140,
-    render: (c) => h(NText, { depth: 2, class: 'mono' }, () => c.type),
-  },
-  {
-    title: t('datasources.notNull'), key: 'nullable', width: 72, align: 'center',
-    render: (c) => (c.nullable ? h(NText, { depth: 3 }, () => '—') : '✓'),
-  },
-  {
-    title: t('datasources.primaryKey'), key: 'primaryKey', width: 72, align: 'center',
-    render: (c) => (c.primaryKey ? h(NTag, { size: 'small', type: 'info', bordered: false }, () => 'PK') : null),
-  },
-  {
-    title: t('datasources.description'), key: 'description', ellipsis: { tooltip: true },
-    render: (c) => c.description || h(NText, { depth: 3 }, () => '—'),
-  },
-])
+// database client. A composite primary key is one key over several columns,
+// so each member shows its position in the key rather than a separate "PK".
+function columnDetail(tb: Table): DataTableColumns<Column> {
+  const pk = tb.candidate.primaryKey
+  const pkTag = (c: Column) => {
+    const i = pk.indexOf(c.name)
+    if (i < 0) return null
+    const label = pk.length > 1 ? `PK ${i + 1}/${pk.length}` : 'PK'
+    const title = pk.length > 1 ? t('datasources.compositeKey', { cols: pk.join(', '), n: i + 1 }) : undefined
+    return h(NTag, { size: 'small', type: 'info', bordered: false, title }, () => label)
+  }
+  return [
+    { title: '#', key: 'index', width: 44, render: (_, i) => h(NText, { depth: 3 }, () => i + 1) },
+    {
+      title: t('datasources.columnName'), key: 'name', minWidth: 140,
+      render: (c) => h('span', { class: 'mono' + (c.primaryKey ? ' strong' : '') }, c.name),
+    },
+    {
+      title: t('datasources.columnType'), key: 'type', minWidth: 140,
+      render: (c) => h(NText, { depth: 2, class: 'mono' }, () => c.type),
+    },
+    {
+      title: t('datasources.notNull'), key: 'nullable', width: 72, align: 'center',
+      render: (c) => (c.nullable ? h(NText, { depth: 3 }, () => '—') : '✓'),
+    },
+    {
+      title: t('datasources.primaryKey'), key: 'primaryKey', width: 88, align: 'center', render: pkTag,
+    },
+    {
+      title: t('datasources.description'), key: 'description', ellipsis: { tooltip: true },
+      render: (c) => c.description || h(NText, { depth: 3 }, () => '—'),
+    },
+  ]
+}
 
 const columns = computed<DataTableColumns<Table>>(() => [
   { type: 'selection', disabled: (tb) => !status(tb).importable },
   {
     type: 'expand',
-    renderExpand: (tb) =>
+    renderExpand: (tb) => h('div', [
       h(NDataTable, {
-        class: 'cols', size: 'small', bordered: false, columns: columnDetail.value, data: tb.columns,
+        class: 'cols', size: 'small', bordered: false, columns: columnDetail(tb), data: tb.columns,
         rowKey: (c: Column) => c.name,
       }),
+      tableConstraints(tb),
+    ]),
   },
   {
     title: t('datasources.table'), key: 'table', minWidth: 160,
@@ -255,7 +294,16 @@ function applySync() {
             <n-text strong>{{ d.name }}</n-text>
             <n-tag size="tiny" :bordered="false">{{ d.driver }}</n-tag>
           </div>
-          <div class="ds-dsn mono">{{ d.dsn }}</div>
+          <div v-if="d.connections.length <= 1" class="ds-dsn mono">{{ d.dsn }}</div>
+          <template v-else>
+            <div v-for="c in d.connections" :key="c.name" class="ds-dsn mono" :title="c.dsn">
+              {{ c.name }}<template v-if="c.role !== 'primary' || c.pooler"> ({{ [c.role, c.pooler].filter(Boolean).join(', ') }})</template>: {{ c.dsn }}
+            </div>
+            <n-text depth="3" class="ds-count">
+              {{ t('datasources.routing', d.routing) }}<template v-if="d.readAfterWrite"> ·
+                {{ t('datasources.readAfterWrite', { d: d.readAfterWrite }) }}</template>
+            </n-text>
+          </template>
           <n-text depth="3" class="ds-count">
             {{ entityCount(d.name) }}
           </n-text>
@@ -356,6 +404,8 @@ function applySync() {
 </template>
 
 <style scoped>
+.constraints { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px 4px; font-size: 12px; }
+.constraint .action { margin-left: 6px; }
 .ds { cursor: pointer; height: 100%; }
 .ds.active { border-color: #2f6fed; box-shadow: 0 0 0 1px #2f6fed inset; }
 .ds-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }

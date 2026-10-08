@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -58,7 +59,27 @@ func yamlDocument(payload []byte) (map[string]any, error) {
 func toDatasources(cfg *config.Config) []Datasource {
 	out := make([]Datasource, 0, len(cfg.Databases))
 	for name, db := range cfg.Databases {
-		out = append(out, Datasource{Name: name, Driver: db.Driver, Dsn: bootstrap.RedactDSN(db.Driver, db.DSN)})
+		connections := db.ConnectionsOrDSN()
+		route := db.Route()
+		ds := Datasource{
+			Name: name, Driver: db.Driver, Dsn: bootstrap.RedactDSN(db.Driver, connections[route.Read].DSN),
+			Routing:     &DatasourceRouting{Read: route.Read, Write: route.Write, Execute: route.Execute},
+			Connections: make([]DatasourceConnection, 0, len(connections)),
+		}
+		if db.ReadAfterWrite > 0 {
+			ds.ReadAfterWrite = optional(db.ReadAfterWrite.String())
+		}
+		for _, connection := range slices.Sorted(maps.Keys(connections)) {
+			c := connections[connection]
+			role := c.Role
+			if role == "" {
+				role = "primary"
+			}
+			ds.Connections = append(ds.Connections, DatasourceConnection{
+				Name: connection, Dsn: bootstrap.RedactDSN(db.Driver, c.DSN), Role: role, Pooler: optional(c.Pooler),
+			})
+		}
+		out = append(out, ds)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -72,9 +93,10 @@ func optional(s string) *string {
 	return &s
 }
 
-func orEmpty(s []string) []string {
+// orEmpty returns s, or an empty list for a non-null API field.
+func orEmpty[T any](s []T) []T {
 	if s == nil {
-		return []string{}
+		return []T{}
 	}
 	return s
 }
@@ -83,7 +105,9 @@ func toEntity(e config.EntityConfig) Entity {
 	out := Entity{
 		Name: e.Name, Source: optional(e.Source), Datasource: optional(e.DataSource), Schema: optional(e.Schema),
 		Kind:        optional(e.Kind),
-		Description: optional(e.Description), PrimaryKey: orEmpty(e.PrimaryKey), Params: orEmpty(e.Params),
+		Description: optional(e.Description), PrimaryKey: orEmpty(e.PrimaryKey),
+		UniqueKeys: orEmpty(e.UniqueKeys), Params: orEmpty(e.Params),
+		Affects: orEmpty(e.Affects), AllowCascade: e.AllowCascade,
 		Fields:        make([]Field, 0, len(e.Fields)),
 		Relationships: make([]Relationship, 0, len(e.Relationships)),
 		Mcp: &EntityMcp{
@@ -279,7 +303,9 @@ func toEdit(in DraftInput) (configedit.Edit, error) {
 func entityConfig(in EntityInput) (config.EntityConfig, error) {
 	e := config.EntityConfig{
 		Name: in.Name, Source: deref(in.Source), DataSource: deref(in.Datasource), Schema: deref(in.Schema),
-		Kind: deref(in.Kind), Description: deref(in.Description), PrimaryKey: in.PrimaryKey, Params: in.Params,
+		Kind: deref(in.Kind), Description: deref(in.Description), PrimaryKey: in.PrimaryKey, UniqueKeys: in.UniqueKeys,
+		Params:  in.Params,
+		Affects: in.Affects, AllowCascade: derefBool(in.AllowCascade),
 	}
 	for _, f := range in.Fields {
 		e.Fields = append(e.Fields, config.FieldConfig{

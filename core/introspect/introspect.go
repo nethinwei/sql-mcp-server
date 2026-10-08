@@ -3,6 +3,7 @@ package introspect
 import (
 	"context"
 	"slices"
+	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 )
@@ -29,6 +30,16 @@ type Catalog struct {
 	// Default is where an entity without a schema reads; when unknown, such
 	// an entity matches a table name unique in the catalog.
 	Default string
+	// FoldCase matches schema and table names case-insensitively, as the
+	// database compares them (see Physical.FoldCase).
+	FoldCase bool
+}
+
+func (c Catalog) sameName(a, b string) bool {
+	if c.FoldCase {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 // Lookup finds the table named by schema (empty for the default) and table.
@@ -38,10 +49,10 @@ func (c Catalog) Lookup(schema, table string) (entity.Entity, bool) {
 	}
 	var found []entity.Entity
 	for _, t := range c.Tables {
-		if tableName(t) != table {
+		if !c.sameName(tableName(t), table) {
 			continue
 		}
-		if schema != "" && t.Schema == schema {
+		if schema != "" && c.sameName(t.Schema, schema) {
 			return t, true
 		}
 		found = append(found, t)
@@ -108,11 +119,11 @@ type Drift struct {
 }
 
 // Reconcile matches configured table and view entities to their tables in the
-// catalog. It returns the entities with empty entity and field descriptions
-// taken from the database comments (a configured description overrides a
-// comment), and the drift: missing entities by name, missing and extra fields
-// as "entity.field". Procedures are returned unchanged. It is pure and
-// deterministic.
+// catalog. It returns the entities with each field's domain (type,
+// nullability, defaults) and empty entity and field descriptions taken from
+// the database (a configured description overrides a comment), and the drift:
+// missing entities by name, missing and extra fields as "entity.field".
+// Procedures are returned unchanged. It is pure and deterministic.
 func Reconcile(configured []entity.Entity, c Catalog) ([]entity.Entity, Drift) {
 	out := make([]entity.Entity, len(configured))
 	d := Drift{}
@@ -167,15 +178,17 @@ func inherit(ce, de entity.Entity) entity.Entity {
 	if ce.Description == "" {
 		ce.Description = de.Description
 	}
-	comments := make(map[string]string, len(de.Attributes))
+	columns := make(map[string]entity.Attribute, len(de.Attributes))
 	for _, a := range de.Attributes {
-		comments[a.Name] = a.Description
+		columns[a.Name] = a
 	}
 	attrs := make([]entity.Attribute, len(ce.Attributes))
 	for i, a := range ce.Attributes {
+		column := columns[a.Name]
 		if a.Description == "" {
-			a.Description = comments[a.Name]
+			a.Description = column.Description
 		}
+		a.Domain = column.Domain
 		attrs[i] = a
 	}
 	ce.Attributes = attrs

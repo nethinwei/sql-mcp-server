@@ -3,6 +3,8 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"maps"
 	"slices"
 
 	"github.com/nethinwei/sql-mcp-server/core/audit"
@@ -11,6 +13,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/cost"
 	"github.com/nethinwei/sql-mcp-server/core/engine"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
+	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/mask"
 	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
@@ -18,17 +21,28 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/tool"
 )
 
-// AssembleWithProviders wires named providers. It is intended for tests and
-// embedders; ownership transfers to the returned App on success. On failure
-// the providers stay with the caller and every resource acquired here is
-// released: configuration is checked before any resource is acquired.
-func AssembleWithProviders(cfg *config.Config, providers map[string]Provider) (*App, error) {
+// AssembleWithConnections wires opened connections. Ownership transfers to
+// the returned App on success. On failure the connections stay with the
+// caller and every resource acquired here is released: configuration is
+// checked before any resource is acquired. Each datasource's read connection
+// serves introspection and EXPLAIN.
+func AssembleWithConnections(cfg *config.Config, connections Connections) (*App, error) {
+	providers, err := readConnections(cfg, connections)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkDefaultSchemas(cfg, connections); err != nil {
+		return nil, err
+	}
 	checked, err := checkAssembly(cfg, providers)
 	if err != nil {
 		return nil, err
 	}
+	for _, p := range (&App{Connections: connections}).allProviders() {
+		configurePool(p, cfg.RateLimit.IOPool, cfg.RateLimit.ConnMaxIdleTime, cfg.RateLimit.ConnMaxLifetime)
+	}
 	feedback := newFeedbackStore(cfg)
-	sources, txBeginners, prepared, err := buildDataSources(cfg, providers, feedback)
+	sources, txBeginners, prepared, err := buildDataSources(cfg, connections, providers, feedback)
 	if err != nil {
 		closePrepared(prepared)
 		return nil, err
@@ -45,11 +59,65 @@ func AssembleWithProviders(cfg *config.Config, providers map[string]Provider) (*
 		return nil, err
 	}
 	defaultName, defaultSource := defaultDatasource(providers, sources)
-	return newAssembledApp(
+	app := newAssembledApp(
 		cfg, providers, prepared, sources, txBeginners, checked.registry,
 		rbac.NewGrantAuthorizer(checked.registry, checked.policy), aud, newAssembleCache(cfg), checked.masker,
 		feedback, defaultSource, defaultName, eng, checked.tools,
-	), nil
+	)
+	app.Connections = connections
+	app.Capabilities = assessCapabilities(cfg, connections, checked.registry.Entities())
+	for _, warning := range CapabilityWarnings(cfg, app.Capabilities) {
+		slog.Warn("grant exceeds the datasource connection's privileges", "detail", warning)
+	}
+	return app, nil
+}
+
+// readConnections returns each datasource's read connection.
+func readConnections(cfg *config.Config, connections Connections) (map[string]Provider, error) {
+	readers := make(map[string]Provider, len(connections))
+	for datasource, byName := range connections {
+		name := cfg.Databases[datasource].Route().Read
+		p, ok := byName[name]
+		if !ok {
+			return nil, fmt.Errorf("datasource %q has no connection %q", datasource, name)
+		}
+		readers[datasource] = p
+	}
+	return readers, nil
+}
+
+// checkDefaultSchemas requires the connections of a datasource to resolve
+// unqualified names to the same schema (accounts may have different
+// search_paths or default databases); otherwise its entities must name one.
+func checkDefaultSchemas(cfg *config.Config, connections Connections) error {
+	for datasource, byName := range connections {
+		if !unqualifiedEntities(cfg, datasource) {
+			continue
+		}
+		defaults := map[string]string{}
+		for connection, p := range byName {
+			lister, ok := p.Introspector().(introspect.SchemaLister)
+			if !ok {
+				continue
+			}
+			_, current, err := lister.Schemas(context.Background())
+			if err != nil {
+				return fmt.Errorf("datasource %q connection %q: %w", datasource, connection, err)
+			}
+			defaults[connection] = current
+		}
+		if len(slices.Compact(slices.Sorted(maps.Values(defaults)))) > 1 {
+			return fmt.Errorf("datasource %q: connections resolve unqualified names to different schemas %v; "+
+				"set schema on its entities", datasource, defaults)
+		}
+	}
+	return nil
+}
+
+func unqualifiedEntities(cfg *config.Config, datasource string) bool {
+	return slices.ContainsFunc(cfg.Entities, func(e config.EntityConfig) bool {
+		return e.DatasourceName() == datasource && e.Schema == "" && e.Kind != "procedure"
+	})
 }
 
 // checkedAssembly holds what assembly derives from configuration and the live
@@ -105,9 +173,6 @@ func prepareAssembleProviders(cfg *config.Config, providers map[string]Provider)
 	if err := cost.ValidateTemplateScopes(datasources, cfg.Cost.AllowTemplates, cfg.Cost.RejectTemplates); err != nil {
 		return fmt.Errorf("assemble: %w", err)
 	}
-	for _, prov := range providers {
-		configurePool(prov, cfg.RateLimit.IOPool, cfg.RateLimit.ConnMaxIdleTime, cfg.RateLimit.ConnMaxLifetime)
-	}
 	return nil
 }
 
@@ -117,7 +182,11 @@ func validateAssembleEntities(entities []entity.Entity, providers map[string]Pro
 	if err := validateEntityDatasources(entities, providers); err != nil {
 		return nil, err
 	}
-	return reconcileAll(providers, entities)
+	entities, err := reconcileAll(providers, entities)
+	if err != nil {
+		return nil, err
+	}
+	return entities, checkUniqueRelations(entities)
 }
 
 func validateEntityDatasources(entities []entity.Entity, providers map[string]Provider) error {
@@ -140,7 +209,7 @@ func reconcileAll(providers map[string]Provider, entities []entity.Entity) ([]en
 				at = append(at, i)
 			}
 		}
-		reconciled, err := reconcileEntities(context.Background(), prov, scoped)
+		reconciled, err := reconcileEntities(context.Background(), name, prov, scoped)
 		if err != nil {
 			return nil, fmt.Errorf("datasource %q: %w", name, err)
 		}
@@ -164,23 +233,42 @@ func newFeedbackStore(cfg *config.Config) cost.FeedbackStore {
 	)
 }
 
+// buildDataSources routes each datasource: the read connection (with its
+// gate and EXPLAIN) serves reads, and the routed connections writes,
+// procedure calls and read-write transactions. A connection behind a
+// transaction-mode pooler gets no prepared-statement cache.
 func buildDataSources(
 	cfg *config.Config,
-	providers map[string]Provider,
+	connections Connections,
+	readers map[string]Provider,
 	feedback cost.FeedbackStore,
 ) (map[string]tool.DataSource, map[string]store.TxBeginner, map[string]*store.PreparedDB, error) {
-	sources := make(map[string]tool.DataSource, len(providers))
-	txBeginners := make(map[string]store.TxBeginner, len(providers))
-	prepared := make(map[string]*store.PreparedDB, len(providers))
-	for name, prov := range providers {
-		txBeginners[name] = prov
-		db := store.WithPreparedCache(prov, cfg.Cache.PreparedMaxSize)
-		prepared[name] = db
-		source, err := dataSourceForProvider(cfg, name, prov, db, feedback, len(providers) == 1)
+	sources := make(map[string]tool.DataSource, len(connections))
+	txBeginners := make(map[string]store.TxBeginner, len(connections))
+	prepared := map[string]*store.PreparedDB{}
+	for name, byName := range connections {
+		database := cfg.Databases[name]
+		cached := func(connection string) *store.PreparedDB {
+			key := name + "/" + connection
+			if db, ok := prepared[key]; ok {
+				return db
+			}
+			size := cfg.Cache.PreparedMaxSize
+			if database.ConnectionsOrDSN()[connection].Pooler != "" {
+				size = 0
+			}
+			prepared[key] = store.WithPreparedCache(byName[connection], size)
+			return prepared[key]
+		}
+		route := database.Route()
+		source, err := dataSourceForProvider(cfg, name, readers[name], cached(route.Read), feedback, len(connections) == 1)
 		if err != nil {
 			return nil, nil, prepared, err
 		}
+		source.Write, source.Execute = cached(route.Write), cached(route.Execute)
+		source.ReadTx, source.ReadAfterWrite = readers[name], database.ReadAfterWrite
 		sources[name] = source
+		txBeginners[name] = byName[route.Write]
 	}
 	return sources, txBeginners, prepared, nil
 }
@@ -327,6 +415,7 @@ func newAssembledApp(
 		Cache:        cc,
 		Budget:       newBudgetManager(cfg.Budget, userBudgets(cfg)),
 		Transactions: tool.NewTransactionManager(cfg.Transactions.TTL, cfg.Transactions.MaxOpen),
+		Writes:       tool.NewWriteTracker(),
 		TxBeginners:  txBeginners,
 	}
 	applyAssembledAppConfig(app, cfg)

@@ -47,7 +47,7 @@ func prepareAggregate(ctx context.Context, tc Context, in aggregateInput) (aggre
 	if err != nil {
 		return aggregatePlan{}, err
 	}
-	tc, err = routeEntity(tc, res.Entity)
+	tc, err = routeEntity(tc, res.Entity, entity.ActionAggregate)
 	if err != nil {
 		return aggregatePlan{}, err
 	}

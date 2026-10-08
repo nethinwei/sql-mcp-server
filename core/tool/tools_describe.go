@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/entity"
 )
 
 // ---- describe_entities ----
@@ -53,7 +55,9 @@ func (DescribeTool) Run(ctx context.Context, input json.RawMessage, tc Context) 
 		if !allowed {
 			continue
 		}
-		out = append(out, map[string]any{"name": e.Name, "description": e.Description})
+		out = append(out, map[string]any{
+			"name": e.Name, "description": e.Description, "datasource": e.DatasourceName(),
+		})
 	}
 	return Result{Content: out}, nil
 }
@@ -80,9 +84,24 @@ func describeEntity(ctx context.Context, tc Context, name string) (Result, error
 		fields = append(fields, map[string]any{
 			"name": a.Name, "alias": a.Alias,
 			"description": a.Description, "type": a.Domain.Type,
+			"required": a.Domain.Required(), "readOnly": !a.Domain.Writable(),
 		})
 	}
 	return Result{Content: []map[string]any{{
-		"name": res.Entity.Name, "description": res.Entity.Description, "fields": fields,
+		"name": res.Entity.Name, "description": res.Entity.Description,
+		"datasource": res.Entity.DatasourceName(), "fields": fields,
+		"keys": VisibleKeys(res.Entity, fieldNames),
 	}}}, nil
+}
+
+// VisibleKeys lists the entity's identity keys whose every column is among
+// visible, the fields a caller can use to address one row.
+func VisibleKeys(e entity.Entity, visible []string) [][]string {
+	out := [][]string{}
+	for _, key := range e.IdentityKeys(false, false) {
+		if !slices.ContainsFunc(key, func(c string) bool { return !slices.Contains(visible, c) }) {
+			out = append(out, key)
+		}
+	}
+	return out
 }

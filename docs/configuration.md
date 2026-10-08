@@ -311,11 +311,20 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
 | `driver` | 字符串 |  | 必填；格式 `^[a-z][a-z0-9_-]*$` | 数据库驱动；内置 postgres、mysql、oceanbase，扩展程序可注册其他名称。 |
-| `dsn` | 字符串 |  | 必填；非空 | 连接串，可包含 ${ENV} 或 ${file:/path} 占位符（仅 DSN 解析占位符；file 路径须在 server.secrets.allowedRoots 下）。 |
+| `dsn` | 字符串 |  |  | 连接串，可包含 ${ENV} 或 ${file:/path} 占位符（仅 DSN 解析占位符；file 路径须在 server.secrets.allowedRoots 下）。单个连接的简写，与 connections 二选一。 |
+| `connections.dsn` | 字符串 |  | 必填；非空 | 连接串，占位符规则同 dsn。 |
+| `connections.role` | 字符串 |  | 可选 `primary`、`replica` | primary（默认）或 replica；replica 只承担读取。 |
+| `connections.pooler` | 字符串 |  | 可选 `transaction` | 连接经过事务模式的连接池（pgbouncer、ProxySQL）时设为 transaction：不使用预编译语句等会话状态，语句超时改由请求上下文取消。 |
+| `connections` | 映射（名称 → 对象） |  | 名称格式 `^[a-z0-9][a-z0-9_-]*$` | 同一数据库的多个连接（如权限不同的账号、只读副本），按名称索引；与 dsn 二选一。多个连接时须配置 routing。 |
+| `routing.read` | 字符串 |  |  | 读取、聚合、EXPLAIN 与只读事务使用的连接。 |
+| `routing.write` | 字符串 |  |  | 新增、修改、删除与读写事务使用的连接；不能是 replica。 |
+| `routing.execute` | 字符串 |  |  | 存储过程使用的连接；不能是 replica。 |
+| `routing` | 对象 |  |  | 各类动作使用的连接；只有一个连接时可省略。 |
+| `readAfterWrite` | 时长 |  | ≥ 0 | 同一会话写入后，在这段时间内的读取改走 write 连接，以便在副本上读到自己的写入；0 表示不切换。 |
 
 ### 定义 `entity`
 
-一个表、视图或存储过程。
+一个表、视图（含物化视图）或存储过程。一个物理表或视图最多对应一个实体：同一数据源中名称完全相同的重复在校验时拒绝，按默认 schema、大小写规则和服务器身份（多个数据源指向同一库）解析后的重复在启动时拒绝。PostgreSQL 分区表只暴露父表，子分区不导入。
 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
@@ -325,7 +334,8 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `schema` | 字符串 |  |  | 数据库 schema。 |
 | `kind` | 字符串 |  | 可选 `table`、`view`、`procedure` | 实体类型；省略时为 table。 |
 | `description` | 字符串 |  |  | 给 Agent 看的实体说明；留空时使用数据库中的表注释（启动或重载时读取）。 |
-| `primaryKey` | 字符串列表 |  |  | 主键字段，决定 keyset 分页与主键写保护。 |
+| `primaryKey` | 字符串列表 |  |  | 主键字段。表以数据库中的主键为准，这里写的与之不同时启动告警；视图上声明的键只用于读取（keyset 分页、单行读取），不会让修改或删除通过写保护。 |
+| `uniqueKeys` | 字符串列表列表 |  |  | 唯一键（每个为字段列表），与主键一样可唯一定位一行。表以数据库中的唯一约束与唯一索引为准（部分索引、表达式索引、前缀索引、含可空列的键除外）；视图上声明的唯一键只用于读取。 |
 | `fields.name` | 字符串 |  | 必填；非空 | 数据库列名。 |
 | `fields.alias` | 字符串 |  |  | 对 Agent 暴露的名称；省略时用列名。 |
 | `fields.description` | 字符串 |  |  | 给 Agent 看的字段说明；留空时使用数据库中的列注释（启动或重载时读取）。 |
@@ -350,10 +360,12 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `relationships.name` | 字符串 |  | 必填；非空 | 关系名，展开时使用。 |
 | `relationships.target` | 字符串 |  | 必填；非空 | 目标实体名。 |
 | `relationships.cardinality` | 字符串 |  | 必填；可选 `one`、`one-to-one`、`belongs-to`、`many`、`one-to-many`、`has-many` | 基数；belongs-to/one 展开为单个对象，has-many/many 展开为列表。 |
-| `relationships.joinOn` | 映射（名称 → 字符串） |  | 必填 | 连接键：本实体字段 → 目标实体字段。 |
-| `relationships` | 对象列表 |  |  | 可展开的关系。当前只支持同数据源、恰好一个连接键的一层展开。 |
+| `relationships.joinOn` | 映射（名称 → 字符串） |  | 必填 | 连接键：本实体字段 → 目标实体字段；多列外键写多对，全部相等才关联。 |
+| `relationships` | 对象列表 |  |  | 可展开的关系。当前只支持同数据源内的一层展开。 |
 | `tenantPolicy` | 自由对象 |  |  | 租户硬边界，语法同一条行过滤；对所有主体始终 AND，不参与多角色合并。引用的 ${subject.x} 缺失时匹配零行。 |
 | `params` | 字符串列表 |  |  | 存储过程参数的固定位置顺序；省略或空表示无参。 |
+| `affects` | 字符串列表 |  |  | 存储过程会写入的实体（须与过程同一数据源），用于读缓存失效；省略时过程执行后失效该数据源的全部缓存。 |
+| `allowCascade` | 布尔 |  |  | 允许级联写入：删除本实体的行或修改其被引用列时，外键的 CASCADE、SET NULL、SET DEFAULT 会改写其他表的行。默认要求调用方对每个被级联的实体都有对应的删除或修改权限，且不带行范围限制；被级联的表未暴露为实体时拒绝。设为 true 则不做该检查，由管理员对级联负责。 |
 
 ### 定义 `role`
 

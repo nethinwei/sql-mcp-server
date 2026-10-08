@@ -91,7 +91,8 @@ func setFields(values ...any) map[string]bool {
 }
 
 const readConfig = `query($id: ID!) { revision(id: $id) { yaml config {
-  entities { name source datasource schema kind description primaryKey params tenantPolicy legacyAccess
+  entities { name source datasource schema kind description primaryKey uniqueKeys params affects allowCascade
+    tenantPolicy legacyAccess
     mcp { dmlTools customTool trustedProcedure }
     fields { name alias description mask exclude }
     relationships { name target cardinality joinOn } }

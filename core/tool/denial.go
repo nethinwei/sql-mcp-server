@@ -6,10 +6,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/nethinwei/sql-mcp-server/core/budget"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
+	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
+	"github.com/nethinwei/sql-mcp-server/core/store"
 )
 
 // Denial is the stable, machine-readable rejection contract returned to MCP
@@ -41,6 +44,8 @@ const (
 	CodeTransactionScope    = "TRANSACTION_SCOPE"
 	CodeTransactionCapacity = "TRANSACTION_CAPACITY"
 	CodeAmbiguousFieldScope = "AMBIGUOUS_FIELD_SCOPE"
+	CodeConstraintViolation = "CONSTRAINT_VIOLATION"
+	CodeDatasourceForbidden = "DATASOURCE_FORBIDDEN"
 )
 
 var sentinelDenials = []struct {
@@ -53,6 +58,7 @@ var sentinelDenials = []struct {
 	{ErrInvalidInput, CodeInvalidInput, true},
 	{ErrDMLToolsDisabled, CodeDMLToolsDisabled, false},
 	{ErrUnsafeWrite, CodeUnsafeWrite, true},
+	{ErrDatasourceForbidden, CodeDatasourceForbidden, false},
 	{ErrDatabase, CodeDatabaseError, false},
 	{ErrTransactionNotFound, CodeTransactionNotFound, false},
 	{ErrTransactionScope, CodeTransactionScope, false},
@@ -62,21 +68,9 @@ var sentinelDenials = []struct {
 // DenialFor maps a business-level error to the rejection contract. ok is
 // false for internal errors, which must not be reflected to clients.
 func DenialFor(err error, decisionID string) (Denial, bool) {
-	var ce *cost.ExceededError
-	if errors.As(err, &ce) {
-		return costDenial(ce, decisionID), true
-	}
-	var ae *AmbiguousFieldScopeError
-	if errors.As(err, &ae) {
-		return Denial{
-			Code: CodeAmbiguousFieldScope, Reason: "requested fields span grants with different row scopes",
-			Retryable:   true,
-			Constraints: map[string]any{"fieldScopes": ae.FieldScopes},
-			Hints: []string{
-				"retry with explicit fields contained in one of constraints.fieldScopes",
-			},
-			DecisionID: decisionID,
-		}, true
+	if d, ok := typedDenial(err); ok {
+		d.DecisionID = decisionID
+		return d, true
 	}
 	if errors.Is(err, budget.ErrExceeded) {
 		return Denial{
@@ -102,6 +96,32 @@ func DenialFor(err error, decisionID string) (Denial, bool) {
 				DecisionID: decisionID,
 			}, true
 		}
+	}
+	return Denial{}, false
+}
+
+// typedDenial maps the error types that carry constraints for the agent.
+func typedDenial(err error) (Denial, bool) {
+	var ce *cost.ExceededError
+	if errors.As(err, &ce) {
+		return costDenial(ce, ""), true
+	}
+	var cv *ConstraintViolationError
+	if errors.As(err, &cv) {
+		return Denial{
+			Code: CodeConstraintViolation, Reason: cv.Error(), Retryable: true,
+			Constraints: map[string]any{"kind": cv.Kind, "fields": cv.Fields},
+			Hints:       []string{"change the values of constraints.fields (or check referenced rows) and retry"},
+		}, true
+	}
+	var ae *AmbiguousFieldScopeError
+	if errors.As(err, &ae) {
+		return Denial{
+			Code: CodeAmbiguousFieldScope, Reason: "requested fields span grants with different row scopes",
+			Retryable:   true,
+			Constraints: map[string]any{"fieldScopes": ae.FieldScopes},
+			Hints:       []string{"retry with explicit fields contained in one of constraints.fieldScopes"},
+		}, true
 	}
 	return Denial{}, false
 }
@@ -174,4 +194,42 @@ func WithDecisionID(ctx context.Context, id string) context.Context {
 func DecisionIDFromContext(ctx context.Context) string {
 	id, _ := ctx.Value(decisionIDCtxKey{}).(string)
 	return id
+}
+
+// ConstraintViolationError reports a write the database rejected for
+// violating a constraint. Fields lists the violating columns the caller may
+// see; the constraint name and the database message are never included.
+type ConstraintViolationError struct {
+	Kind   string
+	Fields []string
+}
+
+func (e *ConstraintViolationError) Error() string {
+	return ErrConstraintViolation.Error() + ": " + e.Kind
+}
+
+func (e *ConstraintViolationError) Unwrap() error { return ErrConstraintViolation }
+
+// writeError classifies the database error of a write on res: a constraint
+// violation becomes an actionable denial, anything else a database error.
+func writeError(res entity.Resolved, err error) error {
+	var ce *store.ConstraintError
+	if !errors.As(err, &ce) {
+		return WrapDBError(err)
+	}
+	columns := ce.Columns
+	if len(columns) == 0 && ce.Constraint != "" {
+		for _, k := range res.Entity.Keys {
+			if k.Name == ce.Constraint {
+				columns = k.Columns
+			}
+		}
+	}
+	fields := []string{}
+	for _, c := range columns {
+		if slices.ContainsFunc(res.Attributes, func(a entity.Attribute) bool { return a.Name == c }) {
+			fields = append(fields, c)
+		}
+	}
+	return &ConstraintViolationError{Kind: ce.Kind, Fields: fields}
 }

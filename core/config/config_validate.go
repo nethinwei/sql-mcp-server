@@ -70,8 +70,8 @@ func (c *Config) validateDatabases(databases map[string]DatabaseConfig) error {
 		if !validDriverName(db.Driver) {
 			return fmt.Errorf("%w: %q in database %q", ErrInvalidDriver, db.Driver, name)
 		}
-		if db.DSN == "" {
-			return fmt.Errorf("%w: database %q", ErrEmptyDSN, name)
+		if err := validateConnections(name, db); err != nil {
+			return err
 		}
 	}
 	datasources := make([]string, 0, len(databases))
@@ -80,6 +80,33 @@ func (c *Config) validateDatabases(databases map[string]DatabaseConfig) error {
 	}
 	if err := cost.ValidateTemplateScopes(datasources, c.Cost.AllowTemplates, c.Cost.RejectTemplates); err != nil {
 		return fmt.Errorf("config: %w", err)
+	}
+	return nil
+}
+
+// validateConnections checks that a database has a DSN or connections, not
+// both, and that several connections are routed explicitly: reads, writes and
+// procedure calls each name a connection, and a replica serves reads only.
+func validateConnections(name string, db DatabaseConfig) error {
+	switch {
+	case db.DSN == "" && len(db.Connections) == 0:
+		return fmt.Errorf("%w: database %q", ErrEmptyDSN, name)
+	case db.DSN != "" && len(db.Connections) > 0:
+		return fmt.Errorf("config: database %q sets both dsn and connections", name)
+	case len(db.Connections) == 0 && db.Routing != (RoutingConfig{}):
+		return fmt.Errorf("config: database %q sets routing without connections", name)
+	}
+	route := db.Route()
+	for action, conn := range map[string]string{"read": route.Read, "write": route.Write, "execute": route.Execute} {
+		target, ok := db.ConnectionsOrDSN()[conn]
+		switch {
+		case conn == "":
+			return fmt.Errorf("config: database %q routing.%s must name a connection", name, action)
+		case !ok:
+			return fmt.Errorf("config: database %q routing.%s names unknown connection %q", name, action, conn)
+		case target.Role == "replica" && action != "read":
+			return fmt.Errorf("config: database %q routes %s to replica %q; replicas serve reads only", name, action, conn)
+		}
 	}
 	return nil
 }
@@ -130,6 +157,7 @@ func (c *Config) validateAQEExplainAnalyze() error {
 func (c *Config) validateEntities(databases map[string]DatabaseConfig) error {
 	entitySources := make(map[string]string, len(c.Entities))
 	entityConfigs := make(map[string]EntityConfig, len(c.Entities))
+	relations := make(map[string]string, len(c.Entities))
 	for _, e := range c.Entities {
 		if e.Name == "" {
 			return ErrEmptyEntityName
@@ -143,6 +171,9 @@ func (c *Config) validateEntities(databases map[string]DatabaseConfig) error {
 		}
 		if _, ok := databases[source]; !ok {
 			return fmt.Errorf("config: entity %q references unknown datasource %q", e.Name, source)
+		}
+		if err := claimRelation(relations, source, e); err != nil {
+			return err
 		}
 		entitySources[e.Name] = source
 		entityConfigs[e.Name] = e
@@ -185,7 +216,91 @@ func (c *Config) validateEntity(
 			return fmt.Errorf("config: entity %q row policy for role %q: %w", e.Name, role, err)
 		}
 	}
+	if err := validateProcedureAffects(e, entitySources, entityConfigs); err != nil {
+		return err
+	}
+	if err := validateKeys(e); err != nil {
+		return err
+	}
 	return validateEntityRelationships(e, entitySources, entityConfigs)
+}
+
+// validateKeys checks that the primary and unique keys name configured
+// fields, each once, and that no key is empty.
+func validateKeys(e EntityConfig) error {
+	fields := make(map[string]bool, len(e.Fields))
+	for _, f := range e.Fields {
+		fields[f.Name] = true
+	}
+	keys := e.UniqueKeys
+	if len(e.PrimaryKey) > 0 {
+		keys = append([][]string{e.PrimaryKey}, keys...)
+	}
+	for _, key := range keys {
+		if len(key) == 0 {
+			return fmt.Errorf("config: entity %q has an empty unique key", e.Name)
+		}
+		if duplicate, ok := firstDuplicate(key); ok {
+			return fmt.Errorf("config: entity %q key lists %q twice", e.Name, duplicate)
+		}
+		for _, column := range key {
+			if !fields[column] {
+				return fmt.Errorf("config: entity %q key column %q is not a configured field", e.Name, column)
+			}
+		}
+	}
+	return nil
+}
+
+// claimRelation enforces that at most one entity exposes a relation, so its
+// policies and cached reads exist once. Only identical names are caught here;
+// assembly also resolves default schemas and case folding against the live
+// database.
+func claimRelation(relations map[string]string, datasource string, e EntityConfig) error {
+	if e.Kind == "procedure" {
+		return nil
+	}
+	key := datasource + "\x00" + e.Schema + "\x00" + e.PhysicalSource()
+	if other, taken := relations[key]; taken {
+		relation := e.PhysicalSource()
+		if e.Schema != "" {
+			relation = e.Schema + "." + relation
+		}
+		return fmt.Errorf("config: entities %q and %q expose the same relation %s on datasource %q; "+
+			"keep one entity (use several connections for different accounts)", other, e.Name, relation, datasource)
+	}
+	relations[key] = e.Name
+	return nil
+}
+
+// validateProcedureAffects checks that a procedure's affects names
+// non-procedure entities on its own datasource, each once.
+func validateProcedureAffects(
+	e EntityConfig,
+	entitySources map[string]string,
+	entityConfigs map[string]EntityConfig,
+) error {
+	if len(e.Affects) == 0 {
+		return nil
+	}
+	if e.Kind != "procedure" {
+		return fmt.Errorf("config: entity %q sets affects but is not a procedure", e.Name)
+	}
+	if duplicate, ok := firstDuplicate(e.Affects); ok {
+		return fmt.Errorf("config: procedure %q lists %q twice in affects (duplicate)", e.Name, duplicate)
+	}
+	for _, name := range e.Affects {
+		target, ok := entityConfigs[name]
+		switch {
+		case !ok:
+			return fmt.Errorf("config: procedure %q affects unknown entity %q", e.Name, name)
+		case target.Kind == "procedure":
+			return fmt.Errorf("config: procedure %q affects %q, which is a procedure", e.Name, name)
+		case entitySources[name] != entitySources[e.Name]:
+			return fmt.Errorf("config: procedure %q affects %q on another datasource %q", e.Name, name, entitySources[name])
+		}
+	}
+	return nil
 }
 
 func visibleFieldNames(fields []FieldConfig) map[string]bool {
@@ -312,8 +427,8 @@ func validateRelationshipJoin(
 	localFields map[string]bool,
 	entityConfigs map[string]EntityConfig,
 ) error {
-	if len(relation.JoinOn) != 1 {
-		return fmt.Errorf("config: relationship %q requires exactly one joinOn pair", relation.Name)
+	if len(relation.JoinOn) == 0 {
+		return fmt.Errorf("config: relationship %q requires at least one joinOn pair", relation.Name)
 	}
 	targetFields := configuredFields(entityConfigs[relation.Target].Fields)
 	for local, target := range relation.JoinOn {

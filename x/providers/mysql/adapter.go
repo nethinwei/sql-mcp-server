@@ -6,21 +6,24 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 	"github.com/nethinwei/sql-mcp-server/x/providers/sqladapter"
 )
 
-// NewAdapterWithTimeout opens a MySQL-compatible database and pings it
-// (fail-fast). It injects sql_safe_updates=1 as a DB-native backstop against
-// full-table UPDATE/DELETE (defense in depth alongside the cost gate's
-// WriteGuard) and a DB-native statement timeout: max_execution_time, or the
-// named OceanBase variable when oceanBaseVariable is set. DSN values set
-// explicitly are respected. The adapter is shared with the oceanbase provider.
-func NewAdapterWithTimeout(dsn string, timeout time.Duration, oceanBaseVariable string) (*sqladapter.Pool, error) {
+// NewAdapter opens a MySQL-compatible database and pings it (fail-fast). It
+// injects sql_safe_updates=1 as a DB-native backstop against full-table
+// UPDATE/DELETE (defense in depth alongside the cost gate's WriteGuard) and a
+// DB-native statement timeout: max_execution_time, or the named OceanBase
+// variable when oceanBaseVariable is set. DSN values set explicitly are
+// respected. Behind a transaction-mode pooler arguments are interpolated by
+// the driver instead of server-side prepared statements, which a pooler may
+// not keep. The adapter is shared with the oceanbase provider.
+func NewAdapter(dsn string, opts providerregistry.Options, oceanBaseVariable string) (*sqladapter.Pool, error) {
+	timeout := opts.Timeout
 	cfg, err := mysqldriver.ParseDSN(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("mysql: parse dsn: %w", err)
@@ -33,6 +36,9 @@ func NewAdapterWithTimeout(dsn string, timeout time.Duration, oceanBaseVariable 
 	}
 	if timeout <= 0 {
 		return nil, errors.New("mysql: statement timeout must be positive")
+	}
+	if opts.Pooler == providerregistry.PoolerTransaction {
+		cfg.InterpolateParams = true
 	}
 	if oceanBaseVariable == "" {
 		if _, ok := cfg.Params["max_execution_time"]; !ok {
@@ -49,7 +55,7 @@ func NewAdapterWithTimeout(dsn string, timeout time.Duration, oceanBaseVariable 
 		_ = db.Close()
 		return nil, fmt.Errorf("mysql: ping failed: %w", err)
 	}
-	return sqladapter.New(db, newTextRows), nil
+	return sqladapter.New(db, newTextRows, classify), nil
 }
 
 // binaryTypes are the column types whose values are bytes, not text.

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { merge3, mergeDeep, useWorkspace } from './workspace'
 import type { WorkspaceQuery } from '@/gql/graphql'
@@ -30,7 +30,7 @@ function loaded(id: string, cfg: {
       config: {
         datasources: [],
         entities: cfg.entities.map((name) => ({
-          name, source: name, datasource: 'default', kind: 'table', primaryKey: [], params: [],
+          name, source: name, datasource: 'default', kind: 'table', primaryKey: [], uniqueKeys: [], params: [], affects: [], allowCascade: false,
           mcp: { dmlTools: true, customTool: false, trustedProcedure: false },
           fields: [{ name: 'id', exclude: false }], relationships: [],
         })),
@@ -312,5 +312,32 @@ describe('fields', () => {
     ws.syncFields('orders', [{ name: 'region', exclude: true }], ['gone'])
     expect(ws.entity('orders')!.fields).toEqual([{ name: 'id' }, { name: 'region', exclude: true }])
     expect(ws.role('analyst')!.grants![0]).toMatchObject({ readFields: ['id'], writeFields: [] })
+  })
+})
+
+describe('persistence', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    const items = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => items.get(k) ?? null,
+      setItem: (k: string, v: string) => void items.set(k, v),
+    })
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('keeps datasources out of storage and ignores ones saved by older versions', () => {
+    const ws = seeded()
+    ws.datasources = [{ name: 'shop', driver: 'postgres', dsn: 'x', connections: [], routing: { read: 'default', write: 'default', execute: 'default' } }]
+    ws.persist()
+    const saved = JSON.parse(localStorage.getItem('smcp.console.workspace.v1')!)
+    expect(saved.datasources).toBeUndefined()
+
+    localStorage.setItem('smcp.console.workspace.v1', JSON.stringify({ ...saved, datasources: [{ name: 'old', driver: 'postgres', dsn: 'x' }] }))
+    setActivePinia(createPinia())
+    const restored = useWorkspace()
+    expect(restored.restore()).toBe(true)
+    expect(restored.datasources).toEqual([])
+    expect(restored.entities.map((e) => e.name)).toEqual(['orders', 'customers'])
   })
 })

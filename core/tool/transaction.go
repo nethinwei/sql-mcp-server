@@ -28,7 +28,7 @@ type transactionHandle struct {
 	subject    string
 	session    string
 	datasource string
-	dirty      map[string]struct{}
+	dirty      map[CacheTarget]struct{}
 	expires    time.Time
 	timer      *time.Timer
 	cancel     context.CancelFunc
@@ -75,7 +75,7 @@ func (m *TransactionManager) Begin(
 	}
 	handle := &transactionHandle{
 		tx: tx, session: session, role: role, subject: scopeKey("", subject), datasource: datasource,
-		dirty: make(map[string]struct{}), expires: time.Now().Add(m.ttl), cancel: cancel,
+		dirty: make(map[CacheTarget]struct{}), expires: time.Now().Add(m.ttl), cancel: cancel,
 	}
 	if err := m.registerHandle(scope, token, handle); err != nil {
 		return "", err
@@ -242,7 +242,7 @@ func (m *TransactionManager) finish(
 	token, session, role string,
 	subject map[string]any,
 	commit bool,
-) ([]string, error) {
+) ([]CacheTarget, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -278,23 +278,23 @@ func (m *TransactionManager) finish(
 			_ = handle.tx.Rollback()
 			return nil, WrapDBError(err)
 		}
-		entities := make([]string, 0, len(handle.dirty))
-		for entity := range handle.dirty {
-			entities = append(entities, entity)
+		targets := make([]CacheTarget, 0, len(handle.dirty))
+		for target := range handle.dirty {
+			targets = append(targets, target)
 		}
-		return entities, nil
+		return targets, nil
 	}
 	return nil, WrapDBError(handle.tx.Rollback())
 }
 
-// Commit commits and returns the entities written by the transaction. The list
+// Commit commits and returns the cache targets the transaction wrote. The list
 // is returned only after a successful commit so callers can invalidate global
 // read caches without rollback pollution.
 func (m *TransactionManager) Commit(
 	ctx context.Context,
 	token, session, role string,
 	subject map[string]any,
-) ([]string, error) {
+) ([]CacheTarget, error) {
 	return m.finish(ctx, token, session, role, subject, true)
 }
 
@@ -304,11 +304,12 @@ func (m *TransactionManager) Rollback(ctx context.Context, token, session, role 
 	return err
 }
 
-// MarkDirty records an entity changed inside a transaction.
+// MarkDirty records the cache targets a write inside a transaction changed.
 func (m *TransactionManager) MarkDirty(
 	token, session, role string,
 	subject map[string]any,
-	datasource, entity string,
+	datasource string,
+	targets ...CacheTarget,
 ) error {
 	handle, err := m.lookup(token, session, role, subject, datasource)
 	if err != nil {
@@ -319,7 +320,9 @@ func (m *TransactionManager) MarkDirty(
 	if handle.closed {
 		return ErrTransactionNotFound
 	}
-	handle.dirty[entity] = struct{}{}
+	for _, target := range targets {
+		handle.dirty[target] = struct{}{}
+	}
 	return nil
 }
 
@@ -431,6 +434,11 @@ func (BeginTransactionTool) Run(ctx context.Context, input json.RawMessage, tc C
 	readOnly, err := resolveTransactionReadOnly(ctx, tc, datasource, in.ReadOnly)
 	if err != nil {
 		return Result{}, err
+	}
+	// A read-only transaction runs on the read connection, unless the
+	// session's reads follow its recent write.
+	if source := tc.Sources[datasource]; readOnly && source.ReadTx != nil && !followsWrite(tc, source, datasource) {
+		beginner = source.ReadTx
 	}
 	isolation, err := parseIsolation(in.Isolation)
 	if err != nil {
@@ -567,15 +575,14 @@ func (CommitTransactionTool) Run(ctx context.Context, input json.RawMessage, tc 
 	if tc.Transactions == nil {
 		return Result{}, ErrTransactionNotFound
 	}
-	entities, err := tc.Transactions.Commit(ctx, token, tc.Session, tc.Role, tc.Subject)
+	targets, err := tc.Transactions.Commit(ctx, token, tc.Session, tc.Role, tc.Subject)
 	if err != nil {
 		return Result{}, err
 	}
-	if tc.Cache != nil {
-		for _, entity := range entities {
-			_ = tc.Cache.Invalidate(entity)
-		}
+	for _, target := range targets {
+		tc.Writes.Record(tc.Session, target.Database)
 	}
+	_ = invalidate(tc.Cache, targets)
 	return Result{Content: []map[string]any{{"committed": true}}}, nil
 }
 

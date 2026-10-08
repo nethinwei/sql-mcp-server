@@ -275,14 +275,26 @@ func (r *queryResolver) Validate(ctx context.Context, draft DraftInput) (*Valida
 	d, err := r.buildDraft(ctx, draft)
 	if err != nil {
 		msg := err.Error()
-		return &Validation{Ok: false, Error: &msg, RestartRequired: []string{}}, nil
+		return &Validation{Ok: false, Error: &msg, RestartRequired: []string{}, Warnings: []string{}}, nil
 	}
 	changes, err := r.restartChanges(ctx, d.cfg)
 	if err != nil {
 		return nil, err
 	}
 	hash := revision.Hash(d.payload)
-	return &Validation{Ok: true, ContentHash: &hash, RestartRequired: changes}, nil
+	warnings := bootstrap.CapabilityWarnings(d.cfg, r.capabilities())
+	if warnings == nil {
+		warnings = []string{}
+	}
+	return &Validation{Ok: true, ContentHash: &hash, RestartRequired: changes, Warnings: warnings}, nil
+}
+
+// Capabilities is the resolver for the capabilities field.
+func (r *queryResolver) Capabilities(ctx context.Context) ([]EntityCapability, error) {
+	if _, err := auth.Require(ctx, auth.PermRead); err != nil {
+		return nil, err
+	}
+	return toCapabilities(r.capabilities()), nil
 }
 
 // Diff is the resolver for the diff field.

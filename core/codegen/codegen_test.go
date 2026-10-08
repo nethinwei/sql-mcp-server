@@ -176,8 +176,8 @@ func TestCompileIsPKPoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.IsPKPoint {
-		t.Fatal("expected IsPKPoint for full-PK equality")
+	if !c.IsKeyPoint {
+		t.Fatal("expected IsKeyPoint for full-PK equality")
 	}
 	scoped := relalg.Select{
 		Predicate: relalg.And{Preds: []relalg.Predicate{
@@ -190,7 +190,7 @@ func TestCompileIsPKPoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !scopedCompiled.IsPKPoint {
+	if !scopedCompiled.IsKeyPoint {
 		t.Fatal("PK equality plus row policy remains a point lookup")
 	}
 
@@ -202,8 +202,8 @@ func TestCompileIsPKPoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c2.IsPKPoint {
-		t.Fatal("expected IsPKPoint false for non-PK filter")
+	if c2.IsKeyPoint {
+		t.Fatal("expected IsKeyPoint false for non-PK filter")
 	}
 }
 
@@ -355,7 +355,7 @@ func TestCompileIsPKPointRejectsOr(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.IsPKPoint {
+	if c.IsKeyPoint {
 		t.Fatal("OR predicate must not be a PK point lookup")
 	}
 	// `id=5 AND (a=1 OR b=2)`: the AND holds a full-PK equality but the nested
@@ -374,7 +374,7 @@ func TestCompileIsPKPointRejectsOr(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c2.IsPKPoint {
+	if c2.IsKeyPoint {
 		t.Fatal("AND containing OR must not be a PK point lookup")
 	}
 }
@@ -403,8 +403,8 @@ func TestCompileWriteIsPKPoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.IsPKPoint {
-		t.Fatal("UPDATE by full PK equality should be IsPKPoint")
+	if !c.IsKeyPoint {
+		t.Fatal("UPDATE by full PK equality should be IsKeyPoint")
 	}
 	del := relalg.Delete{
 		Target:    relalg.RelationRef{Name: "users"},
@@ -414,7 +414,7 @@ func TestCompileWriteIsPKPoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c2.IsPKPoint {
-		t.Fatal("DELETE by a non-PK column must not be IsPKPoint")
+	if c2.IsKeyPoint {
+		t.Fatal("DELETE by a non-PK column must not be IsKeyPoint")
 	}
 }

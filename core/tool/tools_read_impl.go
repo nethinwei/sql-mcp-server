@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -74,7 +76,7 @@ func prepareReadPlan(ctx context.Context, tc Context, in readInput) (readPlan, e
 	if err != nil {
 		return readPlan{}, err
 	}
-	tc, err = routeEntity(tc, res.Entity)
+	tc, err = routeEntity(tc, res.Entity, entity.ActionRead)
 	if err != nil {
 		return readPlan{}, err
 	}
@@ -103,11 +105,33 @@ func prepareReadPlan(ctx context.Context, tc Context, in readInput) (readPlan, e
 	if !dec.Allowed {
 		return readPlan{}, denyUnauthorized(dec)
 	}
-	keyset, keysetCols := keysetAfter(res.Entity.PrimaryKey(), in.Cursor)
+	keyset, keysetCols, err := cursorPredicate(res.Entity, in.Cursor)
+	if err != nil {
+		return readPlan{}, err
+	}
 	return readPlan{
 		res: res, tc: tc, projectionFields: projectionFields,
 		full: andPreds(andPreds(pred, dec.RowFilter), keyset), keysetCols: keysetCols, dec: dec,
 	}, nil
+}
+
+// cursorPredicate resumes keyset pagination after cursor on the entity's
+// cursor key. A cursor that cannot be honored is rejected rather than
+// ignored, which would return the first page again.
+func cursorPredicate(e entity.Entity, cursor map[string]any) (relalg.Predicate, []string, error) {
+	if len(cursor) == 0 {
+		return nil, nil, nil
+	}
+	key := e.CursorKey()
+	if key == nil {
+		return nil, nil, fmt.Errorf("%w: entity %q has no primary or unique key for cursor paging", ErrInvalidInput, e.Name)
+	}
+	keyset, cols := keysetAfter(key, cursor)
+	if len(cols) != len(cursor) {
+		return nil, nil, fmt.Errorf("%w: cursor must name a leading part of the key (%s)",
+			ErrInvalidInput, strings.Join(key, ", "))
+	}
+	return keyset, cols, nil
 }
 
 func readFieldNames(res entity.Resolved, in readInput) ([]string, []string, error) {
@@ -138,6 +162,7 @@ func compileReadQuery(
 	expr := buildReadExpression(res, in, plan)
 	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(expr,
 		codegen.WithPrimaryKey(res.Entity.PrimaryKey()...),
+		codegen.WithIdentityKeys(res.Entity.IdentityKeys(false, tc.Transaction != "")...),
 		codegen.WithMaxINCardinality(effectiveMaxIN(tc)))
 	if err != nil {
 		return codegen.Compiled{}, "", nil, cache.Key{}, err
@@ -148,7 +173,8 @@ func compileReadQuery(
 		return codegen.Compiled{}, "", nil, cache.Key{}, err
 	}
 	key := cache.Key{
-		Entity: in.Entity, SQL: compiled.SQL + "\x00expand=" + strings.Join(in.Expand, ","),
+		Database: res.Entity.DatasourceName(), Relation: cacheRelation(res.Entity),
+		SQL:  compiled.SQL + "\x00expand=" + strings.Join(in.Expand, ","),
 		Args: argsKey(compiled.Args), Scope: scopeKey(tc.Role, tc.Subject),
 	}
 	return compiled, planTemplate, estimatedPlan, key, nil
@@ -181,7 +207,7 @@ func buildReadExpression(res entity.Resolved, in readInput, plan readPlan) relal
 }
 
 func readCacheHit(ctx context.Context, tc Context, in readInput, key cache.Key) (Result, error, bool) {
-	if tc.Cache == nil || in.Transaction != "" || len(in.Expand) > 0 {
+	if tc.Cache == nil || in.Transaction != "" || len(in.Expand) > 0 || tc.followsWrite {
 		return Result{}, nil, false
 	}
 	cached, ok := tc.Cache.Get(ctx, key)
@@ -254,7 +280,7 @@ func trimExpandedJoinFields(parent entity.Entity, in readInput, out []map[string
 }
 
 func storeReadCache(ctx context.Context, tc Context, in readInput, key cache.Key, out []map[string]any) {
-	if tc.Cache == nil || in.Transaction != "" || len(in.Expand) > 0 {
+	if tc.Cache == nil || in.Transaction != "" || len(in.Expand) > 0 || tc.followsWrite {
 		return
 	}
 	encoded, encodeErr := json.Marshal(out)
@@ -290,56 +316,94 @@ func expandOneRelationship(
 	returned *int64,
 ) error {
 	relation, _ := relationshipByName(parent, name)
-	if len(relation.JoinOn) != 1 {
-		return fmt.Errorf("%w: relationship %q requires exactly one join pair", ErrInvalidInput, name)
-	}
-	var localField, targetField string
-	for localField, targetField = range relation.JoinOn {
-	}
+	join := relationJoin(relation)
 	target, err := resolveDMLEntity(tc, relation.Target)
 	if err != nil {
 		return err
 	}
-	if err := validateFields(target, targetField); err != nil {
+	if err := validateFields(target, join.target...); err != nil {
 		return err
 	}
 	if target.Entity.DataSource != parent.DataSource {
 		return fmt.Errorf("%w: cross-datasource relationship %q", ErrInvalidInput, name)
 	}
-	targetTC, err := routeEntity(tc, target.Entity)
+	targetTC, err := routeEntity(tc, target.Entity, entity.ActionRead)
 	if err != nil {
 		return err
 	}
-	values := uniqueJoinValues(rows, localField)
-	if len(values) == 0 {
-		for _, row := range rows {
-			row[name] = []map[string]any{}
+	tuples := uniqueJoinTuples(rows, join.local)
+	grouped := map[string][]map[string]any{}
+	if len(tuples) > 0 {
+		grouped, err = queryExpandedChildren(ctx, tc, targetTC, target, relation, join, tuples, returned)
+		if err != nil {
+			return err
 		}
-		return nil
 	}
-	grouped, err := queryExpandedChildren(ctx, tc, targetTC, target, relation, targetField, values, returned)
-	if err != nil {
-		return err
-	}
-	attachExpandedChildren(rows, name, localField, relation, grouped)
+	attachExpandedChildren(rows, name, join, relation, grouped)
 	return nil
 }
 
-func uniqueJoinValues(rows []map[string]any, localField string) []any {
-	values := make([]any, 0, len(rows))
-	seen := map[string]bool{}
-	for _, row := range rows {
-		value, ok := row[localField]
-		if !ok {
-			continue
-		}
-		key := fmt.Sprintf("%T:%v", value, value)
-		if !seen[key] {
-			seen[key] = true
-			values = append(values, value)
+// joinColumns pairs a relationship's local and target columns in a fixed
+// order.
+type joinColumns struct{ local, target []string }
+
+func relationJoin(relation entity.Relationship) joinColumns {
+	var join joinColumns
+	join.local = slices.Sorted(maps.Keys(relation.JoinOn))
+	for _, local := range join.local {
+		join.target = append(join.target, relation.JoinOn[local])
+	}
+	return join
+}
+
+// joinKey identifies a tuple of join values regardless of how the driver
+// typed them (an int4 foreign key matches an int8 key; text may arrive as
+// bytes); ok is false when a value is NULL, which matches nothing.
+func joinKey(values ...any) (key string, ok bool) {
+	parts := make([]string, len(values))
+	for i, v := range values {
+		// Each part is quoted, so no value can contain the separator.
+		switch x := v.(type) {
+		case nil:
+			return "", false
+		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+			parts[i] = "n:" + fmt.Sprint(x)
+		case []byte:
+			parts[i] = "s:" + strconv.Quote(string(x))
+		case string:
+			parts[i] = "s:" + strconv.Quote(x)
+		default:
+			parts[i] = fmt.Sprintf("%T:%q", x, fmt.Sprint(x))
 		}
 	}
-	return values
+	return strings.Join(parts, ","), true
+}
+
+func rowJoinKey(row map[string]any, columns []string) (string, bool) {
+	values := make([]any, len(columns))
+	for i, c := range columns {
+		values[i] = row[c]
+	}
+	return joinKey(values...)
+}
+
+// uniqueJoinTuples lists the distinct non-NULL join tuples of rows.
+func uniqueJoinTuples(rows []map[string]any, columns []string) [][]any {
+	tuples := make([][]any, 0, len(rows))
+	seen := map[string]bool{}
+	for _, row := range rows {
+		key, ok := rowJoinKey(row, columns)
+		if !ok || seen[key] {
+			continue
+		}
+		seen[key] = true
+		tuple := make([]any, len(columns))
+		for i, c := range columns {
+			tuple[i] = row[c]
+		}
+		tuples = append(tuples, tuple)
+	}
+	return tuples
 }
 
 func queryExpandedChildren(
@@ -348,17 +412,17 @@ func queryExpandedChildren(
 	targetTC Context,
 	target entity.Resolved,
 	relation entity.Relationship,
-	targetField string,
-	values []any,
+	join joinColumns,
+	tuples [][]any,
 	returned *int64,
 ) (map[string][]map[string]any, error) {
 	grouped := map[string][]map[string]any{}
-	batchSize := effectiveMaxIN(targetTC)
-	for start := 0; start < len(values); start += batchSize {
-		stop := min(start+batchSize, len(values))
-		batch, err := queryExpandBatch(
-			ctx, tc, targetTC, target, relation, targetField, values[start:stop], batchSize, returned,
-		)
+	// A batch binds len(tuples)*len(columns) values: keep it within the IN
+	// bound for a single column and the same number of values otherwise.
+	batchSize := max(1, effectiveMaxIN(targetTC)/len(join.target))
+	for start := 0; start < len(tuples); start += batchSize {
+		stop := min(start+batchSize, len(tuples))
+		batch, err := queryExpandBatch(ctx, tc, targetTC, target, relation, join, tuples[start:stop], returned)
 		if err != nil {
 			return nil, err
 		}
@@ -375,12 +439,11 @@ func queryExpandBatch(
 	targetTC Context,
 	target entity.Resolved,
 	relation entity.Relationship,
-	targetField string,
-	values []any,
-	batchSize int,
+	join joinColumns,
+	tuples [][]any,
 	returned *int64,
 ) (map[string][]map[string]any, error) {
-	compiled, err := compileExpandBatch(ctx, tc, targetTC, target, relation, targetField, values, batchSize)
+	compiled, err := compileExpandBatch(ctx, tc, targetTC, target, relation, join, tuples)
 	if err != nil {
 		return nil, err
 	}
@@ -393,11 +456,35 @@ func queryExpandBatch(
 		if iterErr != nil {
 			return nil, WrapDBError(iterErr)
 		}
-		if err := appendExpandedChild(tc, targetTC, target, targetField, child, grouped, returned); err != nil {
+		if err := appendExpandedChild(tc, targetTC, target, join, child, grouped, returned); err != nil {
 			return nil, err
 		}
 	}
 	return grouped, nil
+}
+
+// joinPredicate selects the target rows matching tuples: an IN list for a
+// single column, otherwise one conjunction of equalities per tuple.
+func joinPredicate(columns []string, tuples [][]any) relalg.Predicate {
+	if len(columns) == 1 {
+		values := make([]any, len(tuples))
+		for i, t := range tuples {
+			values[i] = t[0]
+		}
+		return relalg.Condition{Field: columns[0], Op: relalg.OpIn, Value: values}
+	}
+	ors := make([]relalg.Predicate, len(tuples))
+	for i, t := range tuples {
+		ands := make([]relalg.Predicate, len(columns))
+		for j, c := range columns {
+			ands[j] = relalg.Condition{Field: c, Op: relalg.OpEq, Value: t[j]}
+		}
+		ors[i] = relalg.And{Preds: ands}
+	}
+	if len(ors) == 1 {
+		return ors[0]
+	}
+	return relalg.Or{Preds: ors}
 }
 
 func compileExpandBatch(
@@ -406,14 +493,13 @@ func compileExpandBatch(
 	targetTC Context,
 	target entity.Resolved,
 	relation entity.Relationship,
-	targetField string,
-	values []any,
-	batchSize int,
+	join joinColumns,
+	tuples [][]any,
 ) (codegen.Compiled, error) {
-	predicate := relalg.Condition{Field: targetField, Op: relalg.OpIn, Value: values}
+	predicate := joinPredicate(join.target, tuples)
 	decision, err := authorize(ctx, targetTC, rbac.Request{
 		Role: tc.Role, Subject: tc.Subject, Entity: relation.Target,
-		Action: entity.ActionRead, ReadFields: []string{targetField}, Predicate: predicate,
+		Action: entity.ActionRead, ReadFields: join.target, Predicate: predicate,
 	})
 	if err != nil {
 		return codegen.Compiled{}, err
@@ -433,7 +519,8 @@ func compileExpandBatch(
 	}
 	compiled, err := codegen.Renderer{Dialect: targetTC.Dialect}.Compile(expr,
 		codegen.WithPrimaryKey(target.Entity.PrimaryKey()...),
-		codegen.WithMaxINCardinality(batchSize))
+		codegen.WithIdentityKeys(target.Entity.IdentityKeys(false, tc.Transaction != "")...),
+		codegen.WithMaxINCardinality(max(len(tuples), effectiveMaxIN(targetTC))))
 	if err != nil {
 		return codegen.Compiled{}, err
 	}
@@ -444,7 +531,7 @@ func appendExpandedChild(
 	tc Context,
 	targetTC Context,
 	target entity.Resolved,
-	targetField string,
+	join joinColumns,
 	child map[string]any,
 	grouped map[string][]map[string]any,
 	returned *int64,
@@ -453,23 +540,28 @@ func appendExpandedChild(
 	if tc.BudgetLimits.MaxReturnedRows > 0 && *returned > tc.BudgetLimits.MaxReturnedRows {
 		return budget.ErrExceeded
 	}
-	key := fmt.Sprintf("%T:%v", child[targetField], child[targetField])
+	key, ok := rowJoinKey(child, join.target)
 	if targetTC.Masker != nil {
 		maskRow(targetTC.Masker, target.Entity.Attributes, child)
 	}
-	grouped[key] = append(grouped[key], child)
+	if ok {
+		grouped[key] = append(grouped[key], child)
+	}
 	return nil
 }
 
 func attachExpandedChildren(
 	rows []map[string]any,
-	name, localField string,
+	name string,
+	join joinColumns,
 	relation entity.Relationship,
 	grouped map[string][]map[string]any,
 ) {
 	for _, row := range rows {
-		value := row[localField]
-		children := grouped[fmt.Sprintf("%T:%v", value, value)]
+		var children []map[string]any
+		if key, ok := rowJoinKey(row, join.local); ok {
+			children = grouped[key]
+		}
 		switch relation.Cardinality {
 		case "one", "one-to-one", "belongs-to":
 			if len(children) > 0 {

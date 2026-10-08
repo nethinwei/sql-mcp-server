@@ -67,15 +67,31 @@ session 关闭时绑定会同步清理。该绑定防止可信代理后的调用
 
 行级策略不是数据库原生 RLS；保护依赖所有访问都经过本服务的工具执行路径。
 
+数据库账号是第二道边界：一个数据源可以配置多个连接（例如只读账号、读写账号、只读
+副本），读、写、执行按 `routing` 分别走对应连接，读写事务固定在写连接上。有效能力是
+授权、路由连接的数据库权限与实体类型三者的交集。启动和重载时探测的连接权限只用于
+告警和控制台提示，不改变授权结果；数据库拒绝的语句返回 `DATASOURCE_FORBIDDEN`，
+不计入熔断，也不回显数据库原文。建议按最小权限给读连接只读账号。
+
 ## SQL 与写保护
 
 工具不接受原始 SQL。值使用 placeholder 参数化；表、字段和 procedure 标识符
 来自配置实体并由方言引用。
 
 update/delete 必须有用户 filter 或行级 filter。`requirePKForWrite` 默认开启时，
-非完整主键点写由 `WriteGuard` 拒绝；allow fingerprint 不绕过该 mandatory
-保护。`delete_record` 默认不注册。MySQL 协议 provider
-还会在 DSN 未显式指定时加入 `sql_safe_updates=1`。
+不是按身份键等值定位单行的写由 `WriteGuard` 拒绝；allow fingerprint 不绕过该
+mandatory 保护。身份键是主键与能唯一定位一行的唯一键（列全部非空，且不是部分、
+表达式或前缀索引），表的身份键以数据库为准；视图、外部表上声明的键只用于读，不能
+让写入通过 `WriteGuard`；可延迟约束在事务内不算身份键。`delete_record` 默认不
+注册。MySQL 协议 provider 还会在 DSN 未显式指定时加入 `sql_safe_updates=1`。
+
+外键的 `CASCADE`、`SET NULL`、`SET DEFAULT` 会让一次写入改写其他表的行，并可能
+继续级联下去。删除（或修改被引用列）前，调用方必须对级联链上每一层的实体拥有对应
+的删除或修改权限（修改权限须覆盖被改写的外键列），且该权限不带行范围限制；级联到
+未暴露为实体的表时拒绝，除非实体声明 `allowCascade: true`（从该实体起不再检查）。
+写入后按整条级联链失效缓存，链上有未暴露的表时失效整个数据源的缓存。数据库生成的列（生成列、identity ALWAYS）不可写，在发到
+数据库前拒绝。违反约束返回 `CONSTRAINT_VIOLATION`，只给出类别和调用方可见的
+字段，不回显约束名与数据库原文。
 
 ## 成本闸门
 
@@ -121,7 +137,8 @@ PostgreSQL 估算。v0.1 可显式开启 PostgreSQL 只读 `EXPLAIN ANALYZE` 采
 缓存和 singleflight key 包含角色及完整 subject，避免跨身份共享结果。显式事务
 在进入 engine 前先验证 token 的 session/角色/subject，并禁用 singleflight。
 expand 读取不进入结果缓存，以免父子任一实体写入后留下陈旧组合。显式事务
-完全绕过全局读缓存；事务写仅在成功 commit 后按实体失效缓存，rollback 不失效。
+完全绕过全局读缓存；事务写仅在成功 commit 后按物理关系失效缓存，rollback 不失效。
+一个物理表最多对应一个实体，因此同一张表不会有两套策略或两份互不失效的缓存。
 审计使用有界异步队列，满时丢弃并计数；它是 best-effort，不是不可抵赖日志。
 输入按实体 mask 字段脱敏、transaction token 哈希并限制大小；文件以 `0600`
 创建并使用长驻 writer。运营者仍应保护并轮转日志。

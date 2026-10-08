@@ -186,6 +186,9 @@ function remove() {
         </n-descriptions-item>
         <n-descriptions-item :label="t('entity.kind')">{{ kindLabel }}</n-descriptions-item>
         <n-descriptions-item :label="t('entity.primaryKey')"><span class="mono">{{ (entity.primaryKey ?? []).join(', ') || '—' }}</span></n-descriptions-item>
+        <n-descriptions-item :label="t('entity.uniqueKeys')">
+          <span class="mono">{{ (entity.uniqueKeys ?? []).map((k) => `(${k.join(', ')})`).join(' ') || '—' }}</span>
+        </n-descriptions-item>
       </n-descriptions>
       <n-form label-placement="top" class="basics-form">
         <n-form-item :label="t('entity.description')" :show-feedback="false">
@@ -199,6 +202,14 @@ function remove() {
           <div>
             <div>{{ t('entity.visible') }}</div>
             <n-text depth="3" class="hint">{{ t('entity.visibleHint') }}</n-text>
+          </div>
+        </div>
+        <div v-if="entity.kind !== 'procedure'" class="switch-row">
+          <n-switch :value="entity.allowCascade ?? false" :disabled="!editable"
+            @update:value="(v: boolean) => (entity!.allowCascade = v || undefined)" />
+          <div>
+            <div>{{ t('entity.allowCascade') }}</div>
+            <n-text depth="3" class="hint">{{ t('entity.allowCascadeHint') }}</n-text>
           </div>
         </div>
       </n-form>

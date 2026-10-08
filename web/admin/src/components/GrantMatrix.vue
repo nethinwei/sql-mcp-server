@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   NButton, NCheckbox, NCheckboxGroup, NDivider, NGrid, NGi, NIcon, NInput, NModal, NRadio,
@@ -9,6 +9,10 @@ import { AddOutline, TrashOutline } from '@vicons/ionicons5'
 import FilterBuilder from './FilterBuilder.vue'
 import { describeFilter, type Filter } from '@/lib/filter'
 import { setActionOn } from '@/lib/grants'
+import { physicalLocation } from '@/lib/names'
+import { capabilityOf, denied, indexCapabilities, type CapabilityIndex } from '@/lib/capabilities'
+import { run } from '@/api/client'
+import { CapabilitiesQuery } from '@/api/ops'
 import type { Action, EntityInput, GrantInput } from '@/gql/graphql'
 
 // Edits a list of grants as an entity × action matrix. An entity usually has
@@ -63,6 +67,28 @@ function applicable(row: Row, action: Action) {
   return action === 'EXECUTE' ? isProcedure : !isProcedure
 }
 
+// What the routed datasource connections may do, as the running service read
+// it. Denied cells cannot be newly granted; existing grants stay removable.
+const caps = ref<CapabilityIndex>(new Map())
+onMounted(async () => {
+  try {
+    caps.value = indexCapabilities((await run(CapabilitiesQuery, {})).capabilities)
+  } catch {
+    // Without a report every cell stays editable; the database decides.
+  }
+})
+const cap = (row: Row, action: Action) => capabilityOf(caps.value, row.entity.name, action)
+const grantable = (row: Row, action: Action) => applicable(row, action) && !denied(cap(row, action))
+
+function capabilityHint(row: Row, action: Action) {
+  const c = cap(row, action)
+  if (!c) return ''
+  if (c.privilege === 'DENIED') return t('grants.capDenied', { connection: c.connection, reason: c.reason ?? '' })
+  if (c.privilege === 'UNKNOWN') return t('grants.capUnknown', { connection: c.connection })
+  if (c.columns?.length) return t('grants.capColumns', { connection: c.connection, columns: c.columns.join(', ') })
+  return ''
+}
+
 function toggle(row: Row, action: Action, on: boolean) {
   emitWith((list) => {
     if (!row.grant) {
@@ -78,16 +104,16 @@ function toggle(row: Row, action: Action, on: boolean) {
 // Bulk toggles act on the rows currently listed, so searching first narrows
 // them, e.g. search "order" and grant read on every match.
 function columnState(action: Action) {
-  const entities = [...new Set(rows.value.filter((r) => applicable(r, action)).map((r) => r.entity.name))]
+  const entities = [...new Set(rows.value.filter((r) => grantable(r, action)).map((r) => r.entity.name))]
   const on = entities.filter((name) =>
     props.modelValue.some((g) => g.entity === name && g.actions.includes(action))).length
   return { checked: entities.length > 0 && on === entities.length, partial: on > 0 && on < entities.length, any: entities.length > 0 }
 }
 function toggleColumn(action: Action, on: boolean) {
-  const entities = [...new Set(rows.value.filter((r) => applicable(r, action)).map((r) => r.entity.name))]
+  const entities = [...new Set(rows.value.filter((r) => grantable(r, action)).map((r) => r.entity.name))]
   emit('update:modelValue', setActionOn(props.modelValue, entities, action, on))
 }
-const rowActions = (row: Row) => actions.filter((a) => applicable(row, a))
+const rowActions = (row: Row) => actions.filter((a) => grantable(row, a))
 function rowState(row: Row) {
   const n = rowActions(row).filter((a) => row.grant?.actions.includes(a)).length
   return { checked: n > 0 && n === rowActions(row).length, partial: n > 0 && n < rowActions(row).length }
@@ -224,6 +250,7 @@ const editingWrites = computed(() =>
                 <router-link :to="{ name: 'entity', params: { name: row.entity.name } }" class="entity mono">
                   {{ row.entity.name }}
                 </router-link>
+                <div class="loc mono">{{ physicalLocation(row.entity) }}</div>
                 <div v-if="row.entity.description" class="desc" :title="row.entity.description">
                   {{ row.entity.description }}
                 </div>
@@ -235,10 +262,16 @@ const editingWrites = computed(() =>
                 :aria-label="t('grants.allRow')" :title="t('grants.allRow')"
                 @update:checked="(on: boolean) => toggleRow(row, on)" />
             </td>
-            <td v-for="a in actions" :key="a" class="act">
-              <n-checkbox v-if="applicable(row, a)" :disabled="readonly"
-                :checked="row.grant?.actions.includes(a) ?? false"
-                @update:checked="(on: boolean) => toggle(row, a, on)" />
+            <td v-for="a in actions" :key="a" class="act"
+              :class="{ denied: applicable(row, a) && !grantable(row, a), unknown: cap(row, a)?.privilege === 'UNKNOWN' }">
+              <n-tooltip v-if="applicable(row, a)" :disabled="!capabilityHint(row, a)">
+                <template #trigger>
+                  <n-checkbox :checked="row.grant?.actions.includes(a) ?? false"
+                    :disabled="readonly || (!grantable(row, a) && !row.grant?.actions.includes(a))"
+                    @update:checked="(on: boolean) => toggle(row, a, on)" />
+                </template>
+                {{ capabilityHint(row, a) }}
+              </n-tooltip>
             </td>
             <td class="scope">
               <n-button v-if="row.grant" size="tiny" :type="row.grant.fieldsRestricted ? 'info' : 'default'"
@@ -347,6 +380,8 @@ th, td { padding: 8px 10px; border-bottom: 1px solid rgba(128,128,128,.16); text
 tbody tr:last-child td { border-bottom: none; }
 th { font-weight: 500; opacity: .75; white-space: nowrap; }
 .act { text-align: center; width: 56px; }
+td.act.denied { background: rgba(208, 48, 80, .08); }
+td.act.unknown { background: rgba(240, 160, 32, .08); }
 .act.all { border-right: 1px solid rgba(128,128,128,.16); }
 .col-toggle { margin-top: 4px; }
 .name { min-width: 200px; }
@@ -355,6 +390,7 @@ th { font-weight: 500; opacity: .75; white-space: nowrap; }
 tr.granted td.name .entity { font-weight: 600; }
 .entity { color: inherit; text-decoration: none; }
 .entity:hover { color: #2f6fed; }
+.loc { font-size: 11px; opacity: .55; margin-top: 2px; }
 .desc { font-size: 12px; opacity: .6; max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
 .rows-text { display: inline-block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .empty { text-align: center; opacity: .6; padding: 20px; }

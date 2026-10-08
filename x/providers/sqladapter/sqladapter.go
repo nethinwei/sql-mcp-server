@@ -12,20 +12,30 @@ import (
 // RowsFunc wraps driver rows, e.g. to normalize scanned values.
 type RowsFunc func(*sql.Rows) store.Rows
 
+// ClassifyFunc turns a driver error into a store error the gateway acts on
+// (such as *store.ConstraintError), or returns it unchanged.
+type ClassifyFunc func(error) error
+
 // Pool wraps *sql.DB, satisfying store.DB, store.Preparer and store.TxBeginner.
 // Embedders get DB(), which bootstrap uses to size the pool and ping it; the
 // type is not named DB so an embedded field cannot shadow that method.
 type Pool struct {
-	db   *sql.DB
-	rows RowsFunc
+	db       *sql.DB
+	rows     RowsFunc
+	classify ClassifyFunc
 }
 
-// New wraps db. A nil rows returns the driver rows unchanged.
-func New(db *sql.DB, rows RowsFunc) *Pool {
+// New wraps db. A nil rows returns the driver rows unchanged; a nil classify
+// leaves errors unchanged. Statement errors and errors met while reading rows
+// (where PostgreSQL reports a failed INSERT ... RETURNING) are classified.
+func New(db *sql.DB, rows RowsFunc, classify ClassifyFunc) *Pool {
 	if rows == nil {
 		rows = func(r *sql.Rows) store.Rows { return r }
 	}
-	return &Pool{db: db, rows: rows}
+	if classify == nil {
+		classify = func(err error) error { return err }
+	}
+	return &Pool{db: db, rows: rows, classify: classify}
 }
 
 // DB returns the underlying pool, for pool configuration and native pings.
@@ -41,7 +51,7 @@ func (d *Pool) QueryContext(ctx context.Context, query string, args ...any) (sto
 
 // ExecContext implements store.DB.
 func (d *Pool) ExecContext(ctx context.Context, query string, args ...any) (store.Result, error) {
-	return result(d.db.ExecContext(ctx, query, args...))
+	return d.result(d.db.ExecContext(ctx, query, args...))
 }
 
 // PrepareContext implements store.Preparer.
@@ -68,9 +78,35 @@ func (d *Pool) BeginTx(ctx context.Context, opts *store.TxOptions) (store.Tx, er
 
 func (d *Pool) query(rows *sql.Rows, err error) (store.Rows, error) {
 	if err != nil {
-		return nil, err
+		return nil, d.classify(err)
 	}
-	return d.rows(rows), nil
+	return classifiedRows{Rows: d.rows(rows), classify: d.classify}, nil
+}
+
+func (d *Pool) result(res sql.Result, err error) (store.Result, error) {
+	if err != nil {
+		return store.Result{}, d.classify(err)
+	}
+	li, _ := res.LastInsertId()
+	ra, _ := res.RowsAffected()
+	return store.Result{LastInsertID: li, RowsAffected: ra}, nil
+}
+
+// classifiedRows classifies the errors met while reading rows.
+type classifiedRows struct {
+	store.Rows
+	classify ClassifyFunc
+}
+
+func (r classifiedRows) Scan(dest ...any) error { return r.classifyNil(r.Rows.Scan(dest...)) }
+func (r classifiedRows) Err() error             { return r.classifyNil(r.Rows.Err()) }
+func (r classifiedRows) Close() error           { return r.classifyNil(r.Rows.Close()) }
+
+func (r classifiedRows) classifyNil(err error) error {
+	if err == nil {
+		return nil
+	}
+	return r.classify(err)
 }
 
 type stmt struct {
@@ -83,7 +119,7 @@ func (s stmt) QueryContext(ctx context.Context, args ...any) (store.Rows, error)
 }
 
 func (s stmt) ExecContext(ctx context.Context, args ...any) (store.Result, error) {
-	return result(s.Stmt.ExecContext(ctx, args...))
+	return s.db.result(s.Stmt.ExecContext(ctx, args...))
 }
 
 type tx struct {
@@ -96,16 +132,7 @@ func (t tx) QueryContext(ctx context.Context, query string, args ...any) (store.
 }
 
 func (t tx) ExecContext(ctx context.Context, query string, args ...any) (store.Result, error) {
-	return result(t.Tx.ExecContext(ctx, query, args...))
-}
-
-func result(res sql.Result, err error) (store.Result, error) {
-	if err != nil {
-		return store.Result{}, err
-	}
-	li, _ := res.LastInsertId()
-	ra, _ := res.RowsAffected()
-	return store.Result{LastInsertID: li, RowsAffected: ra}, nil
+	return t.db.result(t.Tx.ExecContext(ctx, query, args...))
 }
 
 func isolation(l store.IsolationLevel) sql.IsolationLevel {

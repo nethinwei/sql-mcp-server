@@ -9,3 +9,13 @@ export function nameError(name: string, taken: string[]): string | null {
   if (taken.includes(name)) return t('names.taken')
   return null
 }
+
+/**
+ * The relation an entity exposes, "datasource · schema.table", so entities
+ * on same-named tables of different databases or schemas stay distinguishable.
+ */
+export function physicalLocation(e: { name: string, source?: string | null, schema?: string | null,
+  datasource?: string | null }): string {
+  const table = e.source || e.name
+  return `${e.datasource ?? 'default'} · ${e.schema ? `${e.schema}.${table}` : table}`
+}

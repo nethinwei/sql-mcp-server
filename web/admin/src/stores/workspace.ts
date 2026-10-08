@@ -19,6 +19,9 @@ export interface Datasource {
   name: string
   driver: string
   dsn: string
+  connections: { name: string; dsn: string; role: string; pooler?: string | null }[]
+  routing: { read: string; write: string; execute: string }
+  readAfterWrite?: string | null
 }
 
 /** What the workspace edits; also the shape persisted to localStorage. */
@@ -31,7 +34,7 @@ export interface Sections {
 
 /** A place that names one field of an entity. */
 export interface FieldReference {
-  kind: 'role' | 'user' | 'relationship' | 'primaryKey' | 'tenantPolicy'
+  kind: 'role' | 'user' | 'relationship' | 'primaryKey' | 'uniqueKey' | 'tenantPolicy'
   /** The role, user or entity holding the reference. */
   name: string
 }
@@ -69,7 +72,10 @@ export function toEntityInput(e: EntityPartsFragment): EntityInput {
     kind: e.kind ?? undefined,
     description: e.description ?? undefined,
     primaryKey: [...e.primaryKey],
+    uniqueKeys: e.uniqueKeys.map((k) => [...k]),
     params: [...e.params],
+    affects: [...e.affects],
+    allowCascade: e.allowCascade || undefined,
     tenantPolicy: e.tenantPolicy ?? undefined,
     legacyAccess: e.legacyAccess ?? undefined,
     mcp: { ...e.mcp },
@@ -282,6 +288,7 @@ export const useWorkspace = defineStore('workspace', {
         if (joins) out.push({ kind: 'relationship', name: e.name })
         if (e.name !== entity) continue
         if ((e.primaryKey ?? []).includes(field)) out.push({ kind: 'primaryKey', name: e.name })
+        if ((e.uniqueKeys ?? []).some((k) => k.includes(field))) out.push({ kind: 'uniqueKey', name: e.name })
         if (filterFields(e.tenantPolicy as Filter | undefined).includes(field)) out.push({ kind: 'tenantPolicy', name: e.name })
       }
       return out
@@ -401,7 +408,11 @@ export const useWorkspace = defineStore('workspace', {
     async verifyBase(): Promise<{ id: string; conflicts: Change[] } | null> {
       if (!this.baseId) return null
       const { revision } = await run(RevisionHashQuery, { id: this.baseId })
-      if (revision?.contentHash === this.baseHash) return null
+      if (revision?.contentHash === this.baseHash) {
+        // Datasources are read-only here and not persisted: take the server's.
+        this.datasources = revision.config.datasources.map((d) => ({ ...d }))
+        return null
+      }
       const target = revision?.id ?? (await run(PublishedQuery, {})).published?.id
       if (!target) return null
       if (!this.dirty) {
@@ -416,7 +427,9 @@ export const useWorkspace = defineStore('workspace', {
       try {
         const raw = localStorage.getItem(storageKey)
         if (!raw) return false
-        this.$patch((state) => Object.assign(state, JSON.parse(raw) as Partial<State>))
+        // Older workspaces persisted datasources in an older shape; ignore them.
+        const { datasources: _datasources, ...saved } = JSON.parse(raw) as Partial<State>
+        this.$patch((state) => Object.assign(state, saved))
         // Workspaces saved before basePublished existed tracked their base.
         this.basePublished ??= this.baseId
         return Boolean(this.baseId)
@@ -427,7 +440,8 @@ export const useWorkspace = defineStore('workspace', {
 
     persist() {
       try {
-        const { loading: _loading, ...rest } = this.$state
+        // Datasources come from the server on every load (see verifyBase).
+        const { loading: _loading, datasources: _datasources, ...rest } = this.$state
         localStorage.setItem(storageKey, JSON.stringify(rest))
       } catch {
         // Storage may be unavailable (private mode); the workspace still works in memory.
@@ -496,8 +510,8 @@ export const useWorkspace = defineStore('workspace', {
     /**
      * Adds or replaces an entity. Renaming it (previousName differs) keeps
      * the table it reads (source defaults to the name) and moves every
-     * reference along: grants of roles and users, and relationships of other
-     * entities that target it.
+     * reference along: grants of roles and users, relationships of other
+     * entities that target it and procedures that affect it.
      */
     upsertEntity(e: EntityInput, previousName = e.name) {
       if (previousName !== e.name && !e.source) e = { ...e, source: previousName }
@@ -513,12 +527,19 @@ export const useWorkspace = defineStore('workspace', {
             other.relationships = other.relationships.map((rel) =>
               (rel.target === previousName ? { ...rel, target: e.name } : rel))
           }
+          if (other.affects?.includes(previousName)) {
+            other.affects = other.affects.map((name) => (name === previousName ? e.name : name))
+          }
         }
       }
       this.persist()
     },
 
-    /** Removes an entity, every grant on it and every relationship to it. */
+    /**
+     * Removes an entity, every grant on it, every relationship to it and its
+     * place in procedures' affects (an emptied list invalidates the whole
+     * datasource, the safe default).
+     */
     removeEntity(name: string) {
       this.entities = this.entities.filter((e) => e.name !== name)
       for (const r of this.roles) r.grants = dropGrantsOn(r.grants, name)
@@ -527,6 +548,7 @@ export const useWorkspace = defineStore('workspace', {
         if (other.relationships?.some((rel) => rel.target === name)) {
           other.relationships = other.relationships.filter((rel) => rel.target !== name)
         }
+        if (other.affects?.includes(name)) other.affects = other.affects.filter((a) => a !== name)
       }
       this.persist()
     },

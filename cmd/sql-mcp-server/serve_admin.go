@@ -48,7 +48,13 @@ func (f serveAdminFlags) handler(
 	}
 	return admin.New(admin.Config{
 		Store: src.store, Accounts: src.store, Introspect: runtimeIntrospection(runtime),
-		Status:       runtimeStatus(runtime, src.rev, watching),
+		Status: runtimeStatus(runtime, src.rev, watching),
+		Capabilities: func() bootstrap.EntityCapabilities {
+			if app := runtime.Current(); app != nil {
+				return app.Capabilities
+			}
+			return nil
+		},
 		SecureCookie: cfg.Server.Auth.TLS.Cert != "", Playground: *f.playground,
 	}), nil
 }

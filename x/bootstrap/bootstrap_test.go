@@ -256,11 +256,11 @@ func TestResolveSecrets(t *testing.T) {
 
 func TestNewProviderUnsupported(t *testing.T) {
 	t.Parallel()
-	if _, err := providerregistry.New("oracle", "", time.Second); err == nil {
+	if _, err := providerregistry.New("oracle", "", providerregistry.Options{Timeout: time.Second}); err == nil {
 		t.Fatal("expected error for unsupported driver")
 	}
 	// mysql with an invalid DSN fails fast at ping (still an error).
-	if _, err := providerregistry.New("mysql", "", time.Second); err == nil {
+	if _, err := providerregistry.New("mysql", "", providerregistry.Options{Timeout: time.Second}); err == nil {
 		t.Fatal("expected error for invalid mysql dsn")
 	}
 }
@@ -268,10 +268,10 @@ func TestNewProviderUnsupported(t *testing.T) {
 func TestNewProviderUsesRegistry(t *testing.T) {
 	const driver = "bootstrap-registry-test"
 	want := &fakeProvider{}
-	providerregistry.Register(driver, func(string, time.Duration) (coreprovider.Provider, error) {
+	providerregistry.Register(driver, func(string, providerregistry.Options) (coreprovider.Provider, error) {
 		return want, nil
 	})
-	got, err := providerregistry.New(driver, "ignored", time.Second)
+	got, err := providerregistry.New(driver, "ignored", providerregistry.Options{Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -682,7 +682,7 @@ func TestConfigurePoolReachesBuiltInProviders(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		configurePool(wrap(sqladapter.New(db, nil)), 7, time.Minute, time.Hour)
+		configurePool(wrap(sqladapter.New(db, nil, nil)), 7, time.Minute, time.Hour)
 		if got := db.Stats().MaxOpenConnections; got != 7 {
 			t.Errorf("%s: MaxOpenConnections = %d, want 7", driver, got)
 		}

@@ -52,8 +52,29 @@ type Configuration struct {
 type Datasource struct {
 	Name   string `json:"name"`
 	Driver string `json:"driver"`
+	// The read connection's DSN with passwords redacted.
+	Dsn         string                 `json:"dsn"`
+	Connections []DatasourceConnection `json:"connections"`
+	// The connection reads, writes and procedure calls use.
+	Routing *DatasourceRouting `json:"routing"`
+	// How long a session reads from the write connection after writing (a Go duration); empty when off.
+	ReadAfterWrite *string `json:"readAfterWrite,omitempty"`
+}
+
+type DatasourceConnection struct {
+	Name string `json:"name"`
 	// The DSN with passwords redacted.
 	Dsn string `json:"dsn"`
+	// primary or replica.
+	Role string `json:"role"`
+	// transaction behind a transaction-mode pooler; null otherwise.
+	Pooler *string `json:"pooler,omitempty"`
+}
+
+type DatasourceRouting struct {
+	Read    string `json:"read"`
+	Write   string `json:"write"`
+	Execute string `json:"execute"`
 }
 
 type DraftInput struct {
@@ -76,9 +97,11 @@ type Entity struct {
 	Datasource *string `json:"datasource,omitempty"`
 	Schema     *string `json:"schema,omitempty"`
 	// table, view or procedure; null means table.
-	Kind          *string        `json:"kind,omitempty"`
-	Description   *string        `json:"description,omitempty"`
-	PrimaryKey    []string       `json:"primaryKey"`
+	Kind        *string  `json:"kind,omitempty"`
+	Description *string  `json:"description,omitempty"`
+	PrimaryKey  []string `json:"primaryKey"`
+	// Unique keys, each a field list, that identify one row like the primary key.
+	UniqueKeys    [][]string     `json:"uniqueKeys"`
 	Fields        []Field        `json:"fields"`
 	Relationships []Relationship `json:"relationships"`
 	TenantPolicy  any            `json:"tenantPolicy,omitempty"`
@@ -86,6 +109,21 @@ type Entity struct {
 	LegacyAccess any        `json:"legacyAccess,omitempty"`
 	Mcp          *EntityMcp `json:"mcp"`
 	Params       []string   `json:"params"`
+	// Entities a procedure writes; empty invalidates its datasource's cached reads.
+	Affects []string `json:"affects"`
+	// Admit deletes and key updates that foreign keys cascade to other tables without checking permissions there.
+	AllowCascade bool `json:"allowCascade"`
+}
+
+type EntityCapability struct {
+	Entity    string    `json:"entity"`
+	Action    Action    `json:"action"`
+	Privilege Privilege `json:"privilege"`
+	// The connection the action routes to.
+	Connection string `json:"connection"`
+	// Columns granted at column level when the table-level privilege is not.
+	Columns []string `json:"columns,omitempty"`
+	Reason  *string  `json:"reason,omitempty"`
 }
 
 type EntityInput struct {
@@ -96,12 +134,15 @@ type EntityInput struct {
 	Kind          *string             `json:"kind,omitempty"`
 	Description   *string             `json:"description,omitempty"`
 	PrimaryKey    []string            `json:"primaryKey,omitempty"`
+	UniqueKeys    [][]string          `json:"uniqueKeys,omitempty"`
 	Fields        []FieldInput        `json:"fields,omitempty"`
 	Relationships []RelationshipInput `json:"relationships,omitempty"`
 	TenantPolicy  any                 `json:"tenantPolicy,omitempty"`
 	LegacyAccess  any                 `json:"legacyAccess,omitempty"`
 	Mcp           *EntityMCPInput     `json:"mcp,omitempty"`
 	Params        []string            `json:"params,omitempty"`
+	Affects       []string            `json:"affects,omitempty"`
+	AllowCascade  *bool               `json:"allowCascade,omitempty"`
 }
 
 type EntityMcp struct {
@@ -165,6 +206,25 @@ type ImportColumn struct {
 	PrimaryKey  bool   `json:"primaryKey"`
 }
 
+type ImportForeignKey struct {
+	Name       string   `json:"name"`
+	Columns    []string `json:"columns"`
+	RefSchema  string   `json:"refSchema"`
+	RefTable   string   `json:"refTable"`
+	RefColumns []string `json:"refColumns"`
+	// Referential action that writes referencing rows (cascade, set_null, set_default); null when it only checks.
+	OnDelete *string `json:"onDelete,omitempty"`
+	OnUpdate *string `json:"onUpdate,omitempty"`
+}
+
+type ImportKey struct {
+	Name    string   `json:"name"`
+	Columns []string `json:"columns"`
+	Primary bool     `json:"primary"`
+	// Why the key cannot identify a row (partial, expression, prefix, nullable); null when it can.
+	Reason *string `json:"reason,omitempty"`
+}
+
 type ImportTable struct {
 	Schema      string       `json:"schema"`
 	Table       string       `json:"table"`
@@ -173,6 +233,11 @@ type ImportTable struct {
 	// The configured entity name when status is CONFIGURED.
 	ConfiguredAs *string        `json:"configuredAs,omitempty"`
 	Columns      []ImportColumn `json:"columns"`
+	// The primary key and unique keys, including those that cannot identify a row.
+	Keys        []ImportKey        `json:"keys"`
+	ForeignKeys []ImportForeignKey `json:"foreignKeys"`
+	// Triggers or rules: a write may change other tables.
+	SideEffects bool `json:"sideEffects"`
 	// A zero-permission entity proposal; add it to a draft to configure it.
 	Candidate *Entity `json:"candidate"`
 }
@@ -325,6 +390,8 @@ type Validation struct {
 	ContentHash *string `json:"contentHash,omitempty"`
 	// Changes against the published revision that need a restart.
 	RestartRequired []string `json:"restartRequired"`
+	// Grants the routed datasource connections cannot run (they do not block publishing).
+	Warnings []string `json:"warnings"`
 }
 
 type VisibilityInput struct {
@@ -450,6 +517,63 @@ func (e *ImportStatus) UnmarshalJSON(b []byte) error {
 }
 
 func (e ImportStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type Privilege string
+
+const (
+	PrivilegeGranted Privilege = "GRANTED"
+	PrivilegeDenied  Privilege = "DENIED"
+	PrivilegeUnknown Privilege = "UNKNOWN"
+)
+
+var AllPrivilege = []Privilege{
+	PrivilegeGranted,
+	PrivilegeDenied,
+	PrivilegeUnknown,
+}
+
+func (e Privilege) IsValid() bool {
+	switch e {
+	case PrivilegeGranted, PrivilegeDenied, PrivilegeUnknown:
+		return true
+	}
+	return false
+}
+
+func (e Privilege) String() string {
+	return string(e)
+}
+
+func (e *Privilege) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = Privilege(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid Privilege", str)
+	}
+	return nil
+}
+
+func (e Privilege) MarshalGQL(w io.Writer) {
+	_, _ = fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *Privilege) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e Privilege) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

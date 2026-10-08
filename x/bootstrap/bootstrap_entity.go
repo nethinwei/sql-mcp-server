@@ -34,7 +34,7 @@ func configToEntity(ec config.EntityConfig) (entity.Entity, error) {
 	if err != nil {
 		return entity.Entity{}, fmt.Errorf("tenant policy for entity %q: %w", ec.Name, err)
 	}
-	keys := entityKeysFromConfig(ec.PrimaryKey)
+	keys := entityKeysFromConfig(ec.PrimaryKey, ec.UniqueKeys)
 	relations := entityRelationsFromConfig(ec.Relationships)
 	return entity.Entity{
 		Name: ec.Name, Source: source, DataSource: dataSource, Schema: ec.Schema, Description: ec.Description,
@@ -44,9 +44,11 @@ func configToEntity(ec config.EntityConfig) (entity.Entity, error) {
 			TrustedProcedure: ec.MCP.TrustedProcedure,
 		},
 		RowPolicies:  rowPolicies,
+		AllowCascade: ec.AllowCascade,
 		TenantPolicy: tenantPolicy,
 		Relations:    relations,
 		Params:       ec.Params,
+		Affects:      ec.Affects,
 	}, nil
 }
 
@@ -92,11 +94,15 @@ func entityRowPoliciesFromConfig(policies config.RowPolicies) (entity.RowPolicie
 	return rowPolicies, nil
 }
 
-func entityKeysFromConfig(primaryKey []string) []entity.Key {
-	if len(primaryKey) == 0 {
-		return nil
+func entityKeysFromConfig(primaryKey []string, uniqueKeys [][]string) []entity.Key {
+	var keys []entity.Key
+	if len(primaryKey) > 0 {
+		keys = append(keys, entity.Key{Name: "pk", Columns: primaryKey, Primary: true})
 	}
-	return []entity.Key{{Name: "pk", Columns: primaryKey, Primary: true}}
+	for i, columns := range uniqueKeys {
+		keys = append(keys, entity.Key{Name: fmt.Sprintf("uk%d", i+1), Columns: columns})
+	}
+	return keys
 }
 
 func entityRelationsFromConfig(relations []config.RelationshipConfig) []entity.Relationship {

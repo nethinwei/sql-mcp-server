@@ -38,6 +38,8 @@ entities:
         joinOn: {id: customer_id}
   - name: orders
     datasource: shop
+    uniqueKeys: [[customer_id]]
+    allowCascade: true
     fields:
       - name: id
       - name: customer_id
@@ -45,6 +47,7 @@ entities:
     datasource: shop
     kind: procedure
     params: [tenant]
+    affects: [orders]
     mcp: {customTool: true, trustedProcedure: true}
 roles:
   analyst:

@@ -1110,7 +1110,7 @@ entities:
           name: created_at
         - description: Logical deletion time; NULL means active
           name: deleted_at
-      kind: table
+      kind: view
       name: tenant_customers
       primaryKey:
         - id
@@ -1131,7 +1131,7 @@ entities:
             op: eq
             value: 1
       schema: public
-      source: wl_customers
+      source: wl_tenant_customers
     - datasource: primary
       description: Restricted audit records
       fields:
@@ -1147,7 +1147,7 @@ entities:
           name: created_at
         - description: Logical deletion time; NULL means active
           name: deleted_at
-      kind: table
+      kind: view
       name: internal_audit_log
       primaryKey:
         - id
@@ -1163,7 +1163,7 @@ entities:
         read:
             - admin
       schema: public
-      source: wl_customers
+      source: wl_internal_audit_log
 server:
     role: analyst
     transport: stdio

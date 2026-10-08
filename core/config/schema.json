@@ -738,8 +738,7 @@
       "x-description-zh-CN": "一个数据源连接。validate 会确认 driver 已注册，但不会建立连接。",
       "type": "object",
       "required": [
-        "driver",
-        "dsn"
+        "driver"
       ],
       "properties": {
         "driver": {
@@ -749,17 +748,87 @@
           "pattern": "^[a-z][a-z0-9_-]*$"
         },
         "dsn": {
-          "description": "Connection string; may contain ${ENV} or ${file:/path} placeholders (only DSNs expand them, and file paths must be under server.secrets.allowedRoots).",
-          "x-description-zh-CN": "连接串，可包含 ${ENV} 或 ${file:/path} 占位符（仅 DSN 解析占位符；file 路径须在 server.secrets.allowedRoots 下）。",
+          "description": "Connection string; may contain ${ENV} or ${file:/path} placeholders (only DSNs expand them, and file paths must be under server.secrets.allowedRoots). Shorthand for a single connection; set either this or connections.",
+          "x-description-zh-CN": "连接串，可包含 ${ENV} 或 ${file:/path} 占位符（仅 DSN 解析占位符；file 路径须在 server.secrets.allowedRoots 下）。单个连接的简写，与 connections 二选一。",
+          "type": "string"
+        },
+        "connections": {
+          "description": "Several connections to the same database (such as accounts with different privileges, or read replicas), by name; set either this or dsn. Several connections need routing.",
+          "x-description-zh-CN": "同一数据库的多个连接（如权限不同的账号、只读副本），按名称索引；与 dsn 二选一。多个连接时须配置 routing。",
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "dsn"
+            ],
+            "properties": {
+              "dsn": {
+                "description": "Connection string, with the same placeholder rules as dsn.",
+                "x-description-zh-CN": "连接串，占位符规则同 dsn。",
+                "type": "string",
+                "minLength": 1
+              },
+              "role": {
+                "description": "primary (the default) or replica; a replica serves reads only.",
+                "x-description-zh-CN": "primary（默认）或 replica；replica 只承担读取。",
+                "type": "string",
+                "enum": [
+                  "primary",
+                  "replica"
+                ]
+              },
+              "pooler": {
+                "description": "transaction when the connection goes through a transaction-mode pooler (pgbouncer, ProxySQL); no session state such as prepared statements is kept, and statement timeouts come from request cancellation.",
+                "x-description-zh-CN": "连接经过事务模式的连接池（pgbouncer、ProxySQL）时设为 transaction：不使用预编译语句等会话状态，语句超时改由请求上下文取消。",
+                "type": "string",
+                "enum": [
+                  "transaction"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "routing": {
+          "description": "The connection each kind of action uses; may be omitted with a single connection.",
+          "x-description-zh-CN": "各类动作使用的连接；只有一个连接时可省略。",
+          "type": "object",
+          "properties": {
+            "read": {
+              "description": "Connection for reads, aggregates, EXPLAIN and read-only transactions.",
+              "x-description-zh-CN": "读取、聚合、EXPLAIN 与只读事务使用的连接。",
+              "type": "string"
+            },
+            "write": {
+              "description": "Connection for creates, updates, deletes and read-write transactions; not a replica.",
+              "x-description-zh-CN": "新增、修改、删除与读写事务使用的连接；不能是 replica。",
+              "type": "string"
+            },
+            "execute": {
+              "description": "Connection for procedure calls; not a replica.",
+              "x-description-zh-CN": "存储过程使用的连接；不能是 replica。",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "readAfterWrite": {
+          "description": "For this long after a session writes, its reads use the write connection, so it reads its own writes despite replica lag; 0 disables it.",
+          "x-description-zh-CN": "同一会话写入后，在这段时间内的读取改走 write 连接，以便在副本上读到自己的写入；0 表示不切换。",
           "type": "string",
-          "minLength": 1
+          "x-format": "duration",
+          "x-minimum": "0",
+          "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
         }
       },
       "additionalProperties": false
     },
     "entity": {
-      "description": "One table, view or stored procedure.",
-      "x-description-zh-CN": "一个表、视图或存储过程。",
+      "description": "One table, view (including materialized views) or stored procedure. A physical table or view backs at most one entity: identical names on one datasource fail validation, and duplicates resolved through the default schema, case folding or server identity (several datasources on one database) fail at startup. Of a PostgreSQL partitioned table only the parent is exposed; partitions are not imported.",
+      "x-description-zh-CN": "一个表、视图（含物化视图）或存储过程。一个物理表或视图最多对应一个实体：同一数据源中名称完全相同的重复在校验时拒绝，按默认 schema、大小写规则和服务器身份（多个数据源指向同一库）解析后的重复在启动时拒绝。PostgreSQL 分区表只暴露父表，子分区不导入。",
       "type": "object",
       "required": [
         "name"
@@ -802,11 +871,22 @@
           "type": "string"
         },
         "primaryKey": {
-          "description": "Primary key fields, used for keyset paging and primary-key write protection.",
-          "x-description-zh-CN": "主键字段，决定 keyset 分页与主键写保护。",
+          "description": "Primary key fields. For a table the database's primary key is authoritative and a differing value here is reported at startup; a key declared on a view serves reads only (keyset paging, single-row reads) and never admits an update or delete past write protection.",
+          "x-description-zh-CN": "主键字段。表以数据库中的主键为准，这里写的与之不同时启动告警；视图上声明的键只用于读取（keyset 分页、单行读取），不会让修改或删除通过写保护。",
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "uniqueKeys": {
+          "description": "Unique keys (each a field list) that, like the primary key, identify one row. For a table the database's unique constraints and indexes are authoritative (except partial, expression and prefix indexes and keys with a nullable column); unique keys declared on a view serve reads only.",
+          "x-description-zh-CN": "唯一键（每个为字段列表），与主键一样可唯一定位一行。表以数据库中的唯一约束与唯一索引为准（部分索引、表达式索引、前缀索引、含可空列的键除外）；视图上声明的唯一键只用于读取。",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "fields": {
@@ -971,8 +1051,8 @@
           }
         },
         "relationships": {
-          "description": "Expandable relationships. Only one level within the same datasource and exactly one join pair are supported.",
-          "x-description-zh-CN": "可展开的关系。当前只支持同数据源、恰好一个连接键的一层展开。",
+          "description": "Expandable relationships. Only one level within the same datasource is supported.",
+          "x-description-zh-CN": "可展开的关系。当前只支持同数据源内的一层展开。",
           "type": "array",
           "items": {
             "type": "object",
@@ -1009,8 +1089,8 @@
                 ]
               },
               "joinOn": {
-                "description": "Join pair: this entity's field → the target's field.",
-                "x-description-zh-CN": "连接键：本实体字段 → 目标实体字段。",
+                "description": "Join pairs: this entity's field → the target's field; a multi-column foreign key lists every pair, all of which must match.",
+                "x-description-zh-CN": "连接键：本实体字段 → 目标实体字段；多列外键写多对，全部相等才关联。",
                 "type": "object",
                 "additionalProperties": {
                   "type": "string"
@@ -1032,6 +1112,19 @@
           "items": {
             "type": "string"
           }
+        },
+        "affects": {
+          "description": "Entities the procedure writes (on its datasource), for read-cache invalidation; when omitted, every cached read of the datasource is invalidated after it runs.",
+          "x-description-zh-CN": "存储过程会写入的实体（须与过程同一数据源），用于读缓存失效；省略时过程执行后失效该数据源的全部缓存。",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allowCascade": {
+          "description": "Allow cascading writes: deleting this entity's rows or updating their referenced columns makes foreign keys (CASCADE, SET NULL, SET DEFAULT) rewrite rows of other tables. By default the caller needs delete or update permission without a row scope on every cascaded entity, and a cascade into a table no entity exposes is rejected. true skips the check and leaves the cascade to the administrator.",
+          "x-description-zh-CN": "允许级联写入：删除本实体的行或修改其被引用列时，外键的 CASCADE、SET NULL、SET DEFAULT 会改写其他表的行。默认要求调用方对每个被级联的实体都有对应的删除或修改权限，且不带行范围限制；被级联的表未暴露为实体时拒绝。设为 true 则不做该检查，由管理员对级联负责。",
+          "type": "boolean"
         }
       },
       "additionalProperties": false

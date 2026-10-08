@@ -239,10 +239,11 @@ func TestTransactionCacheInvalidatesOnlyAfterCommit(t *testing.T) {
 	manager := NewTransactionManager(time.Minute, 2)
 	defer manager.Close()
 	cc := cache.NewTTLCache[[]map[string]any](time.Minute, 0)
-	key := cache.Key{Entity: "users", SQL: "select"}
+	users := CacheTarget{Database: "default", Relation: "users"}
+	key := cache.Key{Database: users.Database, Relation: users.Relation, SQL: "select"}
 	_ = cc.Set(context.Background(), key, []map[string]any{{"id": 1}})
 	token, _ := manager.Begin(context.Background(), db, "", "writer", nil, "default", nil)
-	if err := manager.MarkDirty(token, "", "writer", nil, "default", "users"); err != nil {
+	if err := manager.MarkDirty(token, "", "writer", nil, "default", users); err != nil {
 		t.Fatal(err)
 	}
 	tc := Context{Role: "writer", Transactions: manager, Cache: cc}
@@ -254,7 +255,7 @@ func TestTransactionCacheInvalidatesOnlyAfterCommit(t *testing.T) {
 		t.Fatal("rollback polluted global cache")
 	}
 	token, _ = manager.Begin(context.Background(), db, "", "writer", nil, "default", nil)
-	_ = manager.MarkDirty(token, "", "writer", nil, "default", "users")
+	_ = manager.MarkDirty(token, "", "writer", nil, "default", users)
 	input, _ = json.Marshal(map[string]string{"transaction": token})
 	if _, err := (CommitTransactionTool{}).Run(context.Background(), input, tc); err != nil {
 		t.Fatal(err)

@@ -27,6 +27,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/admin/graph"
 	"github.com/nethinwei/sql-mcp-server/x/admin/ui"
+	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
 )
 
@@ -49,6 +50,8 @@ type Config struct {
 	Introspect graph.Introspection
 	// Status reports the serving process to the console; optional.
 	Status func() graph.RuntimeState
+	// Capabilities reports what the serving connections may do; optional.
+	Capabilities func() bootstrap.EntityCapabilities
 	// SecureCookie marks the session cookie Secure; set it when serving TLS.
 	SecureCookie bool
 	// Playground mounts GraphiQL at /admin/playground and enables GraphQL
@@ -71,6 +74,7 @@ func New(cfg Config) *Handler {
 	h := &Handler{cfg: cfg, sessions: newSessions(cfg.Now), logins: newLoginGate(maxConcurrentLogins)}
 	srv := handler.New(graph.NewExecutableSchema(graph.Config{Resolvers: &graph.Resolver{
 		Store: cfg.Store, Accounts: accounts.Service{Store: cfg.Accounts}, Introspect: cfg.Introspect, Status: cfg.Status,
+		Capabilities: cfg.Capabilities,
 	}}))
 	srv.AddTransport(transport.POST{})
 	srv.Use(extension.FixedComplexityLimit(maxQueryComplexity))
