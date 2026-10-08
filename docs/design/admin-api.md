@@ -33,8 +33,14 @@
 - 权限：`admin:read`（查询）、`admin:write`（创建 draft、导入预览、simulate）、
   `admin:publish`（发布、回滚）、`admin:accounts`（管理管理员账号），`admin:*`
   表示全部；
-- 第一个管理员由 CLI 创建：`sql-mcp-server admin create --store S --username u
-  --permissions 'admin:*' --password-stdin`。
+- 第一个管理员由 CLI 创建：`sql-mcp-server admin create --store S --username u`
+  （权限默认 `admin:*`，密码从标准输入读取）；
+- 账号规则只有一份实现：`x/admin/accounts.Service`，管理 API 与 `admin`
+  子命令都调用它（用户名规范化、密码强度、权限校验、argon2id 哈希）；
+- 始终至少保留一个启用且有 `admin:accounts` 的账号。检查与写入在
+  `configstore.MutateAdmins` 的同一事务中、由 store 锁行串行执行，两个管理员
+  同时禁用对方只有一个成功；CLI 没有绕过手段，被锁在外面时用
+  `admin create` 或 `admin set --enable` 恢复（它们不会减少管理员）。
 
 ## 会话与登录（结论）
 
@@ -154,8 +160,9 @@ input DraftInput {
 - `x/admin`：会话、登录、权限、HTTP 挂载；`x/admin/graph`：gqlgen schema 与
   resolver；草稿合并、schema 导入映射、离线 simulate；
 - `x/mcpserver`：`HTTPConfig.Admin` 挂载到 `/admin/`；
+- `x/admin/accounts`：账号业务规则（API 与 CLI 共用）；
 - `cmd/sql-mcp-server`：`--admin`、`--admin-playground`，`admin create/passwd/
-  list/disable` 子命令。
+  set/list` 子命令。
 
 ## 安全影响与验收
 

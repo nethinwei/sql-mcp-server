@@ -14,9 +14,9 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
+	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
-	"github.com/nethinwei/sql-mcp-server/x/configstore"
 	_ "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
 
@@ -43,45 +43,19 @@ users:
     roles: [analyst]
 `
 
-type memAccounts struct {
-	accounts map[string]configstore.AdminAccount
-}
-
-func (m *memAccounts) CreateAdmin(_ context.Context, a configstore.AdminAccount) (configstore.AdminAccount, error) {
-	if _, ok := m.accounts[a.Username]; ok {
-		return configstore.AdminAccount{}, configstore.ErrAdminExists
+// passwordOf returns the stored password hash of an account.
+func (h *harness) passwordOf(t *testing.T, username string) string {
+	t.Helper()
+	a, err := h.accounts.GetAdmin(context.Background(), username)
+	if err != nil {
+		t.Fatal(err)
 	}
-	m.accounts[a.Username] = a
-	return a, nil
-}
-
-func (m *memAccounts) GetAdmin(_ context.Context, name string) (configstore.AdminAccount, error) {
-	a, ok := m.accounts[name]
-	if !ok {
-		return configstore.AdminAccount{}, configstore.ErrAdminNotFound
-	}
-	return a, nil
-}
-
-func (m *memAccounts) ListAdmins(context.Context) ([]configstore.AdminAccount, error) {
-	out := make([]configstore.AdminAccount, 0, len(m.accounts))
-	for _, a := range m.accounts {
-		out = append(out, a)
-	}
-	return out, nil
-}
-
-func (m *memAccounts) UpdateAdmin(_ context.Context, a configstore.AdminAccount) (configstore.AdminAccount, error) {
-	if _, ok := m.accounts[a.Username]; !ok {
-		return configstore.AdminAccount{}, configstore.ErrAdminNotFound
-	}
-	m.accounts[a.Username] = a
-	return a, nil
+	return a.PasswordHash
 }
 
 type harness struct {
 	store    *revision.MemoryStore
-	accounts *memAccounts
+	accounts *accounts.MemoryStore
 	resolver *Resolver
 }
 
@@ -96,9 +70,7 @@ func newHarness(t *testing.T) *harness {
 	if _, err := store.Publish(context.Background(), d.ID, 0, revision.Meta{}); err != nil {
 		t.Fatal(err)
 	}
-	accounts := &memAccounts{accounts: map[string]configstore.AdminAccount{
-		"root": {Username: "root", Permissions: []string{auth.PermAll}},
-	}}
+	accountStore := accounts.NewMemoryStore(accounts.Account{Username: "root", Permissions: []string{auth.PermAll}})
 	introspect := func(context.Context, string, []string) ([]entity.Entity, error) {
 		return []entity.Entity{
 			{Name: "customers", Source: "customers", Schema: "public", Description: "customer master",
@@ -112,8 +84,8 @@ func newHarness(t *testing.T) *harness {
 				}},
 		}, nil
 	}
-	return &harness{store: store, accounts: accounts,
-		resolver: &Resolver{Store: store, Accounts: accounts, Introspect: introspect}}
+	return &harness{store: store, accounts: accountStore,
+		resolver: &Resolver{Store: store, Accounts: accounts.Service{Store: accountStore}, Introspect: introspect}}
 }
 
 // client returns a GraphQL client acting as an administrator with perms.
@@ -432,12 +404,12 @@ func TestAdminAccountsKeepAnAccountManager(t *testing.T) {
 	if err := self.Post(other, &resp); err == nil {
 		t.Fatal("changing another account's password needs admin:accounts")
 	}
-	if !auth.VerifyPassword(h.accounts.accounts["ops"].PasswordHash, "long enough password") {
+	if !auth.VerifyPassword(h.passwordOf(t, "ops"), "long enough password") {
 		t.Fatal("password must be stored as a verifiable hash")
 	}
 	// admin:accounts alone resets other passwords, without admin:read.
 	mustPost(t, h.client(auth.PermAccounts), other, &resp)
-	if !auth.VerifyPassword(h.accounts.accounts["ops"].PasswordHash, "another long password") {
+	if !auth.VerifyPassword(h.passwordOf(t, "ops"), "another long password") {
 		t.Fatal("account manager could not reset a password")
 	}
 	// Any signed-in account changes its own password.

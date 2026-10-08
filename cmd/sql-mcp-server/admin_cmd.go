@@ -11,8 +11,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
-	"github.com/nethinwei/sql-mcp-server/x/configstore"
 )
 
 const adminUsage = "usage: sql-mcp-server admin <create|passwd|set|list> [flags]"
@@ -38,11 +38,7 @@ func readPassword() (string, error) {
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", err
 	}
-	password := strings.TrimRight(line, "\r\n")
-	if err := auth.ValidatePassword(password); err != nil {
-		return "", err
-	}
-	return password, nil
+	return strings.TrimRight(line, "\r\n"), nil
 }
 
 func splitPermissions(raw string) []string {
@@ -55,14 +51,16 @@ func splitPermissions(raw string) []string {
 	return out
 }
 
-func openAdminStore(ctx context.Context, f storeFlags) (*configstore.SQLStore, context.CancelFunc, error) {
+// openAccounts opens the store behind the account service shared with the
+// admin API, so the CLI follows the same rules (there is no bypass).
+func openAccounts(ctx context.Context, f storeFlags) (accounts.Service, func(), error) {
 	ctx, cancel := context.WithTimeout(ctx, *f.timeout)
 	store, err := f.open(ctx)
 	if err != nil {
 		cancel()
-		return nil, nil, err
+		return accounts.Service{}, nil, err
 	}
-	return store, cancel, nil
+	return accounts.Service{Store: store}, func() { _ = store.Close(); cancel() }, nil
 }
 
 func runAdminCreate(ctx context.Context, args []string, stdout io.Writer) error {
@@ -72,30 +70,16 @@ func runAdminCreate(ctx context.Context, args []string, stdout io.Writer) error 
 	if err := f.fs.Parse(args); err != nil {
 		return err
 	}
-	if err := auth.ValidateUsername(*username); err != nil {
-		return err
-	}
-	permissions := splitPermissions(*perms)
-	if err := auth.ValidatePermissions(permissions); err != nil {
-		return err
-	}
 	password, err := readPassword()
 	if err != nil {
 		return err
 	}
-	hash, err := auth.HashPassword(password)
+	svc, done, err := openAccounts(ctx, f)
 	if err != nil {
 		return err
 	}
-	store, cancel, err := openAdminStore(ctx, f)
-	if err != nil {
-		return err
-	}
-	defer cancel()
-	defer func() { _ = store.Close() }()
-	a, err := store.CreateAdmin(ctx, configstore.AdminAccount{
-		Username: *username, PasswordHash: hash, Permissions: permissions,
-	})
+	defer done()
+	a, err := svc.Create(ctx, *username, password, splitPermissions(*perms))
 	if err != nil {
 		return err
 	}
@@ -113,20 +97,13 @@ func runAdminPasswd(ctx context.Context, args []string, stdout io.Writer) error 
 	if err != nil {
 		return err
 	}
-	store, cancel, err := openAdminStore(ctx, f)
+	svc, done, err := openAccounts(ctx, f)
 	if err != nil {
 		return err
 	}
-	defer cancel()
-	defer func() { _ = store.Close() }()
-	a, err := store.GetAdmin(ctx, *username)
+	defer done()
+	a, err := svc.SetPassword(ctx, *username, password)
 	if err != nil {
-		return err
-	}
-	if a.PasswordHash, err = auth.HashPassword(password); err != nil {
-		return err
-	}
-	if _, err := store.UpdateAdmin(ctx, a); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(stdout, "password updated for %s\n", a.Username)
@@ -145,26 +122,20 @@ func runAdminSet(ctx context.Context, args []string, stdout io.Writer) error {
 	if *disable && *enable {
 		return errors.New("--disable and --enable are mutually exclusive")
 	}
-	store, cancel, err := openAdminStore(ctx, f)
-	if err != nil {
-		return err
-	}
-	defer cancel()
-	defer func() { _ = store.Close() }()
-	a, err := store.GetAdmin(ctx, *username)
-	if err != nil {
-		return err
-	}
+	var patch accounts.Patch
 	if *perms != "" {
-		a.Permissions = splitPermissions(*perms)
-		if err := auth.ValidatePermissions(a.Permissions); err != nil {
-			return err
-		}
+		patch.Permissions = splitPermissions(*perms)
 	}
 	if *disable || *enable {
-		a.Disabled = *disable
+		patch.Disabled = disable
 	}
-	if a, err = store.UpdateAdmin(ctx, a); err != nil {
+	svc, done, err := openAccounts(ctx, f)
+	if err != nil {
+		return err
+	}
+	defer done()
+	a, err := svc.Update(ctx, *username, patch)
+	if err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(stdout, "updated admin %s (%s, disabled=%v)\n", a.Username,
@@ -177,13 +148,12 @@ func runAdminList(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := f.fs.Parse(args); err != nil {
 		return err
 	}
-	store, cancel, err := openAdminStore(ctx, f)
+	svc, done, err := openAccounts(ctx, f)
 	if err != nil {
 		return err
 	}
-	defer cancel()
-	defer func() { _ = store.Close() }()
-	all, err := store.ListAdmins(ctx)
+	defer done()
+	all, err := svc.List(ctx)
 	if err != nil {
 		return err
 	}

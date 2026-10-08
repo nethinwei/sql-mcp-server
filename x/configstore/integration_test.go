@@ -22,27 +22,35 @@ import (
 // subtest drops the store tables and initializes them again.
 func runServerConformance(t *testing.T, spec Spec) {
 	t.Helper()
-	revisiontest.Run(t, func(t *testing.T) revision.Store {
-		ctx := context.Background()
-		db, err := sql.Open(dialects[spec.Driver].driver, spec.DSN)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, table := range []string{"smcp_revisions", "smcp_store_meta", "smcp_admin_accounts"} {
-			if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
-				t.Fatal(err)
-			}
-		}
-		_ = db.Close()
-		if err := Init(ctx, spec, nil); err != nil {
-			t.Fatal(err)
-		}
-		store, err := Open(ctx, spec, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return store
+	revisiontest.Run(t, func(t *testing.T) revision.Store { return freshStore(t, spec) })
+	t.Run("MutateAdminsSerializes", func(t *testing.T) {
+		assertMutateAdminsSerializes(t, freshStore(t, spec))
 	})
+}
+
+// freshStore drops the store tables and initializes them again.
+func freshStore(t *testing.T, spec Spec) *SQLStore {
+	t.Helper()
+	ctx := context.Background()
+	db, err := sql.Open(dialects[spec.Driver].driver, spec.DSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"smcp_revisions", "smcp_store_meta", "smcp_admin_accounts"} {
+		if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = db.Close()
+	if err := Init(ctx, spec, nil); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(ctx, spec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
 }
 
 func TestPostgresStoreConformance(t *testing.T) {

@@ -23,6 +23,7 @@ import (
 	"github.com/vektah/gqlparser/v2/gqlerror"
 
 	"github.com/nethinwei/sql-mcp-server/core/revision"
+	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/admin/graph"
 	"github.com/nethinwei/sql-mcp-server/x/admin/ui"
@@ -44,7 +45,7 @@ const (
 // Config wires the admin API.
 type Config struct {
 	Store      revision.Store
-	Accounts   graph.AccountStore
+	Accounts   accounts.Store
 	Introspect graph.Introspector
 	// Status reports the serving process to the console; optional.
 	Status func() graph.RuntimeState
@@ -69,7 +70,7 @@ type Handler struct {
 func New(cfg Config) *Handler {
 	h := &Handler{cfg: cfg, sessions: newSessions(cfg.Now), logins: newLoginGate(maxConcurrentLogins)}
 	srv := handler.New(graph.NewExecutableSchema(graph.Config{Resolvers: &graph.Resolver{
-		Store: cfg.Store, Accounts: cfg.Accounts, Introspect: cfg.Introspect, Status: cfg.Status,
+		Store: cfg.Store, Accounts: accounts.Service{Store: cfg.Accounts}, Introspect: cfg.Introspect, Status: cfg.Status,
 	}}))
 	srv.AddTransport(transport.POST{})
 	srv.Use(extension.FixedComplexityLimit(maxQueryComplexity))

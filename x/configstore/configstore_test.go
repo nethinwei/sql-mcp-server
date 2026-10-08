@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/nethinwei/sql-mcp-server/core/revision"
@@ -126,21 +127,29 @@ func TestAdminAccounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	a, err := store.CreateAdmin(ctx, AdminAccount{Username: "root", PasswordHash: "h1", Permissions: []string{"admin:*"}})
-	if err != nil || a.CreatedAt.IsZero() {
-		t.Fatalf("CreateAdmin = %+v, %v", a, err)
+	put := func(a AdminAccount) ([]AdminAccount, error) {
+		return store.MutateAdmins(ctx, func([]AdminAccount) ([]AdminAccount, error) { return []AdminAccount{a}, nil })
 	}
-	_, err = store.CreateAdmin(ctx, AdminAccount{Username: "root", PasswordHash: "h"})
-	if !errors.Is(err, ErrAdminExists) {
-		t.Fatalf("duplicate account err = %v", err)
+	written, err := put(AdminAccount{Username: "root", PasswordHash: "h1", Permissions: []string{"admin:*"}})
+	if err != nil || len(written) != 1 || written[0].CreatedAt.IsZero() {
+		t.Fatalf("insert = %+v, %v", written, err)
 	}
+	a := written[0]
 	a.PasswordHash, a.Permissions, a.Disabled = "h2", []string{"admin:read", "admin:write"}, true
-	got, err := store.UpdateAdmin(ctx, a)
-	if err != nil || got.PasswordHash != "h2" || len(got.Permissions) != 2 || !got.Disabled {
-		t.Fatalf("UpdateAdmin = %+v, %v", got, err)
+	if _, err := put(a); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := store.UpdateAdmin(ctx, AdminAccount{Username: "ghost"}); !errors.Is(err, ErrAdminNotFound) {
-		t.Fatalf("update missing err = %v", err)
+	got, err := store.GetAdmin(ctx, "root")
+	if err != nil || got.PasswordHash != "h2" || len(got.Permissions) != 2 || !got.Disabled ||
+		!got.CreatedAt.Equal(a.CreatedAt) {
+		t.Fatalf("update = %+v, %v", got, err)
+	}
+	// An error from fn writes nothing.
+	_, err = store.MutateAdmins(ctx, func([]AdminAccount) ([]AdminAccount, error) {
+		return nil, ErrAdminExists
+	})
+	if !errors.Is(err, ErrAdminExists) {
+		t.Fatalf("fn error = %v", err)
 	}
 	if _, err := store.GetAdmin(ctx, "ghost"); !errors.Is(err, ErrAdminNotFound) {
 		t.Fatalf("get missing err = %v", err)
@@ -178,7 +187,52 @@ func TestOpenMigratesVersionOneStore(t *testing.T) {
 	if version, err := store.checkSchema(ctx); err != nil || version != SchemaVersion {
 		t.Fatalf("schema version after migration = %d, %v", version, err)
 	}
-	if _, err := store.CreateAdmin(ctx, AdminAccount{Username: "a", PasswordHash: "h"}); err != nil {
+	if _, err := store.MutateAdmins(ctx, func([]AdminAccount) ([]AdminAccount, error) {
+		return []AdminAccount{{Username: "a", PasswordHash: "h"}}, nil
+	}); err != nil {
 		t.Fatalf("admin table must exist after migration: %v", err)
+	}
+}
+
+// Concurrent mutations see each other's writes: each fn runs on the state
+// the previous one committed.
+func TestMutateAdminsSerializes(t *testing.T) {
+	ctx := context.Background()
+	spec := sqliteSpec(t)
+	if err := Init(ctx, spec, nil); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(ctx, spec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	assertMutateAdminsSerializes(t, store)
+}
+
+// assertMutateAdminsSerializes runs concurrent read-modify-write mutations;
+// each names its account after the number of accounts it saw, so a lost
+// update shows up as a duplicate name or a missing account.
+func assertMutateAdminsSerializes(t *testing.T, store *SQLStore) {
+	t.Helper()
+	ctx := context.Background()
+	const writers = 8
+	errs := make(chan error, writers)
+	for range writers {
+		go func() {
+			_, err := store.MutateAdmins(ctx, func(all []AdminAccount) ([]AdminAccount, error) {
+				return []AdminAccount{{Username: "u" + strconv.Itoa(len(all)), PasswordHash: "h"}}, nil
+			})
+			errs <- err
+		}()
+	}
+	for range writers {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, err := store.ListAdmins(ctx)
+	if err != nil || len(all) != writers {
+		t.Fatalf("accounts = %d, %v; every writer must see the previous ones", len(all), err)
 	}
 }

@@ -12,9 +12,9 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
+	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
-	"github.com/nethinwei/sql-mcp-server/x/configstore"
 )
 
 // CreateDraft is the resolver for the createDraft field.
@@ -120,26 +120,10 @@ func (r *mutationResolver) GenerateUserToken(ctx context.Context) (*UserToken, e
 
 // CreateAdminAccount is the resolver for the createAdminAccount field.
 func (r *mutationResolver) CreateAdminAccount(ctx context.Context, input AdminAccountInput) (*AdminAccount, error) {
-	username, password, permissions := input.Username, input.Password, input.Permissions
 	if _, err := auth.Require(ctx, auth.PermAccounts); err != nil {
 		return nil, err
 	}
-	if err := auth.ValidateUsername(username); err != nil {
-		return nil, err
-	}
-	if err := auth.ValidatePermissions(permissions); err != nil {
-		return nil, err
-	}
-	if err := auth.ValidatePassword(password); err != nil {
-		return nil, err
-	}
-	hash, err := auth.HashPassword(password)
-	if err != nil {
-		return nil, err
-	}
-	a, err := r.Accounts.CreateAdmin(ctx, configstore.AdminAccount{
-		Username: username, PasswordHash: hash, Permissions: permissions,
-	})
+	a, err := r.Accounts.Create(ctx, input.Username, input.Password, input.Permissions)
 	if err != nil {
 		return nil, err
 	}
@@ -148,60 +132,34 @@ func (r *mutationResolver) CreateAdminAccount(ctx context.Context, input AdminAc
 
 // UpdateAdminAccount is the resolver for the updateAdminAccount field.
 func (r *mutationResolver) UpdateAdminAccount(ctx context.Context, input AdminAccountUpdate) (*AdminAccount, error) {
-	username, permissions, disabled := input.Username, input.Permissions, input.Disabled
 	if _, err := auth.Require(ctx, auth.PermAccounts); err != nil {
 		return nil, err
 	}
-	a, err := r.Accounts.GetAdmin(ctx, username)
+	a, err := r.Accounts.Update(ctx, input.Username, accounts.Patch{
+		Permissions: input.Permissions, Disabled: input.Disabled,
+	})
 	if err != nil {
 		return nil, err
 	}
-	if permissions != nil {
-		if err := auth.ValidatePermissions(permissions); err != nil {
-			return nil, err
-		}
-		a.Permissions = permissions
-	}
-	if disabled != nil {
-		a.Disabled = *disabled
-	}
-	if err := r.checkAccountManagers(ctx, a); err != nil {
-		return nil, err
-	}
-	updated, err := r.Accounts.UpdateAdmin(ctx, a)
-	if err != nil {
-		return nil, err
-	}
-	return toAdminAccount(updated), nil
+	return toAdminAccount(a), nil
 }
 
 // SetAdminPassword is the resolver for the setAdminPassword field.
 func (r *mutationResolver) SetAdminPassword(ctx context.Context, input SetAdminPasswordInput) (*AdminAccount, error) {
-	username, password := input.Username, input.Password
 	// Any signed-in administrator may change their own password; changing
 	// another account's needs admin:accounts, like every account change.
 	p, ok := auth.PrincipalFrom(ctx)
 	if !ok {
 		return nil, auth.ErrUnauthorized
 	}
-	if username != p.Username && !p.Has(auth.PermAccounts) {
+	if input.Username != p.Username && !p.Has(auth.PermAccounts) {
 		return nil, fmt.Errorf("%w: %s required to change another account's password", auth.ErrForbidden, auth.PermAccounts)
 	}
-	if err := auth.ValidatePassword(password); err != nil {
-		return nil, err
-	}
-	a, err := r.Accounts.GetAdmin(ctx, username)
+	a, err := r.Accounts.SetPassword(ctx, input.Username, input.Password)
 	if err != nil {
 		return nil, err
 	}
-	if a.PasswordHash, err = auth.HashPassword(password); err != nil {
-		return nil, err
-	}
-	updated, err := r.Accounts.UpdateAdmin(ctx, a)
-	if err != nil {
-		return nil, err
-	}
-	return toAdminAccount(updated), nil
+	return toAdminAccount(a), nil
 }
 
 // Me is the resolver for the me field.
@@ -210,7 +168,7 @@ func (r *queryResolver) Me(ctx context.Context) (*AdminAccount, error) {
 	if !ok {
 		return nil, auth.ErrUnauthorized
 	}
-	a, err := r.Accounts.GetAdmin(ctx, p.Username)
+	a, err := r.Accounts.Get(ctx, p.Username)
 	if err != nil {
 		return nil, err
 	}
@@ -393,7 +351,7 @@ func (r *queryResolver) AdminAccounts(ctx context.Context) ([]AdminAccount, erro
 	if _, err := auth.Require(ctx, auth.PermAccounts); err != nil {
 		return nil, err
 	}
-	all, err := r.Accounts.ListAdmins(ctx)
+	all, err := r.Accounts.List(ctx)
 	if err != nil {
 		return nil, err
 	}

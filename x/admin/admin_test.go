@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -15,41 +14,13 @@ import (
 	"github.com/vektah/gqlparser/v2/parser"
 
 	"github.com/nethinwei/sql-mcp-server/core/revision"
+	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
-	"github.com/nethinwei/sql-mcp-server/x/configstore"
 )
-
-type accounts struct {
-	mu sync.Mutex
-	m  map[string]configstore.AdminAccount
-}
-
-func (a *accounts) CreateAdmin(_ context.Context, acc configstore.AdminAccount) (configstore.AdminAccount, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.m[acc.Username] = acc
-	return acc, nil
-}
-
-func (a *accounts) GetAdmin(_ context.Context, name string) (configstore.AdminAccount, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	acc, ok := a.m[name]
-	if !ok {
-		return configstore.AdminAccount{}, configstore.ErrAdminNotFound
-	}
-	return acc, nil
-}
-
-func (a *accounts) ListAdmins(context.Context) ([]configstore.AdminAccount, error) { return nil, nil }
-
-func (a *accounts) UpdateAdmin(_ context.Context, acc configstore.AdminAccount) (configstore.AdminAccount, error) {
-	return a.CreateAdmin(context.Background(), acc)
-}
 
 type fixture struct {
 	h        *Handler
-	accounts *accounts
+	accounts *accounts.MemoryStore
 	now      time.Time
 }
 
@@ -59,9 +30,9 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &fixture{now: time.Unix(1_700_000_000, 0), accounts: &accounts{m: map[string]configstore.AdminAccount{
-		"root": {Username: "root", PasswordHash: hash, Permissions: []string{auth.PermAll}},
-	}}}
+	f := &fixture{now: time.Unix(1_700_000_000, 0), accounts: accounts.NewMemoryStore(
+		accounts.Account{Username: "root", PasswordHash: hash, Permissions: []string{auth.PermAll}},
+	)}
 	f.h = New(Config{
 		Store: revision.NewMemoryStore(nil), Accounts: f.accounts, Now: func() time.Time { return f.now },
 	})
@@ -164,9 +135,16 @@ func TestLoginFailuresLockOut(t *testing.T) {
 func TestDisabledAccountLosesSessionAndCannotSignIn(t *testing.T) {
 	f := newFixture(t)
 	_, cookie, csrf := f.login(t, "correct horse battery")
-	acc := f.accounts.m["root"]
-	acc.Disabled = true
-	f.accounts.m["root"] = acc
+	disabled := true
+	// root is the only account manager; add another so it can be disabled.
+	svc := accounts.Service{Store: f.accounts}
+	ops := []string{auth.PermAccounts}
+	if _, err := svc.Create(context.Background(), "ops", "another long password", ops); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Update(context.Background(), "root", accounts.Patch{Disabled: &disabled}); err != nil {
+		t.Fatal(err)
+	}
 	rec := f.do(http.MethodPost, "/admin/graphql", meQuery, map[string]string{csrfHeader: csrf}, cookie)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("disabled account kept its session: %d", rec.Code)
