@@ -21,9 +21,53 @@ func NewIntrospector(db *sql.DB) introspect.Introspector {
 	return Introspector{db: db}
 }
 
+// systemSchemas are the MySQL and OceanBase databases a schema import skips.
+var systemSchemas = []string{
+	"information_schema", "mysql", "performance_schema", "sys", "oceanbase", "LBACSYS", "ORAAUDITOR",
+}
+
+// Schemas implements introspect.SchemaLister: every database except the system
+// ones, and the connection's current database.
+func (i Introspector) Schemas(ctx context.Context) ([]string, string, error) {
+	rows, err := i.db.QueryContext(ctx, `SELECT schema_name FROM information_schema.schemata ORDER BY schema_name`)
+	if err != nil {
+		return nil, "", err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, "", err
+		}
+		if !contains(systemSchemas, name) {
+			out = append(out, name)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	current, err := i.currentDatabase(ctx)
+	return out, current, err
+}
+
+func (i Introspector) currentDatabase(ctx context.Context) (string, error) {
+	var current sql.NullString
+	err := i.db.QueryRowContext(ctx, `SELECT DATABASE()`).Scan(&current)
+	return current.String, err
+}
+
 // Discover implements introspect.Introspector. It lists base tables (filtered
-// to the requested schemas in memory) with their columns and primary keys.
+// to the requested schemas in memory, by default the current database, where
+// unqualified names resolve) with their columns and primary keys.
 func (i Introspector) Discover(ctx context.Context, sources []string) ([]entity.Entity, error) {
+	if len(sources) == 0 {
+		current, err := i.currentDatabase(ctx)
+		if err != nil || current == "" {
+			return nil, err
+		}
+		sources = []string{current}
+	}
 	trows, err := i.db.QueryContext(ctx,
 		`SELECT table_schema, table_name, COALESCE(table_comment, '') FROM information_schema.tables
 		 WHERE table_type = 'BASE TABLE'`)
@@ -38,7 +82,7 @@ func (i Introspector) Discover(ctx context.Context, sources []string) ([]entity.
 		if err := trows.Scan(&t.schema, &t.name, &t.comment); err != nil {
 			return nil, err
 		}
-		if len(sources) > 0 && !contains(sources, t.schema) || config.IsStoreTable(t.name) {
+		if !contains(sources, t.schema) || config.IsStoreTable(t.name) {
 			continue
 		}
 		tables = append(tables, t)

@@ -1,12 +1,14 @@
 package graph
 
 import (
+	"context"
 	"slices"
 	"sort"
 	"strconv"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
+	"github.com/nethinwei/sql-mcp-server/core/introspect"
 )
 
 // tableKey identifies a table within a datasource: tables of different
@@ -15,62 +17,42 @@ func tableKey(schema, table string) string {
 	return schema + "." + table
 }
 
-// configuredTables matches configured entities of one datasource to tables.
-// An entity naming its schema matches that table only; one without a schema
-// matches by name, and only when exactly one discovered table has that name.
-type configuredTables struct {
-	scoped   map[string]config.EntityConfig // by tableKey
-	unscoped map[string]config.EntityConfig // by table name
-	tables   map[string]int                 // discovered tables per name
-}
-
-func newConfiguredTables(datasource string, discovered []entity.Entity, cfg *config.Config) configuredTables {
-	c := configuredTables{
-		scoped: map[string]config.EntityConfig{}, unscoped: map[string]config.EntityConfig{}, tables: map[string]int{},
-	}
-	for _, d := range discovered {
-		c.tables[d.Source]++
-	}
+// configuredTables maps each catalog table (by tableKey) to the configured
+// entity of datasource that reads it, resolved by the catalog like the runtime
+// does.
+func configuredTables(datasource string, cat introspect.Catalog, cfg *config.Config) map[string]config.EntityConfig {
+	out := map[string]config.EntityConfig{}
 	for _, e := range cfg.Entities {
-		if entityDatasource(e) != datasource {
+		if e.DatasourceName() != datasource || e.Kind == "procedure" {
 			continue
 		}
-		if e.Schema != "" {
-			c.scoped[tableKey(e.Schema, entitySource(e))] = e
-		} else {
-			c.unscoped[entitySource(e)] = e
+		if d, ok := cat.Lookup(e.Schema, e.PhysicalSource()); ok {
+			out[tableKey(d.Schema, d.Source)] = e
 		}
 	}
-	return c
+	return out
 }
 
-func (c configuredTables) lookup(d entity.Entity) (config.EntityConfig, bool) {
-	if e, ok := c.scoped[tableKey(d.Schema, d.Source)]; ok {
-		return e, true
-	}
-	e, ok := c.unscoped[d.Source]
-	return e, ok && c.tables[d.Source] == 1
-}
-
-// buildSchemaImport compares discovered tables with the configured entities
+// buildSchemaImport compares the scanned tables with the configured entities
 // of datasource and proposes a zero-permission candidate entity per table.
-func buildSchemaImport(datasource string, discovered []entity.Entity, cfg *config.Config) *SchemaImport {
-	configured := newConfiguredTables(datasource, discovered, cfg)
+func buildSchemaImport(datasource string, cat introspect.Catalog, cfg *config.Config) *SchemaImport {
+	configured := configuredTables(datasource, cat, cfg)
 	taken := map[string]bool{}
 	for _, e := range cfg.Entities {
 		taken[e.Name] = true
 	}
-	candidates := candidateNames(datasource, discovered, configured, taken)
-	out := &SchemaImport{Datasource: datasource, Tables: make([]ImportTable, 0, len(discovered))}
-	for _, d := range discovered {
+	candidates := candidateNames(datasource, cat.Tables, configured, taken)
+	out := &SchemaImport{
+		Datasource: datasource, DefaultSchema: optional(cat.Default), Tables: make([]ImportTable, 0, len(cat.Tables)),
+	}
+	for _, d := range cat.Tables {
 		table := ImportTable{
 			Schema: d.Schema, Table: d.Source, Description: d.Description, Status: ImportStatusNew,
-			AddedColumns: []string{}, MissingColumns: []string{}, Columns: importColumns(d),
+			Columns: importColumns(d),
 		}
-		if e, ok := configured.lookup(d); ok {
+		if e, ok := configured[tableKey(d.Schema, d.Source)]; ok {
 			name := e.Name
 			table.Status, table.ConfiguredAs = ImportStatusConfigured, &name
-			table.AddedColumns, table.MissingColumns = columnDiff(d, e)
 		}
 		candidate := candidateEntity(datasource, d, candidates)
 		table.Candidate = &candidate
@@ -84,20 +66,6 @@ func buildSchemaImport(datasource string, discovered []entity.Entity, cfg *confi
 	return out
 }
 
-func entityDatasource(e config.EntityConfig) string {
-	if e.DataSource == "" {
-		return "default"
-	}
-	return e.DataSource
-}
-
-func entitySource(e config.EntityConfig) string {
-	if e.Source == "" {
-		return e.Name
-	}
-	return e.Source
-}
-
 // candidateNames maps each table (by tableKey) to the entity name a candidate
 // would use: the configured name when the table is configured, otherwise the
 // table name, qualified by schema when several schemas have that table and by
@@ -105,7 +73,7 @@ func entitySource(e config.EntityConfig) string {
 func candidateNames(
 	datasource string,
 	discovered []entity.Entity,
-	configured configuredTables,
+	configured map[string]config.EntityConfig,
 	taken map[string]bool,
 ) map[string]string {
 	out := make(map[string]string, len(discovered))
@@ -113,8 +81,10 @@ func candidateNames(
 	for name := range taken {
 		used[name] = true
 	}
+	perName := map[string]int{}
 	for _, d := range discovered {
-		if e, ok := configured.lookup(d); ok {
+		perName[d.Source]++
+		if e, ok := configured[tableKey(d.Schema, d.Source)]; ok {
 			out[tableKey(d.Schema, d.Source)] = e.Name
 		}
 	}
@@ -124,7 +94,7 @@ func candidateNames(
 			continue
 		}
 		name := d.Source
-		if configured.tables[d.Source] > 1 && d.Schema != "" {
+		if perName[d.Source] > 1 && d.Schema != "" {
 			name = d.Schema + "_" + d.Source
 		}
 		if used[name] {
@@ -152,40 +122,22 @@ func importColumns(d entity.Entity) []ImportColumn {
 	return out
 }
 
-func columnDiff(d entity.Entity, e config.EntityConfig) (added, missing []string) {
-	declared := map[string]bool{}
-	for _, f := range e.Fields {
-		declared[f.Name] = true
-	}
-	present := map[string]bool{}
-	for _, a := range d.Attributes {
-		present[a.Name] = true
-		if !declared[a.Name] {
-			added = append(added, a.Name)
-		}
-	}
-	for _, f := range e.Fields {
-		if !present[f.Name] {
-			missing = append(missing, f.Name)
-		}
-	}
-	return orEmpty(added), orEmpty(missing)
-}
-
-// candidateEntity proposes an entity with every column, the primary key, the
-// table comment and a belongs-to relationship per single-column foreign key.
+// candidateEntity proposes an entity with every column, the primary key and a
+// belongs-to relationship per single-column foreign key. Table and column
+// comments are not copied: at runtime they are the default descriptions, so
+// later comment changes still apply and only a written description overrides.
 // It carries no roles, grants or row policies: nobody can access it until an
 // administrator grants access explicitly.
 func candidateEntity(datasource string, d entity.Entity, names map[string]string) Entity {
 	out := Entity{
 		Name: names[tableKey(d.Schema, d.Source)], Source: optional(d.Source), Datasource: optional(datasource),
-		Schema:      optional(d.Schema),
-		Description: optional(d.Description), PrimaryKey: orEmpty(d.PrimaryKey()), Params: []string{},
+		Schema:     optional(d.Schema),
+		PrimaryKey: orEmpty(d.PrimaryKey()), Params: []string{},
 		Fields: make([]Field, 0, len(d.Attributes)), Relationships: []Relationship{},
 		Mcp: &EntityMcp{DmlTools: true},
 	}
 	for _, a := range d.Attributes {
-		out.Fields = append(out.Fields, Field{Name: a.Name, Description: optional(a.Description)})
+		out.Fields = append(out.Fields, Field{Name: a.Name})
 	}
 	for _, fk := range d.ForeignKeys {
 		refSchema := fk.RefSchema
@@ -248,4 +200,67 @@ func uniqueRelationshipName(existing []Relationship, base string) string {
 		}
 		name = base + "_" + strconv.Itoa(n)
 	}
+}
+
+// importCatalog scans schemas, or every schema of the database when none are
+// named (only the default one when the introspector cannot list them).
+func importCatalog(ctx context.Context, in introspect.Introspector, schemas []string) (introspect.Catalog, error) {
+	if lister, ok := in.(introspect.SchemaLister); ok && len(schemas) == 0 {
+		all, _, err := lister.Schemas(ctx)
+		if err != nil {
+			return introspect.Catalog{}, err
+		}
+		schemas = all
+	}
+	return introspect.LoadCatalog(ctx, in, schemas, len(schemas) == 0)
+}
+
+// referencedCatalog scans the schemas refs name, and the default schema when
+// a ref names none.
+func referencedCatalog(ctx context.Context, in introspect.Introspector, refs []TableRef) (introspect.Catalog, error) {
+	var schemas []string
+	unqualified := false
+	for _, ref := range refs {
+		if schema := deref(ref.Schema); schema == "" {
+			unqualified = true
+		} else if !slices.Contains(schemas, schema) {
+			schemas = append(schemas, schema)
+		}
+	}
+	return introspect.LoadCatalog(ctx, in, schemas, unqualified)
+}
+
+// lookupTableComments resolves each table's comments with one catalog per
+// datasource; entries whose table is not found are nil.
+func lookupTableComments(
+	tables []TableRef,
+	catalog func(datasource string, refs []TableRef) (introspect.Catalog, error),
+) ([]*TableComments, error) {
+	byDatasource := map[string][]TableRef{}
+	for _, ref := range tables {
+		byDatasource[ref.Datasource] = append(byDatasource[ref.Datasource], ref)
+	}
+	catalogs := map[string]introspect.Catalog{}
+	for datasource, refs := range byDatasource {
+		cat, err := catalog(datasource, refs)
+		if err != nil {
+			return nil, err
+		}
+		catalogs[datasource] = cat
+	}
+	out := make([]*TableComments, len(tables))
+	for i, ref := range tables {
+		if d, ok := catalogs[ref.Datasource].Lookup(deref(ref.Schema), ref.Table); ok {
+			out[i] = tableComments(d)
+		}
+	}
+	return out, nil
+}
+
+func tableComments(d entity.Entity) *TableComments {
+	out := &TableComments{Description: d.Description, Columns: make([]ColumnComment, 0, len(d.Attributes))}
+	for _, a := range d.Attributes {
+		out.Columns = append(out.Columns, ColumnComment{Name: a.Name, Description: a.Description})
+	}
+	return out
 }

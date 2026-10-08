@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -13,6 +14,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
+	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
@@ -57,6 +59,7 @@ type harness struct {
 	store    *revision.MemoryStore
 	accounts *accounts.MemoryStore
 	resolver *Resolver
+	tables   *fakeIntrospector
 }
 
 func newHarness(t *testing.T) *harness {
@@ -71,21 +74,49 @@ func newHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	accountStore := accounts.NewMemoryStore(accounts.Account{Username: "root", Permissions: []string{auth.PermAll}})
-	introspect := func(context.Context, string, []string) ([]entity.Entity, error) {
-		return []entity.Entity{
-			{Name: "customers", Source: "customers", Schema: "public", Description: "customer master",
-				Attributes: []entity.Attribute{{Name: "id"}, {Name: "region", Description: "sales region"}},
-				Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}}},
-			{Name: "orders", Source: "orders", Schema: "public",
-				Attributes: []entity.Attribute{{Name: "id"}, {Name: "customer_id"}},
-				Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
-				ForeignKeys: []entity.ForeignKey{
-					{Columns: []string{"customer_id"}, RefRelation: "customers", RefColumns: []string{"id"}},
-				}},
-		}, nil
+	tables := &fakeIntrospector{all: []string{"public"}, tables: []entity.Entity{
+		{Name: "customers", Source: "customers", Schema: "public", Description: "customer master",
+			Attributes: []entity.Attribute{{Name: "id"}, {Name: "region", Description: "sales region"}},
+			Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}}},
+		{Name: "orders", Source: "orders", Schema: "public",
+			Attributes: []entity.Attribute{{Name: "id"}, {Name: "customer_id"}},
+			Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
+			ForeignKeys: []entity.ForeignKey{
+				{Columns: []string{"customer_id"}, RefRelation: "customers", RefColumns: []string{"id"}},
+			}},
+	}}
+	introspection := func(_ context.Context, _ string, fn func(introspect.Introspector) error) error {
+		return fn(tables)
 	}
-	return &harness{store: store, accounts: accountStore,
-		resolver: &Resolver{Store: store, Accounts: accounts.Service{Store: accountStore}, Introspect: introspect}}
+	return &harness{store: store, accounts: accountStore, tables: tables, resolver: &Resolver{
+		Store: store, Accounts: accounts.Service{Store: accountStore}, Introspect: introspection,
+	}}
+}
+
+// fakeIntrospector serves fixed tables with public as the default schema and
+// records the schemas each Discover scans.
+type fakeIntrospector struct {
+	tables  []entity.Entity
+	all     []string
+	scanned []string
+}
+
+func (f *fakeIntrospector) Discover(_ context.Context, schemas []string) ([]entity.Entity, error) {
+	f.scanned = schemas
+	if len(schemas) == 0 {
+		schemas = []string{"public"}
+	}
+	var out []entity.Entity
+	for _, t := range f.tables {
+		if slices.Contains(schemas, t.Schema) {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeIntrospector) Schemas(context.Context) ([]string, string, error) {
+	return f.all, "public", nil
 }
 
 // client returns a GraphQL client acting as an administrator with perms.
@@ -176,13 +207,12 @@ func TestSchemaImportProposesZeroPermissionCandidates(t *testing.T) {
 	c := h.client(auth.PermAll)
 	var resp struct {
 		SchemaImport struct {
-			Tables []struct {
-				Table          string
-				Status         string
-				ConfiguredAs   *string
-				AddedColumns   []string
-				MissingColumns []string
-				Candidate      struct {
+			DefaultSchema string
+			Tables        []struct {
+				Table        string
+				Status       string
+				ConfiguredAs *string
+				Candidate    struct {
 					Name          string
 					Description   string
 					LegacyAccess  any
@@ -191,17 +221,15 @@ func TestSchemaImportProposesZeroPermissionCandidates(t *testing.T) {
 			}
 		}
 	}
-	mustPost(t, c, `{ schemaImport(datasource: "shop") { tables { table status configuredAs addedColumns missingColumns
+	mustPost(t, c, `{ schemaImport(datasource: "shop") { defaultSchema tables { table status configuredAs
 		candidate { name description legacyAccess relationships { name target cardinality } } } } }`, &resp)
 	tables := resp.SchemaImport.Tables
 	if len(tables) != 2 || tables[0].Table != "customers" || tables[1].Table != "orders" {
 		t.Fatalf("tables = %+v", tables)
 	}
 	customers, orders := tables[0], tables[1]
-	if customers.Status != "CONFIGURED" || *customers.ConfiguredAs != "customers" ||
-		len(
-			customers.MissingColumns,
-		) != 1 || customers.MissingColumns[0] != "legacy_col" || len(customers.AddedColumns) != 0 {
+	if resp.SchemaImport.DefaultSchema != "public" ||
+		customers.Status != "CONFIGURED" || *customers.ConfiguredAs != "customers" {
 		t.Fatalf("customers = %+v", customers)
 	}
 	if orders.Status != "NEW" || orders.Candidate.LegacyAccess != nil {

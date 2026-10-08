@@ -46,7 +46,7 @@ const (
 type Config struct {
 	Store      revision.Store
 	Accounts   accounts.Store
-	Introspect graph.Introspector
+	Introspect graph.Introspection
 	// Status reports the serving process to the console; optional.
 	Status func() graph.RuntimeState
 	// SecureCookie marks the session cookie Secure; set it when serving TLS.

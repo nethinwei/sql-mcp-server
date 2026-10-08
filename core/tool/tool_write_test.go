@@ -103,6 +103,38 @@ func TestCreateToolReturning(t *testing.T) {
 	}
 }
 
+// With several datasources only the routed context has a dialect; the insert
+// must use it rather than the top-level one.
+func TestCreateToolUsesTheRoutedDatasource(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{
+		Name: "refunds", Source: "refunds", Kind: entity.KindTable, DataSource: "shop",
+		Attributes: []entity.Attribute{{Name: "id"}, {Name: "amount"}},
+		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
+		Role:       entity.RoleAccess{entity.ActionCreate: {"writer"}},
+		MCP:        entity.MCPFlags{DMLTools: true},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	shop := &store.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
+		return store.NewFakeRows([]string{"id"}, []any{int64(9)}), nil
+	}}
+	tc := Context{
+		Role: "writer", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
+		Sources: map[string]DataSource{
+			"shop":      {DB: shop, Dialect: testdialect.Postgres{}},
+			"analytics": {DB: &store.FakeDB{}, Dialect: testdialect.Postgres{}},
+		},
+	}
+	in, _ := json.Marshal(createInput{Entity: "refunds", Values: map[string]any{"amount": "10.00"}})
+	res, err := CreateTool{}.Run(context.Background(), in, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Content[0]["id"] != int64(9) {
+		t.Fatalf("got %v", res.Content[0])
+	}
+}
+
 func TestDeleteTool(t *testing.T) {
 	t.Parallel()
 	e := entity.Entity{

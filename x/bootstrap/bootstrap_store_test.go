@@ -14,28 +14,42 @@ import (
 
 func TestValidateStorePayloadRejectsPlaintextSecrets(t *testing.T) {
 	t.Parallel()
-	ok := []string{
-		"${DSN}",
-		"postgres://app:${PG_PASSWORD}@db:5432/app",
-		"app:${file:/run/secrets/mysql}@tcp(db:3306)/app",
-		"host=db user=app password=${PW} dbname=app",
-		"postgres://app@db/app",
+	ok := [][2]string{
+		{"postgres", "${DSN}"},
+		{"postgres", "postgres://app:${PG_PASSWORD}@db:5432/app"},
+		{"postgres", "postgres://app:${file:/run/secrets/pg}@db:5432/app"},
+		{"mysql", "app:${file:/run/secrets/mysql}@tcp(db:3306)/app"},
+		{"postgres", "host=db user=app password=${PW} dbname=app"},
+		{"postgres", "host=db user=app password = '${PW}' dbname=app"},
+		{"postgres", "postgres://app@db/app"},
+		{"postgres", "postgres://alice:@localhost/test"},
+		{"postgres", "host=db user=app password='' dbname=app"},
+		{"mysql", "app:@tcp(db:3306)/app"},
 	}
-	for _, dsn := range ok {
-		cfg := &config.Config{Database: config.DatabaseConfig{Driver: "postgres", DSN: dsn}}
+	for _, c := range ok {
+		cfg := &config.Config{Database: config.DatabaseConfig{Driver: c[0], DSN: c[1]}}
 		if err := ValidateStorePayload(cfg); err != nil {
-			t.Errorf("%q must be accepted: %v", dsn, err)
+			t.Errorf("%q must be accepted: %v", c[1], err)
 		}
 	}
-	bad := []string{
-		"postgres://app:hunter2@db/app",
-		"app:hunter2@tcp(db:3306)/app",
-		"host=db password=hunter2",
+	bad := [][2]string{
+		{"postgres", "postgres://app:hunter2@db/app"},
+		{"postgres", "postgres://app@db/app?password=hunter2"},
+		{"postgres", "postgres://app@db/app?%70assword=hunter2"},
+		{"postgres", "postgres://app@db/app?sslmode=disable&PASS%57ORD=hunter2"},
+		{"mysql", "app:hunter2@tcp(db:3306)/app"},
+		{"oceanbase", "app:${PW}x@tcp(db:2881)/app"},
+		{"postgres", "host=db password=hunter2"},
+		{"postgres", "host=db password = hunter2"},
+		{"postgres", "host=db password='hunter 2'"},
+		// The driver grammar rejects these; every grammar is tried instead.
+		{"postgres", "app:hunter2@tcp(db:3306)/app"},
+		{"unknown", "host=db password = hunter2"},
 	}
-	for _, dsn := range bad {
-		cfg := &config.Config{Databases: map[string]config.DatabaseConfig{"main": {Driver: "postgres", DSN: dsn}}}
+	for _, c := range bad {
+		cfg := &config.Config{Databases: map[string]config.DatabaseConfig{"main": {Driver: c[0], DSN: c[1]}}}
 		if err := ValidateStorePayload(cfg); !errors.Is(err, ErrPlaintextSecret) {
-			t.Errorf("%q must be rejected: %v", dsn, err)
+			t.Errorf("%q must be rejected: %v", c[1], err)
 		}
 	}
 	shared := &config.Config{Database: config.DatabaseConfig{Driver: "postgres", DSN: "${DSN}"}}

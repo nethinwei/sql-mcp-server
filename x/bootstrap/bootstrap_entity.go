@@ -22,14 +22,7 @@ func configToEntities(ecs []config.EntityConfig) ([]entity.Entity, error) {
 }
 
 func configToEntity(ec config.EntityConfig) (entity.Entity, error) {
-	source := ec.Source
-	if source == "" {
-		source = ec.Name
-	}
-	dataSource := ec.DataSource
-	if dataSource == "" {
-		dataSource = "default"
-	}
+	source, dataSource := ec.PhysicalSource(), ec.DatasourceName()
 	attrs := entityAttributesFromConfig(ec.Fields)
 	role := entityRoleFromConfig(ec.Roles)
 	fieldAccess := entityFieldAccessFromConfig(ec.FieldACL)

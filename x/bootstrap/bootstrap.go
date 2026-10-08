@@ -5,10 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -333,37 +333,35 @@ func configurePool(p Provider, maxOpen int, connMaxIdle, connMaxLifetime time.Du
 	}
 }
 
-// checkDrift introspects the live schema and fails fast if a configured entity
-// or field is missing from the database. Extra DB columns are not fatal.
-func checkDrift(ctx context.Context, prov Provider, entities []entity.Entity) error {
+// reconcileEntities matches entities to their tables in the live schema. It
+// fails fast if a configured entity or field is missing from the database
+// (extra DB columns are not fatal) and returns the entities with database
+// comments as their default descriptions.
+func reconcileEntities(ctx context.Context, prov Provider, entities []entity.Entity) ([]entity.Entity, error) {
 	if prov.Introspector() == nil {
-		return nil
+		return entities, nil
 	}
 	schemas := make([]string, 0)
-	seen := make(map[string]bool)
+	unqualified := false
 	for _, e := range entities {
-		if e.Schema != "" && !seen[e.Schema] {
-			seen[e.Schema] = true
+		if e.Kind == entity.KindProcedure {
+			continue
+		}
+		if e.Schema == "" {
+			unqualified = true
+		} else if !slices.Contains(schemas, e.Schema) {
 			schemas = append(schemas, e.Schema)
 		}
 	}
-	discovered, err := prov.Introspector().Discover(ctx, schemas)
+	cat, err := introspect.LoadCatalog(ctx, prov.Introspector(), schemas, unqualified)
 	if err != nil {
-		return fmt.Errorf("introspect: %w", err)
+		return nil, fmt.Errorf("introspect: %w", err)
 	}
-	// Procedures are not discovered as base tables; check drift only for
-	// table/view entities.
-	var tables []entity.Entity
-	for _, e := range entities {
-		if e.Kind != entity.KindProcedure {
-			tables = append(tables, e)
-		}
-	}
-	drift := introspect.DetectDrift(tables, discovered)
+	reconciled, drift := introspect.Reconcile(entities, cat)
 	if len(drift.Missing) > 0 {
-		return fmt.Errorf("schema drift (configured but missing in DB): %v", drift.Missing)
+		return nil, fmt.Errorf("schema drift (configured but missing in DB): %v", drift.Missing)
 	}
-	return nil
+	return reconciled, nil
 }
 
 // toThreshold maps config.CostConfig to cost.Threshold.
@@ -472,38 +470,6 @@ func (r EnvFileResolver) Resolve(s string) (string, error) {
 		roots = []string{"/run/secrets", "/var/run/secrets"}
 	}
 	return resolveSecretsWithRoots(s, roots)
-}
-
-var (
-	pgPassRe    = regexp.MustCompile(`(://[^:/@]+:)[^@]+(@)`)
-	mysqlPassRe = regexp.MustCompile(`^([^:@]+:)[^@]+(@tcp)`)
-	keyPassRe   = regexp.MustCompile(`(?i)(^|[?;&\s])(password|pwd)=([^&;\s]+)`)
-)
-
-// RedactDSN returns dsn with any password replaced by ***, for safe logging.
-// It handles PostgreSQL URI form (scheme://user:pass@host) and MySQL DSN form
-// (user:pass@tcp(host)); DSNs without a password are returned unchanged.
-func RedactDSN(dsn string) string {
-	redacted := dsn
-	if parsed, err := url.Parse(dsn); err == nil && parsed.Scheme != "" {
-		if parsed.User != nil {
-			if _, hasPassword := parsed.User.Password(); hasPassword {
-				parsed.User = url.UserPassword(parsed.User.Username(), "***")
-			}
-		}
-		query := parsed.Query()
-		for _, key := range []string{"password", "pwd"} {
-			if query.Has(key) {
-				query.Set(key, "***")
-			}
-		}
-		parsed.RawQuery = query.Encode()
-		redacted = parsed.String()
-	} else if pgPassRe.MatchString(redacted) {
-		redacted = pgPassRe.ReplaceAllString(redacted, "${1}***${2}")
-	}
-	redacted = mysqlPassRe.ReplaceAllString(redacted, "${1}***${2}")
-	return keyPassRe.ReplaceAllString(redacted, "${1}${2}=***")
 }
 
 // validateMaskRules fails fast if a configured mask rule is unknown, so a typo

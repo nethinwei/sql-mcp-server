@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/nethinwei/sql-mcp-server/core/audit"
 	"github.com/nethinwei/sql-mcp-server/core/cache"
@@ -27,7 +28,8 @@ func AssembleWithProviders(cfg *config.Config, providers map[string]Provider) (*
 	if err != nil {
 		return nil, err
 	}
-	if err := validateAssembleEntities(entities, providers); err != nil {
+	entities, err = validateAssembleEntities(entities, providers)
+	if err != nil {
 		return nil, err
 	}
 	reg, err := entityRegistryFromConfig(entities)
@@ -82,11 +84,13 @@ func prepareAssembleProviders(cfg *config.Config, providers map[string]Provider)
 	return nil
 }
 
-func validateAssembleEntities(entities []entity.Entity, providers map[string]Provider) error {
+// validateAssembleEntities checks entities against their datasources and
+// returns them with database comments as the default descriptions.
+func validateAssembleEntities(entities []entity.Entity, providers map[string]Provider) ([]entity.Entity, error) {
 	if err := validateEntityDatasources(entities, providers); err != nil {
-		return err
+		return nil, err
 	}
-	return checkAllDrift(providers, entities)
+	return reconcileAll(providers, entities)
 }
 
 func validateEntityDatasources(entities []entity.Entity, providers map[string]Provider) error {
@@ -98,19 +102,26 @@ func validateEntityDatasources(entities []entity.Entity, providers map[string]Pr
 	return nil
 }
 
-func checkAllDrift(providers map[string]Provider, entities []entity.Entity) error {
+func reconcileAll(providers map[string]Provider, entities []entity.Entity) ([]entity.Entity, error) {
+	out := slices.Clone(entities)
 	for name, prov := range providers {
 		var scoped []entity.Entity
-		for _, e := range entities {
+		var at []int
+		for i, e := range entities {
 			if e.DataSource == name {
 				scoped = append(scoped, e)
+				at = append(at, i)
 			}
 		}
-		if err := checkDrift(context.Background(), prov, scoped); err != nil {
-			return fmt.Errorf("datasource %q: %w", name, err)
+		reconciled, err := reconcileEntities(context.Background(), prov, scoped)
+		if err != nil {
+			return nil, fmt.Errorf("datasource %q: %w", name, err)
+		}
+		for j, e := range reconciled {
+			out[at[j]] = e
 		}
 	}
-	return nil
+	return out, nil
 }
 
 func entityRegistryFromConfig(entities []entity.Entity) (*entity.Registry, error) {

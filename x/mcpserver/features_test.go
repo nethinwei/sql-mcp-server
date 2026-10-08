@@ -181,3 +181,82 @@ func TestCustomProcedureThroughMCP(t *testing.T) {
 		t.Fatalf("custom procedure result = %+v, error = %v", result, err)
 	}
 }
+
+// Two read grants with incompatible field scopes deny the default projection,
+// but the entity stays discoverable with the scopes to choose fields from.
+func TestAuthorizedSchemaListsSplitFieldScopes(t *testing.T) {
+	t.Parallel()
+	registry, err := entity.NewRegistry([]entity.Entity{{
+		Name: "customers", MCP: entity.MCPFlags{DMLTools: true},
+		Attributes: []entity.Attribute{{Name: "id"}, {Name: "name"}, {Name: "phone"}, {Name: "secret"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func(id string, fields ...string) rbac.Grant {
+		return rbac.Grant{ID: id, Actions: []entity.Action{entity.ActionRead},
+			Fields: &entity.FieldPermissions{Read: fields}}
+	}
+	policy := rbac.Policy{Roles: map[string]map[string][]rbac.Grant{
+		"reader": {"customers": {read("n", "id", "name"), read("p", "id", "phone")}},
+	}}
+	app := &bootstrap.App{Registry: registry, Authorizer: rbac.NewGrantAuthorizer(registry, policy)}
+	schema, err := authorizedSchema(context.Background(), app, "reader", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(schema)
+	text := string(data)
+	for _, want := range []string{`"customers"`,
+		`"read":{"explicitFieldsRequired":true,"fieldScopes":[["id","name"],["id","phone"]],"fields":["id","name","phone"]}`,
+		`"actions":["read"]`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("schema missing %s: %s", want, text)
+		}
+	}
+	if strings.Contains(text, `"secret"`) {
+		t.Fatalf("schema leaked an unreadable field: %s", text)
+	}
+}
+
+// Read and aggregate grants cover different fields: each action reports its
+// own fields and scopes instead of the read ones standing for both.
+func TestAuthorizedSchemaReportsFieldsPerAction(t *testing.T) {
+	t.Parallel()
+	registry, err := entity.NewRegistry([]entity.Entity{{
+		Name: "orders", MCP: entity.MCPFlags{DMLTools: true},
+		Attributes: []entity.Attribute{{Name: "id"}, {Name: "amount"}, {Name: "region"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := func(id string, action entity.Action, fields ...string) rbac.Grant {
+		return rbac.Grant{ID: id, Actions: []entity.Action{action}, Fields: &entity.FieldPermissions{Read: fields}}
+	}
+	policy := rbac.Policy{Roles: map[string]map[string][]rbac.Grant{"analyst": {"orders": {
+		grant("r", entity.ActionRead, "id"),
+		grant("a1", entity.ActionAggregate, "id", "amount"),
+		grant("a2", entity.ActionAggregate, "id", "region"),
+	}}}}
+	app := &bootstrap.App{Registry: registry, Authorizer: rbac.NewGrantAuthorizer(registry, policy)}
+	schema, err := authorizedSchema(context.Background(), app, "analyst", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(schema)
+	text := string(data)
+	for _, want := range []string{
+		`"actions":["read","aggregate"]`,
+		`"read":{"fields":["id"]}`,
+		`"aggregate":{"explicitFieldsRequired":true,"fieldScopes":[["id","amount"],["id","region"]],` +
+			`"fields":["id","amount","region"]}`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("schema missing %s: %s", want, text)
+		}
+	}
+	entityFields := schema["entities"].([]map[string]any)[0]["fields"].([]map[string]any)
+	if len(entityFields) != 3 {
+		t.Fatalf("top-level fields must cover every action: %v", entityFields)
+	}
+}

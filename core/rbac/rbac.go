@@ -22,7 +22,8 @@ type Request struct {
 }
 
 // Decision is the authorization outcome. When Allowed, Fields is the
-// projected set the caller may read, and RowFilter is the effective row-level
+// projected set the caller may read (empty for create/update/delete, which
+// return no rows), and RowFilter is the effective row-level
 // predicate (covering grants ORed, tenant policy ANDed) to AND with the request
 // predicate. Grants lists the covering grant IDs for decision traces.
 type Decision struct {
@@ -34,6 +35,27 @@ type Decision struct {
 	// FieldScopes is set on an ambiguous-field-scope denial: each entry is a
 	// field set one grant covers, so the caller can retry with explicit fields.
 	FieldScopes [][]string
+}
+
+// Reachable reports that the caller can use the entity for the action with
+// some field selection: the default projection is allowed, or it was denied
+// only because the readable fields are split across grants, in which case an
+// explicit selection within one of FieldScopes is allowed. Entity discovery
+// (describe_entities, the authorized-schema resource) shares this rule.
+func (d Decision) Reachable() bool {
+	return d.Allowed || len(d.Scopes()) > 0
+}
+
+// Scopes returns the non-empty FieldScopes: the field sets an explicit
+// selection may use after an ambiguous-field-scope denial.
+func (d Decision) Scopes() [][]string {
+	var out [][]string
+	for _, scope := range d.FieldScopes {
+		if len(scope) > 0 {
+			out = append(out, scope)
+		}
+	}
+	return out
 }
 
 // Authorizer authorizes a request. Implementations must be safe for concurrent
@@ -127,10 +149,15 @@ func (a *GrantAuthorizer) Authorize(_ context.Context, req Request) (Decision, e
 	if len(covering) == 0 {
 		return deniedFieldScope(req, candidates, readFields, writeFields, res.Attributes), nil
 	}
-	projected := unionProjection(res.Attributes, req.Fields, covering)
-	covering = coveringGrants(covering, projected, nil, res.Attributes)
-	if len(covering) == 0 {
-		return ambiguousFieldScope(req, candidates, res.Attributes), nil
+	// Only actions that return rows project fields; a write is covered by the
+	// fields it reads and writes, not by fields it never returns.
+	var projected []string
+	if returnsRows(req.Action) {
+		projected = unionProjection(res.Attributes, req.Fields, covering)
+		covering = coveringGrants(covering, projected, nil, res.Attributes)
+		if len(covering) == 0 {
+			return ambiguousFieldScope(req, candidates, res.Attributes), nil
+		}
 	}
 	filter, ids := effectiveRowFilter(covering, res.Entity.TenantPolicy)
 	return Decision{
@@ -139,6 +166,14 @@ func (a *GrantAuthorizer) Authorize(_ context.Context, req Request) (Decision, e
 		RowFilter: resolveSubject(filter, req.Subject),
 		Grants:    ids,
 	}, nil
+}
+
+func returnsRows(action entity.Action) bool {
+	switch action {
+	case entity.ActionCreate, entity.ActionUpdate, entity.ActionDelete:
+		return false
+	}
+	return true
 }
 
 // effectiveRowFilter ORs the covering grants' rows (TRUE when any grant is

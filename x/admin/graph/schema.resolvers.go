@@ -11,6 +11,7 @@ import (
 	"fmt"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
@@ -223,22 +224,47 @@ func (r *queryResolver) SchemaImport(ctx context.Context, datasource string, sch
 	if _, err := auth.Require(ctx, auth.PermWrite); err != nil {
 		return nil, err
 	}
-	current, err := r.Store.Published(ctx)
-	if err != nil {
-		return nil, err
-	}
-	cfg, err := bootstrap.LoadRevision(current)
+	cfg, err := r.selectConfig(ctx, nil, nil)
 	if err != nil {
 		return nil, err
 	}
 	if !hasDatasource(cfg, datasource) {
 		return nil, fmt.Errorf("unknown datasource %q", datasource)
 	}
-	discovered, err := r.Introspect(ctx, datasource, schemas)
+	var cat introspect.Catalog
+	err = r.Introspect(ctx, datasource, func(in introspect.Introspector) (err error) {
+		cat, err = importCatalog(ctx, in, schemas)
+		return err
+	})
 	if err != nil {
 		return nil, fmt.Errorf("introspect %q: %w", datasource, err)
 	}
-	return buildSchemaImport(datasource, discovered, cfg), nil
+	return buildSchemaImport(datasource, cat, cfg), nil
+}
+
+// TableComments is the resolver for the tableComments field.
+func (r *queryResolver) TableComments(ctx context.Context, tables []TableRef) ([]*TableComments, error) {
+	if _, err := auth.Require(ctx, auth.PermRead); err != nil {
+		return nil, err
+	}
+	cfg, err := r.selectConfig(ctx, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	return lookupTableComments(tables, func(datasource string, refs []TableRef) (introspect.Catalog, error) {
+		var cat introspect.Catalog
+		if !hasDatasource(cfg, datasource) {
+			return cat, nil
+		}
+		err := r.Introspect(ctx, datasource, func(in introspect.Introspector) (err error) {
+			cat, err = referencedCatalog(ctx, in, refs)
+			return err
+		})
+		if err != nil {
+			return cat, fmt.Errorf("introspect %q: %w", datasource, err)
+		}
+		return cat, nil
+	})
 }
 
 // Validate is the resolver for the validate field.
@@ -296,7 +322,7 @@ func (r *queryResolver) Simulate(ctx context.Context, input SimulationInput) (*S
 	if _, err := auth.Require(ctx, auth.PermRead); err != nil {
 		return nil, err
 	}
-	cfg, err := r.simulationConfig(ctx, draft, revision)
+	cfg, err := r.selectConfig(ctx, draft, revision)
 	if err != nil {
 		return nil, err
 	}
@@ -312,7 +338,7 @@ func (r *queryResolver) Visibility(ctx context.Context, input VisibilityInput) (
 	if _, err := auth.Require(ctx, auth.PermRead); err != nil {
 		return nil, err
 	}
-	cfg, err := r.simulationConfig(ctx, input.Draft, input.Revision)
+	cfg, err := r.selectConfig(ctx, input.Draft, input.Revision)
 	if err != nil {
 		return nil, err
 	}

@@ -51,6 +51,11 @@ type ComplexityRoot struct {
 		Username    func(childComplexity int) int
 	}
 
+	ColumnComment struct {
+		Description func(childComplexity int) int
+		Name        func(childComplexity int) int
+	}
+
 	Configuration struct {
 		Datasources func(childComplexity int) int
 		Entities    func(childComplexity int) int
@@ -118,15 +123,13 @@ type ComplexityRoot struct {
 	}
 
 	ImportTable struct {
-		AddedColumns   func(childComplexity int) int
-		Candidate      func(childComplexity int) int
-		Columns        func(childComplexity int) int
-		ConfiguredAs   func(childComplexity int) int
-		Description    func(childComplexity int) int
-		MissingColumns func(childComplexity int) int
-		Schema         func(childComplexity int) int
-		Status         func(childComplexity int) int
-		Table          func(childComplexity int) int
+		Candidate    func(childComplexity int) int
+		Columns      func(childComplexity int) int
+		ConfiguredAs func(childComplexity int) int
+		Description  func(childComplexity int) int
+		Schema       func(childComplexity int) int
+		Status       func(childComplexity int) int
+		Table        func(childComplexity int) int
 	}
 
 	Mutation struct {
@@ -156,6 +159,7 @@ type ComplexityRoot struct {
 		SchemaImport  func(childComplexity int, datasource string, schemas []string) int
 		ServerStatus  func(childComplexity int) int
 		Simulate      func(childComplexity int, input SimulationInput) int
+		TableComments func(childComplexity int, tables []TableRef) int
 		Validate      func(childComplexity int, draft DraftInput) int
 		Visibility    func(childComplexity int, input VisibilityInput) int
 	}
@@ -188,8 +192,9 @@ type ComplexityRoot struct {
 	}
 
 	SchemaImport struct {
-		Datasource func(childComplexity int) int
-		Tables     func(childComplexity int) int
+		Datasource    func(childComplexity int) int
+		DefaultSchema func(childComplexity int) int
+		Tables        func(childComplexity int) int
 	}
 
 	ServerStatus struct {
@@ -205,6 +210,11 @@ type ComplexityRoot struct {
 		Grants      func(childComplexity int) int
 		Reason      func(childComplexity int) int
 		RowFilter   func(childComplexity int) int
+	}
+
+	TableComments struct {
+		Columns     func(childComplexity int) int
+		Description func(childComplexity int) int
 	}
 
 	User struct {
@@ -251,6 +261,7 @@ type QueryResolver interface {
 	Revision(ctx context.Context, id string) (*Revision, error)
 	Revisions(ctx context.Context, limit *int) ([]Revision, error)
 	SchemaImport(ctx context.Context, datasource string, schemas []string) (*SchemaImport, error)
+	TableComments(ctx context.Context, tables []TableRef) ([]*TableComments, error)
 	Validate(ctx context.Context, draft DraftInput) (*Validation, error)
 	Diff(ctx context.Context, from string, to *string, draft *DraftInput) (string, error)
 	Simulate(ctx context.Context, input SimulationInput) (*Simulation, error)
@@ -323,6 +334,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.AdminAccount.Username(childComplexity), true
+
+	case "ColumnComment.description":
+		if e.ComplexityRoot.ColumnComment.Description == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ColumnComment.Description(childComplexity), true
+	case "ColumnComment.name":
+		if e.ComplexityRoot.ColumnComment.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ColumnComment.Name(childComplexity), true
 
 	case "Configuration.datasources":
 		if e.ComplexityRoot.Configuration.Datasources == nil {
@@ -584,12 +608,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ImportColumn.Type(childComplexity), true
 
-	case "ImportTable.addedColumns":
-		if e.ComplexityRoot.ImportTable.AddedColumns == nil {
-			break
-		}
-
-		return e.ComplexityRoot.ImportTable.AddedColumns(childComplexity), true
 	case "ImportTable.candidate":
 		if e.ComplexityRoot.ImportTable.Candidate == nil {
 			break
@@ -614,12 +632,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ImportTable.Description(childComplexity), true
-	case "ImportTable.missingColumns":
-		if e.ComplexityRoot.ImportTable.MissingColumns == nil {
-			break
-		}
-
-		return e.ComplexityRoot.ImportTable.MissingColumns(childComplexity), true
 	case "ImportTable.schema":
 		if e.ComplexityRoot.ImportTable.Schema == nil {
 			break
@@ -817,6 +829,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.Simulate(childComplexity, args["input"].(SimulationInput)), true
+	case "Query.tableComments":
+		if e.ComplexityRoot.Query.TableComments == nil {
+			break
+		}
+
+		args, err := ec.field_Query_tableComments_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.TableComments(childComplexity, args["tables"].([]TableRef)), true
 	case "Query.validate":
 		if e.ComplexityRoot.Query.Validate == nil {
 			break
@@ -957,6 +980,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.SchemaImport.Datasource(childComplexity), true
+	case "SchemaImport.defaultSchema":
+		if e.ComplexityRoot.SchemaImport.DefaultSchema == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SchemaImport.DefaultSchema(childComplexity), true
 	case "SchemaImport.tables":
 		if e.ComplexityRoot.SchemaImport.Tables == nil {
 			break
@@ -1019,6 +1048,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Simulation.RowFilter(childComplexity), true
+
+	case "TableComments.columns":
+		if e.ComplexityRoot.TableComments.Columns == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TableComments.Columns(childComplexity), true
+	case "TableComments.description":
+		if e.ComplexityRoot.TableComments.Description == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TableComments.Description(childComplexity), true
 
 	case "User.description":
 		if e.ComplexityRoot.User.Description == nil {
@@ -1122,6 +1164,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputRollbackInput,
 		ec.unmarshalInputSetAdminPasswordInput,
 		ec.unmarshalInputSimulationInput,
+		ec.unmarshalInputTableRef,
 		ec.unmarshalInputUserInput,
 		ec.unmarshalInputVisibilityInput,
 	)
@@ -1242,6 +1285,16 @@ func (ec *executionContext) childFields_AdminAccount(ctx context.Context, field 
 		return ec.fieldContext_AdminAccount_updatedAt(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type AdminAccount", field.Name)
+}
+
+func (ec *executionContext) childFields_ColumnComment(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_ColumnComment_name(ctx, field)
+	case "description":
+		return ec.fieldContext_ColumnComment_description(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ColumnComment", field.Name)
 }
 
 func (ec *executionContext) childFields_Configuration(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -1388,10 +1441,6 @@ func (ec *executionContext) childFields_ImportTable(ctx context.Context, field g
 		return ec.fieldContext_ImportTable_status(ctx, field)
 	case "configuredAs":
 		return ec.fieldContext_ImportTable_configuredAs(ctx, field)
-	case "addedColumns":
-		return ec.fieldContext_ImportTable_addedColumns(ctx, field)
-	case "missingColumns":
-		return ec.fieldContext_ImportTable_missingColumns(ctx, field)
 	case "columns":
 		return ec.fieldContext_ImportTable_columns(ctx, field)
 	case "candidate":
@@ -1470,6 +1519,8 @@ func (ec *executionContext) childFields_SchemaImport(ctx context.Context, field 
 	switch field.Name {
 	case "datasource":
 		return ec.fieldContext_SchemaImport_datasource(ctx, field)
+	case "defaultSchema":
+		return ec.fieldContext_SchemaImport_defaultSchema(ctx, field)
 	case "tables":
 		return ec.fieldContext_SchemaImport_tables(ctx, field)
 	}
@@ -1504,6 +1555,16 @@ func (ec *executionContext) childFields_Simulation(ctx context.Context, field gr
 		return ec.fieldContext_Simulation_fieldScopes(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Simulation", field.Name)
+}
+
+func (ec *executionContext) childFields_TableComments(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "description":
+		return ec.fieldContext_TableComments_description(ctx, field)
+	case "columns":
+		return ec.fieldContext_TableComments_columns(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TableComments", field.Name)
 }
 
 func (ec *executionContext) childFields_User(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -1866,6 +1927,20 @@ func (ec *executionContext) field_Query_simulate_args(ctx context.Context, rawAr
 	return args, nil
 }
 
+func (ec *executionContext) field_Query_tableComments_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "tables",
+		func(ctx context.Context, v any) ([]TableRef, error) {
+			return ec.unmarshalNTableRef2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐTableRefᚄ(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["tables"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Query_validate_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -2122,6 +2197,52 @@ func (ec *executionContext) _AdminAccount_updatedAt(ctx context.Context, field g
 }
 func (ec *executionContext) fieldContext_AdminAccount_updatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("AdminAccount", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _ColumnComment_name(ctx context.Context, field graphql.CollectedField, obj *ColumnComment) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ColumnComment_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ColumnComment_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ColumnComment", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ColumnComment_description(ctx context.Context, field graphql.CollectedField, obj *ColumnComment) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ColumnComment_description(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Description, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ColumnComment_description(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ColumnComment", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _Configuration_datasources(ctx context.Context, field graphql.CollectedField, obj *Configuration) (ret graphql.Marshaler) {
@@ -3277,52 +3398,6 @@ func (ec *executionContext) fieldContext_ImportTable_configuredAs(_ context.Cont
 	return graphql.NewScalarFieldContext("ImportTable", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _ImportTable_addedColumns(ctx context.Context, field graphql.CollectedField, obj *ImportTable) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ImportTable_addedColumns(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.AddedColumns, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
-			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_ImportTable_addedColumns(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ImportTable", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _ImportTable_missingColumns(ctx context.Context, field graphql.CollectedField, obj *ImportTable) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ImportTable_missingColumns(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.MissingColumns, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
-			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_ImportTable_missingColumns(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ImportTable", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
 func (ec *executionContext) _ImportTable_columns(ctx context.Context, field graphql.CollectedField, obj *ImportTable) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -3997,6 +4072,50 @@ func (ec *executionContext) fieldContext_Query_schemaImport(ctx context.Context,
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Query_schemaImport_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_tableComments(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_tableComments(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().TableComments(ctx, fc.Args["tables"].([]TableRef))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*TableComments) graphql.Marshaler {
+			return ec.marshalNTableComments2ᚕᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐTableComments(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_tableComments(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_TableComments(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_tableComments_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -4742,6 +4861,29 @@ func (ec *executionContext) fieldContext_SchemaImport_datasource(_ context.Conte
 	return graphql.NewScalarFieldContext("SchemaImport", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _SchemaImport_defaultSchema(ctx context.Context, field graphql.CollectedField, obj *SchemaImport) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SchemaImport_defaultSchema(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.DefaultSchema, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_SchemaImport_defaultSchema(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SchemaImport", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _SchemaImport_tables(ctx context.Context, field graphql.CollectedField, obj *SchemaImport) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -4988,6 +5130,61 @@ func (ec *executionContext) _Simulation_fieldScopes(ctx context.Context, field g
 }
 func (ec *executionContext) fieldContext_Simulation_fieldScopes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Simulation", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TableComments_description(ctx context.Context, field graphql.CollectedField, obj *TableComments) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TableComments_description(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Description, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TableComments_description(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TableComments", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TableComments_columns(ctx context.Context, field graphql.CollectedField, obj *TableComments) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TableComments_columns(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Columns, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []ColumnComment) graphql.Marshaler {
+			return ec.marshalNColumnComment2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐColumnCommentᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TableComments_columns(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TableComments",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ColumnComment(ctx, field)
+		},
+	}
+	return fc, nil
 }
 
 func (ec *executionContext) _User_name(ctx context.Context, field graphql.CollectedField, obj *User) (ret graphql.Marshaler) {
@@ -7084,6 +7281,50 @@ func (ec *executionContext) unmarshalInputSimulationInput(ctx context.Context, o
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputTableRef(ctx context.Context, obj any) (TableRef, error) {
+	var it TableRef
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"datasource", "schema", "table"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "datasource":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("datasource"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Datasource = data
+		case "schema":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("schema"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Schema = data
+		case "table":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("table"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Table = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputUserInput(ctx context.Context, obj any) (UserInput, error) {
 	var it UserInput
 	if obj == nil {
@@ -7292,6 +7533,49 @@ func (ec *executionContext) _AdminAccount(ctx context.Context, sel ast.Selection
 			}
 		case "updatedAt":
 			out.Values[i] = ec._AdminAccount_updatedAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var columnCommentImplementors = []string{"ColumnComment"}
+
+func (ec *executionContext) _ColumnComment(ctx context.Context, sel ast.SelectionSet, obj *ColumnComment) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, columnCommentImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ColumnComment")
+		case "name":
+			out.Values[i] = ec._ColumnComment_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "description":
+			out.Values[i] = ec._ColumnComment_description(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -7827,16 +8111,6 @@ func (ec *executionContext) _ImportTable(ctx context.Context, sel ast.SelectionS
 			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
-		case "addedColumns":
-			out.Values[i] = ec._ImportTable_addedColumns(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "missingColumns":
-			out.Values[i] = ec._ImportTable_missingColumns(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		case "columns":
 			out.Values[i] = ec._ImportTable_columns(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -8168,6 +8442,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_schemaImport(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "tableComments":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_tableComments(ctx, field)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -8597,6 +8893,11 @@ func (ec *executionContext) _SchemaImport(ctx context.Context, sel ast.Selection
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "defaultSchema":
+			out.Values[i] = ec._SchemaImport_defaultSchema(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
 		case "tables":
 			out.Values[i] = ec._SchemaImport_tables(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -8711,6 +9012,49 @@ func (ec *executionContext) _Simulation(ctx context.Context, sel ast.SelectionSe
 		case "fieldScopes":
 			out.Values[i] = ec._Simulation_fieldScopes(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var tableCommentsImplementors = []string{"TableComments"}
+
+func (ec *executionContext) _TableComments(ctx context.Context, sel ast.SelectionSet, obj *TableComments) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, tableCommentsImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("TableComments")
+		case "description":
+			out.Values[i] = ec._TableComments_description(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "columns":
+			out.Values[i] = ec._TableComments_columns(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
 		default:
@@ -9406,6 +9750,26 @@ func (ec *executionContext) marshalNBoolean2bool(ctx context.Context, sel ast.Se
 	return res
 }
 
+func (ec *executionContext) marshalNColumnComment2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐColumnComment(ctx context.Context, sel ast.SelectionSet, v ColumnComment) graphql.Marshaler {
+	return ec._ColumnComment(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNColumnComment2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐColumnCommentᚄ(ctx context.Context, sel ast.SelectionSet, v []ColumnComment) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNColumnComment2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐColumnComment(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
 func (ec *executionContext) marshalNConfiguration2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐConfiguration(ctx context.Context, sel ast.SelectionSet, v *Configuration) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -9827,6 +10191,35 @@ func (ec *executionContext) marshalNString2ᚕstringᚄ(ctx context.Context, sel
 	}
 
 	return ret
+}
+
+func (ec *executionContext) marshalNTableComments2ᚕᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐTableComments(ctx context.Context, sel ast.SelectionSet, v []*TableComments) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalOTableComments2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐTableComments(ctx, sel, v[i])
+	})
+
+	return ret
+}
+
+func (ec *executionContext) unmarshalNTableRef2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐTableRef(ctx context.Context, v any) (TableRef, error) {
+	res, err := ec.unmarshalInputTableRef(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNTableRef2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐTableRefᚄ(ctx context.Context, v any) ([]TableRef, error) {
+	vSlice := graphql.CoerceList(v)
+	var err error
+	res := make([]TableRef, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNTableRef2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐTableRef(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
 }
 
 func (ec *executionContext) unmarshalNTime2timeᚐTime(ctx context.Context, v any) (time.Time, error) {
@@ -10320,6 +10713,13 @@ func (ec *executionContext) marshalOString2ᚖstring(ctx context.Context, sel as
 	_ = ctx
 	res := graphql.MarshalString(*v)
 	return res
+}
+
+func (ec *executionContext) marshalOTableComments2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐTableComments(ctx context.Context, sel ast.SelectionSet, v *TableComments) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._TableComments(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalOTime2ᚖtimeᚐTime(ctx context.Context, v any) (*time.Time, error) {

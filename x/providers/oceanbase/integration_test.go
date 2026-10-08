@@ -379,7 +379,7 @@ func assertOBIntrospectUsers(t *testing.T, ctx context.Context, prov *oceanbase.
 			t.Fatalf("%s: %v", stmt, err)
 		}
 	}
-	entities, err := prov.Introspector().Discover(ctx, nil)
+	entities, err := prov.Introspector().Discover(ctx, []string{"test"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -53,9 +53,9 @@ func (r *Resolver) withPayload(ctx context.Context, obj *Revision) (revision.Rev
 	return r.Store.Get(ctx, obj.rev.ID)
 }
 
-// simulationConfig selects the configuration to simulate against: an unsaved
-// draft, a revision, or the published revision.
-func (r *Resolver) simulationConfig(ctx context.Context, draft *DraftInput, id *string) (*config.Config, error) {
+// selectConfig selects a configuration: an unsaved draft, a revision, or,
+// when both are nil, the published revision.
+func (r *Resolver) selectConfig(ctx context.Context, draft *DraftInput, id *string) (*config.Config, error) {
 	if draft != nil && id != nil {
 		return nil, errors.New("pass either draft or revision, not both")
 	}

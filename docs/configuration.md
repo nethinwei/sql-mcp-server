@@ -327,11 +327,11 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `datasource` | 字符串 |  |  | 所在数据源；省略时为 default。 |
 | `schema` | 字符串 |  |  | 数据库 schema。 |
 | `kind` | 字符串 |  | 可选 `table`、`view`、`procedure` | 实体类型；省略时为 table。 |
-| `description` | 字符串 |  |  | 给 Agent 看的实体说明。 |
+| `description` | 字符串 |  |  | 给 Agent 看的实体说明；留空时使用数据库中的表注释（启动或重载时读取）。 |
 | `primaryKey` | 字符串列表 |  |  | 主键字段，决定 keyset 分页与主键写保护。 |
 | `fields.name` | 字符串 |  | 必填；非空 | 数据库列名。 |
 | `fields.alias` | 字符串 |  |  | 对 Agent 暴露的名称；省略时用列名。 |
-| `fields.description` | 字符串 |  |  | 给 Agent 看的字段说明。 |
+| `fields.description` | 字符串 |  |  | 给 Agent 看的字段说明；留空时使用数据库中的列注释（启动或重载时读取）。 |
 | `fields.mask` | 字符串 |  | 内置 `email`、`idcard`、`phone`、`secret` | 脱敏规则：内置规则或扩展程序注册的规则，未知规则会拒绝启动。脱敏字段只能出现在读取结果中，不能用于过滤、游标、分组、聚合或写谓词。 |
 | `fields.exclude` | 布尔 |  |  | 隐藏该字段，Agent 不可见。 |
 | `fields` | 对象列表 |  |  | 暴露的字段。 |

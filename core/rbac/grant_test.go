@@ -191,6 +191,26 @@ func TestGrantAuthorizerChecksActionAndWriteCoverage(t *testing.T) {
 	}
 }
 
+// Two grants that both cover an update but read different other fields do
+// not make the update ambiguous: it returns no rows, so no projection applies.
+func TestGrantAuthorizerWriteIgnoresUnusedReadScopes(t *testing.T) {
+	t.Parallel()
+	grant := func(id, extra string) Grant {
+		return Grant{
+			ID: id, Actions: []entity.Action{entity.ActionUpdate},
+			Fields: &entity.FieldPermissions{Read: []string{"id", extra}, Write: []string{"amount"}},
+		}
+	}
+	policy := alicePolicy(map[string][]Grant{"a": {grant("n", "name"), grant("p", "phone")}}, nil, "a")
+	dec, _ := NewGrantAuthorizer(grantRegistry(t, nil), policy).Authorize(context.Background(), Request{
+		Role: "user:alice", Entity: "customers", Action: entity.ActionUpdate,
+		ReadFields: []string{"id"}, WriteFields: []string{"amount"},
+	})
+	if !dec.Allowed || !slices.Equal(dec.Grants, []string{"n", "p"}) || dec.Fields != nil {
+		t.Fatalf("update covered by both grants: %+v", dec)
+	}
+}
+
 // TestGrantAuthorizerCoverageInvariant checks on random grant sets that every
 // allowed decision only uses grants covering all fields it touches, and that
 // its row filter is exactly the OR of those grants' rows.

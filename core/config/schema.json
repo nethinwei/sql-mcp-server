@@ -803,8 +803,8 @@
           ]
         },
         "description": {
-          "description": "Entity description shown to agents.",
-          "x-description-zh-CN": "给 Agent 看的实体说明。",
+          "description": "Entity description shown to agents; the table comment in the database (read at startup and reload) when empty.",
+          "x-description-zh-CN": "给 Agent 看的实体说明；留空时使用数据库中的表注释（启动或重载时读取）。",
           "type": "string"
         },
         "primaryKey": {
@@ -837,8 +837,8 @@
                 "type": "string"
               },
               "description": {
-                "description": "Field description shown to agents.",
-                "x-description-zh-CN": "给 Agent 看的字段说明。",
+                "description": "Field description shown to agents; the column comment in the database (read at startup and reload) when empty.",
+                "x-description-zh-CN": "给 Agent 看的字段说明；留空时使用数据库中的列注释（启动或重载时读取）。",
                 "type": "string"
               },
               "mask": {

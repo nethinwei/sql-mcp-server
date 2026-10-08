@@ -24,7 +24,7 @@ func runInsert(ctx context.Context, tc Context, in createInput) (Result, error) 
 	if err != nil {
 		return Result{}, err
 	}
-	if tc.Dialect.Capabilities().Returning && len(plan.res.Entity.PrimaryKey()) > 0 {
+	if plan.tc.Dialect.Capabilities().Returning && len(plan.res.Entity.PrimaryKey()) > 0 {
 		return insertWithReturning(ctx, plan.tc, plan.res, in, compiled)
 	}
 	return insertWithExec(ctx, plan.tc, plan.res, in, compiled)

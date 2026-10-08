@@ -18,7 +18,7 @@ func describeFields(ctx context.Context, tc Context, e entity.Entity) ([]string,
 		if err != nil {
 			return nil, false, err
 		}
-		if !dec.Allowed {
+		if !dec.Reachable() {
 			continue
 		}
 		allowedEntity = true
@@ -26,7 +26,7 @@ func describeFields(ctx context.Context, tc Context, e entity.Entity) ([]string,
 			return nil, false, err
 		}
 	}
-	return orderedDescribeFields(e, fields), allowedEntity, nil
+	return e.OrderedNames(fields), allowedEntity, nil
 }
 
 func describeEntityActions(e entity.Entity) []entity.Action {
@@ -88,14 +88,4 @@ func describeFieldRequests(tc Context, entityName string, action entity.Action, 
 	default:
 		return []rbac.Request{request}
 	}
-}
-
-func orderedDescribeFields(e entity.Entity, fields map[string]bool) []string {
-	out := make([]string, 0, len(fields))
-	for _, attr := range e.Attributes {
-		if fields[attr.Name] {
-			out = append(out, attr.Name)
-		}
-	}
-	return out
 }

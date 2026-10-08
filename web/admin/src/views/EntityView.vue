@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, h, ref } from 'vue'
+import { computed, h, ref, watchEffect } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
@@ -11,6 +11,7 @@ import { useWorkspace } from '@/stores/workspace'
 import { describeFilter, type Filter } from '@/lib/filter'
 import { useConfigSchema } from '@/lib/configSchema'
 import { can } from '@/api/session'
+import { loadTableComments, tableComments } from '@/lib/tableComments'
 import type { FieldInput, GrantInput, RelationshipInput } from '@/gql/graphql'
 
 const props = defineProps<{ name: string }>()
@@ -23,6 +24,10 @@ const message = useMessage()
 const editable = computed(() => can('admin:write'))
 
 const entity = computed(() => ws.entity(props.name))
+// Empty descriptions fall back to the database comments at runtime; they are
+// shown as placeholders so only a written description overrides them.
+const comments = computed(() => (entity.value ? tableComments(entity.value) : null))
+watchEffect(() => { if (entity.value) void loadTableComments([entity.value]) })
 const fieldNames = computed(() => (entity.value?.fields ?? []).map((f) => f.name))
 const subjectKeys = computed(() => [...new Set(ws.users.flatMap((u) => Object.keys((u.subject as object) ?? {})))])
 const kindLabel = computed(() => t(`entity.kinds.${entity.value?.kind === 'procedure' ? 'procedure' : entity.value?.kind === 'view' ? 'view' : 'table'}`))
@@ -42,7 +47,7 @@ const fieldColumns = computed<DataTableColumns<FieldInput>>(() => [
   {
     title: t('entity.fieldDescription'), key: 'description', minWidth: 220,
     render: (f) => h(NInput, {
-      size: 'small', value: f.description ?? '', disabled: !editable.value, placeholder: t('entity.fieldDescriptionHint'),
+      size: 'small', value: f.description ?? '', disabled: !editable.value, placeholder: comments.value?.columns.get(f.name) || t('entity.fieldDescriptionHint'),
       onUpdateValue: (v: string) => { f.description = v },
     }),
   },
@@ -151,7 +156,7 @@ function remove() {
   <n-space v-else vertical :size="16">
     <n-page-header @back="router.push({ name: 'entities' })">
       <template #title><span class="mono">{{ entity.name }}</span></template>
-      <template #subtitle>{{ entity.description }}</template>
+      <template #subtitle>{{ entity.description || comments?.description }}</template>
       <template #extra>
         <n-space v-if="editable">
           <n-button size="small" @click="startRename">{{ t('common.rename') }}</n-button>
@@ -185,8 +190,9 @@ function remove() {
       <n-form label-placement="top" class="basics-form">
         <n-form-item :label="t('entity.description')" :show-feedback="false">
           <n-input v-model:value="entity.description" type="textarea" :autosize="{ minRows: 1, maxRows: 4 }"
-            :disabled="!editable" :placeholder="t('entity.descriptionHint')" />
+            :disabled="!editable" :placeholder="comments?.description || t('entity.descriptionHint')" />
         </n-form-item>
+        <n-text depth="3" class="hint">{{ t('entity.commentDefault') }}</n-text>
         <div class="switch-row">
           <n-switch :value="entity.mcp?.dmlTools ?? true" :disabled="!editable"
             @update:value="(v: boolean) => (entity!.mcp = { ...(entity!.mcp ?? {}), dmlTools: v })" />
@@ -199,7 +205,9 @@ function remove() {
     </n-card>
 
     <n-card size="small" :title="t('entity.fields')">
-      <template #header-extra><n-text depth="3" class="hint">{{ t('entity.maskHint') }}</n-text></template>
+      <template #header-extra>
+        <n-text depth="3" class="hint">{{ t('entity.commentDefault') }} {{ t('entity.maskHint') }}</n-text>
+      </template>
       <n-data-table :columns="fieldColumns" :data="entity.fields ?? []" size="small" :row-key="(f: FieldInput) => f.name"
         :scroll-x="720" />
     </n-card>

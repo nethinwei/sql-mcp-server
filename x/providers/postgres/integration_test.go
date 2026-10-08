@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -14,6 +15,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
+	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
@@ -447,5 +449,26 @@ func assertCommentsAndForeignKeys(t *testing.T, entities []entity.Entity) {
 		len(fk.Columns) != 1 || fk.Columns[0] != "customer_id" ||
 		len(fk.RefColumns) != 1 || fk.RefColumns[0] != "id" {
 		t.Fatalf("foreign key = %+v", fk)
+	}
+}
+
+func TestPostgresListsUserSchemas(t *testing.T) {
+	prov, cleanup := setupPG(t)
+	defer cleanup()
+	ctx := context.Background()
+	if _, err := prov.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS crm"); err != nil {
+		t.Fatal(err)
+	}
+	lister, ok := prov.Introspector().(introspect.SchemaLister)
+	if !ok {
+		t.Fatal("postgres introspector must list schemas")
+	}
+	schemas, current, err := lister.Schemas(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current != "public" || !slices.Contains(schemas, "crm") || !slices.Contains(schemas, "public") ||
+		slices.Contains(schemas, "pg_catalog") || slices.Contains(schemas, "information_schema") {
+		t.Fatalf("schemas = %v", schemas)
 	}
 }

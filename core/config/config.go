@@ -147,6 +147,24 @@ type EntityConfig struct {
 	Params []string `yaml:"params,omitempty"        json:"params,omitempty"`
 }
 
+// PhysicalSource is the table or procedure the entity reads: Source, or the
+// entity name when Source is empty.
+func (e EntityConfig) PhysicalSource() string {
+	if e.Source == "" {
+		return e.Name
+	}
+	return e.Source
+}
+
+// DatasourceName is the entity's datasource: DataSource, or "default" (the
+// single database section) when empty.
+func (e EntityConfig) DatasourceName() string {
+	if e.DataSource == "" {
+		return "default"
+	}
+	return e.DataSource
+}
+
 // RoleDefinition is a named set of grants declared at the top level. Entity
 // level roles/fieldACL/rowPolicies remain valid and merge into the same role.
 type RoleDefinition struct {

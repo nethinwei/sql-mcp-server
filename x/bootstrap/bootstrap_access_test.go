@@ -157,7 +157,7 @@ func TestCheckHotReloadRejectsRestartRequiredChanges(t *testing.T) {
 		cfg := &config.Config{
 			Server:   config.ServerConfig{Transport: "http", Addr: ":8080", Auth: config.AuthConfig{Token: "a"}},
 			Database: config.DatabaseConfig{Driver: "postgres", DSN: "x"},
-			Entities: []config.EntityConfig{{Name: "p", Kind: "procedure",
+			Entities: []config.EntityConfig{{Name: "p", Kind: "procedure", Params: []string{"old"},
 				MCP: config.MCPFlags{CustomTool: true, TrustedProcedure: true}}},
 		}
 		cfg.ApplyDefaults()
@@ -187,5 +187,11 @@ func TestCheckHotReloadRejectsRestartRequiredChanges(t *testing.T) {
 		if !errors.Is(err, ErrRestartRequired) || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err = %v", want, err)
 		}
+	}
+	// A renamed parameter changes the input schema registered with clients.
+	renamed := base()
+	renamed.Entities[0].Params = []string{"new"}
+	if err := CheckHotReload(base(), renamed); !errors.Is(err, ErrRestartRequired) {
+		t.Errorf("procedure parameter rename: err = %v", err)
 	}
 }

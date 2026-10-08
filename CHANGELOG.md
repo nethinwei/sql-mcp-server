@@ -46,6 +46,9 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   `cost.maxRow`）会让 `validate`、启动、reload 与 store publish 失败，并报告
   行号与字段名；升级前先用 `sql-mcp-server validate` 检查现有配置。行过滤
   （`rows`、`rowPolicies`、`tenantPolicy`）仍是自由结构。
+- MySQL/OceanBase 未设 `schema` 的实体解析到连接的当前数据库（与生成的 SQL 一致），
+  不再在所有数据库中按表名查找；DSN 未指定数据库时这类实体启动即报缺失（此前能
+  启动，但查询会因未选择数据库而失败）。请为实体设置 `schema` 或在 DSN 中指定数据库。
 - 字段规则改由结构体 `schema` 标签统一校验，此前只写在 JSON Schema 里的约束开始
   生效：`server.transport`、实体 `kind` 的取值，以及各字段的范围与格式；部分
   校验错误的措辞随之改为 `config: <路径> ...` 形式。`config.Validate` 现在要求
@@ -75,6 +78,33 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   保留为不带顶层策略的构造函数，未配置 `users`/`roles` 时行为不变。
 - 配置用户且没有共享 token 时，非 mTLS/可信代理通道的请求必须携带用户 token；
   `/metrics` 同样要求有效 token。
+- 写操作（create/update/delete）只按实际读写的字段选择覆盖 grant，不再因默认读
+  投影跨 grant 不兼容而返回 `AMBIGUOUS_FIELD_SCOPE`。
+- `describe_entities` 与 `sql-mcp://schema` 资源不再隐藏字段范围分散在多个 grant
+  中的实体（共用 `rbac.Decision.Reachable`）：返回可访问字段的并集。资源新增
+  `access.read`/`access.aggregate`，按动作分别给出可用字段，字段分散时另给
+  `explicitFieldsRequired` 与 `fieldScopes`，提示需在单个范围内显式选择字段。
+- 自定义过程工具的参数变化（改变注册给客户端的工具 schema）需要重启，不再热重载。
+- store 模式的明文密码检查与 DSN 脱敏改为按驱动语法解析连接串（PostgreSQL
+  keyword/value 允许 `password = x` 与引号值，URI 参数名按 URL 解码识别，如
+  `%70assword`），二者共用同一解析；空密码（免密认证）视为无凭据；`bootstrap.RedactDSN`
+  增加 driver 参数。
+- 管理 API 拒绝非对象的 `tenantPolicy`，不再将其静默清空。
+- 实体与字段的说明留空时使用数据库表注释与列注释（启动与重载时随漂移检查读取，
+  不增加查询），写在配置中的说明覆盖注释；控制台导入表时不再把注释复制进配置，
+  以灰色缺省值显示注释（新增管理 API 查询 `tableComments`）。
+- 表解析规则统一为 `introspect.Catalog`：未设 `schema` 的实体读取默认 schema
+  （PostgreSQL `current_schema()`、MySQL/OceanBase 当前数据库，即生成的 SQL 实际
+  访问的表），设了 `schema` 的按 schema 与表名精确匹配。启动漂移检查、注释继承
+  （合并为 `introspect.Reconcile`，取代 `DetectDrift`）、控制台导入与注释查询共用
+  该规则：不同 schema 的同名表不再互相覆盖而误报缺列，混用带 schema 与不带 schema
+  的实体时也不会继承到另一张表的注释。新增可选接口 `introspect.SchemaLister`
+  （PostgreSQL、MySQL/OceanBase 实现）。
+- 控制台导入表不填 schema 时扫描全部用户 schema（此前 PostgreSQL 只扫 `public`，
+  表都在其他 schema 时扫描结果为空）；扫描结果返回 `defaultSchema`，删除控制台
+  未使用、由前端按工作区计算的 `addedColumns`/`missingColumns`。
+- 修复多数据源配置下 `create_record` 空指针 panic（插入时读取了未路由上下文的
+  方言）。
 
 ## 0.1.10 - 2026-07-12
 

@@ -8,7 +8,7 @@ import (
 	"net/http"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
-	"github.com/nethinwei/sql-mcp-server/core/entity"
+	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/x/admin"
 	"github.com/nethinwei/sql-mcp-server/x/admin/graph"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
@@ -47,7 +47,7 @@ func (f serveAdminFlags) handler(
 		return nil, errors.New("--admin requires the http transport")
 	}
 	return admin.New(admin.Config{
-		Store: src.store, Accounts: src.store, Introspect: runtimeIntrospector(runtime),
+		Store: src.store, Accounts: src.store, Introspect: runtimeIntrospection(runtime),
 		Status:       runtimeStatus(runtime, src.rev, watching),
 		SecureCookie: cfg.Server.Auth.TLS.Cert != "", Playground: *f.playground,
 	}), nil
@@ -69,21 +69,23 @@ func runtimeStatus(runtime *bootstrap.Runtime, startup int64, watching bool) fun
 }
 
 // runtimeIntrospector introspects a datasource of the current snapshot.
-func runtimeIntrospector(runtime *bootstrap.Runtime) func(context.Context, string, []string) ([]entity.Entity, error) {
-	return func(ctx context.Context, datasource string, schemas []string) ([]entity.Entity, error) {
+// runtimeIntrospection runs fn with the introspector of a connected datasource
+// of the current snapshot.
+func runtimeIntrospection(runtime *bootstrap.Runtime) graph.Introspection {
+	return func(_ context.Context, datasource string, fn func(introspect.Introspector) error) error {
 		app, release, err := runtime.Acquire()
 		if err != nil {
-			return nil, err
+			return err
 		}
 		defer release()
 		provider, ok := app.Providers[datasource]
 		if !ok {
-			return nil, fmt.Errorf("datasource %q is not connected", datasource)
+			return fmt.Errorf("datasource %q is not connected", datasource)
 		}
 		introspector := provider.Introspector()
 		if introspector == nil {
-			return nil, fmt.Errorf("datasource %q does not support introspection", datasource)
+			return fmt.Errorf("datasource %q does not support introspection", datasource)
 		}
-		return introspector.Discover(ctx, schemas)
+		return fn(introspector)
 	}
 }

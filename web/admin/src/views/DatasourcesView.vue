@@ -22,6 +22,7 @@ const message = useMessage()
 const selectedDs = ref<string | null>(ws.datasources[0]?.name ?? null)
 const schemas = ref('')
 const tables = ref<Table[]>([])
+const defaultSchema = ref<string | null>(null)
 const scanning = ref(false)
 const scanned = ref(false)
 const checked = ref<DataTableRowKey[]>([])
@@ -45,6 +46,7 @@ async function scan() {
     const list = schemas.value.split(',').map((s) => s.trim()).filter(Boolean)
     const data = await run(SchemaImportQuery, { datasource: selectedDs.value, schemas: list.length ? list : null })
     tables.value = data.schemaImport.tables
+    defaultSchema.value = data.schemaImport.defaultSchema ?? null
     scanned.value = true
     checked.value = []
   } catch (e) {
@@ -56,7 +58,7 @@ async function scan() {
 
 const key = (tb: Table) => `${tb.schema}.${tb.table}`
 const inWorkspace = (tb: Table) =>
-  ws.entities.find((e) => readsTable(e, selectedDs.value ?? '', tb, tables.value))
+  ws.entities.find((e) => readsTable(e, selectedDs.value ?? '', tb, tables.value, defaultSchema.value))
 
 /** Status of a table against the workspace (not just the published config). */
 function status(tb: Table): Status {
@@ -78,18 +80,43 @@ const visible = computed(() => {
   return tables.value.filter((tb) => !q || tb.table.toLowerCase().includes(q) || tb.description.toLowerCase().includes(q))
 })
 
+type Column = Table['columns'][number]
+
+// The expanded table lists one column per row, like the column view of a
+// database client.
+const columnDetail = computed<DataTableColumns<Column>>(() => [
+  { title: '#', key: 'index', width: 44, render: (_, i) => h(NText, { depth: 3 }, () => i + 1) },
+  {
+    title: t('datasources.columnName'), key: 'name', minWidth: 140,
+    render: (c) => h('span', { class: 'mono' + (c.primaryKey ? ' strong' : '') }, c.name),
+  },
+  {
+    title: t('datasources.columnType'), key: 'type', minWidth: 140,
+    render: (c) => h(NText, { depth: 2, class: 'mono' }, () => c.type),
+  },
+  {
+    title: t('datasources.notNull'), key: 'nullable', width: 72, align: 'center',
+    render: (c) => (c.nullable ? h(NText, { depth: 3 }, () => '—') : '✓'),
+  },
+  {
+    title: t('datasources.primaryKey'), key: 'primaryKey', width: 72, align: 'center',
+    render: (c) => (c.primaryKey ? h(NTag, { size: 'small', type: 'info', bordered: false }, () => 'PK') : null),
+  },
+  {
+    title: t('datasources.description'), key: 'description', ellipsis: { tooltip: true },
+    render: (c) => c.description || h(NText, { depth: 3 }, () => '—'),
+  },
+])
+
 const columns = computed<DataTableColumns<Table>>(() => [
   { type: 'selection', disabled: (tb) => !status(tb).importable },
   {
     type: 'expand',
     renderExpand: (tb) =>
-      h('div', { class: 'cols' }, tb.columns.map((c) =>
-        h('div', { class: 'col' }, [
-          h('span', { class: 'mono' }, c.name),
-          h(NText, { depth: 3, class: 'col-meta' }, () =>
-            ` ${c.type}${c.nullable ? '' : ' · ' + t('datasources.notNull')}${c.primaryKey ? ' · ' + t('datasources.primaryKey') : ''}`),
-          c.description ? h(NText, { class: 'col-desc' }, () => c.description) : null,
-        ]))),
+      h(NDataTable, {
+        class: 'cols', size: 'small', bordered: false, columns: columnDetail.value, data: tb.columns,
+        rowKey: (c: Column) => c.name,
+      }),
   },
   {
     title: t('datasources.table'), key: 'table', minWidth: 160,
@@ -244,9 +271,7 @@ function syncFields(tb: Table) {
 .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
 .search { width: 240px; }
 .grant-hint { font-size: 13px; }
-:deep(.cols) { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 4px 16px; padding: 4px 0; }
-:deep(.col-meta) { font-size: 12px; }
-:deep(.col-desc) { margin-left: 8px; font-size: 12px; }
+:deep(.cols) { margin: 2px 0 2px 36px; width: auto; }
 :deep(.strong) { font-weight: 600; }
 :deep(.schema) { margin-left: 6px; font-size: 12px; }
 </style>

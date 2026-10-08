@@ -17,6 +17,7 @@ import LocaleSwitch from './LocaleSwitch.vue'
 import { useWorkspace } from '@/stores/workspace'
 import { useStatus } from '@/stores/status'
 import { can, logout, session } from '@/api/session'
+import logo from '@/assets/logo.svg'
 
 const { t } = useI18n()
 const ws = useWorkspace()
@@ -124,7 +125,7 @@ async function onUserMenu(key: string) {
       :collapsed="collapsed" @collapse="collapsed = true" @expand="collapsed = false"
     >
       <div class="brand" :class="{ collapsed }">
-        <span class="logo">SQL</span><span v-if="!collapsed" class="brand-name">{{ t('app.title') }}</span>
+        <img :src="logo" class="logo" alt="" /><span v-if="!collapsed" class="brand-name">{{ t('app.title') }}</span>
       </div>
       <n-menu :value="activeKey" :options="menu" :collapsed="collapsed" :collapsed-width="64" />
     </n-layout-sider>
@@ -191,6 +192,6 @@ async function onUserMenu(key: string) {
 .brand { height: 56px; display: flex; align-items: center; gap: 10px; padding: 0 20px; font-weight: 600; white-space: nowrap; overflow: hidden; }
 .brand.collapsed { justify-content: center; padding: 0; }
 .brand-name { overflow: hidden; text-overflow: ellipsis; }
-.logo { background: #2f6fed; color: #fff; border-radius: 6px; padding: 2px 6px; font-size: 12px; letter-spacing: 0.5px; flex: none; }
+.logo { width: 28px; height: 28px; flex: none; }
 .nowrap { white-space: nowrap; }
 </style>

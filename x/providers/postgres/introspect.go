@@ -14,32 +14,76 @@ type pgIntrospector struct {
 	db *sql.DB
 }
 
-// Discover implements introspect.Introspector. It lists base tables in the
-// given schemas (defaulting to "public") with their columns and primary keys.
-func (i pgIntrospector) Discover(ctx context.Context, sources []string) ([]entity.Entity, error) {
-	if len(sources) == 0 {
-		sources = []string{"public"}
+// Schemas implements introspect.SchemaLister: every schema except the system
+// ones, and the current schema (the first one of search_path that exists).
+func (i pgIntrospector) Schemas(ctx context.Context) ([]string, string, error) {
+	rows, err := i.db.QueryContext(ctx,
+		`SELECT schema_name FROM information_schema.schemata
+		 WHERE schema_name NOT IN ('pg_catalog', 'information_schema')
+		   AND schema_name NOT LIKE 'pg\_toast%' AND schema_name NOT LIKE 'pg\_temp\_%'
+		 ORDER BY schema_name`)
+	if err != nil {
+		return nil, "", err
 	}
-	trows, err := i.db.QueryContext(ctx,
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, "", err
+		}
+		out = append(out, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	current, err := i.currentSchema(ctx)
+	return out, current, err
+}
+
+func (i pgIntrospector) currentSchema(ctx context.Context) (string, error) {
+	var current sql.NullString
+	err := i.db.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&current)
+	return current.String, err
+}
+
+type pgTable struct{ schema, name string }
+
+// tables lists the base tables of schemas, skipping the config store's own.
+func (i pgIntrospector) tables(ctx context.Context, schemas []string) ([]pgTable, error) {
+	rows, err := i.db.QueryContext(ctx,
 		`SELECT table_schema, table_name FROM information_schema.tables
-		 WHERE table_type = 'BASE TABLE' AND table_schema = ANY($1)`, sources)
+		 WHERE table_type = 'BASE TABLE' AND table_schema = ANY($1)`, schemas)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = trows.Close() }()
-	type tbl struct{ schema, name string }
-	var tables []tbl
-	for trows.Next() {
-		var t tbl
-		if err := trows.Scan(&t.schema, &t.name); err != nil {
+	defer func() { _ = rows.Close() }()
+	var out []pgTable
+	for rows.Next() {
+		var t pgTable
+		if err := rows.Scan(&t.schema, &t.name); err != nil {
 			return nil, err
 		}
-		if config.IsStoreTable(t.name) {
-			continue
+		if !config.IsStoreTable(t.name) {
+			out = append(out, t)
 		}
-		tables = append(tables, t)
 	}
-	if err := trows.Err(); err != nil {
+	return out, rows.Err()
+}
+
+// Discover implements introspect.Introspector. It lists base tables in the
+// given schemas (by default the current one, where unqualified names resolve)
+// with their columns and primary keys.
+func (i pgIntrospector) Discover(ctx context.Context, sources []string) ([]entity.Entity, error) {
+	if len(sources) == 0 {
+		current, err := i.currentSchema(ctx)
+		if err != nil || current == "" {
+			return nil, err
+		}
+		sources = []string{current}
+	}
+	tables, err := i.tables(ctx, sources)
+	if err != nil {
 		return nil, err
 	}
 	entities := make([]entity.Entity, 0, len(tables))

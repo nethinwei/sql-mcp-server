@@ -62,13 +62,19 @@ export const RevisionYamlQuery = graphql(`
 export const SchemaImportQuery = graphql(`
   query SchemaImport($datasource: String!, $schemas: [String!]) {
     schemaImport(datasource: $datasource, schemas: $schemas) {
-      datasource
+      datasource defaultSchema
       tables {
-        schema table description status configuredAs addedColumns missingColumns
+        schema table description status configuredAs
         columns { name type nullable description primaryKey }
         candidate { ...EntityParts }
       }
     }
+  }
+`)
+
+export const TableCommentsQuery = graphql(`
+  query TableComments($tables: [TableRef!]!) {
+    tableComments(tables: $tables) { description columns { name description } }
   }
 `)
 

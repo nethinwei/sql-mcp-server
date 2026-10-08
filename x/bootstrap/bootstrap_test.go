@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -278,17 +279,22 @@ func TestNewProviderUsesRegistry(t *testing.T) {
 
 func TestRedactDSN(t *testing.T) {
 	t.Parallel()
-	cases := []struct{ in, want string }{
-		{"postgres://user:secret@host:5432/db", "postgres://user:%2A%2A%2A@host:5432/db"},
-		{"postgresql://u:p@h/db", "postgresql://u:%2A%2A%2A@h/db"},
-		{"user:secret@tcp(127.0.0.1:3306)/db", "user:***@tcp(127.0.0.1:3306)/db"},
-		{"postgres://user@host/db", "postgres://user@host/db"},
-		{"postgres://user:secret@host/db?password=other", "postgres://user:%2A%2A%2A@host/db?password=***"},
-		{"user=x password=secret host=db", "user=x password=*** host=db"},
+	cases := []struct{ driver, in, want string }{
+		{"postgres", "postgres://user:secret@host:5432/db", "postgres://user:***@host:5432/db"},
+		{"postgres", "postgresql://u:p@h/db", "postgresql://u:***@h/db"},
+		{"mysql", "user:secret@tcp(127.0.0.1:3306)/db", "user:***@tcp(127.0.0.1:3306)/db"},
+		{"oceanbase", "user:p@ss@tcp(h:2881)/db", "user:***@tcp(h:2881)/db"},
+		{"postgres", "postgres://user@host/db", "postgres://user@host/db"},
+		{"postgres", "postgres://user:secret@host/db?password=other", "postgres://user:***@host/db?password=***"},
+		{"postgres", "user=x password=secret host=db", "user=x password=*** host=db"},
+		{"postgres", "postgres://u@h/db?%70assword=secret&x=1", "postgres://u@h/db?%70assword=***&x=1"},
+		{"postgres", "user=x password = secret host=db", "user=x password = *** host=db"},
+		{"postgres", "password='a b\\' c' host=db", "password=*** host=db"},
+		{"unknown", "host=db password = secret", "host=db password = ***"},
 	}
 	for _, c := range cases {
-		if got := RedactDSN(c.in); got != c.want {
-			t.Errorf("RedactDSN(%q) = %q, want %q", c.in, got, c.want)
+		if got := RedactDSN(c.driver, c.in); got != c.want {
+			t.Errorf("RedactDSN(%q, %q) = %q, want %q", c.driver, c.in, got, c.want)
 		}
 	}
 }
@@ -530,5 +536,97 @@ func TestAssembleWiresAnalyzePolicyPerDatasource(t *testing.T) {
 	defer app.Close()
 	if !app.Analyze.Config.Enabled || app.Sources["default"].Analyze.Config.SampleRate != 0.5 {
 		t.Fatalf("analyze wiring = %+v / %+v", app.Analyze, app.Sources["default"].Analyze)
+	}
+}
+
+type fakeIntrospector []entity.Entity
+
+func (f fakeIntrospector) Discover(context.Context, []string) ([]entity.Entity, error) { return f, nil }
+
+type commentedProvider struct {
+	*fakeProvider
+	tables fakeIntrospector
+}
+
+func (p commentedProvider) Introspector() introspect.Introspector { return p.tables }
+
+// Database comments are the default descriptions; configured ones win.
+func TestAssembleInheritsDatabaseComments(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Databases: map[string]config.DatabaseConfig{"main": {Driver: "postgres", DSN: "x"}},
+		Entities: []config.EntityConfig{{Name: "users", DataSource: "main", Fields: []config.FieldConfig{
+			{Name: "id"}, {Name: "region", Description: "销售区域（手写）"},
+		}}},
+	}
+	cfg.ApplyDefaults()
+	prov := commentedProvider{&fakeProvider{dialect: postgres.Dialect{}}, fakeIntrospector{{
+		Name: "users", Source: "users", Schema: "public", Description: "用户表",
+		Attributes: []entity.Attribute{{Name: "id", Description: "主键"}, {Name: "region", Description: "销售大区"}},
+	}}}
+	app, err := AssembleWithProviders(cfg, map[string]Provider{"main": prov})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	res, _ := app.Registry.Resolve("users")
+	if res.Entity.Description != "用户表" || res.Attributes[0].Description != "主键" ||
+		res.Attributes[1].Description != "销售区域（手写）" {
+		t.Fatalf("descriptions = %q %+v", res.Entity.Description, res.Attributes)
+	}
+}
+
+// listingIntrospector knows its default schema and scans the named schemas.
+type listingIntrospector struct{ tables []entity.Entity }
+
+func (l listingIntrospector) Discover(_ context.Context, schemas []string) ([]entity.Entity, error) {
+	var out []entity.Entity
+	for _, t := range l.tables {
+		if slices.Contains(schemas, t.Schema) {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+func (l listingIntrospector) Schemas(context.Context) ([]string, string, error) {
+	return []string{"crm", "public"}, "public", nil
+}
+
+type listingProvider struct {
+	*fakeProvider
+	in listingIntrospector
+}
+
+func (p listingProvider) Introspector() introspect.Introspector { return p.in }
+
+// An entity without a schema reads the default schema even when another
+// entity names a different one, and takes that table's comments.
+func TestAssembleResolvesUnqualifiedEntitiesInTheDefaultSchema(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Databases: map[string]config.DatabaseConfig{"main": {Driver: "postgres", DSN: "x"}},
+		Entities: []config.EntityConfig{
+			{Name: "customers", DataSource: "main", Fields: []config.FieldConfig{{Name: "id"}}},
+			{Name: "crm_customers", Source: "customers", Schema: "crm", DataSource: "main",
+				Fields: []config.FieldConfig{{Name: "id"}}},
+		},
+	}
+	cfg.ApplyDefaults()
+	table := func(schema, comment string) entity.Entity {
+		return entity.Entity{Name: "customers", Source: "customers", Schema: schema, Description: comment,
+			Attributes: []entity.Attribute{{Name: "id"}}}
+	}
+	prov := listingProvider{&fakeProvider{dialect: postgres.Dialect{}},
+		listingIntrospector{[]entity.Entity{table("crm", "CRM 客户"), table("public", "公共客户")}}}
+	app, err := AssembleWithProviders(cfg, map[string]Provider{"main": prov})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	plain, _ := app.Registry.Resolve("customers")
+	crm, _ := app.Registry.Resolve("crm_customers")
+	if plain.Entity.Description != "公共客户" || crm.Entity.Description != "CRM 客户" {
+		t.Fatalf("descriptions = %q / %q", plain.Entity.Description, crm.Entity.Description)
 	}
 }

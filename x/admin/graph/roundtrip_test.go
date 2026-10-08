@@ -5,6 +5,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/99designs/gqlgen/client"
@@ -151,3 +152,19 @@ func TestDraftRoundTripKeepsEveryField(t *testing.T) {
 }
 
 func revisionID(id int64) string { return strconv.FormatInt(id, 10) }
+
+// A tenant policy that is not an object is rejected rather than dropped,
+// which would silently remove the tenant constraint.
+func TestEntityConfigRejectsNonObjectTenantPolicy(t *testing.T) {
+	t.Parallel()
+	for _, policy := range []any{"tenant_id", []any{"tenant_id"}} {
+		_, err := entityConfig(EntityInput{Name: "orders", TenantPolicy: policy})
+		if err == nil || !strings.Contains(err.Error(), "tenantPolicy must be an object") {
+			t.Errorf("tenantPolicy %#v: err = %v", policy, err)
+		}
+	}
+	e, err := entityConfig(EntityInput{Name: "orders", TenantPolicy: map[string]any{"column": "tenant_id"}})
+	if err != nil || e.TenantPolicy["column"] != "tenant_id" {
+		t.Fatalf("object tenantPolicy = %v, %v", e.TenantPolicy, err)
+	}
+}

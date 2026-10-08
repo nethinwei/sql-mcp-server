@@ -45,7 +45,8 @@ make build
   [`examples/clients/`](examples/clients/)（核对结论见
   [客户端接入核对](docs/clients.md)）；
 - 完整配置模板：[`examples/config.example.yaml`](examples/config.example.yaml)；
-- CLI、启动、热重载和升级：[运行与运维](docs/operations.md)；
+- CLI、启动、热重载、容器部署和升级：[运行与运维](docs/operations.md)；
+- Web 管理控制台与 Docker Compose 部署：[管理控制台](docs/console.md)；
 - 魔搭分发展示：[ModelScope 上架与使用](docs/modelscope.md)。
 
 ## 按角色阅读
@@ -59,7 +60,8 @@ make build
 
 ### 部署与安全
 
-- [运行与运维](docs/operations.md)：CLI、生命周期、监控和升级；
+- [运行与运维](docs/operations.md)：CLI、容器部署、生命周期、监控和升级；
+- [管理控制台](docs/console.md)：配置编辑、发布回滚、管理员权限与 Docker 部署；
 - [安全模型](docs/security.md)：运行时安全行为的唯一事实源；
 - [威胁模型](docs/threat-model.md)：威胁、控制、测试证据与剩余风险；
 - [SECURITY.md](SECURITY.md)：漏洞披露流程。

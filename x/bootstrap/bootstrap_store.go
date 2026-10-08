@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
+	"github.com/nethinwei/sql-mcp-server/core/tool"
 	"github.com/nethinwei/sql-mcp-server/x/configyaml"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 )
@@ -81,15 +83,20 @@ func CheckPublishable(current, target revision.Revision, restartRequired bool) e
 	return nil
 }
 
+// procedureToolSignature identifies the custom procedure tools as registered
+// with MCP clients (name, description and input schema), which are fixed at
+// startup: renaming a parameter changes the schema and needs a restart.
 func procedureToolSignature(entities []config.EntityConfig) string {
-	names := make([]string, 0)
-	for _, e := range entities {
-		if e.Kind == "procedure" && e.MCP.CustomTool && e.MCP.TrustedProcedure {
-			names = append(names, e.Name)
+	sigs := make([]string, 0)
+	for _, ec := range entities {
+		if ec.Kind != "procedure" || !ec.MCP.CustomTool || !ec.MCP.TrustedProcedure {
+			continue
 		}
+		info := tool.ProcedureTool{Entity: entity.Entity{Name: ec.Name, Params: ec.Params}}.Info()
+		sigs = append(sigs, info.Name+"\x00"+info.Description+"\x00"+string(info.InputSchema))
 	}
-	sort.Strings(names)
-	return strings.Join(names, "\x00")
+	sort.Strings(sigs)
+	return strings.Join(sigs, "\x01")
 }
 
 // LoadBytes decodes, defaults and validates YAML configuration bytes and
@@ -110,8 +117,8 @@ func LoadBytes(data []byte) (*config.Config, error) {
 // ErrPlaintextSecret rejects store payloads that would persist credentials.
 var ErrPlaintextSecret = errors.New("store payload must not contain plaintext secrets")
 
-// ValidateStorePayload enforces the store-mode secret rule: every DSN
-// password must come from a ${...} placeholder and server.auth.token must be
+// ValidateStorePayload enforces the store-mode secret rule: every non-empty
+// DSN password must come from a ${...} placeholder and server.auth.token must be
 // empty (configured users keep only token hashes).
 func ValidateStorePayload(cfg *config.Config) error {
 	if cfg.Server.Auth.Token != "" {
@@ -122,8 +129,9 @@ func ValidateStorePayload(cfg *config.Config) error {
 		databases = map[string]config.DatabaseConfig{"default": cfg.Database}
 	}
 	for name, db := range databases {
-		for _, password := range dsnPasswords(db.DSN) {
-			if !wholePlaceholderRe.MatchString(password) {
+		for _, secret := range dsnSecrets(db.Driver, db.DSN) {
+			// An empty password is no credential (trust or peer authentication).
+			if secret.value != "" && !wholePlaceholderRe.MatchString(secret.value) {
 				return fmt.Errorf("%w: database %q DSN has a plaintext password; use ${ENV} or ${file:...}",
 					ErrPlaintextSecret, name)
 			}
@@ -132,33 +140,7 @@ func ValidateStorePayload(cfg *config.Config) error {
 	return nil
 }
 
-var (
-	wholePlaceholderRe = regexp.MustCompile(`^\$\{[^}]+\}$`)
-	uriPasswordRe      = regexp.MustCompile(`://[^:/@]+:([^@]+)@`)
-	mysqlPasswordRe    = regexp.MustCompile(`^[^:@/]+:([^@]+)@`)
-	keyPasswordRe      = regexp.MustCompile(`(?i)(?:^|[?;&\s])(?:password|pwd)=([^&;\s]+)`)
-)
-
-// dsnPasswords extracts password values from URI (scheme://user:pass@),
-// MySQL (user:pass@tcp(...)) and key=value (password=/pwd=) DSN forms. A DSN
-// that is a single placeholder has no inline password.
-func dsnPasswords(dsn string) []string {
-	if wholePlaceholderRe.MatchString(dsn) {
-		return nil
-	}
-	var out []string
-	userinfo := mysqlPasswordRe
-	if strings.Contains(dsn, "://") {
-		userinfo = uriPasswordRe
-	}
-	if m := userinfo.FindStringSubmatch(dsn); m != nil {
-		out = append(out, m[1])
-	}
-	for _, m := range keyPasswordRe.FindAllStringSubmatch(dsn, -1) {
-		out = append(out, m[1])
-	}
-	return out
-}
+var wholePlaceholderRe = regexp.MustCompile(`^\$\{[^}]+\}$`)
 
 // StaleState describes a published store revision the runtime has not
 // applied, either because building it failed or because it needs a restart.

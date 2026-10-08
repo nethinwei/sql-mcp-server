@@ -62,7 +62,7 @@ func toDatasources(cfg *config.Config) []Datasource {
 	}
 	out := make([]Datasource, 0, len(databases))
 	for name, db := range databases {
-		out = append(out, Datasource{Name: name, Driver: db.Driver, Dsn: bootstrap.RedactDSN(db.DSN)})
+		out = append(out, Datasource{Name: name, Driver: db.Driver, Dsn: bootstrap.RedactDSN(db.Driver, db.DSN)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -301,7 +301,11 @@ func entityConfig(in EntityInput) (config.EntityConfig, error) {
 		})
 	}
 	if in.TenantPolicy != nil {
-		e.TenantPolicy, _ = normalizeJSON(in.TenantPolicy).(map[string]any)
+		policy, ok := normalizeJSON(in.TenantPolicy).(map[string]any)
+		if !ok {
+			return config.EntityConfig{}, fmt.Errorf("entity %q tenantPolicy must be an object", in.Name)
+		}
+		e.TenantPolicy = policy
 	}
 	if in.LegacyAccess != nil {
 		legacy, err := decodeJSON[struct {

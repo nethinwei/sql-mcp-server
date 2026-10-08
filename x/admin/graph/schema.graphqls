@@ -46,6 +46,12 @@ type Query {
   revisions(limit: Int = 50): [Revision!]!
   "Introspect a configured datasource and propose zero-permission entities."
   schemaImport(datasource: String!, schemas: [String!]): SchemaImport!
+  """
+  Database comments of tables: the default descriptions of entities and their
+  fields, used when the configuration leaves them empty. Results follow the
+  order of `tables`; an entry is null when its table is not found.
+  """
+  tableComments(tables: [TableRef!]!): [TableComments]!
   "Validate a draft without saving it."
   validate(draft: DraftInput!): Validation!
   "Unified diff from revision `from` to revision `to` or an unsaved draft (default: published)."
@@ -180,6 +186,11 @@ type User {
 
 type SchemaImport {
   datasource: String!
+  """
+  The schema where entities without a schema read (unqualified names
+  resolve); null when the database cannot report it.
+  """
+  defaultSchema: String
   tables: [ImportTable!]!
 }
 
@@ -190,13 +201,26 @@ type ImportTable {
   status: ImportStatus!
   "The configured entity name when status is CONFIGURED."
   configuredAs: String
-  "Database columns the configured entity does not declare."
-  addedColumns: [String!]!
-  "Columns the configured entity declares that the database lacks."
-  missingColumns: [String!]!
   columns: [ImportColumn!]!
   "A zero-permission entity proposal; add it to a draft to configure it."
   candidate: Entity!
+}
+
+input TableRef {
+  datasource: String!
+  schema: String
+  "Physical table name (entity source)."
+  table: String!
+}
+
+type TableComments {
+  description: String!
+  columns: [ColumnComment!]!
+}
+
+type ColumnComment {
+  name: String!
+  description: String!
 }
 
 type ImportColumn {

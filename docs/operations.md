@@ -86,8 +86,9 @@ dsn: "${DATABASE_DSN}"
 
 也可用 `dsn: "${file:/run/secrets/database_dsn}"`。缺失 secret、数据库 ping
 失败、未知 mask、配置实体/字段在数据库中缺失都会阻止启动。日志中不要打印
-解析后的 DSN；`bootstrap.RedactDSN` 只覆盖常见 PostgreSQL URI 和 MySQL DSN
-密码形式。
+解析后的 DSN；`bootstrap.RedactDSN` 按驱动语法（PostgreSQL URI 与
+keyword/value、MySQL/OceanBase DSN）定位密码，与 store 模式的明文密码检查共用
+同一解析。
 
 启用 `cost.aqe.explainAnalyze` 时的字段、启动校验和负载约束见
 [配置参考](configuration.md#成本)，执行与失败语义见
@@ -109,8 +110,8 @@ manager；事务 `ttl` 或 `maxOpen` 变化会拒绝 reload，必须重启，不
 
 热重载拒绝[字段参考](configuration.md#字段参考)中标记“修改需重启”的字段
 （`server.transport`、`server.addr`、`server.auth`、`tools`、事务
-`ttl`/`maxOpen`），以及新增/移除 custom procedure tool、首次启用或全部删除
-用户；这些变化必须重启服务。文件模式与 store 模式共用同一份规则。详见
+`ttl`/`maxOpen`），以及新增、移除 custom procedure tool 或修改其参数（参数决定
+注册给客户端的工具 schema）、首次启用或全部删除用户；这些变化必须重启服务。文件模式与 store 模式共用同一份规则。详见
 [architecture.md](architecture.md)。
 
 ## 配置存储
@@ -139,11 +140,35 @@ sql-mcp-server serve         --store sqlite:/var/lib/sql-mcp-server/config.db --
   重启后生效）。因此回滚到正在运行的旧配置时，也可能需要该参数。
 - store 模式下 payload 中的 DSN 密码必须是占位符，`server.auth.token` 必须为空
   （改用 `users` 的每用户 token），否则 import 失败。
-- `store list/show/diff` 查看历史；import、publish、rollback 在 stderr 记录一条
-  结构化审计日志。
+- `store list/show/diff` 查看历史。`diff` 先把两侧按当前编码重新编码再比较，
+  与控制台显示的差异一致；`--raw` 改为比较存储的原始字节。import、publish、
+  rollback 在 stderr 记录一条结构化审计日志（含 `via=cli` 或 `via=admin-api`）。
 - `migrate --from <file:path|driver:dsn> --to <...>` 在 YAML 文件与各 store 之间
   迁移当前配置并校验 `content_hash`；两侧都是 store 时 `--history` 复制全部
   revision（目标必须为空）。
+
+## 管理控制台
+
+store 模式下 `serve --admin`（仅 HTTP）在 `/admin` 提供 GraphQL 管理 API 与
+Web 控制台，管理员账号用 `sql-mcp-server admin create|passwd|set|list` 管理，
+密码从标准输入读取。使用方法、权限说明与 Docker 部署见
+[管理控制台](console.md)。
+
+## 容器部署
+
+镜像 `ghcr.io/nethinwei/sql-mcp-server` 基于 distroless，以非 root 用户
+（uid 65532）运行，入口为 `sql-mcp-server`，子命令与参数由容器命令给出（如
+`serve --config /config/config.yaml`）。`/var/lib/sql-mcp-server` 已建好并归该用户所有，可直接挂载
+数据卷存放 SQLite 配置存储。
+
+- 文件模式：挂载配置到 `/config/config.yaml`，参考
+  [`examples/quickstart`](../examples/quickstart/compose.yaml)。
+- store 模式与控制台：设置 `SQL_MCP_STORE`，用 `docker compose run --rm <服务>
+  store ...`/`admin create` 完成初始化后启动 `serve --admin --watch`，完整步骤见
+  [管理控制台 · Docker 部署](console.md#docker-部署)。
+
+容器内监听非 loopback 地址时必须配置 MCP 认证（`users`、`server.auth.token`
+或 mTLS），否则服务拒绝启动。
 
 ## 生命周期
 

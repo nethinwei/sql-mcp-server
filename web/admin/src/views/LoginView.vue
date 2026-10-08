@@ -7,6 +7,7 @@ import { login } from '@/api/session'
 import { useWorkspace } from '@/stores/workspace'
 import ThemeSwitch from '@/components/ThemeSwitch.vue'
 import LocaleSwitch from '@/components/LocaleSwitch.vue'
+import logo from '@/assets/logo.svg'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -38,7 +39,7 @@ async function submit() {
   <div class="wrap">
     <n-space class="corner" :size="4"><locale-switch /><theme-switch /></n-space>
     <n-card class="card" :bordered="false">
-      <div class="title"><span class="logo">SQL</span> {{ t('app.title') }}</div>
+      <div class="title"><img :src="logo" class="logo" alt="" /> {{ t('app.title') }}</div>
       <p class="sub">{{ t('app.subtitle') }}</p>
       <n-form @submit.prevent="submit">
         <n-form-item :label="t('login.username')" :show-feedback="false" class="field">
@@ -63,7 +64,7 @@ async function submit() {
 .corner { position: fixed; top: 14px; right: 16px; }
 .card { width: 360px; max-width: 100%; box-shadow: 0 8px 32px rgba(0,0,0,.12); }
 .title { font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
-.logo { background: #2f6fed; color: #fff; border-radius: 6px; padding: 2px 6px; font-size: 13px; }
+.logo { width: 32px; height: 32px; flex: none; }
 .sub { margin: 6px 0 22px; opacity: .6; font-size: 13px; }
 .field { margin-bottom: 14px; }
 .field.last { margin-bottom: 18px; }

@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, h, ref } from 'vue'
+import { computed, h, ref, watchEffect } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { NButton, NDataTable, NEmpty, NInput, NSelect, NSpace, NTag, NText, type DataTableColumns } from 'naive-ui'
 import { useWorkspace } from '@/stores/workspace'
 import type { EntityInput } from '@/gql/graphql'
+import { loadTableComments, tableComments } from '@/lib/tableComments'
 
 const { t } = useI18n()
 const ws = useWorkspace()
@@ -12,11 +13,14 @@ const router = useRouter()
 const search = ref('')
 const datasource = ref<string | null>(null)
 
+watchEffect(() => { void loadTableComments(ws.entities) })
+const description = (e: EntityInput) => e.description || tableComments(e)?.description || ''
+
 const rows = computed(() => {
   const q = search.value.trim().toLowerCase()
   return ws.entities.filter((e) =>
     (!datasource.value || (e.datasource ?? 'default') === datasource.value) &&
-    (!q || e.name.toLowerCase().includes(q) || (e.description ?? '').toLowerCase().includes(q)))
+    (!q || e.name.toLowerCase().includes(q) || description(e).toLowerCase().includes(q)))
 })
 
 const columns = computed<DataTableColumns<EntityInput>>(() => [
@@ -27,7 +31,11 @@ const columns = computed<DataTableColumns<EntityInput>>(() => [
       e.kind === 'procedure' ? h(NTag, { size: 'tiny', bordered: false }, () => t('entities.procedure')) : null,
     ]),
   },
-  { title: t('entities.description'), key: 'description', ellipsis: { tooltip: true } },
+  {
+    title: t('entities.description'), key: 'description', ellipsis: { tooltip: true },
+    // A database comment (the runtime default) is shown in grey.
+    render: (e) => e.description || h(NText, { depth: 3 }, () => description(e)),
+  },
   { title: t('entities.datasource'), key: 'datasource', width: 120, render: (e) => e.datasource ?? 'default' },
   { title: t('entities.fields'), key: 'fields', width: 80, render: (e) => (e.fields ?? []).filter((f) => !f.exclude).length },
   {

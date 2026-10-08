@@ -9,12 +9,16 @@ export interface TableRef {
 }
 
 /**
- * Whether entity e of datasource reads table tb. An entity without a schema
- * matches by name only when no other listed table shares that name.
+ * Whether entity e of datasource reads table tb, resolved like the server: an
+ * entity without a schema reads defaultSchema (where unqualified names
+ * resolve); when that is unknown, a table name unique among tables.
  */
-export function readsTable(e: EntityInput, datasource: string, tb: TableRef, tables: TableRef[]): boolean {
+export function readsTable(
+  e: EntityInput, datasource: string, tb: TableRef, tables: TableRef[], defaultSchema?: string | null,
+): boolean {
   if ((e.datasource ?? 'default') !== datasource || (e.source ?? e.name) !== tb.table) return false
-  if (e.schema) return e.schema === tb.schema
+  const schema = e.schema || defaultSchema
+  if (schema) return schema === tb.schema
   return tables.filter((x) => x.table === tb.table).length === 1
 }
 

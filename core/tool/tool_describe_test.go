@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/nethinwei/sql-mcp-server/core/entity"
@@ -55,5 +56,39 @@ func TestDescribeToolFiltersUnauthorizedEntitiesAndFields(t *testing.T) {
 		ErrUnauthorized,
 	) {
 		t.Fatalf("unauthorized detail error = %v", err)
+	}
+}
+
+// Read grants with split field scopes deny the default projection, but the
+// entity stays discoverable, like in the authorized-schema resource, with the
+// fields that an explicit selection may use.
+func TestDescribeToolListsSplitFieldScopes(t *testing.T) {
+	t.Parallel()
+	users := testUsersEntity()
+	users.Role = nil
+	users.Attributes = []entity.Attribute{{Name: "id"}, {Name: "name"}, {Name: "phone"}, {Name: "secret"}}
+	reg, _ := entity.NewRegistry([]entity.Entity{users})
+	read := func(id string, fields ...string) rbac.Grant {
+		return rbac.Grant{ID: id, Actions: []entity.Action{entity.ActionRead},
+			Fields: &entity.FieldPermissions{Read: fields}}
+	}
+	policy := rbac.Policy{Roles: map[string]map[string][]rbac.Grant{
+		"reader": {"users": {read("n", "id", "name"), read("p", "id", "phone")}},
+	}}
+	tc := Context{Role: "reader", Registry: reg, Authorizer: rbac.NewGrantAuthorizer(reg, policy)}
+	list, err := DescribeTool{}.Run(context.Background(), json.RawMessage(`{}`), tc)
+	if err != nil || len(list.Content) != 1 || list.Content[0]["name"] != "users" {
+		t.Fatalf("list = %#v, %v", list.Content, err)
+	}
+	detail, err := DescribeTool{}.Run(context.Background(), json.RawMessage(`{"entity":"users"}`), tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, f := range detail.Content[0]["fields"].([]map[string]any) {
+		names = append(names, f["name"].(string))
+	}
+	if strings.Join(names, ",") != "id,name,phone" {
+		t.Fatalf("fields = %v", names)
 	}
 }

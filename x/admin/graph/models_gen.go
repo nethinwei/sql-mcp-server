@@ -35,6 +35,11 @@ type AdminAccountUpdate struct {
 	Disabled    *bool    `json:"disabled,omitempty"`
 }
 
+type ColumnComment struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
 type Configuration struct {
 	Datasources []Datasource `json:"datasources"`
 	Entities    []Entity     `json:"entities"`
@@ -166,12 +171,8 @@ type ImportTable struct {
 	Description string       `json:"description"`
 	Status      ImportStatus `json:"status"`
 	// The configured entity name when status is CONFIGURED.
-	ConfiguredAs *string `json:"configuredAs,omitempty"`
-	// Database columns the configured entity does not declare.
-	AddedColumns []string `json:"addedColumns"`
-	// Columns the configured entity declares that the database lacks.
-	MissingColumns []string       `json:"missingColumns"`
-	Columns        []ImportColumn `json:"columns"`
+	ConfiguredAs *string        `json:"configuredAs,omitempty"`
+	Columns      []ImportColumn `json:"columns"`
 	// A zero-permission entity proposal; add it to a draft to configure it.
 	Candidate *Entity `json:"candidate"`
 }
@@ -234,8 +235,11 @@ type RollbackInput struct {
 }
 
 type SchemaImport struct {
-	Datasource string        `json:"datasource"`
-	Tables     []ImportTable `json:"tables"`
+	Datasource string `json:"datasource"`
+	// The schema where entities without a schema read (unqualified names
+	// resolve); null when the database cannot report it.
+	DefaultSchema *string       `json:"defaultSchema,omitempty"`
+	Tables        []ImportTable `json:"tables"`
 }
 
 type ServerStatus struct {
@@ -276,6 +280,18 @@ type SimulationInput struct {
 	Fields []string `json:"fields,omitempty"`
 	// Extra subject attributes; configured user attributes win.
 	Subject any `json:"subject,omitempty"`
+}
+
+type TableComments struct {
+	Description string          `json:"description"`
+	Columns     []ColumnComment `json:"columns"`
+}
+
+type TableRef struct {
+	Datasource string  `json:"datasource"`
+	Schema     *string `json:"schema,omitempty"`
+	// Physical table name (entity source).
+	Table string `json:"table"`
 }
 
 type User struct {

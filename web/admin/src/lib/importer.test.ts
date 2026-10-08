@@ -10,7 +10,13 @@ describe('readsTable', () => {
     expect(readsTable(e, 'shop', tables[0], tables)).toBe(false)
   })
 
-  it('matches an entity without schema only when the name is unique', () => {
+  it('resolves an entity without schema in the default schema', () => {
+    const e = { name: 'users', datasource: 'shop' }
+    expect(readsTable(e, 'shop', tables[0], tables, 'public')).toBe(true)
+    expect(readsTable(e, 'shop', tables[1], tables, 'public')).toBe(false)
+  })
+
+  it('without a default schema, matches an entity without schema only when the name is unique', () => {
     expect(readsTable({ name: 'users', datasource: 'shop' }, 'shop', tables[0], tables)).toBe(false)
     expect(readsTable({ name: 'orders', datasource: 'shop' }, 'shop', tables[2], tables)).toBe(true)
     expect(readsTable({ name: 'orders' }, 'shop', tables[2], tables)).toBe(false)

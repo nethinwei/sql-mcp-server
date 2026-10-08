@@ -191,6 +191,17 @@ func (e Entity) AttributeByName(name string) (Attribute, bool) {
 	return Attribute{}, false
 }
 
+// OrderedNames returns the attribute names in set, in attribute order.
+func (e Entity) OrderedNames(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for _, a := range e.Attributes {
+		if set[a.Name] {
+			out = append(out, a.Name)
+		}
+	}
+	return out
+}
+
 // Resolved is a request-time view of an entity with field projection applied
 // (excluded attributes removed). RBAC further restricts Attributes per role.
 type Resolved struct {
