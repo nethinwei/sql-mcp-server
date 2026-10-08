@@ -29,14 +29,6 @@ func TestDialectPlaceholder(t *testing.T) {
 	}
 }
 
-func TestDialectExplainSQL(t *testing.T) {
-	t.Parallel()
-	q := "SELECT * FROM t"
-	if got := (Dialect{}).ExplainSQL(q); got != "EXPLAIN (FORMAT JSON) "+q {
-		t.Errorf("ExplainSQL = %q", got)
-	}
-}
-
 func TestDialectCapabilities(t *testing.T) {
 	t.Parallel()
 	caps := (Dialect{}).Capabilities()
@@ -45,8 +37,5 @@ func TestDialectCapabilities(t *testing.T) {
 	}
 	if !caps.Returning {
 		t.Error("postgres should support RETURNING")
-	}
-	if caps.SQLSafeUpdates {
-		t.Error("postgres should not use sql_safe_updates")
 	}
 }

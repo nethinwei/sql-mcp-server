@@ -23,7 +23,6 @@ type Limits struct {
 	MaxConcurrent           int
 	MaxExecution            time.Duration
 	MaxEstimatedScannedRows int64
-	MaxScannedRows          int64 // deprecated alias
 	MaxReturnedRows         int64
 	MaxReturnedBytes        int64
 	MaxSessionCost          int64
@@ -31,9 +30,6 @@ type Limits struct {
 
 // Usage captures one invocation's observable resource usage.
 type Usage struct {
-	// ScannedRows is an actual observed scan count. Zero means unknown or none;
-	// callers must not substitute ReturnedRows for it.
-	ScannedRows int64
 	// EstimatedScannedRows is a planner estimate, not an observed scan count.
 	EstimatedScannedRows int64
 	ReturnedRows         int64
@@ -56,22 +52,10 @@ type Lease interface {
 	Complete(Usage) error
 }
 
-// Manager acquires scoped budgets.
+// Manager acquires scoped budgets, atomically holding a pre-execution
+// reservation until the lease completes.
 type Manager interface {
-	Acquire(context.Context, Scope) (Lease, error)
-}
-
-// ReservingManager supports atomic pre-execution budget reservations. Callers
-// with cost estimates should prefer this interface over Manager.
-type ReservingManager interface {
-	Manager
 	AcquireWithReservation(context.Context, Scope, Reservation) (Lease, error)
-}
-
-// SessionManager can discard all accounting for a disconnected session.
-type SessionManager interface {
-	Manager
-	CloseSession(string)
 }
 
 type state struct {
@@ -143,7 +127,7 @@ func (m *MemoryManager) limits(scope Scope) Limits {
 	return m.roles[scope.Role]
 }
 
-// Acquire implements Manager.
+// Acquire acquires a lease without a reservation.
 func (m *MemoryManager) Acquire(ctx context.Context, scope Scope) (Lease, error) {
 	return m.AcquireWithReservation(ctx, scope, Reservation{})
 }
@@ -202,11 +186,8 @@ func checkReservationLimits(limits Limits, st *state, reservation Reservation) e
 	if limits.MaxConcurrent > 0 && st.inflight >= limits.MaxConcurrent {
 		return ErrExceeded
 	}
-	maxEstimated := limits.MaxEstimatedScannedRows
-	if maxEstimated == 0 {
-		maxEstimated = limits.MaxScannedRows
-	}
-	if maxEstimated > 0 && reservation.EstimatedScannedRows > maxEstimated {
+	if maxEstimated := limits.MaxEstimatedScannedRows; maxEstimated > 0 &&
+		reservation.EstimatedScannedRows > maxEstimated {
 		return ErrExceeded
 	}
 	if limits.MaxSessionCost > 0 &&
@@ -307,10 +288,7 @@ func (l *lease) Complete(usage Usage) error {
 		}
 		l.manager.mu.Unlock()
 		maxEstimated := l.limits.MaxEstimatedScannedRows
-		if maxEstimated == 0 {
-			maxEstimated = l.limits.MaxScannedRows
-		}
-		if (maxEstimated > 0 && (usage.EstimatedScannedRows > maxEstimated || usage.ScannedRows > maxEstimated)) ||
+		if (maxEstimated > 0 && usage.EstimatedScannedRows > maxEstimated) ||
 			(l.limits.MaxReturnedRows > 0 && usage.ReturnedRows > l.limits.MaxReturnedRows) ||
 			(l.limits.MaxReturnedBytes > 0 && usage.ReturnedBytes > l.limits.MaxReturnedBytes) ||
 			(l.limits.MaxSessionCost > 0 && sessionCost > l.limits.MaxSessionCost) {

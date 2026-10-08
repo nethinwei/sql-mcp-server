@@ -19,55 +19,82 @@ import (
 )
 
 // AssembleWithProviders wires named providers. It is intended for tests and
-// embedders; ownership transfers to the returned App on success.
+// embedders; ownership transfers to the returned App on success. On failure
+// the providers stay with the caller and every resource acquired here is
+// released: configuration is checked before any resource is acquired.
 func AssembleWithProviders(cfg *config.Config, providers map[string]Provider) (*App, error) {
-	if err := prepareAssembleProviders(cfg, providers); err != nil {
-		return nil, err
-	}
-	entities, err := configToEntities(cfg.Entities)
+	checked, err := checkAssembly(cfg, providers)
 	if err != nil {
 		return nil, err
-	}
-	entities, err = validateAssembleEntities(entities, providers)
-	if err != nil {
-		return nil, err
-	}
-	reg, err := entityRegistryFromConfig(entities)
-	if err != nil {
-		return nil, err
-	}
-	policy, err := accessPolicy(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("assemble: %w", err)
 	}
 	feedback := newFeedbackStore(cfg)
 	sources, txBeginners, prepared, err := buildDataSources(cfg, providers, feedback)
 	if err != nil {
+		closePrepared(prepared)
 		return nil, err
 	}
 	eng, err := newAssembleEngine(cfg)
 	if err != nil {
+		closePrepared(prepared)
 		return nil, err
 	}
-	tools, err := tool.NewRegistry(tool.DefaultTools())
+	aud, err := newAssembleAuditor(cfg)
 	if err != nil {
 		eng.Close()
-		return nil, err
-	}
-	aud, err := newAssembleAuditor(cfg, eng, providers)
-	if err != nil {
-		return nil, err
-	}
-	cc := newAssembleCache(cfg)
-	msk, err := newAssembleMasker(cfg, entities)
-	if err != nil {
+		closePrepared(prepared)
 		return nil, err
 	}
 	defaultName, defaultSource := defaultDatasource(providers, sources)
 	return newAssembledApp(
-		cfg, providers, prepared, sources, txBeginners, reg, rbac.NewGrantAuthorizer(reg, policy), aud, cc, msk,
-		feedback, defaultSource, defaultName, eng, tools,
+		cfg, providers, prepared, sources, txBeginners, checked.registry,
+		rbac.NewGrantAuthorizer(checked.registry, checked.policy), aud, newAssembleCache(cfg), checked.masker,
+		feedback, defaultSource, defaultName, eng, checked.tools,
 	), nil
+}
+
+// checkedAssembly holds what assembly derives from configuration and the live
+// schema before it acquires any resource.
+type checkedAssembly struct {
+	registry *entity.Registry
+	policy   rbac.Policy
+	masker   mask.Masker
+	tools    *tool.Registry
+}
+
+func checkAssembly(cfg *config.Config, providers map[string]Provider) (checkedAssembly, error) {
+	if err := prepareAssembleProviders(cfg, providers); err != nil {
+		return checkedAssembly{}, err
+	}
+	entities, err := configToEntities(cfg.Entities)
+	if err != nil {
+		return checkedAssembly{}, err
+	}
+	policy, err := accessPolicy(cfg)
+	if err != nil {
+		return checkedAssembly{}, fmt.Errorf("assemble: %w", err)
+	}
+	msk, err := newAssembleMasker(cfg, entities)
+	if err != nil {
+		return checkedAssembly{}, err
+	}
+	tools, err := tool.NewRegistry(tool.DefaultTools())
+	if err != nil {
+		return checkedAssembly{}, err
+	}
+	if entities, err = validateAssembleEntities(entities, providers); err != nil {
+		return checkedAssembly{}, err
+	}
+	reg, err := entity.NewRegistry(entities)
+	if err != nil {
+		return checkedAssembly{}, err
+	}
+	return checkedAssembly{registry: reg, policy: policy, masker: msk, tools: tools}, nil
+}
+
+func closePrepared(prepared map[string]*store.PreparedDB) {
+	for _, db := range prepared {
+		_ = db.Close()
+	}
 }
 
 func prepareAssembleProviders(cfg *config.Config, providers map[string]Provider) error {
@@ -124,10 +151,6 @@ func reconcileAll(providers map[string]Provider, entities []entity.Entity) ([]en
 	return out, nil
 }
 
-func entityRegistryFromConfig(entities []entity.Entity) (*entity.Registry, error) {
-	return entity.NewRegistry(entities)
-}
-
 func newFeedbackStore(cfg *config.Config) cost.FeedbackStore {
 	if !cfg.Cost.EnabledOrDefault() {
 		return cost.NoopFeedbackStore{}
@@ -155,7 +178,7 @@ func buildDataSources(
 		prepared[name] = db
 		source, err := dataSourceForProvider(cfg, name, prov, db, feedback, len(providers) == 1)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, prepared, err
 		}
 		sources[name] = source
 	}
@@ -200,13 +223,7 @@ func dataSourceForProvider(
 	threshold.DialectName = prov.Dialect().Name()
 	threshold.LegacyExactSQL = legacyExactSQL
 	if !cfg.Cost.EnabledOrDefault() {
-		threshold.DisableEstimate = true
-		threshold.SoftScore = 0
-		threshold.HardScore = 0
-		threshold.RejectFullScan = false
-		threshold.RequireKnownScan = false
-		threshold.RequireFreshStats = false
-		threshold.ExplainFailClosed = false
+		explainer = nil // no Estimate layer; mandatory safety layers remain
 	}
 	gate := cost.NewGateFromCapabilities(prov.Dialect().Capabilities(), explainer, threshold, feedback)
 	return tool.DataSource{DB: db, Dialect: prov.Dialect(), Gate: gate, Analyze: analyze}, nil
@@ -228,7 +245,6 @@ func newAssembleEngine(cfg *config.Config) (*engine.Engine, error) {
 	}
 	return engine.New(
 		engine.WithIOPool(cfg.RateLimit.IOPool),
-		engine.WithCPUPool(cfg.RateLimit.CPUPool),
 		engine.WithMaxInflight(cfg.RateLimit.MaxInflight),
 		engine.WithLimiter(limiter),
 		engine.WithRPSLimiter(rps),
@@ -237,14 +253,12 @@ func newAssembleEngine(cfg *config.Config) (*engine.Engine, error) {
 	)
 }
 
-func newAssembleAuditor(cfg *config.Config, eng *engine.Engine, providers map[string]Provider) (audit.Auditor, error) {
+func newAssembleAuditor(cfg *config.Config) (audit.Auditor, error) {
 	if !cfg.Audit.Enabled || cfg.Audit.Path == "" {
 		return audit.NoopAuditor{}, nil
 	}
 	sink, err := audit.OpenFileSink(cfg.Audit.Path)
 	if err != nil {
-		eng.Close()
-		closeProviders(providers)
 		return nil, fmt.Errorf("assemble audit sink: %w", err)
 	}
 	return audit.NewAsyncAuditorWithClose(sink.Record, sink.Close, cfg.Audit.QueueSize), nil
@@ -261,7 +275,7 @@ func newAssembleMasker(cfg *config.Config, entities []entity.Entity) (mask.Maske
 	if !cfg.Mask.EnabledOrDefault() {
 		return mask.NoopMasker{}, nil
 	}
-	rm := mask.NewRuleMasker(nil)
+	rm := mask.NewRuleMasker()
 	if err := validateMaskRules(rm, entities); err != nil {
 		return nil, err
 	}
@@ -324,18 +338,14 @@ func applyAssembledAppConfig(app *App, cfg *config.Config) {
 	app.DefaultRole = cfg.Server.Role
 	app.DefaultUser = cfg.Server.User
 	app.Users, app.UserTokens = userDirectory(cfg)
-	app.QueryTimeout = cfg.Cost.QueryTimeout
-	app.MaxRows = cfg.Cost.MaxRows
-	app.MaxProcedureRows = cfg.Cost.MaxProcedureRows
-	app.MaxReturnedBytes = cfg.Cost.MaxBytes
-	app.MaxINListSize = cfg.Cost.MaxINListSize
-	app.MaxFilterConditions = cfg.Cost.MaxFilterConditions
-	app.MaxGroupByFields = cfg.Cost.MaxGroupByFields
-	app.MaxAggregates = cfg.Cost.MaxAggregates
-	app.MaxExpand = cfg.Cost.MaxExpand
-	app.CacheMaxEntryRows = cfg.Cache.MaxEntryRows
-	app.CacheMaxEntryBytes = cfg.Cache.MaxEntryBytes
-	app.TransactionBeginTimeout = cfg.Transactions.BeginTimeout
-	app.TransactionCommitTimeout = cfg.Transactions.CommitTimeout
-	app.TransactionRollbackTimeout = cfg.Transactions.RollbackTimeout
+	app.Limits = tool.Limits{
+		Timeout: cfg.Cost.QueryTimeout, MaxRows: cfg.Cost.MaxRows, MaxProcedureRows: cfg.Cost.MaxProcedureRows,
+		MaxReturnedBytes: cfg.Cost.MaxBytes, MaxINListSize: cfg.Cost.MaxINListSize,
+		MaxFilterConditions: cfg.Cost.MaxFilterConditions, MaxGroupByFields: cfg.Cost.MaxGroupByFields,
+		MaxAggregates: cfg.Cost.MaxAggregates, MaxExpand: cfg.Cost.MaxExpand,
+		CacheMaxEntryRows: cfg.Cache.MaxEntryRows, CacheMaxEntryBytes: cfg.Cache.MaxEntryBytes,
+		TransactionBeginTimeout:    cfg.Transactions.BeginTimeout,
+		TransactionCommitTimeout:   cfg.Transactions.CommitTimeout,
+		TransactionRollbackTimeout: cfg.Transactions.RollbackTimeout,
+	}
 }

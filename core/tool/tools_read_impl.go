@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,11 +23,12 @@ type readPlan struct {
 	tc               Context
 	projectionFields []string
 	full             relalg.Predicate
+	keysetCols       []string // ORDER BY for keyset pagination
 	dec              rbac.Decision
 }
 
 func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
-	ctx, cancel := withTimeout(ctx, tc)
+	ctx, cancel := withTimeout(ctx, tc, 0)
 	defer cancel()
 	tc.Transaction = in.Transaction
 	start := time.Now()
@@ -76,7 +78,7 @@ func prepareReadPlan(ctx context.Context, tc Context, in readInput) (readPlan, e
 	if err != nil {
 		return readPlan{}, err
 	}
-	pred, err := filterToPredicate(in.Filter)
+	pred, err := filterToPredicate(in.Filter, tc.MaxFilterConditions)
 	if err != nil {
 		return readPlan{}, err
 	}
@@ -101,12 +103,11 @@ func prepareReadPlan(ctx context.Context, tc Context, in readInput) (readPlan, e
 	if !dec.Allowed {
 		return readPlan{}, denyUnauthorized(dec)
 	}
-	full := andPreds(pred, dec.RowFilter)
-	if len(in.Cursor) > 0 {
-		ks, _ := keysetAfter(res.Entity.PrimaryKey(), in.Cursor)
-		full = andPreds(full, ks)
-	}
-	return readPlan{res: res, tc: tc, projectionFields: projectionFields, full: full, dec: dec}, nil
+	keyset, keysetCols := keysetAfter(res.Entity.PrimaryKey(), in.Cursor)
+	return readPlan{
+		res: res, tc: tc, projectionFields: projectionFields,
+		full: andPreds(andPreds(pred, dec.RowFilter), keyset), keysetCols: keysetCols, dec: dec,
+	}, nil
 }
 
 func readFieldNames(res entity.Resolved, in readInput) ([]string, []string, error) {
@@ -119,7 +120,7 @@ func readFieldNames(res entity.Resolved, in readInput) ([]string, []string, erro
 		}
 		for local := range relation.JoinOn {
 			readFields = append(readFields, local)
-			if len(in.Fields) > 0 && !containsString(projectionFields, local) {
+			if len(in.Fields) > 0 && !slices.Contains(projectionFields, local) {
 				projectionFields = append(projectionFields, local)
 			}
 		}
@@ -159,15 +160,12 @@ func buildReadExpression(res entity.Resolved, in readInput, plan readPlan) relal
 	if plan.full != nil {
 		expr = relalg.Select{Input: scan, Predicate: plan.full}
 	}
-	if len(in.Cursor) > 0 {
-		_, keysetCols := keysetAfter(res.Entity.PrimaryKey(), in.Cursor)
-		if len(keysetCols) > 0 {
-			order := make([]relalg.OrderTerm, len(keysetCols))
-			for i, c := range keysetCols {
-				order[i] = relalg.OrderTerm{Field: c, Dir: "asc"}
-			}
-			expr = relalg.Sort{Input: expr, OrderBy: order}
+	if len(plan.keysetCols) > 0 {
+		order := make([]relalg.OrderTerm, len(plan.keysetCols))
+		for i, c := range plan.keysetCols {
+			order[i] = relalg.OrderTerm{Field: c, Dir: "asc"}
 		}
+		expr = relalg.Sort{Input: expr, OrderBy: order}
 	}
 	if len(plan.dec.Fields) > 0 {
 		items := make([]relalg.ProjectItem, len(plan.dec.Fields))
@@ -247,7 +245,7 @@ func trimExpandedJoinFields(parent entity.Entity, in readInput, out []map[string
 		for _, name := range in.Expand {
 			relation, _ := relationshipByName(parent, name)
 			for local := range relation.JoinOn {
-				if !containsString(in.Fields, local) {
+				if !slices.Contains(in.Fields, local) {
 					delete(row, local)
 				}
 			}

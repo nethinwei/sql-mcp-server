@@ -1,6 +1,7 @@
 # binaries
 /sql-mcp-server
 /sql-mcp-server.exe
+/fmtcheck
 /cmd/sql-mcp-server/sql-mcp-server
 /dist/
 

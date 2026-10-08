@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"slices"
@@ -22,7 +23,9 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/tool"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
+	"github.com/nethinwei/sql-mcp-server/x/providers/oceanbase"
 	"github.com/nethinwei/sql-mcp-server/x/providers/postgres"
+	"github.com/nethinwei/sql-mcp-server/x/providers/sqladapter"
 )
 
 func TestRecordProviderFailureClassification(t *testing.T) {
@@ -239,25 +242,25 @@ func TestResolveSecrets(t *testing.T) {
 	t.Parallel()
 	os.Setenv("TEST_DSN_VAR", "postgres://x")
 	defer os.Unsetenv("TEST_DSN_VAR")
-	got, err := resolveSecrets("host=${TEST_DSN_VAR}")
+	got, err := (EnvFileResolver{}).Resolve("host=${TEST_DSN_VAR}")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != "host=postgres://x" {
 		t.Fatalf("got %q", got)
 	}
-	if _, err := resolveSecrets("${MISSING_VAR_ZZZ}"); err == nil {
+	if _, err := (EnvFileResolver{}).Resolve("${MISSING_VAR_ZZZ}"); err == nil {
 		t.Fatal("expected error for missing env")
 	}
 }
 
 func TestNewProviderUnsupported(t *testing.T) {
 	t.Parallel()
-	if _, err := newProvider("oracle", "", time.Second); err == nil {
+	if _, err := providerregistry.New("oracle", "", time.Second); err == nil {
 		t.Fatal("expected error for unsupported driver")
 	}
 	// mysql with an invalid DSN fails fast at ping (still an error).
-	if _, err := newProvider("mysql", "", time.Second); err == nil {
+	if _, err := providerregistry.New("mysql", "", time.Second); err == nil {
 		t.Fatal("expected error for invalid mysql dsn")
 	}
 }
@@ -268,12 +271,12 @@ func TestNewProviderUsesRegistry(t *testing.T) {
 	providerregistry.Register(driver, func(string, time.Duration) (coreprovider.Provider, error) {
 		return want, nil
 	})
-	got, err := newProvider(driver, "ignored", time.Second)
+	got, err := providerregistry.New(driver, "ignored", time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != want {
-		t.Fatalf("newProvider() = %p, want %p", got, want)
+		t.Fatalf("providerregistry.New() = %p, want %p", got, want)
 	}
 }
 
@@ -419,7 +422,7 @@ func assertDatasourceRejectsFullScan(t *testing.T, gate cost.Gate, d dialect.Dia
 func TestAssembleKeepsMandatorySafetyWhenCostEstimateDisabled(t *testing.T) {
 	cfg := &config.Config{
 		Database: config.DatabaseConfig{Driver: "postgres", DSN: "x"},
-		Cost:     config.CostConfig{Enabled: config.Bool(false)},
+		Cost:     config.CostConfig{Enabled: new(false)},
 		Entities: []config.EntityConfig{{
 			Name: "users", PrimaryKey: []string{"id"},
 			Fields: []config.FieldConfig{{Name: "id"}, {Name: "status"}},
@@ -628,5 +631,61 @@ func TestAssembleResolvesUnqualifiedEntitiesInTheDefaultSchema(t *testing.T) {
 	crm, _ := app.Registry.Resolve("crm_customers")
 	if plain.Entity.Description != "公共客户" || crm.Entity.Description != "CRM 客户" {
 		t.Fatalf("descriptions = %q / %q", plain.Entity.Description, crm.Entity.Description)
+	}
+}
+
+// A failed assembly leaves the providers to the caller and opens no audit
+// sink: configuration errors are detected before any resource is acquired.
+func TestAssembleFailureAcquiresNoResources(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for name, mutate := range map[string]func(*config.Config){
+		"unknown mask rule": func(c *config.Config) { c.Entities[0].Fields[0].Mask = "nope" },
+		"unwritable audit":  func(c *config.Config) { c.Audit.Path = dir + "/missing/audit.log" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := &config.Config{
+				Database: config.DatabaseConfig{Driver: "postgres", DSN: "x"},
+				Audit:    config.AuditConfig{Enabled: true, Path: dir + "/" + strings.ReplaceAll(name, " ", "-")},
+				Entities: []config.EntityConfig{{Name: "users", Fields: []config.FieldConfig{{Name: "id"}}}},
+			}
+			mutate(cfg)
+			cfg.ApplyDefaults()
+			provider := &fakeProvider{dialect: postgres.Dialect{}}
+			if _, err := AssembleWithProviders(cfg, map[string]Provider{"default": provider}); err == nil {
+				t.Fatal("assembly succeeded")
+			}
+			if provider.closed != 0 {
+				t.Fatalf("provider closed %d times; the caller owns it on failure", provider.closed)
+			}
+			if _, err := os.Stat(cfg.Audit.Path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("audit sink opened despite failed assembly: %v", err)
+			}
+		})
+	}
+}
+
+// configurePool must reach the pool of every built-in provider; an embedded
+// field shadowing DB() once made it a silent no-op.
+func TestConfigurePoolReachesBuiltInProviders(t *testing.T) {
+	t.Parallel()
+	for driver, wrap := range map[string]func(*sqladapter.Pool) Provider{
+		"pgx":   func(p *sqladapter.Pool) Provider { return &postgres.Provider{Pool: p} },
+		"mysql": func(p *sqladapter.Pool) Provider { return &mysql.Provider{Pool: p} },
+		"ob":    func(p *sqladapter.Pool) Provider { return &oceanbase.Provider{Pool: p} },
+	} {
+		name := driver
+		if name == "ob" {
+			name = "mysql"
+		}
+		db, err := sql.Open(name, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		configurePool(wrap(sqladapter.New(db, nil)), 7, time.Minute, time.Hour)
+		if got := db.Stats().MaxOpenConnections; got != 7 {
+			t.Errorf("%s: MaxOpenConnections = %d, want 7", driver, got)
+		}
+		_ = db.Close()
 	}
 }

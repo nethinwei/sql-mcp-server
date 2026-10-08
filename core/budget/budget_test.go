@@ -169,8 +169,8 @@ func TestMemoryManagerConcurrentReservationsAreAtomic(t *testing.T) {
 	}
 }
 
-func TestMemoryManagerChecksEstimatedAndObservedScannedRowsSeparately(t *testing.T) {
-	m := New(map[string]Limits{"reader": {MaxScannedRows: 10}}, nil)
+func TestMemoryManagerChecksEstimatedScannedRows(t *testing.T) {
+	m := New(map[string]Limits{"reader": {MaxEstimatedScannedRows: 10}}, nil)
 	scope := Scope{Role: "reader"}
 	if _, err := m.AcquireWithReservation(
 		context.Background(),
@@ -188,11 +188,7 @@ func TestMemoryManagerChecksEstimatedAndObservedScannedRowsSeparately(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := lease.Complete(Usage{
-		EstimatedScannedRows: 5,
-		ScannedRows:          11,
-		ReturnedRows:         1,
-	}); !errors.Is(err, ErrExceeded) {
-		t.Fatalf("observed scan error = %v", err)
+	if err := lease.Complete(Usage{EstimatedScannedRows: 11, ReturnedRows: 1}); !errors.Is(err, ErrExceeded) {
+		t.Fatalf("completed estimate error = %v", err)
 	}
 }

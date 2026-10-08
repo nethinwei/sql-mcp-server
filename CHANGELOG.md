@@ -54,6 +54,17 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   校验错误的措辞随之改为 `config: <路径> ...` 形式。`config.Validate` 现在要求
   先调用 `ApplyDefaults`（所有加载器都会这样做），未物化默认值的程序化配置会因
   上限为 0 被拒绝。
+- 删除从未生效的配置项 `rateLimit.cpuPool`（engine 没有 CPU 任务）与已弃用别名
+  `budget.*.maxScannedRows`；由于未知字段直接拒绝，旧配置需删除前者、把后者改名为
+  `maxEstimatedScannedRows`。
+- `read_records` 的 `offset` 必须与 `limit` 同时给出（此前 `offset` 被静默忽略），
+  输入 schema 增加 `dependentRequired`；`describe_entities` 拒绝非法输入（此前忽略
+  后列出全部实体）。删除永不产生的拒绝码 `NOT_IMPLEMENTED`。
+- Go API：删除仅测试使用的 `bootstrap.NewRuntime`、`mysql.New`、`mysql.NewAdapter`、
+  `oceanbase.New`、`providerregistry.KnownDrivers`、`config.Bool`（用 `new(v)`）等；
+  `store.Tx` 去掉无调用方的 `Savepoint`/`RollbackTo`，`dialect.Dialect` 去掉
+  `ExplainSQL`，`dialect.Capabilities` 只保留被读取的字段；`hook.Hooks.AfterTool`
+  去掉恒为 nil 的 result 参数；`budget.Manager` 收敛为单一的预留接口。
 
 ### Changed
 
@@ -121,6 +132,17 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   所基于的版本在服务端已变化时自动重新载入并保留未保存修改。
 - 修复多数据源配置下 `create_record` 空指针 panic（插入时读取了未路由上下文的
   方言）。
+- 修复单库且数据源名不是 `default` 时，省略 `datasource` 的 `begin_transaction`
+  把事务绑定到 `default`，导致事务内所有读写报 `TRANSACTION_SCOPE`。
+- 修复 MySQL/OceanBase 文本列（及 DECIMAL）以字节串返回、经 JSON 序列化成 base64
+  的问题：非二进制列按字符串返回。
+- 脱敏改为 fail-closed：无法按格式脱敏的值（无 `@` 的 email、不足 8 位或非标量的
+  phone/idcard）整体替换为 `***`，不再原样返回明文。
+- 写操作（create/update/delete/存储过程）执行后再超出返回字节或会话预算时只计账，
+  不再把已生效的写报告为失败（避免 agent 重试造成重复写）；存储过程即使结果超限也会
+  失效相关缓存。
+- 装配失败时不再泄漏审计 sink 与 engine，也不再替调用方关闭 provider：所有配置
+  校验先于资源获取。
 
 ## 0.1.10 - 2026-07-12
 

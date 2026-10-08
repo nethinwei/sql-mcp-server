@@ -53,32 +53,11 @@ func (a Action) String() string {
 	return "unknown"
 }
 
-// ConstraintKind names a domain constraint.
-type ConstraintKind uint8
-
-const (
-	// ConstraintNotNull forbids nulls.
-	ConstraintNotNull ConstraintKind = iota
-	// ConstraintUnique requires uniqueness.
-	ConstraintUnique
-	// ConstraintCheck is an arbitrary check (Expr is informational only).
-	ConstraintCheck
-	// ConstraintRange bounds a numeric value (Expr is informational only).
-	ConstraintRange
-)
-
-// Constraint is a domain constraint.
-type Constraint struct {
-	Kind ConstraintKind
-	Expr string
-}
-
-// Domain is a value domain: a SQL type plus constraints. The type is
-// informational; IR construction validates value kinds against it where it can.
+// Domain is a column's value domain as introspected from the database. It is
+// informational: shown to agents and the console, not enforced.
 type Domain struct {
-	Type        string
-	Nullable    bool
-	Constraints []Constraint
+	Type     string
+	Nullable bool
 }
 
 // Attribute is one column of a relation, with projection and masking controls.
@@ -168,6 +147,23 @@ type Entity struct {
 	// declared cannot be executed (fail-closed) since positional binding would
 	// otherwise be guesswork.
 	Params []string
+}
+
+// ActionsFor lists the actions applicable to an entity kind: execute for a
+// procedure, otherwise the record actions.
+func ActionsFor(kind Kind) []Action {
+	if kind == KindProcedure {
+		return []Action{ActionExecute}
+	}
+	return []Action{ActionRead, ActionAggregate, ActionCreate, ActionUpdate, ActionDelete}
+}
+
+// DatasourceName is the entity's datasource, "default" when unset.
+func (e Entity) DatasourceName() string {
+	if e.DataSource == "" {
+		return "default"
+	}
+	return e.DataSource
 }
 
 // PrimaryKey returns the columns of the primary key, or nil if none is declared.

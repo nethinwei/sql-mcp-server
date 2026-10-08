@@ -73,5 +73,10 @@
     },
     "required": [
         "entity"
-    ]
+    ],
+    "dependentRequired": {
+        "offset": [
+            "limit"
+        ]
+    }
 }

@@ -124,24 +124,12 @@ func (d *FakeDB) BeginTx(ctx context.Context, opts *TxOptions) (Tx, error) {
 
 // FakeTx is a hand-written Tx for tests.
 type FakeTx struct {
-	Committed   bool
-	RolledBack  bool
-	Savepoints  []string
-	RollbacksTo []string
+	Committed  bool
+	RolledBack bool
 }
 
 func (t *FakeTx) Commit() error   { t.Committed = true; return nil }
 func (t *FakeTx) Rollback() error { t.RolledBack = true; return nil }
-
-func (t *FakeTx) Savepoint(_ context.Context, name string) (Savepoint, error) {
-	t.Savepoints = append(t.Savepoints, name)
-	return Savepoint{Name: name}, nil
-}
-
-func (t *FakeTx) RollbackTo(_ context.Context, sp Savepoint) error {
-	t.RollbacksTo = append(t.RollbacksTo, sp.Name)
-	return nil
-}
 
 // QueryContext and ExecContext on FakeTx defer to package-level helpers; tests
 // usually configure a shared FakeDB for tx behavior. For simplicity they return

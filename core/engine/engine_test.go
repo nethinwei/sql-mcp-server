@@ -311,7 +311,7 @@ func TestSingleflightLeaderCancellationDoesNotCancelRemainingWaiter(t *testing.T
 			err   error
 		}{value, err}
 	}()
-	waitForSingleflightWaiters(t, e, "0\x00shared-cancel", 2)
+	waitForSingleflightWaiters(t, e, "shared-cancel", 2)
 	cancelLeader()
 	if err := <-leaderDone; !errors.Is(err, context.Canceled) {
 		t.Fatalf("leader error = %v", err)
@@ -374,7 +374,7 @@ func TestSingleflightCancelsExecutionAfterAllWaitersCancel(t *testing.T) {
 		})
 		results <- err
 	}()
-	waitForSingleflightWaiters(t, e, "0\x00all-cancel", 2)
+	waitForSingleflightWaiters(t, e, "all-cancel", 2)
 	cancel1()
 	select {
 	case err := <-executionCanceled:
@@ -454,7 +454,7 @@ func TestDrainWaitsForSingleflightExecutionAfterAllWaitersCancel(t *testing.T) {
 	go run(ctx1)
 	<-started
 	go run(ctx2)
-	waitForSingleflightWaiters(t, e, "0\x00detached", 2)
+	waitForSingleflightWaiters(t, e, "detached", 2)
 	cancel1()
 	cancel2()
 	for i := 0; i < 2; i++ {
@@ -473,36 +473,6 @@ func TestDrainWaitsForSingleflightExecutionAfterAllWaitersCancel(t *testing.T) {
 	if err := <-drained; err != nil {
 		t.Fatal(err)
 	}
-}
-
-func TestSubmitCPUBoundsConcurrency(t *testing.T) {
-	t.Parallel()
-	e, _ := New(WithIOPool(1), WithCPUPool(1), WithMaxInflight(4))
-	started := make(chan struct{})
-	release := make(chan struct{})
-	go func() {
-		_, _ = e.SubmitCPU(context.Background(), "", func(context.Context) (any, error) {
-			close(started)
-			<-release
-			return nil, nil
-		})
-	}()
-	<-started
-	ioCtx, ioCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer ioCancel()
-	if _, err := e.Submit(ioCtx, "", func(context.Context) (any, error) { return nil, nil }); err != nil {
-		t.Fatalf("IO work should use a pool independent from CPU: %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	_, err := e.SubmitCPU(ctx, "", func(context.Context) (any, error) {
-		t.Fatal("second CPU task must not pass a full CPU pool")
-		return nil, nil
-	})
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("got %v, want context deadline", err)
-	}
-	close(release)
 }
 
 func contains(s, sub string) bool {

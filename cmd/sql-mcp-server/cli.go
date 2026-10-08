@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -411,12 +409,11 @@ func runUserToken(args []string, stdout io.Writer) error {
 	if len(args) != 0 {
 		return errors.New("user token accepts no arguments")
 	}
-	var raw [32]byte
-	if _, err := rand.Read(raw[:]); err != nil {
+	token, err := config.NewUserToken()
+	if err != nil {
 		return err
 	}
-	token := "smcp_" + base64.RawURLEncoding.EncodeToString(raw[:])
-	_, err := fmt.Fprintf(stdout, "token: %s\ntokenHash: %s\n", token, config.TokenHash(token))
+	_, err = fmt.Fprintf(stdout, "token: %s\ntokenHash: %s\n", token, config.TokenHash(token))
 	return err
 }
 

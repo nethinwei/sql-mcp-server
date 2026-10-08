@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nethinwei/sql-mcp-server/core/budget"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
@@ -82,11 +81,7 @@ func TestAssembleCompilesUsersRolesAndTenantPolicy(t *testing.T) {
 	if dec.Allowed {
 		t.Fatal("disabled user must not keep its grants")
 	}
-	manager, ok := app.Budget.(*budget.MemoryManager)
-	if !ok {
-		t.Fatalf("budget manager = %T", app.Budget)
-	}
-	roles, _ := manager.ConfiguredLimits()
+	roles, _ := app.Budget.ConfiguredLimits()
 	if roles[UserPrincipal("alice")].MaxReturnedRows != 5 {
 		t.Fatalf("alice budget must inherit the analyst budget: %+v", roles)
 	}
@@ -103,7 +98,7 @@ func TestUserBudgetsMergeMostPermissive(t *testing.T) {
 		},
 		Budget: config.BudgetConfig{
 			Roles: map[string]config.BudgetLimits{
-				"small": {MaxReturnedRows: 10, MaxExecution: time.Second, MaxScannedRows: 100, MaxConcurrent: 1},
+				"small": {MaxReturnedRows: 10, MaxExecution: time.Second, MaxEstimatedScannedRows: 100, MaxConcurrent: 1},
 				"large": {MaxReturnedRows: 1000, MaxExecution: time.Minute, MaxEstimatedScannedRows: 50},
 			},
 			Users: map[string]config.BudgetLimits{"explicit": {MaxReturnedRows: 3}},

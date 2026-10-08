@@ -1,7 +1,9 @@
 package config
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -23,6 +25,19 @@ func IsStoreTable(name string) bool {
 
 // TokenHashPrefix is the only supported tokenHash algorithm.
 const TokenHashPrefix = "sha256:"
+
+// NewUserToken returns a 256-bit random bearer token ("smcp_" + base64url).
+func NewUserToken() (string, error) {
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return "smcp_" + base64.RawURLEncoding.EncodeToString(raw[:]), nil
+}
+
+// DefaultSecretRoots are the directories ${file:...} secrets may be read from
+// when server.secrets.allowedRoots is unset.
+func DefaultSecretRoots() []string { return []string{"/run/secrets", "/var/run/secrets"} }
 
 // TokenHash returns the tokenHash form ("sha256:<hex>") of a bearer token.
 func TokenHash(token string) string {

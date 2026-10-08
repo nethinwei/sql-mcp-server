@@ -124,7 +124,7 @@ func TestOptionalBlocksLoadWithDefaults(t *testing.T) {
 		"rate limit rps":    func(c *Config) { c.RateLimit.RPS = 10 },
 		"aqe sampling":      func(c *Config) { c.Cost.AQE.SampleRate = 0.5 },
 		"http transport":    func(c *Config) { c.Server.Transport = "http" },
-		"explicit tools":    func(c *Config) { c.Tools = ExplicitToolFlags(ToolFlags{ReadRecords: true}) },
+		"explicit tools":    func(c *Config) { c.Tools = ToolFlags{ReadRecords: true, present: true} },
 		"cost switched on":  func(c *Config) { c.Cost.Enabled = &on },
 		"budget role entry": func(c *Config) { c.Budget.Roles = map[string]BudgetLimits{"reader": {}} },
 		"entity":            func(c *Config) { c.Entities = []EntityConfig{{Name: "orders", DataSource: "main"}} },

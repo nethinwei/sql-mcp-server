@@ -113,7 +113,6 @@ rateLimit:
   rps: 100
   maxInflight: 256
   ioPool: 16 # also bounds DB MaxOpenConns
-  cpuPool: 8
   minConcurrency: 1
   rttThreshold: 0s
   breakerThreshold: 5

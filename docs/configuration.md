@@ -98,9 +98,7 @@ PostgreSQL sampler 始终使用独立 read-only transaction 并 rollback，调�
 ## Budget 与执行控制
 
 预算在 session 关闭时清理；行数与 cost 限制的执行时点见
-[security.md](security.md)。`rateLimit` 中普通 `Submit` 使用 IO pool，只有调用
-方显式使用 `SubmitCPU`/`SubmitClass` 才使用 CPU pool，engine 不会自动拆分 SQL
-执行阶段。
+[security.md](security.md)。`rateLimit.ioPool` 限制并发执行的工具调用数。
 
 ## 事务
 
@@ -269,7 +267,6 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `rps` | 数字 |  | ≥ 0 | 每秒请求数上限（令牌桶）；0 表示只做并发限制。 |
 | `maxInflight` | 整数 | `256` | ≥ 0 | 同时进行的请求上限。 |
 | `ioPool` | 整数 | `16` | ≥ 0 | IO 工作池大小；普通执行使用它。 |
-| `cpuPool` | 整数 |  | ≥ 0 | CPU 工作池大小；默认为逻辑 CPU 数。只有显式提交 CPU 任务时使用。 |
 | `minConcurrency` | 整数 | `1` | ≥ 0 | 自适应并发的下限。 |
 | `rttThreshold` | 时长 |  | ≥ 0 | 延迟超过该值时降低并发；0s 不触发。 |
 | `breakerThreshold` | 整数 | `5` | ≥ 0 | 连续失败多少次后熔断。 |
@@ -404,7 +401,6 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `maxConcurrent` | 整数 |  | ≥ 0 | 同时执行的请求数上限。 |
 | `maxExecution` | 时长 |  | ≥ 0 | 单次执行时长上限。 |
 | `maxEstimatedScannedRows` | 整数 |  | ≥ 0 | 单次调用的估算（及实际）扫描行数上限。 |
-| `maxScannedRows` | 整数 |  | ≥ 0 | 已弃用，等同 maxEstimatedScannedRows。 |
 | `maxReturnedRows` | 整数 |  | ≥ 0 | 单次调用返回行数上限。 |
 | `maxReturnedBytes` | 整数 |  | ≥ 0 | 单次调用返回字节上限。 |
 | `maxSessionCost` | 整数 |  | ≥ 0 | 会话累计成本上限。 |

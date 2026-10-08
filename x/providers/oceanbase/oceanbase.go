@@ -1,6 +1,7 @@
 package oceanbase
 
 import (
+	"database/sql"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/cost"
@@ -9,6 +10,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/provider"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
+	"github.com/nethinwei/sql-mcp-server/x/providers/sqladapter"
 )
 
 func init() {
@@ -19,30 +21,30 @@ func init() {
 
 // Provider adapts an OceanBase database to the core interfaces.
 type Provider struct {
-	*mysql.Adapter
+	*sqladapter.Pool
 	dialect      dialect.Dialect
 	explainer    cost.Explainer
 	introspector introspect.Introspector
 }
 
-// New opens an OceanBase database (MySQL-protocol DSN) and assembles adapters.
-func New(dsn string) (*Provider, error) {
-	return NewWithTimeout(dsn, 30*time.Second)
-}
-
-// NewWithTimeout opens OceanBase with a DB-native query timeout.
+// NewWithTimeout opens an OceanBase database (MySQL-protocol DSN) with a
+// DB-native query timeout and assembles the core adapters.
 func NewWithTimeout(dsn string, timeout time.Duration) (*Provider, error) {
 	ad, err := mysql.NewAdapterWithTimeout(dsn, timeout, "ob_query_timeout")
 	if err != nil {
 		return nil, err
 	}
 	return &Provider{
-		Adapter:      ad,
+		Pool:         ad,
 		dialect:      Dialect{},
 		explainer:    obExplainer{db: ad.DB()},
 		introspector: mysql.NewIntrospector(ad.DB()),
 	}, nil
 }
+
+// bootstrap sizes and pings the pool through DB(); keep it reachable (an
+// embedded field named DB would shadow it).
+var _ interface{ DB() *sql.DB } = (*Provider)(nil)
 
 // Dialect returns the OceanBase dialect.
 func (p *Provider) Dialect() dialect.Dialect { return p.dialect }

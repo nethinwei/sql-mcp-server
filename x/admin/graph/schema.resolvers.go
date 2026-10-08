@@ -89,7 +89,7 @@ func (r *mutationResolver) GenerateUserToken(ctx context.Context) (*UserToken, e
 	if _, err := auth.Require(ctx, auth.PermWrite); err != nil {
 		return nil, err
 	}
-	token, err := newUserToken()
+	token, err := config.NewUserToken()
 	if err != nil {
 		return nil, err
 	}

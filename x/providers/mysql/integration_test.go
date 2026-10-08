@@ -50,7 +50,7 @@ func connectMySQLWithRetry(t *testing.T, dsn string) *mysql.Provider {
 	t.Helper()
 	var lastErr error
 	for range 20 {
-		provider, err := mysql.New(dsn)
+		provider, err := mysql.NewWithTimeout(dsn, 30*time.Second)
 		if err == nil {
 			return provider
 		}
@@ -107,7 +107,7 @@ func TestMySQLReadEnforceCap(t *testing.T) {
 		}},
 		Tools: config.DefaultToolFlags(),
 		// MySQL uses conservative EXPLAIN: unfiltered full scans are rejected.
-		Cost: config.CostConfig{Enabled: config.Bool(true), SoftScore: 90, HardScore: 95, MaxRows: 1},
+		Cost: config.CostConfig{Enabled: new(true), SoftScore: 90, HardScore: 95, MaxRows: 1},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -130,6 +130,9 @@ func TestMySQLReadEnforceCap(t *testing.T) {
 	}
 	if len(res.Content) > 1 {
 		t.Fatalf("EnforceCap should limit to 1 row, got %d", len(res.Content))
+	}
+	if email, ok := res.Content[0]["email"].(string); !ok || email != "alice@x.com" {
+		t.Fatalf("text column = %#v (%T), want string", res.Content[0]["email"], res.Content[0]["email"])
 	}
 }
 
@@ -160,7 +163,7 @@ func newMySQLRLSApp(t *testing.T, prov *mysql.Provider) *bootstrap.App {
 			},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(false), MaxRows: 10000},
+		Cost:  config.CostConfig{Enabled: new(false), MaxRows: 10000},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -234,7 +237,7 @@ func assertMySQLQuotedIdentifierRLS(t *testing.T, ctx context.Context, prov *mys
 			},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(false), MaxRows: 10000},
+		Cost:  config.CostConfig{Enabled: new(false), MaxRows: 10000},
 	}
 	quotedCfg.ApplyDefaults()
 	quotedApp, err := bootstrap.AssembleWithProvider(quotedCfg, prov)
@@ -267,7 +270,7 @@ func TestMySQLUpdateUnsafeWriteAndPK(t *testing.T) {
 			Roles:  config.RoleConfig{Update: []string{"writer"}},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(false)},
+		Cost:  config.CostConfig{Enabled: new(false)},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -311,7 +314,7 @@ func TestMySQLExecuteProcedure(t *testing.T) {
 		}},
 		Tools: config.DefaultToolFlags(),
 		Cost: config.CostConfig{
-			Enabled:        config.Bool(false),
+			Enabled:        new(false),
 			AllowTemplates: []string{"CALL `count_users`()"},
 		},
 	}
@@ -345,7 +348,7 @@ func TestMySQLReadPKWhitelist(t *testing.T) {
 		}},
 		Tools: config.DefaultToolFlags(),
 		Cost: config.CostConfig{
-			Enabled:          config.Bool(true),
+			Enabled:          new(true),
 			SoftScore:        40,
 			HardScore:        70,
 			MaxRows:          10000,

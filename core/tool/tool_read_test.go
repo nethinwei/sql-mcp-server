@@ -29,7 +29,7 @@ func TestReadToolEndToEnd(t *testing.T) {
 	}}
 	tc := Context{
 		Role: "reader", DB: db, Dialect: testdialect.Postgres{},
-		Registry: reg, Authorizer: auth, Masker: mask.NewRuleMasker(nil),
+		Registry: reg, Authorizer: auth, Masker: mask.NewRuleMasker(),
 	}
 	in, _ := json.Marshal(readInput{Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: int64(1)}}})
 	res, err := ReadTool{}.Run(context.Background(), in, tc)
@@ -367,8 +367,7 @@ func TestBuildReadExpressionKeysetSort(t *testing.T) {
 	plan := readPlan{
 		dec: rbac.Decision{Allowed: true, Fields: []string{"a", "b"}},
 	}
-	ks, _ := keysetAfter(e.PrimaryKey(), in.Cursor)
-	plan.full = ks
+	plan.full, plan.keysetCols = keysetAfter(e.PrimaryKey(), in.Cursor)
 	expr := buildReadExpression(res, in, plan)
 	compiled, err := codegen.Renderer{Dialect: testdialect.Postgres{}}.Compile(expr)
 	if err != nil {
@@ -436,7 +435,7 @@ func TestExpandUsesMaskedJoinFieldsInternally(t *testing.T) {
 	}}
 	tc := Context{
 		Role: "reader", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
-		Masker: mask.NewRuleMasker(nil),
+		Masker: mask.NewRuleMasker(),
 		Sources: map[string]DataSource{
 			"default": {DB: db, Dialect: testdialect.Postgres{}},
 		},
@@ -518,5 +517,15 @@ func TestAuthorizePrecedesGateAndHooksFire(t *testing.T) {
 	}
 	if got := strings.Join(events, ","); got != "authorize,authorize-hook,gate,gate-hook" {
 		t.Fatalf("event order = %s", got)
+	}
+}
+
+func TestReadRejectsOffsetWithoutLimit(t *testing.T) {
+	t.Parallel()
+	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	tc := Context{Role: "reader", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}
+	_, err := (ReadTool{}).Run(context.Background(), json.RawMessage(`{"entity":"users","offset":10}`), tc)
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("error = %v, want invalid input", err)
 	}
 }

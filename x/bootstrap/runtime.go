@@ -9,8 +9,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/nethinwei/sql-mcp-server/core/budget"
 )
 
 // ErrRuntimeClosed is returned when a closed runtime is used.
@@ -66,17 +64,6 @@ func (r *Runtime) UserByName(name string) (UserIdentity, bool) {
 		return UserIdentity{}, false
 	}
 	return app.UserByName(name)
-}
-
-// NewRuntime creates a runtime using Load followed by Assemble for reloads.
-func NewRuntime(app *App) *Runtime {
-	return NewRuntimeWithBuilder(app, func(path string) (*App, error) {
-		cfg, err := Load(path)
-		if err != nil {
-			return nil, err
-		}
-		return Assemble(cfg)
-	})
 }
 
 // NewRuntimeWithBuilder creates a runtime with an injected reload builder.
@@ -142,9 +129,6 @@ func (r *Runtime) reloadWith(build func() (*App, error)) error {
 		return err
 	}
 	old := r.current.Load()
-	if err := validateReloadBudget(old.app, next); err != nil {
-		return err
-	}
 	if err := preserveReloadTransactions(old.app, next); err != nil {
 		return err
 	}
@@ -166,16 +150,6 @@ func revokedPrincipals(old, next *App) []string {
 		}
 	}
 	return out
-}
-
-func validateReloadBudget(old, next *App) error {
-	_, oldBudgetOK := old.Budget.(*budget.MemoryManager)
-	_, nextBudgetOK := next.Budget.(*budget.MemoryManager)
-	if old.Budget != nil && (!oldBudgetOK || !nextBudgetOK) && next.Budget != old.Budget {
-		_ = next.Close()
-		return errors.New("bootstrap: budget manager does not support state-preserving reload")
-	}
-	return nil
 }
 
 func preserveReloadTransactions(old, next *App) error {
@@ -205,18 +179,14 @@ func preserveReloadTransactions(old, next *App) error {
 	return nil
 }
 
+// preserveReloadBudget keeps the accumulated session state across a reload,
+// adopting the new configured limits.
 func preserveReloadBudget(old, next *App) {
-	if old.Budget == nil {
+	if old.Budget == nil || next.Budget == nil {
 		return
 	}
-	oldBudget, oldBudgetOK := old.Budget.(*budget.MemoryManager)
-	nextBudget, nextBudgetOK := next.Budget.(*budget.MemoryManager)
-	if !oldBudgetOK || !nextBudgetOK {
-		return
-	}
-	roles, tenants := nextBudget.ConfiguredLimits()
-	oldBudget.UpdateLimits(roles, tenants)
-	next.Budget = oldBudget
+	old.Budget.UpdateLimits(next.Budget.ConfiguredLimits())
+	next.Budget = old.Budget
 }
 
 func publishReload(r *Runtime, old *appSnapshot, next *App) error {
@@ -305,8 +275,8 @@ func (r *Runtime) RollbackSession(session string) {
 	if app.Transactions != nil {
 		app.Transactions.RollbackSession(session)
 	}
-	if manager, ok := app.Budget.(budget.SessionManager); ok {
-		manager.CloseSession(session)
+	if app.Budget != nil {
+		app.Budget.CloseSession(session)
 	}
 }
 

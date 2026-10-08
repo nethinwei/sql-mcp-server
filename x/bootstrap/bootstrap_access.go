@@ -25,7 +25,7 @@ func OfflineAuthorizer(cfg *config.Config) (rbac.Authorizer, error) {
 	if err != nil {
 		return nil, err
 	}
-	reg, err := entityRegistryFromConfig(entities)
+	reg, err := entity.NewRegistry(entities)
 	if err != nil {
 		return nil, err
 	}
@@ -115,17 +115,14 @@ func mostPermissiveBudget(roles map[string]config.BudgetLimits, names []string) 
 	if !ok {
 		return config.BudgetLimits{}
 	}
-	merged.MaxEstimatedScannedRows = toBudgetLimits(merged).MaxEstimatedScannedRows
-	merged.MaxScannedRows = 0
 	for _, name := range names[1:] {
 		limits, ok := roles[name]
 		if !ok {
 			return config.BudgetLimits{}
 		}
-		normalized := toBudgetLimits(limits)
 		merged.MaxConcurrent = looser(merged.MaxConcurrent, limits.MaxConcurrent)
 		merged.MaxExecution = looser(merged.MaxExecution, limits.MaxExecution)
-		merged.MaxEstimatedScannedRows = looser(merged.MaxEstimatedScannedRows, normalized.MaxEstimatedScannedRows)
+		merged.MaxEstimatedScannedRows = looser(merged.MaxEstimatedScannedRows, limits.MaxEstimatedScannedRows)
 		merged.MaxReturnedRows = looser(merged.MaxReturnedRows, limits.MaxReturnedRows)
 		merged.MaxReturnedBytes = looser(merged.MaxReturnedBytes, limits.MaxReturnedBytes)
 		merged.MaxSessionCost = looser(merged.MaxSessionCost, limits.MaxSessionCost)

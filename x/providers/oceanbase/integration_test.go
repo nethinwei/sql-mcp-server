@@ -48,7 +48,7 @@ func connectOBWithRetry(t *testing.T, dsn string) *oceanbase.Provider {
 	var prov *oceanbase.Provider
 	var err error
 	for i := 0; i < 40; i++ {
-		prov, err = oceanbase.New(dsn)
+		prov, err = oceanbase.NewWithTimeout(dsn, 30*time.Second)
 		if err == nil {
 			return prov
 		}
@@ -135,7 +135,7 @@ func TestOBReadEnforceCap(t *testing.T) {
 			Roles:  config.RoleConfig{Read: []string{"reader"}},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(true), SoftScore: 90, HardScore: 95, MaxRows: 1},
+		Cost:  config.CostConfig{Enabled: new(true), SoftScore: 90, HardScore: 95, MaxRows: 1},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -188,7 +188,7 @@ func newOBRLSApp(t *testing.T, prov *oceanbase.Provider) *bootstrap.App {
 			},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(false), MaxRows: 10000},
+		Cost:  config.CostConfig{Enabled: new(false), MaxRows: 10000},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -260,7 +260,7 @@ func assertOBQuotedIdentifierRLS(t *testing.T, ctx context.Context, prov *oceanb
 			},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(false), MaxRows: 10000},
+		Cost:  config.CostConfig{Enabled: new(false), MaxRows: 10000},
 	}
 	quotedCfg.ApplyDefaults()
 	quotedApp, err := bootstrap.AssembleWithProvider(quotedCfg, prov)
@@ -301,7 +301,7 @@ func TestOBExecuteProcedure(t *testing.T) {
 		}},
 		Tools: config.DefaultToolFlags(),
 		Cost: config.CostConfig{
-			Enabled:        config.Bool(false),
+			Enabled:        new(false),
 			AllowTemplates: []string{"CALL `test`.`count_users`()"},
 		},
 	}
@@ -334,7 +334,7 @@ func TestOBUpdateUnsafeWriteAndPK(t *testing.T) {
 			Roles:  config.RoleConfig{Update: []string{"writer"}},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(false)},
+		Cost:  config.CostConfig{Enabled: new(false)},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)

@@ -278,13 +278,6 @@ type ToolFlags struct {
 	present             bool
 }
 
-// ExplicitToolFlags marks a programmatically constructed tools block present,
-// including the meaningful all-false configuration.
-func ExplicitToolFlags(flags ToolFlags) ToolFlags {
-	flags.present = true
-	return flags
-}
-
 // UnmarshalJSON records that the tools object was present.
 func (f *ToolFlags) UnmarshalJSON(data []byte) error {
 	type plain ToolFlags
@@ -396,11 +389,9 @@ type BudgetLimits struct {
 	MaxConcurrent           int           `yaml:"maxConcurrent"            json:"maxConcurrent" schema:"min=0"`
 	MaxExecution            time.Duration `yaml:"maxExecution"             json:"maxExecution" schema:"min=0"`
 	MaxEstimatedScannedRows int64         `yaml:"maxEstimatedScannedRows"  json:"maxEstimatedScannedRows" schema:"min=0"`
-	// MaxScannedRows is a deprecated alias of MaxEstimatedScannedRows.
-	MaxScannedRows   int64 `yaml:"maxScannedRows,omitempty" json:"maxScannedRows,omitempty" schema:"min=0"`
-	MaxReturnedRows  int64 `yaml:"maxReturnedRows"          json:"maxReturnedRows" schema:"min=0"`
-	MaxReturnedBytes int64 `yaml:"maxReturnedBytes"         json:"maxReturnedBytes" schema:"min=0"`
-	MaxSessionCost   int64 `yaml:"maxSessionCost"           json:"maxSessionCost" schema:"min=0"`
+	MaxReturnedRows         int64         `yaml:"maxReturnedRows"          json:"maxReturnedRows" schema:"min=0"`
+	MaxReturnedBytes        int64         `yaml:"maxReturnedBytes"         json:"maxReturnedBytes" schema:"min=0"`
+	MaxSessionCost          int64         `yaml:"maxSessionCost"           json:"maxSessionCost" schema:"min=0"`
 }
 
 // EnabledOrDefault reports whether cost protection is on; nil means default
@@ -410,12 +401,6 @@ func (c CostConfig) EnabledOrDefault() bool {
 		return *c.Enabled
 	}
 	return true
-}
-
-// Bool returns a pointer to v for programmatically constructed tri-state
-// configuration fields.
-func Bool(v bool) *bool {
-	return &v
 }
 
 // RequirePKForWriteOrDefault reports whether writes must be primary-key scoped.
@@ -444,7 +429,6 @@ type RateLimitConfig struct {
 	RPS              float64       `yaml:"rps"               json:"rps" schema:"min=0"`
 	MaxInflight      int           `yaml:"maxInflight"       json:"maxInflight" schema:"min=0"`
 	IOPool           int           `yaml:"ioPool"            json:"ioPool" schema:"min=0"`
-	CPUPool          int           `yaml:"cpuPool"           json:"cpuPool" schema:"min=0,nodefault"`
 	MinConcurrency   int           `yaml:"minConcurrency"    json:"minConcurrency" schema:"min=0"`
 	RTTThreshold     time.Duration `yaml:"rttThreshold"      json:"rttThreshold" schema:"min=0"`
 	BreakerThreshold int           `yaml:"breakerThreshold"  json:"breakerThreshold" schema:"min=0"`

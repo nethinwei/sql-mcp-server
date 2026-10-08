@@ -13,7 +13,7 @@ import (
 )
 
 func runExecute(ctx context.Context, tc Context, in executeInput, requireDMLTools bool) (Result, error) {
-	ctx, cancel := withTimeout(ctx, tc)
+	ctx, cancel := withTimeout(ctx, tc, 0)
 	defer cancel()
 	tc.Transaction = in.Transaction
 	res, tc, dec, err := prepareExecute(ctx, tc, in, requireDMLTools)
@@ -25,10 +25,12 @@ func runExecute(ctx context.Context, tc Context, in executeInput, requireDMLTool
 		return Result{}, err
 	}
 	out, err := collectProcedureRows(ctx, tc, res, dec, compiled)
-	if err != nil {
-		return Result{}, err
+	// The procedure may have written even when its result is unusable, so the
+	// cache is invalidated either way (after the rows are closed).
+	if writeErr := afterWrite(tc, res.Entity, in.Transaction); err == nil {
+		err = writeErr
 	}
-	if err := afterWrite(tc, res.Entity, in.Transaction); err != nil {
+	if err != nil {
 		return Result{}, err
 	}
 	return Result{Content: out, ReturnedRows: int64(len(out))}, nil

@@ -115,7 +115,7 @@ function typeMatches(want: string, got: string) {
  * Whether v is unset in the server's terms: empty string, zero, false, null,
  * an empty list, or an object whose values are all unset.
  */
-export function isUnset(v: unknown): boolean {
+function isUnset(v: unknown): boolean {
   if (v === undefined || v === null || v === '' || v === 0 || v === false) return true
   if (Array.isArray(v)) return v.length === 0
   if (typeof v === 'object') return Object.values(v as object).every(isUnset)
@@ -125,7 +125,7 @@ export function isUnset(v: unknown): boolean {
 const durationUnits: Record<string, number> = { ns: 1, us: 1e3, 'µs': 1e3, ms: 1e6, s: 1e9, m: 6e10, h: 3.6e12 }
 
 /** Parses a Go duration ("1h30m", "500ms", "0") into nanoseconds; NaN if invalid. */
-export function parseDuration(s: string): number {
+function parseDuration(s: string): number {
   if (s === '0') return 0
   const re = /(-?\d+(?:\.\d*)?)(ns|us|µs|ms|s|m|h)/gy
   let total = 0

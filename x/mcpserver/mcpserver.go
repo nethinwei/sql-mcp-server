@@ -57,10 +57,8 @@ func newServer(acquire appAcquire) *mcp.Server {
 	for _, t := range app.Tools.Enabled(app.ToolFlags) {
 		registerTool(s, t, acquire)
 	}
-	for _, e := range app.Registry.Entities() {
-		if e.Kind == entity.KindProcedure && e.MCP.CustomTool && e.MCP.TrustedProcedure {
-			registerTool(s, tool.ProcedureTool{Entity: e}, acquire)
-		}
+	for _, t := range tool.ProcedureTools(app.Registry) {
+		registerTool(s, t, acquire)
 	}
 	release()
 	registerSchemaResource(s, acquire)
@@ -117,11 +115,8 @@ func currentTool(app *bootstrap.App, name string) (tool.Tool, bool) {
 		}
 		return nil, false
 	}
-	for _, e := range app.Registry.Entities() {
-		if e.Kind == entity.KindProcedure && e.MCP.CustomTool && e.MCP.TrustedProcedure &&
-			tool.ProcedureToolName(e.Name) == name {
-			return tool.ProcedureTool{Entity: e}, true
-		}
+	if t, ok := tool.FindProcedureTool(app.Registry, name); ok {
+		return t, true
 	}
 	return nil, false
 }
@@ -313,13 +308,8 @@ func rawArgs(req *mcp.CallToolRequest) json.RawMessage {
 }
 
 func toMCPResult(r tool.Result) *mcp.CallToolResult {
-	out := &mcp.CallToolResult{IsError: r.IsError}
 	b, _ := json.Marshal(r.Content)
-	out.Content = []mcp.Content{&mcp.TextContent{Text: string(b)}}
-	if r.StructuredResult != nil {
-		out.StructuredContent = r.StructuredResult
-	}
-	return out
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(b)}}}
 }
 
 // toResult maps a core error to an MCP outcome. Business errors become

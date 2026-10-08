@@ -75,7 +75,7 @@ func TestTransactionCommitAndTTL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Commit(token, "", "writer", nil); err != nil {
+	if _, err := manager.Commit(context.Background(), token, "", "writer", nil); err != nil {
 		t.Fatal(err)
 	}
 	if !committed.Committed {
@@ -133,7 +133,7 @@ func TestTransactionCommitFailureRollsBackAndWrapsError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = manager.Commit(token, "", "writer", nil)
+	_, err = manager.Commit(context.Background(), token, "", "writer", nil)
 	if !errors.Is(err, ErrDatabase) || !errors.Is(err, cause) {
 		t.Fatalf("commit error = %v", err)
 	}
@@ -158,7 +158,7 @@ func TestTransactionToolsUseRequestContextAndTimeout(t *testing.T) {
 	tc := Context{
 		Role: "reader", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
 		Transactions: manager, TxBeginners: map[string]store.TxBeginner{"default": beginner},
-		Timeout: 5 * time.Millisecond,
+		Limits: Limits{Timeout: 5 * time.Millisecond},
 	}
 	_, err := (BeginTransactionTool{}).Run(context.Background(), json.RawMessage(`{}`), tc)
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -304,5 +304,31 @@ func TestBeginTransactionRequiresRoleAndDefaultsReadOnly(t *testing.T) {
 		ErrUnauthorized,
 	) {
 		t.Fatalf("unauthorized role error = %v", err)
+	}
+}
+
+func TestBeginTransactionBindsResolvedDefaultDatasource(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{Name: "users", DataSource: "main", Role: entity.RoleAccess{entity.ActionRead: {"reader"}}}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+		return &store.FakeTx{}, nil
+	}}
+	manager := NewTransactionManager(time.Minute, 2)
+	defer manager.Close()
+	tc := Context{
+		Role: "reader", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Transactions: manager,
+		TxBeginners: map[string]store.TxBeginner{"main": db},
+	}
+	res, err := (BeginTransactionTool{}).Run(context.Background(), json.RawMessage(`{}`), tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Content[0]["datasource"]; got != "main" {
+		t.Fatalf("datasource = %v, want main", got)
+	}
+	token := res.Content[0]["transaction"].(string)
+	if _, err := manager.DB(token, "", "reader", nil, "main"); err != nil {
+		t.Fatalf("transaction not bound to resolved datasource: %v", err)
 	}
 }

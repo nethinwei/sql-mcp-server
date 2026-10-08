@@ -80,7 +80,7 @@ func TestApplyDefaultsPreservesAllFalseToolsNode(t *testing.T) {
 
 func TestApplyDefaultsCostThresholds(t *testing.T) {
 	t.Parallel()
-	c := &Config{Database: DatabaseConfig{Driver: "postgres", DSN: "x"}, Cost: CostConfig{Enabled: Bool(true)}}
+	c := &Config{Database: DatabaseConfig{Driver: "postgres", DSN: "x"}, Cost: CostConfig{Enabled: new(true)}}
 	c.ApplyDefaults()
 	if c.Cost.HardScore != 40 || c.Cost.SoftScore != 60 || c.Cost.MaxRows != 10000 ||
 		c.Cost.MaxINListSize != 256 || c.Cost.MaxProcedureRows != 1000 ||
@@ -214,7 +214,6 @@ func securityConstraintCases() []struct {
 		{"soft below hard", func(c *Config) { c.Cost.SoftScore = 39 }},
 		{"audit path missing", func(c *Config) { c.Audit.Enabled = true }},
 		{"negative io pool", func(c *Config) { c.RateLimit.IOPool = -1 }},
-		{"negative cpu pool", func(c *Config) { c.RateLimit.CPUPool = -1 }},
 		{"negative query timeout", func(c *Config) { c.Cost.QueryTimeout = -time.Second }},
 		{"negative cache timeout", func(c *Config) { c.Cache.TTL = -time.Second }},
 		{"tls cert without key", func(c *Config) { c.Server.Auth.TLS.Cert = "cert.pem" }},

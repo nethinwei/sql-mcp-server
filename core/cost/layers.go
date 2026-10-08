@@ -50,26 +50,6 @@ type Estimate struct {
 	FailClosed bool
 }
 
-// EstimateOption configures NewEstimate.
-type EstimateOption func(*Estimate)
-
-// WithFailClosed rejects EXPLAIN errors and unknown plans.
-func WithFailClosed() EstimateOption {
-	return func(e *Estimate) { e.FailClosed = true }
-}
-
-// NewEstimate constructs an Estimate. Existing struct literals remain valid;
-// the default behavior continues to degrade EXPLAIN failures.
-func NewEstimate(ex Explainer, th Threshold, feedback FeedbackStore, opts ...EstimateOption) Estimate {
-	e := Estimate{Explainer: ex, Threshold: th, Feedback: feedback}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&e)
-		}
-	}
-	return e
-}
-
 // Name implements Layer.
 func (e Estimate) Name() string { return "estimate" }
 

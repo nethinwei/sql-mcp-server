@@ -4,7 +4,6 @@ package providerregistry
 import (
 	"errors"
 	"fmt"
-	"sort"
 	"sync"
 	"time"
 
@@ -56,16 +55,4 @@ func IsRegistered(driver string) bool {
 	defer mu.RUnlock()
 	_, ok := factories[driver]
 	return ok
-}
-
-// KnownDrivers returns registered names in deterministic order.
-func KnownDrivers() []string {
-	mu.RLock()
-	names := make([]string, 0, len(factories))
-	for name := range factories {
-		names = append(names, name)
-	}
-	mu.RUnlock()
-	sort.Strings(names)
-	return names
 }

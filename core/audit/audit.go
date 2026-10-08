@@ -81,12 +81,8 @@ type AsyncAuditor struct {
 	closed    atomic.Bool
 }
 
-// NewAsyncAuditor starts a flusher goroutine. Call Close to drain and stop.
-func NewAsyncAuditor(sink Sink, queueSize int) *AsyncAuditor {
-	return NewAsyncAuditorWithClose(sink, nil, queueSize)
-}
-
-// NewAsyncAuditorWithClose starts an auditor and closes the sink after draining.
+// NewAsyncAuditorWithClose starts a flusher goroutine and closes the sink (when
+// closeSink is non-nil) after draining. Call Close to drain and stop.
 func NewAsyncAuditorWithClose(sink Sink, closeSink func() error, queueSize int) *AsyncAuditor {
 	if queueSize <= 0 {
 		queueSize = 1024

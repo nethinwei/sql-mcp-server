@@ -22,7 +22,7 @@ func TestAsyncAuditorRecordsToSink(t *testing.T) {
 		mu.Unlock()
 		return nil
 	}
-	a := NewAsyncAuditor(sink, 8)
+	a := NewAsyncAuditorWithClose(sink, nil, 8)
 	_ = a.Record(context.Background(), Event{Tool: "read_records", Role: "reader", Cost: &cost.Plan{}})
 	a.Close()
 	mu.Lock()
@@ -36,7 +36,7 @@ func TestAsyncAuditorDropsWhenFull(t *testing.T) {
 	t.Parallel()
 	block := make(chan struct{})
 	sink := func(_ Event) error { <-block; return nil } // block flusher
-	a := NewAsyncAuditor(sink, 2)
+	a := NewAsyncAuditorWithClose(sink, nil, 2)
 	_ = a.Record(context.Background(), Event{Tool: "x"})
 	_ = a.Record(context.Background(), Event{Tool: "x"}) // queue full now
 	// queue full; next records should drop
@@ -60,7 +60,7 @@ func TestNoopAuditor(t *testing.T) {
 
 func TestRecordNonBlocking(t *testing.T) {
 	t.Parallel()
-	a := NewAsyncAuditor(nil, 1)
+	a := NewAsyncAuditorWithClose(nil, nil, 1)
 	start := time.Now()
 	_ = a.Record(context.Background(), Event{})
 	_ = a.Record(context.Background(), Event{}) // dropped, not blocked

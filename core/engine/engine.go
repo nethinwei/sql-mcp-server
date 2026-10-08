@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime"
 	"sync"
 	"time"
 
@@ -25,18 +24,15 @@ var (
 type Option func(*config)
 
 type config struct {
-	io, cpu, inflight int
-	limiter           *ratelimit.Adaptive
-	rps               *ratelimit.TokenBucket
-	breaker           *ratelimit.Breaker
-	recordFailure     func(error) bool
+	io, inflight  int
+	limiter       *ratelimit.Adaptive
+	rps           *ratelimit.TokenBucket
+	breaker       *ratelimit.Breaker
+	recordFailure func(error) bool
 }
 
 // WithIOPool sets the IO concurrency (<= DB connection pool size).
 func WithIOPool(n int) Option { return func(c *config) { c.io = n } }
-
-// WithCPUPool sets the CPU concurrency (<= GOMAXPROCS).
-func WithCPUPool(n int) Option { return func(c *config) { c.cpu = n } }
 
 // WithMaxInflight sets the bounded in-flight queue (backpressure).
 func WithMaxInflight(n int) Option { return func(c *config) { c.inflight = n } }
@@ -59,7 +55,6 @@ func WithFailureClassifier(classify func(error) bool) Option {
 // Engine bounds concurrency and deduplicates concurrent identical requests.
 type Engine struct {
 	iosem         chan struct{}
-	cpusem        chan struct{}
 	inflight      chan struct{}
 	sf            singleflight
 	limiter       *ratelimit.Adaptive
@@ -74,18 +69,17 @@ type Engine struct {
 
 // New returns an Engine with the given options and sane defaults.
 func New(opts ...Option) (*Engine, error) {
-	cfg := config{io: 16, cpu: runtime.NumCPU(), inflight: 256}
+	cfg := config{io: 16, inflight: 256}
 	for _, o := range opts {
 		if o != nil {
 			o(&cfg)
 		}
 	}
-	if cfg.io <= 0 || cfg.cpu <= 0 || cfg.inflight <= 0 {
+	if cfg.io <= 0 || cfg.inflight <= 0 {
 		return nil, ErrInvalidConfig
 	}
 	return &Engine{
 		iosem:         make(chan struct{}, cfg.io),
-		cpusem:        make(chan struct{}, cfg.cpu),
 		inflight:      make(chan struct{}, cfg.inflight),
 		limiter:       cfg.limiter,
 		rps:           cfg.rps,
@@ -94,16 +88,6 @@ func New(opts ...Option) (*Engine, error) {
 	}, nil
 }
 
-// WorkClass selects the resource pool used by a submission.
-type WorkClass uint8
-
-const (
-	// WorkIO is database or network work and uses the IO pool.
-	WorkIO WorkClass = iota
-	// WorkCPU is compute-heavy work and uses the CPU pool.
-	WorkCPU
-)
-
 // Submit schedules fn under backpressure and returns fn's result value and
 // error. It returns ErrOverloaded if the in-flight queue is full, ErrCircuitOpen
 // if the breaker is open, ErrRateLimited if concurrency exceeds the adaptive
@@ -111,22 +95,6 @@ const (
 // (singleflight) and all receive the leader's result. An empty key opts out of
 // de-duplication (writes/unique ops). Panics in fn are recovered as errors.
 func (e *Engine) Submit(ctx context.Context, key string, fn func(context.Context) (any, error)) (any, error) {
-	return e.SubmitClass(ctx, WorkIO, key, fn)
-}
-
-// SubmitCPU schedules compute-heavy work on the CPU pool.
-func (e *Engine) SubmitCPU(ctx context.Context, key string, fn func(context.Context) (any, error)) (any, error) {
-	return e.SubmitClass(ctx, WorkCPU, key, fn)
-}
-
-// SubmitClass schedules fn on the selected resource pool. Submit remains the
-// backwards-compatible IO entry point.
-func (e *Engine) SubmitClass(
-	ctx context.Context,
-	class WorkClass,
-	key string,
-	fn func(context.Context) (any, error),
-) (any, error) {
 	e.stateMu.Lock()
 	if e.closed {
 		e.stateMu.Unlock()
@@ -152,34 +120,26 @@ func (e *Engine) SubmitClass(
 	}
 	defer func() { <-e.inflight }()
 	if key == "" {
-		return e.execute(ctx, class, fn)
+		return e.execute(ctx, fn)
 	}
-	return e.sf.Do(ctx, fmt.Sprintf("%d\x00%s", class, key), &e.executions, func(runCtx context.Context) (any, error) {
-		return e.execute(runCtx, class, fn)
+	return e.sf.Do(ctx, key, &e.executions, func(runCtx context.Context) (any, error) {
+		return e.execute(runCtx, fn)
 	})
 }
 
-func (e *Engine) execute(
-	ctx context.Context,
-	class WorkClass,
-	fn func(context.Context) (any, error),
-) (any, error) {
-	if class == WorkIO && e.limiter != nil {
+func (e *Engine) execute(ctx context.Context, fn func(context.Context) (any, error)) (any, error) {
+	if e.limiter != nil {
 		if err := e.limiter.Acquire(); err != nil {
 			return nil, err
 		}
 		defer e.limiter.Release()
 	}
-	sem := e.iosem
-	if class == WorkCPU {
-		sem = e.cpusem
-	}
 	select {
-	case sem <- struct{}{}:
+	case e.iosem <- struct{}{}:
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	defer func() { <-sem }()
+	defer func() { <-e.iosem }()
 	start := time.Now()
 	val, err := e.runSafe(ctx, fn)
 	record := err == nil || e.recordFailure == nil || e.recordFailure(err)

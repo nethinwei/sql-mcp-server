@@ -56,12 +56,8 @@ func yamlDocument(payload []byte) (map[string]any, error) {
 }
 
 func toDatasources(cfg *config.Config) []Datasource {
-	databases := cfg.Databases
-	if len(databases) == 0 && cfg.Database.Driver != "" {
-		databases = map[string]config.DatabaseConfig{"default": cfg.Database}
-	}
-	out := make([]Datasource, 0, len(databases))
-	for name, db := range databases {
+	out := make([]Datasource, 0, len(cfg.Databases))
+	for name, db := range cfg.Databases {
 		out = append(out, Datasource{Name: name, Driver: db.Driver, Dsn: bootstrap.RedactDSN(db.Driver, db.DSN)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

@@ -34,7 +34,6 @@ const (
 	CodeInvalidInput        = "INVALID_INPUT"
 	CodeDMLToolsDisabled    = "DML_TOOLS_DISABLED"
 	CodeUnsafeWrite         = "UNSAFE_WRITE"
-	CodeNotImplemented      = "NOT_IMPLEMENTED"
 	CodeDatabaseError       = "DATABASE_ERROR"
 	CodeCostExceeded        = "COST_EXCEEDED"
 	CodeBudgetExceeded      = "BUDGET_EXCEEDED"
@@ -54,7 +53,6 @@ var sentinelDenials = []struct {
 	{ErrInvalidInput, CodeInvalidInput, true},
 	{ErrDMLToolsDisabled, CodeDMLToolsDisabled, false},
 	{ErrUnsafeWrite, CodeUnsafeWrite, true},
-	{ErrNotImplemented, CodeNotImplemented, false},
 	{ErrDatabase, CodeDatabaseError, false},
 	{ErrTransactionNotFound, CodeTransactionNotFound, false},
 	{ErrTransactionScope, CodeTransactionScope, false},

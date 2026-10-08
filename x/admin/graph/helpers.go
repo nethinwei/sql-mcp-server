@@ -2,8 +2,6 @@ package graph
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,21 +23,7 @@ func deref(s *string) string {
 
 func derefBool(b *bool) bool { return b != nil && *b }
 
-// newUserToken returns a 256-bit random bearer token in the same form as
-// `sql-mcp-server user token`.
-func newUserToken() (string, error) {
-	var raw [32]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", err
-	}
-	return "smcp_" + base64.RawURLEncoding.EncodeToString(raw[:]), nil
-}
-
-// auditAdmin logs a store mutation made through the admin API.
 func hasDatasource(cfg *config.Config, name string) bool {
-	if len(cfg.Databases) == 0 {
-		return name == "default" && cfg.Database.Driver != ""
-	}
 	_, ok := cfg.Databases[name]
 	return ok
 }

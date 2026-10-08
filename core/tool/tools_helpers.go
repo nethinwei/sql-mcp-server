@@ -14,15 +14,6 @@ func relationshipByName(e entity.Entity, name string) (entity.Relationship, bool
 	return entity.Relationship{}, false
 }
 
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
-}
-
 func effectiveMaxIN(tc Context) int {
 	if tc.MaxINListSize > 0 {
 		return tc.MaxINListSize

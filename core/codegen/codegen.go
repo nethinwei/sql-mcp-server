@@ -62,11 +62,6 @@ type Renderer struct {
 	Dialect dialect.Dialect
 }
 
-// NewRenderer returns a Renderer for the given dialect.
-func NewRenderer(d dialect.Dialect) Renderer {
-	return Renderer{Dialect: d}
-}
-
 // Compile renders e into a Compiled value. It applies inline lightweight
 // transforms (IsPKPoint detection) and capability-driven rendering (e.g.
 // RETURNING). It does not run a separate optimizer: the IR is deliberately

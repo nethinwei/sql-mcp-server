@@ -2,7 +2,6 @@ package providerregistry
 
 import (
 	"errors"
-	"slices"
 	"testing"
 	"time"
 
@@ -16,9 +15,6 @@ func TestRegisterAndLookup(t *testing.T) {
 	})
 	if !IsRegistered(name) {
 		t.Fatalf("IsRegistered(%q) = false", name)
-	}
-	if !slices.Contains(KnownDrivers(), name) {
-		t.Fatalf("KnownDrivers() does not contain %q", name)
 	}
 	if _, err := New(name, "", time.Second); err != nil {
 		t.Fatalf("New(%q): %v", name, err)

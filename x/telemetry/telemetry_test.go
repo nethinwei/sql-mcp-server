@@ -21,9 +21,9 @@ func TestMetricsHooksRecordCallsAndDurations(t *testing.T) {
 	m := NewMetrics()
 	hooks := m.Hooks()
 	ctx := hooks.FireBeforeTool(context.Background(), "read_records", nil)
-	hooks.FireAfterTool(ctx, "read_records", nil, nil)
+	hooks.FireAfterTool(ctx, "read_records", nil)
 	ctx = hooks.FireBeforeTool(context.Background(), "read_records", nil)
-	hooks.FireAfterTool(ctx, "read_records", nil, tool.ErrUnauthorized)
+	hooks.FireAfterTool(ctx, "read_records", tool.ErrUnauthorized)
 
 	rec := httptest.NewRecorder()
 	m.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))

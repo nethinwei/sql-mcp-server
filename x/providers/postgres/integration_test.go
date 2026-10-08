@@ -161,7 +161,7 @@ func TestCostGateEndToEnd(t *testing.T) {
 		}},
 		Tools: config.DefaultToolFlags(),
 		Cost: config.CostConfig{
-			Enabled: config.Bool(true), SoftScore: 40, HardScore: 70, MaxRows: 10000,
+			Enabled: new(true), SoftScore: 40, HardScore: 70, MaxRows: 10000,
 			RejectFullScan: true, WhitelistPKPoint: true,
 		},
 	}
@@ -222,7 +222,7 @@ func newPGRLSApp(t *testing.T, prov *pgprov.Provider) *bootstrap.App {
 		Tools: config.DefaultToolFlags(),
 		// This test targets RLS/masking; mandatory EnforceCap remains active
 		// while optional EXPLAIN scoring is disabled.
-		Cost: config.CostConfig{Enabled: config.Bool(false), MaxRows: 10000},
+		Cost: config.CostConfig{Enabled: new(false), MaxRows: 10000},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -297,7 +297,7 @@ func assertPGQuotedIdentifierRLS(t *testing.T, ctx context.Context, prov *pgprov
 			},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(false), MaxRows: 10000},
+		Cost:  config.CostConfig{Enabled: new(false), MaxRows: 10000},
 	}
 	quotedCfg.ApplyDefaults()
 	quotedApp, err := bootstrap.AssembleWithProvider(quotedCfg, prov)
@@ -330,7 +330,7 @@ func TestUpdateUnsafeWriteAndPK(t *testing.T) {
 			Roles:  config.RoleConfig{Update: []string{"writer"}},
 		}},
 		Tools: config.DefaultToolFlags(),
-		Cost:  config.CostConfig{Enabled: config.Bool(false)},
+		Cost:  config.CostConfig{Enabled: new(false)},
 	}
 	cfg.ApplyDefaults()
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
@@ -376,7 +376,7 @@ func TestEnforceCapLimitsRows(t *testing.T) {
 		Tools: config.DefaultToolFlags(),
 		// Optional Estimate is disabled; mandatory EnforceCap remains active.
 		Cost: config.CostConfig{
-			Enabled: config.Bool(false), MaxRows: 1,
+			Enabled: new(false), MaxRows: 1,
 		},
 	}
 	cfg.ApplyDefaults()
@@ -411,7 +411,7 @@ func TestPGExecuteProcedure(t *testing.T) {
 		}},
 		Tools: config.DefaultToolFlags(),
 		Cost: config.CostConfig{
-			Enabled:        config.Bool(false),
+			Enabled:        new(false),
 			AllowTemplates: []string{`CALL "noop_proc"()`},
 		},
 	}

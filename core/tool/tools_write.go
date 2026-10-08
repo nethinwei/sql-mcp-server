@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/nethinwei/sql-mcp-server/core/codegen"
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/entity"
 )
 
 // ---- create_record ----
@@ -14,7 +16,10 @@ import (
 type CreateTool struct{}
 
 func (CreateTool) Info() Info {
-	return Info{Name: "create_record", Description: "Create a record in an entity", InputSchema: schemaCreate}
+	return Info{
+		Name: "create_record", Description: "Create a record in an entity", InputSchema: schemaCreate,
+		Action: entity.ActionCreate.String(),
+	}
 }
 func (CreateTool) Enabled(f config.ToolFlags) bool { return f.CreateRecord }
 func (CreateTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
@@ -34,7 +39,10 @@ func (CreateTool) Run(ctx context.Context, input json.RawMessage, tc Context) (R
 type UpdateTool struct{}
 
 func (UpdateTool) Info() Info {
-	return Info{Name: "update_record", Description: "Update records in an entity", InputSchema: schemaUpdate}
+	return Info{
+		Name: "update_record", Description: "Update records in an entity", InputSchema: schemaUpdate,
+		Action: entity.ActionUpdate.String(),
+	}
 }
 func (UpdateTool) Enabled(f config.ToolFlags) bool { return f.UpdateRecord }
 func (UpdateTool) CostGated()                      {}
@@ -43,13 +51,14 @@ func (UpdateTool) Run(ctx context.Context, input json.RawMessage, tc Context) (R
 	if err := decodeInput(input, &in); err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
-	if tc.MaxFilterConditions > 0 && len(in.Filter) > tc.MaxFilterConditions {
-		return Result{}, fmt.Errorf("%w: too many filter conditions", ErrInvalidInput)
-	}
 	if err := normalizeMapValues(in.Set); err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
-	return runUpdate(ctx, tc, in)
+	return runFilteredWrite(ctx, tc, in.Transaction, func(ctx context.Context, tc Context) (
+		writePlan, codegen.Compiled, error,
+	) {
+		return prepareUpdate(ctx, tc, in)
+	})
 }
 
 // ---- delete_record ----
@@ -58,7 +67,10 @@ func (UpdateTool) Run(ctx context.Context, input json.RawMessage, tc Context) (R
 type DeleteTool struct{}
 
 func (DeleteTool) Info() Info {
-	return Info{Name: "delete_record", Description: "Delete records from an entity", InputSchema: schemaDelete}
+	return Info{
+		Name: "delete_record", Description: "Delete records from an entity", InputSchema: schemaDelete,
+		Action: entity.ActionDelete.String(),
+	}
 }
 func (DeleteTool) Enabled(f config.ToolFlags) bool { return f.DeleteRecord }
 func (DeleteTool) CostGated()                      {}
@@ -67,8 +79,9 @@ func (DeleteTool) Run(ctx context.Context, input json.RawMessage, tc Context) (R
 	if err := decodeInput(input, &in); err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
-	if tc.MaxFilterConditions > 0 && len(in.Filter) > tc.MaxFilterConditions {
-		return Result{}, fmt.Errorf("%w: too many filter conditions", ErrInvalidInput)
-	}
-	return runDelete(ctx, tc, in)
+	return runFilteredWrite(ctx, tc, in.Transaction, func(ctx context.Context, tc Context) (
+		writePlan, codegen.Compiled, error,
+	) {
+		return prepareDelete(ctx, tc, in)
+	})
 }

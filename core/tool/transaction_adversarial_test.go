@@ -51,9 +51,9 @@ func testAdversarialTransactionScopeAndTerminalReuse(t *testing.T, terminal stri
 		})
 	}
 	if terminal == "commit" {
-		err = manager.Commit(token, "session-a", "writer", subject)
+		_, err = manager.Commit(context.Background(), token, "session-a", "writer", subject)
 	} else {
-		err = manager.Rollback(token, "session-a", "writer", subject)
+		err = manager.Rollback(context.Background(), token, "session-a", "writer", subject)
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,8 @@ func assertTerminalTransactionTokenRejected(
 	if _, err := manager.DB(token, "session-a", "writer", subject, "primary"); !errors.Is(err, ErrTransactionNotFound) {
 		t.Fatalf("terminal token reuse error = %v", err)
 	}
-	if err := manager.Commit(token, "session-a", "writer", subject); !errors.Is(err, ErrTransactionNotFound) {
+	_, err := manager.Commit(context.Background(), token, "session-a", "writer", subject)
+	if !errors.Is(err, ErrTransactionNotFound) {
 		t.Fatalf("second terminal operation error = %v", err)
 	}
 }
@@ -121,9 +122,9 @@ func runFuzzTransactionOperation(
 	case 4:
 		_, err = manager.DB(token, "session-a", "writer", subject, "replica")
 	case 5:
-		err = manager.Commit(token, "session-a", "writer", subject)
+		_, err = manager.Commit(context.Background(), token, "session-a", "writer", subject)
 	case 6:
-		err = manager.Rollback(token, "session-a", "writer", subject)
+		err = manager.Rollback(context.Background(), token, "session-a", "writer", subject)
 	}
 	return err, terminal || (operation%8 == 5 || operation%8 == 6) && err == nil
 }

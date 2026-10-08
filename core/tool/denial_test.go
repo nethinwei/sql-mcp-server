@@ -28,7 +28,6 @@ func TestDenialForSentinels(t *testing.T) {
 		{ErrInvalidInput, "INVALID_INPUT", true},
 		{ErrDMLToolsDisabled, "DML_TOOLS_DISABLED", false},
 		{ErrUnsafeWrite, "UNSAFE_WRITE", true},
-		{ErrNotImplemented, "NOT_IMPLEMENTED", false},
 		{ErrDatabase, "DATABASE_ERROR", false},
 		{ErrTransactionNotFound, "TRANSACTION_NOT_FOUND", false},
 		{ErrTransactionScope, "TRANSACTION_SCOPE", false},

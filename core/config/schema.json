@@ -580,12 +580,6 @@
           "default": 16,
           "minimum": 0
         },
-        "cpuPool": {
-          "description": "CPU worker pool size; defaults to the number of logical CPUs. Used only by explicit CPU submissions.",
-          "x-description-zh-CN": "CPU 工作池大小；默认为逻辑 CPU 数。只有显式提交 CPU 任务时使用。",
-          "type": "integer",
-          "minimum": 0
-        },
         "minConcurrency": {
           "description": "Lower bound of adaptive concurrency.",
           "x-description-zh-CN": "自适应并发的下限。",
@@ -1211,12 +1205,6 @@
         "maxEstimatedScannedRows": {
           "description": "Estimated (and actual) scanned rows per call.",
           "x-description-zh-CN": "单次调用的估算（及实际）扫描行数上限。",
-          "type": "integer",
-          "minimum": 0
-        },
-        "maxScannedRows": {
-          "description": "Deprecated alias of maxEstimatedScannedRows.",
-          "x-description-zh-CN": "已弃用，等同 maxEstimatedScannedRows。",
           "type": "integer",
           "minimum": 0
         },

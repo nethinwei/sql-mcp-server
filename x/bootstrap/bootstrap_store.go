@@ -124,11 +124,7 @@ func ValidateStorePayload(cfg *config.Config) error {
 	if cfg.Server.Auth.Token != "" {
 		return fmt.Errorf("%w: server.auth.token is set; use users with tokenHash instead", ErrPlaintextSecret)
 	}
-	databases := cfg.Databases
-	if len(databases) == 0 {
-		databases = map[string]config.DatabaseConfig{"default": cfg.Database}
-	}
-	for name, db := range databases {
+	for name, db := range cfg.Databases {
 		for _, secret := range dsnSecrets(db.Driver, db.DSN) {
 			// An empty password is no credential (trust or peer authentication).
 			if secret.value != "" && !wholePlaceholderRe.MatchString(secret.value) {

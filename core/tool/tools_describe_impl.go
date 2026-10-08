@@ -8,7 +8,7 @@ import (
 )
 
 func describeFields(ctx context.Context, tc Context, e entity.Entity) ([]string, bool, error) {
-	actions := describeEntityActions(e)
+	actions := entity.ActionsFor(e.Kind)
 	allowedEntity := false
 	fields := make(map[string]bool)
 	for _, action := range actions {
@@ -27,16 +27,6 @@ func describeFields(ctx context.Context, tc Context, e entity.Entity) ([]string,
 		}
 	}
 	return e.OrderedNames(fields), allowedEntity, nil
-}
-
-func describeEntityActions(e entity.Entity) []entity.Action {
-	if e.Kind == entity.KindProcedure {
-		return []entity.Action{entity.ActionExecute}
-	}
-	return []entity.Action{
-		entity.ActionRead, entity.ActionCreate, entity.ActionUpdate,
-		entity.ActionDelete, entity.ActionAggregate,
-	}
 }
 
 func collectDescribeFields(

@@ -11,13 +11,12 @@ import (
 )
 
 type writePlan struct {
-	res  entity.Resolved
-	tc   Context
-	full relalg.Predicate
+	res entity.Resolved
+	tc  Context
 }
 
 func runInsert(ctx context.Context, tc Context, in createInput) (Result, error) {
-	ctx, cancel := withTimeout(ctx, tc)
+	ctx, cancel := withTimeout(ctx, tc, 0)
 	defer cancel()
 	tc.Transaction = in.Transaction
 	plan, compiled, err := prepareInsert(ctx, tc, in)
@@ -117,11 +116,18 @@ func insertWithExec(
 	return Result{Content: []map[string]any{{"lastInsertId": r.LastInsertID, "rowsAffected": r.RowsAffected}}}, nil
 }
 
-func runUpdate(ctx context.Context, tc Context, in updateInput) (Result, error) {
-	ctx, cancel := withTimeout(ctx, tc)
+// runFilteredWrite gates and executes a filtered UPDATE or DELETE built by
+// prepare, then invalidates the entity's cached reads.
+func runFilteredWrite(
+	ctx context.Context,
+	tc Context,
+	transaction string,
+	prepare func(context.Context, Context) (writePlan, codegen.Compiled, error),
+) (Result, error) {
+	ctx, cancel := withTimeout(ctx, tc, 0)
 	defer cancel()
-	tc.Transaction = in.Transaction
-	plan, compiled, err := prepareUpdate(ctx, tc, in)
+	tc.Transaction = transaction
+	plan, compiled, err := prepare(ctx, tc)
 	if err != nil {
 		return Result{}, err
 	}
@@ -133,14 +139,14 @@ func runUpdate(ctx context.Context, tc Context, in updateInput) (Result, error) 
 	if err != nil {
 		return Result{}, WrapDBError(err)
 	}
-	if err := afterWrite(plan.tc, plan.res.Entity, in.Transaction); err != nil {
+	if err := afterWrite(plan.tc, plan.res.Entity, transaction); err != nil {
 		return Result{}, err
 	}
 	return Result{Content: []map[string]any{{"rowsAffected": r.RowsAffected}}}, nil
 }
 
 func prepareUpdate(ctx context.Context, tc Context, in updateInput) (writePlan, codegen.Compiled, error) {
-	plan, pred, err := prepareFilteredWrite(ctx, tc, in.Entity, in.Transaction, in.Filter)
+	plan, pred, err := prepareFilteredWrite(ctx, tc, in.Entity, in.Filter)
 	if err != nil {
 		return writePlan{}, codegen.Compiled{}, err
 	}
@@ -178,33 +184,11 @@ func prepareUpdate(ctx context.Context, tc Context, in updateInput) (writePlan, 
 	if err != nil {
 		return writePlan{}, codegen.Compiled{}, err
 	}
-	return writePlan{res: plan.res, tc: plan.tc, full: full}, compiled, nil
-}
-
-func runDelete(ctx context.Context, tc Context, in deleteInput) (Result, error) {
-	ctx, cancel := withTimeout(ctx, tc)
-	defer cancel()
-	tc.Transaction = in.Transaction
-	plan, compiled, err := prepareDelete(ctx, tc, in)
-	if err != nil {
-		return Result{}, err
-	}
-	compiled, err = checkGate(ctx, plan.tc, compiled)
-	if err != nil {
-		return Result{}, err
-	}
-	r, err := plan.tc.DB.ExecContext(ctx, compiled.SQL, compiled.Args...)
-	if err != nil {
-		return Result{}, WrapDBError(err)
-	}
-	if err := afterWrite(plan.tc, plan.res.Entity, in.Transaction); err != nil {
-		return Result{}, err
-	}
-	return Result{Content: []map[string]any{{"rowsAffected": r.RowsAffected}}}, nil
+	return plan, compiled, nil
 }
 
 func prepareDelete(ctx context.Context, tc Context, in deleteInput) (writePlan, codegen.Compiled, error) {
-	plan, pred, err := prepareFilteredWrite(ctx, tc, in.Entity, in.Transaction, in.Filter)
+	plan, pred, err := prepareFilteredWrite(ctx, tc, in.Entity, in.Filter)
 	if err != nil {
 		return writePlan{}, codegen.Compiled{}, err
 	}
@@ -237,16 +221,15 @@ func prepareDelete(ctx context.Context, tc Context, in deleteInput) (writePlan, 
 	if err != nil {
 		return writePlan{}, codegen.Compiled{}, err
 	}
-	return writePlan{res: plan.res, tc: plan.tc, full: full}, compiled, nil
+	return plan, compiled, nil
 }
 
 func prepareFilteredWrite(
 	ctx context.Context,
 	tc Context,
-	entityName, transaction string,
+	entityName string,
 	filter []condJSON,
 ) (writePlan, relalg.Predicate, error) {
-	tc.Transaction = transaction
 	res, err := resolveDMLEntity(tc, entityName)
 	if err != nil {
 		return writePlan{}, nil, err
@@ -255,7 +238,7 @@ func prepareFilteredWrite(
 	if err != nil {
 		return writePlan{}, nil, err
 	}
-	pred, err := filterToPredicate(filter)
+	pred, err := filterToPredicate(filter, tc.MaxFilterConditions)
 	if err != nil {
 		return writePlan{}, nil, err
 	}

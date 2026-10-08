@@ -84,7 +84,7 @@ export function toEntityInput(e: EntityPartsFragment): EntityInput {
   }
 }
 
-export function toGrantInput(g: GrantPartsFragment): GrantInput {
+function toGrantInput(g: GrantPartsFragment): GrantInput {
   return {
     entity: g.entity,
     actions: [...g.actions],

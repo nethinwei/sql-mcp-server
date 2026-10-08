@@ -125,7 +125,6 @@ type AnalyzeConfig struct {
 
 // Threshold configures the gate. SoftScore/HardScore are 0-100 cutoffs.
 type Threshold struct {
-	Enabled                   bool
 	Datasource                string
 	DialectName               string
 	SoftScore                 int
@@ -137,7 +136,6 @@ type Threshold struct {
 	RequirePKForWrite         bool // reject UPDATE/DELETE that is not a PK point write
 	RequireAggregatePredicate bool
 	ExplainFailClosed         bool
-	DisableEstimate           bool
 	RequireKnownScan          bool
 	RequireFreshStats         bool
 	LegacyExactSQL            bool
@@ -274,7 +272,7 @@ func (g *ChainGate) attachRewritten(d Decision, c codegen.Compiled, rewritten bo
 }
 
 func layerPhase(l Layer) Phase {
-	if phased, ok := l.(interface{ Phase() Phase }); ok {
+	if phased, ok := l.(PhasedLayer); ok {
 		return phased.Phase()
 	}
 	return PhaseEnforcement
@@ -299,7 +297,7 @@ func NewGateFromCapabilities(caps dialect.Capabilities, ex Explainer, th Thresho
 	if th.RequireAggregatePredicate {
 		layers = append(layers, AggregateGuard{RequirePredicate: true})
 	}
-	if !th.DisableEstimate && caps.ExplainCost && ex != nil && (caps.ExplainAccurate || th.ExplainFailClosed) {
+	if caps.ExplainCost && ex != nil && (caps.ExplainAccurate || th.ExplainFailClosed) {
 		layers = append(layers, Estimate{
 			Explainer: ex, Threshold: th, Feedback: feedback,
 			FailClosed: th.ExplainFailClosed,

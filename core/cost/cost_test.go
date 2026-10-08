@@ -67,8 +67,8 @@ func TestEstimateExplainFailureDegrades(t *testing.T) {
 func TestEstimateFailClosed(t *testing.T) {
 	t.Parallel()
 	for _, est := range []Estimate{
-		NewEstimate(FakeExplainer{Err: errors.New("explain failed")}, Threshold{}, nil, WithFailClosed()),
-		NewEstimate(FakeExplainer{Plan: Plan{ScanType: ScanUnknown}}, Threshold{}, nil, WithFailClosed()),
+		{Explainer: FakeExplainer{Err: errors.New("explain failed")}, FailClosed: true},
+		{Explainer: FakeExplainer{Plan: Plan{ScanType: ScanUnknown}}, FailClosed: true},
 	} {
 		d, err := est.Check(context.Background(), codegen.Compiled{Kind: codegen.KindRead})
 		if err != nil {
@@ -78,9 +78,7 @@ func TestEstimateFailClosed(t *testing.T) {
 			t.Fatalf("fail-closed estimate must hard reject: %+v", d)
 		}
 	}
-	defaultEstimate := NewEstimate(
-		FakeExplainer{Err: errors.New("explain failed")}, Threshold{}, nil,
-	)
+	defaultEstimate := Estimate{Explainer: FakeExplainer{Err: errors.New("explain failed")}}
 	if d, _ := defaultEstimate.Check(context.Background(), codegen.Compiled{Kind: codegen.KindRead}); !d.Allow {
 		t.Fatalf("default estimate must retain fail-open compatibility: %+v", d)
 	}

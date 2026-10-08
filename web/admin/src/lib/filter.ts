@@ -41,7 +41,7 @@ export function isCondition(f: Filter): f is Condition {
 
 const subjectRe = /^\$\{subject\.([^}]+)\}$/
 
-export function describeValue(v: unknown): string {
+function describeValue(v: unknown): string {
   if (typeof v === 'string') {
     const m = subjectRe.exec(v)
     return m ? `「${t('filter.currentUser')}.${m[1]}」` : JSON.stringify(v)

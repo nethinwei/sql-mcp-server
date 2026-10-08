@@ -402,9 +402,6 @@ defs.budgetLimits.maxExecution:
 defs.budgetLimits.maxEstimatedScannedRows:
   zh-CN: 单次调用的估算（及实际）扫描行数上限。
   en: Estimated (and actual) scanned rows per call.
-defs.budgetLimits.maxScannedRows:
-  zh-CN: 已弃用，等同 maxEstimatedScannedRows。
-  en: Deprecated alias of maxEstimatedScannedRows.
 defs.budgetLimits.maxReturnedRows:
   zh-CN: 单次调用返回行数上限。
   en: Rows returned per call.
@@ -454,9 +451,6 @@ rateLimit.maxInflight:
 rateLimit.ioPool:
   zh-CN: IO 工作池大小；普通执行使用它。
   en: IO worker pool size, used by ordinary execution.
-rateLimit.cpuPool:
-  zh-CN: CPU 工作池大小；默认为逻辑 CPU 数。只有显式提交 CPU 任务时使用。
-  en: CPU worker pool size; defaults to the number of logical CPUs. Used only by explicit CPU submissions.
 rateLimit.minConcurrency:
   zh-CN: 自适应并发的下限。
   en: Lower bound of adaptive concurrency.

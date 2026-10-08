@@ -1,7 +1,6 @@
 package config
 
 import (
-	"runtime"
 	"strings"
 	"time"
 )
@@ -26,7 +25,7 @@ func (c *Config) ApplyDefaults() {
 func (c *Config) applyServerDefaults() {
 	c.Server.Role = canonicalRole(c.Server.Role)
 	if len(c.Server.Secrets.AllowedRoots) == 0 {
-		c.Server.Secrets.AllowedRoots = []string{"/run/secrets", "/var/run/secrets"}
+		c.Server.Secrets.AllowedRoots = DefaultSecretRoots()
 	}
 	if c.Server.Transport == "" {
 		c.Server.Transport = "stdio"
@@ -152,9 +151,6 @@ func (c *Config) applyRateLimitDefaults() {
 	}
 	if c.RateLimit.IOPool == 0 {
 		c.RateLimit.IOPool = 16
-	}
-	if c.RateLimit.CPUPool == 0 {
-		c.RateLimit.CPUPool = runtime.NumCPU()
 	}
 	if c.RateLimit.MinConcurrency == 0 {
 		c.RateLimit.MinConcurrency = 1

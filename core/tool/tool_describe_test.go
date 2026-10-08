@@ -92,3 +92,16 @@ func TestDescribeToolListsSplitFieldScopes(t *testing.T) {
 		t.Fatalf("fields = %v", names)
 	}
 }
+
+func TestDescribeRejectsInvalidInput(t *testing.T) {
+	t.Parallel()
+	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	tc := Context{Role: "reader", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}
+	for _, input := range []string{`{"entitty":"users"}`, `[]`, `{"entity":1}`} {
+		if _, err := (DescribeTool{}).Run(context.Background(), json.RawMessage(input), tc); !errors.Is(
+			err, ErrInvalidInput,
+		) {
+			t.Errorf("input %s: error = %v, want invalid input", input, err)
+		}
+	}
+}
