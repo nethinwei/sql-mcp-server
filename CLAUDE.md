@@ -67,6 +67,10 @@ MCP SDK、YAML、gqlgen 都在 `x/` 或 `cmd/`。新增数据库只改 `x/provid
 - **管理 API**：`x/admin`（会话 Cookie + CSRF、登录并发闸门、改密吊销会话）+
   `x/admin/graph`（gqlgen，schema-first，`schema.graphqls`；读模型如实返回配置值，
   未设置即 null）。
+- **批量配置**（`docs/design/planning.md`）：`x/catalog`（扫描目录 DTO 与 Store，
+  配置库 schema 3 持久化）→ `x/configplan`（纯计算：Plan → Proposal + Report，
+  候选实体命名也在这里）→ `x/admin/graph` 的 `catalog`/`previewPlan`/模板/`pending`
+  → `x/admin/configmcp`（`/admin/mcp`，管理员令牌，复用 resolver，无发布工具）。
 - **控制台**：`web/admin`（Vue 3 + Naive UI + urql + vue-i18n zh-CN/en），通过
   `x/admin/ui` go:embed。工作区状态在 `src/stores/workspace.ts`（变更检测、按属性
   三方合并 rebase（`src/lib/merge.ts`，冲突须逐项解决后才能发布）、实体/角色引用维护），

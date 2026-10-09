@@ -116,6 +116,13 @@ smcp_revisions (
 )
 ```
 
+管理面另有不属于配置 revision 的表（发布不会改动它们）：`smcp_admin_accounts`
+（schema 版本 2）；`smcp_catalog_lists`、`smcp_catalog_schemas`（扫描目录）、
+`smcp_plan_templates` 与 `smcp_plan_template_versions`（方案模板及其版本）、
+`smcp_admin_tokens`（配置 MCP 令牌哈希）、`smcp_pending_states` 与
+`smcp_pending_log`（待处理事项的状态与记录）（schema 版本 3，见
+`docs/design/planning.md`）。
+
 - **store 自身 schema 版本化**：`smcp_store_meta.schema_version` 记录表结构
   版本；打开 store 时版本未知或更新于程序 → fail closed；旧版本按内置迁移
   升级，迁移在事务内执行。

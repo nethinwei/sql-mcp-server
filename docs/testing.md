@@ -78,6 +78,22 @@ quickstart 和 attestation 验证脚本由本地 Make target 与 GitHub Actions 
   逐叶子校验合并规则（单方修改保留、双方不同即冲突且不漏报、两侧交换对称、采用
   对方后取值一致），`workspace.test.ts` 随机生成“编辑 / 他人发布 / 变基 / 选择”
   序列；失败信息给出可复现的种子。
+- 批量配置：`x/configplan` 的表驱动测试与随机性质测试（随机目录、配置与方案：
+  结果总能通过配置校验，同一方案执行第二次没有修改，每个应授予而未授予的授权都
+  有例外；改坏合并或规则顺序时测试失败）；`x/catalog/catalogtest` 与配置库的
+  模板/令牌测试在 SQLite 与 PostgreSQL/MySQL/OceanBase 上运行；
+  `x/admin/configmcp` 用真实 MCP 客户端端到端测试配置 MCP（没有发布工具、只读
+  管理员不能保存草稿、过期与停用账号的令牌失效、预览不一致时拒绝保存、在草稿上
+  继续）。控制台的操作链路有单元测试：乱序返回时只采用最新的方案预览
+  （`src/lib/planPreview.test.ts`）、“选择全部匹配”的筛选快照与排除
+  （`src/lib/selection.test.ts`，含匹配数变化后的确认）、模板载入不改变导入语义、
+  扫描批次的跟随与刷新（`src/lib/schemaScans.test.ts`）、工作区计算上下文（载入
+  草稿也作为基准）、异步读取的状态与单表同步在找不到表时不提出删除
+  （`src/lib/asyncResource.test.ts`）。扫描批次的接管与取消在
+  `x/admin/graph/scans_test.go`，批次存储在四种配置库上跑一致性套件；按需生成的
+  候选实体与全量生成逐项一致由 `x/configplan` 的随机测试保证。规模基准（500 个库、5 万张表）：
+  `go test ./x/configplan ./x/admin/graph -run '^$' -bench 'Large|CatalogPage'`，
+  其中 `BenchmarkCatalogPageParallel` 模拟多个管理员并发翻页。
 
 ## 安全 corpus 与 fuzz
 
