@@ -38,6 +38,23 @@ func TestCheckFileLineLength(t *testing.T) {
 	}
 }
 
+// gqlgen writes resolver signatures; only those, and only in resolver files,
+// may be long.
+func TestCheckFileResolverSignature(t *testing.T) {
+	long := strings.Repeat("x", maxLineColumns)
+	source := []byte("package sample\n\nfunc (r *queryResolver) Q(" + long + " int) {\n}\n\n// " + long + "\n")
+	issues, err := checkFile("schema.resolvers.go", source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || !strings.Contains(issues[0].detail, "line 6 has") {
+		t.Fatalf("issues = %#v, want the comment only", issues)
+	}
+	if issues, _ := checkFile("other.go", source); len(issues) != 2 {
+		t.Fatalf("issues = %#v, want both lines outside a resolver file", issues)
+	}
+}
+
 func TestCheckFileTooManyLines(t *testing.T) {
 	lines := make([]string, maxFileLines+1)
 	for i := range lines {

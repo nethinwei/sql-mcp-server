@@ -2,8 +2,8 @@
 import { computed, h, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
-  NAlert, NButton, NCard, NDataTable, NForm, NFormItem, NInput, NInputNumber, NPopconfirm, NSpace, NTag, NText,
-  useMessage, type DataTableColumns,
+  NAlert, NButton, NCard, NDataTable, NForm, NFormItem, NInput, NInputNumber, NPopconfirm, NSelect, NSpace, NSwitch, NTag,
+  NText, useMessage, type DataTableColumns,
 } from 'naive-ui'
 import { run } from '@/api/client'
 import { CreateMcpTokenMutation, McpTokensQuery, RevokeMcpTokenMutation } from '@/api/ops'
@@ -11,12 +11,14 @@ import type { McpTokensQuery as Tokens } from '@/gql/graphql'
 import { session } from '@/api/session'
 import McpConnect from '@/components/McpConnect.vue'
 import SecretOnce from '@/components/SecretOnce.vue'
+import { useWorkspace } from '@/stores/workspace'
 
 // The configuration MCP endpoint lets an agent work for the signed-in
 // administrator: search the catalog, scan, preview plans and save them as
 // drafts. It never publishes; drafts are reviewed and published here. Each
 // client gets a token of its own, named, with an expiry, revoked on its own;
-// a token acts with the administrator's permissions and is shown once.
+// a token acts with the administrator's permissions, narrowed to reading or
+// to some datasources when asked, and is shown once.
 type Token = Tokens['mcpTokens'][number]
 
 const { t } = useI18n()
@@ -25,6 +27,11 @@ const tokens = ref<Token[]>([])
 const error = ref('')
 const name = ref('')
 const days = ref<number | null>(90)
+const readOnly = ref(false)
+/** The datasources the token reaches; empty: every one. */
+const datasources = ref<string[]>([])
+const ws = useWorkspace()
+const datasourceOptions = computed(() => ws.datasources.map((d) => ({ label: d.name, value: d.name })))
 const created = ref<{ token: string; name: string } | null>(null)
 
 async function load() {
@@ -39,9 +46,15 @@ onMounted(load)
 
 async function create() {
   try {
-    const { createMcpToken } = await run(CreateMcpTokenMutation, { input: { name: name.value.trim(), expiresInDays: days.value ?? 0 } }, true)
+    const input = {
+      name: name.value.trim(), expiresInDays: days.value ?? 0, readOnly: readOnly.value,
+      datasources: datasources.value.length ? datasources.value : null,
+    }
+    const { createMcpToken } = await run(CreateMcpTokenMutation, { input }, true)
     created.value = { token: createMcpToken.token, name: createMcpToken.info.name }
     name.value = ''
+    readOnly.value = false
+    datasources.value = []
     await load()
   } catch (e) {
     message.error(e instanceof Error ? e.message : String(e))
@@ -58,6 +71,14 @@ const when = (at?: string | null) => (at ? new Date(at).toLocaleString() : '—'
 const expired = (tk: Token) => !!tk.expiresAt && new Date(tk.expiresAt).getTime() <= Date.now()
 const columns = computed<DataTableColumns<Token>>(() => [
   { title: t('agent.client'), key: 'name', render: (tk) => h('span', { class: 'strong' }, tk.name) },
+  {
+    title: t('agent.scope'), key: 'scope',
+    render: (tk) => h('div', { class: 'tags' }, [
+      h(NTag, { size: 'small', bordered: false, type: tk.readOnly ? 'default' : 'warning' },
+        () => (tk.readOnly ? t('agent.readOnly') : t('agent.canDraft'))),
+      h(NText, { depth: 2 }, () => (tk.datasources?.length ? tk.datasources.join(', ') : t('agent.allDatasources'))),
+    ]),
+  },
   { title: t('agent.created'), key: 'createdAt', render: (tk) => when(tk.createdAt) },
   {
     title: t('agent.expires'), key: 'expiresAt',
@@ -89,6 +110,13 @@ const columns = computed<DataTableColumns<Token>>(() => [
         <n-form-item :label="t('agent.expiresIn')">
           <n-input-number v-model:value="days" :min="0" :max="3650" :placeholder="t('agent.never')" class="days" />
         </n-form-item>
+        <n-form-item :label="t('agent.readOnly')">
+          <n-switch v-model:value="readOnly" />
+        </n-form-item>
+        <n-form-item :label="t('agent.datasources')">
+          <n-select v-model:value="datasources" multiple clearable :options="datasourceOptions" class="datasources"
+            :placeholder="t('agent.allDatasources')" />
+        </n-form-item>
         <n-form-item>
           <n-button type="primary" attr-type="submit" :disabled="!name.trim()">{{ t('agent.generate') }}</n-button>
         </n-form-item>
@@ -108,5 +136,7 @@ const columns = computed<DataTableColumns<Token>>(() => [
 .stack { display: flex; flex-direction: column; }
 .hint { font-size: 12px; }
 .days { width: 140px; }
+.datasources { min-width: 200px; }
+:deep(.tags) { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 :deep(.strong) { font-weight: 600; }
 </style>

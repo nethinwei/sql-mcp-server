@@ -14,10 +14,10 @@ var graphPrivileges = map[introspect.Privilege]Privilege{
 
 // capabilities returns the serving snapshot's capabilities, or nil.
 func (r *Resolver) capabilities() bootstrap.EntityCapabilities {
-	if r.Capabilities == nil {
+	if r.App.Capabilities == nil {
 		return nil
 	}
-	return r.Capabilities()
+	return r.App.Capabilities()
 }
 
 // toCapabilities flattens capabilities by entity and action, in a stable order.

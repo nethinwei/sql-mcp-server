@@ -89,10 +89,13 @@ quickstart 和 attestation 验证脚本由本地 Make target 与 GitHub Actions 
   （`src/lib/selection.test.ts`，含匹配数变化后的确认）、模板载入不改变导入语义、
   扫描批次的跟随与刷新（`src/lib/schemaScans.test.ts`）、工作区计算上下文（载入
   草稿也作为基准）、异步读取的状态与单表同步在找不到表时不提出删除
-  （`src/lib/asyncResource.test.ts`）。扫描批次的接管与取消在
-  `x/admin/graph/scans_test.go`，批次存储在四种配置库上跑一致性套件；按需生成的
-  候选实体与全量生成逐项一致由 `x/configplan` 的随机测试保证。规模基准（500 个库、5 万张表）：
-  `go test ./x/configplan ./x/admin/graph -run '^$' -bench 'Large|CatalogPage'`，
+  （`src/lib/asyncResource.test.ts`）。扫描批次的接管、取消、失败
+  重试、幂等键与配额在 `x/admin/configapp/scans_test.go`，批次存储（条件迁移、旧运行
+  写不进、并发创建不越过上限）在四种配置库上跑一致性套件；令牌范围与例外确认绑定在
+  `x/admin/configmcp`。按需生成的候选实体与全量生成、目录索引过滤与 `Rows` 逐项一致
+  由 `x/configplan` 的随机测试保证；缓存的并发去重与预算淘汰在
+  `x/admin/configapp/lru_test.go`。规模基准（500 个库、5 万张表）：
+  `go test ./x/configplan ./x/admin/configapp -run '^$' -bench 'Large|CatalogPage'`，
   其中 `BenchmarkCatalogPageParallel` 模拟多个管理员并发翻页：ns/op 是吞吐，
   `p50-ms`/`p95-ms` 是逐请求计时的延迟，一半请求的筛选从未出现过、不命中缓存。
 

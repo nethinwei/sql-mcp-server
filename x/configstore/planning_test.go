@@ -3,6 +3,7 @@ package configstore
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -94,8 +95,9 @@ func assertTokens(t *testing.T, s *SQLStore) {
 	t.Helper()
 	ctx := context.Background()
 	expires := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	scope := TokenScope{ReadOnly: true, Datasources: []string{"shop"}}
 	laptop, err := s.CreateAdminToken(ctx, AdminToken{ID: "t1", Username: "root", Name: "laptop", TokenHash: "sha256:1",
-		ExpiresAt: expires})
+		ExpiresAt: expires, Scope: scope})
 	if err != nil || laptop.CreatedAt.IsZero() {
 		t.Fatalf("create = %+v, %v", laptop, err)
 	}
@@ -113,7 +115,8 @@ func assertTokens(t *testing.T, s *SQLStore) {
 		t.Fatal(err)
 	}
 	tok, ok, err := s.AdminTokenByHash(ctx, "sha256:1")
-	if err != nil || !ok || tok.Username != "root" || !tok.ExpiresAt.Equal(expires) || !tok.LastUsedAt.IsZero() {
+	if err != nil || !ok || tok.Username != "root" || !tok.ExpiresAt.Equal(expires) || !tok.LastUsedAt.IsZero() ||
+		!reflect.DeepEqual(tok.Scope, scope) {
 		t.Fatalf("by hash = %+v %v %v", tok, ok, err)
 	}
 	used := time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)

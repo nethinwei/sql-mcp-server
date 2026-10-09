@@ -2,7 +2,6 @@ package graph
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -12,7 +11,7 @@ import (
 	"github.com/99designs/gqlgen/client"
 
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
-	"github.com/nethinwei/sql-mcp-server/x/catalog"
+	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
 )
 
@@ -30,7 +29,7 @@ func planningHarness(t *testing.T) (*harness, *client.Client) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	h.resolver.Plans = store
+	h.resolver.App.Plans = store
 	c := h.client(auth.PermAll)
 	var listed map[string]any
 	mustPost(t, c, `{ schemaList(datasource: "shop") { defaultSchema } }`, &listed)
@@ -176,7 +175,7 @@ func checkPlanDrafts(t *testing.T, h *harness, c *client.Client) {
 	}
 	mustPost(t, c, draftMutation, &saved, client.Var("in", map[string]any{
 		"plan": mustJSON(importPlan), "planId": preview.PreviewPlan.PlanID, "comment": "import orders"}))
-	id, err := parseID(saved.CreatePlanDraft.ID)
+	id, err := configapp.ParseID(saved.CreatePlanDraft.ID)
 	if err != nil || saved.CreatePlanDraft.State != "DRAFT" ||
 		!strings.Contains(h.payload(t, id), "shop.public.orders") {
 		t.Fatalf("draft = %+v", saved)
@@ -186,7 +185,7 @@ func checkPlanDrafts(t *testing.T, h *harness, c *client.Client) {
 		"plan": mustJSON(
 			`{"scope": {"tables": ["orders"]}, "grants": [{"principal": "role:support", "actions": ["read"]}]}`,
 		)}))
-	next, _ := parseID(second.CreatePlanDraft.ID)
+	next, _ := configapp.ParseID(second.CreatePlanDraft.ID)
 	if second.CreatePlanDraft.Parent != saved.CreatePlanDraft.ID || !strings.Contains(h.payload(t, next), "support") ||
 		!strings.Contains(h.payload(t, next), "shop.public.orders") {
 		t.Fatalf("continued draft = %+v", second)
@@ -405,7 +404,7 @@ func TestCatalogLinksScopeAndBatches(t *testing.T) {
 }
 
 func TestScanBatches(t *testing.T) {
-	h, c := planningHarness(t)
+	_, c := planningHarness(t)
 	var batch struct{ StartScanBatch struct{ ID string } }
 	mustPost(t, c, `mutation { startScanBatch(input: {datasource: "shop", schemas: ["public"]}) { id } }`, &batch)
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
@@ -431,37 +430,6 @@ func TestScanBatches(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "nothing") {
 		t.Fatalf("retrying a batch that did not fail: %v", err)
-	}
-	h.assertBatchQuotas(t, c)
-}
-
-// Batches cannot pile up: a datasource runs a few at a time, of a bounded
-// number of schemas each.
-func (h *harness) assertBatchQuotas(t *testing.T, c *client.Client) {
-	t.Helper()
-	scans, err := h.resolver.scans()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := range batchOpen {
-		if err := scans.store.PutBatch(context.Background(), catalog.Batch{ID: fmt.Sprint("open", i),
-			Datasource: "shop", Owner: "elsewhere", StartedAt: time.Now(), Heartbeat: time.Now()}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	var resp map[string]any
-	err = c.Post(`mutation { startScanBatch(input: {datasource: "shop", schemas: ["public"]}) { id } }`, &resp)
-	if err == nil || !strings.Contains(err.Error(), "running") {
-		t.Fatalf("a batch past the quota: %v", err)
-	}
-	many := make([]string, batchSchemas+1)
-	for i := range many {
-		many[i] = fmt.Sprint("s", i)
-	}
-	err = c.Post(`mutation($s: [String!]!) { startScanBatch(input: {datasource: "shop", schemas: $s}) { id } }`, &resp,
-		client.Var("s", many))
-	if err == nil || !strings.Contains(err.Error(), "at most") {
-		t.Fatalf("a batch of too many schemas: %v", err)
 	}
 }
 

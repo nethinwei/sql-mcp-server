@@ -40,26 +40,17 @@ func runServerConformance(t *testing.T, spec Spec) {
 		catalogtest.Run(t, func(t *testing.T) catalog.Store { return freshStore(t, spec) })
 	})
 	t.Run("Planning", func(t *testing.T) { assertPlanning(t, freshStore(t, spec)) })
+	t.Run("MigratesVersionThree", func(t *testing.T) {
+		dropTables(t, spec)
+		assertMigratesVersionThree(t, spec)
+	})
 }
 
 // freshStore drops the store tables and initializes them again.
 func freshStore(t *testing.T, spec Spec) *SQLStore {
 	t.Helper()
 	ctx := context.Background()
-	db, err := sql.Open(dialects[spec.Driver].driver, spec.DSN)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, table := range []string{
-		"smcp_revisions", "smcp_store_meta", "smcp_admin_accounts", "smcp_catalog_lists", "smcp_catalog_schemas",
-		"smcp_plan_templates", "smcp_plan_template_versions", "smcp_admin_tokens", "smcp_pending_states", "smcp_scan_batches",
-		"smcp_pending_log",
-	} {
-		if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
-			t.Fatal(err)
-		}
-	}
-	_ = db.Close()
+	dropTables(t, spec)
 	if err := Init(ctx, spec, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -69,6 +60,25 @@ func freshStore(t *testing.T, spec Spec) *SQLStore {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	return store
+}
+
+func dropTables(t *testing.T, spec Spec) {
+	t.Helper()
+	ctx := context.Background()
+	db, err := sql.Open(dialects[spec.Driver].driver, spec.DSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{
+		"smcp_revisions", "smcp_store_meta", "smcp_admin_accounts", "smcp_catalog_lists", "smcp_catalog_schemas",
+		"smcp_plan_templates", "smcp_plan_template_versions", "smcp_admin_tokens", "smcp_pending_states", "smcp_scan_batches",
+		"smcp_scan_batch_items", "smcp_pending_log",
+	} {
+		if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = db.Close()
 }
 
 func TestPostgresStoreConformance(t *testing.T) {

@@ -1,4 +1,4 @@
-package graph
+package configapp
 
 import (
 	"context"
@@ -9,9 +9,9 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 )
 
-// schemaList lists the schemas of datasource with what was scanned of each;
+// SchemaList lists the schemas of datasource with what was scanned of each;
 // the list is read from the database once, and again on refresh.
-func (r *Resolver) schemaList(ctx context.Context, datasource string, refresh bool) (*SchemaList, error) {
+func (r *Service) SchemaList(ctx context.Context, datasource string, refresh bool) (*SchemaList, error) {
 	cfg, scans, src, err := r.scanContext(ctx, datasource)
 	if err != nil {
 		return nil, err
@@ -44,10 +44,10 @@ func (r *Resolver) schemaList(ctx context.Context, datasource string, refresh bo
 	return out, nil
 }
 
-func (r *Resolver) listSchemas(
+func (r *Service) listSchemas(
 	ctx context.Context, datasource string, database config.DatabaseConfig,
 ) (listedSchemas, error) {
-	ctx, cancel := context.WithTimeout(ctx, requestScanTimeout)
+	ctx, cancel := context.WithTimeout(ctx, RequestScanTimeout)
 	defer cancel()
 	var listed listedSchemas
 	err := r.Introspect(ctx, datasource, database, func(in introspect.Introspector) (err error) {
@@ -62,8 +62,8 @@ func (r *Resolver) listSchemas(
 	return listed, nil
 }
 
-// schemaTables returns the tables of the kept ones of schemas (nil: all).
-func (r *Resolver) schemaTables(ctx context.Context, datasource string, schemas []string) (*SchemaImport, error) {
+// SchemaTables returns the tables of the kept ones of schemas (nil: all).
+func (r *Service) SchemaTables(ctx context.Context, datasource string, schemas []string) (*Imports, error) {
 	cfg, scans, src, err := r.scanContext(ctx, datasource)
 	if err != nil {
 		return nil, err
@@ -71,9 +71,9 @@ func (r *Resolver) schemaTables(ctx context.Context, datasource string, schemas 
 	return scans.importOf(ctx, src, schemas, cfg)
 }
 
-// startSchemaScan queues a scan of schemas of datasource (none: every schema
+// StartSchemaScan queues a scan of schemas of datasource (none: every schema
 // it lists, or its default one) and keeps what it finds.
-func (r *Resolver) startSchemaScan(ctx context.Context, datasource string, schemas []string) (*ScanJob, error) {
+func (r *Service) StartSchemaScan(ctx context.Context, datasource string, schemas []string) (*ScanJob, error) {
 	cfg, scans, src, err := r.scanContext(ctx, datasource)
 	if err != nil {
 		return nil, err
@@ -85,8 +85,8 @@ func (r *Resolver) startSchemaScan(ctx context.Context, datasource string, schem
 	return toScanJob(job), nil
 }
 
-// schemaScan reads a scan, or cancels it.
-func (r *Resolver) schemaScan(ctx context.Context, id string, cancel bool) (*ScanJob, error) {
+// SchemaScan reads a scan, or cancels it.
+func (r *Service) SchemaScan(ctx context.Context, id string, cancel bool) (*ScanJob, error) {
 	if _, err := auth.Require(ctx, auth.PermWrite); err != nil {
 		return nil, err
 	}
@@ -98,10 +98,14 @@ func (r *Resolver) schemaScan(ctx context.Context, id string, cancel bool) (*Sca
 	if cancel {
 		get = scans.pool.Cancel
 	}
-	job, ok := get(id)
+	job, ok := scans.pool.Get(id)
 	if !ok {
 		return nil, nil
 	}
+	if _, err := auth.RequireDatasource(ctx, auth.PermWrite, job.Label); err != nil {
+		return nil, err
+	}
+	job, _ = get(id)
 	return toScanJob(job), nil
 }
 
@@ -109,7 +113,7 @@ func (r *Resolver) schemaScan(ctx context.Context, id string, cancel bool) (*Sca
 // default one) and keeps what it finds. It reads the database of cfg, the
 // configuration the scan was started with, which src names, even when the
 // runtime reloads meanwhile.
-func (r *Resolver) scanRun(
+func (r *Service) scanRun(
 	cfg *config.Config, scans *Scans, src source, datasource string, schemas []string,
 ) func(context.Context) (struct{}, error) {
 	return func(ctx context.Context) (struct{}, error) {
@@ -127,4 +131,43 @@ func (r *Resolver) scanRun(
 		}
 		return struct{}{}, scans.keep(ctx, src, scanned, cat)
 	}
+}
+
+// importCatalog scans schemas, or every schema of the database when none are
+// named (only the default one when the introspector cannot list them), and
+// returns the schemas it scanned (none for the default one).
+func importCatalog(
+	ctx context.Context, in introspect.Introspector, schemas []string,
+) (introspect.Catalog, []string, error) {
+	if lister, ok := in.(introspect.SchemaLister); ok && len(schemas) == 0 {
+		all, _, err := lister.Schemas(ctx)
+		if err != nil {
+			return introspect.Catalog{}, nil, err
+		}
+		schemas = all
+	}
+	cat, err := LoadCatalog(ctx, in, schemas, len(schemas) == 0)
+	return cat, schemas, err
+}
+
+// LoadCatalog loads a catalog that matches names the way the database
+// compares them, as assembly does.
+func LoadCatalog(
+	ctx context.Context,
+	in introspect.Introspector,
+	schemas []string,
+	withDefault bool,
+) (introspect.Catalog, error) {
+	cat, err := introspect.LoadCatalog(ctx, in, schemas, withDefault)
+	if err != nil {
+		return cat, err
+	}
+	if namer, ok := in.(introspect.PhysicalNamer); ok {
+		physical, err := namer.Physical(ctx)
+		if err != nil {
+			return cat, err
+		}
+		cat.FoldCase = physical.FoldCase
+	}
+	return cat, nil
 }

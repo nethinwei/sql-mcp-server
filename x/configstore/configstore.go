@@ -24,8 +24,9 @@ const TablePrefix = config.StoreTablePrefix
 
 // SchemaVersion is the store table layout this build understands. Version 2
 // added administrator accounts, version 3 the scanned catalog, plan templates
-// and administrator tokens.
-const SchemaVersion = 3
+// and administrator tokens, version 4 token scopes and scan batch items as
+// rows.
+const SchemaVersion = 4
 
 // Errors returned when opening a store.
 var (
@@ -84,6 +85,11 @@ func (s *SQLStore) migrate(ctx context.Context, version int64) error {
 		err := s.withTx(ctx, func(tx *sql.Tx) error {
 			for _, ddl := range s.dialect.migrations[v-1] {
 				if _, err := tx.ExecContext(ctx, ddl); err != nil {
+					return err
+				}
+			}
+			if move, ok := dataMigrations[v]; ok {
+				if err := move(ctx, s, tx); err != nil {
 					return err
 				}
 			}

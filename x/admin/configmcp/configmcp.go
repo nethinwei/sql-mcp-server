@@ -1,10 +1,11 @@
 // Package configmcp serves the configuration MCP endpoint at /admin/mcp: an
 // agent, signed in with one of an administrator's tokens, searches the
 // scanned catalog, scans schemas, previews plans and saves them as drafts,
-// and validates, diffs and simulates configurations. It has no tool to
-// publish: an administrator reviews and publishes drafts in the console. Each
-// tool calls the admin API resolvers, so permissions and results are the
-// console's.
+// and diffs and simulates configurations. It has no tool to publish: an
+// administrator reviews and publishes drafts in the console. Each tool calls
+// the configuration service the console's API calls, so permissions, checks
+// and results are the console's; a token may narrow them (read only, some
+// datasources).
 package configmcp
 
 import (
@@ -20,7 +21,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/version"
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
-	"github.com/nethinwei/sql-mcp-server/x/admin/graph"
+	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
 )
 
@@ -45,7 +46,7 @@ const touchEvery = time.Minute
 // console for one client; it acts with the administrator's current
 // permissions and stops working when it expires, is revoked or the account
 // is disabled.
-func New(r *graph.Resolver, tokens Tokens, admins accounts.Store, opts Options) http.Handler {
+func New(app *configapp.Service, tokens Tokens, admins accounts.Store, opts Options) http.Handler {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
@@ -55,7 +56,7 @@ func New(r *graph.Resolver, tokens Tokens, admins accounts.Store, opts Options) 
 			Instructions: instructions,
 		},
 	)
-	register(s, r)
+	register(s, app)
 	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s },
 		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
 	return authenticate(tokens, admins, opts, handler)
@@ -63,8 +64,9 @@ func New(r *graph.Resolver, tokens Tokens, admins accounts.Store, opts Options) 
 
 const instructions = `Configures sql-mcp-server for an administrator. Find tables with catalog_search (scan
 schemas with scan_schemas when they are not scanned), describe what to do as a plan, check it with
-plan_preview (a summary; page through its objects and exceptions with plan_details) and save it with
-plan_save_draft, passing the planId plan_preview returned; continue a draft by passing it as base.
+plan_preview (a summary; page through what it previewed with plan_details and its planId) and save it
+with plan_save_draft, passing the planId and the IDs of the exceptions to confirm the administrator
+confirmed; continue a draft by passing it as base.
 An administrator reviews and publishes drafts in the console (the result links to it). A plan is
 {scope, import, grants, fields, sync, exclude, names}: scope selects scanned tables by datasource,
 schema and table glob patterns, search text and status (new, workspace, published); import adds
@@ -121,14 +123,25 @@ func authenticate(tokens Tokens, admins accounts.Store, opts Options, next http.
 				slog.Warn("config MCP token use not recorded", "error", err.Error())
 			}
 		}
-		ctx := auth.WithPrincipal(
-			r.Context(),
-			auth.Principal{Username: account.Username, Permissions: account.Permissions},
-		)
+		ctx := auth.WithPrincipal(r.Context(), scoped(account.Username, account.Permissions, found.Scope))
 		ctx = context.WithValue(ctx, baseURLKey, requestBase(r, opts.PathPrefix))
 		ctx = context.WithValue(ctx, tokenKey, found.Name)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// scoped is an administrator as one of their tokens acts: with the
+// administrator's current permissions, narrowed by the token's scope (read
+// only, some datasources).
+func scoped(username string, permissions []string, scope configstore.TokenScope) auth.Principal {
+	p := auth.Principal{Username: username, Permissions: permissions, Datasources: scope.Datasources}
+	if scope.ReadOnly {
+		p.Permissions = nil
+		if (auth.Principal{Permissions: permissions}).Has(auth.PermRead) {
+			p.Permissions = []string{auth.PermRead}
+		}
+	}
+	return p
 }
 
 func unauthorized(w http.ResponseWriter) {

@@ -7,13 +7,19 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 	"github.com/nethinwei/sql-mcp-server/x/configplan"
 )
 
-// tableKey identifies a table within a datasource: tables of different
-// schemas may share a name.
-func tableKey(schema, table string) string {
-	return schema + "." + table
+// toSchemaImport shows the scanned tables of a datasource with the entity
+// proposed for each.
+func toSchemaImport(in *configapp.Imports) *SchemaImport {
+	out := &SchemaImport{Datasource: in.Datasource, DefaultSchema: optional(in.DefaultSchema), Source: in.Source,
+		Tables: make([]ImportTable, 0, len(in.Tables))}
+	for _, c := range in.Tables {
+		out.Tables = append(out.Tables, importTable(c))
+	}
+	return out
 }
 
 // buildSchemaImport compares the scanned tables with the configured entities
@@ -86,45 +92,6 @@ func importForeignKeys(d entity.Entity) []ImportForeignKey {
 	return out
 }
 
-// importCatalog scans schemas, or every schema of the database when none are
-// named (only the default one when the introspector cannot list them), and
-// returns the schemas it scanned (none for the default one).
-func importCatalog(
-	ctx context.Context, in introspect.Introspector, schemas []string,
-) (introspect.Catalog, []string, error) {
-	if lister, ok := in.(introspect.SchemaLister); ok && len(schemas) == 0 {
-		all, _, err := lister.Schemas(ctx)
-		if err != nil {
-			return introspect.Catalog{}, nil, err
-		}
-		schemas = all
-	}
-	cat, err := loadCatalog(ctx, in, schemas, len(schemas) == 0)
-	return cat, schemas, err
-}
-
-// loadCatalog loads a catalog that matches names the way the database
-// compares them, as assembly does.
-func loadCatalog(
-	ctx context.Context,
-	in introspect.Introspector,
-	schemas []string,
-	withDefault bool,
-) (introspect.Catalog, error) {
-	cat, err := introspect.LoadCatalog(ctx, in, schemas, withDefault)
-	if err != nil {
-		return cat, err
-	}
-	if namer, ok := in.(introspect.PhysicalNamer); ok {
-		physical, err := namer.Physical(ctx)
-		if err != nil {
-			return cat, err
-		}
-		cat.FoldCase = physical.FoldCase
-	}
-	return cat, nil
-}
-
 // referencedCatalog scans the schemas refs name, and the default schema when
 // a ref names none.
 func referencedCatalog(ctx context.Context, in introspect.Introspector, refs []TableRef) (introspect.Catalog, error) {
@@ -137,7 +104,7 @@ func referencedCatalog(ctx context.Context, in introspect.Introspector, refs []T
 			schemas = append(schemas, schema)
 		}
 	}
-	return loadCatalog(ctx, in, schemas, unqualified)
+	return configapp.LoadCatalog(ctx, in, schemas, unqualified)
 }
 
 // lookupTableComments resolves each table's comments with one catalog per

@@ -1,4 +1,4 @@
-package graph
+package configapp
 
 import (
 	"context"
@@ -6,50 +6,36 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/nethinwei/sql-mcp-server/core/entity"
+	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/configplan"
 )
 
-// Catalog pages filter every scanned table on each request. Several
-// administrators page through the same filter, so the rows of a filter (but
-// for the status, which only narrows them) are cached per scans, base
-// configuration and published revision: a new scan, an edit of the draft or a
-// publish changes the key.
+// Catalog pages filter every scanned table on each request, and several
+// administrators page through the same filters. Where each table stands is
+// worked out once per scans, base configuration and published revision (an
+// index: a new scan, an edit of the draft or a publish makes another), and
+// the rows of a filter (but for the status, which only narrows them) are kept
+// as their positions in it. Both caches merge concurrent misses of a key and
+// evict the least recently used entries past a memory budget.
 
-const rowsCacheSize = 16
+const (
+	// indexBudget and matchBudget bound the bytes the indexes and the kept
+	// filters take.
+	indexBudget = 128 << 20
+	matchBudget = 32 << 20
+	// rowBytes is about what an indexed row takes.
+	rowBytes = 512
+)
 
-type rowsEntry struct {
-	key        string
-	rows       []configplan.Row
-	referenced map[string]int
-}
-
-type rowsCache struct {
-	mu      sync.Mutex
-	entries []*rowsEntry // most recently used last
-}
-
-func (c *rowsCache) get(key string, build func() *rowsEntry) *rowsEntry {
-	c.mu.Lock()
-	for i, e := range c.entries {
-		if e.key == key {
-			c.entries = append(slices.Delete(c.entries, i, i+1), e)
-			c.mu.Unlock()
-			return e
-		}
-	}
-	c.mu.Unlock()
-	e := build() // outside the lock: concurrent misses build twice, never block each other
-	e.key = key
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.entries = append(c.entries, e)
-	if len(c.entries) > rowsCacheSize {
-		c.entries = c.entries[1:]
-	}
-	return e
+// indexOf is the index of pc's scans and configurations.
+func (s *Scans) indexOf(pc planContext) *configplan.Index {
+	key := fmt.Sprintf("%s|%s|%d", pc.fingerprint, pc.baseHash, pc.publishedID)
+	return s.indexes.get(key, func() (*configplan.Index, int) {
+		x := configplan.NewIndex(pc.sources, pc.base, pc.published)
+		return x, x.Len() * rowBytes
+	})
 }
 
 func scopeOf(f CatalogFilter) configplan.Scope {
@@ -62,27 +48,24 @@ func scopeOf(f CatalogFilter) configplan.Scope {
 	return s
 }
 
-// scopeRows are the rows of scope, but for its status and drift conditions,
-// with how many foreign keys reference each table.
-func (s *Scans) scopeRows(pc planContext, scope configplan.Scope) *rowsEntry {
-	scope.Status, scope.Drift = nil, false
-	key, _ := json.Marshal(scope)
-	return s.rows.get(fmt.Sprintf("%s|%s|%d|%s", pc.fingerprint, pc.baseHash, pc.publishedID, key), func() *rowsEntry {
-		return &rowsEntry{
-			rows:       configplan.Rows(pc.sources, pc.base, pc.published, scope),
-			referenced: referencedBy(pc.sources),
-		}
-	})
-}
-
-// catalogRows lists the tables matching f, with the counts by status of
-// those matching it but for the status.
-func (s *Scans) catalogRows(pc planContext, f CatalogFilter) ([]configplan.Row, CatalogCounts, map[string]int) {
+// catalogRows lists the positions of the tables matching f in the index
+// they come from, with the counts by status of those matching it but for the
+// status.
+func (s *Scans) catalogRows(pc planContext, f CatalogFilter) ([]int32, CatalogCounts, *configplan.Index) {
+	x := s.indexOf(pc)
 	scope := scopeOf(f)
-	entry := s.scopeRows(pc, scope)
+	wide := scope
+	wide.Status, wide.Drift = nil, false
+	key, _ := json.Marshal(wide)
+	matched := s.matches.get(fmt.Sprintf("%s|%s|%d|%s", pc.fingerprint, pc.baseHash, pc.publishedID, key),
+		func() ([]int32, int) {
+			m := x.Match(wide)
+			return m, 4 * len(m)
+		})
 	var counts CatalogCounts
-	var out []configplan.Row
-	for _, row := range entry.rows {
+	var out []int32
+	for _, i := range matched {
+		row := x.At(i)
 		counts.All++
 		switch row.Status {
 		case configplan.StatusNew:
@@ -96,42 +79,36 @@ func (s *Scans) catalogRows(pc planContext, f CatalogFilter) ([]configplan.Row, 
 			counts.Drift++
 		}
 		if (len(scope.Status) == 0 || slices.Contains(scope.Status, row.Status)) && (!scope.Drift || row.Drift()) {
-			out = append(out, row)
+			out = append(out, i)
 		}
 	}
-	return out, counts, entry.referenced
+	return out, counts, x
 }
 
-func (r *Resolver) catalog(
-	ctx context.Context, f CatalogFilter, draft *DraftInput, offset, limit int,
-) (*CatalogPage, error) {
+// Catalog pages through the scanned tables matching f, against draft
+// (default: the published configuration).
+func (r *Service) Catalog(ctx context.Context, f CatalogFilter, draft *Draft, offset, limit int) (*CatalogPage, error) {
+	who, err := auth.Require(ctx, auth.PermWrite)
+	if err != nil {
+		return nil, err
+	}
+	if err := withinFilter(who, &f); err != nil {
+		return nil, err
+	}
 	pc, err := r.planContext(ctx, draft)
 	if err != nil {
 		return nil, err
 	}
-	rows, counts, referenced := r.Scans.catalogRows(pc, f)
+	rows, counts, x := r.Scans.catalogRows(pc, f)
+	out := &CatalogPage{Total: len(rows), Counts: &counts, Coverage: coverage(pc.sources, who)}
 	offset = min(max(offset, 0), len(rows))
 	page := rows[offset:min(offset+max(min(limit, 500), 0), len(rows))]
-	out := &CatalogPage{Total: len(rows), Counts: &counts, Tables: make([]CatalogRow, 0, len(page)),
-		Coverage: coverage(pc.sources)}
-	for _, row := range page {
-		out.Tables = append(out.Tables, toCatalogRow(row, referenced[row.Ref]))
+	out.Tables = make([]CatalogRow, 0, len(page))
+	for _, i := range page {
+		row := x.At(i)
+		out.Tables = append(out.Tables, toCatalogRow(row, x.Referenced(row.Ref)))
 	}
 	return out, nil
-}
-
-// referencedBy counts the foreign keys of scanned tables referencing each
-// table, by Ref.
-func referencedBy(sources []configplan.Source) map[string]int {
-	out := map[string]int{}
-	for _, src := range sources {
-		for _, t := range src.Catalog.Tables {
-			for _, fk := range t.ForeignKeys {
-				out[configplan.Ref(src.Datasource, refSchema(t, fk), fk.RefRelation)]++
-			}
-		}
-	}
-	return out
 }
 
 func refSchema(t entity.Entity, fk entity.ForeignKey) string {
@@ -141,10 +118,35 @@ func refSchema(t entity.Entity, fk entity.ForeignKey) string {
 	return fk.RefSchema
 }
 
-func coverage(sources []configplan.Source) []CatalogCoverage {
+// CatalogRefs lists the refs of every table matching f.
+func (r *Service) CatalogRefs(ctx context.Context, f CatalogFilter, draft *Draft) ([]string, error) {
+	who, err := auth.Require(ctx, auth.PermWrite)
+	if err != nil {
+		return nil, err
+	}
+	if err := withinFilter(who, &f); err != nil {
+		return nil, err
+	}
+	pc, err := r.planContext(ctx, draft)
+	if err != nil {
+		return nil, err
+	}
+	rows, _, x := r.Scans.catalogRows(pc, f)
+	out := make([]string, 0, len(rows))
+	for _, i := range rows {
+		out = append(out, x.At(i).Ref)
+	}
+	return out, nil
+}
+
+// coverage reports what is scanned of each datasource who may read.
+func coverage(sources []configplan.Source, who auth.Principal) []CatalogCoverage {
 	out := make([]CatalogCoverage, 0, len(sources))
 	unscanned := configplan.Unscanned(sources, configplan.Scope{})
 	for _, src := range sources {
+		if !who.Allows(src.Datasource) {
+			continue
+		}
 		c := CatalogCoverage{
 			Datasource: src.Datasource, Scanned: len(src.Scanned), Unscanned: orEmpty(unscanned[src.Datasource]),
 		}
@@ -191,7 +193,12 @@ func sourceOfRef(pc planContext, ref string) (configplan.Source, bool) {
 	return configplan.Source{}, false
 }
 
-func (r *Resolver) catalogTable(ctx context.Context, ref string, draft *DraftInput) (*ImportTable, error) {
+// CatalogTable is one scanned table in full, with the entity proposed for
+// it; nil when no scanned table has the ref.
+func (r *Service) CatalogTable(ctx context.Context, ref string, draft *Draft) (*configplan.Candidate, error) {
+	if _, err := auth.RequireDatasource(ctx, auth.PermWrite, refDatasource(ref)); err != nil {
+		return nil, err
+	}
 	pc, err := r.planContext(ctx, draft)
 	if err != nil {
 		return nil, err
@@ -212,14 +219,16 @@ func (r *Resolver) catalogTable(ctx context.Context, ref string, draft *DraftInp
 		return nil, nil
 	}
 	cs := configplan.Candidates(src.Datasource, src.Catalog, pc.base, nil, only)
-	t := importTable(cs[0])
-	return &t, nil
+	return &cs[0], nil
 }
 
-// catalogLinks lists the foreign keys of a table and those referencing it,
+// CatalogLinks lists the foreign keys of a table and those referencing it,
 // among the scanned tables of its datasource, with the entities reading the
 // other tables.
-func (r *Resolver) catalogLinks(ctx context.Context, ref string, draft *DraftInput) (*CatalogLinks, error) {
+func (r *Service) CatalogLinks(ctx context.Context, ref string, draft *Draft) (*CatalogLinks, error) {
+	if _, err := auth.RequireDatasource(ctx, auth.PermWrite, refDatasource(ref)); err != nil {
+		return nil, err
+	}
 	pc, err := r.planContext(ctx, draft)
 	if err != nil {
 		return nil, err
@@ -256,15 +265,14 @@ func (r *Resolver) catalogLinks(ctx context.Context, ref string, draft *DraftInp
 	return out, nil
 }
 
-// planScope counts what a scope selects, and each of its conditions alone.
-func (r *Resolver) planScope(ctx context.Context, v any, draft *DraftInput) (*ScopeStats, error) {
-	data, err := json.Marshal(v)
+// PlanScope counts what a scope selects, and each of its conditions alone.
+func (r *Service) PlanScope(ctx context.Context, scope configplan.Scope, draft *Draft) (*ScopeStats, error) {
+	who, err := auth.Require(ctx, auth.PermWrite)
 	if err != nil {
 		return nil, err
 	}
-	var scope configplan.Scope
-	if err := json.Unmarshal(data, &scope); err != nil {
-		return nil, fmt.Errorf("scope: %w", err)
+	if err := within(who, &scope); err != nil {
+		return nil, err
 	}
 	if err := (&configplan.Plan{Scope: scope, Import: true}).Check(); err != nil {
 		return nil, err
@@ -273,15 +281,19 @@ func (r *Resolver) planScope(ctx context.Context, v any, draft *DraftInput) (*Sc
 	if err != nil {
 		return nil, err
 	}
-	rows := configplan.Rows(pc.sources, pc.base, pc.published, scope)
+	x := r.Scans.indexOf(pc)
+	rows := x.Rows(scope)
 	out := &ScopeStats{Total: len(rows), Samples: []CatalogRow{}, Conditions: []ScopeCondition{}}
-	referenced := r.Scans.scopeRows(pc, configplan.Scope{}).referenced
 	for _, row := range rows[:min(len(rows), 5)] {
-		out.Samples = append(out.Samples, toCatalogRow(row, referenced[row.Ref]))
+		out.Samples = append(out.Samples, toCatalogRow(row, x.Referenced(row.Ref)))
 	}
 	for _, c := range scopeConditions(scope) {
+		if who.Limited() {
+			// Each condition alone, within what who reaches.
+			c.scope.Datasources = scope.Datasources
+		}
 		out.Conditions = append(out.Conditions, ScopeCondition{
-			Name: c.name, Value: c.value, Matched: len(configplan.Rows(pc.sources, pc.base, pc.published, c.scope)),
+			Name: c.name, Value: c.value, Matched: len(x.Match(c.scope)),
 		})
 	}
 	return out, nil

@@ -3,6 +3,7 @@ package configstore
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -21,6 +22,16 @@ type AdminToken struct {
 	ExpiresAt time.Time
 	// LastUsedAt is when the token last authenticated a request; zero never.
 	LastUsedAt time.Time
+	Scope      TokenScope
+}
+
+// TokenScope narrows what a token may do below its administrator's
+// permissions.
+type TokenScope struct {
+	// ReadOnly limits the token to reading: no scans, drafts or templates.
+	ReadOnly bool `json:"readOnly,omitempty"`
+	// Datasources limits the token to these datasources; nil does not.
+	Datasources []string `json:"datasources,omitempty"`
 }
 
 // MaxAdminTokens bounds the tokens of one administrator.
@@ -33,15 +44,21 @@ var (
 	ErrTokenNameTaken = errors.New("configstore: the administrator has a token with this name")
 )
 
-const tokenColumns = "id, username, name, token_hash, created_us, expires_us, last_used_us"
+const tokenColumns = "id, username, name, token_hash, created_us, expires_us, last_used_us, scope"
 
 func scanToken(row scanner) (AdminToken, error) {
 	var t AdminToken
 	var created, expires, used int64
-	if err := row.Scan(&t.ID, &t.Username, &t.Name, &t.TokenHash, &created, &expires, &used); err != nil {
+	var scope string
+	if err := row.Scan(&t.ID, &t.Username, &t.Name, &t.TokenHash, &created, &expires, &used, &scope); err != nil {
 		return AdminToken{}, err
 	}
 	t.CreatedAt, t.ExpiresAt, t.LastUsedAt = fromMicros(created), fromMicros(expires), fromMicros(used)
+	if scope != "" {
+		if err := json.Unmarshal([]byte(scope), &t.Scope); err != nil {
+			return AdminToken{}, fmt.Errorf("configstore: decode the scope of admin token %q: %w", t.ID, err)
+		}
+	}
 	return t, nil
 }
 
@@ -100,8 +117,12 @@ func (s *SQLStore) CreateAdminToken(ctx context.Context, t AdminToken) (AdminTok
 				return fmt.Errorf("%w: %q", ErrTokenNameTaken, t.Name)
 			}
 		}
-		_, err = s.exec(ctx, tx, "INSERT INTO smcp_admin_tokens ("+tokenColumns+") VALUES (?, ?, ?, ?, ?, ?, ?)",
-			t.ID, t.Username, t.Name, t.TokenHash, toMicros(t.CreatedAt), toMicros(t.ExpiresAt), 0)
+		scope, err := json.Marshal(t.Scope)
+		if err != nil {
+			return err
+		}
+		_, err = s.exec(ctx, tx, "INSERT INTO smcp_admin_tokens ("+tokenColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			t.ID, t.Username, t.Name, t.TokenHash, toMicros(t.CreatedAt), toMicros(t.ExpiresAt), 0, string(scope))
 		return err
 	})
 	if err != nil {

@@ -1,10 +1,11 @@
-package graph
+package configapp
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -34,10 +35,17 @@ func toPlanTemplates(all []configstore.PlanTemplate) ([]PlanTemplate, error) {
 	return out, nil
 }
 
-func (r *Resolver) planTemplates(ctx context.Context) ([]PlanTemplate, error) {
-	if _, err := auth.Require(ctx, auth.PermRead); err != nil {
+// PlanTemplates lists the plan templates; a principal limited to some
+// datasources sees those whose scope names only them.
+func (r *Service) PlanTemplates(ctx context.Context) ([]PlanTemplate, error) {
+	who, err := auth.Require(ctx, auth.PermRead)
+	if err != nil {
 		return nil, err
 	}
+	return r.templates(ctx, who)
+}
+
+func (r *Service) templates(ctx context.Context, who auth.Principal) ([]PlanTemplate, error) {
 	store, err := r.plans()
 	if err != nil {
 		return nil, err
@@ -46,11 +54,20 @@ func (r *Resolver) planTemplates(ctx context.Context) ([]PlanTemplate, error) {
 	if err != nil {
 		return nil, err
 	}
-	return toPlanTemplates(all)
+	out, err := toPlanTemplates(all)
+	if err != nil || !who.Limited() {
+		return out, err
+	}
+	return slices.DeleteFunc(out, func(t PlanTemplate) bool {
+		p, err := DecodePlan(t.Plan)
+		return err != nil || len(p.Scope.Datasources) == 0 ||
+			slices.ContainsFunc(p.Scope.Datasources, func(ds string) bool { return !who.Allows(ds) })
+	}), nil
 }
 
-func (r *Resolver) planTemplateVersions(ctx context.Context, name string) ([]PlanTemplate, error) {
-	if _, err := auth.Require(ctx, auth.PermRead); err != nil {
+// PlanTemplateVersions lists the versions of a template, newest first.
+func (r *Service) PlanTemplateVersions(ctx context.Context, name string) ([]PlanTemplate, error) {
+	if _, err := auth.RequireUnlimited(ctx, auth.PermRead); err != nil {
 		return nil, err
 	}
 	store, err := r.plans()
@@ -64,8 +81,10 @@ func (r *Resolver) planTemplateVersions(ctx context.Context, name string) ([]Pla
 	return toPlanTemplates(all)
 }
 
-func (r *Resolver) savePlanTemplate(ctx context.Context, in PlanTemplateInput) (*PlanTemplate, error) {
-	who, err := auth.Require(ctx, auth.PermWrite)
+// SavePlanTemplate creates a template, or saves a new version of one
+// while it is still at in.ExpectedVersion.
+func (r *Service) SavePlanTemplate(ctx context.Context, in PlanTemplateInput) (*PlanTemplate, error) {
+	who, err := auth.RequireUnlimited(ctx, auth.PermWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +96,7 @@ func (r *Resolver) savePlanTemplate(ctx context.Context, in PlanTemplateInput) (
 	if name == "" || utf8.RuneCountInString(name) > 64 {
 		return nil, errors.New("a template name has 1 to 64 characters")
 	}
-	p, err := decodePlan(in.Plan)
+	p, err := DecodePlan(in.Plan)
 	if err != nil {
 		return nil, err
 	}
@@ -89,14 +108,15 @@ func (r *Resolver) savePlanTemplate(ctx context.Context, in PlanTemplateInput) (
 		Name: name, Plan: data, Recurring: in.Recurring, Author: who.Username,
 	}, derefInt(in.ExpectedVersion, 0))
 	if err != nil {
-		return nil, apiError(err)
+		return nil, err
 	}
 	out, err := toPlanTemplate(saved)
 	return &out, err
 }
 
-func (r *Resolver) deletePlanTemplate(ctx context.Context, name string) (bool, error) {
-	if _, err := auth.Require(ctx, auth.PermWrite); err != nil {
+// DeletePlanTemplate deletes a template with its versions.
+func (r *Service) DeletePlanTemplate(ctx context.Context, name string) (bool, error) {
+	if _, err := auth.RequireUnlimited(ctx, auth.PermWrite); err != nil {
 		return false, err
 	}
 	store, err := r.plans()

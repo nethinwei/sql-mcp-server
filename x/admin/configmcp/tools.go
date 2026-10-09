@@ -2,20 +2,23 @@ package configmcp
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/nethinwei/sql-mcp-server/core/entity"
+	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
-	"github.com/nethinwei/sql-mcp-server/x/admin/graph"
+	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/configplan"
 )
 
 type catalogIn struct {
-	graph.CatalogFilter
+	configapp.CatalogFilter
 	Offset int `json:"offset,omitempty" jsonschema:"tables to skip"`
 	Limit  int `json:"limit,omitempty"  jsonschema:"tables to return, at most 500 (default 50)"`
 }
@@ -28,15 +31,20 @@ type scopeIn struct {
 	Scope configplan.Scope `json:"scope" jsonschema:"the scope part of a plan"`
 }
 
-type validateIn struct {
-	Draft graph.DraftInput `json:"draft" jsonschema:"a base revision and the sections to replace"`
-}
-
 type diffIn struct {
 	From   string `json:"from"             jsonschema:"revision ID"`
 	To     string `json:"to,omitempty"     jsonschema:"revision ID (default: the published one)"`
 	Offset int    `json:"offset,omitempty" jsonschema:"lines to skip"`
 	Limit  int    `json:"limit,omitempty"  jsonschema:"lines to return, at most 2000 (default 400)"`
+}
+
+type simulateIn struct {
+	Revision string         `json:"revision,omitempty" jsonschema:"revision ID (default: the published one)"`
+	User     string         `json:"user"               jsonschema:"a configured user, or role:<name>"`
+	Entity   string         `json:"entity"`
+	Action   string         `json:"action"             jsonschema:"read, aggregate, create, update, delete or execute"`
+	Fields   []string       `json:"fields,omitempty"   jsonschema:"fields to request; empty: the default projection"`
+	Subject  map[string]any `json:"subject,omitempty"  jsonschema:"attributes the user does not set"`
 }
 
 type revisionsIn struct {
@@ -60,22 +68,53 @@ type revisionOut struct {
 	ReviewURL string `json:"reviewURL,omitempty"`
 }
 
-func toRevisionOut(r graph.Revision) revisionOut {
-	out := revisionOut{ID: r.ID, State: string(r.State), Author: r.Author, Comment: r.Comment}
-	if r.Parent != nil {
-		out.Parent = *r.Parent
+func toRevisionOut(r revision.Revision) revisionOut {
+	state := strings.ToUpper(strings.ReplaceAll(string(r.State), "-", "_"))
+	out := revisionOut{ID: id(r.ID), State: state, Author: r.Author, Comment: r.Comment}
+	if r.ParentID != 0 {
+		out.Parent = id(r.ParentID)
 	}
 	return out
 }
 
-// planJSON passes a plan to the admin API as its JSON value.
-func planJSON(p any) (any, error) {
-	data, err := json.Marshal(p)
-	if err != nil {
-		return nil, err
+func id(n int64) string { return strconv.FormatInt(n, 10) }
+
+// columnOut and tableOut show a scanned table and the entity proposed for it.
+type columnOut struct {
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Nullable    bool   `json:"nullable,omitempty"`
+	PrimaryKey  bool   `json:"primaryKey,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+type tableOut struct {
+	Ref          string              `json:"ref"`
+	Description  string              `json:"description,omitempty"`
+	Columns      []columnOut         `json:"columns"`
+	Keys         []entity.Key        `json:"keys,omitempty"`
+	Indexes      []entity.Index      `json:"indexes,omitempty"`
+	ForeignKeys  []entity.ForeignKey `json:"foreignKeys,omitempty"`
+	SideEffects  bool                `json:"sideEffects,omitempty"`
+	ConfiguredAs string              `json:"configuredAs,omitempty"`
+	// Candidate is the entity proposed for the table; ID its identity.
+	ID        string `json:"id"`
+	Candidate any    `json:"candidate"`
+}
+
+func toTableOut(ref string, c configplan.Candidate) tableOut {
+	t := c.Table
+	pk := t.PrimaryKey()
+	out := tableOut{Ref: ref, Description: t.Description, Keys: t.Keys, Indexes: t.Indexes, ForeignKeys: t.ForeignKeys,
+		SideEffects: t.SideEffects, ID: c.ID, Candidate: c.Entity, Columns: make([]columnOut, 0, len(t.Attributes))}
+	for _, a := range t.Attributes {
+		out.Columns = append(out.Columns, columnOut{Name: a.Name, Type: a.Domain.Type, Nullable: a.Domain.Nullable,
+			PrimaryKey: slices.Contains(pk, a.Name), Description: a.Description})
 	}
-	var v any
-	return v, json.Unmarshal(data, &v)
+	if c.Configured != nil {
+		out.ConfiguredAs = c.Configured.Name
+	}
+	return out
 }
 
 func tool(name, description string, readOnly bool) *mcp.Tool {
@@ -102,9 +141,9 @@ func add[In any](s *mcp.Server, t *mcp.Tool, fn func(context.Context, In) (any, 
 // reviewURL is where an administrator reviews a revision in the console:
 // next to server.publicURL when configured, otherwise where the request
 // came.
-func reviewURL(ctx context.Context, r *graph.Resolver, id string) string {
+func reviewURL(ctx context.Context, app *configapp.Service, id string) string {
 	base, _ := ctx.Value(baseURLKey).(string)
-	if rev, err := r.Store.Published(ctx); err == nil {
+	if rev, err := app.Store.Published(ctx); err == nil {
 		if cfg, err := bootstrap.LoadRevision(rev); err == nil && cfg.Server.PublicURL != "" {
 			base = strings.TrimSuffix(strings.TrimSuffix(cfg.Server.PublicURL, "/"), "/mcp")
 		}
@@ -112,56 +151,53 @@ func reviewURL(ctx context.Context, r *graph.Resolver, id string) string {
 	return base + "/admin/revisions?id=" + id
 }
 
-func register(s *mcp.Server, r *graph.Resolver) {
-	registerCatalog(s, r)
-	registerScans(s, r)
-	registerPlans(s, r)
-	registerReads(s, r)
+func register(s *mcp.Server, app *configapp.Service) {
+	registerCatalog(s, app)
+	registerScans(s, app)
+	registerPlans(s, app)
+	registerReads(s, app)
 }
 
-func registerCatalog(s *mcp.Server, r *graph.Resolver) {
-	q := r.Query()
-	add(s, tool("catalog_search", "Search the scanned tables of every datasource, a page at a time, with their "+
-		"status against the published configuration, counts by status and what is scanned of each datasource.", true),
+func registerCatalog(s *mcp.Server, app *configapp.Service) {
+	add(s, tool("catalog_search", "Search the scanned tables of every datasource (the token's), a page at a time, "+
+		"with their status against the published configuration, counts by status and what is scanned of each "+
+		"datasource.", true),
 		func(ctx context.Context, in catalogIn) (any, error) {
 			limit := in.Limit
 			if limit == 0 {
 				limit = 50
 			}
-			return q.Catalog(ctx, graph.CatalogInput{Filter: &in.CatalogFilter, Offset: &in.Offset, Limit: &limit})
+			return app.Catalog(ctx, in.CatalogFilter, nil, in.Offset, limit)
 		})
 	add(s, tool("catalog_table", "One scanned table in full: columns, keys, indexes, foreign keys and the entity "+
 		"proposed for it.", true),
-		func(ctx context.Context, in refIn) (any, error) { return q.CatalogTable(ctx, in.Ref, nil) })
-	add(s, tool("catalog_links", "The foreign keys of a scanned table and those of other tables referencing it.", true),
-		func(ctx context.Context, in refIn) (any, error) { return q.CatalogLinks(ctx, in.Ref, nil) })
-	add(s, tool("plan_scope", "How many tables a plan scope selects, the first few, and how many each condition "+
-		"selects alone: check a scope before writing rules.", true),
-		func(ctx context.Context, in scopeIn) (any, error) {
-			scope, err := planJSON(in.Scope)
-			if err != nil {
+		func(ctx context.Context, in refIn) (any, error) {
+			c, err := app.CatalogTable(ctx, in.Ref, nil)
+			if err != nil || c == nil {
 				return nil, err
 			}
-			return q.PlanScope(ctx, scope, nil)
+			return toTableOut(in.Ref, *c), nil
 		})
+	add(s, tool("catalog_links", "The foreign keys of a scanned table and those of other tables referencing it.", true),
+		func(ctx context.Context, in refIn) (any, error) { return app.CatalogLinks(ctx, in.Ref, nil) })
+	add(s, tool("plan_scope", "How many tables a plan scope selects, the first few, and how many each condition "+
+		"selects alone: check a scope before writing rules.", true),
+		func(ctx context.Context, in scopeIn) (any, error) { return app.PlanScope(ctx, in.Scope, nil) })
 }
 
-func registerReads(s *mcp.Server, r *graph.Resolver) {
-	q := r.Query()
+func registerReads(s *mcp.Server, app *configapp.Service) {
 	add(s, tool("plan_templates", "The saved plan templates.", true),
-		func(ctx context.Context, _ none) (any, error) { return q.PlanTemplates(ctx) })
+		func(ctx context.Context, _ none) (any, error) { return app.PlanTemplates(ctx) })
 	add(s, tool("pending", "What waits for review: recurring templates with new matches or rules they cannot "+
 		"apply, tables whose fields differ from their columns, tables not imported and schemas never scanned.", true),
-		func(ctx context.Context, _ none) (any, error) { return q.Pending(ctx, nil) })
-	add(s, tool("validate", "Validate a configuration draft without saving it.", true),
-		func(ctx context.Context, in validateIn) (any, error) { return q.Validate(ctx, in.Draft) })
-	add(s, tool("diff", "Unified diff between two revisions, a page of lines at a time.", true),
+		func(ctx context.Context, _ none) (any, error) { return app.Pending(ctx, nil) })
+	add(s, tool("diff", "Unified diff between two revisions, a page of lines at a time; secrets are redacted.", true),
 		func(ctx context.Context, in diffIn) (any, error) {
 			var to *string
 			if in.To != "" {
 				to = &in.To
 			}
-			out, err := q.Diff(ctx, in.From, to, nil)
+			out, err := app.Diff(ctx, in.From, to, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -169,14 +205,21 @@ func registerReads(s *mcp.Server, r *graph.Resolver) {
 		})
 	add(s, tool("simulate", "Evaluate one authorization offline against a revision (default: the published "+
 		"one): whether a user or role:<name> may run an action on an entity, with which fields and rows.", true),
-		func(ctx context.Context, in graph.SimulationInput) (any, error) { return q.Simulate(ctx, in) })
+		func(ctx context.Context, in simulateIn) (any, error) {
+			req := configapp.SimulateRequest{User: in.User, Entity: in.Entity, Action: in.Action, Fields: in.Fields,
+				Subject: in.Subject}
+			if in.Revision != "" {
+				req.Revision = &in.Revision
+			}
+			return app.Simulate(ctx, req)
+		})
 	add(s, tool("revisions", "Revisions, newest first, without their configuration.", true),
 		func(ctx context.Context, in revisionsIn) (any, error) {
 			limit := in.Limit
 			if limit <= 0 {
 				limit = 20
 			}
-			revs, err := q.Revisions(ctx, &limit)
+			revs, err := app.Revisions(ctx, limit)
 			out := make([]revisionOut, 0, len(revs))
 			for _, rev := range revs {
 				out = append(out, toRevisionOut(rev))

@@ -220,10 +220,11 @@ const en: typeof zh = {
     expired: 'Expired', expires: 'Expires', expiresIn: 'Valid days', expiresHint: '0 or empty: never expires. Give each client a token of its own, so a leaked one is revoked alone.',
     lastUsed: 'Last used', never: 'Never', unused: 'Not used', tokensOf: '{user}’s configuration MCP tokens ({n})',
     title: 'Configuration MCP (agents)',
-    intro: 'An agent can search the catalog, preview plans and save them as drafts as you through the configuration MCP endpoint; it cannot publish: drafts are reviewed and published under Revisions. The token carries all your admin permissions: give it only to agents you trust.',
+    intro: 'An agent can search the catalog, preview plans and save them as drafts as you through the configuration MCP endpoint; it cannot publish: drafts are reviewed and published under Revisions. A token carries your admin permissions unless narrowed to reading (no scans, no drafts) or to some datasources (it searches, previews and scans those only, and cannot read diffs, simulations or revisions spanning every datasource).',
+    scope: 'Scope', readOnly: 'Read only', canDraft: 'Saves drafts', datasources: 'Datasources', allDatasources: 'Every datasource',
     generate: 'Generate token',
     revoke: 'Revoke', revokeConfirm: 'Agents using “{name}” lose access at once. Revoke?', revoked: 'Token revoked',
-    tools: 'Tools: catalog_search, catalog_table, plan_preview, plan_save_draft, plan_templates, pending, validate, diff, simulate, revisions.',
+    tools: 'Tools: catalog_search, catalog_table, catalog_links, plan_scope, scan_schemas, scan_status, plan_preview, plan_details, plan_save_draft, plan_templates, pending, diff, simulate, revisions. A draft is saved with the IDs of the exceptions the administrator confirmed.',
   },
   entities: {
     search: 'Search entities', allDatasources: 'All datasources', importFromDb: 'Import from database',

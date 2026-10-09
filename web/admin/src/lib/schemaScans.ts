@@ -111,7 +111,10 @@ export async function followBatches(ds: string, interval = 1000) {
 
 /** Scans schemas of ds on the server as a batch. */
 export async function startBatch(ds: string, schemas: string[]) {
-  const { startScanBatch } = await run(StartScanBatchMutation, { input: { datasource: ds, schemas } }, true)
+  // One key per request: a retried request (a refreshed CSRF token) gets the
+  // batch the first one started instead of starting another.
+  const requestKey = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('')
+  const { startScanBatch } = await run(StartScanBatchMutation, { input: { datasource: ds, schemas, requestKey } }, true)
   const s = scansOf(ds)
   s.batches = [startScanBatch, ...s.batches.filter((b) => b.id !== startScanBatch.id)]
   void followBatches(ds)

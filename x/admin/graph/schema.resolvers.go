@@ -15,18 +15,19 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
+	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 )
 
 // StartSchemaScan is the resolver for the startSchemaScan field.
-func (r *mutationResolver) StartSchemaScan(ctx context.Context, datasource string, schemas []string) (*ScanJob, error) {
-	return r.startSchemaScan(ctx, datasource, schemas)
+func (r *mutationResolver) StartSchemaScan(ctx context.Context, datasource string, schemas []string) (*configapp.ScanJob, error) {
+	return r.App.StartSchemaScan(ctx, datasource, schemas)
 }
 
 // CancelSchemaScan is the resolver for the cancelSchemaScan field.
-func (r *mutationResolver) CancelSchemaScan(ctx context.Context, id string) (*ScanJob, error) {
-	return r.schemaScan(ctx, id, true)
+func (r *mutationResolver) CancelSchemaScan(ctx context.Context, id string) (*configapp.ScanJob, error) {
+	return r.App.SchemaScan(ctx, id, true)
 }
 
 // CreateDraft is the resolver for the createDraft field.
@@ -54,13 +55,13 @@ func (r *mutationResolver) Publish(ctx context.Context, input PublishInput) (*Re
 	if err != nil {
 		return nil, err
 	}
-	id, err := parseID(input.ID)
+	id, err := configapp.ParseID(input.ID)
 	if err != nil {
 		return nil, err
 	}
 	req := revisionops.PublishRequest{ID: id, RestartRequired: derefBool(input.RestartRequired), Author: p.Username}
 	if input.ExpectedPublished != nil {
-		expected, err := parseID(*input.ExpectedPublished)
+		expected, err := configapp.ParseID(*input.ExpectedPublished)
 		if err != nil {
 			return nil, err
 		}
@@ -83,7 +84,7 @@ func (r *mutationResolver) Rollback(ctx context.Context, input RollbackInput) (*
 		RestartRequired: derefBool(input.RestartRequired), Author: p.Username, Comment: deref(input.Comment),
 	}
 	if input.To != nil {
-		if req.To, err = parseID(*input.To); err != nil {
+		if req.To, err = configapp.ParseID(*input.To); err != nil {
 			return nil, err
 		}
 	}
@@ -184,7 +185,7 @@ func (r *queryResolver) Published(ctx context.Context) (*Revision, error) {
 	if _, err := auth.Require(ctx, auth.PermRead); err != nil {
 		return nil, err
 	}
-	rev, err := r.Store.Published(ctx)
+	rev, err := r.App.Store.Published(ctx)
 	if errors.Is(err, revision.ErrNoPublished) {
 		return nil, nil
 	}
@@ -211,14 +212,7 @@ func (r *queryResolver) Revision(ctx context.Context, id string) (*Revision, err
 
 // Revisions is the resolver for the revisions field.
 func (r *queryResolver) Revisions(ctx context.Context, limit *int) ([]Revision, error) {
-	if _, err := auth.Require(ctx, auth.PermRead); err != nil {
-		return nil, err
-	}
-	n := 50
-	if limit != nil {
-		n = *limit
-	}
-	revs, err := r.Store.List(ctx, n)
+	revs, err := r.App.Revisions(ctx, derefInt(limit, 50))
 	if err != nil {
 		return nil, err
 	}
@@ -230,18 +224,22 @@ func (r *queryResolver) Revisions(ctx context.Context, limit *int) ([]Revision, 
 }
 
 // SchemaList is the resolver for the schemaList field.
-func (r *queryResolver) SchemaList(ctx context.Context, datasource string, refresh *bool) (*SchemaList, error) {
-	return r.schemaList(ctx, datasource, refresh != nil && *refresh)
+func (r *queryResolver) SchemaList(ctx context.Context, datasource string, refresh *bool) (*configapp.SchemaList, error) {
+	return r.App.SchemaList(ctx, datasource, refresh != nil && *refresh)
 }
 
 // SchemaTables is the resolver for the schemaTables field.
 func (r *queryResolver) SchemaTables(ctx context.Context, datasource string, schemas []string) (*SchemaImport, error) {
-	return r.schemaTables(ctx, datasource, schemas)
+	imports, err := r.App.SchemaTables(ctx, datasource, schemas)
+	if err != nil {
+		return nil, err
+	}
+	return toSchemaImport(imports), nil
 }
 
 // SchemaScan is the resolver for the schemaScan field.
-func (r *queryResolver) SchemaScan(ctx context.Context, id string) (*ScanJob, error) {
-	return r.schemaScan(ctx, id, false)
+func (r *queryResolver) SchemaScan(ctx context.Context, id string) (*configapp.ScanJob, error) {
+	return r.App.SchemaScan(ctx, id, false)
 }
 
 // TableComments is the resolver for the tableComments field.
@@ -253,14 +251,14 @@ func (r *queryResolver) TableComments(ctx context.Context, tables []TableRef) ([
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, requestScanTimeout)
+	ctx, cancel := context.WithTimeout(ctx, configapp.RequestScanTimeout)
 	defer cancel()
 	return lookupTableComments(tables, func(datasource string, refs []TableRef) (introspect.Catalog, error) {
 		var cat introspect.Catalog
-		if !hasDatasource(cfg, datasource) {
+		if _, ok := cfg.Databases[datasource]; !ok {
 			return cat, nil
 		}
-		err := r.Introspect(ctx, datasource, cfg.Databases[datasource], func(in introspect.Introspector) (err error) {
+		err := r.App.Introspect(ctx, datasource, cfg.Databases[datasource], func(in introspect.Introspector) (err error) {
 			cat, err = referencedCatalog(ctx, in, refs)
 			return err
 		})
@@ -272,25 +270,16 @@ func (r *queryResolver) TableComments(ctx context.Context, tables []TableRef) ([
 }
 
 // Validate is the resolver for the validate field.
-func (r *queryResolver) Validate(ctx context.Context, draft DraftInput) (*Validation, error) {
+func (r *queryResolver) Validate(ctx context.Context, draft DraftInput) (*configapp.Validation, error) {
 	if _, err := auth.Require(ctx, auth.PermRead); err != nil {
 		return nil, err
 	}
-	d, err := r.buildDraft(ctx, draft)
+	d, err := toDraft(&draft)
 	if err != nil {
 		msg := err.Error()
-		return &Validation{Ok: false, Error: &msg, RestartRequired: []string{}, Warnings: []string{}}, nil
+		return &configapp.Validation{Error: &msg, RestartRequired: []string{}, Warnings: []string{}}, nil
 	}
-	changes, err := r.restartChanges(ctx, d.cfg)
-	if err != nil {
-		return nil, err
-	}
-	hash := revision.Hash(d.payload)
-	warnings := bootstrap.CapabilityWarnings(d.cfg, r.capabilities())
-	if warnings == nil {
-		warnings = []string{}
-	}
-	return &Validation{Ok: true, ContentHash: &hash, RestartRequired: changes, Warnings: warnings}, nil
+	return r.App.Validate(ctx, *d)
 }
 
 // Capabilities is the resolver for the capabilities field.
@@ -303,50 +292,25 @@ func (r *queryResolver) Capabilities(ctx context.Context) ([]EntityCapability, e
 
 // Diff is the resolver for the diff field.
 func (r *queryResolver) Diff(ctx context.Context, from string, to *string, draft *DraftInput) (string, error) {
-	if _, err := auth.Require(ctx, auth.PermRead); err != nil {
-		return "", err
-	}
-	a, err := r.revisionByID(ctx, from)
+	d, err := toDraft(draft)
 	if err != nil {
 		return "", err
 	}
-	switch {
-	case draft != nil:
-		d, err := r.buildDraft(ctx, *draft)
-		if err != nil {
-			return "", err
-		}
-		return revisionops.Diff(fmt.Sprintf("revision %d", a.ID), a.Payload, "draft", d.payload)
-	case to != nil:
-		b, err := r.revisionByID(ctx, *to)
-		if err != nil {
-			return "", err
-		}
-		return revisionops.Diff(fmt.Sprintf("revision %d", a.ID), a.Payload, fmt.Sprintf("revision %d", b.ID), b.Payload)
-	default:
-		b, err := r.Store.Published(ctx)
-		if err != nil {
-			return "", err
-		}
-		return revisionops.Diff(fmt.Sprintf("revision %d", a.ID), a.Payload, fmt.Sprintf("revision %d", b.ID), b.Payload)
-	}
+	return r.App.Diff(ctx, from, to, d)
 }
 
 // Simulate is the resolver for the simulate field.
-func (r *queryResolver) Simulate(ctx context.Context, input SimulationInput) (*Simulation, error) {
-	draft, revision, subject := input.Draft, input.Revision, input.Subject
-	if _, err := auth.Require(ctx, auth.PermRead); err != nil {
-		return nil, err
+func (r *queryResolver) Simulate(ctx context.Context, input SimulationInput) (*configapp.Simulation, error) {
+	attrs, _ := normalizeJSON(input.Subject).(map[string]any)
+	if input.Subject != nil && attrs == nil {
+		return nil, errors.New("subject must be an object")
 	}
-	cfg, err := r.selectConfig(ctx, draft, revision)
+	d, err := toDraft(input.Draft)
 	if err != nil {
 		return nil, err
 	}
-	attrs, _ := normalizeJSON(subject).(map[string]any)
-	if subject != nil && attrs == nil {
-		return nil, errors.New("subject must be an object")
-	}
-	return simulate(ctx, cfg, input.User, input.Entity, input.Action, input.Fields, attrs)
+	return r.App.Simulate(ctx, configapp.SimulateRequest{Draft: d, Revision: input.Revision, User: input.User,
+		Entity: input.Entity, Action: graphActions[input.Action].String(), Fields: input.Fields, Subject: attrs})
 }
 
 // Visibility is the resolver for the visibility field.

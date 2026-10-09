@@ -10,6 +10,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/x/admin"
+	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 	"github.com/nethinwei/sql-mcp-server/x/admin/graph"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 )
@@ -79,7 +80,7 @@ func runtimeStatus(runtime *bootstrap.Runtime, startup int64, watching bool) fun
 // runtimeIntrospection runs fn with the introspector of datasource as
 // database configures it, on a connection of its own; an App assembled from
 // handed connections introspects its connected datasource instead.
-func runtimeIntrospection(runtime *bootstrap.Runtime) graph.Introspection {
+func runtimeIntrospection(runtime *bootstrap.Runtime) configapp.Introspection {
 	return func(
 		ctx context.Context, datasource string, database config.DatabaseConfig, fn func(introspect.Introspector) error,
 	) error {

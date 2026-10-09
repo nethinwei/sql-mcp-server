@@ -300,12 +300,12 @@ export const SetPendingStateMutation = graphql(`
 `)
 
 export const McpTokensQuery = graphql(`
-  query McpTokens { mcpTokens { id name createdAt expiresAt lastUsedAt } }
+  query McpTokens { mcpTokens { id name createdAt expiresAt lastUsedAt readOnly datasources } }
 `)
 
 export const CreateMcpTokenMutation = graphql(`
   mutation CreateMcpToken($input: McpTokenInput!) {
-    createMcpToken(input: $input) { token info { id name createdAt expiresAt lastUsedAt } }
+    createMcpToken(input: $input) { token info { id name createdAt expiresAt lastUsedAt readOnly datasources } }
   }
 `)
 

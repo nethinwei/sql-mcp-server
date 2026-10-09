@@ -177,10 +177,18 @@
       {"file": "x/admin/graph/planning_test.go", "name": "TestScanBatches"},
       {"file": "x/admin/graph/planning_test.go", "name": "TestPreviewForReview"},
       {"file": "x/revisionops/revisionops_test.go", "name": "TestDiffRedactsSecrets"},
-      {"file": "x/admin/graph/scans_test.go", "name": "TestScanBatchLateWriteOfALostRun"}
+      {"file": "x/admin/configapp/scans_test.go", "name": "TestScanBatchLateWriteOfALostRun"},
+      {"file": "x/admin/configapp/scans_test.go", "name": "TestScanBatchQuotas"},
+      {"file": "x/admin/configapp/scans_test.go", "name": "TestScanBatchStoreFailures"},
+      {"file": "x/admin/configapp/scans_test.go", "name": "TestScanBatchLostAnswers"},
+      {"file": "x/admin/configapp/scans_test.go", "name": "TestScanBatchTakeoverWaitsForTheStore"},
+      {"file": "x/admin/configmcp/configmcp_test.go", "name": "TestScopedTokens"},
+      {"file": "x/admin/configmcp/configmcp_test.go", "name": "TestScopedTokensReadNothingBeyond"},
+      {"file": "x/admin/configmcp/configmcp_test.go", "name": "TestConfirmationsAreBoundToExceptions"},
+      {"file": "x/admin/auth/auth_test.go", "name": "TestDatasourceScope"}
     ],
     "gaps": [
-      "令牌拥有管理员全部权限，无更细范围；/admin/mcp 无单独限速"
+      "令牌按只读与数据源收窄，不能按单个工具收窄；/admin/mcp 无单独限速"
     ]
   }
 }

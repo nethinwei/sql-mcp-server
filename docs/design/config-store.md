@@ -119,13 +119,16 @@ smcp_revisions (
 管理面另有不属于配置 revision 的表（发布不会改动它们）：`smcp_admin_accounts`
 （schema 版本 2）；`smcp_catalog_lists`、`smcp_catalog_schemas`（扫描目录）、
 `smcp_plan_templates` 与 `smcp_plan_template_versions`（方案模板及其版本）、
-`smcp_admin_tokens`（配置 MCP 令牌哈希）、`smcp_pending_states` 与
-`smcp_pending_log`（待处理事项的状态与记录）（schema 版本 3，见
-`docs/design/planning.md`）。
+`smcp_admin_tokens`（配置 MCP 令牌哈希）、`smcp_scan_batches`（扫描批次）、
+`smcp_pending_states` 与 `smcp_pending_log`（待处理事项的状态与记录）（schema
+版本 3）；令牌的范围列 `scope`、批次的 `request_key` 与每个库一行的
+`smcp_scan_batch_items`（schema 版本 4；迁移在同一事务内把版本 3 批次 payload 中
+的各库进度转成行，此后 payload 只写空数组）。见 `docs/design/planning.md`。
 
 - **store 自身 schema 版本化**：`smcp_store_meta.schema_version` 记录表结构
   版本；打开 store 时版本未知或更新于程序 → fail closed；旧版本按内置迁移
-  升级，迁移在事务内执行。
+  逐版升级，每个版本的 DDL 与数据迁移在同一事务内执行（MySQL/OceanBase 的 DDL
+  会隐式提交：迁移中途失败时版本号不前进，但已执行的 DDL 留下，需人工检查后再升级）。
 - **首次使用**：`store init` 显式建表；服务启动时不会自动建表（避免误把
   store 建进业务库）。
 

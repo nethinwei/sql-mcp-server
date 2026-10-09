@@ -17,7 +17,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
-	"github.com/nethinwei/sql-mcp-server/x/admin/graph"
+	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 	"github.com/nethinwei/sql-mcp-server/x/admin/scanjobs"
 	"github.com/nethinwei/sql-mcp-server/x/catalog"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
@@ -26,6 +26,7 @@ import (
 
 const published = `databases:
   shop: {driver: postgres, dsn: "postgres://u@h/shop"}
+  ledger: {driver: postgres, dsn: "postgres://u@h/ledger"}
 entities:
   - {name: customers, datasource: shop, schema: public, primaryKey: [id], fields: [{name: id}]}
 roles:
@@ -73,10 +74,10 @@ func newEnv(t *testing.T) env {
 		accounts.Account{Username: "root", Permissions: []string{auth.PermAll}},
 		accounts.Account{Username: "viewer", Permissions: []string{auth.PermRead}},
 	)
-	scans := graph.NewScans(scanjobs.Options{}, plans)
+	scans := configapp.NewScans(scanjobs.Options{}, plans)
 	t.Cleanup(scans.Close)
-	r := &graph.Resolver{Store: store, Accounts: accounts.Service{Store: admins}, Scans: scans, Plans: plans}
-	srv := httptest.NewServer(New(r, plans, admins, Options{}))
+	app := &configapp.Service{Store: store, Scans: scans, Plans: plans}
+	srv := httptest.NewServer(New(app, plans, admins, Options{}))
 	t.Cleanup(srv.Close)
 	return env{url: srv.URL, store: store, accounts: admins, plans: plans}
 }
@@ -88,12 +89,18 @@ func (e env) token(t *testing.T, username string) string {
 
 func (e env) tokenUntil(t *testing.T, username string, expires time.Time) string {
 	t.Helper()
+	return e.scopedToken(t, username, expires, configstore.TokenScope{})
+}
+
+func (e env) scopedToken(t *testing.T, username string, expires time.Time, scope configstore.TokenScope) string {
+	t.Helper()
 	token, err := config.NewUserToken()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.plans.CreateAdminToken(context.Background(), configstore.AdminToken{
 		ID: token[:12], Username: username, Name: token[:12], TokenHash: config.TokenHash(token), ExpiresAt: expires,
+		Scope: scope,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +163,7 @@ func TestAgentPlansAndSavesADraft(t *testing.T) {
 		Total int
 		Items []string
 	}
-	call(t, s, "plan_details", map[string]any{"plan": plan, "section": "added"}, &added)
+	call(t, s, "plan_details", map[string]any{"planId": preview.PlanID, "section": "added"}, &added)
 	if added.Total != 1 || added.Items[0] != "shop.public.orders" {
 		t.Fatalf("details = %+v", added)
 	}
@@ -228,7 +235,7 @@ func checkContinuesADraft(t *testing.T, s *mcp.ClientSession, draft string) {
 		Total int
 		Items []string
 	}
-	call(t, s, "plan_details", map[string]any{"plan": more, "base": draft, "section": "changeEntities", "change": 1},
+	call(t, s, "plan_details", map[string]any{"planId": preview.PlanID, "section": "changeEntities", "change": 1},
 		&entities)
 	if entities.Total != 1 || entities.Items[0] != "shop.public.orders" {
 		t.Fatalf("change entities = %+v", entities)
@@ -296,5 +303,189 @@ func TestTokensAndPermissions(t *testing.T) {
 	tokens, _ := e.plans.AdminTokens(context.Background(), "viewer")
 	if len(tokens) != 2 || tokens[0].LastUsedAt.IsZero() {
 		t.Fatalf("the use of a token is not recorded: %+v", tokens)
+	}
+}
+
+// A draft is saved from a review only with each exception to confirm
+// confirmed by its ID; the confirmations are kept with the draft.
+func TestConfirmationsAreBoundToExceptions(t *testing.T) {
+	e := newEnv(t)
+	s, err := connect(t, e.url, e.token(t, "root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	plan := map[string]any{"scope": map[string]any{"status": []string{"new"}}, "import": true,
+		"grants": []any{map[string]any{"principal": "role:analyst", "actions": []string{"read"}}}}
+	var preview struct {
+		PlanID       string
+		ToConfirm    int
+		ToConfirmIDs []string
+	}
+	call(t, s, "plan_preview", map[string]any{"plan": plan, "review": true}, &preview)
+	if preview.ToConfirm != 1 || len(preview.ToConfirmIDs) != 1 {
+		t.Fatalf("preview = %+v", preview)
+	}
+	save := map[string]any{"plan": plan, "review": true, "planId": preview.PlanID}
+	if res := call(t, s, "plan_save_draft", save, nil); !res.IsError {
+		t.Fatal("a draft was saved with an exception not confirmed")
+	}
+	save["confirmed"] = []string{"not-an-exception"}
+	if res := call(t, s, "plan_save_draft", save, nil); !res.IsError {
+		t.Fatal("a draft was saved confirming something else")
+	}
+	save["confirmed"] = preview.ToConfirmIDs
+	var saved struct{ ID, Comment string }
+	call(t, s, "plan_save_draft", save, &saved)
+	if !strings.Contains(saved.Comment, "confirmed: review") {
+		t.Fatalf("saved = %+v", saved)
+	}
+}
+
+// A token narrowed to reading cannot scan or save; one narrowed to some
+// datasources reads and plans within them only, and not what spans every
+// datasource.
+func TestScopedTokens(t *testing.T) {
+	e := newEnv(t)
+	plan := map[string]any{"scope": map[string]any{"status": []string{"new"}}, "import": true}
+	checkReadOnlyToken(t, e, plan)
+	shop, err := connect(t, e.url, e.scopedToken(t, "root", time.Time{},
+		configstore.TokenScope{Datasources: []string{"shop"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = shop.Close() }()
+	var page struct {
+		Total    int
+		Coverage []struct{ Datasource string }
+	}
+	call(t, shop, "catalog_search", map[string]any{}, &page)
+	if page.Total != 2 || len(page.Coverage) != 1 || page.Coverage[0].Datasource != "shop" {
+		t.Fatalf("catalog = %+v", page)
+	}
+	var preview struct{ PlanID string }
+	call(t, shop, "plan_preview", map[string]any{"plan": plan}, &preview)
+	if preview.PlanID == "" {
+		t.Fatal("a plan within the token's datasources was refused")
+	}
+	elsewhere := map[string]any{"scope": map[string]any{"datasources": []string{"ledger"}}, "import": true}
+	for name, args := range map[string]any{
+		"catalog_search": map[string]any{"datasources": []string{"ledger"}},
+		"plan_preview":   map[string]any{"plan": elsewhere},
+		"catalog_table":  map[string]any{"ref": "ledger.public.entries"},
+		"scan_status":    map[string]any{"datasource": "ledger"},
+		"diff":           map[string]any{"from": "1"},
+		"simulate":       map[string]any{"user": "role:analyst", "entity": "customers", "action": "read"},
+		"revisions":      map[string]any{},
+	} {
+		if res := call(t, shop, name, args, nil); !res.IsError {
+			t.Errorf("a token limited to shop ran %s %v", name, args)
+		}
+	}
+}
+
+func checkReadOnlyToken(t *testing.T, e env, plan map[string]any) {
+	t.Helper()
+	reader, err := connect(t, e.url, e.scopedToken(t, "root", time.Time{}, configstore.TokenScope{ReadOnly: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reader.Close() }()
+	for name, args := range map[string]any{
+		"plan_preview":    map[string]any{"plan": plan},
+		"plan_save_draft": map[string]any{"plan": plan, "planId": "x"},
+		"scan_schemas":    map[string]any{"datasource": "shop", "schemas": []string{"public"}},
+	} {
+		if res := call(t, reader, name, args, nil); !res.IsError {
+			t.Errorf("a read-only token ran %s", name)
+		}
+	}
+	var templates []any
+	if res := call(t, reader, "plan_templates", map[string]any{}, &templates); res.IsError {
+		t.Error("a read-only token cannot read templates")
+	}
+}
+
+// A token limited to some datasources reads nothing beyond them: not a
+// preview another token of the same administrator made, not the counts of a
+// scope's conditions.
+func TestScopedTokensReadNothingBeyond(t *testing.T) {
+	e := newEnv(t)
+	ledger := catalog.Source{Datasource: "ledger", Driver: "postgres", DSN: "postgres://u@h/ledger"}
+	if err := e.plans.PutCatalogSchemas(context.Background(), ledger.ID(), "ledger", []catalog.Schema{{Name: "public",
+		ScannedAt: time.Now(), Default: "public", Tables: []catalog.Table{{Schema: "public", Name: "entries",
+			Columns: []catalog.Column{{Name: "id", Type: "bigint"}}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	root, err := connect(t, e.url, e.token(t, "root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	plan := map[string]any{"scope": map[string]any{"status": []string{"new"}}, "import": true}
+	var wide struct{ PlanID string }
+	call(t, root, "plan_preview", map[string]any{"plan": plan}, &wide)
+	shop, err := connect(t, e.url, e.scopedToken(t, "root", time.Time{},
+		configstore.TokenScope{Datasources: []string{"shop"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = shop.Close() }()
+	if res := call(t, shop, "plan_details", map[string]any{"planId": wide.PlanID, "section": "added"}, nil); !res.IsError {
+		t.Fatal("a limited token read a preview spanning every datasource")
+	}
+	var own struct{ PlanID string }
+	call(t, shop, "plan_preview", map[string]any{"plan": plan}, &own)
+	var added struct{ Items []string }
+	call(t, shop, "plan_details", map[string]any{"planId": own.PlanID, "section": "added"}, &added)
+	if len(added.Items) != 1 || added.Items[0] != "shop.public.orders" {
+		t.Fatalf("the token's own preview = %+v", added)
+	}
+	checkScopeCounts(t, root, shop)
+}
+
+// checkScopeCounts: the counts of each condition of a scope stay within the
+// token's datasources.
+func checkScopeCounts(t *testing.T, root, shop *mcp.ClientSession) {
+	t.Helper()
+	var stats struct {
+		Total      int
+		Conditions []struct {
+			Name    string
+			Matched int
+		}
+	}
+	call(t, shop, "plan_scope", map[string]any{"scope": map[string]any{"tables": []string{"entries"}}}, &stats)
+	tables := slices.IndexFunc(stats.Conditions, func(c struct {
+		Name    string
+		Matched int
+	}) bool {
+		return c.Name == "tables"
+	})
+	if stats.Total != 0 || tables < 0 || stats.Conditions[tables].Matched != 0 {
+		t.Fatalf("scope counts beyond the token's datasources: %+v", stats)
+	}
+	call(t, root, "plan_scope", map[string]any{"scope": map[string]any{"tables": []string{"entries"}}}, &stats)
+	if stats.Total != 1 {
+		t.Fatalf("an unlimited token's counts = %+v", stats)
+	}
+}
+
+// A plan saves as previewed however it is written: the service puts it in
+// its normal form (actions lower case, sorted, once each) before the plan ID.
+func TestPlanSavesAsWritten(t *testing.T) {
+	e := newEnv(t)
+	s, err := connect(t, e.url, e.token(t, "root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	plan := map[string]any{"scope": map[string]any{"status": []string{"new"}}, "import": true,
+		"grants": []any{map[string]any{"principal": "role:analyst", "actions": []string{"READ", "Aggregate", "read"}}}}
+	var preview struct{ PlanID string }
+	call(t, s, "plan_preview", map[string]any{"plan": plan}, &preview)
+	var saved struct{ ID string }
+	if res := call(t, s, "plan_save_draft", map[string]any{"plan": plan, "planId": preview.PlanID}, &saved); res.IsError {
+		t.Fatalf("the plan as written does not save: %v", res.Content)
 	}
 }

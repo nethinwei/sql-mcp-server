@@ -1,4 +1,4 @@
-package graph
+package configapp
 
 import (
 	"cmp"
@@ -17,11 +17,12 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/admin/scanjobs"
 	"github.com/nethinwei/sql-mcp-server/x/catalog"
+	"github.com/nethinwei/sql-mcp-server/x/configplan"
 )
 
-// requestScanTimeout bounds the reads that answer within their request:
+// RequestScanTimeout bounds the reads that answer within their request:
 // tableComments and schemaList.
-const requestScanTimeout = 30 * time.Second
+const RequestScanTimeout = 30 * time.Second
 
 // Scans runs schema scans on a bounded pool of workers and keeps what each
 // scan found, per schema, in a catalog store until the next scan of that
@@ -38,10 +39,11 @@ type Scans struct {
 	// batches are the scan batches started.
 	batches *batches
 	// built caches each source's catalog by the versions of its schemas;
-	// rows caches the rows of catalog filters.
+	// indexes the indexed catalogs and matches the rows of catalog filters.
 	builtMu sync.Mutex
 	built   map[string]builtCatalog
-	rows    rowsCache
+	indexes *lru[*configplan.Index]
+	matches *lru[[]int32]
 }
 
 type builtCatalog struct {
@@ -88,6 +90,7 @@ func NewScans(opts scanjobs.Options, store catalog.Store) *Scans {
 	return &Scans{
 		pool: scanjobs.New[struct{}](opts), store: store, cache: map[scanKey]keptSchema{},
 		clock: time.Now, batches: newBatches(), built: map[string]builtCatalog{},
+		indexes: newLRU[*configplan.Index](indexBudget), matches: newLRU[[]int32](matchBudget),
 	}
 }
 
@@ -242,11 +245,21 @@ func (s *Scans) catalogOf(ctx context.Context, src source) (introspect.Catalog, 
 	return cat, all, nil
 }
 
+// Imports are the scanned tables of a datasource with the entity proposed
+// for each.
+type Imports struct {
+	Datasource    string
+	DefaultSchema string
+	// Source is the token of the database the tables were read from.
+	Source string
+	Tables []configplan.Candidate
+}
+
 // importOf compares the tables of the kept ones of schemas (nil: all of
 // them) with cfg. Names and relationships are worked out over every kept
 // schema of src: a table may reference, or share its name with, a table of
 // another schema.
-func (s *Scans) importOf(ctx context.Context, src source, schemas []string, cfg *config.Config) (*SchemaImport, error) {
+func (s *Scans) importOf(ctx context.Context, src source, schemas []string, cfg *config.Config) (*Imports, error) {
 	all, kept, err := s.catalogOf(ctx, src)
 	if err != nil {
 		return nil, err
@@ -255,17 +268,20 @@ func (s *Scans) importOf(ctx context.Context, src source, schemas []string, cfg 
 	for name, k := range kept {
 		if schemas == nil || slices.Contains(schemas, name) {
 			for _, t := range k.tables {
-				shown[tableKey(t.Schema, t.Source)] = true
+				shown[configplan.TableKey(t.Schema, t.Source)] = true
 			}
 		}
 	}
-	out := buildSchemaImport(src.Datasource, all, cfg)
-	out.Tables = slices.DeleteFunc(out.Tables, func(t ImportTable) bool { return !shown[tableKey(t.Schema, t.Table)] })
-	out.Source = src.Token()
+	out := &Imports{Datasource: src.Datasource, DefaultSchema: all.Default, Source: src.Token()}
+	for _, c := range configplan.Candidates(src.Datasource, all, cfg, nil, nil) {
+		if shown[configplan.TableKey(c.Table.Schema, c.Table.Source)] {
+			out.Tables = append(out.Tables, c)
+		}
+	}
 	return out, nil
 }
 
-func (r *Resolver) scans() (*Scans, error) {
+func (r *Service) scans() (*Scans, error) {
 	if r.Scans == nil {
 		return nil, errors.New("schema scans are not available")
 	}
@@ -275,8 +291,8 @@ func (r *Resolver) scans() (*Scans, error) {
 // scanContext checks the caller may scan datasource and returns the
 // published configuration, the scans and the source the configuration names,
 // dropping what was kept for the datasource's earlier sources.
-func (r *Resolver) scanContext(ctx context.Context, datasource string) (*config.Config, *Scans, source, error) {
-	if _, err := auth.Require(ctx, auth.PermWrite); err != nil {
+func (r *Service) scanContext(ctx context.Context, datasource string) (*config.Config, *Scans, source, error) {
+	if _, err := auth.RequireDatasource(ctx, auth.PermWrite, datasource); err != nil {
 		return nil, nil, source{}, err
 	}
 	scans, err := r.scans()
@@ -284,7 +300,7 @@ func (r *Resolver) scanContext(ctx context.Context, datasource string) (*config.
 		return nil, nil, source{}, err
 	}
 	seen := scans.now()
-	cfg, err := r.selectConfig(ctx, nil, nil)
+	cfg, err := r.SelectConfig(ctx, nil, nil)
 	if err != nil {
 		return nil, nil, source{}, err
 	}

@@ -8,137 +8,167 @@ package graph
 import (
 	"context"
 
-	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
+	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 )
 
 // CreatePlanDraft is the resolver for the createPlanDraft field.
 func (r *mutationResolver) CreatePlanDraft(ctx context.Context, input PlanDraftInput) (*Revision, error) {
-	return r.createPlanDraft(ctx, input.Plan, input.Comment, input.Base, input.PlanID)
+	p, err := configapp.DecodePlan(input.Plan)
+	if err != nil {
+		return nil, err
+	}
+	rev, err := r.App.SaveDraft(ctx, configapp.SaveRequest{
+		Plan: p, Base: input.Base, PlanID: deref(input.PlanID), Review: derefBool(input.Review),
+		Confirmed: input.Confirmed, Comment: deref(input.Comment),
+	})
+	if err != nil {
+		return nil, apiError(err)
+	}
+	return toRevision(rev), nil
 }
 
 // SavePlanTemplate is the resolver for the savePlanTemplate field.
-func (r *mutationResolver) SavePlanTemplate(ctx context.Context, input PlanTemplateInput) (*PlanTemplate, error) {
-	return r.savePlanTemplate(ctx, input)
+func (r *mutationResolver) SavePlanTemplate(ctx context.Context, input configapp.PlanTemplateInput) (*configapp.PlanTemplate, error) {
+	t, err := r.App.SavePlanTemplate(ctx, input)
+	return t, apiError(err)
 }
 
 // DeletePlanTemplate is the resolver for the deletePlanTemplate field.
 func (r *mutationResolver) DeletePlanTemplate(ctx context.Context, name string) (bool, error) {
-	return r.deletePlanTemplate(ctx, name)
+	return r.App.DeletePlanTemplate(ctx, name)
 }
 
 // SetPendingState is the resolver for the setPendingState field.
-func (r *mutationResolver) SetPendingState(ctx context.Context, input PendingStateInput) (*PendingState, error) {
-	return r.setPendingState(ctx, input)
+func (r *mutationResolver) SetPendingState(ctx context.Context, input configapp.PendingStateInput) (*configapp.PendingState, error) {
+	return r.App.SetPendingState(ctx, input)
 }
 
 // CreateMcpToken is the resolver for the createMcpToken field.
-func (r *mutationResolver) CreateMcpToken(ctx context.Context, input McpTokenInput) (*McpTokenSecret, error) {
-	return r.createMcpToken(ctx, input)
+func (r *mutationResolver) CreateMcpToken(ctx context.Context, input configapp.McpTokenInput) (*configapp.McpTokenSecret, error) {
+	return r.App.CreateMcpToken(ctx, input)
 }
 
 // RevokeMcpToken is the resolver for the revokeMcpToken field.
 func (r *mutationResolver) RevokeMcpToken(ctx context.Context, id string) (bool, error) {
-	return r.revokeMcpToken(ctx, id)
+	return r.App.RevokeMcpToken(ctx, id)
 }
 
 // StartScanBatch is the resolver for the startScanBatch field.
-func (r *mutationResolver) StartScanBatch(ctx context.Context, input ScanBatchInput) (*ScanBatch, error) {
-	return r.startScanBatch(ctx, input.Datasource, input.Schemas)
+func (r *mutationResolver) StartScanBatch(ctx context.Context, input configapp.ScanBatchInput) (*configapp.ScanBatch, error) {
+	return r.App.StartScanBatch(ctx, input)
 }
 
 // CancelScanBatch is the resolver for the cancelScanBatch field.
-func (r *mutationResolver) CancelScanBatch(ctx context.Context, id string) (*ScanBatch, error) {
-	return r.cancelScanBatch(ctx, id)
+func (r *mutationResolver) CancelScanBatch(ctx context.Context, id string) (*configapp.ScanBatch, error) {
+	return r.App.CancelScanBatch(ctx, id)
 }
 
 // RetryScanBatch is the resolver for the retryScanBatch field.
-func (r *mutationResolver) RetryScanBatch(ctx context.Context, id string) (*ScanBatch, error) {
-	return r.retryScanBatch(ctx, id)
+func (r *mutationResolver) RetryScanBatch(ctx context.Context, id string) (*configapp.ScanBatch, error) {
+	return r.App.RetryScanBatch(ctx, id)
 }
 
 // Catalog is the resolver for the catalog field.
-func (r *queryResolver) Catalog(ctx context.Context, input CatalogInput) (*CatalogPage, error) {
-	if _, err := auth.Require(ctx, auth.PermWrite); err != nil {
-		return nil, err
-	}
-	return r.catalog(ctx, *input.Filter, input.Draft, derefInt(input.Offset, 0), derefInt(input.Limit, 50))
-}
-
-// CatalogRefs is the resolver for the catalogRefs field.
-func (r *queryResolver) CatalogRefs(ctx context.Context, filter CatalogFilter, draft *DraftInput) ([]string, error) {
-	if _, err := auth.Require(ctx, auth.PermWrite); err != nil {
-		return nil, err
-	}
-	pc, err := r.planContext(ctx, draft)
+func (r *queryResolver) Catalog(ctx context.Context, input CatalogInput) (*configapp.CatalogPage, error) {
+	d, err := toDraft(input.Draft)
 	if err != nil {
 		return nil, err
 	}
-	rows, _, _ := r.Scans.catalogRows(pc, filter)
-	out := make([]string, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, row.Ref)
+	return r.App.Catalog(ctx, *input.Filter, d, derefInt(input.Offset, 0), derefInt(input.Limit, 50))
+}
+
+// CatalogRefs is the resolver for the catalogRefs field.
+func (r *queryResolver) CatalogRefs(ctx context.Context, filter configapp.CatalogFilter, draft *DraftInput) ([]string, error) {
+	d, err := toDraft(draft)
+	if err != nil {
+		return nil, err
 	}
-	return out, nil
+	return r.App.CatalogRefs(ctx, filter, d)
 }
 
 // CatalogTable is the resolver for the catalogTable field.
 func (r *queryResolver) CatalogTable(ctx context.Context, ref string, draft *DraftInput) (*ImportTable, error) {
-	if _, err := auth.Require(ctx, auth.PermWrite); err != nil {
+	d, err := toDraft(draft)
+	if err != nil {
 		return nil, err
 	}
-	return r.catalogTable(ctx, ref, draft)
+	c, err := r.App.CatalogTable(ctx, ref, d)
+	if err != nil || c == nil {
+		return nil, err
+	}
+	t := importTable(*c)
+	return &t, nil
 }
 
 // CatalogLinks is the resolver for the catalogLinks field.
-func (r *queryResolver) CatalogLinks(ctx context.Context, ref string, draft *DraftInput) (*CatalogLinks, error) {
-	if _, err := auth.Require(ctx, auth.PermWrite); err != nil {
+func (r *queryResolver) CatalogLinks(ctx context.Context, ref string, draft *DraftInput) (*configapp.CatalogLinks, error) {
+	d, err := toDraft(draft)
+	if err != nil {
 		return nil, err
 	}
-	return r.catalogLinks(ctx, ref, draft)
+	return r.App.CatalogLinks(ctx, ref, d)
 }
 
 // PlanScope is the resolver for the planScope field.
-func (r *queryResolver) PlanScope(ctx context.Context, scope any, draft *DraftInput) (*ScopeStats, error) {
-	if _, err := auth.Require(ctx, auth.PermWrite); err != nil {
+func (r *queryResolver) PlanScope(ctx context.Context, scope any, draft *DraftInput) (*configapp.ScopeStats, error) {
+	s, err := decodeScope(scope)
+	if err != nil {
 		return nil, err
 	}
-	return r.planScope(ctx, scope, draft)
+	d, err := toDraft(draft)
+	if err != nil {
+		return nil, err
+	}
+	return r.App.PlanScope(ctx, s, d)
 }
 
 // PreviewPlan is the resolver for the previewPlan field.
 func (r *queryResolver) PreviewPlan(ctx context.Context, input PlanPreviewInput) (*PlanPreview, error) {
-	if _, err := auth.Require(ctx, auth.PermWrite); err != nil {
+	p, err := configapp.DecodePlan(input.Plan)
+	if err != nil {
 		return nil, err
 	}
-	return r.previewPlan(ctx, input.Plan, input.Draft, derefBool(input.Review))
+	d, err := toDraft(input.Draft)
+	if err != nil {
+		return nil, err
+	}
+	preview, err := r.App.PreviewPlan(ctx, p, d, derefBool(input.Review))
+	if err != nil {
+		return nil, err
+	}
+	return toPlanPreview(preview), nil
 }
 
 // PlanTemplates is the resolver for the planTemplates field.
-func (r *queryResolver) PlanTemplates(ctx context.Context) ([]PlanTemplate, error) {
-	return r.planTemplates(ctx)
+func (r *queryResolver) PlanTemplates(ctx context.Context) ([]configapp.PlanTemplate, error) {
+	return r.App.PlanTemplates(ctx)
 }
 
 // PlanTemplateVersions is the resolver for the planTemplateVersions field.
-func (r *queryResolver) PlanTemplateVersions(ctx context.Context, name string) ([]PlanTemplate, error) {
-	return r.planTemplateVersions(ctx, name)
+func (r *queryResolver) PlanTemplateVersions(ctx context.Context, name string) ([]configapp.PlanTemplate, error) {
+	return r.App.PlanTemplateVersions(ctx, name)
 }
 
 // Pending is the resolver for the pending field.
-func (r *queryResolver) Pending(ctx context.Context, draft *DraftInput) (*PendingWork, error) {
-	return r.pending(ctx, draft)
+func (r *queryResolver) Pending(ctx context.Context, draft *DraftInput) (*configapp.PendingWork, error) {
+	d, err := toDraft(draft)
+	if err != nil {
+		return nil, err
+	}
+	return r.App.Pending(ctx, d)
 }
 
 // PendingLog is the resolver for the pendingLog field.
-func (r *queryResolver) PendingLog(ctx context.Context, key string) ([]PendingState, error) {
-	return r.pendingLog(ctx, key)
+func (r *queryResolver) PendingLog(ctx context.Context, key string) ([]configapp.PendingState, error) {
+	return r.App.PendingLog(ctx, key)
 }
 
 // McpTokens is the resolver for the mcpTokens field.
-func (r *queryResolver) McpTokens(ctx context.Context) ([]McpToken, error) {
-	return r.mcpTokens(ctx)
+func (r *queryResolver) McpTokens(ctx context.Context) ([]configapp.McpToken, error) {
+	return r.App.McpTokens(ctx)
 }
 
 // ScanBatches is the resolver for the scanBatches field.
-func (r *queryResolver) ScanBatches(ctx context.Context, datasource string) ([]ScanBatch, error) {
-	return r.scanBatches(ctx, datasource)
+func (r *queryResolver) ScanBatches(ctx context.Context, datasource string) ([]configapp.ScanBatch, error) {
+	return r.App.ScanBatches(ctx, datasource)
 }

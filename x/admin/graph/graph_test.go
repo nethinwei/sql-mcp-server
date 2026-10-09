@@ -19,6 +19,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
+	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 	"github.com/nethinwei/sql-mcp-server/x/admin/scanjobs"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	_ "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
@@ -92,10 +93,11 @@ func newHarness(t *testing.T) *harness {
 	) error {
 		return fn(tables)
 	}
-	scans := NewScans(scanjobs.Options{}, nil)
+	scans := configapp.NewScans(scanjobs.Options{}, nil)
 	t.Cleanup(scans.Close)
 	return &harness{store: store, accounts: accountStore, tables: tables, resolver: &Resolver{
-		Store: store, Accounts: accounts.Service{Store: accountStore}, Introspect: introspection, Scans: scans,
+		App:      &configapp.Service{Store: store, Introspect: introspection, Scans: scans},
+		Accounts: accounts.Service{Store: accountStore},
 	}}
 }
 
@@ -513,7 +515,7 @@ func mustJSON(s string) any {
 
 func TestCapabilitiesAndValidationWarnings(t *testing.T) {
 	h := newHarness(t)
-	h.resolver.Capabilities = func() bootstrap.EntityCapabilities {
+	h.resolver.App.Capabilities = func() bootstrap.EntityCapabilities {
 		return bootstrap.EntityCapabilities{"shop.customers": {
 			entity.ActionRead:   {Privilege: introspect.PrivilegeDenied, Connection: "ro", Reason: "no SELECT"},
 			entity.ActionUpdate: {Privilege: introspect.PrivilegeGranted, Connection: "rw", Columns: []string{"region"}},

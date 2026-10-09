@@ -194,7 +194,8 @@ input DraftInput {
 
 - `x/configyaml`：新增 `Encode`（确定性 export），CLI 与 API 共用；
 - `x/configstore`：schema 版本 2、管理员账号表与迁移；版本 3 增加扫描目录、方案
-  模板与配置 MCP 令牌（见 `docs/design/planning.md`）；
+  模板与配置 MCP 令牌，版本 4 增加令牌范围与扫描批次的逐库记录（见
+  `docs/design/planning.md`）；
 - `x/providers/{postgres,mysql}`：注释与外键 introspection；
 - `x/admin`：会话、登录、权限、HTTP 挂载；`x/admin/graph`：gqlgen schema 与
   resolver；草稿合并、schema 导入映射、离线 simulate；

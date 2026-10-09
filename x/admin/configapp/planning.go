@@ -1,4 +1,4 @@
-package graph
+package configapp
 
 import (
 	"context"
@@ -7,12 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
@@ -38,7 +38,7 @@ type planContext struct {
 
 // planContext reads the draft (default: the published configuration) and
 // every kept scan of the published configuration's datasources.
-func (r *Resolver) planContext(ctx context.Context, draft *DraftInput) (planContext, error) {
+func (r *Service) planContext(ctx context.Context, draft *Draft) (planContext, error) {
 	scans, err := r.scans()
 	if err != nil {
 		return planContext{}, err
@@ -56,11 +56,11 @@ func (r *Resolver) planContext(ctx context.Context, draft *DraftInput) (planCont
 	}
 	pc := planContext{base: published, payload: rev.Payload, baseID: rev.ID, published: published, publishedID: rev.ID}
 	if draft != nil {
-		d, err := r.buildDraft(ctx, *draft)
+		d, err := r.BuildDraft(ctx, *draft)
 		if err != nil {
 			return planContext{}, err
 		}
-		pc.base, pc.payload, pc.baseID = d.cfg, d.payload, d.base.ID
+		pc.base, pc.payload, pc.baseID = d.Config, d.Payload, d.Base.ID
 	}
 	pc.baseHash = revision.Hash(pc.payload)
 	pc.sources, pc.fingerprint, err = scans.sources(ctx, published)
@@ -105,8 +105,8 @@ func (s *Scans) sources(ctx context.Context, cfg *config.Config) ([]configplan.S
 	return out, hex.EncodeToString(sum.Sum(nil)[:12]), nil
 }
 
-// decodePlan reads a plan from its GraphQL JSON value.
-func decodePlan(v any) (configplan.Plan, error) {
+// DecodePlan reads a plan from its JSON value.
+func DecodePlan(v any) (configplan.Plan, error) {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return configplan.Plan{}, err
@@ -114,102 +114,60 @@ func decodePlan(v any) (configplan.Plan, error) {
 	return configplan.Decode(data)
 }
 
+var entityActions = map[string]entity.Action{
+	"read": entity.ActionRead, "create": entity.ActionCreate, "update": entity.ActionUpdate,
+	"delete": entity.ActionDelete, "execute": entity.ActionExecute, "aggregate": entity.ActionAggregate,
+}
+
 // denied reports the entity actions the serving connections cannot run.
 func denied(caps bootstrap.EntityCapabilities) func(string, string) (string, bool) {
 	return func(id, action string) (string, bool) {
-		c, ok := caps[id][graphActions[Action(strings.ToUpper(action))]]
-		if !ok || c.Privilege != introspect.PrivilegeDenied {
+		a, known := entityActions[strings.ToLower(action)]
+		c, ok := caps[id][a]
+		if !known || !ok || c.Privilege != introspect.PrivilegeDenied {
 			return "", false
 		}
 		return c.Reason, true
 	}
 }
 
-func (r *Resolver) planInput(pc planContext, review bool) configplan.Input {
+func (r *Service) planInput(pc planContext, review bool) configplan.Input {
 	return configplan.Input{
 		Base: pc.base, Published: pc.published, Sources: pc.sources, Denied: denied(r.capabilities()), Review: review,
 	}
 }
 
-// planID identifies a plan with what it is evaluated against: the base
-// revision, the draft and the scans read. The same ID means the same outcome.
-func planID(pc planContext, p configplan.Plan) string {
+// planID identifies a plan with what it is evaluated against (the base
+// revision, the draft and the scans read) and how (as a review or not). The
+// same ID means the same outcome and report.
+func planID(pc planContext, p configplan.Plan, review bool) string {
 	data, _ := json.Marshal(p)
-	sum := sha256.Sum256(fmt.Appendf(nil, "%s\x00%d\x00%s\x00%s\x00%d", data, pc.baseID, pc.baseHash, pc.fingerprint,
-		pc.publishedID))
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s\x00%d\x00%s\x00%s\x00%d\x00%t", data, pc.baseID, pc.baseHash,
+		pc.fingerprint, pc.publishedID, review))
 	return hex.EncodeToString(sum[:12])
 }
 
-// evaluatePlan evaluates p against pc and validates the outcome as a whole.
-func (r *Resolver) evaluatePlan(
-	ctx context.Context, pc planContext, p configplan.Plan, review bool,
-) (configplan.Proposal, draft, *Validation, error) {
-	caps := r.capabilities()
+// evaluate evaluates p against pc and validates the outcome as a whole.
+func (r *Service) evaluate(ctx context.Context, pc planContext, p configplan.Plan, review bool) (*Preview, error) {
 	proposal, err := configplan.Evaluate(r.planInput(pc, review), p)
 	if err != nil {
-		return configplan.Proposal{}, draft{}, nil, err
+		return nil, err
 	}
+	out := &Preview{PlanID: planID(pc, p, review), Plan: p, Review: review, Proposal: proposal, Base: pc.base,
+		Report: toPlanReport(proposal.Report), baseID: pc.baseID}
 	cfg, payload, err := configedit.Apply(pc.payload, proposal.Edit())
 	if err != nil {
 		msg := err.Error()
-		return proposal, draft{}, &Validation{Error: &msg, RestartRequired: []string{}, Warnings: []string{}}, nil
+		out.Validation = &Validation{Error: &msg, RestartRequired: []string{}, Warnings: []string{}}
+		return out, nil
 	}
-	changes, err := r.restartChanges(ctx, cfg)
+	changes, err := r.RestartChanges(ctx, cfg)
 	if err != nil {
-		return configplan.Proposal{}, draft{}, nil, err
+		return nil, err
 	}
 	hash := revision.Hash(payload)
-	warnings := orEmpty(bootstrap.CapabilityWarnings(cfg, caps))
-	return proposal, draft{cfg: cfg, payload: payload},
-		&Validation{Ok: true, ContentHash: &hash, RestartRequired: changes, Warnings: warnings}, nil
-}
-
-func (r *Resolver) previewPlan(ctx context.Context, plan any, in *DraftInput, review bool) (*PlanPreview, error) {
-	p, err := decodePlan(plan)
-	if err != nil {
-		return nil, err
-	}
-	pc, err := r.planContext(ctx, in)
-	if err != nil {
-		return nil, err
-	}
-	proposal, _, validation, err := r.evaluatePlan(ctx, pc, p, review)
-	if err != nil {
-		return nil, err
-	}
-	out := &PlanPreview{
-		PlanID: planID(pc, p), Report: toPlanReport(proposal.Report), Entities: make([]Entity, 0, len(proposal.Entities)),
-		Added: orEmpty(proposal.Added), Validation: validation,
-	}
-	for _, e := range proposal.Entities {
-		out.Entities = append(out.Entities, toEntity(e))
-	}
-	canonical := canonicalGrants(pc.base, proposal.Config)
-	out.Roles = slices.DeleteFunc(toRoles(proposal.Config), func(role Role) bool {
-		_, ok := proposal.Roles[role.Name]
-		canonical(role.Grants)
-		return !ok
-	})
-	out.Users = slices.DeleteFunc(toUsers(proposal.Config), func(u User) bool {
-		_, ok := proposal.Users[u.Name]
-		canonical(u.Grants)
-		return !ok
-	})
+	out.payload = payload
+	out.Validation = &Validation{Ok: true, ContentHash: &hash, RestartRequired: changes,
+		Warnings: orEmpty(bootstrap.CapabilityWarnings(cfg, r.capabilities()))}
 	return out, nil
-}
-
-// canonicalGrants names the entity of each grant by its ID, as base resolved
-// the reference (or, for a grant the plan added, the outcome), so the console
-// can rewrite references once the entities are in its workspace.
-func canonicalGrants(base, outcome *config.Config) func([]Grant) {
-	before, after := config.NewEntityRefs(base.Entities), config.NewEntityRefs(outcome.Entities)
-	return func(grants []Grant) {
-		for i, g := range grants {
-			if e, err := before.Resolve(g.Entity); err == nil {
-				grants[i].Entity = e.ID()
-			} else if e, err := after.Resolve(g.Entity); err == nil {
-				grants[i].Entity = e.ID()
-			}
-		}
-	}
 }

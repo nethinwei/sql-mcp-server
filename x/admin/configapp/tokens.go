@@ -1,10 +1,12 @@
-package graph
+package configapp
 
 import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -18,7 +20,8 @@ import (
 const maxTokenDays = 3650
 
 func toMcpToken(t configstore.AdminToken) McpToken {
-	out := McpToken{ID: t.ID, Name: t.Name, CreatedAt: t.CreatedAt}
+	out := McpToken{ID: t.ID, Name: t.Name, CreatedAt: t.CreatedAt, ReadOnly: t.Scope.ReadOnly,
+		Datasources: t.Scope.Datasources}
 	if !t.ExpiresAt.IsZero() {
 		out.ExpiresAt = &t.ExpiresAt
 	}
@@ -28,8 +31,9 @@ func toMcpToken(t configstore.AdminToken) McpToken {
 	return out
 }
 
-func (r *Resolver) mcpTokens(ctx context.Context) ([]McpToken, error) {
-	who, err := auth.Require(ctx, auth.PermRead)
+// McpTokens lists the caller's tokens.
+func (r *Service) McpTokens(ctx context.Context) ([]McpToken, error) {
+	who, err := auth.RequireUnlimited(ctx, auth.PermRead)
 	if err != nil {
 		return nil, err
 	}
@@ -48,8 +52,10 @@ func (r *Resolver) mcpTokens(ctx context.Context) ([]McpToken, error) {
 	return out, nil
 }
 
-func (r *Resolver) createMcpToken(ctx context.Context, in McpTokenInput) (*McpTokenSecret, error) {
-	who, err := auth.Require(ctx, auth.PermRead)
+// CreateMcpToken creates a token of the caller for one client; the token
+// is returned once.
+func (r *Service) CreateMcpToken(ctx context.Context, in McpTokenInput) (*McpTokenSecret, error) {
+	who, err := auth.RequireUnlimited(ctx, auth.PermRead)
 	if err != nil {
 		return nil, err
 	}
@@ -64,6 +70,8 @@ func (r *Resolver) createMcpToken(ctx context.Context, in McpTokenInput) (*McpTo
 		return nil, errors.New("a token name has 1 to 64 characters")
 	case days < 0 || days > maxTokenDays:
 		return nil, errors.New("a token expires within 0 (never) to 3650 days")
+	case in.Datasources != nil && len(in.Datasources) == 0:
+		return nil, errors.New("name the datasources the token reaches, or none to reach every one")
 	}
 	token, err := config.NewUserToken()
 	if err != nil {
@@ -73,8 +81,12 @@ func (r *Resolver) createMcpToken(ctx context.Context, in McpTokenInput) (*McpTo
 	if _, err := rand.Read(id[:]); err != nil {
 		return nil, err
 	}
+	scope, err := r.tokenScope(ctx, in)
+	if err != nil {
+		return nil, err
+	}
 	t := configstore.AdminToken{ID: hex.EncodeToString(id[:]), Username: who.Username, Name: name,
-		TokenHash: config.TokenHash(token)}
+		TokenHash: config.TokenHash(token), Scope: scope}
 	if days > 0 {
 		t.ExpiresAt = r.Scans.clock().Add(time.Duration(days) * 24 * time.Hour).UTC().Truncate(time.Microsecond)
 	}
@@ -86,8 +98,9 @@ func (r *Resolver) createMcpToken(ctx context.Context, in McpTokenInput) (*McpTo
 	return &McpTokenSecret{Token: token, Info: &info}, nil
 }
 
-func (r *Resolver) revokeMcpToken(ctx context.Context, id string) (bool, error) {
-	who, err := auth.Require(ctx, auth.PermRead)
+// RevokeMcpToken revokes one of the caller's tokens.
+func (r *Service) RevokeMcpToken(ctx context.Context, id string) (bool, error) {
+	who, err := auth.RequireUnlimited(ctx, auth.PermRead)
 	if err != nil {
 		return false, err
 	}
@@ -96,4 +109,25 @@ func (r *Resolver) revokeMcpToken(ctx context.Context, id string) (bool, error) 
 		return false, err
 	}
 	return true, store.DeleteAdminToken(ctx, who.Username, id)
+}
+
+// tokenScope checks the datasources a token is limited to are configured.
+func (r *Service) tokenScope(ctx context.Context, in McpTokenInput) (configstore.TokenScope, error) {
+	scope := configstore.TokenScope{ReadOnly: derefBool(in.ReadOnly)}
+	if in.Datasources == nil {
+		return scope, nil
+	}
+	cfg, err := r.SelectConfig(ctx, nil, nil)
+	if err != nil {
+		return scope, err
+	}
+	for _, ds := range in.Datasources {
+		if !hasDatasource(cfg, ds) {
+			return scope, fmt.Errorf("unknown datasource %q", ds)
+		}
+		if !slices.Contains(scope.Datasources, ds) {
+			scope.Datasources = append(scope.Datasources, ds)
+		}
+	}
+	return scope, nil
 }

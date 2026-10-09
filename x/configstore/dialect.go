@@ -18,7 +18,7 @@ type dialect struct {
 
 func storeMigrations(text, longText string) [][]string {
 	return [][]string{revisionDDL(text, longText), adminDDL(), slices.Concat(catalogDDL(longText), templatesDDL(longText),
-		tokensDDL(), pendingDDL(longText))}
+		tokensDDL(), pendingDDL(longText)), scopesAndItemsDDL(longText)}
 }
 
 // catalogDDL is schema version 3, with planningDDL: the scanned catalog.
@@ -90,6 +90,27 @@ func tokensDDL() []string {
 			last_used_us BIGINT       NOT NULL
 		)`,
 		`CREATE UNIQUE INDEX smcp_admin_tokens_hash ON smcp_admin_tokens (token_hash)`,
+	}
+}
+
+// scopesAndItemsDDL is schema version 4: the scopes of administrators'
+// tokens (none: unlimited), the request keys of scan batches, and their items
+// as rows. The items kept in the payload of earlier batches move to rows in
+// the same migration (migrateBatchItems); the payload is written empty since.
+func scopesAndItemsDDL(longText string) []string {
+	return []string{
+		`ALTER TABLE smcp_admin_tokens ADD COLUMN scope VARCHAR(4000) NOT NULL DEFAULT ''`,
+		`ALTER TABLE smcp_scan_batches ADD COLUMN request_key VARCHAR(64) NOT NULL DEFAULT ''`,
+		`CREATE TABLE IF NOT EXISTS smcp_scan_batch_items (
+			batch_id      VARCHAR(32)  NOT NULL,
+			ordinal       INT          NOT NULL,
+			schema_name   VARCHAR(255) NOT NULL,
+			state         VARCHAR(16)  NOT NULL,
+			error_text    ` + longText + ` NOT NULL,
+			attempts      INT          NOT NULL,
+			not_before_us BIGINT       NOT NULL,
+			PRIMARY KEY (batch_id, schema_name)
+		)`,
 	}
 }
 

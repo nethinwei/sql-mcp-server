@@ -26,6 +26,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
+	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 	"github.com/nethinwei/sql-mcp-server/x/admin/configmcp"
 	"github.com/nethinwei/sql-mcp-server/x/admin/graph"
 	"github.com/nethinwei/sql-mcp-server/x/admin/scanjobs"
@@ -54,8 +55,8 @@ type Config struct {
 	// Catalog keeps what schema scans found; in memory when nil.
 	Catalog catalog.Store
 	// Plans keeps plan templates and MCP tokens; nil refuses them.
-	Plans      graph.PlanStore
-	Introspect graph.Introspection
+	Plans      configapp.PlanStore
+	Introspect configapp.Introspection
 	// Status reports the serving process to the console; optional.
 	Status func() graph.RuntimeState
 	// Capabilities reports what the serving connections may do; optional.
@@ -79,7 +80,7 @@ type Handler struct {
 	logins    *loginGate
 	graphql   http.Handler
 	mux       *http.ServeMux
-	scans     *graph.Scans
+	scans     *configapp.Scans
 	published *publishedFeed
 }
 
@@ -87,13 +88,13 @@ type Handler struct {
 func New(cfg Config) *Handler {
 	h := &Handler{
 		cfg: cfg, sessions: newSessions(cfg.Now), logins: newLoginGate(maxConcurrentLogins),
-		scans: graph.NewScans(scanjobs.Options{}, cfg.Catalog), published: newPublishedFeed(cfg.Store, eventPollInterval),
+		scans: configapp.NewScans(scanjobs.Options{}, cfg.Catalog), published: newPublishedFeed(cfg.Store, eventPollInterval),
 	}
-	resolver := &graph.Resolver{
-		Store: cfg.Store, Accounts: accounts.Service{Store: cfg.Accounts}, Introspect: cfg.Introspect, Status: cfg.Status,
-		Capabilities: cfg.Capabilities, Scans: h.scans, Plans: cfg.Plans,
+	app := &configapp.Service{
+		Store: cfg.Store, Introspect: cfg.Introspect, Capabilities: cfg.Capabilities, Scans: h.scans, Plans: cfg.Plans,
 	}
-	resolver.WatchScanBatches()
+	app.WatchScanBatches()
+	resolver := &graph.Resolver{App: app, Accounts: accounts.Service{Store: cfg.Accounts}, Status: cfg.Status}
 	srv := handler.New(graph.NewExecutableSchema(graph.Config{Resolvers: resolver}))
 	srv.AddTransport(transport.POST{})
 	srv.Use(extension.FixedComplexityLimit(maxQueryComplexity))
@@ -121,7 +122,7 @@ func New(cfg Config) *Handler {
 	}
 	if cfg.Plans != nil {
 		opts := configmcp.Options{PathPrefix: cfg.PathPrefix, Now: cfg.Now}
-		mcpHandler := configmcp.New(resolver, cfg.Plans, cfg.Accounts, opts)
+		mcpHandler := configmcp.New(app, cfg.Plans, cfg.Accounts, opts)
 		for _, method := range []string{http.MethodPost, http.MethodGet, http.MethodDelete} {
 			h.mux.Handle(method+" /admin/mcp", mcpHandler)
 		}

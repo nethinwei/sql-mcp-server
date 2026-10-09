@@ -1,4 +1,4 @@
-package graph
+package configapp
 
 import (
 	"context"
@@ -36,7 +36,7 @@ func toPendingState(p configstore.PendingState, now time.Time) *PendingState {
 	return out
 }
 
-func (r *Resolver) pendingStates(ctx context.Context) (map[string]*PendingState, error) {
+func (r *Service) pendingStates(ctx context.Context) (map[string]*PendingState, error) {
 	store, err := r.plans()
 	if err != nil {
 		return nil, err
@@ -52,15 +52,18 @@ func (r *Resolver) pendingStates(ctx context.Context) (map[string]*PendingState,
 	return out, nil
 }
 
-// pending evaluates every recurring template, reporting each that would
+// Pending evaluates every recurring template, reporting each that would
 // change the configuration or has rules it cannot apply, lists the tables
 // whose fields differ, and counts the tables not imported and the schemas
-// never scanned.
-func (r *Resolver) pending(ctx context.Context, in *DraftInput) (*PendingWork, error) {
-	if _, err := auth.Require(ctx, auth.PermWrite); err != nil {
+// never scanned. A principal limited to some datasources sees what is
+// about them only: their tables and the templates whose scope names only
+// them.
+func (r *Service) Pending(ctx context.Context, draft *Draft) (*PendingWork, error) {
+	who, err := auth.Require(ctx, auth.PermWrite)
+	if err != nil {
 		return nil, err
 	}
-	pc, err := r.planContext(ctx, in)
+	pc, err := r.planContext(ctx, draft)
 	if err != nil {
 		return nil, err
 	}
@@ -69,31 +72,36 @@ func (r *Resolver) pending(ctx context.Context, in *DraftInput) (*PendingWork, e
 		return nil, err
 	}
 	out := &PendingWork{Plans: []PendingPlan{}, DriftTables: []PendingTable{}, UnlistedDatasources: []string{}}
-	rows, counts, _ := r.Scans.catalogRows(pc, CatalogFilter{})
+	var f CatalogFilter
+	if err := withinFilter(who, &f); err != nil {
+		return nil, err
+	}
+	positions, counts, x := r.Scans.catalogRows(pc, f)
 	out.Drift, out.NewTables = counts.Drift, counts.New
-	for _, row := range rows {
+	for _, at := range positions {
+		row := x.At(at)
 		if row.Drift() && row.Entity != nil {
 			key := "drift:" + row.Ref + ":" + digest([][]string{row.Added, row.Missing})
 			out.DriftTables = append(out.DriftTables, PendingTable{Key: key, Ref: row.Ref, Entity: row.Entity.ID(),
 				Added: orEmpty(row.Added), Missing: orEmpty(row.Missing), State: states[key]})
 		}
 	}
-	for _, schemas := range configplan.Unscanned(pc.sources, configplan.Scope{}) {
+	for _, schemas := range configplan.Unscanned(pc.sources, configplan.Scope{Datasources: f.Datasources}) {
 		out.UnscannedSchemas += len(schemas)
 	}
 	for _, src := range pc.sources {
-		if src.Listed == nil && len(src.Scanned) == 0 {
+		if who.Allows(src.Datasource) && src.Listed == nil && len(src.Scanned) == 0 {
 			out.UnlistedDatasources = append(out.UnlistedDatasources, src.Datasource)
 		}
 	}
-	out.Plans, err = r.pendingPlans(ctx, pc, states)
+	out.Plans, err = r.pendingPlans(ctx, pc, states, who)
 	return out, err
 }
 
-func (r *Resolver) pendingPlans(
-	ctx context.Context, pc planContext, states map[string]*PendingState,
+func (r *Service) pendingPlans(
+	ctx context.Context, pc planContext, states map[string]*PendingState, who auth.Principal,
 ) ([]PendingPlan, error) {
-	templates, err := r.planTemplates(ctx)
+	templates, err := r.templates(ctx, who)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +110,7 @@ func (r *Resolver) pendingPlans(
 		if !t.Recurring {
 			continue
 		}
-		p, err := decodePlan(t.Plan)
+		p, err := DecodePlan(t.Plan)
 		if err != nil {
 			return nil, err
 		}
@@ -126,8 +134,9 @@ func (r *Resolver) pendingPlans(
 
 var pendingStatuses = []string{"open", "snoozed", "ignored"}
 
-func (r *Resolver) setPendingState(ctx context.Context, in PendingStateInput) (*PendingState, error) {
-	who, err := auth.Require(ctx, auth.PermWrite)
+// SetPendingState records who handles a pending item and how.
+func (r *Service) SetPendingState(ctx context.Context, in PendingStateInput) (*PendingState, error) {
+	who, err := auth.RequireUnlimited(ctx, auth.PermWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -161,8 +170,9 @@ func (r *Resolver) setPendingState(ctx context.Context, in PendingStateInput) (*
 	return toPendingState(saved, r.Scans.clock()), nil
 }
 
-func (r *Resolver) pendingLog(ctx context.Context, key string) ([]PendingState, error) {
-	if _, err := auth.Require(ctx, auth.PermRead); err != nil {
+// PendingLog lists what was set of a pending item, newest first.
+func (r *Service) PendingLog(ctx context.Context, key string) ([]PendingState, error) {
+	if _, err := auth.RequireUnlimited(ctx, auth.PermRead); err != nil {
 		return nil, err
 	}
 	store, err := r.plans()

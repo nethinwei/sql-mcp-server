@@ -52,6 +52,8 @@ input PlanTemplateInput {
 input ScanBatchInput {
   datasource: String!
   schemas: [String!]!
+  "Names the request: sent again with the same key, it gets the batch it started."
+  requestKey: String
 }
 
 input PlanPreviewInput {
@@ -72,9 +74,14 @@ input PlanDraftInput {
   base: ID
   """
   The planId previewPlan returned: the draft is saved only when the plan
-  still evaluates to what was previewed.
+  still evaluates to what was previewed, and every exception to confirm is
+  confirmed.
   """
   planId: String
+  "Whether planId is a review's (previewPlan with review)."
+  review: Boolean = false
+  "The IDs of the exceptions to confirm the administrator confirmed."
+  confirmed: [String!]
 }
 
 input PendingStateInput {
@@ -93,6 +100,10 @@ input McpTokenInput {
   name: String!
   "Days until it expires; null or 0 never."
   expiresInDays: Int
+  "Reads only: no scans or drafts."
+  readOnly: Boolean = false
+  "Limits it to these datasources; null: every one."
+  datasources: [String!]
 }
 
 extend type Query {
@@ -321,6 +332,11 @@ type PlanChange {
 
 type PlanException {
   """
+  Identifies the exception within its plan: a draft is saved with each
+  exception to confirm confirmed by its ID.
+  """
+  id: String!
+  """
   renamed, noKey, sideEffects, relationshipDropped, qualified, unknownUser,
   noFields, referenced, denied or review.
   """
@@ -403,6 +419,10 @@ type McpToken {
   "null: never expires."
   expiresAt: Time
   lastUsedAt: Time
+  "Reads only: no scans or drafts."
+  readOnly: Boolean!
+  "The datasources it reaches; null: every one."
+  datasources: [String!]
 }
 
 type McpTokenSecret {

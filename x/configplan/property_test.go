@@ -215,3 +215,27 @@ func TestCandidatesForSomeTablesMatchAll(t *testing.T) {
 		}
 	}
 }
+
+// An index filters by any scope to what Rows computes for that scope.
+func TestIndexMatchesRows(t *testing.T) {
+	t.Parallel()
+	for seed := range uint64(300) {
+		r := rand.New(rand.NewPCG(seed, 11))
+		cat := randomCatalog(r)
+		base := randomBase(t, r, cat)
+		sources := []Source{{Datasource: "shop", Catalog: cat}, {Datasource: "other", Catalog: randomCatalog(r)}}
+		index := NewIndex(sources, base, nil)
+		scope := randomPlan(r).Scope
+		scope.Search = []string{"", "or", "S"}[r.IntN(3)]
+		scope.Drift = r.IntN(3) == 0
+		if r.IntN(3) == 0 {
+			scope.Datasources = []string{"other"}
+		}
+		if r.IntN(4) == 0 {
+			scope.Refs = []string{"shop.public.orders", "other.sales.users"}
+		}
+		if got, want := index.Rows(scope), Rows(sources, base, nil, scope); !reflect.DeepEqual(got, want) {
+			t.Fatalf("seed %d, scope %+v: index %d rows, Rows %d", seed, scope, len(got), len(want))
+		}
+	}
+}

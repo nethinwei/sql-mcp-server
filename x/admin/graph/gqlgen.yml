@@ -14,6 +14,10 @@ resolver:
   package: graph
   filename_template: "{name}.resolvers.go"
 omit_slice_element_pointers: true
+# The configuration service's results and inputs bind by name, through the
+# aliases of app_types.go.
+autobind:
+  - github.com/nethinwei/sql-mcp-server/x/admin/graph
 models:
   ID:
     model:

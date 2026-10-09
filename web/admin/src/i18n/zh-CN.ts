@@ -212,10 +212,11 @@ export default {
     expired: '已过期', expires: '到期', expiresIn: '有效天数', expiresHint: '有效天数填 0 或留空表示不过期；建议为每个客户端单独生成令牌，泄露时只需吊销对应的那个。',
     lastUsed: '最近使用', never: '不过期', unused: '未使用', tokensOf: '{user} 的配置 MCP 令牌（{n} 个）',
     title: '配置 MCP（Agent 接入）',
-    intro: 'Agent 可以用你的身份通过配置 MCP 检索表目录、预览方案并保存为草稿，但不能发布；草稿在「版本历史」里由人审核发布。令牌拥有你的全部管理权限，请只交给可信的 Agent。',
+    intro: 'Agent 可以用你的身份通过配置 MCP 检索表目录、预览方案并保存为草稿，但不能发布；草稿在「版本历史」里由人审核发布。令牌默认拥有你的管理权限，可以收窄为只读（不能扫描、不能保存草稿）或只能访问部分数据源（只能检索、预览和扫描这些数据源，读不到跨数据源的差异、模拟和版本列表）。',
+    scope: '范围', readOnly: '只读', canDraft: '可保存草稿', datasources: '数据源', allDatasources: '全部数据源',
     generate: '生成令牌',
     revoke: '吊销', revokeConfirm: '吊销后使用「{name}」令牌的 Agent 立即无法访问，确定吊销？', revoked: '令牌已吊销',
-    tools: '可用工具：catalog_search、catalog_table、plan_preview、plan_save_draft、plan_templates、pending、validate、diff、simulate、revisions。',
+    tools: '可用工具：catalog_search、catalog_table、catalog_links、plan_scope、scan_schemas、scan_status、plan_preview、plan_details、plan_save_draft、plan_templates、pending、diff、simulate、revisions。保存草稿时需要带上管理员确认过的例外 ID。',
   },
   entities: {
     search: '搜索实体', allDatasources: '全部数据源', importFromDb: '从数据库导入', empty: '还没有实体：从数据库导入表开始',

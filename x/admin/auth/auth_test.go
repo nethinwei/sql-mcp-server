@@ -77,3 +77,31 @@ func TestRequire(t *testing.T) {
 		t.Fatalf("admin:* must grant everything: %v", err)
 	}
 }
+
+// A principal limited to some datasources acts on those only, and cannot
+// read what spans every datasource; an unlimited one can.
+func TestDatasourceScope(t *testing.T) {
+	t.Parallel()
+	limited := WithPrincipal(context.Background(),
+		Principal{Permissions: []string{PermRead}, Datasources: []string{"shop"}})
+	if _, err := RequireDatasource(limited, PermRead, "shop"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RequireDatasource(limited, PermRead, "ledger"); !errors.Is(err, ErrOutOfScope) {
+		t.Fatalf("another datasource: %v", err)
+	}
+	if _, err := RequireDatasource(limited, PermWrite, "shop"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("a missing permission: %v", err)
+	}
+	if _, err := RequireUnlimited(limited, PermRead); !errors.Is(err, ErrOutOfScope) {
+		t.Fatalf("a read of every datasource: %v", err)
+	}
+	none := WithPrincipal(context.Background(), Principal{Permissions: []string{PermRead}, Datasources: []string{}})
+	if _, err := RequireDatasource(none, PermRead, "shop"); !errors.Is(err, ErrOutOfScope) {
+		t.Fatalf("limited to no datasource: %v", err)
+	}
+	all := WithPrincipal(context.Background(), Principal{Permissions: []string{PermRead}})
+	if _, err := RequireUnlimited(all, PermRead); err != nil {
+		t.Fatal(err)
+	}
+}
