@@ -68,6 +68,7 @@ COMMENT ON COLUMN crm.customers.region IS '销售大区';
 COMMENT ON COLUMN crm.customers.vip_level IS '会员等级 0-5';
 COMMENT ON COLUMN crm.customers.created_at IS '注册时间';
 CREATE INDEX ON crm.customers (tenant_id, region);
+CREATE INDEX customers_vip ON crm.customers (tenant_id, vip_level) WHERE vip_level >= 3;
 
 INSERT INTO crm.customers
 SELECT i,
@@ -81,6 +82,11 @@ SELECT i,
        (i * 13) % 6,
        timestamptz '2023-01-01' + (i * interval '4 hours')
 FROM generate_series(1, 3000) AS i;
+-- Unique keys that do not identify a row: over a nullable column, partial,
+-- on an expression.
+ALTER TABLE crm.customers ADD UNIQUE (tenant_id, email);
+CREATE UNIQUE INDEX customers_id_card_key ON crm.customers (id_card) WHERE id_card IS NOT NULL;
+CREATE UNIQUE INDEX customers_email_lower_key ON crm.customers (lower(email));
 
 CREATE TABLE crm.support_tickets (
   id          integer PRIMARY KEY,
@@ -111,6 +117,7 @@ SELECT i, c.tenant_id, c.id,
        CASE WHEN i % 4 >= 2 THEN timestamptz '2024-01-02' + (i * interval '3 hours') END
 FROM generate_series(1, 1200) AS i
 JOIN crm.customers c ON c.id = 1 + (i * 37) % 3000;
+CREATE INDEX support_tickets_subject_fts ON crm.support_tickets USING gin (to_tsvector('simple', subject));
 
 -- sales ----------------------------------------------------------------------
 
@@ -169,6 +176,7 @@ COMMENT ON COLUMN sales.orders.created_at IS '下单时间';
 COMMENT ON COLUMN sales.orders.paid_at IS '支付时间';
 CREATE INDEX ON sales.orders (tenant_id, created_at);
 CREATE INDEX ON sales.orders (customer_id);
+CREATE INDEX orders_created_brin ON sales.orders USING brin (created_at);
 
 INSERT INTO sales.orders
 SELECT i, c.tenant_id, c.id,
@@ -289,6 +297,7 @@ SELECT row_number() OVER (), o.id, (ARRAY['wallet','bank_transfer','card'])[1 + 
        CASE WHEN o.id % 3 = 2 THEN lpad((o.id % 10000)::text, 4, '0') END,
        'TXN' || md5(o.id::text), o.paid_at
 FROM sales.orders o WHERE o.paid_at IS NOT NULL;
+ALTER TABLE finance.payments ADD UNIQUE (provider_txn_id);
 
 -- ops (not configured; import it from the console) -----------------------------
 
@@ -334,6 +343,10 @@ SELECT row_number() OVER (), o.id,
        o.paid_at + interval '1 day',
        CASE WHEN o.status = 'completed' THEN o.paid_at + interval '3 days' END
 FROM sales.orders o WHERE o.status IN ('shipped', 'completed');
+-- Two composite unique keys sharing a column.
+ALTER TABLE ops.shipments ADD UNIQUE (carrier, tracking_no);
+ALTER TABLE ops.shipments ADD UNIQUE (order_id, carrier);
+CREATE INDEX shipments_tracking_hash ON ops.shipments USING hash (tracking_no);
 
 -- archive: same table name as sales.orders, told apart by schema -----------------
 

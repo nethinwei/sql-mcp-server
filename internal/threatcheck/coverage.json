@@ -87,13 +87,15 @@
   "TM-007": {
     "severity": "high",
     "tests": [
-      {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadDrainsBeforePublishing"},
+      {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadPublishesWithoutWaitingForLeases"},
+      {"file": "x/bootstrap/bootstrap_access_test.go", "name": "TestReloadReportsRevokedPrincipals"},
       {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadFailureKeepsOldApp"},
       {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadRejectsTransactionLimitChanges"},
       {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadUpdatesBudgetLimitsAndPreservesState"}
     ],
     "gaps": [
-      "race 测试不枚举所有调度交错；多进程/多实例配置发布不在当前一致性模型内"
+      "race 测试不枚举所有调度交错；多进程/多实例配置发布不在当前一致性模型内",
+      "新旧快照重叠期间 engine 并发与连接池短暂最多为配置值的两倍"
     ]
   },
   "TM-008": {

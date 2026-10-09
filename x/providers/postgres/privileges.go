@@ -2,19 +2,10 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 )
-
-// relationName is a regclass-parseable name for schema.table ("" schema
-// resolves through search_path).
-func relationName(schema, table string) string {
-	name := Dialect{}.QuoteIdent(table)
-	if schema != "" {
-		name = Dialect{}.QuoteIdent(schema) + "." + name
-	}
-	return name
-}
 
 // ReadOnly implements introspect.PrivilegeInspector: a hot standby, or a
 // session whose transactions default to read-only.
@@ -25,45 +16,74 @@ func (i pgIntrospector) ReadOnly(ctx context.Context) (bool, error) {
 	return readOnly, err
 }
 
-// TablePrivileges implements introspect.PrivilegeInspector.
-func (i pgIntrospector) TablePrivileges(ctx context.Context, schema, table string) (introspect.TablePrivileges, error) {
-	var p introspect.TablePrivileges
-	rel := relationName(schema, table)
-	var sel, ins, upd, del bool
-	if err := i.db.QueryRowContext(ctx,
-		`SELECT has_table_privilege($1::regclass, 'SELECT'), has_table_privilege($1::regclass, 'INSERT'),
-		        has_table_privilege($1::regclass, 'UPDATE'), has_table_privilege($1::regclass, 'DELETE')`,
-		rel).Scan(&sel, &ins, &upd, &del); err != nil {
-		return p, err
-	}
-	p.Select, p.Insert, p.Update, p.Delete =
-		introspect.GrantedIf(sel), introspect.GrantedIf(ins), introspect.GrantedIf(upd), introspect.GrantedIf(del)
-	if sel && ins && upd {
-		return p, nil
-	}
-	rows, err := i.db.QueryContext(ctx,
-		`SELECT a.attname, has_column_privilege(a.attrelid, a.attnum, 'SELECT'),
-		        has_column_privilege(a.attrelid, a.attnum, 'INSERT'), has_column_privilege(a.attrelid, a.attnum, 'UPDATE')
-		 FROM pg_attribute a WHERE a.attrelid = $1::regclass AND a.attnum > 0 AND NOT a.attisdropped
-		 ORDER BY a.attnum`, rel)
-	if err != nil {
-		return p, err
-	}
-	defer func() { _ = rows.Close() }()
-	p.Columns = map[string][]string{}
-	for rows.Next() {
-		var column string
-		var cs, ci, cu bool
-		if err := rows.Scan(&column, &cs, &ci, &cu); err != nil {
-			return p, err
-		}
-		for action, granted := range map[string]bool{"select": cs && !sel, "insert": ci && !ins, "update": cu && !upd} {
-			if granted {
-				p.Columns[action] = append(p.Columns[action], column)
+// TablePrivileges implements introspect.PrivilegeInspector: table-level
+// privileges of tables in one query, and the column-level ones of tables
+// lacking some table-level privilege in a second.
+func (i pgIntrospector) TablePrivileges(
+	ctx context.Context, schema string, tables []string,
+) (map[string]introspect.TablePrivileges, error) {
+	out := map[string]introspect.TablePrivileges{}
+	var partial []string
+	err := i.each(ctx,
+		`SELECT c.relname, has_table_privilege(c.oid, 'SELECT'), has_table_privilege(c.oid, 'INSERT'),
+		        has_table_privilege(c.oid, 'UPDATE'), has_table_privilege(c.oid, 'DELETE')
+		 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+		 WHERE n.nspname = COALESCE(NULLIF($2, ''), current_schema()) AND c.relname = ANY($1)`,
+		tables, func(rows *sql.Rows) error {
+			var table string
+			var sel, ins, upd, del bool
+			if err := rows.Scan(&table, &sel, &ins, &upd, &del); err != nil {
+				return err
 			}
-		}
+			out[table] = introspect.TablePrivileges{
+				Select: introspect.GrantedIf(sel), Insert: introspect.GrantedIf(ins),
+				Update: introspect.GrantedIf(upd), Delete: introspect.GrantedIf(del),
+			}
+			if !sel || !ins || !upd {
+				partial = append(partial, table)
+			}
+			return nil
+		}, schema)
+	if err != nil || len(partial) == 0 {
+		return out, err
 	}
-	return p, rows.Err()
+	return out, i.columnPrivileges(ctx, schema, partial, out)
+}
+
+// columnPrivileges adds the columns granted where the table-level privilege
+// is not.
+func (i pgIntrospector) columnPrivileges(
+	ctx context.Context, schema string, tables []string, out map[string]introspect.TablePrivileges,
+) error {
+	return i.each(ctx,
+		`SELECT c.relname, a.attname, has_column_privilege(a.attrelid, a.attnum, 'SELECT'),
+		        has_column_privilege(a.attrelid, a.attnum, 'INSERT'), has_column_privilege(a.attrelid, a.attnum, 'UPDATE')
+		 FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+		 WHERE n.nspname = COALESCE(NULLIF($2, ''), current_schema()) AND c.relname = ANY($1)
+		   AND a.attnum > 0 AND NOT a.attisdropped
+		 ORDER BY c.relname, a.attnum`,
+		tables, func(rows *sql.Rows) error {
+			var table, column string
+			var cs, ci, cu bool
+			if err := rows.Scan(&table, &column, &cs, &ci, &cu); err != nil {
+				return err
+			}
+			p := out[table]
+			if p.Columns == nil {
+				p.Columns = map[string][]string{}
+			}
+			for action, granted := range map[string]bool{
+				"select": cs && p.Select != introspect.PrivilegeGranted,
+				"insert": ci && p.Insert != introspect.PrivilegeGranted,
+				"update": cu && p.Update != introspect.PrivilegeGranted,
+			} {
+				if granted {
+					p.Columns[action] = append(p.Columns[action], column)
+				}
+			}
+			out[table] = p
+			return nil
+		}, schema)
 }
 
 // ProcedurePrivilege implements introspect.PrivilegeInspector.

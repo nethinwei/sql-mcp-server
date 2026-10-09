@@ -2,6 +2,7 @@
 package providerregistry
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -21,6 +22,17 @@ type Options struct {
 	// transaction-mode pooler, which keeps no session state: the provider
 	// must not rely on named prepared statements or startup settings.
 	Pooler string
+	// Context bounds opening the provider (its first connection); nil means
+	// no bound.
+	Context context.Context
+}
+
+// OpenContext is the context opening the provider runs under.
+func (o Options) OpenContext() context.Context {
+	if o.Context != nil {
+		return o.Context
+	}
+	return context.Background()
 }
 
 // PoolerTransaction is the transaction-mode pooler setting.

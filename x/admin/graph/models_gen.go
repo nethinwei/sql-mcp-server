@@ -217,6 +217,21 @@ type ImportForeignKey struct {
 	OnUpdate *string `json:"onUpdate,omitempty"`
 }
 
+type ImportIndex struct {
+	Name string `json:"name"`
+	// The database's name for the index structure, lower-cased: for example
+	// btree, hash, gin, gist, brin, spgist (PostgreSQL); btree, hash, fulltext,
+	// spatial (MySQL, OceanBase).
+	Method string `json:"method"`
+	// Key parts in order: a column, a column prefix such as title(20), or an
+	// expression as the database prints it ("" when it does not report it).
+	Parts   []string `json:"parts"`
+	Unique  bool     `json:"unique"`
+	Primary bool     `json:"primary"`
+	// The predicate of a partial index; null for a full one.
+	Where *string `json:"where,omitempty"`
+}
+
 type ImportKey struct {
 	Name    string   `json:"name"`
 	Columns []string `json:"columns"`
@@ -234,7 +249,9 @@ type ImportTable struct {
 	ConfiguredAs *string        `json:"configuredAs,omitempty"`
 	Columns      []ImportColumn `json:"columns"`
 	// The primary key and unique keys, including those that cannot identify a row.
-	Keys        []ImportKey        `json:"keys"`
+	Keys []ImportKey `json:"keys"`
+	// Every index, in the database's own terms; the unique ones are also keys.
+	Indexes     []ImportIndex      `json:"indexes"`
 	ForeignKeys []ImportForeignKey `json:"foreignKeys"`
 	// Triggers or rules: a write may change other tables.
 	SideEffects bool `json:"sideEffects"`
@@ -299,12 +316,44 @@ type RollbackInput struct {
 	Comment         *string `json:"comment,omitempty"`
 }
 
+type ScanJob struct {
+	ID         string    `json:"id"`
+	Datasource string    `json:"datasource"`
+	State      ScanState `json:"state"`
+	// Why the scan failed or stopped.
+	Error *string `json:"error,omitempty"`
+}
+
 type SchemaImport struct {
 	Datasource string `json:"datasource"`
 	// The schema where entities without a schema read (unqualified names
 	// resolve); null when the database cannot report it.
 	DefaultSchema *string       `json:"defaultSchema,omitempty"`
 	Tables        []ImportTable `json:"tables"`
+	// Identifies the database the datasource reads (its driver and read
+	// connection); results of another source are stale.
+	Source string `json:"source"`
+}
+
+type SchemaInfo struct {
+	Name string `json:"name"`
+	// When its tables were last scanned; null when never.
+	ScannedAt *time.Time `json:"scannedAt,omitempty"`
+	// How many tables the last scan found; null when never scanned.
+	Tables *int `json:"tables,omitempty"`
+}
+
+type SchemaList struct {
+	Datasource string `json:"datasource"`
+	// Every user schema; when the database cannot list them, one named "" for its
+	// default schema, which a scan without schemas reads.
+	Schemas []SchemaInfo `json:"schemas"`
+	// Where unqualified names resolve; null when unknown.
+	DefaultSchema *string   `json:"defaultSchema,omitempty"`
+	ListedAt      time.Time `json:"listedAt"`
+	// Identifies the database the datasource reads (its driver and read
+	// connection); results of another source are stale.
+	Source string `json:"source"`
 }
 
 type ServerStatus struct {
@@ -633,6 +682,67 @@ func (e *RevisionState) UnmarshalJSON(b []byte) error {
 }
 
 func (e RevisionState) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type ScanState string
+
+const (
+	ScanStatePending  ScanState = "PENDING"
+	ScanStateRunning  ScanState = "RUNNING"
+	ScanStateDone     ScanState = "DONE"
+	ScanStateFailed   ScanState = "FAILED"
+	ScanStateCanceled ScanState = "CANCELED"
+)
+
+var AllScanState = []ScanState{
+	ScanStatePending,
+	ScanStateRunning,
+	ScanStateDone,
+	ScanStateFailed,
+	ScanStateCanceled,
+}
+
+func (e ScanState) IsValid() bool {
+	switch e {
+	case ScanStatePending, ScanStateRunning, ScanStateDone, ScanStateFailed, ScanStateCanceled:
+		return true
+	}
+	return false
+}
+
+func (e ScanState) String() string {
+	return string(e)
+}
+
+func (e *ScanState) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ScanState(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ScanState", str)
+	}
+	return nil
+}
+
+func (e ScanState) MarshalGQL(w io.Writer) {
+	_, _ = fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ScanState) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ScanState) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

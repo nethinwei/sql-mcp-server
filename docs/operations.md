@@ -102,8 +102,12 @@ sql-mcp-server serve --config config.yaml --watch --watch-interval 1s
 
 watcher 轮询文件内容 hash。新配置必须完整通过加载、secret 解析、数据库连接、
 自省和装配才会发布；失败会记录日志、继续使用旧快照，并对相同文件内容继续重试。
-采用 drain-before-publish：新快照构建成功后，reload 窗口内的新请求等待发布；
-旧快照的在途请求结束后才关闭其 engine、审计、prepared statement 和 provider。
+新快照构建成功后立即发布，新请求不等待旧请求；旧快照的在途请求结束后，由后台
+关闭其 engine、审计、prepared statement 和 provider（重叠期间并发与连接数短暂
+最多为配置值的两倍）。被删除或禁用的用户从发布起即被拒绝，其会话与事务在旧快照
+排空后回滚。装配时的自省（读 schema、对账）各数据源并行、整体限时 1 分钟；
+连接权限探测只用于告警与控制台置灰，在发布后于后台进行（限时 2 分钟），不阻塞
+启动与重载。
 事务 manager 与 budget session 状态跨快照保留。新预算限制会原子应用到原
 manager；事务 `ttl` 或 `maxOpen` 变化会拒绝 reload，必须重启，不会静默沿用
 旧限制。

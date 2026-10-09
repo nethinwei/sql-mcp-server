@@ -3,8 +3,10 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sort"
+	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
@@ -26,12 +28,58 @@ type Capability struct {
 // EntityCapabilities are capabilities by entity and action.
 type EntityCapabilities map[string]map[entity.Action]Capability
 
+// assessTimeout bounds the background assessment of capabilities.
+const assessTimeout = 2 * time.Minute
+
+// assessInBackground assesses the capabilities of the App's entities off the
+// assembly path: they only inform administrators, so serving does not wait
+// for the privilege queries. Close stops it.
+func (a *App) assessInBackground(cfg *config.Config, connections Connections, entities []entity.Entity) {
+	ctx, cancel := context.WithTimeout(context.Background(), assessTimeout)
+	a.stopAssessing, a.assessed = cancel, make(chan struct{})
+	go func() {
+		defer close(a.assessed)
+		defer cancel()
+		capabilities := assessCapabilities(ctx, cfg, connections, entities)
+		if ctx.Err() != nil {
+			return // closed, or timed out: the capabilities stay unknown
+		}
+		a.capabilities.Store(&capabilities)
+		for _, warning := range CapabilityWarnings(cfg, capabilities) {
+			slog.Warn("grant exceeds the datasource connection's privileges", "detail", warning)
+		}
+	}()
+}
+
+// Capabilities returns what the routed connections may do per entity action,
+// as the databases reported after the App was assembled; nil (unknown) while
+// they are being assessed.
+func (a *App) Capabilities() EntityCapabilities {
+	if c := a.capabilities.Load(); c != nil {
+		return *c
+	}
+	return nil
+}
+
+// WaitCapabilities waits for the assessment of capabilities, or for ctx.
+func (a *App) WaitCapabilities(ctx context.Context) (EntityCapabilities, error) {
+	if a.assessed != nil {
+		select {
+		case <-a.assessed:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return a.Capabilities(), nil
+}
+
 // connectionInspector caches what one connection reports.
 type connectionInspector struct {
 	name     string
 	inspect  introspect.PrivilegeInspector
 	readOnly *bool
-	tables   map[string]introspect.TablePrivileges
+	tables   map[string]introspect.TablePrivileges // by schema + "." + table
+	errs     map[string]error                      // by schema
 }
 
 func (c *connectionInspector) isReadOnly(ctx context.Context) bool {
@@ -42,48 +90,91 @@ func (c *connectionInspector) isReadOnly(ctx context.Context) bool {
 	return *c.readOnly
 }
 
-func (c *connectionInspector) table(ctx context.Context, schema, table string) (introspect.TablePrivileges, error) {
-	key := schema + "." + table
-	if p, ok := c.tables[key]; ok {
-		return p, nil
+// load reads the privileges on the tables of each schema, a schema at a time.
+func (c *connectionInspector) load(ctx context.Context, bySchema map[string][]string) {
+	if c.inspect == nil {
+		return
 	}
-	p, err := c.inspect.TablePrivileges(ctx, schema, table)
-	if err == nil {
-		c.tables[key] = p
+	for schema, tables := range bySchema {
+		found, err := c.inspect.TablePrivileges(ctx, schema, tables)
+		if err != nil {
+			c.errs[schema] = err
+			continue
+		}
+		for table, p := range found {
+			c.tables[schema+"."+table] = p
+		}
 	}
-	return p, err
+}
+
+func (c *connectionInspector) table(schema, table string) (introspect.TablePrivileges, error) {
+	if err := c.errs[schema]; err != nil {
+		return introspect.TablePrivileges{}, err
+	}
+	p, ok := c.tables[schema+"."+table]
+	if !ok {
+		return p, fmt.Errorf("the connection cannot see %s", table)
+	}
+	return p, nil
+}
+
+// routedConnection is the connection an entity action runs on.
+func routedConnection(route config.RoutingConfig, action entity.Action) string {
+	switch action {
+	case entity.ActionCreate, entity.ActionUpdate, entity.ActionDelete:
+		return route.Write
+	case entity.ActionExecute:
+		return route.Execute
+	}
+	return route.Read
 }
 
 // assessCapabilities asks each routed connection what it may do for each
-// entity action.
-func assessCapabilities(cfg *config.Config, connections Connections, entities []entity.Entity) EntityCapabilities {
-	ctx := context.Background()
+// entity action, reading table privileges a schema at a time.
+func assessCapabilities(
+	ctx context.Context, cfg *config.Config, connections Connections, entities []entity.Entity,
+) EntityCapabilities {
 	inspectors := map[string]*connectionInspector{}
-	inspector := func(datasource, name string) *connectionInspector {
+	inspector := func(e entity.Entity, action entity.Action) *connectionInspector {
+		datasource := e.DatasourceName()
+		name := routedConnection(cfg.Databases[datasource].Route(), action)
 		key := datasource + "/" + name
 		if c, ok := inspectors[key]; ok {
 			return c
 		}
-		c := &connectionInspector{name: name, tables: map[string]introspect.TablePrivileges{}}
+		c := &connectionInspector{name: name, tables: map[string]introspect.TablePrivileges{}, errs: map[string]error{}}
 		if p := connections[datasource][name]; p != nil {
 			c.inspect, _ = p.Introspector().(introspect.PrivilegeInspector)
 		}
 		inspectors[key] = c
 		return c
 	}
+	type table struct {
+		c              *connectionInspector
+		schema, source string
+	}
+	seen := map[table]bool{}
+	wanted := map[*connectionInspector]map[string][]string{}
+	for _, e := range entities {
+		for _, action := range entity.ActionsFor(e.Kind) {
+			c := inspector(e, action)
+			if t := (table{c, e.Schema, e.Source}); action != entity.ActionExecute && !seen[t] {
+				seen[t] = true
+				if wanted[c] == nil {
+					wanted[c] = map[string][]string{}
+				}
+				wanted[c][e.Schema] = append(wanted[c][e.Schema], e.Source)
+			}
+		}
+	}
+	for c, bySchema := range wanted {
+		c.load(ctx, bySchema)
+	}
 	out := make(EntityCapabilities, len(entities))
 	for _, e := range entities {
-		route := cfg.Databases[e.DatasourceName()].Route()
 		out[e.Name] = map[entity.Action]Capability{}
 		for _, action := range entity.ActionsFor(e.Kind) {
-			name := route.Read
-			switch action {
-			case entity.ActionCreate, entity.ActionUpdate, entity.ActionDelete:
-				name = route.Write
-			case entity.ActionExecute:
-				name = route.Execute
-			}
-			out[e.Name][action] = assessAction(ctx, inspector(e.DatasourceName(), name), e, action)
+			out[e.Name][action] = assessAction(ctx, inspector(e, action), e, action)
 		}
 	}
 	return out
@@ -107,7 +198,7 @@ func assessAction(ctx context.Context, c *connectionInspector, e entity.Entity, 
 		}
 		return capability
 	}
-	tp, err := c.table(ctx, e.Schema, e.Source)
+	tp, err := c.table(e.Schema, e.Source)
 	if err != nil {
 		capability.Reason = err.Error()
 		return capability

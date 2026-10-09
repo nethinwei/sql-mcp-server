@@ -19,6 +19,16 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 )
 
+// StartSchemaScan is the resolver for the startSchemaScan field.
+func (r *mutationResolver) StartSchemaScan(ctx context.Context, datasource string, schemas []string) (*ScanJob, error) {
+	return r.startSchemaScan(ctx, datasource, schemas)
+}
+
+// CancelSchemaScan is the resolver for the cancelSchemaScan field.
+func (r *mutationResolver) CancelSchemaScan(ctx context.Context, id string) (*ScanJob, error) {
+	return r.schemaScan(ctx, id, true)
+}
+
 // CreateDraft is the resolver for the createDraft field.
 func (r *mutationResolver) CreateDraft(ctx context.Context, draft DraftInput, comment *string) (*Revision, error) {
 	p, err := auth.Require(ctx, auth.PermWrite)
@@ -219,27 +229,19 @@ func (r *queryResolver) Revisions(ctx context.Context, limit *int) ([]Revision, 
 	return out, nil
 }
 
-// SchemaImport is the resolver for the schemaImport field.
-func (r *queryResolver) SchemaImport(ctx context.Context, datasource string, schemas []string) (*SchemaImport, error) {
-	if _, err := auth.Require(ctx, auth.PermWrite); err != nil {
-		return nil, err
-	}
-	cfg, err := r.selectConfig(ctx, nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	if !hasDatasource(cfg, datasource) {
-		return nil, fmt.Errorf("unknown datasource %q", datasource)
-	}
-	var cat introspect.Catalog
-	err = r.Introspect(ctx, datasource, func(in introspect.Introspector) (err error) {
-		cat, err = importCatalog(ctx, in, schemas)
-		return err
-	})
-	if err != nil {
-		return nil, fmt.Errorf("introspect %q: %w", datasource, err)
-	}
-	return buildSchemaImport(datasource, cat, cfg), nil
+// SchemaList is the resolver for the schemaList field.
+func (r *queryResolver) SchemaList(ctx context.Context, datasource string, refresh *bool) (*SchemaList, error) {
+	return r.schemaList(ctx, datasource, refresh != nil && *refresh)
+}
+
+// SchemaTables is the resolver for the schemaTables field.
+func (r *queryResolver) SchemaTables(ctx context.Context, datasource string, schemas []string) (*SchemaImport, error) {
+	return r.schemaTables(ctx, datasource, schemas)
+}
+
+// SchemaScan is the resolver for the schemaScan field.
+func (r *queryResolver) SchemaScan(ctx context.Context, id string) (*ScanJob, error) {
+	return r.schemaScan(ctx, id, false)
 }
 
 // TableComments is the resolver for the tableComments field.
@@ -251,12 +253,14 @@ func (r *queryResolver) TableComments(ctx context.Context, tables []TableRef) ([
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithTimeout(ctx, requestScanTimeout)
+	defer cancel()
 	return lookupTableComments(tables, func(datasource string, refs []TableRef) (introspect.Catalog, error) {
 		var cat introspect.Catalog
 		if !hasDatasource(cfg, datasource) {
 			return cat, nil
 		}
-		err := r.Introspect(ctx, datasource, func(in introspect.Introspector) (err error) {
+		err := r.Introspect(ctx, datasource, cfg.Databases[datasource], func(in introspect.Introspector) (err error) {
 			cat, err = referencedCatalog(ctx, in, refs)
 			return err
 		})

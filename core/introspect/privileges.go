@@ -47,7 +47,10 @@ type PrivilegeInspector interface {
 	// ReadOnly reports a server or session that refuses every write (a
 	// replica, a hot standby, read_only).
 	ReadOnly(ctx context.Context) (bool, error)
-	TablePrivileges(ctx context.Context, schema, table string) (TablePrivileges, error)
+	// TablePrivileges reports the privileges on tables of schema ("" for the
+	// default one) in one round of queries; a table the connection cannot
+	// see is left out.
+	TablePrivileges(ctx context.Context, schema string, tables []string) (map[string]TablePrivileges, error)
 	// ProcedurePrivilege reports EXECUTE on a procedure; unknown when its
 	// name is overloaded.
 	ProcedurePrivilege(ctx context.Context, schema, name string) (Privilege, error)

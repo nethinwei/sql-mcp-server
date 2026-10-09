@@ -114,13 +114,104 @@ func TestLookupTableCommentsResolvesLikeTheRuntime(t *testing.T) {
 func TestSchemaImportScansListedSchemasByDefault(t *testing.T) {
 	h := newHarness(t)
 	h.tables.all = []string{"crm", "sales"}
-	mustPost(t, h.client(auth.PermAll), `{ schemaImport(datasource: "shop") { datasource } }`, &map[string]any{})
+	scanSchema(t, h.client(auth.PermAll), `datasource: "shop"`)
 	if strings.Join(h.tables.scanned, ",") != "crm,sales" {
 		t.Fatalf("scanned %v", h.tables.scanned)
 	}
-	explicit := `{ schemaImport(datasource: "shop", schemas: ["crm"]) { datasource } }`
-	mustPost(t, h.client(auth.PermAll), explicit, &map[string]any{})
+	scanSchema(t, h.client(auth.PermAll), `datasource: "shop", schemas: ["crm"]`)
 	if strings.Join(h.tables.scanned, ",") != "crm" {
 		t.Fatalf("explicit schemas replaced: %v", h.tables.scanned)
+	}
+}
+
+// The console lists schemas first and scans the one an administrator opens;
+// what a scan found is kept until the schema is scanned again.
+func TestSchemaListAndKeptScans(t *testing.T) {
+	h := newHarness(t)
+	h.tables.all = []string{"crm", "public"}
+	c := h.client(auth.PermWrite)
+	type list struct {
+		SchemaList struct {
+			Schemas []struct {
+				Name      string
+				ScannedAt *string
+				Tables    *int
+			}
+			DefaultSchema *string
+		}
+	}
+	const listQuery = `{ schemaList(datasource: "shop") { schemas { name scannedAt tables } defaultSchema } }`
+	var before list
+	mustPost(t, c, listQuery, &before)
+	if len(before.SchemaList.Schemas) != 2 || before.SchemaList.Schemas[1].ScannedAt != nil ||
+		*before.SchemaList.DefaultSchema != "public" || h.tables.scanned != nil {
+		t.Fatalf("schemaList = %+v, scanned %v; listing must not scan tables", before.SchemaList, h.tables.scanned)
+	}
+	var kept struct {
+		SchemaTables struct {
+			Tables []struct{ Table, Status string }
+		}
+	}
+	const tablesQuery = `{ schemaTables(datasource: "shop", schemas: ["public"]) { tables { table status } } }`
+	mustPost(t, c, tablesQuery, &kept)
+	if len(kept.SchemaTables.Tables) != 0 {
+		t.Fatalf("an unscanned schema = %+v, want no tables", kept)
+	}
+	scanSchema(t, c, `datasource: "shop", schemas: ["public"]`)
+	h.tables.scanned = nil
+	var after list
+	mustPost(t, c, listQuery, &after)
+	if s := after.SchemaList.Schemas[1]; s.Name != "public" || s.ScannedAt == nil || *s.Tables != 2 {
+		t.Fatalf("public after its scan = %+v", s)
+	}
+	mustPost(t, c, tablesQuery, &kept)
+	if len(kept.SchemaTables.Tables) != 2 || kept.SchemaTables.Tables[0].Status != "CONFIGURED" ||
+		h.tables.scanned != nil {
+		t.Fatalf("kept scan = %+v, scanned %v; it must not scan again", kept.SchemaTables, h.tables.scanned)
+	}
+	if err := h.client(auth.PermRead).Post(listQuery, &before); err == nil {
+		t.Fatal("listing schemas needs admin:write, like scanning")
+	}
+}
+
+func TestSchemaImportListsIndexes(t *testing.T) {
+	t.Parallel()
+	d := table("public", "docs")
+	d.Indexes = []entity.Index{
+		{Name: "docs_pkey", Method: "btree", Parts: []string{"id"}, Unique: true, Primary: true},
+		{Name: "docs_lower", Method: "btree", Parts: []string{"lower(title)"}, Where: "at IS NOT NULL"},
+		{Name: "docs_body", Method: "fulltext"},
+	}
+	got := buildSchemaImport("shop", introspect.Catalog{Tables: []entity.Entity{d}}, &config.Config{}).Tables[0].Indexes
+	if len(got) != 3 || !got[0].Primary || got[0].Where != nil || *got[1].Where != "at IS NOT NULL" ||
+		got[2].Method != "fulltext" || got[2].Parts == nil {
+		t.Fatalf("indexes = %+v", got)
+	}
+}
+
+// A datasource that cannot list its schemas lists its default one as "",
+// scanned or not, even when the scan found no tables.
+func TestSchemaListShowsTheDefaultSchemaScan(t *testing.T) {
+	h := newHarness(t)
+	h.tables.all, h.tables.tables = nil, nil
+	c := h.client(auth.PermWrite)
+	var resp struct {
+		SchemaList struct {
+			Schemas []struct {
+				Name      string
+				ScannedAt *string
+				Tables    *int
+			}
+		}
+	}
+	const query = `{ schemaList(datasource: "shop", refresh: true) { schemas { name scannedAt tables } } }`
+	mustPost(t, c, query, &resp)
+	if s := resp.SchemaList.Schemas; len(s) != 1 || s[0].Name != "" || s[0].ScannedAt != nil {
+		t.Fatalf("before the scan = %+v", s)
+	}
+	scanSchema(t, c, `datasource: "shop"`)
+	mustPost(t, c, query, &resp)
+	if s := resp.SchemaList.Schemas; len(s) != 1 || s[0].ScannedAt == nil || *s[0].Tables != 0 {
+		t.Fatalf("after the scan = %+v", s)
 	}
 }

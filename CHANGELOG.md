@@ -9,6 +9,39 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+### Changed
+
+- 自省按 schema 批量读取元数据（参考 mysqldump）：PostgreSQL 与
+  MySQL/OceanBase 的表、列、键、外键、级联、触发器各一次查询，往返次数与表数
+  无关；MySQL 只读取目标库的 `information_schema`（此前读取全实例后在内存过滤）。
+  本地 600 张表：PostgreSQL 0.98s → 58ms，MySQL 1.32s → 18ms。连接权限探测按
+  schema 批量。
+- 热重载改为发布后排空（publish-then-drain）：新快照立即生效，新请求不再等待
+  旧快照的在途请求（此前一个慢查询或长时间的控制台扫描会让全部新请求停住）；
+  旧快照在后台关闭，被吊销用户的事务在旧快照排空后回滚。重叠期间并发与连接数
+  短暂最多为配置值的两倍（TM-007）。
+- 启动与重载：各数据源并行对账、自省整体限时 1 分钟；连接权限探测移到发布后的
+  后台执行（限时 2 分钟），不再阻塞启动与重载。
+- 控制台导入改为“库 → 表”：先列出库，展开时才扫描该库；扫描是后台任务（有界
+  worker 池、独立单连接、可取消、限时），结果按读连接保留到下次重新扫描；候选
+  实体的命名与关系跨已扫描的库计算。导入页列出全部索引（结构、键部分、条件，
+  按各数据库自己的术语），键从同一次索引查询得出。导入页的状态计算不再是表数 × 实体数，表格
+  分页。
+
+- 新增热路径 Go benchmark（`make bench`，无需 Docker）与真实数据库的元数据
+  扫描、权限探测 benchmark（`make bench-integration`），基线与已知热点见
+  `docs/benchmarks/hot-paths.md`。e2e 套件共享一个 PostgreSQL 容器、每个测试
+  一个新数据库，`make test-e2e` 约 12 s → 4 s。
+
+### Breaking
+
+- 管理 API：移除 `schemaImport`，改为 `schemaList`、`schemaTables`（一次返回
+  数据源已扫描库的表）、`startSchemaScan`、`schemaScan`（只返回任务状态）、
+  `cancelSchemaScan`。
+- Go API：`introspect.PrivilegeInspector.TablePrivileges` 改为按 schema 批量
+  （`tables []string` → `map[string]TablePrivileges`）；`bootstrap.App.Capabilities`
+  字段改为方法 `Capabilities()`（评估完成前为 nil），新增 `WaitCapabilities`。
+
 ## 0.1.11 - 2026-10-08
 
 ### Added

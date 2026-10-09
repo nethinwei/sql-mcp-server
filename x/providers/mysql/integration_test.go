@@ -20,7 +20,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
 )
 
-func setupMySQL(t *testing.T) (*mysql.Provider, func()) {
+func setupMySQL(t testing.TB) (*mysql.Provider, func()) {
 	t.Helper()
 	ctx := context.Background()
 	container, err := tcmysql.Run(ctx, "mysql:8",
@@ -46,7 +46,7 @@ func setupMySQL(t *testing.T) (*mysql.Provider, func()) {
 	}
 }
 
-func connectMySQLWithRetry(t *testing.T, dsn string) *mysql.Provider {
+func connectMySQLWithRetry(t testing.TB, dsn string) *mysql.Provider {
 	t.Helper()
 	var lastErr error
 	for range 20 {

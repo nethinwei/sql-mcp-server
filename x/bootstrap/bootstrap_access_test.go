@@ -135,6 +135,7 @@ func TestReloadReportsRevokedPrincipals(t *testing.T) {
 	if err := runtime.Reload("ignored"); err != nil {
 		t.Fatal(err)
 	}
+	runtime.retiring.Wait() // reported once requests on the old snapshot finish
 	if !reflect.DeepEqual(revoked, []string{"user:bob"}) {
 		t.Fatalf("revoked = %v", revoked)
 	}

@@ -66,7 +66,9 @@ type Query {
   published: Revision
   revision(id: ID!): Revision
   revisions(limit: Int): [Revision!]!
-  schemaImport(datasource: String!, schemas: [String!]): SchemaImport!
+  schemaList(datasource: String!, refresh: Boolean): SchemaList!   # 库（schema）列表与各库最近扫描
+  schemaTables(datasource: String!, schemas: [String!]): SchemaImport!  # 已扫描库的表（省略 schemas 为全部）
+  schemaScan(id: ID!): ScanJob                                          # 扫描任务状态
   validate(draft: DraftInput!): Validation!
   diff(from: ID!, to: ID, draft: DraftInput): String!
   simulate(input: SimulationInput!): Simulation!
@@ -144,8 +146,32 @@ input DraftInput {
 - introspection 扩展：PostgreSQL 读取 `pg_description` 表/列注释与外键；
   MySQL/OceanBase 读取 `TABLE_COMMENT`/`COLUMN_COMMENT` 与
   `KEY_COLUMN_USAGE` 外键；`smcp_` 表继续跳过；
-- `schemaImport` 返回每张表的候选实体与状态：`new`（未配置）、`configured`
+- 按库导入：`schemaList` 列出数据源的库（PG schema / MySQL database），控制台
+  展开一个库时才扫描它的表。扫描是后台任务：`startSchemaScan` 返回任务 id，
+  `schemaScan(id)` 轮询到完成后读取 `schemaTables`，`cancelSchemaScan` 取消；任务在有界 worker 池（2 个
+  worker、排队上限 8，超出拒绝）中执行，单个任务限时 5 分钟，使用独立的单连接，
+  不占用数据面连接池、不持有快照租约，因此扫描再慢也不阻塞请求与热重载；
+- 每个库最近一次扫描的结果和库列表保存在进程内，直到该库被重新扫描（库列表由
+  `refresh` 刷新，并丢弃已不存在的库），离开或刷新控制台不会重新扫描；读取时与
+  当前已发布配置比较，状态不会过期。保存的内容属于数据源的读连接（驱动与
+  DSN）：保留名称但改连到别的数据库后，旧结果被丢弃；只清理读取配置之前保存的
+  旧库结果，改连前开始、之后才完成的请求或扫描不会清掉新库的结果。扫描按入队时
+  的已发布配置建连（不依赖运行时是否已热重载），因此结果与其标记的库一致。
+  `SchemaList` 与 `SchemaImport` 带 `source`（该身份的摘要，不含 DSN），控制台
+  据此丢弃旧库的结果。进程重启后清空；
+- 候选实体的命名与关系在该数据源所有已扫描的库上一起计算：不同库的同名表各得
+  其名，外键指向其他已扫描库的表或已配置实体时同样生成关系。因此控制台不按库
+  分别缓存，而是在一次请求里读取库列表和全部已扫描库的表（同步），只采用最新
+  一次同步的结果：最后一个扫描完成后开始的同步必然看到所有扫描。扫描、同步进行
+  中或同步失败（可重试）时不能导入；
+- 扫描结果返回每张表的候选实体与状态：`new`（未配置）、`configured`
   （同数据源同表已配置；列出新增与缺失的列）；
+- 自省按库批量读取（参考 mysqldump）：表、列、索引、外键、级联、触发器各一次
+  查询，往返次数与表数量无关；
+- 索引按数据库自己的术语返回：结构（PostgreSQL 的 btree/hash/gin/gist/brin/
+  spgist，MySQL/OceanBase 的 btree/hash/fulltext/spatial）、键部分（列、前缀如
+  `title(20)`、表达式原文）与部分索引条件；唯一索引同时是键，并标出不能唯一
+  定位行的原因。控制台在列表下单独列出索引，列上只标主键与外键；
 - 候选实体：逻辑名取表名（冲突时加数据源前缀）、注释映射为 description、
   主键、全部列；单列外键生成候选关系（子表 `belongs-to` 父表，父表 `has-many`
   子表）；**不含任何角色、授权或行策略**，即导入后对任何主体都不可访问；

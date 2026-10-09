@@ -5,7 +5,12 @@ package mcpserver_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/url"
+	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -18,28 +23,74 @@ import (
 	pgprov "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
 
-// TestMain verifies no goroutine leaks across the e2e suite.
-func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m)
+// The suite shares one PostgreSQL container: starting a container is most of
+// an e2e test's time, while the code under test answers in milliseconds.
+// Each test gets a database of its own, so tests stay isolated.
+var e2ePG struct {
+	once      sync.Once
+	container *postgres.PostgresContainer
+	admin     *pgprov.Provider
+	base      *url.URL
+	err       error
+	databases atomic.Int64
 }
 
+// TestMain stops the shared container and verifies no goroutine leaks across
+// the e2e suite.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if e2ePG.admin != nil {
+		_ = e2ePG.admin.Close()
+	}
+	if e2ePG.container != nil {
+		_ = e2ePG.container.Terminate(context.Background())
+	}
+	if err := goleak.Find(); code == 0 && err != nil {
+		fmt.Fprintln(os.Stderr, "goleak:", err)
+		code = 1
+	}
+	os.Exit(code)
+}
+
+func sharedE2EPostgres() error {
+	e2ePG.once.Do(func() {
+		ctx := context.Background()
+		e2ePG.container, e2ePG.err = postgres.Run(ctx, "postgres:16-alpine",
+			postgres.WithDatabase("test"),
+			postgres.WithUsername("test"),
+			postgres.WithPassword("test"),
+			postgres.BasicWaitStrategies(),
+		)
+		if e2ePG.err != nil {
+			return
+		}
+		var dsn string
+		if dsn, e2ePG.err = e2ePG.container.ConnectionString(ctx, "sslmode=disable"); e2ePG.err != nil {
+			return
+		}
+		if e2ePG.base, e2ePG.err = url.Parse(dsn); e2ePG.err != nil {
+			return
+		}
+		e2ePG.admin, e2ePG.err = pgprov.New(dsn)
+	})
+	return e2ePG.err
+}
+
+// startE2EPostgres connects to a new database of the shared container with
+// the users fixture.
 func startE2EPostgres(t *testing.T) (*pgprov.Provider, func()) {
 	t.Helper()
-	ctx := context.Background()
-	container, err := postgres.Run(ctx, "postgres:16-alpine",
-		postgres.WithDatabase("test"),
-		postgres.WithUsername("test"),
-		postgres.WithPassword("test"),
-		postgres.BasicWaitStrategies(),
-	)
-	if err != nil {
+	if err := sharedE2EPostgres(); err != nil {
 		t.Fatalf("start postgres: %v", err)
 	}
-	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
+	ctx := context.Background()
+	name := fmt.Sprintf("e2e_%d", e2ePG.databases.Add(1))
+	if _, err := e2ePG.admin.ExecContext(ctx, "CREATE DATABASE "+name); err != nil {
 		t.Fatal(err)
 	}
-	prov, err := pgprov.New(dsn)
+	dsn := *e2ePG.base
+	dsn.Path = "/" + name
+	prov, err := pgprov.New(dsn.String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,10 +98,7 @@ func startE2EPostgres(t *testing.T) (*pgprov.Provider, func()) {
 	_, _ = prov.ExecContext(ctx, "INSERT INTO users (email, tenant_id) VALUES ('alice@x.com', 7), ('bob@x.com', 8)")
 	// A separate table: one relation backs at most one entity.
 	_, _ = prov.ExecContext(ctx, "CREATE TABLE admin_users (id serial PRIMARY KEY, email text)")
-	return prov, func() {
-		_ = prov.Close()
-		_ = container.Terminate(context.Background())
-	}
+	return prov, func() { _ = prov.Close() }
 }
 
 func e2eTestConfig() *config.Config {

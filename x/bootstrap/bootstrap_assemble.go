@@ -3,9 +3,10 @@ package bootstrap
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"maps"
 	"slices"
+	"sync"
+	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/audit"
 	"github.com/nethinwei/sql-mcp-server/core/cache"
@@ -65,10 +66,7 @@ func AssembleWithConnections(cfg *config.Config, connections Connections) (*App,
 		feedback, defaultSource, defaultName, eng, checked.tools,
 	)
 	app.Connections = connections
-	app.Capabilities = assessCapabilities(cfg, connections, checked.registry.Entities())
-	for _, warning := range CapabilityWarnings(cfg, app.Capabilities) {
-		slog.Warn("grant exceeds the datasource connection's privileges", "detail", warning)
-	}
+	app.assessInBackground(cfg, connections, checked.registry.Entities())
 	return app, nil
 }
 
@@ -90,6 +88,8 @@ func readConnections(cfg *config.Config, connections Connections) (map[string]Pr
 // unqualified names to the same schema (accounts may have different
 // search_paths or default databases); otherwise its entities must name one.
 func checkDefaultSchemas(cfg *config.Config, connections Connections) error {
+	ctx, cancel := context.WithTimeout(context.Background(), introspectTimeout)
+	defer cancel()
 	for datasource, byName := range connections {
 		if !unqualifiedEntities(cfg, datasource) {
 			continue
@@ -100,7 +100,7 @@ func checkDefaultSchemas(cfg *config.Config, connections Connections) error {
 			if !ok {
 				continue
 			}
-			_, current, err := lister.Schemas(context.Background())
+			_, current, err := lister.Schemas(ctx)
 			if err != nil {
 				return fmt.Errorf("datasource %q connection %q: %w", datasource, connection, err)
 			}
@@ -198,8 +198,19 @@ func validateEntityDatasources(entities []entity.Entity, providers map[string]Pr
 	return nil
 }
 
+// introspectTimeout bounds the schema reads of one assembly, so a database
+// that stops answering fails a startup or reload instead of hanging it.
+const introspectTimeout = time.Minute
+
+// reconcileAll reconciles each datasource's entities with its schema, the
+// datasources in parallel; it reports the first failure by datasource name.
 func reconcileAll(providers map[string]Provider, entities []entity.Entity) ([]entity.Entity, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), introspectTimeout)
+	defer cancel()
 	out := slices.Clone(entities)
+	errs := make(map[string]error, len(providers))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 	for name, prov := range providers {
 		var scoped []entity.Entity
 		var at []int
@@ -209,13 +220,22 @@ func reconcileAll(providers map[string]Provider, entities []entity.Entity) ([]en
 				at = append(at, i)
 			}
 		}
-		reconciled, err := reconcileEntities(context.Background(), name, prov, scoped)
-		if err != nil {
-			return nil, fmt.Errorf("datasource %q: %w", name, err)
-		}
-		for j, e := range reconciled {
-			out[at[j]] = e
-		}
+		wg.Go(func() {
+			reconciled, err := reconcileEntities(ctx, name, prov, scoped)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				errs[name] = fmt.Errorf("datasource %q: %w", name, err)
+				return
+			}
+			for j, e := range reconciled {
+				out[at[j]] = e
+			}
+		})
+	}
+	wg.Wait()
+	for _, name := range slices.Sorted(maps.Keys(errs)) {
+		return nil, errs[name]
 	}
 	return out, nil
 }

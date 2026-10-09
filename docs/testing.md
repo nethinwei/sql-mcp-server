@@ -133,6 +133,8 @@ make modelscope-check
 性能基线与 Agent Eval pilot 按需手动运行，不进入 PR CI：
 
 ```sh
+make bench            # 热路径 Go benchmark（无需 Docker），见 docs/benchmarks/hot-paths.md
+make bench-integration  # 真实 PG/MySQL 的元数据扫描与权限探测（需要 Docker）
 make bench-overhead   # data-plane overhead p50/p95/p99（需要 Docker）
 make eval-pilot       # Eval 回归轨（v3 冻结基线），需要 Docker 与 EVAL_API_KEY/EVAL_MODEL
 make eval-workload    # Eval 真实负载轨（fixtures/v4），环境同上；EVAL_DSN 切换 dogfooding 模式

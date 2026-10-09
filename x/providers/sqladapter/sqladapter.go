@@ -148,3 +148,18 @@ func isolation(l store.IsolationLevel) sql.IsolationLevel {
 	}
 	return sql.LevelDefault
 }
+
+// Each runs query on db and calls scan for every row.
+func Each(ctx context.Context, db *sql.DB, query string, args []any, scan func(*sql.Rows) error) error {
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		if err := scan(rows); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}

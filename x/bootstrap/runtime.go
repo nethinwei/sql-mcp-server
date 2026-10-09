@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -29,15 +30,17 @@ func newAppSnapshot(app *App) *appSnapshot {
 }
 
 // Runtime owns the atomically replaceable App snapshot used by serving
-// handlers. A successful reload publishes the new App before draining and
-// closing the old one; a failed build leaves the current App untouched.
+// handlers. A successful reload publishes the new App at once, so requests
+// never wait for a reload, and drains and closes the old one in the
+// background; a failed build leaves the current App untouched.
 type Runtime struct {
-	current atomic.Pointer[appSnapshot]
-	reload  sync.Mutex
-	build   func(string) (*App, error)
-	revoked atomic.Pointer[func([]string)]
-	stale   atomic.Pointer[StaleState]
-	applied atomic.Int64
+	current  atomic.Pointer[appSnapshot]
+	reload   sync.Mutex
+	retiring sync.WaitGroup
+	build    func(string) (*App, error)
+	revoked  atomic.Pointer[func([]string)]
+	stale    atomic.Pointer[StaleState]
+	applied  atomic.Int64
 }
 
 // OnRevokedPrincipals registers fn to receive the principal keys of users that
@@ -136,12 +139,8 @@ func (r *Runtime) reloadWith(build func() (*App, error)) error {
 	if old.app.Writes != nil {
 		next.Writes = old.app.Writes // sessions keep reading their own writes across a reload
 	}
-	revoked := revokedPrincipals(old.app, next)
-	err = publishReload(r, old, next)
-	if fn := r.revoked.Load(); fn != nil && len(revoked) > 0 {
-		(*fn)(revoked)
-	}
-	return err
+	publishReload(r, old, next, revokedPrincipals(old.app, next))
+	return nil
 }
 
 // revokedPrincipals lists users servable by old but no longer by next.
@@ -192,19 +191,33 @@ func preserveReloadBudget(old, next *App) {
 	next.Budget = old.Budget
 }
 
-func publishReload(r *Runtime, old *appSnapshot, next *App) error {
+// publishReload serves next at once and retires old in the background: once
+// the requests that leased old finish, the users the reload revoked are
+// reported (so transactions those requests opened are rolled back too) and old
+// is closed.
+func publishReload(r *Runtime, old *appSnapshot, next *App, revoked []string) {
+	shared := next.Transactions == old.app.Transactions // the next App carries them on
+	r.current.Store(newAppSnapshot(next))
 	old.mu.Lock()
 	old.retired = true
-	for old.refs > 0 {
-		old.cond.Wait()
-	}
-	r.current.Store(newAppSnapshot(next))
 	old.cond.Broadcast()
-	if next.Transactions == old.app.Transactions {
-		old.app.Transactions = nil
-	}
 	old.mu.Unlock()
-	return old.app.Close()
+	r.retiring.Go(func() {
+		old.mu.Lock()
+		for old.refs > 0 {
+			old.cond.Wait()
+		}
+		if shared {
+			old.app.Transactions = nil
+		}
+		old.mu.Unlock()
+		if fn := r.revoked.Load(); fn != nil && len(revoked) > 0 {
+			(*fn)(revoked)
+		}
+		if err := old.app.Close(); err != nil {
+			slog.Warn("closing the replaced snapshot failed", "error", err.Error())
+		}
+	})
 }
 
 // Watch polls path for content changes and reloads it. Reload errors are
@@ -284,10 +297,12 @@ func (r *Runtime) RollbackSession(session string) {
 	app.Writes.Forget(session)
 }
 
-// Close stops new acquisitions, drains leases, and closes the current App.
+// Close stops new acquisitions, drains leases, and closes the current App and
+// the ones reloads replaced.
 func (r *Runtime) Close() error {
 	r.reload.Lock()
 	defer r.reload.Unlock()
+	defer r.retiring.Wait()
 	old := r.current.Swap(nil)
 	if old == nil {
 		return nil

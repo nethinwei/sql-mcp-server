@@ -128,17 +128,21 @@ func TestPGCapabilitiesAndRefusedWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = app.Close() }()
-	notes := app.Capabilities["notes"]
+	capabilities, err := app.WaitCapabilities(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := capabilities["notes"]
 	if notes[entity.ActionRead].Privilege != introspect.PrivilegeGranted ||
 		notes[entity.ActionCreate].Privilege != introspect.PrivilegeDenied ||
 		!strings.Contains(notes[entity.ActionCreate].Reason, "read-only") {
 		t.Fatalf("notes capabilities = %+v", notes)
 	}
-	if read := app.Capabilities["salaries"][entity.ActionRead]; read.Privilege != introspect.PrivilegeGranted ||
+	if read := capabilities["salaries"][entity.ActionRead]; read.Privilege != introspect.PrivilegeGranted ||
 		!slices.Equal(read.Columns, []string{"id", "name"}) {
 		t.Fatalf("salaries read = %+v, want the column-level grant", read)
 	}
-	if warnings := bootstrap.CapabilityWarnings(cfg, app.Capabilities); len(warnings) != 2 {
+	if warnings := bootstrap.CapabilityWarnings(cfg, capabilities); len(warnings) != 2 {
 		t.Fatalf("warnings = %v, want the two creates", warnings)
 	}
 	_, err = tool.CreateTool{}.Run(ctx, json.RawMessage(`{"entity":"notes","values":{"body":"a"}}`), app.ToolContext("u"))

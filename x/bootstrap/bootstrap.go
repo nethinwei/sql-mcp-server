@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/audit"
@@ -45,21 +46,18 @@ type App struct {
 	// introspection and EXPLAIN; Connections holds every connection.
 	Providers   map[string]Provider
 	Connections Connections
-	// Capabilities are what the routed connections may do per entity action,
-	// as the databases reported when the App was assembled.
-	Capabilities EntityCapabilities
-	Prepared     map[string]*store.PreparedDB
-	Sources      map[string]tool.DataSource
-	Dialect      dialect.Dialect
-	Registry     *entity.Registry
-	Authorizer   rbac.Authorizer
-	Masker       mask.Masker
-	Gate         cost.Gate
-	Engine       *engine.Engine
-	Tools        *tool.Registry
-	ToolFlags    config.ToolFlags
-	DefaultRole  string
-	DefaultUser  string
+	Prepared    map[string]*store.PreparedDB
+	Sources     map[string]tool.DataSource
+	Dialect     dialect.Dialect
+	Registry    *entity.Registry
+	Authorizer  rbac.Authorizer
+	Masker      mask.Masker
+	Gate        cost.Gate
+	Engine      *engine.Engine
+	Tools       *tool.Registry
+	ToolFlags   config.ToolFlags
+	DefaultRole string
+	DefaultUser string
 	// Users maps an enabled user name to its identity; UserTokens maps a
 	// tokenHash to the user name. Both follow the snapshot on reload.
 	Users        map[string]UserIdentity
@@ -76,6 +74,15 @@ type App struct {
 	TxBeginners  map[string]store.TxBeginner
 	closeMu      sync.Mutex
 	closed       bool
+	// capabilities are assessed in the background once the App is assembled
+	// (see Capabilities); stopAssessing ends that work and assessed reports
+	// it ended.
+	capabilities atomic.Pointer[EntityCapabilities]
+	// scanCfg and scanResolver open scan connections (see OpenScan).
+	scanCfg       *config.Config
+	scanResolver  SecretResolver
+	stopAssessing context.CancelFunc
+	assessed      chan struct{}
 }
 
 // ToolContext builds a per-request tool.Context for the given role.
@@ -125,6 +132,10 @@ func (a *App) CloseContext(ctx context.Context) error {
 	defer a.closeMu.Unlock()
 	if a.closed {
 		return nil
+	}
+	if a.stopAssessing != nil {
+		a.stopAssessing()
+		<-a.assessed
 	}
 	var errs []error
 	if a.Engine != nil {
@@ -276,7 +287,41 @@ func AssembleWithResolver(cfg *config.Config, r SecretResolver) (*App, error) {
 		closeConnections(connections)
 		return nil, err
 	}
+	app.scanCfg, app.scanResolver = cfg, r
 	return app, nil
+}
+
+// OpenScan opens a connection of its own to the read connection of database,
+// as given, for a schema scan: it takes no serving connection and does not
+// hold the snapshot, so neither requests nor reloads wait for the scan, and it
+// reads the database the caller names even before this App is replaced by
+// one configured so. The caller closes it; ctx bounds opening it. ok is false
+// when the App was assembled from connections it was handed and cannot open
+// more.
+func (a *App) OpenScan(ctx context.Context, database config.DatabaseConfig) (p Provider, ok bool, err error) {
+	if a.scanCfg == nil {
+		return nil, false, nil
+	}
+	read := database.Route().Read
+	p, err = openConnection(ctx, a.scanCfg, a.scanResolver, database.Driver, database.ConnectionsOrDSN()[read])
+	if err != nil {
+		return nil, true, fmt.Errorf("connection %q: %w", read, err)
+	}
+	configurePool(p, 1, 0, 0)
+	return p, true, nil
+}
+
+// openConnection opens connection c of a database with driver; ctx bounds
+// opening it.
+func openConnection(
+	ctx context.Context, cfg *config.Config, r SecretResolver, driver string, c config.ConnectionConfig,
+) (Provider, error) {
+	dsn, err := r.Resolve(c.DSN)
+	if err != nil {
+		return nil, err
+	}
+	return providerregistry.New(driver, dsn,
+		providerregistry.Options{Timeout: cfg.Cost.QueryTimeout, Pooler: c.Pooler, Context: ctx})
 }
 
 // openConnections opens every connection of every database.
@@ -285,13 +330,7 @@ func openConnections(cfg *config.Config, r SecretResolver) (Connections, error) 
 	for name, database := range cfg.Databases {
 		connections[name] = map[string]Provider{}
 		for connection, c := range database.ConnectionsOrDSN() {
-			dsn, err := r.Resolve(c.DSN)
-			if err != nil {
-				closeConnections(connections)
-				return nil, fmt.Errorf("database %q connection %q: %w", name, connection, err)
-			}
-			provider, err := providerregistry.New(database.Driver, dsn,
-				providerregistry.Options{Timeout: cfg.Cost.QueryTimeout, Pooler: c.Pooler})
+			provider, err := openConnection(context.Background(), cfg, r, database.Driver, c)
 			if err != nil {
 				closeConnections(connections)
 				return nil, fmt.Errorf("database %q connection %q: %w", name, connection, err)

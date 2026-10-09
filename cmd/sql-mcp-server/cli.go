@@ -246,6 +246,9 @@ func serveTransport(
 	metrics http.Handler,
 	adminHandler http.Handler,
 ) error {
+	if scans, ok := adminHandler.(interface{ Close() }); ok {
+		defer scans.Close() // background schema scans
+	}
 	srv := mcpserver.NewRuntimeServer(runtime)
 	switch transport {
 	case "stdio":

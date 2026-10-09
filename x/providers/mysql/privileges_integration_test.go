@@ -40,10 +40,11 @@ func TestMySQLPrivileges(t *testing.T) {
 	ro := connectMySQLWithRetry(t, strings.Replace(dsn, "test:test@", "ro:ro@", 1))
 	defer func() { _ = ro.Close() }()
 	inspect := ro.Introspector().(introspect.PrivilegeInspector)
-	p, err := inspect.TablePrivileges(ctx, "", "notes")
+	found, err := inspect.TablePrivileges(ctx, "", []string{"notes"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	p := found["notes"]
 	if p.Select != introspect.PrivilegeGranted || p.Insert != introspect.PrivilegeDenied ||
 		p.Update != introspect.PrivilegeDenied || !slices.Equal(p.Columns["update"], []string{"body"}) {
 		t.Fatalf("privileges = %+v", p)

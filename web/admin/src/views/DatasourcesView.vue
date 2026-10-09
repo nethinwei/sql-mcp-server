@@ -1,47 +1,25 @@
 <script setup lang="ts">
-import { computed, h, reactive, ref } from 'vue'
+import { computed, h, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
-  NAlert, NButton, NCard, NCheckbox, NCheckboxGroup, NDataTable, NEmpty, NForm, NFormItem, NGrid, NGi, NInput,
-  NModal, NSelect, NSpace, NSwitch, NTag, NText, NTooltip, useMessage, type DataTableColumns, type DataTableRowKey,
+  NAlert, NButton, NCard, NCheckbox, NCheckboxGroup, NCollapse, NCollapseItem, NDataTable, NEmpty, NForm, NFormItem,
+  NGrid, NGi, NInput, NModal, NSelect, NSpace, NSpin, NSwitch, NTag, NText, NTooltip, useMessage, type DataTableColumns,
 } from 'naive-ui'
 import { useWorkspace, toEntityInput } from '@/stores/workspace'
-import { run } from '@/api/client'
-import { SchemaImportQuery } from '@/api/ops'
-import type { Action, SchemaImportQuery as SchemaImportResult } from '@/gql/graphql'
+import type { Action } from '@/gql/graphql'
 import { nameError } from '@/lib/names'
-import { readsTable, uniqueCandidates } from '@/lib/importer'
+import { entityByTable, tableKey as key, uniqueCandidates } from '@/lib/importer'
+import {
+  cancelScan, scanSchema, scans, scansOf, sync, tablesBySchema, type SchemaNode, type Table,
+} from '@/lib/schemaScans'
 import { can } from '@/api/session'
 
-type Table = SchemaImportResult['schemaImport']['tables'][number]
 type Status = { label: string; type: 'success' | 'info' | 'warning' | 'default'; importable: boolean; drift: boolean }
 
 const { t } = useI18n()
 const ws = useWorkspace()
 const message = useMessage()
-// Each datasource keeps its own scan: schemas, results, search and selection,
-// so switching back and forth loses nothing, and a scan that returns after
-// switching fills in its own datasource only.
-interface Scan {
-  schemas: string
-  tables: Table[]
-  defaultSchema: string | null
-  scanned: boolean
-  scanning: boolean
-  checked: DataTableRowKey[]
-  search: string
-  /** Bumped per request; a response for an older request is dropped. */
-  seq: number
-}
-const scans = reactive<Record<string, Scan>>({})
-function scanOf(ds: string): Scan {
-  scans[ds] ??= {
-    schemas: '', tables: [], defaultSchema: null, scanned: false, scanning: false, checked: [], search: '', seq: 0,
-  }
-  return scans[ds]
-}
 const selectedDs = ref<string | null>(ws.datasources[0]?.name ?? null)
-if (selectedDs.value) scanOf(selectedDs.value)
 const cur = computed(() => (selectedDs.value ? scans[selectedDs.value] : undefined))
 const entityCount = (ds: string) => {
   const n = ws.entities.filter((e) => (e.datasource ?? 'default') === ds).length
@@ -49,42 +27,71 @@ const entityCount = (ds: string) => {
 }
 
 function selectDatasource(name: string) {
-  scanOf(name)
   selectedDs.value = name
 }
+const when = (at: string | null) => (at ? new Date(at).toLocaleString() : '')
 
-async function scan() {
-  const ds = selectedDs.value
+// Selecting a datasource reads its schemas and what was scanned of them; a
+// schema never scanned is scanned when it is opened, and again on rescan.
+watch(selectedDs, (ds) => {
   if (!ds) return
-  const s = scanOf(ds)
-  const mine = ++s.seq
-  s.scanning = true
-  try {
-    const list = s.schemas.split(',').map((x) => x.trim()).filter(Boolean)
-    const data = await run(SchemaImportQuery, { datasource: ds, schemas: list.length ? list : null })
-    if (mine !== s.seq) return
-    s.tables = data.schemaImport.tables
-    s.defaultSchema = data.schemaImport.defaultSchema ?? null
-    s.scanned = true
-    s.checked = []
-  } catch (e) {
-    if (mine === s.seq) message.error(e instanceof Error ? e.message : String(e))
-  } finally {
-    if (mine === s.seq) s.scanning = false
+  scansOf(ds)
+  if (can('admin:write')) void sync(ds)
+}, { immediate: true })
+
+function onExpand(names: (string | number)[]) {
+  const s = cur.value
+  const ds = selectedDs.value
+  if (!s || !ds) return
+  for (const name of names) {
+    const n = s.schemas.find((x) => x.name === name)
+    if (n && !s.expanded.includes(n.name) && !n.scannedAt && !n.scanning) void scanSchema(ds, n)
   }
+  s.expanded = names.map(String)
 }
 
-const key = (tb: Table) => `${tb.schema}.${tb.table}`
-const inWorkspace = (tb: Table) =>
-  ws.entities.find((e) => readsTable(e, selectedDs.value ?? '', tb, cur.value?.tables ?? [], cur.value?.defaultSchema))
+function rescan(n: SchemaNode) {
+  if (!selectedDs.value) return
+  if (!cur.value?.expanded.includes(n.name)) cur.value?.expanded.push(n.name)
+  void scanSchema(selectedDs.value, n)
+}
+
+const schemaFilter = ref('')
+const search = ref('')
+const shownSchemas = computed(() => {
+  const q = schemaFilter.value.trim().toLowerCase()
+  return (cur.value?.schemas ?? []).filter((n) => !q || n.name.toLowerCase().includes(q))
+})
+const bySchema = computed(() => tablesBySchema(cur.value?.result ?? null))
+const visible = (n: SchemaNode) => {
+  const q = search.value.trim().toLowerCase()
+  return (bySchema.value.get(n.name) ?? []).filter((tb) => !q || tb.table.toLowerCase().includes(q) || tb.description.toLowerCase().includes(q))
+}
+// Importing waits for the sync after the last scan: a scan may rename the
+// candidates of other schemas, and after a failed sync they may be stale.
+const blocked = computed(() => {
+  const s = cur.value
+  return !s || s.syncing || !!s.error || s.schemas.some((n) => n.scanning)
+})
+const checkedCount = computed(() => (cur.value?.schemas ?? []).reduce((sum, n) => sum + n.checked.length, 0))
+const pagination = { pageSize: 50, showSizePicker: true, pageSizes: [20, 50, 100] }
+
+// Which workspace entity reads each scanned table, resolved once for all of
+// them rather than per row and render.
+const owners = computed(() => {
+  const s = cur.value
+  return entityByTable(ws.entities, selectedDs.value ?? '', s?.result?.tables ?? [], s?.defaultSchema)
+})
+const inWorkspace = (tb: Table) => owners.value.get(key(tb))
 
 /** Status of a table against the workspace (not just the published config). */
-function status(tb: Table): Status {
+function statusOf(tb: Table): Status {
   const e = inWorkspace(tb)
   if (!e) return { label: t('datasources.state.new'), type: 'default', importable: true, drift: false }
   const declared = new Set((e.fields ?? []).map((f) => f.name))
+  const columns = new Set(tb.columns.map((c) => c.name))
   const added = tb.columns.filter((c) => !declared.has(c.name)).length
-  const missing = [...declared].filter((n) => !tb.columns.some((c) => c.name === n)).length
+  const missing = [...declared].filter((n) => !columns.has(n)).length
   if (added || missing) {
     return { label: t('datasources.state.drift', { added, missing }), type: 'warning', importable: false, drift: true }
   }
@@ -92,53 +99,84 @@ function status(tb: Table): Status {
     ? { label: t('datasources.state.inWorkspace'), type: 'info', importable: false, drift: false }
     : { label: t('datasources.state.configured'), type: 'success', importable: false, drift: false }
 }
-
-const visible = computed(() => {
-  const q = (cur.value?.search ?? '').trim().toLowerCase()
-  return (cur.value?.tables ?? []).filter((tb) => !q || tb.table.toLowerCase().includes(q) || tb.description.toLowerCase().includes(q))
+const statuses = computed(() => {
+  const out = new Map<string, Status>()
+  for (const tb of cur.value?.result?.tables ?? []) out.set(key(tb), statusOf(tb))
+  return out
 })
+const status = (tb: Table) => statuses.value.get(key(tb)) ?? statusOf(tb)
 
 type Column = Table['columns'][number]
 
-// tableConstraints lists the keys (saying why a unique key cannot identify a
-// row), the foreign keys with the actions that write referencing rows, and
-// triggers, under the column list.
-function tableConstraints(tb: Table) {
-  const cols = (c: readonly string[]) => `(${c.join(', ')})`
-  const lines = [
-    ...tb.keys.map((k) => h('div', { class: 'constraint' }, [
-      h(NTag, { size: 'tiny', bordered: false, type: k.reason ? 'default' : 'info' },
-        () => t(k.primary ? 'datasources.primaryKey' : 'datasources.uniqueKey')),
-      h('span', { class: 'mono' }, ` ${cols(k.columns)} `),
-      k.reason
-        ? h(NText, { depth: 3 }, () => t('datasources.notIdentity', { reason: t(`datasources.keyReason.${k.reason}`) }))
-        : null,
-    ])),
-    ...tb.foreignKeys.map((fk) => h('div', { class: 'constraint' }, [
-      h(NTag, { size: 'tiny', bordered: false }, () => t('datasources.foreignKey')),
-      h('span', { class: 'mono' },
-        ` ${cols(fk.columns)} → ${fk.refSchema}.${fk.refTable} ${cols(fk.refColumns)}`),
-      ...[['onDelete', fk.onDelete], ['onUpdate', fk.onUpdate]].filter(([, a]) => a).map(([on, a]) =>
-        h(NTag, { size: 'tiny', bordered: false, type: 'warning', class: 'action' },
-          () => t(`datasources.${on}`, { action: t(`datasources.fkAction.${a}`) }))),
-    ])),
-    tb.sideEffects ? h(NText, { type: 'warning', class: 'constraint' }, () => t('datasources.sideEffects')) : null,
+interface KeyTag {
+  label: string
+  type: 'default' | 'info' | 'success' | 'warning'
+  title: string
+}
+
+// The primary key and foreign keys are shown on the columns they cover, like
+// the column view of a database client: a table has one primary key, and each
+// column of a foreign key references its own column, so the tags cannot be
+// mixed up. The tooltip says what a foreign key writes on delete or update.
+function columnKeys(tb: Table): Map<string, KeyTag[]> {
+  const out = new Map<string, KeyTag[]>()
+  const add = (column: string, tag: KeyTag) => out.set(column, [...(out.get(column) ?? []), tag])
+  const pk = tb.keys.find((k) => k.primary)?.columns ?? []
+  pk.forEach((column, i) => add(column, {
+    label: pk.length > 1 ? `PK ${i + 1}/${pk.length}` : 'PK',
+    type: 'info',
+    title: pk.length > 1 ? t('datasources.compositeKey', { cols: pk.join(', '), n: i + 1 }) : t('datasources.primaryKey'),
+  }))
+  for (const fk of tb.foreignKeys) {
+    const ref = fk.refSchema === tb.schema ? fk.refTable : `${fk.refSchema}.${fk.refTable}`
+    const actions = [['onDelete', fk.onDelete], ['onUpdate', fk.onUpdate]].filter(([, a]) => a)
+      .map(([on, a]) => t(`datasources.${on}`, { action: t(`datasources.fkAction.${a}`) }))
+    fk.columns.forEach((column, i) => add(column, {
+      label: `FK → ${ref}.${fk.refColumns[i]}`,
+      type: actions.length ? 'warning' : 'default',
+      title: [`${t('datasources.foreignKey')} ${fk.name}`, ...actions].join('\n'),
+    }))
+  }
+  return out
+}
+
+type Index = Table['indexes'][number]
+
+// The indexes are a table of their own under the columns, one index per row
+// in the database's own terms (structure, key parts, predicate): a table may
+// have several over overlapping columns, so they are not shown on the
+// columns. A unique index says when it cannot identify a row.
+function indexes(tb: Table) {
+  if (!tb.indexes.length) return null
+  const dash = () => h(NText, { depth: 3 }, () => '—')
+  const uniqueness = (ix: Index) => {
+    if (ix.primary) return t('datasources.primaryKey')
+    if (!ix.unique) return dash()
+    const reason = tb.keys.find((k) => k.name === ix.name)?.reason
+    return reason
+      ? h(NText, { depth: 3 }, () => t('datasources.uniqueNotIdentity', { reason: t(`datasources.keyReason.${reason}`) }))
+      : t('datasources.unique')
+  }
+  const columns: DataTableColumns<Index> = [
+    { title: t('datasources.index'), key: 'name', minWidth: 140, render: (ix) => h('span', { class: 'mono' }, ix.name) },
+    { title: t('datasources.indexMethod'), key: 'method', width: 90, render: (ix) => h('span', { class: 'mono' }, ix.method) },
+    {
+      title: t('datasources.keyColumns'), key: 'parts', minWidth: 160,
+      render: (ix) => h('span', { class: 'mono' }, ix.parts.map((p) => p || t('datasources.expression')).join(', ')),
+    },
+    { title: t('datasources.uniqueness'), key: 'unique', minWidth: 120, render: uniqueness },
+    {
+      title: t('datasources.indexWhere'), key: 'where', ellipsis: { tooltip: true },
+      render: (ix) => (ix.where ? h('span', { class: 'mono' }, ix.where) : dash()),
+    },
   ]
-  return lines.some(Boolean) ? h('div', { class: 'constraints' }, lines) : null
+  return h(NDataTable, { class: 'cols', size: 'small', bordered: false, columns, data: tb.indexes, rowKey: (ix: Index) => ix.name })
 }
 
 // The expanded table lists one column per row, like the column view of a
-// database client. A composite primary key is one key over several columns,
-// so each member shows its position in the key rather than a separate "PK".
+// database client, with the keys each column is part of.
 function columnDetail(tb: Table): DataTableColumns<Column> {
-  const pk = tb.candidate.primaryKey
-  const pkTag = (c: Column) => {
-    const i = pk.indexOf(c.name)
-    if (i < 0) return null
-    const label = pk.length > 1 ? `PK ${i + 1}/${pk.length}` : 'PK'
-    const title = pk.length > 1 ? t('datasources.compositeKey', { cols: pk.join(', '), n: i + 1 }) : undefined
-    return h(NTag, { size: 'small', type: 'info', bordered: false, title }, () => label)
-  }
+  const keys = columnKeys(tb)
   return [
     { title: '#', key: 'index', width: 44, render: (_, i) => h(NText, { depth: 3 }, () => i + 1) },
     {
@@ -154,7 +192,9 @@ function columnDetail(tb: Table): DataTableColumns<Column> {
       render: (c) => (c.nullable ? h(NText, { depth: 3 }, () => '—') : '✓'),
     },
     {
-      title: t('datasources.primaryKey'), key: 'primaryKey', width: 88, align: 'center', render: pkTag,
+      title: t('datasources.keys'), key: 'keys', minWidth: 160,
+      render: (c) => h('div', { class: 'keys' }, (keys.get(c.name) ?? []).map((k) =>
+        h(NTag, { size: 'small', bordered: false, type: k.type, title: k.title }, () => k.label))),
     },
     {
       title: t('datasources.description'), key: 'description', ellipsis: { tooltip: true },
@@ -172,15 +212,13 @@ const columns = computed<DataTableColumns<Table>>(() => [
         class: 'cols', size: 'small', bordered: false, columns: columnDetail(tb), data: tb.columns,
         rowKey: (c: Column) => c.name,
       }),
-      tableConstraints(tb),
+      indexes(tb),
+      tb.sideEffects ? h(NText, { type: 'warning', class: 'notes' }, () => t('datasources.sideEffects')) : null,
     ]),
   },
   {
     title: t('datasources.table'), key: 'table', minWidth: 160,
-    render: (tb) => h('div', [
-      h('span', { class: 'mono strong' }, tb.table),
-      h(NText, { depth: 3, class: 'schema' }, () => tb.schema),
-    ]),
+    render: (tb) => h('span', { class: 'mono strong' }, tb.table),
   },
   { title: t('datasources.description'), key: 'description', ellipsis: { tooltip: true } },
   { title: t('datasources.columns'), key: 'cols', width: 70, render: (tb) => tb.columns.length },
@@ -228,11 +266,12 @@ function openImport() {
 function addSelected() {
   const s = cur.value
   if (!s) return
-  const chosen = s.tables.filter((tb) => s.checked.includes(key(tb)))
+  const checked = new Set(s.schemas.flatMap((n) => n.checked.map(String)))
+  const chosen = (s.result?.tables ?? []).filter((tb) => checked.has(key(tb)))
   const candidates = uniqueCandidates(chosen.map((tb) => toEntityInput(tb.candidate)), ws.entities.map((e) => e.name))
   const added = candidates.map((e) => e.name)
   const dropped = ws.importEntities(candidates, grantRoles.value, grantActions.value)
-  s.checked = []
+  for (const n of s.schemas) n.checked = []
   importing.value = false
   const note = dropped ? t('datasources.droppedNote', { dropped }) : ''
   message.success(grantRoles.value.length
@@ -314,23 +353,53 @@ function applySync() {
 
     <n-card v-if="selectedDs && cur" size="small" :title="t('datasources.importTitle', { name: selectedDs })">
       <template #header-extra>
-        <n-space :wrap="false">
-          <n-input v-model:value="cur.schemas" size="small" :placeholder="t('datasources.schemas')" class="schemas" />
-          <n-button size="small" type="primary" :loading="cur.scanning" :disabled="!can('admin:write')" @click="scan">
-            {{ cur.scanned ? t('datasources.rescan') : t('datasources.scan') }}
-          </n-button>
-        </n-space>
+        <n-button size="small" :loading="cur.syncing" :disabled="!can('admin:write')"
+          @click="sync(selectedDs, true)">
+          {{ t('datasources.refreshSchemas') }}
+        </n-button>
       </template>
-      <n-empty v-if="!cur.scanned" :description="t('datasources.scanHint')" />
-      <template v-else>
+      <n-alert v-if="cur.error" type="error" :show-icon="false">
+        {{ cur.listed ? t('datasources.stale', { error: cur.error }) : cur.error }}
+        <n-button size="tiny" text type="primary" @click="sync(selectedDs)">{{ t('datasources.retry') }}</n-button>
+      </n-alert>
+      <n-empty v-if="!cur.listed && !cur.error" :description="t(can('admin:write') ? 'datasources.listing' : 'datasources.scanHint')" />
+      <template v-else-if="cur.listed">
         <div class="toolbar">
-          <n-input v-model:value="cur.search" size="small" :placeholder="t('datasources.searchTables')" clearable class="search" />
-          <n-button type="primary" size="small" :disabled="!cur.checked.length" @click="openImport">
-            {{ t('datasources.addSelected', { count: cur.checked.length }) }}
+          <n-space :size="8">
+            <n-input v-model:value="schemaFilter" size="small" :placeholder="t('datasources.filterSchemas')" clearable class="search" />
+            <n-input v-model:value="search" size="small" :placeholder="t('datasources.searchTables')" clearable class="search" />
+          </n-space>
+          <n-button type="primary" size="small" :disabled="!checkedCount || blocked" @click="openImport">
+            {{ t('datasources.addSelected', { count: checkedCount }) }}
           </n-button>
         </div>
-        <n-data-table v-model:checked-row-keys="cur.checked" :columns="columns" :data="visible" :row-key="key"
-          size="small" :max-height="560" />
+        <n-collapse :expanded-names="cur.expanded" @update:expanded-names="onExpand">
+          <n-collapse-item v-for="n in shownSchemas" :key="n.name" :name="n.name">
+            <template #header>
+              <span class="mono strong">{{ n.name || t('datasources.defaultSchema') }}</span>
+              <n-tag v-if="n.name && n.name === cur.defaultSchema" size="tiny" :bordered="false" class="schema-tag">
+                {{ t('datasources.defaultSchema') }}
+              </n-tag>
+            </template>
+            <template #header-extra>
+              <n-space :size="8" align="center" :wrap="false">
+                <n-text depth="3" class="schema-meta">
+                  {{ n.scannedAt ? t('datasources.scannedMeta', { count: n.tables ?? 0, at: when(n.scannedAt) }) : t('datasources.notScanned') }}
+                </n-text>
+                <n-button v-if="n.scanning" size="tiny" @click.stop="cancelScan(n)">{{ t('datasources.cancelScan') }}</n-button>
+                <n-button v-else size="tiny" :disabled="!can('admin:write')" @click.stop="rescan(n)">
+                  {{ n.scannedAt ? t('datasources.rescan') : t('datasources.scan') }}
+                </n-button>
+              </n-space>
+            </template>
+            <n-alert v-if="n.error" type="error" :show-icon="false">{{ n.error }}</n-alert>
+            <n-spin :show="n.scanning">
+              <n-empty v-if="!n.scannedAt" :description="t(n.scanning ? 'datasources.scanning' : 'datasources.scanHint')" />
+              <n-data-table v-else v-model:checked-row-keys="n.checked" :columns="columns" :data="visible(n)" :row-key="key"
+                size="small" :pagination="pagination" />
+            </n-spin>
+          </n-collapse-item>
+        </n-collapse>
       </template>
     </n-card>
 
@@ -376,7 +445,7 @@ function applySync() {
     </n-modal>
 
     <n-modal v-model:show="importing" preset="card" class="dialog"
-      :title="t('datasources.importDialog', { count: cur?.checked.length ?? 0 }, cur?.checked.length ?? 0)">
+      :title="t('datasources.importDialog', { count: checkedCount }, checkedCount)">
       <n-form label-placement="top">
         <n-form-item :label="t('datasources.grantRoles')" :feedback="roleError ?? ''"
           :validation-status="roleError ? 'error' : undefined">
@@ -404,14 +473,15 @@ function applySync() {
 </template>
 
 <style scoped>
-.constraints { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px 4px; font-size: 12px; }
-.constraint .action { margin-left: 6px; }
+.keys { display: flex; flex-wrap: wrap; gap: 4px; }
+.notes { display: block; margin: 6px 0 6px 36px; font-size: 12px; }
 .ds { cursor: pointer; height: 100%; }
 .ds.active { border-color: #2f6fed; box-shadow: 0 0 0 1px #2f6fed inset; }
 .ds-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .ds-dsn { font-size: 12px; opacity: .65; word-break: break-all; margin-bottom: 4px; }
 .ds-count { font-size: 12px; }
-.schemas { width: 220px; }
+.schema-tag { margin-left: 8px; }
+.schema-meta { font-size: 12px; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
 .search { width: 240px; }
 .grant-hint { font-size: 13px; }
@@ -420,6 +490,7 @@ function applySync() {
 .sync-switch { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
 .ref { margin-left: 6px; }
 :deep(.cols) { margin: 2px 0 2px 36px; width: auto; }
+:deep(.cols + .cols) { margin-top: 12px; }
 :deep(.strong) { font-weight: 600; }
 :deep(.schema) { margin-left: 6px; font-size: 12px; }
 </style>

@@ -1,7 +1,6 @@
 package mysql
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -51,7 +50,7 @@ func NewAdapter(dsn string, opts providerregistry.Options, oceanBaseVariable str
 	if err != nil {
 		return nil, err
 	}
-	if err := db.PingContext(context.Background()); err != nil {
+	if err := db.PingContext(opts.OpenContext()); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("mysql: ping failed: %w", err)
 	}

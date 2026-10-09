@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"cmp"
 	"context"
 	"slices"
 	"sort"
@@ -42,13 +43,22 @@ func buildSchemaImport(datasource string, cat introspect.Catalog, cfg *config.Co
 		taken[e.Name] = true
 	}
 	candidates := candidateNames(datasource, cat.Tables, configured, taken)
+	// A foreign key may reference a table of a schema not scanned: it is
+	// related when an entity is configured on it.
+	for _, e := range cfg.Entities {
+		key := tableKey(cmp.Or(e.Schema, cat.Default), e.PhysicalSource())
+		if _, ok := candidates[key]; !ok && e.DatasourceName() == datasource && e.Kind != "procedure" {
+			candidates[key] = e.Name
+		}
+	}
 	out := &SchemaImport{
 		Datasource: datasource, DefaultSchema: optional(cat.Default), Tables: make([]ImportTable, 0, len(cat.Tables)),
 	}
 	for _, d := range cat.Tables {
 		table := ImportTable{
 			Schema: d.Schema, Table: d.Source, Description: d.Description, Status: ImportStatusNew,
-			Columns: importColumns(d), Keys: importKeys(d), ForeignKeys: importForeignKeys(d),
+			Columns: importColumns(d), Keys: importKeys(d), Indexes: importIndexes(d),
+			ForeignKeys: importForeignKeys(d),
 			SideEffects: d.SideEffects,
 		}
 		if e, ok := configured[tableKey(d.Schema, d.Source)]; ok {
@@ -127,6 +137,17 @@ func importKeys(d entity.Entity) []ImportKey {
 	out := make([]ImportKey, 0, len(d.Keys))
 	for _, k := range d.Keys {
 		out = append(out, ImportKey{Name: k.Name, Columns: k.Columns, Primary: k.Primary, Reason: optional(k.Reason)})
+	}
+	return out
+}
+
+func importIndexes(d entity.Entity) []ImportIndex {
+	out := make([]ImportIndex, 0, len(d.Indexes))
+	for _, ix := range d.Indexes {
+		out = append(out, ImportIndex{
+			Name: ix.Name, Method: ix.Method, Parts: orEmpty(ix.Parts), Unique: ix.Unique, Primary: ix.Primary,
+			Where: optional(ix.Where),
+		})
 	}
 	return out
 }
@@ -241,16 +262,20 @@ func uniqueRelationshipName(existing []Relationship, base string) string {
 }
 
 // importCatalog scans schemas, or every schema of the database when none are
-// named (only the default one when the introspector cannot list them).
-func importCatalog(ctx context.Context, in introspect.Introspector, schemas []string) (introspect.Catalog, error) {
+// named (only the default one when the introspector cannot list them), and
+// returns the schemas it scanned (none for the default one).
+func importCatalog(
+	ctx context.Context, in introspect.Introspector, schemas []string,
+) (introspect.Catalog, []string, error) {
 	if lister, ok := in.(introspect.SchemaLister); ok && len(schemas) == 0 {
 		all, _, err := lister.Schemas(ctx)
 		if err != nil {
-			return introspect.Catalog{}, err
+			return introspect.Catalog{}, nil, err
 		}
 		schemas = all
 	}
-	return loadCatalog(ctx, in, schemas, len(schemas) == 0)
+	cat, err := loadCatalog(ctx, in, schemas, len(schemas) == 0)
+	return cat, schemas, err
 }
 
 // loadCatalog loads a catalog that matches names the way the database

@@ -152,18 +152,24 @@ Provider 适用范围使用以下口径：
 
 ### TM-007 — reload 竞态
 
-- **等级/状态**：high / 已由 drain-before-publish corpus 与 race 测试覆盖。
+- **等级/状态**：high / 已由 publish-then-drain 与 race 测试覆盖。
 - **攻击**：在配置发布、旧请求 drain、事务/预算状态保留或 provider 关闭交错时，
   让请求混用新旧授权快照、使用已关闭资源或绕过新限制。
-- **控制**：新快照完整构建成功后才发布；发布前 drain 旧 app，失败保留旧 app；
-  reload 窗口新请求等待；transaction manager 与 budget 状态保留并原子更新限制；
-  事务容量/TTL和 listener/auth/tool-set 等边界变化拒绝热重载。
-- **现有证据**：`x/bootstrap/runtime_test.go` 的 drain、失败保旧、事务 manager
-  保留、限制拒绝和预算更新测试；CI 默认运行 race detector。
-- **持续验证**：`x/bootstrap/runtime_test.go` 覆盖旧 lease drain、新请求等待新快照
-  和失败 reload 保留旧快照；CI race 检查并不枚举所有调度交错。
-- **剩余风险**：现有测试不是所有调度的形式化证明；热重载会短暂重叠新旧连接池，
-  多进程/多实例配置发布不在当前一致性模型内。
+- **控制**：新快照完整构建成功后才发布，失败保留旧 app；每个请求自始至终只用
+  一个快照（`Acquire` 租约）。发布立即生效，新请求不等待旧请求（旧做法
+  drain-before-publish 会让一个慢查询或长时间持有租约的操作卡住全部新请求）；
+  旧 app 由后台在其在途请求结束后关闭，被删除/禁用用户的会话解除与事务回滚
+  也在此时执行，从而覆盖旧请求中途打开的事务（新快照从发布起即拒绝这些用户）。
+  transaction manager 与 budget 状态保留并原子更新限制；事务容量/TTL 和
+  listener/auth/tool-set 等边界变化拒绝热重载。控制台 schema 扫描使用独立连接、
+  不持有租约。
+- **现有证据**：`x/bootstrap/runtime_test.go` 的“发布不等待租约、旧 app 在租约
+  释放后关闭”、失败保旧、事务 manager 保留、限制拒绝和预算更新测试；
+  `x/bootstrap/bootstrap_access_test.go` 的吊销通知测试；CI 默认运行 race detector。
+- **持续验证**：以上测试在默认单元测试中运行；CI race 检查并不枚举所有调度交错。
+- **剩余风险**：现有测试不是所有调度的形式化证明；新旧快照重叠期间，在途旧请求
+  与新请求同时执行，engine 并发与连接池短暂最多为配置值的两倍；多进程/多实例
+  配置发布不在当前一致性模型内。
 - **Provider**：runtime 控制为共享层；provider 资源 drain 依赖各 driver 行为，
   尚无三库专门的 reload integration。
 

@@ -108,6 +108,24 @@ type Key struct {
 	Reason string
 }
 
+// Index is an index of a table in the database's own terms: databases
+// support different structures and forms of index.
+type Index struct {
+	Name string
+	// Method is the database's name for the index structure, lower-cased:
+	// for example btree, hash, gin, gist, brin or spgist on PostgreSQL, and
+	// btree, hash, fulltext or spatial on MySQL and OceanBase.
+	Method string
+	// Parts are the key parts in order: a column, a column prefix such as
+	// title(20), or an expression as the database prints it ("" when the
+	// database does not report it).
+	Parts   []string
+	Unique  bool
+	Primary bool
+	// Where is the predicate of a partial index.
+	Where string
+}
+
 // ForeignKey declares referential integrity to another relation.
 type ForeignKey struct {
 	Name    string
@@ -200,6 +218,10 @@ type Entity struct {
 	Attributes  []Attribute
 	Keys        []Key
 	ForeignKeys []ForeignKey
+	// Indexes are the table's indexes as introspection reports them, for
+	// administrators to see; the database plans access paths, not the
+	// gateway. The unique ones are also Keys.
+	Indexes     []Index
 	Role        RoleAccess
 	FieldAccess FieldAccess
 	MCP         MCPFlags

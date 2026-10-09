@@ -26,6 +26,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/admin/graph"
+	"github.com/nethinwei/sql-mcp-server/x/admin/scanjobs"
 	"github.com/nethinwei/sql-mcp-server/x/admin/ui"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
@@ -67,14 +68,18 @@ type Handler struct {
 	logins   *loginGate
 	graphql  http.Handler
 	mux      *http.ServeMux
+	scans    *graph.Scans
 }
 
 // New builds the admin handler.
 func New(cfg Config) *Handler {
-	h := &Handler{cfg: cfg, sessions: newSessions(cfg.Now), logins: newLoginGate(maxConcurrentLogins)}
+	h := &Handler{
+		cfg: cfg, sessions: newSessions(cfg.Now), logins: newLoginGate(maxConcurrentLogins),
+		scans: graph.NewScans(scanjobs.Options{}),
+	}
 	srv := handler.New(graph.NewExecutableSchema(graph.Config{Resolvers: &graph.Resolver{
 		Store: cfg.Store, Accounts: accounts.Service{Store: cfg.Accounts}, Introspect: cfg.Introspect, Status: cfg.Status,
-		Capabilities: cfg.Capabilities,
+		Capabilities: cfg.Capabilities, Scans: h.scans,
 	}}))
 	srv.AddTransport(transport.POST{})
 	srv.Use(extension.FixedComplexityLimit(maxQueryComplexity))
@@ -97,6 +102,11 @@ func New(cfg Config) *Handler {
 		h.mux.HandleFunc("GET /admin/playground", h.playground)
 	}
 	return h
+}
+
+// Close stops the background schema scans.
+func (h *Handler) Close() {
+	h.scans.Close()
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

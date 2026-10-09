@@ -51,8 +51,9 @@
 
 ## 在途请求一致性（结论）
 
-- 一次请求自始至终使用同一个 snapshot（`Acquire()` 租约），发布新 snapshot
-  采用 drain-before-publish：旧 snapshot 等待在途请求结束后才关闭；
+- 一次请求自始至终使用同一个 snapshot（`Acquire()` 租约）；新 snapshot 构建
+  成功后立即发布，旧 snapshot 在其在途请求结束后由后台关闭（publish-then-drain，
+  新请求从不等待旧请求）；
 - 事务跨越多次请求，绑定创建时的事务 manager；`ttl`/`maxOpen` 变化无法安全
   迁移在途事务，拒绝热发布、要求重启（现状保持）；
 - budget session 用量在发布时保留并套用新限制（现状保持）；
