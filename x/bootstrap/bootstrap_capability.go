@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"time"
@@ -40,6 +41,12 @@ func (a *App) assessInBackground(cfg *config.Config, connections Connections, en
 	go func() {
 		defer close(a.assessed)
 		defer cancel()
+		// A panic here would stop the process; the capabilities stay unknown.
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("capability assessment panicked", "panic", r, "stack", string(debug.Stack()))
+			}
+		}()
 		capabilities := assessCapabilities(ctx, cfg, connections, entities)
 		if ctx.Err() != nil {
 			return // closed, or timed out: the capabilities stay unknown

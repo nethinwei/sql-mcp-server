@@ -23,6 +23,12 @@ server.transport:
 server.addr:
   zh-CN: HTTP 监听地址；CLI --addr 优先，两处都未设置时为 :8080。非 loopback 地址必须配置 token 或 mTLS。
   en: HTTP listen address; the CLI --addr flag wins, and :8080 applies when neither is set. Non-loopback addresses need a token or mTLS.
+server.pathPrefix:
+  zh-CN: 网关把服务挂在此路径前缀下并从请求中剥掉它（如 /sql-mcp-server）；控制台的页面、Cookie 与重定向都带上它，网关无需改写响应。修改需重启。
+  en: The path a gateway serves this service under and strips from requests (for example /sql-mcp-server); the console's pages, cookie and redirects carry it, so the gateway need not rewrite responses. Changing it needs a restart.
+server.publicURL:
+  zh-CN: 客户端访问 MCP 端点的完整外部地址（经网关或反向代理时填写，如 https://gw.example.com/sql-mcp/mcp）；控制台据此生成客户端接入配置，未设置时用控制台所在域名加 /mcp。
+  en: The MCP endpoint as clients reach it, through any gateway or reverse proxy (for example https://gw.example.com/sql-mcp/mcp); the console builds client configuration with it, and uses the console's own origin plus /mcp when it is unset.
 server.role:
   zh-CN: 没有用户身份的请求使用的默认角色；CLI --role 覆盖。
   en: Default role for requests without a user identity; the CLI --role flag overrides it.
@@ -362,8 +368,11 @@ cost.maxProcedureRows:
   zh-CN: 存储过程结果行数上限。
   en: Row cap for procedure results.
 cost.rejectFullScan:
-  zh-CN: 拒绝全表扫描。
-  en: Reject full table scans.
+  zh-CN: 拒绝全表扫描（估计行数不超过 fullScanMaxRows 的小表除外）。
+  en: Reject full table scans (except of small tables, see fullScanMaxRows).
+cost.fullScanMaxRows:
+  zh-CN: 估计行数不超过此值的全表扫描按普通顺序扫描评分、不被 rejectFullScan 拒绝（配置表、维表）；0 表示全表扫描一律按全表扫描处理。
+  en: A full scan estimated at no more than this many rows scores as an ordinary sequential scan and is not rejected by rejectFullScan (lookup and dimension tables); 0 treats every full scan as one.
 cost.whitelistPKPoint:
   zh-CN: 主键点查询跳过估算（仍受结果上限约束）。
   en: Primary-key point reads skip estimation (result caps still apply).

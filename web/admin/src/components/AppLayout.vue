@@ -18,6 +18,7 @@ import { useWorkspace } from '@/stores/workspace'
 import { useStatus } from '@/stores/status'
 import { useSettingsEdits } from '@/stores/settingsEdits'
 import { can, logout, session } from '@/api/session'
+import { adminURL } from '@/api/base'
 import logo from '@/assets/logo.svg'
 
 const { t } = useI18n()
@@ -79,16 +80,11 @@ function onVisible() {
 
 const outdated = computed(() =>
   status.publishedId !== null && ws.basePublished !== null && status.publishedId !== ws.basePublished)
-const conflictList = computed(() =>
-  status.conflicts.map((c) => c.kind === 'settings'
-    ? `${t('changes.settingsName')}（${(c.paths ?? []).join(', ')}）`
-    : `${t(`changes.kind.${c.kind}`)} ${c.name}`)
-    .join(t('common.listSep')))
 
 async function rebase() {
   try {
     const count = await status.rebaseWorkspace()
-    message.success(t('stale.rebased', { id: status.rebasedOnto, count }, count))
+    message.success(t('stale.rebased', { id: status.publishedId, count }, count))
   } catch (e) {
     message.error(e instanceof Error ? e.message : String(e))
   }
@@ -101,16 +97,13 @@ function onBeforeUnload(e: BeforeUnloadEvent) {
 }
 
 let timer: number | undefined
+let events: EventSource | undefined
 onMounted(async () => {
   window.addEventListener('beforeunload', onBeforeUnload)
   if (ws.baseId) {
     try {
       const moved = await ws.verifyBase()
-      if (moved) {
-        status.conflicts = moved.conflicts
-        status.rebasedOnto = moved.conflicts.length ? moved.id : null
-        message.warning(t('layout.baseReloaded', { id: moved.id }))
-      }
+      if (moved) message.warning(t('layout.baseReloaded', { id: moved.id }))
     } catch (e) {
       message.error(e instanceof Error ? e.message : String(e))
     }
@@ -122,12 +115,17 @@ onMounted(async () => {
     }
   }
   await poll()
+  // Publishes arrive as server-sent events at once; polling stays as the
+  // fallback for a stream a proxy cuts off.
+  events = new EventSource(adminURL('events'))
+  events.addEventListener('published', () => void poll())
   timer = window.setInterval(() => document.visibilityState === 'visible' && void poll(), 10000)
   document.addEventListener('visibilitychange', onVisible)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', onBeforeUnload)
   window.clearInterval(timer)
+  events?.close()
   document.removeEventListener('visibilitychange', onVisible)
 })
 
@@ -188,9 +186,12 @@ async function onUserMenu(key: string) {
               <n-button size="small" @click="router.push({ name: 'revisions' })">{{ t('stale.history') }}</n-button>
             </div>
           </n-alert>
-          <n-alert v-if="status.conflicts.length" type="info" class="banner" closable
-            :title="t('stale.conflictsTitle', { id: status.rebasedOnto })" @close="status.dismissConflicts()">
-            {{ t('stale.conflictsBody', { list: conflictList, id: status.rebasedOnto }) }}
+          <n-alert v-if="ws.openConflicts.length && route.name !== 'review'" type="error" class="banner"
+            :title="t('conflicts.bannerTitle', { count: ws.openConflicts.length })">
+            {{ t('conflicts.bannerBody') }}
+            <div class="alert-actions">
+              <n-button size="small" type="error" @click="router.push({ name: 'review' })">{{ t('conflicts.resolve') }}</n-button>
+            </div>
           </n-alert>
           <n-alert v-if="nothingPublished" type="info" class="banner" :title="t('layout.nothingPublishedTitle')">
             {{ t('layout.nothingPublishedBody') }}

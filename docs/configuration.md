@@ -129,6 +129,8 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | --- | --- | --- | --- | --- |
 | `transport` | 字符串 | `"stdio"` | 可选 `stdio`、`http`；修改需重启 | 传输方式；CLI --transport 优先。 |
 | `addr` | 字符串 |  | 修改需重启 | HTTP 监听地址；CLI --addr 优先，两处都未设置时为 :8080。非 loopback 地址必须配置 token 或 mTLS。 |
+| `pathPrefix` | 字符串 |  | 格式 `^(/[A-Za-z0-9._~-]+)+$`；修改需重启 | 网关把服务挂在此路径前缀下并从请求中剥掉它（如 /sql-mcp-server）；控制台的页面、Cookie 与重定向都带上它，网关无需改写响应。修改需重启。 |
+| `publicURL` | 字符串 |  | 格式 `^https?://[^\s/?#]+(/[^\s?#]*)?$` | 客户端访问 MCP 端点的完整外部地址（经网关或反向代理时填写，如 https://gw.example.com/sql-mcp/mcp）；控制台据此生成客户端接入配置，未设置时用控制台所在域名加 /mcp。 |
 | `role` | 字符串 |  |  | 没有用户身份的请求使用的默认角色；CLI --role 覆盖。 |
 | `auth.token` | 字符串 |  |  | 共享 bearer token，按字面读取（不做 ${ENV} 替换）。配置用户后各用户使用自己的 token。 |
 | `auth.trustProxyHeaders` | 布尔 |  |  | 信任代理传入的身份头（X-MCP-User / X-MCP-Role / X-MCP-Subject）；需要 mTLS 或 trustedProxyCIDRs 建立信任边界。 |
@@ -216,7 +218,8 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `maxAggregates` | 整数 | `16` | ≥ 1 | 最多聚合表达式数。 |
 | `maxExpand` | 整数 | `8` | ≥ 1 | 最多展开的关系数。 |
 | `maxProcedureRows` | 整数 | `1000` | ≥ 1 | 存储过程结果行数上限。 |
-| `rejectFullScan` | 布尔 | `true` |  | 拒绝全表扫描。 |
+| `rejectFullScan` | 布尔 | `true` |  | 拒绝全表扫描（估计行数不超过 fullScanMaxRows 的小表除外）。 |
+| `fullScanMaxRows` | 整数 | `1000` | ≥ 0 | 估计行数不超过此值的全表扫描按普通顺序扫描评分、不被 rejectFullScan 拒绝（配置表、维表）；0 表示全表扫描一律按全表扫描处理。 |
 | `whitelistPKPoint` | 布尔 | `true` |  | 主键点查询跳过估算（仍受结果上限约束）。 |
 | `requirePKForWrite` | 布尔 | `true` |  | 写操作必须带主键条件；不随 cost.enabled 关闭。 |
 | `requireKnownScan` | 布尔 | `true` |  | 无法判断扫描方式时拒绝；MySQL/OceanBase 的 EXPLAIN 失败即拒绝。 |

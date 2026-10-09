@@ -254,3 +254,41 @@ func TestPlaygroundIsOffByDefault(t *testing.T) {
 		t.Fatalf("console routes must serve the app with a CSP: %d %v", rec.Code, rec.Header())
 	}
 }
+
+// Behind a gateway path prefix, the cookie and redirects carry it.
+func TestPathPrefixInCookieAndRedirects(t *testing.T) {
+	f := newFixture(t)
+	f.h = New(Config{Store: f.h.cfg.Store, Accounts: f.accounts, Now: f.h.cfg.Now, PathPrefix: "/sql-mcp-server"})
+	_, cookie, _ := f.login(t, "correct horse battery")
+	if cookie == nil || cookie.Path != "/sql-mcp-server/admin" {
+		t.Fatalf("session cookie = %+v", cookie)
+	}
+	rec := f.do(http.MethodGet, "/admin", "", nil, nil)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/sql-mcp-server/admin/" {
+		t.Fatalf("redirect = %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	plain := newFixture(t)
+	if rec := plain.do(http.MethodGet, "/admin", "", nil, nil); rec.Header().Get("Location") != "/admin/" {
+		t.Fatalf("without a prefix: %q", rec.Header().Get("Location"))
+	}
+}
+
+// Under a gateway prefix, the playground's sign-in page posts relative to
+// itself and its queries go to the prefixed GraphQL path.
+func TestPlaygroundPathsUnderAGatewayPrefix(t *testing.T) {
+	f := newFixture(t)
+	f.h = New(Config{Store: f.h.cfg.Store, Accounts: f.accounts, Now: f.h.cfg.Now, Playground: true,
+		PathPrefix: "/sql-mcp-server"})
+	signIn := f.do(http.MethodGet, "/admin/playground", "", nil, nil).Body.String()
+	if !strings.Contains(signIn, "fetch('login'") || strings.Contains(signIn, "/admin/login") {
+		t.Fatalf("sign-in page calls an absolute path: %s", signIn)
+	}
+	_, cookie, _ := f.login(t, "correct horse battery")
+	// The endpoint is appended to location.host: it must be the absolute
+	// path under the prefix.
+	page := f.do(http.MethodGet, "/admin/playground", "", nil, cookie).Body.String()
+	if !strings.Contains(page, `const url = location.protocol + '//' + location.host + "/sql-mcp-server/admin/graphql";`) {
+		i := strings.Index(page, "location.host")
+		t.Fatalf("playground endpoint: %s", page[i:min(len(page), i+80)])
+	}
+}

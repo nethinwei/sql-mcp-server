@@ -8,6 +8,7 @@ import {
 } from 'naive-ui'
 import DiffView from '@/components/DiffView.vue'
 import ChangeSummary from '@/components/ChangeSummary.vue'
+import ConflictList from '@/components/ConflictList.vue'
 import { summarize, type Config } from '@/lib/changeSummary'
 import { useWorkspace } from '@/stores/workspace'
 import { ApiError, run } from '@/api/client'
@@ -57,7 +58,11 @@ async function check() {
     diff.value = d
     checkedContent.value = snap.content
   } catch (e) {
-    if (mine === seq) error.value = e instanceof Error ? e.message : String(e)
+    if (mine !== seq) return
+    // A failed check is the result for this content: shown with a recheck
+    // button instead of waiting for a recheck no edit will trigger.
+    error.value = e instanceof Error ? e.message : String(e)
+    checkedContent.value = snap.content
   } finally {
     if (mine === seq) checking.value = false
   }
@@ -66,7 +71,7 @@ async function check() {
 let recheck: ReturnType<typeof setTimeout> | undefined
 watch(() => ws.content, () => {
   clearTimeout(recheck)
-  if (ws.dirty) recheck = setTimeout(() => void check(), 400)
+  if (ws.dirty) recheck = setTimeout(() => void check(), 800)
 })
 onBeforeUnmount(() => clearTimeout(recheck))
 
@@ -97,6 +102,7 @@ function conflict(id: string) {
  * again (the workspace is still based on the older revision).
  */
 const syncFailed = ref<{ id: string; sections: string; restart: boolean; error: string } | null>(null)
+const blocked = computed(() => Boolean(error.value) || Boolean(syncFailed.value) || ws.openConflicts.length > 0)
 
 async function sync(id: string, sections: string, restartNeeded: boolean) {
   try {
@@ -112,6 +118,8 @@ async function sync(id: string, sections: string, restartNeeded: boolean) {
 }
 
 async function save(publish: boolean) {
+  // Conflicting values are only kept locally until chosen.
+  if (ws.openConflicts.length) return
   saving.value = true
   try {
     // Validation must describe what is submitted.
@@ -179,7 +187,7 @@ onMounted(check)
       <n-button size="small" @click="router.push({ name: 'settings' })">{{ t('review.toSettings') }}</n-button>
     </div>
   </n-alert>
-  <n-empty v-if="!ws.dirty" :description="t('review.nothing')">
+  <n-empty v-if="!ws.dirty && !ws.openConflicts.length" :description="t('review.nothing')">
     <template #extra><n-button @click="router.push({ name: 'overview' })">{{ t('review.backToOverview') }}</n-button></template>
   </n-empty>
   <n-spin v-else :show="checking">
@@ -193,6 +201,8 @@ onMounted(check)
           </n-tag>
         </n-space>
       </n-card>
+
+      <conflict-list v-if="ws.openConflicts.length" />
 
       <n-alert v-if="checkStale" type="info" :show-icon="false">{{ t('review.rechecking') }}</n-alert>
       <n-alert v-else-if="error" type="error" :title="t('review.invalid')">
@@ -249,11 +259,11 @@ onMounted(check)
             :disabled="Boolean(error) || Boolean(ws.savedDraftId)" />
           <n-space justify="end">
             <n-text v-if="!can('admin:publish')" depth="3" style="font-size: 12px">{{ t('review.noPublish') }}</n-text>
-            <n-button :disabled="Boolean(error) || Boolean(ws.savedDraftId) || Boolean(syncFailed)" :loading="saving"
+            <n-button :disabled="blocked || Boolean(ws.savedDraftId)" :loading="saving"
               @click="save(false)">
               {{ ws.savedDraftId ? t('review.draftSaved', { id: ws.savedDraftId }) : t('review.saveDraft') }}
             </n-button>
-            <n-button v-if="can('admin:publish')" type="primary" :disabled="Boolean(error) || Boolean(syncFailed)"
+            <n-button v-if="can('admin:publish')" type="primary" :disabled="blocked"
               :loading="saving" @click="publish">
               {{ ws.savedDraftId ? t('review.publishDraft', { id: ws.savedDraftId }) : t('review.saveAndPublish') }}
             </n-button>

@@ -60,7 +60,8 @@ MCP SDK、YAML、gqlgen 都在 `x/` 或 `cmd/`。新增数据库只改 `x/provid
 - **业务规则只在服务层实现，入口（CLI、GraphQL）只做参数、身份、输出**：
   - 管理员账号：`x/admin/accounts.Service`；唯一写入口是 `configstore.MutateAdmins`
     （“至少保留一个账号管理员”在同一事务内检查，CLI 无绕过）；
-  - revision 操作：`x/revisionops`（规范化、草稿、发布及 `ExpectedPublished` 乐观并发、
+  - revision 操作：`x/revisionops`（规范化、草稿、发布只允许快进（草稿须基于当前已发布）
+    及 `ExpectedPublished` 乐观并发、
     回滚、diff 统一重编码、审计）；
   - 草稿合并：`x/configedit.Apply`（类型化分区写入 base，整体校验，tokenHash 保留规则）。
 - **管理 API**：`x/admin`（会话 Cookie + CSRF、登录并发闸门、改密吊销会话）+
@@ -68,7 +69,8 @@ MCP SDK、YAML、gqlgen 都在 `x/` 或 `cmd/`。新增数据库只改 `x/provid
   未设置即 null）。
 - **控制台**：`web/admin`（Vue 3 + Naive UI + urql + vue-i18n zh-CN/en），通过
   `x/admin/ui` go:embed。工作区状态在 `src/stores/workspace.ts`（变更检测、按属性
-  三方合并 rebase、实体/角色引用维护），页面只调用其中的操作。
+  三方合并 rebase（`src/lib/merge.ts`，冲突须逐项解决后才能发布）、实体/角色引用维护），
+  页面只调用其中的操作；`/admin/events`（SSE）推送新发布。
 
 ## 配置规则的单一来源
 

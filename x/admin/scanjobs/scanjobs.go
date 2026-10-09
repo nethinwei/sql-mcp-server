@@ -8,6 +8,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -166,7 +169,7 @@ func (p *Pool[T]) runJob(j *job[T]) {
 	}
 	j.State, j.cancel = Running, cancel
 	p.mu.Unlock()
-	result, err := j.run(ctx)
+	result, err := runSafely(ctx, j)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	switch {
@@ -178,6 +181,19 @@ func (p *Pool[T]) runJob(j *job[T]) {
 		j.Result = result
 		p.finish(j, Done, "")
 	}
+}
+
+// runSafely runs a job and turns a panic (a driver bug, say) into its
+// failure: a job runs on a pool goroutine, and a panic there would stop the
+// whole process.
+func runSafely[T any](ctx context.Context, j *job[T]) (result T, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("scan job panicked", "job", j.Label, "panic", r, "stack", string(debug.Stack()))
+			err = fmt.Errorf("internal error: %v", r)
+		}
+	}()
+	return j.run(ctx)
 }
 
 // finish records the outcome; p.mu is held.

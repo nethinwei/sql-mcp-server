@@ -109,7 +109,10 @@ func buildHTTPMux(mcpHandler, metrics http.Handler, cfg HTTPConfig) *http.ServeM
 	mux.Handle("/readyz/snapshot", staleMarker(cfg.SnapshotStale, readinessHandler(cfg.SnapshotReady)))
 	mux.Handle("/readyz/db", readinessHandler(cfg.DatabaseReady))
 	if cfg.Admin != nil {
-		mux.Handle("/admin/", limitBody(cfg.MaxBodyBytes, cfg.Admin))
+		admin := limitBody(cfg.MaxBodyBytes, cfg.Admin)
+		mux.Handle("/admin/", admin)
+		// /admin itself too: the console redirects it under its gateway prefix.
+		mux.Handle("/admin", admin)
 	}
 	if metrics != nil {
 		mux.Handle("/metrics", metrics)

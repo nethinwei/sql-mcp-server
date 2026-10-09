@@ -128,3 +128,59 @@ func TestRawDiffComparesBytes(t *testing.T) {
 		t.Fatalf("raw diff = %q, %v", diff, err)
 	}
 }
+
+// racingStore publishes another draft just before the first Publish it
+// serves, as a concurrent administrator would after the service's check.
+type racingStore struct {
+	revision.Store
+	other int64
+	raced bool
+}
+
+func (r *racingStore) Publish(ctx context.Context, id, expected int64, m revision.Meta) (revision.Revision, error) {
+	if !r.raced {
+		r.raced = true
+		if _, err := r.Store.Publish(ctx, r.other, expected, m); err != nil {
+			return revision.Revision{}, err
+		}
+	}
+	return r.Store.Publish(ctx, id, expected, m)
+}
+
+func TestPublishReportsAConcurrentPublishAsAConflict(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, published := newService(t)
+	a, _, _ := s.Draft(ctx, DraftRequest{Payload: payload(t, "200")})
+	b, _, _ := s.Draft(ctx, DraftRequest{Payload: payload(t, "300")})
+	s.Store = &racingStore{Store: s.Store, other: b.ID}
+	expected := published.ID
+	_, err := s.Publish(ctx, PublishRequest{ID: a.ID, ExpectedPublished: &expected})
+	var conflict *ConflictError
+	if !errors.As(err, &conflict) || conflict.Published != b.ID {
+		t.Fatalf("publish racing another = %v, want a conflict naming revision %d", err, b.ID)
+	}
+}
+
+func TestPublishRequiresADraftBuiltOnThePublishedRevision(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, published := newService(t)
+	a, _, _ := s.Draft(ctx, DraftRequest{Payload: payload(t, "200")})
+	stale, _, _ := s.Draft(ctx, DraftRequest{Payload: payload(t, "300")})
+	if _, err := s.Publish(ctx, PublishRequest{ID: a.ID}); err != nil {
+		t.Fatal(err)
+	}
+	// Without ExpectedPublished too (the CLI): it would undo a.
+	_, err := s.Publish(ctx, PublishRequest{ID: stale.ID})
+	var conflict *ConflictError
+	if !errors.As(err, &conflict) || conflict.Expected != published.ID || conflict.Published != a.ID {
+		t.Fatalf("publish of a draft built on revision %d = %v", published.ID, err)
+	}
+	// A draft built on a draft of the published revision builds on it.
+	b, _, _ := s.Draft(ctx, DraftRequest{Payload: payload(t, "400"), Parent: a.ID})
+	c, _, _ := s.Draft(ctx, DraftRequest{Payload: payload(t, "500"), Parent: b.ID})
+	if _, err := s.Publish(ctx, PublishRequest{ID: c.ID}); err != nil {
+		t.Fatalf("publish of a draft built on a draft of the published revision: %v", err)
+	}
+}

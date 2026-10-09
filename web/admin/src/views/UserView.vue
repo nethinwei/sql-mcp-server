@@ -14,6 +14,7 @@ import { simulationRoute } from '@/lib/simulation'
 import { useWorkspace } from '@/stores/workspace'
 import { run } from '@/api/client'
 import { GenerateUserTokenMutation } from '@/api/ops'
+import McpConnect from '@/components/McpConnect.vue'
 import { can } from '@/api/session'
 import type { Action, GrantInput } from '@/gql/graphql'
 
@@ -143,6 +144,7 @@ onMounted(() => { if (route.query.token && editable.value && tokenState.value ==
           </n-button>
         </n-space>
         <secret-once v-if="newToken" :secret="newToken" :note="t('users.tokenOnce')" />
+        <mcp-connect v-if="newToken" :token="newToken" />
       </n-space>
     </n-card>
 

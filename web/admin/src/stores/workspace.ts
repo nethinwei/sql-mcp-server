@@ -3,6 +3,7 @@ import { run } from '@/api/client'
 import { PublishedQuery, RevisionHashQuery, WorkspaceQuery } from '@/api/ops'
 import { EntityIndex, entityId } from '@/lib/entityRefs'
 import { filterFields, type Filter } from '@/lib/filter'
+import { getAt, merge, same, setAt, type Path } from '@/lib/merge'
 import type {
   Action,
   FieldInput,
@@ -49,6 +50,23 @@ export interface Change {
   paths?: string[]
 }
 
+/**
+ * A value this workspace and a newer published revision changed differently
+ * (see lib/merge). The workspace keeps its value meanwhile; it cannot be
+ * saved or published until every conflict is resolved.
+ */
+export interface Conflict {
+  kind: Change['kind']
+  /** The item, as Change names it. */
+  name: string
+  /** Where in the item; empty for the whole item. */
+  path: Path
+  mine: unknown
+  /** The value in revision; undefined when removed there. */
+  theirs: unknown
+  revision: string
+}
+
 interface State extends Sections {
   baseId: string | null
   /** The published revision when the workspace was loaded or rebased. */
@@ -60,6 +78,7 @@ interface State extends Sections {
   baseline: string
   /** The draft last saved from this workspace and the content it holds. */
   savedDraft: { id: string; content: string } | null
+  conflicts: Conflict[]
   loading: boolean
 }
 
@@ -138,56 +157,51 @@ export function canonical(value: unknown): string {
   return JSON.stringify(value, (key, v: unknown) => (optionalText.has(key) && (v === '' || v === null) ? undefined : v))
 }
 
-type Item = Record<string, unknown>
-
-/**
- * Three-way merge of one item by top-level property: local changes apply on
- * top of next; a property both sides changed differently is a conflict and
- * keeps the local value. Additions and removals take the local side.
- */
-export function merge3(base: unknown, local: unknown, next: unknown): { value: unknown; conflict: boolean } {
-  if (base === undefined || local === undefined || next === undefined) {
-    const theirs = canonical(next)
-    return { value: local, conflict: theirs !== canonical(base) && theirs !== canonical(local) }
-  }
-  const [b, l, n] = [base as Item, local as Item, next as Item]
-  const value: Item = { ...n }
-  let conflict = false
-  for (const key of new Set([...Object.keys(b), ...Object.keys(l)])) {
-    if (canonical({ [key]: l[key] }) === canonical({ [key]: b[key] })) continue
-    if (canonical({ [key]: n[key] }) !== canonical({ [key]: b[key] }) &&
-      canonical({ [key]: n[key] }) !== canonical({ [key]: l[key] })) conflict = true
-    if (l[key] === undefined) delete value[key]
-    else value[key] = l[key]
-  }
-  return { value, conflict }
-}
-
-const isObject = (v: unknown): v is Item => typeof v === 'object' && v !== null && !Array.isArray(v)
-
-/**
- * Three-way merge of nested settings, field by field: a field changed on one
- * side takes that side; changed on both to different values it keeps the
- * local value and is reported by path. Arrays and scalars are single fields.
- */
-export function mergeDeep(base: unknown, local: unknown, next: unknown, path = ''): { value: unknown; conflicts: string[] } {
-  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
-  if (same(local, base)) return { value: next, conflicts: [] }
-  if (same(next, base) || same(next, local)) return { value: local, conflicts: [] }
-  if (!isObject(base) || !isObject(local) || !isObject(next)) return { value: local, conflicts: [path || '.'] }
-  const value: Item = {}
-  const conflicts: string[] = []
-  for (const key of new Set([...Object.keys(base), ...Object.keys(local), ...Object.keys(next)])) {
-    const m = mergeDeep(base[key], local[key], next[key], path ? `${path}.${key}` : key)
-    if (m.value !== undefined) value[key] = m.value
-    conflicts.push(...m.conflicts)
-  }
-  return { value, conflicts }
-}
-
 /** How a change names an item: an entity by its ID, others by name. */
 function keyOf(kind: Change['kind'], item: { name: string }): string {
   return kind === 'entity' ? entityId(item) : item.name
+}
+
+/** Whether conflict c is on the value of outer's path or one under it. */
+function within(c: Conflict, outer: Conflict): boolean {
+  return c.kind === outer.kind && c.name === outer.name && c.path.length >= outer.path.length &&
+    same(c.path.slice(0, outer.path.length), outer.path)
+}
+
+/**
+ * The part of path that still names one value in each of items: a path
+ * through a list element that has since become a group (a second grant on
+ * one entity, say) stops at the group, which the merge treats as a whole.
+ */
+function addressable(path: Path, ...items: unknown[]): Path {
+  for (let i = 0; i < path.length - 1; i++) {
+    if (typeof path[i] !== 'string' && items.some((item) => Array.isArray(getAt(item, path.slice(0, i + 1))))) {
+      return path.slice(0, i + 1)
+    }
+  }
+  return path
+}
+
+/**
+ * A conflict as it stands in the workspace s, against base, the newest
+ * published revision: its path (see addressable), the workspace's value and
+ * the published one; null when there is nothing left to choose, because the
+ * workspace holds the published value already (for instance typed in by
+ * hand) or has removed what holds it, the item or a list element or object
+ * on the way (a removal made on the newer revision overwrites nothing unseen,
+ * and taking theirs would rebuild it without its name or key). Values are compared in place, so unset optional text
+ * equals empty text.
+ */
+function view(s: Sections, base: Sections, c: Conflict): Conflict | null {
+  const [item, theirsItem] = [pick(s, c), pick(base, c)]
+  const path = addressable(c.path, item, theirsItem)
+  // The workspace removed what holds the value (the item, a list element or
+  // an object on the way).
+  for (let i = 0; i < path.length; i++) if (getAt(item, path.slice(0, i)) === undefined) return null
+  const [mine, theirs] = [getAt(item, path), getAt(theirsItem, path)]
+  const last = path[path.length - 1]
+  const settled = typeof last === 'string' ? same({ [last]: mine }, { [last]: theirs }) : same(mine, theirs)
+  return settled ? null : { ...c, path, mine, theirs }
 }
 
 /** The item a change refers to in sections, or undefined when absent. */
@@ -277,6 +291,7 @@ export const useWorkspace = defineStore('workspace', {
     baseTokens: {},
     baseline: '',
     savedDraft: null,
+    conflicts: [],
     loading: false,
     entities: [],
     roles: [],
@@ -300,14 +315,36 @@ export const useWorkspace = defineStore('workspace', {
     savedDraftId(state): string | null {
       return this.dirty && state.savedDraft?.content === canonical(sections(state)) ? state.savedDraft.id : null
     },
+    /**
+     * The workspace as a draft of its base revision, holding only the
+     * sections it changed: the server keeps the others from the base, so
+     * requests stay small (each check of the review page sends one). A removed
+     * settings section is sent as null.
+     */
     draft(state): DraftInput {
-      return {
-        base: state.baseId ?? '',
-        entities: state.entities,
-        roles: state.roles,
-        users: state.users,
-        settings: state.settings,
+      const draft: DraftInput = { base: state.baseId ?? '' }
+      if (!state.baseline) return { ...draft, entities: state.entities, roles: state.roles, users: state.users, settings: state.settings }
+      const base = JSON.parse(state.baseline) as Sections
+      if (canonical(base.entities) !== canonical(state.entities)) draft.entities = state.entities
+      if (canonical(base.roles) !== canonical(state.roles)) draft.roles = state.roles
+      if (canonical(base.users) !== canonical(state.users)) draft.users = state.users
+      const settings: Record<string, unknown> = {}
+      for (const key of new Set([...Object.keys(base.settings), ...Object.keys(state.settings)])) {
+        if (canonical(base.settings[key]) !== canonical(state.settings[key])) settings[key] = state.settings[key] ?? null
       }
+      if (Object.keys(settings).length) draft.settings = settings
+      return draft
+    },
+    /**
+     * The conflicts still to resolve: those whose value the workspace does
+     * not already hold from the newer revision. mine is the workspace's
+     * current value, edits since the conflict arose included: it is what
+     * keeping mine keeps.
+     */
+    openConflicts(state): Conflict[] {
+      const s = sections(state)
+      const base = JSON.parse(state.baseline || '{}') as Sections
+      return state.conflicts.flatMap((c) => view(s, base, c) ?? [])
     },
     /** The entities by ID and by reference (see EntityIndex). */
     entityIndex: (state) => new EntityIndex(state.entities),
@@ -370,12 +407,11 @@ export const useWorkspace = defineStore('workspace', {
 
     /**
      * Moves the workspace onto revision id and re-applies the unsaved
-     * changes with a three-way merge per item property (description, grants,
-     * fields, ...). Returns the changes where id changed a property this
-     * workspace changed differently: the local value wins, and reverting the
-     * item takes id's version.
+     * changes with a three-way merge (see lib/merge). Returns the conflicts
+     * found: values id changed that this workspace changed differently,
+     * which keep the local value until resolved (see resolveConflict).
      */
-    async rebase(id: string, from?: string): Promise<Change[]> {
+    async rebase(id: string, from?: string): Promise<Conflict[]> {
       this.loading = true
       try {
         return this.rebaseOnto(await run(WorkspaceQuery, { id }), id, from)
@@ -389,33 +425,72 @@ export const useWorkspace = defineStore('workspace', {
      * local edits are measured from: after publishing a snapshot, only edits
      * made since it, including undoing part of it, are re-applied.
      */
-    rebaseOnto(data: WorkspaceResult, id: string, from?: string): Change[] {
+    rebaseOnto(data: WorkspaceResult, id: string, from?: string): Conflict[] {
       const oldBase = JSON.parse(from ?? this.baseline) as Sections
       const local = JSON.parse(JSON.stringify(sections(this.$state))) as Sections
       const changes = changesBetween(oldBase, local)
+      const pending = this.conflicts
       this.apply(data, id)
       const newBase = JSON.parse(this.baseline) as Sections
-      const conflicts: Change[] = []
+      const found: Conflict[] = []
       for (const c of changes) {
-        if (c.kind === 'settings') {
-          const m = mergeDeep(oldBase.settings, local.settings, newBase.settings)
-          if (m.conflicts.length) conflicts.push({ ...c, paths: m.conflicts })
-          this.settings = (m.value ?? {}) as Record<string, unknown>
-          continue
-        }
-        const merged = merge3(pick(oldBase, c), pick(local, c), pick(newBase, c))
-        if (merged.conflict) conflicts.push(c)
-        const mine = merged.value as never
-        if (c.type === 'removed') {
-          if (c.kind === 'entity') this.removeEntity(c.name)
-          else if (c.kind === 'role') this.removeRole(c.name)
-          else this.removeUser(c.name)
-        } else if (c.kind === 'entity') this.upsertEntity(mine)
-        else if (c.kind === 'role') this.upsertRole(mine)
-        else this.upsertUser(mine)
+        const merged = merge(pick(oldBase, c), pick(local, c), pick(newBase, c))
+        found.push(...merged.conflicts.map((v) => ({ kind: c.kind, name: c.name, ...v, revision: id })))
+        if (c.kind === 'settings') this.settings = (merged.value ?? {}) as Record<string, unknown>
+        else if (merged.value === undefined) this.removeItem(c.kind, c.name)
+        else this.upsertItem(c.kind, merged.value as never, c.name)
       }
+      // Conflicts not resolved before stand against the newest revision's
+      // value, unless it now equals the local one.
+      const now = sections(this.$state)
+      // A new conflict replaces those under it (a removed item replaces the
+      // conflicts on its values); one under an older, still unresolved
+      // conflict is left to it, which now stands against the newest value of
+      // its whole path.
+      const carried = pending.flatMap((p) => {
+        if (found.some((f) => within(p, f))) return []
+        return view(now, newBase, { ...p, revision: id }) ?? []
+      })
+      const added = found.filter((f) => !carried.some((p) => within(f, p)))
+      this.conflicts = [...carried, ...added]
       this.persist()
-      return conflicts
+      return added
+    },
+
+    /** Adds or replaces an item a change names. */
+    upsertItem(kind: Change['kind'], item: never, previous: string) {
+      if (kind === 'entity') this.upsertEntity(item, previous)
+      else if (kind === 'role') this.upsertRole(item, previous)
+      else if (kind === 'user') this.upsertUser(item, previous)
+    },
+
+    /** Removes an item a change names. */
+    removeItem(kind: Change['kind'], name: string) {
+      if (kind === 'entity') this.removeEntity(name)
+      else if (kind === 'role') this.removeRole(name)
+      else if (kind === 'user') this.removeUser(name)
+    },
+
+    /**
+     * Resolves a conflict: mine keeps the workspace's current value, theirs
+     * takes the value of the newer revision (removing it when removed there).
+     */
+    resolveConflict(conflict: Conflict, choice: 'mine' | 'theirs') {
+      if (choice === 'theirs') {
+        if (conflict.kind === 'settings') {
+          this.settings = (setAt(this.settings, conflict.path, conflict.theirs) ?? {}) as Record<string, unknown>
+        } else {
+          const item = setAt(pick(sections(this.$state), conflict), conflict.path, conflict.theirs)
+          if (item === undefined) this.removeItem(conflict.kind, conflict.name)
+          else this.upsertItem(conflict.kind, item as never, conflict.name)
+        }
+      }
+      // Its choice decides the values under it too, and what now matches the
+      // newer revision needs no choice.
+      const now = sections(this.$state)
+      const base = JSON.parse(this.baseline) as Sections
+      this.conflicts = this.conflicts.flatMap((c) => (within(c, conflict) ? [] : view(now, base, c) ?? []))
+      this.persist()
     },
 
     /** Replaces the workspace with a loaded revision as the new baseline. */
@@ -431,6 +506,7 @@ export const useWorkspace = defineStore('workspace', {
       Object.assign(this, revisionSections(rev))
       this.baseline = JSON.stringify(sections(this.$state))
       this.savedDraft = null
+      this.conflicts = []
       this.persist()
     },
 
@@ -465,7 +541,7 @@ export const useWorkspace = defineStore('workspace', {
      * revision the workspace was moved onto and the conflicting changes, or
      * null when the base is current.
      */
-    async verifyBase(): Promise<{ id: string; conflicts: Change[] } | null> {
+    async verifyBase(): Promise<{ id: string; conflicts: Conflict[] } | null> {
       if (!this.baseId) return null
       const { revision } = await run(RevisionHashQuery, { id: this.baseId })
       if (revision?.contentHash === this.baseHash) {
@@ -511,6 +587,7 @@ export const useWorkspace = defineStore('workspace', {
     discard() {
       if (!this.baseline) return
       this.$patch((state) => Object.assign(state, JSON.parse(this.baseline) as Sections))
+      this.conflicts = []
       this.persist()
     },
 
@@ -522,6 +599,8 @@ export const useWorkspace = defineStore('workspace', {
     revert(change: Pick<Change, 'kind' | 'name'>) {
       if (!this.baseline) return
       const base = JSON.parse(this.baseline) as Sections
+      // The baseline holds the newer revision's values: its side of conflicts.
+      this.conflicts = this.conflicts.filter((c) => c.kind !== change.kind || c.name !== change.name)
       if (change.kind === 'settings') return this.setSettings(base.settings)
       const restore = <T extends { name: string }>(items: T[], baseItems: T[]) => {
         const original = baseItems.find((x) => keyOf(change.kind, x) === change.name)

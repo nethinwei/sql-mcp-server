@@ -61,9 +61,10 @@ func (e Estimate) Check(ctx context.Context, c codegen.Compiled) (Decision, erro
 	if c.Kind != "" && c.Kind != codegen.KindRead && c.Kind != codegen.KindAggregate {
 		return Decision{Allow: true}, nil
 	}
-	plan, err := e.explainPlan(ctx, c)
-	score := ScorePlan(plan)
 	th := e.Threshold
+	plan, err := e.explainPlan(ctx, c)
+	plan = smallTable(plan, th)
+	score := ScorePlan(plan)
 	deny := func(soft bool) (Decision, error) {
 		return Decision{
 			Allow: false, Soft: soft,
@@ -73,6 +74,16 @@ func (e Estimate) Check(ctx context.Context, c codegen.Compiled) (Decision, erro
 		}, nil
 	}
 	return e.evaluatePlan(plan, err, score, th, deny)
+}
+
+// smallTable treats a full scan of at most th.FullScanMaxRows estimated rows
+// as a sequential scan: reading a lookup table whole is cheap, and rejecting
+// it would refuse queries on every small table.
+func smallTable(plan Plan, th Threshold) Plan {
+	if plan.ScanType == ScanFull && th.FullScanMaxRows > 0 && plan.EstimatedRows <= th.FullScanMaxRows {
+		plan.ScanType = ScanSeq
+	}
+	return plan
 }
 
 func (e Estimate) explainPlan(ctx context.Context, c codegen.Compiled) (Plan, error) {

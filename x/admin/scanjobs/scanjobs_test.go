@@ -97,3 +97,18 @@ func TestPoolForgetsFinishedJobs(t *testing.T) {
 		t.Fatal("a job finished longer ago than Keep must expire")
 	}
 }
+
+// A job that panics fails; the worker and the process carry on.
+func TestPoolSurvivesAPanickingJob(t *testing.T) {
+	t.Parallel()
+	p := New[int](Options{Workers: 1})
+	defer p.Close()
+	bad, _ := p.Start("bad", func(context.Context) (int, error) { panic("driver bug") })
+	if j := waitState(t, p, bad.ID, Failed); j.Err != "internal error: driver bug" {
+		t.Fatalf("panicking job = %+v", j)
+	}
+	good, _ := p.Start("good", func(context.Context) (int, error) { return 7, nil })
+	if j := waitState(t, p, good.ID, Done); j.Result != 7 {
+		t.Fatalf("the next job on the same worker = %+v", j)
+	}
+}

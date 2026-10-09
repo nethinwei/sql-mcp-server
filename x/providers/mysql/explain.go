@@ -52,8 +52,11 @@ func ParseExplain(b []byte) (cost.Plan, error) {
 		total, _ := info["query_cost"].(string)
 		plan.TotalCost, _ = strconv.ParseFloat(strings.TrimSpace(total), 64)
 	}
-	tables := 0
+	tables, readsNothing := 0, false
 	eachJSONObject(root.QueryBlock, func(node map[string]any) {
+		if message, ok := node["message"].(string); ok && noTableRead(message) {
+			readsNothing = true
+		}
 		if sort, _ := node["using_filesort"].(bool); sort {
 			plan.HasSort = true
 		}
@@ -74,7 +77,26 @@ func ParseExplain(b []byte) (cost.Plan, error) {
 			}
 		}
 	})
+	if tables == 0 && readsNothing {
+		// The optimizer settled the query without reading a table.
+		plan.ScanType, plan.EstimatedRows = cost.ScanPoint, 0
+	}
 	return plan, nil
+}
+
+// noTableRead reports an EXPLAIN message saying the optimizer answers the
+// query without reading table rows: a condition no row can meet, a constant
+// table without the row, or MIN/MAX/COUNT read from an index or metadata.
+func noTableRead(message string) bool {
+	for _, m := range []string{
+		"Impossible WHERE", "Impossible HAVING", "no matching row in const table", "No matching min/max row",
+		"Select tables optimized away", "Zero limit", "No tables used", "Impossible ON condition",
+	} {
+		if strings.HasPrefix(message, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // eachJSONObject calls fn for v and every object nested in it.

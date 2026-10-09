@@ -1,8 +1,9 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { restoreSession, session } from '@/api/session'
+import { adminBase } from '@/api/base'
 
 export const router = createRouter({
-  history: createWebHistory('/admin/'),
+  history: createWebHistory(adminBase),
   routes: [
     { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue'), meta: { public: true } },
     {

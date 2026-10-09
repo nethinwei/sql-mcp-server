@@ -69,6 +69,15 @@ quickstart 和 attestation 验证脚本由本地 Make target 与 GitHub Actions 
 - ModelScope smoke：读取根目录 `mcp_config.json`，启动真实 PostgreSQL 和 stdio
   子进程，验证展示配置及 allow/deny 路径。
 - 并发测试：CI 默认使用 race detector；MCP e2e 包含 goleak 检查。
+- 多管理员发布的边界与压力：`x/revisionops/revisionopstest` 在内存库、SQLite（单元
+  测试）和 PostgreSQL/MySQL/OceanBase（配置库集成测试）上运行同一套用例——多人并发
+  “读取 → 修改 → 发布，冲突则变基重试”不丢任何修改且历史线性、基于同一版本的草稿
+  并发发布只有一个成功、发布与回滚交错、草稿链、回滚后的旧草稿、缺失父版本等；
+  `x/admin/events_test.go` 压测发布推送（大量订阅与退订抖动、慢订阅者、会话结束）。
+- 控制台合并的性质测试：`web/admin/src/lib/merge.fuzz.test.ts` 用带种子的随机编辑
+  逐叶子校验合并规则（单方修改保留、双方不同即冲突且不漏报、两侧交换对称、采用
+  对方后取值一致），`workspace.test.ts` 随机生成“编辑 / 他人发布 / 变基 / 选择”
+  序列；失败信息给出可复现的种子。
 
 ## 安全 corpus 与 fuzz
 

@@ -133,13 +133,16 @@ type AnalyzeConfig struct {
 
 // Threshold configures the gate. SoftScore/HardScore are 0-100 cutoffs.
 type Threshold struct {
-	Datasource                string
-	DialectName               string
-	SoftScore                 int
-	HardScore                 int
-	MaxRows                   int64
-	MaxBytes                  int64
-	RejectFullScan            bool
+	Datasource     string
+	DialectName    string
+	SoftScore      int
+	HardScore      int
+	MaxRows        int64
+	MaxBytes       int64
+	RejectFullScan bool
+	// FullScanMaxRows: a full scan estimated at no more than this many rows
+	// is a small table's, scored and admitted as a sequential scan.
+	FullScanMaxRows           int64
 	WhitelistPKPoint          bool
 	RequirePKForWrite         bool // reject UPDATE/DELETE that is not a PK point write
 	RequireAggregatePredicate bool

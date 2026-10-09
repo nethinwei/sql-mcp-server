@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { merge3, mergeDeep, useWorkspace } from './workspace'
+import { useWorkspace } from './workspace'
 import type { WorkspaceQuery } from '@/gql/graphql'
 
 function seeded() {
@@ -70,22 +70,6 @@ describe('rebase', () => {
     expect(ws.role('analyst')!.description).toBe('mine')
     expect(ws.role('analyst')!.grants![0].actions).toEqual(['READ', 'AGGREGATE'])
     expect(ws.changes.map((c) => `${c.kind}:${c.name}`).sort()).toEqual(['entity:default.refunds', 'role:analyst'])
-  })
-})
-
-describe('merge3', () => {
-  it('reports a property both sides changed differently and keeps the local value', () => {
-    const base = { name: 'r', description: 'a', grants: [1] }
-    expect(merge3(base, { ...base, description: 'mine' }, { ...base, description: 'theirs', grants: [2] }))
-      .toEqual({ value: { name: 'r', description: 'mine', grants: [2] }, conflict: true })
-    expect(merge3(base, { ...base, description: 'same' }, { ...base, description: 'same' }).conflict).toBe(false)
-  })
-
-  it('applies a local property removal and treats a concurrent removal as a conflict', () => {
-    const base = { name: 'r', description: 'a' }
-    expect(merge3(base, { name: 'r' }, { ...base, extra: 1 })).toEqual({ value: { name: 'r', extra: 1 }, conflict: false })
-    expect(merge3(base, { ...base, description: 'b' }, undefined).conflict).toBe(true)
-    expect(merge3(undefined, { name: 'r' }, undefined)).toEqual({ value: { name: 'r' }, conflict: false })
   })
 })
 
@@ -184,23 +168,16 @@ describe('workspace', () => {
     expect(ws.user('alice')!.roles).toEqual([])
   })
 
-  it('produces a draft against the base revision', () => {
+  it('produces a draft of the base revision holding only the changed sections', () => {
     const ws = seeded()
-    expect(ws.draft.base).toBe('2')
-    expect(ws.draft.entities).toHaveLength(2)
-  })
-})
-
-describe('mergeDeep', () => {
-  it('merges settings field by field and reports fields changed on both sides', () => {
-    const base = { cost: { maxRows: 10, softScore: 5 }, cache: { enabled: false } }
-    const local = { cost: { maxRows: 20, softScore: 5 }, cache: { enabled: true } }
-    const next = { cost: { maxRows: 10, softScore: 8 }, cache: { enabled: false, ttl: '1m' }, audit: { enabled: true } }
-    expect(mergeDeep(base, local, next)).toEqual({
-      value: { cost: { maxRows: 20, softScore: 8 }, cache: { enabled: true, ttl: '1m' }, audit: { enabled: true } },
-      conflicts: [],
-    })
-    expect(mergeDeep(base, local, { ...next, cost: { maxRows: 30, softScore: 5 } }).conflicts).toEqual(['cost.maxRows'])
+    expect(ws.draft).toEqual({ base: '2' })
+    ws.role('analyst')!.description = 'changed'
+    expect(Object.keys(ws.draft).sort()).toEqual(['base', 'roles'])
+    ws.setSettings({ budget: { maxRows: 5 } })
+    // A removed settings section is sent as null, a new one as it is.
+    expect(ws.draft.settings).toEqual({ cost: null, budget: { maxRows: 5 } })
+    ws.upsertEntity({ name: 'refunds' })
+    expect(ws.draft.entities).toHaveLength(3)
   })
 })
 
@@ -391,5 +368,200 @@ describe('importing next to same-named entities', () => {
     const named = (role: string) => ws.entityIndex.idOf(ws.role(role)!.grants![0].entity)
     expect(named('new')).toBe('archive.orders')
     expect(named('old')).toBe('main.archive.orders')
+  })
+})
+
+describe('conflicts', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  function editedRole(theirs: string) {
+    const ws = useWorkspace()
+    ws.apply(loaded('3', { entities: ['orders'], roles: [{ name: 'analyst', grants: [] }], users: [] }), '3')
+    ws.role('analyst')!.description = 'mine'
+    const next = loaded('4', { entities: ['orders'], roles: [{ name: 'analyst', grants: [] }], users: [] })
+    next.revision!.config.roles[0].description = theirs
+    return { ws, found: ws.rebaseOnto(next, '4') }
+  }
+
+  it('records a value both sides changed, keeping mine until resolved', () => {
+    const { ws, found } = editedRole('theirs')
+    expect(found).toEqual([{ kind: 'role', name: 'analyst', path: ['description'], mine: 'mine', theirs: 'theirs', revision: '4' }])
+    expect(ws.role('analyst')!.description).toBe('mine')
+    expect(ws.conflicts).toHaveLength(1)
+    ws.resolveConflict(ws.conflicts[0], 'theirs')
+    expect(ws.role('analyst')!.description).toBe('theirs')
+    expect(ws.conflicts).toEqual([])
+  })
+
+  it('keeps mine when chosen, and needs no choice when both made the same change', () => {
+    const { ws } = editedRole('theirs')
+    ws.resolveConflict(ws.conflicts[0], 'mine')
+    expect(ws.role('analyst')!.description).toBe('mine')
+    expect(editedRole('mine').found).toEqual([])
+  })
+
+  it('merges different fields of one entity, and conflicts on the same one', () => {
+    const ws = useWorkspace()
+    ws.apply(loaded('3', { entities: ['orders'], roles: [], users: [] }), '3')
+    ws.entity('default.orders')!.fields = [{ name: 'id', exclude: false, mask: 'secret' }]
+    const next = loaded('4', { entities: ['orders'], roles: [], users: [] })
+    const theirs = next.revision!.config.entities[0] as unknown as { fields: object[] }
+    theirs.fields = [{ name: 'id', exclude: true, mask: 'phone' }, { name: 'email', exclude: false }]
+    const found = ws.rebaseOnto(next, '4')
+    // Both masked id differently; only theirs hid it and added email.
+    expect(found.map((c) => [c.path, c.mine, c.theirs])).toEqual([[['fields', { element: 'id' }, 'mask'], 'secret', 'phone']])
+    expect(ws.entity('default.orders')!.fields).toEqual([
+      { name: 'id', exclude: true, mask: 'secret' }, { name: 'email', exclude: false },
+    ])
+  })
+
+  it('keeps unresolved conflicts across rebases, against the newest revision', () => {
+    const { ws } = editedRole('theirs')
+    const newer = loaded('5', { entities: ['orders'], roles: [{ name: 'analyst', grants: [] }], users: [] })
+    newer.revision!.config.roles[0].description = 'newer'
+    ws.rebaseOnto(newer, '5')
+    expect(ws.conflicts.map((c) => [c.theirs, c.revision])).toEqual([['newer', '5']])
+  })
+})
+
+describe('rebase sequences (random)', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  // A seeded generator, so a failure names the seed that reproduces it.
+  const rng = (seed: number) => () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0
+    return seed / 2 ** 32
+  }
+
+  it('ends every sequence of edits, publishes and choices with the chosen values', () => {
+    const texts = ['a', 'b', 'c']
+    for (let seed = 1; seed <= 200; seed++) {
+      setActivePinia(createPinia())
+      const r = rng(seed)
+      const pick = <T>(xs: T[]) => xs[Math.floor(r() * xs.length)]
+      const ws = useWorkspace()
+      const revision = (id: number, description: string) => {
+        const data = loaded(String(id), { entities: ['orders'], roles: [{ name: 'analyst', grants: [] }], users: [] })
+        data.revision!.config.roles[0].description = description
+        return data
+      }
+      let published = pick(texts)
+      ws.apply(revision(1, published), '1')
+      for (let id = 2; id <= 6; id++) {
+        if (r() < 0.7) ws.role('analyst')!.description = pick(texts)
+        const mine = ws.role('analyst')!.description
+        published = r() < 0.7 ? pick(texts) : published
+        ws.rebaseOnto(revision(id, published), String(id))
+        for (const c of [...ws.conflicts]) {
+          const choice = r() < 0.5 ? 'mine' : 'theirs'
+          ws.resolveConflict(c, choice)
+          expect(ws.role('analyst')!.description, `seed ${seed}`).toBe(choice === 'mine' ? mine : published)
+        }
+        expect(ws.conflicts, `seed ${seed}`).toEqual([])
+        expect(ws.baseId).toBe(String(id))
+      }
+    }
+  })
+})
+
+describe('conflicts across rebases', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  function described(id: string, description: string | null) {
+    const roles = description === null ? [] : [{ name: 'analyst', grants: [] }]
+    const data = loaded(id, { entities: ['orders'], roles, users: [] })
+    if (description !== null) data.revision!.config.roles[0].description = description
+    return data
+  }
+
+  it('lets a removal of the whole item replace the conflicts on its values', () => {
+    const ws = useWorkspace()
+    ws.apply(described('3', 'base'), '3')
+    ws.role('analyst')!.description = 'mine'
+    ws.rebaseOnto(described('4', 'theirs'), '4')
+    expect(ws.openConflicts.map((c) => c.path)).toEqual([['description']])
+    // The newer revision removes the role: one conflict, on the whole role.
+    ws.rebaseOnto(described('5', null), '5')
+    expect(ws.openConflicts.map((c) => c.path)).toEqual([[]])
+    ws.resolveConflict(ws.openConflicts[0], 'theirs')
+    expect(ws.roles).toEqual([])
+    expect(ws.conflicts).toEqual([])
+  })
+
+  it('clears the conflicts under the one resolved', () => {
+    const ws = useWorkspace()
+    ws.apply(described('3', 'base'), '3')
+    ws.role('analyst')!.description = 'mine'
+    ws.rebaseOnto(described('4', 'theirs'), '4')
+    // A whole-item conflict and one on its value, as an older workspace may hold.
+    ws.conflicts.push({ kind: 'role', name: 'analyst', path: [], mine: ws.role('analyst'), theirs: undefined, revision: '4' })
+    ws.resolveConflict(ws.conflicts[1], 'theirs')
+    expect(ws.roles).toEqual([])
+    expect(ws.conflicts).toEqual([])
+  })
+
+  it('needs no choice once the value matches the newer revision, and stops blocking', () => {
+    const ws = useWorkspace()
+    ws.apply(described('3', 'base'), '3')
+    ws.role('analyst')!.description = 'mine'
+    ws.rebaseOnto(described('4', 'theirs'), '4')
+    expect(ws.openConflicts).toHaveLength(1)
+    ws.role('analyst')!.description = 'theirs'
+    expect(ws.openConflicts).toEqual([])
+    expect(ws.dirty).toBe(false)
+  })
+})
+
+describe('a whole-item conflict across rebases', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  it('is not dropped by a later conflict on one of its values, and taking theirs takes all of it', () => {
+    const ws = useWorkspace()
+    const revision = (id: string, roles: { description?: string, actions?: string[] }[]) => {
+      const data = loaded(id, {
+        entities: ['orders'],
+        roles: roles.map((r) => ({ name: 'analyst', grants: [{ entity: 'orders', actions: r.actions ?? ['READ'] }] })),
+        users: [],
+      })
+      roles.forEach((r, i) => { data.revision!.config.roles[i].description = r.description ?? '' })
+      return data
+    }
+    ws.apply(revision('3', []), '3')
+    // Both add the role, with different descriptions: one conflict on the whole role.
+    ws.upsertRole({ name: 'analyst', description: 'mine', grants: [{ entity: 'orders', actions: ['READ'] }] })
+    ws.rebaseOnto(revision('4', [{ description: 'theirs' }]), '4')
+    expect(ws.openConflicts.map((c) => c.path)).toEqual([[]])
+    // Both then change the grant's actions: still the one whole-role conflict.
+    ws.role('analyst')!.grants![0].actions = ['READ', 'CREATE']
+    ws.rebaseOnto(revision('5', [{ description: 'theirs', actions: ['READ', 'DELETE'] }]), '5')
+    expect(ws.openConflicts.map((c) => c.path)).toEqual([[]])
+    ws.resolveConflict(ws.openConflicts[0], 'theirs')
+    expect(ws.role('analyst')!.description).toBe('theirs')
+    expect(ws.role('analyst')!.grants![0].actions).toEqual(['READ', 'DELETE'])
+    expect(ws.openConflicts).toEqual([])
+  })
+})
+
+describe('the local side of a conflict', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  it('is the current value, after edits and across rebases, and is what keeping mine keeps', () => {
+    const ws = useWorkspace()
+    const revision = (id: string, description: string) => {
+      const data = loaded(id, { entities: ['orders'], roles: [{ name: 'analyst', grants: [] }], users: [] })
+      data.revision!.config.roles[0].description = description
+      return data
+    }
+    ws.apply(revision('3', 'base'), '3')
+    ws.role('analyst')!.description = 'mine'
+    ws.rebaseOnto(revision('4', 'theirs'), '4')
+    ws.role('analyst')!.description = 'edited'
+    expect(ws.openConflicts[0].mine).toBe('edited')
+    ws.role('analyst')!.description = 'edited again'
+    ws.rebaseOnto(revision('5', 'newer'), '5')
+    expect(ws.openConflicts.map((c) => [c.mine, c.theirs])).toEqual([['edited again', 'newer']])
+    ws.resolveConflict(ws.openConflicts[0], 'mine')
+    expect(ws.role('analyst')!.description).toBe('edited again')
+    expect(ws.conflicts).toEqual([])
   })
 })

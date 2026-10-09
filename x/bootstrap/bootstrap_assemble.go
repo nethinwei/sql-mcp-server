@@ -3,7 +3,9 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"maps"
+	"runtime/debug"
 	"slices"
 	"sync"
 	"time"
@@ -233,7 +235,7 @@ func reconcileAll(providers map[string]Provider, entities []entity.Entity) ([]en
 			scoped[n] = entities[i]
 		}
 		wg.Go(func() {
-			reconciled, err := reconcileEntities(ctx, name, prov, scoped)
+			reconciled, err := reconcileSafely(ctx, name, prov, scoped)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -463,4 +465,18 @@ func applyAssembledAppConfig(app *App, cfg *config.Config) {
 		TransactionCommitTimeout:   cfg.Transactions.CommitTimeout,
 		TransactionRollbackTimeout: cfg.Transactions.RollbackTimeout,
 	}
+}
+
+// reconcileSafely reconciles on its own goroutine, so a panic fails assembly
+// (and a reload keeps the old configuration) instead of stopping the process.
+func reconcileSafely(
+	ctx context.Context, name string, prov Provider, entities []entity.Entity,
+) (out []entity.Entity, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("reconciliation panicked", "datasource", name, "panic", r, "stack", string(debug.Stack()))
+			err = fmt.Errorf("internal error: %v", r)
+		}
+	}()
+	return reconcileEntities(ctx, name, prov, entities)
 }

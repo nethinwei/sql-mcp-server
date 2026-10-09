@@ -122,15 +122,50 @@ func (s Service) Publish(ctx context.Context, req PublishRequest) (revision.Revi
 	if req.ExpectedPublished != nil && *req.ExpectedPublished != current.ID {
 		return revision.Revision{}, &ConflictError{Expected: *req.ExpectedPublished, Published: current.ID}
 	}
+	// Publishing replaces the whole configuration, so a draft must build on
+	// what is published: one built on an earlier revision would undo every
+	// change published since (a non-fast-forward push). It is rebased first.
+	basedOn, err := s.basedOn(ctx, target)
+	if err != nil {
+		return revision.Revision{}, err
+	}
+	if current.ID != 0 && basedOn != current.ID {
+		return revision.Revision{}, &ConflictError{Expected: basedOn, Published: current.ID}
+	}
 	if err := bootstrap.CheckPublishable(current, target, req.RestartRequired); err != nil {
 		return revision.Revision{}, err
 	}
 	rev, err := s.Store.Publish(ctx, target.ID, current.ID, revision.Meta{Author: req.Author})
+	if errors.Is(err, revision.ErrConflict) {
+		// Another publish committed between the check above and the store's
+		// lock: report it like a stale ExpectedPublished.
+		if latest, lerr := s.published(ctx); lerr == nil {
+			return revision.Revision{}, &ConflictError{Expected: current.ID, Published: latest.ID}
+		}
+	}
 	if err != nil {
 		return revision.Revision{}, err
 	}
 	s.audit("publish", rev, req.Author)
 	return rev, nil
+}
+
+// basedOn is the revision a draft builds on: the nearest ancestor that is
+// not a draft (a draft may build on another draft); 0 when none is.
+func (s Service) basedOn(ctx context.Context, rev revision.Revision) (int64, error) {
+	seen := map[int64]bool{}
+	for id := rev.ParentID; id != 0 && !seen[id]; {
+		seen[id] = true
+		parent, err := s.Store.Get(ctx, id)
+		if err != nil {
+			return 0, err
+		}
+		if parent.State != revision.StateDraft {
+			return parent.ID, nil
+		}
+		id = parent.ParentID
+	}
+	return 0, nil
 }
 
 // RollbackRequest restores earlier published content as a new revision.

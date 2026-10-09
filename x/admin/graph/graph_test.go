@@ -387,6 +387,14 @@ func TestPublishRejectsStaleBase(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `"code":"CONFLICT"`) {
 		t.Fatalf("stale publish err = %v", err)
 	}
+	// Naming the new published revision does not help: the draft still
+	// builds on revision 1 and would undo it. Rebased, it publishes.
+	err = c.Post(publish, &pub, client.Var("id", draft.CreateDraft.ID), client.Var("e", first))
+	if err == nil || !strings.Contains(err.Error(), `"code":"CONFLICT"`) {
+		t.Fatalf("publish of a draft built on an older revision err = %v", err)
+	}
+	mustPost(t, c, `mutation($b: ID!) { createDraft(draft: {base: $b}, comment: "x") { id } }`, &draft,
+		client.Var("b", first))
 	mustPost(t, c, publish, &pub, client.Var("id", draft.CreateDraft.ID), client.Var("e", first))
 }
 
@@ -528,5 +536,31 @@ func TestCapabilitiesAndValidationWarnings(t *testing.T) {
 		client.Var("d", map[string]any{"base": "1"}))
 	if len(resp.Validate.Warnings) != 1 || !strings.Contains(resp.Validate.Warnings[0], `connection "ro"`) {
 		t.Fatalf("warnings = %q", resp.Validate.Warnings)
+	}
+}
+
+// A draft sends only the sections it changes; a settings section sent as
+// null is removed, and the others are kept from the base.
+func TestDraftKeepsUnsentSectionsAndRemovesNullSettings(t *testing.T) {
+	h := newHarness(t)
+	c := h.client(auth.PermAll)
+	var draft struct{ CreateDraft struct{ ID string } }
+	mustPost(t, c, `mutation($d: DraftInput!) { createDraft(draft: $d) { id } }`, &draft,
+		client.Var("d", map[string]any{"base": "1", "settings": map[string]any{"cost": map[string]any{"maxRows": 7}}}))
+	mustPost(t, c, `mutation($d: DraftInput!) { createDraft(draft: $d) { id } }`, &draft,
+		client.Var("d", map[string]any{"base": draft.CreateDraft.ID, "settings": map[string]any{"cost": nil}}))
+	var rev struct {
+		Revision struct {
+			Config struct {
+				Settings map[string]any
+				Entities []struct{ Name string }
+			}
+		}
+	}
+	mustPost(t, c, `query($id: ID!) { revision(id: $id) { config { settings entities { name } } } }`, &rev,
+		client.Var("id", draft.CreateDraft.ID))
+	cost, _ := rev.Revision.Config.Settings["cost"].(map[string]any)
+	if cost["maxRows"] == float64(7) || len(rev.Revision.Config.Entities) == 0 {
+		t.Fatalf("draft = %+v: cost must be back to its defaults and the entities kept", rev.Revision.Config)
 	}
 }

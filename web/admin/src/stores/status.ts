@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { run } from '@/api/client'
 import { StatusQuery } from '@/api/ops'
-import { useWorkspace, type Change } from '@/stores/workspace'
+import { useWorkspace } from '@/stores/workspace'
 import type { StatusQuery as StatusResult } from '@/gql/graphql'
 
 // What the server reports: the published revision and the revision the
@@ -11,9 +11,6 @@ export const useStatus = defineStore('status', {
     server: null as StatusResult['serverStatus'] | null,
     published: null as StatusResult['published'] | null,
     loaded: false,
-    /** Items a rebase kept in the local version although the new base changed them. */
-    conflicts: [] as Change[],
-    rebasedOnto: null as string | null,
   }),
   getters: {
     publishedId: (s) => s.published?.id ?? null,
@@ -30,20 +27,17 @@ export const useStatus = defineStore('status', {
       }
     },
 
-    /** Re-applies the unsaved changes onto the published revision. */
+    /**
+     * Re-applies the unsaved changes onto the published revision; conflicts
+     * are left in the workspace to resolve.
+     */
     async rebaseWorkspace(): Promise<number> {
       const ws = useWorkspace()
       const id = this.publishedId
       if (!id) return 0
       const count = ws.changes.length
-      this.conflicts = await ws.rebase(id)
-      this.rebasedOnto = id
+      await ws.rebase(id)
       return count
-    },
-
-    dismissConflicts() {
-      this.conflicts = []
-      this.rebasedOnto = null
     },
   },
 })

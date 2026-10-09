@@ -55,6 +55,7 @@ func (f serveAdminFlags) handler(
 			}
 			return nil
 		},
+		PathPrefix:   cfg.Server.PathPrefix,
 		SecureCookie: cfg.Server.Auth.TLS.Cert != "", Playground: *f.playground,
 	}), nil
 }

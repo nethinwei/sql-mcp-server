@@ -46,6 +46,19 @@
           "type": "string",
           "x-restart": true
         },
+        "pathPrefix": {
+          "description": "The path a gateway serves this service under and strips from requests (for example /sql-mcp-server); the console's pages, cookie and redirects carry it, so the gateway need not rewrite responses. Changing it needs a restart.",
+          "x-description-zh-CN": "网关把服务挂在此路径前缀下并从请求中剥掉它（如 /sql-mcp-server）；控制台的页面、Cookie 与重定向都带上它，网关无需改写响应。修改需重启。",
+          "type": "string",
+          "pattern": "^(/[A-Za-z0-9._~-]+)+$",
+          "x-restart": true
+        },
+        "publicURL": {
+          "description": "The MCP endpoint as clients reach it, through any gateway or reverse proxy (for example https://gw.example.com/sql-mcp/mcp); the console builds client configuration with it, and uses the console's own origin plus /mcp when it is unset.",
+          "x-description-zh-CN": "客户端访问 MCP 端点的完整外部地址（经网关或反向代理时填写，如 https://gw.example.com/sql-mcp/mcp）；控制台据此生成客户端接入配置，未设置时用控制台所在域名加 /mcp。",
+          "type": "string",
+          "pattern": "^https?://[^\\s/?#]+(/[^\\s?#]*)?$"
+        },
         "role": {
           "description": "Default role for requests without a user identity; the CLI --role flag overrides it.",
           "x-description-zh-CN": "没有用户身份的请求使用的默认角色；CLI --role 覆盖。",
@@ -343,10 +356,17 @@
           "minimum": 1
         },
         "rejectFullScan": {
-          "description": "Reject full table scans.",
-          "x-description-zh-CN": "拒绝全表扫描。",
+          "description": "Reject full table scans (except of small tables, see fullScanMaxRows).",
+          "x-description-zh-CN": "拒绝全表扫描（估计行数不超过 fullScanMaxRows 的小表除外）。",
           "type": "boolean",
           "default": true
+        },
+        "fullScanMaxRows": {
+          "description": "A full scan estimated at no more than this many rows scores as an ordinary sequential scan and is not rejected by rejectFullScan (lookup and dimension tables); 0 treats every full scan as one.",
+          "x-description-zh-CN": "估计行数不超过此值的全表扫描按普通顺序扫描评分、不被 rejectFullScan 拒绝（配置表、维表）；0 表示全表扫描一律按全表扫描处理。",
+          "type": "integer",
+          "default": 1000,
+          "minimum": 0
         },
         "whitelistPKPoint": {
           "description": "Primary-key point reads skip estimation (result caps still apply).",

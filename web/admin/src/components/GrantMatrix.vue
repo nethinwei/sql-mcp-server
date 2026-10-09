@@ -30,7 +30,8 @@ const { t } = useI18n()
 const actions: Action[] = ['READ', 'AGGREGATE', 'CREATE', 'UPDATE', 'DELETE', 'EXECUTE']
 
 const search = ref('')
-const onlyGranted = ref(false)
+// Only granted entities by default; a role or user without grants lists them all.
+const onlyGranted = ref(props.modelValue.length > 0)
 
 interface Row {
   entity: EntityInput

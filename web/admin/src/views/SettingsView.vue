@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
-import { onBeforeRouteLeave } from 'vue-router'
+import { computed, ref, watch } from 'vue'
+import { onBeforeRouteLeave, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { NAlert, NButton, NCard, NCollapse, NCollapseItem, NSpace, NTag, NText, useDialog } from 'naive-ui'
 import JsonEditor from '@/components/JsonEditor.vue'
@@ -23,6 +23,9 @@ const dialog = useDialog()
 const editable = computed(() => can('admin:write'))
 
 const sections = computed(() => [...new Set([...Object.keys(ws.settings), ...edits.pending])].sort())
+// A link may open one section, e.g. ?section=server.
+const route = useRoute()
+const expanded = ref<string[]>(typeof route.query.section === 'string' ? [route.query.section] : [])
 watch(() => ws.settings, () => edits.sync(), { immediate: true, deep: true })
 
 const { schema } = useConfigSchema()
@@ -65,7 +68,7 @@ onBeforeRouteLeave(() => {
       {{ t('settings.pending', { list: edits.pending.join(', ') }) }}
     </n-alert>
     <n-card size="small">
-      <n-collapse>
+      <n-collapse v-model:expanded-names="expanded">
         <n-collapse-item v-for="key in sections" :key="key" :name="key">
           <template #header>
             <n-space align="center" :size="8">

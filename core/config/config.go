@@ -74,6 +74,13 @@ type ServerConfig struct {
 	Transport string `yaml:"transport" json:"transport" schema:"enum=@transport,restart"`
 	// Addr is the HTTP listen address.
 	Addr string `yaml:"addr" json:"addr" schema:"restart"`
+	// PathPrefix is the path a gateway serves this service under and strips
+	// from requests, such as /sql-mcp-server; the console's pages, cookie and
+	// redirects carry it, so the gateway need not rewrite responses.
+	PathPrefix string `yaml:"pathPrefix,omitempty" json:"pathPrefix,omitempty" schema:"pattern=@pathPrefix,restart"`
+	// PublicURL is the MCP endpoint as clients reach it, through any proxy;
+	// the console builds client configuration with it.
+	PublicURL string `yaml:"publicURL,omitempty" json:"publicURL,omitempty" schema:"pattern=@httpURL"`
 	// Role is the runtime role; the --role flag overrides it.
 	Role string `yaml:"role" json:"role"`
 	// Auth configures HTTP transport authentication.
@@ -374,6 +381,7 @@ type CostConfig struct {
 	MaxExpand           int           `yaml:"maxExpand"                   json:"maxExpand" schema:"min=1"`
 	MaxProcedureRows    int64         `yaml:"maxProcedureRows"            json:"maxProcedureRows" schema:"min=1"`
 	RejectFullScan      bool          `yaml:"rejectFullScan"              json:"rejectFullScan"`
+	FullScanMaxRows     int64         `yaml:"fullScanMaxRows"             json:"fullScanMaxRows" schema:"min=0"`
 	WhitelistPKPoint    bool          `yaml:"whitelistPKPoint"            json:"whitelistPKPoint"`
 	RequirePKForWrite   *bool         `yaml:"requirePKForWrite,omitempty" json:"requirePKForWrite,omitempty"`
 	RequireKnownScan    bool          `yaml:"requireKnownScan"            json:"requireKnownScan"`

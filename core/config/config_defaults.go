@@ -110,6 +110,9 @@ func (c *Config) applyCostSafetyDefaults() {
 	if !c.Cost.present["whitelistPKPoint"] {
 		c.Cost.WhitelistPKPoint = true
 	}
+	if !c.Cost.present["fullScanMaxRows"] && c.Cost.FullScanMaxRows == 0 {
+		c.Cost.FullScanMaxRows = 1000
+	}
 	if !c.Cost.present["rejectFullScan"] {
 		c.Cost.RejectFullScan = true
 	}

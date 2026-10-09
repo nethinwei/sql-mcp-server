@@ -522,3 +522,31 @@ func TestChainGateSoftDenyUsesFinalCompiledAfterRewrite(t *testing.T) {
 		t.Fatalf("expected final rewritten SQL %q, got %+v", first.SQL, d.Rewritten)
 	}
 }
+
+// A full scan of a small table is a sequential scan; of a large one, or with
+// the allowance off, it is rejected.
+func TestEstimateSmallTableFullScan(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		rows, limit int64
+		allow       bool
+	}{
+		{rows: 1, limit: 1000, allow: true},
+		{rows: 71, limit: 1000, allow: true},
+		{rows: 1000, limit: 1000, allow: true},
+		{rows: 1001, limit: 1000, allow: false},
+		{rows: 71, limit: 0, allow: false},
+	} {
+		est := Estimate{
+			Explainer: FakeExplainer{Plan: Plan{ScanType: ScanFull, EstimatedRows: c.rows, StatsFresh: true}},
+			Threshold: Threshold{RejectFullScan: true, FullScanMaxRows: c.limit, HardScore: 40, SoftScore: 60},
+		}
+		d, err := est.Check(context.Background(), codegen.Compiled{SQL: "SELECT * FROM t"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.Allow != c.allow {
+			t.Errorf("full scan of %d rows with fullScanMaxRows %d: allow = %v, want %v", c.rows, c.limit, d.Allow, c.allow)
+		}
+	}
+}

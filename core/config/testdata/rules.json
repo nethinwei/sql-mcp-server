@@ -24,6 +24,25 @@
       "roles": {"Analyst": {"grants": [{"entity": "orders", "actions": ["read"]}]}}}
   },
   {
+    "name": "path prefix of a gateway",
+    "config": {"database": {"driver": "postgres", "dsn": "x"}, "server": {"pathPrefix": "/sql-mcp-server"}}
+  },
+  {
+    "name": "path prefix with a trailing slash",
+    "config": {"database": {"driver": "postgres", "dsn": "x"}, "server": {"pathPrefix": "/sql-mcp-server/"}},
+    "error": "must match", "path": ["server", "pathPrefix"]
+  },
+  {
+    "name": "public MCP URL behind a proxy",
+    "config": {"database": {"driver": "postgres", "dsn": "x"},
+      "server": {"publicURL": "https://gw.example.com/sql-mcp/mcp"}}
+  },
+  {
+    "name": "public MCP URL without a scheme",
+    "config": {"database": {"driver": "postgres", "dsn": "x"}, "server": {"publicURL": "gw.example.com/mcp"}},
+    "error": "must match", "path": ["server", "publicURL"]
+  },
+  {
     "name": "duration within its bounds",
     "config": {"database": {"driver": "postgres", "dsn": "x"}, "cost": {"aqe": {"timeout": "2s"}}}
   },

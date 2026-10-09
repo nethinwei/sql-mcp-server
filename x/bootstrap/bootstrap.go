@@ -489,6 +489,7 @@ func toThreshold(c config.CostConfig) cost.Threshold {
 		MaxRows:                   c.MaxRows,
 		MaxBytes:                  c.MaxBytes,
 		RejectFullScan:            c.RejectFullScan,
+		FullScanMaxRows:           c.FullScanMaxRows,
 		WhitelistPKPoint:          c.WhitelistPKPoint,
 		RequirePKForWrite:         c.RequirePKForWriteOrDefault(),
 		RequireAggregatePredicate: true,

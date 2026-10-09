@@ -289,6 +289,11 @@ func runStorePublish(ctx context.Context, args []string, stdout io.Writer) error
 	rev, err := revisionOps(store).Publish(ctx, revisionops.PublishRequest{
 		ID: target.ID, RestartRequired: *restart, Author: f.authorName(),
 	})
+	var conflict *revisionops.ConflictError
+	if errors.As(err, &conflict) {
+		return fmt.Errorf("%w; re-apply the changes to revision %d (store show) and import them as a new draft",
+			err, conflict.Published)
+	}
 	if err != nil {
 		return err
 	}
