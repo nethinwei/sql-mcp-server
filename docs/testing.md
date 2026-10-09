@@ -150,10 +150,10 @@ PostgreSQL/MySQL/OceanBase 或 MCP e2e 已在当前机器执行。
 当前 workflow 包含：
 
 - `lint`：golangci-lint；
-- `unit`：Go 1.26.8，通过 Make target 执行 gofmt、vet、开发版本
+- `unit`：Go 1.26.9，通过 Make target 执行 gofmt、vet、开发版本
   build、`go test -race ./...`；
 - `coverage`：与 Makefile 共用核心包清单，真实检查合计至少 80.0%；
-- `security-fuzz`：Go 1.26.8 下分别运行四个有界、无 Docker 的安全 fuzz smoke；
+- `security-fuzz`：Go 1.26.9 下分别运行四个有界、无 Docker 的安全 fuzz smoke；
 - `integration`：PostgreSQL、MySQL、OceanBase 三项 testcontainers matrix；
 - `e2e`：PostgreSQL + in-memory 与真实 streamable HTTP 双传输 MCP client，
   覆盖协议边界上的工具发现、成本、RBAC/RLS/字段 ACL、脱敏、写保护、
