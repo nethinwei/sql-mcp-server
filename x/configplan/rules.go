@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 )
@@ -131,11 +130,6 @@ func (ev *evaluation) sync(t target) {
 	}
 	if !rule.Remove || len(t.row.Missing) == 0 {
 		return
-	}
-	if at := t.row.ScannedAt; ev.in.StaleAfter > 0 && !at.IsZero() && ev.in.Now.Sub(at) > ev.in.StaleAfter {
-		ev.except(
-			Exception{Kind: ExceptionStaleScan, Ref: t.row.Ref, Entity: t.id, Detail: at.UTC().Format(time.RFC3339)},
-		)
 	}
 	for _, field := range t.row.Missing {
 		if where := ev.fieldReferences(t.id, field); len(where) > 0 {

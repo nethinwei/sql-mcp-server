@@ -106,11 +106,11 @@ func (r *queryResolver) PlanScope(ctx context.Context, scope any, draft *DraftIn
 }
 
 // PreviewPlan is the resolver for the previewPlan field.
-func (r *queryResolver) PreviewPlan(ctx context.Context, plan any, draft *DraftInput) (*PlanPreview, error) {
+func (r *queryResolver) PreviewPlan(ctx context.Context, input PlanPreviewInput) (*PlanPreview, error) {
 	if _, err := auth.Require(ctx, auth.PermWrite); err != nil {
 		return nil, err
 	}
-	return r.previewPlan(ctx, plan, draft)
+	return r.previewPlan(ctx, input.Plan, input.Draft, derefBool(input.Review))
 }
 
 // PlanTemplates is the resolver for the planTemplates field.

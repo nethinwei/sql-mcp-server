@@ -142,6 +142,8 @@ type Batch struct {
 	ID         string
 	Datasource string
 	StartedBy  string
+	// Owner is one run of the batch, never reused: a takeover makes a new
+	// one, so a write conditioned on it fences off a run that lost the batch.
 	Owner      string
 	StartedAt  time.Time
 	FinishedAt time.Time
@@ -163,6 +165,10 @@ type BatchItem struct {
 type BatchStore interface {
 	// PutBatch creates or replaces a batch.
 	PutBatch(ctx context.Context, b Batch) error
+	// SaveBatch records the items, heartbeat and finish of b while b.Owner
+	// still owns the unfinished batch, in one conditional write that keeps a
+	// cancel; false (writing nothing) when another owner took it over.
+	SaveBatch(ctx context.Context, b Batch) (bool, error)
 	Batch(ctx context.Context, id string) (Batch, bool, error)
 	// Batches lists the batches of datasource, newest first.
 	Batches(ctx context.Context, datasource string, limit int) ([]Batch, error)
@@ -197,6 +203,18 @@ func (m *MemoryStore) PutBatch(_ context.Context, b Batch) error {
 	}
 	m.batches.all[b.ID] = cloneBatch(b)
 	return nil
+}
+
+func (m *MemoryStore) SaveBatch(_ context.Context, b Batch) (bool, error) {
+	m.batches.mu.Lock()
+	defer m.batches.mu.Unlock()
+	old, ok := m.batches.all[b.ID]
+	if !ok || old.Owner != b.Owner || !old.FinishedAt.IsZero() {
+		return false, nil
+	}
+	old.Items, old.Heartbeat, old.FinishedAt = slices.Clone(b.Items), b.Heartbeat, b.FinishedAt
+	m.batches.all[b.ID] = old
+	return true, nil
 }
 
 func (m *MemoryStore) Batch(_ context.Context, id string) (Batch, bool, error) {

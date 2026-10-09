@@ -125,14 +125,9 @@ func denied(caps bootstrap.EntityCapabilities) func(string, string) (string, boo
 	}
 }
 
-// staleScan is the age past which a scan no longer backs removing fields
-// without confirmation.
-const staleScan = 7 * 24 * time.Hour
-
 func (r *Resolver) planInput(pc planContext, review bool) configplan.Input {
 	return configplan.Input{
 		Base: pc.base, Published: pc.published, Sources: pc.sources, Denied: denied(r.capabilities()), Review: review,
-		Now: r.Scans.clock(), StaleAfter: staleScan,
 	}
 }
 
@@ -169,7 +164,7 @@ func (r *Resolver) evaluatePlan(
 		&Validation{Ok: true, ContentHash: &hash, RestartRequired: changes, Warnings: warnings}, nil
 }
 
-func (r *Resolver) previewPlan(ctx context.Context, plan any, in *DraftInput) (*PlanPreview, error) {
+func (r *Resolver) previewPlan(ctx context.Context, plan any, in *DraftInput, review bool) (*PlanPreview, error) {
 	p, err := decodePlan(plan)
 	if err != nil {
 		return nil, err
@@ -178,7 +173,7 @@ func (r *Resolver) previewPlan(ctx context.Context, plan any, in *DraftInput) (*
 	if err != nil {
 		return nil, err
 	}
-	proposal, _, validation, err := r.evaluatePlan(ctx, pc, p, false)
+	proposal, _, validation, err := r.evaluatePlan(ctx, pc, p, review)
 	if err != nil {
 		return nil, err
 	}

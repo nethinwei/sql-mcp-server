@@ -51,7 +51,13 @@ type Plan struct {
 	HasSort         bool
 	HasTempTable    bool
 	StatsFresh      bool
-	Raw             json.RawMessage
+	// TableRows is how many rows the largest table a full scan reads holds:
+	// what the scan reads, not what it outputs after filtering. TableSized
+	// reports that a provider measured it for every full scan; without it a
+	// full scan is never taken for a small table's.
+	TableRows  int64
+	TableSized bool
+	Raw        json.RawMessage
 }
 
 // Score is the 0-100 normalized plan quality (higher is safer), with the risk
@@ -140,8 +146,9 @@ type Threshold struct {
 	MaxRows        int64
 	MaxBytes       int64
 	RejectFullScan bool
-	// FullScanMaxRows: a full scan estimated at no more than this many rows
-	// is a small table's, scored and admitted as a sequential scan.
+	// FullScanMaxRows: a full scan of tables of no more than this many rows
+	// (Plan.TableRows, when sized) is a small table's, scored and admitted as
+	// a sequential scan.
 	FullScanMaxRows           int64
 	WhitelistPKPoint          bool
 	RequirePKForWrite         bool // reject UPDATE/DELETE that is not a PK point write

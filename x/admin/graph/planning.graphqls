@@ -54,6 +54,17 @@ input ScanBatchInput {
   schemas: [String!]!
 }
 
+input PlanPreviewInput {
+  plan: JSON!
+  "Evaluate against this draft; default: the published configuration."
+  draft: DraftInput
+  """
+  Report every new table a grant covers (exception review, to confirm), as
+  reviewing a recurring template's proposal needs.
+  """
+  review: Boolean = false
+}
+
 input PlanDraftInput {
   plan: JSON!
   comment: String
@@ -105,7 +116,7 @@ extend type Query {
   Evaluate a plan against the draft (default: the published configuration)
   without saving anything.
   """
-  previewPlan(plan: JSON!, draft: DraftInput): PlanPreview!
+  previewPlan(input: PlanPreviewInput!): PlanPreview!
   planTemplates: [PlanTemplate!]!
   "Every version of a template, newest first."
   planTemplateVersions(name: String!): [PlanTemplate!]!
@@ -311,7 +322,7 @@ type PlanChange {
 type PlanException {
   """
   renamed, noKey, sideEffects, relationshipDropped, qualified, unknownUser,
-  noFields, referenced, denied, review or staleScan.
+  noFields, referenced, denied or review.
   """
   kind: String!
   """

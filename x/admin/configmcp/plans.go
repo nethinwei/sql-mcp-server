@@ -18,6 +18,8 @@ import (
 type planIn struct {
 	Plan configplan.Plan `json:"plan"           jsonschema:"the plan: scope plus import, grants, fields or sync"`
 	Base string          `json:"base,omitempty" jsonschema:"a draft revision ID to continue (default: published)"`
+	// Review is set to review a recurring template's proposal.
+	Review bool `json:"review,omitempty" jsonschema:"report every new table a grant covers, to confirm"`
 }
 
 type detailsIn struct {
@@ -75,7 +77,7 @@ func (in planIn) preview(ctx context.Context, r *graph.Resolver) (*graph.PlanPre
 	if in.Base != "" {
 		draft = &graph.DraftInput{Base: in.Base}
 	}
-	return r.Query().PreviewPlan(ctx, plan, draft)
+	return r.Query().PreviewPlan(ctx, graph.PlanPreviewInput{Plan: plan, Draft: draft, Review: &in.Review})
 }
 
 func summarize(p *graph.PlanPreview) previewSummary {

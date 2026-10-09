@@ -1,6 +1,7 @@
 package oceanbase
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/nethinwei/sql-mcp-server/core/cost"
@@ -79,5 +80,31 @@ func TestParseOBExplainKeepsJoinEstimate(t *testing.T) {
 	p, _ := parseOBExplain([]byte(joined))
 	if p.EstimatedRows != 1000000 || p.ScanType != cost.ScanIndex {
 		t.Fatalf("joined = %+v", p)
+	}
+}
+
+// The size of a full scan's table comes from EXPLAIN EXTENDED's optimization
+// info, not from the rows the filter outputs; without an entry for every
+// full scan it is not sized.
+func TestOBTableRows(t *testing.T) {
+	t.Parallel()
+	text := `|ID|OPERATOR       |NAME|EST.ROWS|EST.TIME(us)|
+|0 |TABLE FULL SCAN|t   |1       |3           |
+Optimization Info:
+-------------------------------------
+  t:
+      table_rows:2000000
+      physical_range_rows:2000000
+      output_rows:1
+`
+	if rows, ok := obTableRows(text); !ok || rows != 2000000 {
+		t.Fatalf("rows = %d, %v", rows, ok)
+	}
+	join := strings.Replace(text, "|0 |TABLE FULL SCAN|t", "|0 |TABLE FULL SCAN|t|\n|1 |TABLE FULL SCAN|u", 1)
+	if _, ok := obTableRows(join); ok {
+		t.Fatal("sized with a full scan missing from the optimization info")
+	}
+	if _, ok := obTableRows("|0 |TABLE FULL SCAN|t|"); ok {
+		t.Fatal("sized without optimization info")
 	}
 }

@@ -453,7 +453,7 @@ type PlanDraftInput struct {
 
 type PlanException struct {
 	// renamed, noKey, sideEffects, relationshipDropped, qualified, unknownUser,
-	// noFields, referenced, denied, review or staleScan.
+	// noFields, referenced, denied or review.
 	Kind string `json:"kind"`
 	// block (the proposal cannot be taken), confirm (taking it needs the
 	// exception acknowledged) or info.
@@ -488,6 +488,15 @@ type PlanPreview struct {
 	Users []User `json:"users"`
 	// The draft with the plan applied, as validate checks it.
 	Validation *Validation `json:"validation"`
+}
+
+type PlanPreviewInput struct {
+	Plan any `json:"plan"`
+	// Evaluate against this draft; default: the published configuration.
+	Draft *DraftInput `json:"draft,omitempty"`
+	// Report every new table a grant covers (exception review, to confirm), as
+	// reviewing a recurring template's proposal needs.
+	Review *bool `json:"review,omitempty"`
 }
 
 type PlanReport struct {

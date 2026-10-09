@@ -141,7 +141,7 @@ const nothing = computed(() => pending.value && !plans.value.length && !drift.va
       </n-alert>
     </div>
   </n-spin>
-  <plan-preview-dialog v-model:show="previewing" :plan="plan" @applied="load" />
+  <plan-preview-dialog v-model:show="previewing" :plan="plan" review @applied="load" />
 </template>
 
 <style scoped>

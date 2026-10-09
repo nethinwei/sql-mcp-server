@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -193,5 +194,22 @@ func TestExplainAnalyzeReadOnlyViolationIsSamplingErrorAndRollsBack(t *testing.T
 	})
 	if !errors.Is(err, want) || !tx.RolledBack {
 		t.Fatalf("error=%v rolledBack=%v", err, tx.RolledBack)
+	}
+}
+
+// The tables a plan's sequential scans read are listed to size them; a scan
+// naming no table cannot be sized.
+func TestFullScanRelations(t *testing.T) {
+	t.Parallel()
+	join := pgPlanNode{NodeType: "Hash Join", Plans: []pgPlanNode{
+		{NodeType: "Seq Scan", RelationName: "orders"},
+		{NodeType: "Hash", Plans: []pgPlanNode{{NodeType: "Seq Scan", RelationName: "regions"}}},
+		{NodeType: "Index Scan", RelationName: "users"},
+	}}
+	if got, ok := fullScanRelations(join, nil); !ok || !slices.Equal(got, []string{"orders", "regions"}) {
+		t.Fatalf("relations = %v, %v", got, ok)
+	}
+	if _, ok := fullScanRelations(pgPlanNode{NodeType: "Seq Scan"}, nil); ok {
+		t.Fatal("a scan naming no table is sized")
 	}
 }

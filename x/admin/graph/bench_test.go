@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -108,22 +111,37 @@ func BenchmarkCatalogPage(b *testing.B) {
 }
 
 // BenchmarkCatalogPageParallel pages through the catalog from many
-// administrators at once, half of them with filters not cached yet.
+// goroutines at once (GOMAXPROCS of them): every other request uses a filter
+// no request used before, so its rows are not cached. ns/op is throughput
+// (wall time over requests); p50-ms and p95-ms are the latencies of the
+// requests, timed one by one.
 func BenchmarkCatalogPageParallel(b *testing.B) {
 	r := catalogBench(b)
 	catalogPage(b, r, "t_05", 0)
+	var fresh atomic.Int64
+	var mu sync.Mutex
+	var latencies []time.Duration
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
-		i := 0
-		for pb.Next() {
-			if i%2 == 1 { // the same rows under filters not seen yet
-				catalogPage(b, r, "t_05", (i%100)*50, fmt.Sprintf("db_*%d", i), "db_*")
+		var mine []time.Duration
+		for i := 0; pb.Next(); i++ {
+			start := time.Now()
+			if i%2 == 1 { // a filter never seen: the same rows under a new cache key
+				catalogPage(b, r, "t_05", (i%100)*50, fmt.Sprintf("db_*%d", fresh.Add(1)), "db_*")
 			} else {
 				catalogPage(b, r, "t_05", (i%100)*50)
 			}
-			i++
+			mine = append(mine, time.Since(start))
 		}
+		mu.Lock()
+		latencies = append(latencies, mine...)
+		mu.Unlock()
 	})
+	slices.Sort(latencies)
+	if n := len(latencies); n > 0 {
+		b.ReportMetric(float64(latencies[n/2].Microseconds())/1000, "p50-ms")
+		b.ReportMetric(float64(latencies[n*95/100].Microseconds())/1000, "p95-ms")
+	}
 }
 
 // largeSchemas is 500 scanned schemas of 100 tables each.

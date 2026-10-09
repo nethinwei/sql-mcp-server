@@ -76,11 +76,14 @@ func (e Estimate) Check(ctx context.Context, c codegen.Compiled) (Decision, erro
 	return e.evaluatePlan(plan, err, score, th, deny)
 }
 
-// smallTable treats a full scan of at most th.FullScanMaxRows estimated rows
+// smallTable treats a full scan of tables of at most th.FullScanMaxRows rows
 // as a sequential scan: reading a lookup table whole is cheap, and rejecting
-// it would refuse queries on every small table.
+// it would refuse queries on every small table. The size is the tables',
+// never the estimated output: a filter on a large table may output one row
+// after reading all of them.
 func smallTable(plan Plan, th Threshold) Plan {
-	if plan.ScanType == ScanFull && th.FullScanMaxRows > 0 && plan.EstimatedRows <= th.FullScanMaxRows {
+	if plan.ScanType == ScanFull && th.FullScanMaxRows > 0 && plan.TableSized &&
+		plan.TableRows <= th.FullScanMaxRows {
 		plan.ScanType = ScanSeq
 	}
 	return plan

@@ -84,6 +84,29 @@ func (s *SQLStore) PutBatch(ctx context.Context, b catalog.Batch) error {
 	})
 }
 
+// SaveBatch implements catalog.BatchStore with one conditional update.
+func (s *SQLStore) SaveBatch(ctx context.Context, b catalog.Batch) (bool, error) {
+	payload, err := json.Marshal(b.Items)
+	if err != nil {
+		return false, err
+	}
+	res, err := s.exec(ctx, s.db, "UPDATE smcp_scan_batches SET payload = ?, heartbeat_us = ?, finished_us = ? "+
+		"WHERE id = ? AND owner = ? AND finished_us = 0",
+		string(payload), toMicros(b.Heartbeat), toMicros(b.FinishedAt), b.ID, b.Owner)
+	if err != nil {
+		return false, fmt.Errorf("configstore: save scan batch: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 1 {
+		return err == nil, err
+	}
+	// MySQL counts changed rows: a write of what is already there changes
+	// none, and still is the owner's.
+	var owned int
+	err = s.queryRow(ctx, s.db, "SELECT count(*) FROM smcp_scan_batches WHERE id = ? AND owner = ? AND finished_us = 0",
+		b.ID, b.Owner).Scan(&owned)
+	return owned == 1, err
+}
+
 // Batch implements catalog.BatchStore.
 func (s *SQLStore) Batch(ctx context.Context, id string) (catalog.Batch, bool, error) {
 	b, err := scanBatch(s.queryRow(ctx, s.db, "SELECT "+batchColumns+" FROM smcp_scan_batches WHERE id = ?", id))

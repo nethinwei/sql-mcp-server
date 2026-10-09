@@ -18,7 +18,9 @@ import ChangeDrillDown from './ChangeDrillDown.vue'
 // the outcome is taken only while it is the preview of the plan and the
 // workspace on screen. Blocking exceptions keep it from being taken; those
 // to confirm must be acknowledged.
-const props = defineProps<{ plan: Plan | null; title?: string }>()
+// review keeps the new tables a grant covers up for confirmation, as
+// reviewing a recurring template's proposal from the pending page needs.
+const props = defineProps<{ plan: Plan | null; title?: string; review?: boolean }>()
 const show = defineModel<boolean>('show', { required: true })
 const emit = defineEmits<{ applied: [result: { added: string[]; changed: number; plan: Plan }] }>()
 const { t } = useI18n()
@@ -26,7 +28,7 @@ const ws = useWorkspace()
 
 const current = ref<Plan | null>(null)
 const previewer = createPreviewer<Proposal>(
-  async (plan) => (await run(PreviewPlanQuery, { plan, draft: ws.computeDraft })).previewPlan,
+  async (plan) => (await run(PreviewPlanQuery, { plan, draft: ws.computeDraft, review: !!props.review })).previewPlan,
   () => ws.contextKey,
 )
 const state = previewer.state

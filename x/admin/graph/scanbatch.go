@@ -32,6 +32,10 @@ const (
 	batchStale = 30 * time.Second
 	// batchList bounds the batches listed per datasource.
 	batchList = 10
+	// batchOpen bounds the unfinished batches of a datasource and
+	// batchSchemas the schemas of one, so requests cannot pile up work.
+	batchOpen    = 4
+	batchSchemas = 5000
 )
 
 // scanRunner scans one schema of a datasource.
@@ -59,6 +63,10 @@ func (b *batches) close() {
 	b.wg.Wait()
 }
 
+// run names one run of a batch by this process: a takeover, even by this
+// process again, is a new run.
+func (b *batches) run() string { return b.owner + "." + randomID() }
+
 func randomID() string {
 	var buf [8]byte
 	_, _ = rand.Read(buf[:])
@@ -73,7 +81,7 @@ func (s *Scans) startBatch(
 	run scanRunner,
 ) (*ScanBatch, error) {
 	now := s.now()
-	b := catalog.Batch{ID: randomID(), Datasource: datasource, StartedBy: who, Owner: s.batches.owner, StartedAt: now,
+	b := catalog.Batch{ID: randomID(), Datasource: datasource, StartedBy: who, Owner: s.batches.run(), StartedAt: now,
 		Heartbeat: now}
 	for _, schema := range schemas {
 		b.Items = append(b.Items, catalog.BatchItem{Schema: schema, State: "pending"})
@@ -106,32 +114,36 @@ func (s *Scans) runBatch(b catalog.Batch, run scanRunner) {
 	}()
 }
 
-// batchRun is a batch as its owner runs it; the lock guards its items.
-// lost is set once another process owns the batch: this one then writes
-// nothing more.
+// batchRun is a batch as its owner (batch.Owner, one run) runs it; the lock
+// guards its items. lost is set once another run owns the batch: this one
+// then writes nothing more, and the store refuses its writes regardless.
 type batchRun struct {
 	mu    sync.Mutex
 	batch catalog.Batch
 	lost  bool
 }
 
-// save records the progress of a batch while this process still owns it.
+// save records the progress of a batch while this run still owns it: the
+// store checks the owner and writes in one step, so a run that lost the
+// batch, however late it writes, never overwrites the new owner's.
 func (s *Scans) save(br *batchRun) {
-	now := s.now()
-	owned, err := s.store.ClaimBatch(context.Background(), br.batch.ID, s.batches.owner, now.Add(-batchStale), now)
 	br.mu.Lock()
-	if err == nil && !owned {
-		br.lost = true
-	}
 	b := br.batch
-	b.Items, b.Heartbeat = slices.Clone(b.Items), now
+	b.Items, b.Heartbeat = slices.Clone(b.Items), s.now()
 	lost := br.lost
 	br.mu.Unlock()
 	if lost {
 		return
 	}
-	if err := s.store.PutBatch(context.Background(), b); err != nil {
+	owned, err := s.store.SaveBatch(context.Background(), b)
+	if err != nil {
 		slog.Warn("scan batch progress not recorded", "batch", b.ID, "error", err.Error())
+		return
+	}
+	if !owned {
+		br.mu.Lock()
+		br.lost = true
+		br.mu.Unlock()
 	}
 }
 
@@ -192,7 +204,7 @@ func (s *Scans) beat(ctx context.Context, cancel context.CancelFunc, br *batchRu
 		case <-t.C:
 		}
 		now := s.now()
-		owned, err := s.store.ClaimBatch(ctx, br.batch.ID, s.batches.owner, now.Add(-batchStale), now)
+		owned, err := s.store.ClaimBatch(ctx, br.batch.ID, br.batch.Owner, now.Add(-batchStale), now)
 		if err != nil {
 			continue
 		}
@@ -288,9 +300,8 @@ func (s *Scans) takeOver(ctx context.Context, runner func(ctx context.Context, d
 		if mine {
 			continue
 		}
-		now := s.now()
-		if claimed, err := s.store.ClaimBatch(ctx, b.ID, s.batches.owner, now.Add(-batchStale), now); err != nil ||
-			!claimed {
+		now, owner := s.now(), s.batches.run()
+		if claimed, err := s.store.ClaimBatch(ctx, b.ID, owner, now.Add(-batchStale), now); err != nil || !claimed {
 			continue
 		}
 		run, err := runner(ctx, b.Datasource)
@@ -303,7 +314,7 @@ func (s *Scans) takeOver(ctx context.Context, runner func(ctx context.Context, d
 				b.Items[i].State = "pending"
 			}
 		}
-		b.Owner, b.Heartbeat = s.batches.owner, now
+		b.Owner, b.Heartbeat = owner, now
 		slog.Info("scan batch taken over", "batch", b.ID, "datasource", b.Datasource)
 		s.runBatch(b, run)
 	}
@@ -387,18 +398,30 @@ func (r *Resolver) startScanBatch(ctx context.Context, datasource string, schema
 	if err != nil {
 		return nil, err
 	}
+	schemas = slices.Compact(slices.Sorted(slices.Values(schemas)))
 	if len(schemas) == 0 {
 		return nil, errors.New("name the schemas to scan")
+	}
+	if len(schemas) > batchSchemas {
+		return nil, fmt.Errorf("a batch scans at most %d schemas", batchSchemas)
 	}
 	_, scans, _, err := r.scanContext(ctx, datasource)
 	if err != nil {
 		return nil, err
 	}
+	open, err := scans.store.UnfinishedBatches(ctx)
+	if err != nil {
+		return nil, err
+	}
+	open = slices.DeleteFunc(open, func(b catalog.Batch) bool { return b.Datasource != datasource })
+	if len(open) >= batchOpen {
+		return nil, fmt.Errorf("%s has %d scan batches running: wait for them or stop one", datasource, len(open))
+	}
 	run, err := r.runnerFor(ctx, datasource)
 	if err != nil {
 		return nil, err
 	}
-	return scans.startBatch(ctx, datasource, who.Username, slices.Compact(slices.Sorted(slices.Values(schemas))), run)
+	return scans.startBatch(ctx, datasource, who.Username, schemas, run)
 }
 
 func (r *Resolver) scanBatches(ctx context.Context, datasource string) ([]ScanBatch, error) {

@@ -523,22 +523,27 @@ func TestChainGateSoftDenyUsesFinalCompiledAfterRewrite(t *testing.T) {
 	}
 }
 
-// A full scan of a small table is a sequential scan; of a large one, or with
-// the allowance off, it is rejected.
+// A full scan of a small table is a sequential scan; of a large one, of one
+// whose size is unknown, or with the allowance off, it is rejected. The size
+// is the table's: a filter that outputs one row of a large table still reads
+// all of them.
 func TestEstimateSmallTableFullScan(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
-		rows, limit int64
-		allow       bool
+		output, table, limit int64
+		sized, allow         bool
 	}{
-		{rows: 1, limit: 1000, allow: true},
-		{rows: 71, limit: 1000, allow: true},
-		{rows: 1000, limit: 1000, allow: true},
-		{rows: 1001, limit: 1000, allow: false},
-		{rows: 71, limit: 0, allow: false},
+		{output: 1, table: 1, limit: 1000, sized: true, allow: true},
+		{output: 71, table: 71, limit: 1000, sized: true, allow: true},
+		{output: 1, table: 1000, limit: 1000, sized: true, allow: true},
+		{output: 1, table: 1001, limit: 1000, sized: true, allow: false},
+		{output: 1, table: 5_000_000, limit: 1000, sized: true, allow: false},
+		{output: 1, table: 0, limit: 1000, sized: false, allow: false},
+		{output: 71, table: 71, limit: 0, sized: true, allow: false},
 	} {
 		est := Estimate{
-			Explainer: FakeExplainer{Plan: Plan{ScanType: ScanFull, EstimatedRows: c.rows, StatsFresh: true}},
+			Explainer: FakeExplainer{Plan: Plan{ScanType: ScanFull, EstimatedRows: c.output, TableRows: c.table,
+				TableSized: c.sized, StatsFresh: true}},
 			Threshold: Threshold{RejectFullScan: true, FullScanMaxRows: c.limit, HardScore: 40, SoftScore: 60},
 		}
 		d, err := est.Check(context.Background(), codegen.Compiled{SQL: "SELECT * FROM t"})
@@ -546,7 +551,7 @@ func TestEstimateSmallTableFullScan(t *testing.T) {
 			t.Fatal(err)
 		}
 		if d.Allow != c.allow {
-			t.Errorf("full scan of %d rows with fullScanMaxRows %d: allow = %v, want %v", c.rows, c.limit, d.Allow, c.allow)
+			t.Errorf("%+v: allow = %v", c, d.Allow)
 		}
 	}
 }

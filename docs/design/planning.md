@@ -44,8 +44,8 @@
   字段差异过滤并分页；`catalogTable(ref)` 返回一张表的完整结构与候选实体；
   `catalogLinks(ref)` 返回它引用的表和引用它的表（列表里的数量与浮层详情同源）。
   状态相对草稿（控制台工作区）计算：`NEW` 未导入、`WORKSPACE` 工作区未发布、
-  `PUBLISHED` 已发布；字段差异单独给出（新增列与缺失字段），每行带扫描时间，
-  超过 7 天标为过期。
+  `PUBLISHED` 已发布；字段差异单独给出（新增列与缺失字段），每行带扫描时间
+  （只作展示：表结构是否变化与扫描时间无关，不按时间标记过期）。
 - 一个筛选的行（除状态外）按“扫描指纹 + 草稿内容哈希 + 已发布版本 + 筛选”缓存
   （16 项 LRU），翻页、切换状态和多个管理员看同一筛选都不再重复计算；新扫描、草稿
   修改或发布都会换键。每个数据源的目录按各库扫描时间缓存，不必每次重建。
@@ -54,8 +54,11 @@
   `cancelScanBatch` 停止，`retryScanBatch` 只重扫失败与未完成的库。批次及每个库
   的状态保存在配置库（`smcp_scan_batches`），所有副本都能看到；执行它的进程是
   所有者，每 5 秒续一次心跳，取消请求写入批次，所有者据此停止。所有者 30 秒没有
-  心跳（进程重启或退出）时，任一进程按当前已发布配置接管批次，扫描尚未完成的库；
-  失去所有权的进程不再写入进度。
+  心跳（进程重启或退出）时，任一进程按当前已发布配置接管批次，扫描尚未完成的库。
+  所有者标识每次运行都不同（进程标识 + 运行标识，同一进程再次接管也是新的运行），
+  进度与结束都用 `SaveBatch` 按“仍是该所有者且未结束”的条件一次写入，因此暂停后
+  恢复的旧运行即使晚写也不会覆盖新所有者的进度（`catalogtest` 的 `SaveBatches`
+  在四种配置库上验证）。每个数据源最多 4 个未完成批次、每批最多 5000 个库。
 - 选择：控制台的“选择全部匹配”保存的是筛选条件加排除集合，不把几万个表引用传到
   浏览器；导入或交给方案页时转成方案的 `scope` + `exclude`。这是动态范围：作用时
   取筛选当时匹配的表。新扫描或工作区变化使匹配数变化时，控制台更新数量并要求确认
@@ -73,7 +76,7 @@
 
 ```text
 Plan = { scope, import, grants, fields, sync, exclude, names }
-Evaluate(Input{Base, Published, Sources, Denied, Review, Now, StaleAfter}, Plan) → Proposal
+Evaluate(Input{Base, Published, Sources, Denied, Review}, Plan) → Proposal
 Proposal = { Config（Base 应用后）, Entities（新增或修改）, Added, Roles, Users, Report }
 ```
 
@@ -89,7 +92,7 @@ Proposal = { Config（Base 应用后）, Entities（新增或修改）, Added, R
 - `fields`：按列名（及可选类型）通配隐藏或脱敏字段；
 - `sync`：按数据库现状新增字段（可默认隐藏）、移除已不存在的字段；授权中的字段
   列表随之移除，仍被主键、唯一键、关系、租户策略或行范围引用的字段不移除，报告
-  例外；依据超过 `StaleAfter`（管理 API 取 7 天）的扫描删除字段时报告 `staleScan`；
+  例外；
 - 顺序：导入 → 同步 → 字段规则 → 授权，因此字段规则覆盖同步新增的字段，同一方案
   重复执行第二次没有任何修改（性质测试保证）；
 - 报告：范围内表数、排除数、所依据扫描的时间范围、按库计数、合并后的变化（同类
@@ -98,7 +101,7 @@ Proposal = { Config（Base 应用后）, Entities（新增或修改）, Added, R
   - `block`（阻断，不能加入工作区或保存草稿）：目前没有规则产生它，结果校验不
     通过时同样阻断；
   - `confirm`（需确认，控制台要求勾选“已核对”，MCP 要求 Agent 向管理员报告）：
-    `unknownUser`、`noFields`、`referenced`、`denied`、`review`、`staleScan`，
+    `unknownUser`、`noFields`、`referenced`、`denied`、`review`，
     以及去掉了写动作的 `noKey`；
   - `info`（提示）：`renamed`、`sideEffects`、`relationshipDropped`、只读的
     `noKey`，以及 `qualified`：新增实体会让已有的简写引用（授权、关系目标、
@@ -133,7 +136,9 @@ Proposal = { Config（Base 应用后）, Entities（新增或修改）, Added, R
   计算：有修改或有未能应用的规则（`confirm`/`block` 例外）的模板、字段有差异的表，
   每项一个键（对象 + 情况摘要），可设负责人、稍后处理（到期重新打开）或忽略（必须
   写原因），每次变更写入 `smcp_pending_log`；情况变化（新匹配、新差异）后键随之
-  变化，重新打开。
+  变化，重新打开。未导入的表、未扫描的库、从未列出库的数据源只给出数量和跳转入口，
+  没有处理状态。模板的方案在待处理中以审核方式预览（`previewPlan` 的 `review`），
+  授权覆盖的每张新表都作为需确认例外列出。
 - **配置 MCP**：`/admin/mcp`（Streamable HTTP，无状态），`Authorization: Bearer`
   使用管理员在控制台为每个客户端生成的令牌（`smcp_admin_tokens` 只存哈希；可命名、
   设有效期，记录最近使用时间，每人最多 20 个，单独吊销；过期、吊销或账号停用后
@@ -145,10 +150,13 @@ Proposal = { Config（Base 应用后）, Entities（新增或修改）, Added, R
     `plan_details` 按段分页读取：`changes` 只给每组变化涉及的实体数与序号，
     `changeEntities` 按序号分页读取一组变化的实体，另有 `exceptions`、`added`、
     `entities`、`objects`；
+    两者都接受 `review: true`，以审核方式列出授权覆盖的每张新表；
   - `plan_save_draft` 需要 `planId`：方案在同一基准、草稿与扫描下的结果与预览一致
     才保存，否则要求重新预览；`base` 指定已有草稿时在其上继续，新草稿以它为父
     版本；只返回草稿、diff 行数与控制台审核链接（`server.publicURL` 优先，否则按
-    请求地址），diff 用 `diff` 工具按行分页读取；
+    请求地址），diff 用 `diff` 工具按行分页读取。`diff` 与控制台共用
+    `revisionops.Diff`：生成前对两侧配置结构化脱敏，DSN 密码与 HTTP token 不会
+    出现在任何一行（含上下文行），变化了的标为 `(changed)`；
   - `plan_templates`、`pending`、`validate`、`diff`、`simulate`、`revisions`。
   没有发布与回滚工具。
 
@@ -158,8 +166,11 @@ Proposal = { Config（Base 应用后）, Entities（新增或修改）, Added, R
 
 - 目录筛选（不含缓存）：约 36 ms（`BenchmarkRowsLargeCatalog`）；经 SQLite 配置库
   首次读取需解码全部 5 万张表约 140 ms，之后同一筛选翻页约 3 ms
-  （`BenchmarkCatalogPage`）；10 个并发、一半是新筛选时平均约 8 ms
-  （`BenchmarkCatalogPageParallel`）；
+  （`BenchmarkCatalogPage`）；
+- 并发翻页（`BenchmarkCatalogPageParallel`，GOMAXPROCS=10 个 goroutine 同时请求，
+  一半请求用从未出现过的筛选、不命中行缓存，另一半命中）：吞吐约每 3.5 ms 完成
+  一个请求（ns/op 是总耗时除以请求数，不是单次延迟）；逐请求计时的延迟 p50 约
+  30 ms、p95 约 64 ms（未命中缓存的请求要重新筛选 5 万张表，并与其他请求争用 CPU）；
 - 导入 4500 张表并授权、脱敏：约 100 ms、每次累计分配约 190 MB
   （`BenchmarkEvaluateLargePlan`；按需生成候选与引用索引之前约 200 ms、380 MB）。
 

@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/99designs/gqlgen/client"
 
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
+	"github.com/nethinwei/sql-mcp-server/x/catalog"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
 )
 
@@ -130,7 +132,8 @@ func TestPreviewPlanAndDraft(t *testing.T) {
 			}
 		}
 	}
-	mustPost(t, c, `query($p: JSON!) { previewPlan(plan: $p) { added entities { id } roles { name grants { entity } }
+	mustPost(t, c, `query($p: JSON!) { previewPlan(input: {plan: $p}) {
+		added entities { id } roles { name grants { entity } }
 		report { matched changes { kind } } validation { ok error } } }`, &preview, client.Var("p", mustJSON(importPlan)))
 	p := preview.PreviewPlan
 	if !slices.Equal(p.Added, []string{"shop.public.orders"}) || len(p.Entities) != 1 || len(p.Roles) != 1 ||
@@ -139,7 +142,7 @@ func TestPreviewPlanAndDraft(t *testing.T) {
 		t.Fatalf("preview = %+v", p)
 	}
 	checkPlanDrafts(t, h, c)
-	if err := c.Post(`{ previewPlan(plan: {scope: {}}) { added } }`, &preview); err == nil {
+	if err := c.Post(`{ previewPlan(input: {plan: {scope: {}}}) { added } }`, &preview); err == nil {
 		t.Fatal("a plan with nothing to do must fail")
 	}
 }
@@ -158,7 +161,7 @@ func checkPlanDrafts(t *testing.T, h *harness, c *client.Client) {
 	mustPost(
 		t,
 		c,
-		`query($p: JSON!) { previewPlan(plan: $p) { planId } }`,
+		`query($p: JSON!) { previewPlan(input: {plan: $p}) { planId } }`,
 		&preview,
 		client.Var("p", mustJSON(importPlan)),
 	)
@@ -251,6 +254,30 @@ type pendingResponse struct {
 
 const pendingQuery = `{ pending { plans { key template { name } report { exceptions { kind level } } state { status } }
 	driftTables { key ref missing state { status reason } } drift newTables unscannedSchemas unlistedDatasources } }`
+
+// Reviewing a recurring template's proposal keeps the new tables a grant
+// covers up for confirmation, as the pending page reported them.
+func TestPreviewForReview(t *testing.T) {
+	_, c := planningHarness(t)
+	type response struct {
+		PreviewPlan struct {
+			Report struct {
+				Exceptions []struct{ Kind, Level string }
+			}
+		}
+	}
+	const query = `query($p: JSON!, $r: Boolean) { previewPlan(input: {plan: $p, review: $r}) {
+		report { exceptions { kind level } } } }`
+	var plain, review response
+	mustPost(t, c, query, &plain, client.Var("p", mustJSON(importPlan)), client.Var("r", false))
+	mustPost(t, c, query, &review, client.Var("p", mustJSON(importPlan)), client.Var("r", true))
+	if len(plain.PreviewPlan.Report.Exceptions) != 0 {
+		t.Fatalf("plain = %+v", plain)
+	}
+	if x := review.PreviewPlan.Report.Exceptions; len(x) != 1 || x[0].Kind != "review" || x[0].Level != "confirm" {
+		t.Fatalf("review = %+v", x)
+	}
+}
 
 func TestTemplatesPendingAndTokens(t *testing.T) {
 	_, c := planningHarness(t)
@@ -378,7 +405,7 @@ func TestCatalogLinksScopeAndBatches(t *testing.T) {
 }
 
 func TestScanBatches(t *testing.T) {
-	_, c := planningHarness(t)
+	h, c := planningHarness(t)
 	var batch struct{ StartScanBatch struct{ ID string } }
 	mustPost(t, c, `mutation { startScanBatch(input: {datasource: "shop", schemas: ["public"]}) { id } }`, &batch)
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
@@ -405,6 +432,37 @@ func TestScanBatches(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "nothing") {
 		t.Fatalf("retrying a batch that did not fail: %v", err)
 	}
+	h.assertBatchQuotas(t, c)
+}
+
+// Batches cannot pile up: a datasource runs a few at a time, of a bounded
+// number of schemas each.
+func (h *harness) assertBatchQuotas(t *testing.T, c *client.Client) {
+	t.Helper()
+	scans, err := h.resolver.scans()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range batchOpen {
+		if err := scans.store.PutBatch(context.Background(), catalog.Batch{ID: fmt.Sprint("open", i),
+			Datasource: "shop", Owner: "elsewhere", StartedAt: time.Now(), Heartbeat: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var resp map[string]any
+	err = c.Post(`mutation { startScanBatch(input: {datasource: "shop", schemas: ["public"]}) { id } }`, &resp)
+	if err == nil || !strings.Contains(err.Error(), "running") {
+		t.Fatalf("a batch past the quota: %v", err)
+	}
+	many := make([]string, batchSchemas+1)
+	for i := range many {
+		many[i] = fmt.Sprint("s", i)
+	}
+	err = c.Post(`mutation($s: [String!]!) { startScanBatch(input: {datasource: "shop", schemas: $s}) { id } }`, &resp,
+		client.Var("s", many))
+	if err == nil || !strings.Contains(err.Error(), "at most") {
+		t.Fatalf("a batch of too many schemas: %v", err)
+	}
 }
 
 func TestPlanningPermissions(t *testing.T) {
@@ -412,7 +470,7 @@ func TestPlanningPermissions(t *testing.T) {
 	reader := h.client(auth.PermRead)
 	for _, q := range []string{
 		`{ catalog(input: {filter: {}}) { total } }`, `{ catalogRefs(filter: {}) }`, `{ pending { drift } }`,
-		`{ previewPlan(plan: {scope: {}, import: true}) { added } }`,
+		`{ previewPlan(input: {plan: {scope: {}, import: true}}) { added } }`,
 		`{ catalogLinks(ref: "shop.public.orders") { incoming { ref } } }`,
 		`mutation { createPlanDraft(input: {plan: {scope: {}, import: true}}) { id } }`,
 		`mutation { savePlanTemplate(input: {name: "x", plan: {scope: {}, import: true}, recurring: false}) { name } }`,

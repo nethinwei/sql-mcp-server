@@ -22,6 +22,27 @@ func TestParseMySQLExplainFullScan(t *testing.T) {
 	}
 }
 
+// A full scan's table size is the rows it examines, not what the filter lets
+// through; a full scan without that estimate is not sized.
+func TestParseMySQLExplainTableRows(t *testing.T) {
+	t.Parallel()
+	raw := `{"query_block":{"nested_loop":[` +
+		`{"table":{"access_type":"ALL","rows_examined_per_scan":5000000,"rows_produced_per_join":1}},` +
+		`{"table":{"access_type":"ALL","rows_examined_per_scan":12,"rows_produced_per_join":1}}]}}`
+	p, _ := ParseExplain([]byte(raw))
+	if !p.TableSized || p.TableRows != 5000000 {
+		t.Fatalf("got %+v", p)
+	}
+	p, _ = ParseExplain([]byte(`{"query_block":{"table":{"access_type":"ALL","rows_produced_per_join":1}}}`))
+	if p.TableSized {
+		t.Fatalf("a full scan without rows_examined_per_scan is sized: %+v", p)
+	}
+	p, _ = ParseExplain([]byte(`{"query_block":{"table":{"access_type":"ref","rows_examined_per_scan":3}}}`))
+	if p.TableSized {
+		t.Fatalf("a plan without a full scan is sized: %+v", p)
+	}
+}
+
 func TestParseMySQLExplainConstPoint(t *testing.T) {
 	t.Parallel()
 	raw := `{"query_block":{"cost_info":{"query_cost":"1.0"},"table":{"access_type":"const","rows":1}}}`

@@ -218,8 +218,8 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `maxAggregates` | 整数 | `16` | ≥ 1 | 最多聚合表达式数。 |
 | `maxExpand` | 整数 | `8` | ≥ 1 | 最多展开的关系数。 |
 | `maxProcedureRows` | 整数 | `1000` | ≥ 1 | 存储过程结果行数上限。 |
-| `rejectFullScan` | 布尔 | `true` |  | 拒绝全表扫描（估计行数不超过 fullScanMaxRows 的小表除外）。 |
-| `fullScanMaxRows` | 整数 | `1000` | ≥ 0 | 估计行数不超过此值的全表扫描按普通顺序扫描评分、不被 rejectFullScan 拒绝（配置表、维表）；0 表示全表扫描一律按全表扫描处理。 |
+| `rejectFullScan` | 布尔 | `true` |  | 拒绝全表扫描（表本身不超过 fullScanMaxRows 行的小表除外）。 |
+| `fullScanMaxRows` | 整数 | `1000` | ≥ 0 | 被全表扫描的表本身不超过此行数时（配置表、维表），按普通顺序扫描评分、不被 rejectFullScan 拒绝。按表的规模判断而不是计划的输出行数（PostgreSQL 取 pg_class 统计、MySQL 取 rows_examined_per_scan、OceanBase 取 EXPLAIN EXTENDED 的 table_rows），得不到表的行数时不豁免；0 表示全表扫描一律按全表扫描处理。 |
 | `whitelistPKPoint` | 布尔 | `true` |  | 主键点查询跳过估算（仍受结果上限约束）。 |
 | `requirePKForWrite` | 布尔 | `true` |  | 写操作必须带主键条件；不随 cost.enabled 关闭。 |
 | `requireKnownScan` | 布尔 | `true` |  | 无法判断扫描方式时拒绝；MySQL/OceanBase 的 EXPLAIN 失败即拒绝。 |

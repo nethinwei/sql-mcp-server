@@ -11,7 +11,7 @@ import { can } from '@/api/session'
 import { patterns } from '@/lib/plan'
 
 // The schemas of one datasource and what was scanned of each: never, failed,
-// fresh or stale. Scanning runs on the server in batches, a few schemas at a
+// or when. Scanning runs on the server in batches, a few schemas at a
 // time; a batch goes on when the console is closed, shows its progress here,
 // can be stopped, and what failed can be scanned again on its own.
 const props = defineProps<{ datasource: string }>()
@@ -19,7 +19,6 @@ const { t } = useI18n()
 const message = useMessage()
 const s = computed(() => scansOf(props.datasource))
 const filter = ref('')
-const staleAfter = 7 * 24 * 3600 * 1000
 
 watch(() => props.datasource, (ds) => {
   filter.value = ''
@@ -35,11 +34,10 @@ const shown = computed(() => {
 })
 const busy = (n: SchemaNode) => ['pending', 'running'].includes(batchState(s.value, n.name)?.state ?? '')
 const unscanned = computed(() => shown.value.filter((n) => !n.scannedAt && !busy(n)))
-const staleOnes = computed(() => shown.value.filter((n) => isStale(n) && !busy(n)))
+const idle = computed(() => shown.value.filter((n) => !busy(n)))
 const runningBatch = computed(() => s.value.batches.find((b) => b.state === 'running') ?? null)
 const lastBatch = computed(() => s.value.batches[0] ?? null)
 const when = (at: string | null) => (at ? new Date(at).toLocaleString() : '')
-const isStale = (n: SchemaNode) => !!n.scannedAt && Date.now() - new Date(n.scannedAt).getTime() > staleAfter
 const writable = computed(() => can('admin:write'))
 
 async function act(fn: () => Promise<unknown>) {
@@ -63,10 +61,7 @@ function state(n: SchemaNode) {
     }))
   }
   if (!n.scannedAt) tags.push(h(NText, { depth: 3 }, () => t('datasources.notScanned')))
-  else {
-    tags.push(h(NText, { depth: 2 }, () => t('datasources.scannedMeta', { count: n.tables ?? 0, at: when(n.scannedAt) })))
-    if (isStale(n)) tags.push(h(NTag, { size: 'small', type: 'warning', bordered: false }, () => t('catalog.stale')))
-  }
+  else tags.push(h(NText, { depth: 2 }, () => t('datasources.scannedMeta', { count: n.tables ?? 0, at: when(n.scannedAt) })))
   return h('div', { class: 'tags' }, tags)
 }
 
@@ -126,8 +121,8 @@ const columns = computed<DataTableColumns<SchemaNode>>(() => [
           @click="scan(unscanned.map((n) => n.name))">
           {{ t('catalog.scanUnscanned', { n: unscanned.length }) }}
         </n-button>
-        <n-button size="small" :disabled="!writable || !staleOnes.length" @click="scan(staleOnes.map((n) => n.name))">
-          {{ t('catalog.rescanStale', { n: staleOnes.length }) }}
+        <n-button size="small" :disabled="!writable || !idle.length" @click="scan(idle.map((n) => n.name))">
+          {{ t('catalog.scanAll', { n: idle.length }) }}
         </n-button>
         <n-button size="small" :loading="s.syncing" :disabled="!writable" @click="sync(datasource, true)">
           {{ t('datasources.refreshSchemas') }}

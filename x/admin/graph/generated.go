@@ -385,7 +385,7 @@ type ComplexityRoot struct {
 		PlanScope            func(childComplexity int, scope any, draft *DraftInput) int
 		PlanTemplateVersions func(childComplexity int, name string) int
 		PlanTemplates        func(childComplexity int) int
-		PreviewPlan          func(childComplexity int, plan any, draft *DraftInput) int
+		PreviewPlan          func(childComplexity int, input PlanPreviewInput) int
 		Published            func(childComplexity int) int
 		Revision             func(childComplexity int, id string) int
 		Revisions            func(childComplexity int, limit *int) int
@@ -591,7 +591,7 @@ type QueryResolver interface {
 	CatalogTable(ctx context.Context, ref string, draft *DraftInput) (*ImportTable, error)
 	CatalogLinks(ctx context.Context, ref string, draft *DraftInput) (*CatalogLinks, error)
 	PlanScope(ctx context.Context, scope any, draft *DraftInput) (*ScopeStats, error)
-	PreviewPlan(ctx context.Context, plan any, draft *DraftInput) (*PlanPreview, error)
+	PreviewPlan(ctx context.Context, input PlanPreviewInput) (*PlanPreview, error)
 	PlanTemplates(ctx context.Context) ([]PlanTemplate, error)
 	PlanTemplateVersions(ctx context.Context, name string) ([]PlanTemplate, error)
 	Pending(ctx context.Context, draft *DraftInput) (*PendingWork, error)
@@ -2210,7 +2210,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.PreviewPlan(childComplexity, args["plan"].(any), args["draft"].(*DraftInput)), true
+		return e.ComplexityRoot.Query.PreviewPlan(childComplexity, args["input"].(PlanPreviewInput)), true
 	case "Query.published":
 		if e.ComplexityRoot.Query.Published == nil {
 			break
@@ -2895,6 +2895,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputMcpTokenInput,
 		ec.unmarshalInputPendingStateInput,
 		ec.unmarshalInputPlanDraftInput,
+		ec.unmarshalInputPlanPreviewInput,
 		ec.unmarshalInputPlanTemplateInput,
 		ec.unmarshalInputPublishInput,
 		ec.unmarshalInputRelationshipInput,
@@ -4470,22 +4471,14 @@ func (ec *executionContext) field_Query_planTemplateVersions_args(ctx context.Co
 func (ec *executionContext) field_Query_previewPlan_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "plan",
-		func(ctx context.Context, v any) (any, error) {
-			return ec.unmarshalNJSON2interface(ctx, v)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (PlanPreviewInput, error) {
+			return ec.unmarshalNPlanPreviewInput2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐPlanPreviewInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["plan"] = arg0
-	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "draft",
-		func(ctx context.Context, v any) (*DraftInput, error) {
-			return ec.unmarshalODraftInput2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐDraftInput(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["draft"] = arg1
+	args["input"] = arg0
 	return args, nil
 }
 
@@ -11323,13 +11316,7 @@ func (ec *executionContext) _Query_previewPlan(ctx context.Context, field graphq
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().PreviewPlan(ctx,
-				func() any {
-					if fc.Args["plan"] == nil {
-						return nil
-					}
-					return fc.Args["plan"].(any)
-				}(), fc.Args["draft"].(*DraftInput))
+			return ec.Resolvers.Query().PreviewPlan(ctx, fc.Args["input"].(PlanPreviewInput))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *PlanPreview) graphql.Marshaler {
@@ -15541,6 +15528,54 @@ func (ec *executionContext) unmarshalInputPlanDraftInput(ctx context.Context, ob
 				return it, err
 			}
 			it.PlanID = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputPlanPreviewInput(ctx context.Context, obj any) (PlanPreviewInput, error) {
+	var it PlanPreviewInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["review"]; !present {
+		asMap["review"] = false
+	}
+
+	fieldsInOrder := [...]string{"plan", "draft", "review"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "plan":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("plan"))
+			data, err := ec.unmarshalNJSON2interface(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Plan = data
+		case "draft":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("draft"))
+			data, err := ec.unmarshalODraftInput2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐDraftInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Draft = data
+		case "review":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("review"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Review = data
 		}
 	}
 	return it, nil
@@ -21453,6 +21488,11 @@ func (ec *executionContext) marshalNPlanPreview2ᚖgithubᚗcomᚋnethinweiᚋsq
 		return graphql.Null
 	}
 	return ec._PlanPreview(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNPlanPreviewInput2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐPlanPreviewInput(ctx context.Context, v any) (PlanPreviewInput, error) {
+	res, err := ec.unmarshalInputPlanPreviewInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalNPlanReport2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐPlanReport(ctx context.Context, sel ast.SelectionSet, v *PlanReport) graphql.Marshaler {

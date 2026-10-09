@@ -121,6 +121,48 @@ entities:
 	}
 }
 
+// A diff never carries a secret: DSN passwords and the HTTP token are
+// redacted on both sides, also in context lines, and one that changed is
+// marked changed.
+func TestDiffRedactsSecrets(t *testing.T) {
+	t.Parallel()
+	cfg := func(pw, other, token string) []byte {
+		return []byte(`server: {auth: {token: ` + token + `}}
+databases:
+  shop: {driver: postgres, dsn: "postgres://app:` + pw + `@db/shop"}
+  ledger:
+    driver: mysql
+    connections:
+      reader: {dsn: "ro:` + other + `@tcp(ob)/ledger"}
+entities:
+  - name: orders
+    datasource: shop
+    fields:
+      - name: id
+`)
+	}
+	old, current := cfg("hunter2", "s3cret-ro", "tok-old"), cfg("swordfish", "s3cret-ro", "tok-old")
+	diff, err := Diff("old", old, "current", current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"hunter2", "swordfish", "s3cret-ro", "tok-old"} {
+		if strings.Contains(diff, secret) {
+			t.Fatalf("diff carries %q:\n%s", secret, diff)
+		}
+	}
+	if !strings.Contains(diff, "+    dsn: postgres://app:***@db/shop (changed)") {
+		t.Fatalf("a changed password is not marked:\n%s", diff)
+	}
+	if same, _ := Diff("old", old, "current", old); same != "" {
+		t.Fatalf("unchanged secrets show as changed:\n%s", same)
+	}
+	broken, _ := Diff("old", []byte("database: [hunter2"), "current", current)
+	if strings.Contains(broken, "hunter2") {
+		t.Fatalf("an undecodable payload is shown:\n%s", broken)
+	}
+}
+
 func TestRawDiffComparesBytes(t *testing.T) {
 	t.Parallel()
 	diff, err := RawDiff("a", []byte("x: 1\n"), "b", []byte("x:   1\n"))

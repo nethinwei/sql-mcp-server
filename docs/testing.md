@@ -93,7 +93,8 @@ quickstart 和 attestation 验证脚本由本地 Make target 与 GitHub Actions 
   `x/admin/graph/scans_test.go`，批次存储在四种配置库上跑一致性套件；按需生成的
   候选实体与全量生成逐项一致由 `x/configplan` 的随机测试保证。规模基准（500 个库、5 万张表）：
   `go test ./x/configplan ./x/admin/graph -run '^$' -bench 'Large|CatalogPage'`，
-  其中 `BenchmarkCatalogPageParallel` 模拟多个管理员并发翻页。
+  其中 `BenchmarkCatalogPageParallel` 模拟多个管理员并发翻页：ns/op 是吞吐，
+  `p50-ms`/`p95-ms` 是逐请求计时的延迟，一半请求的筛选从未出现过、不命中缓存。
 
 ## 安全 corpus 与 fuzz
 

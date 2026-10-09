@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -204,7 +205,8 @@ func TestScanBatchIsTakenOver(t *testing.T) {
 	first.Close() // the process stops while scanning
 	second := NewScans(scanjobs.Options{}, store)
 	t.Cleanup(second.Close)
-	if second.takeOver(context.Background(), runners(nil)); batchState(t, store, b.ID).Owner == second.batches.owner {
+	ownedBySecond := func(owner string) bool { return strings.HasPrefix(owner, second.batches.owner+".") }
+	if second.takeOver(context.Background(), runners(nil)); ownedBySecond(batchState(t, store, b.ID).Owner) {
 		t.Fatal("a batch with a fresh heartbeat was taken over")
 	}
 	second.clock = func() time.Time { return time.Now().Add(time.Minute) }
@@ -217,7 +219,7 @@ func TestScanBatchIsTakenOver(t *testing.T) {
 					t.Fatalf("items = %+v", got.Items)
 				}
 			}
-			if got.Owner != second.batches.owner {
+			if !ownedBySecond(got.Owner) {
 				t.Fatalf("owner = %s", got.Owner)
 			}
 			return
@@ -225,6 +227,33 @@ func TestScanBatchIsTakenOver(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("not finished: %+v", got)
 		}
+	}
+}
+
+// A run that lost its batch (paused past its heartbeat while another process
+// took it over) writes nothing when it resumes: not its progress, not its end.
+func TestScanBatchLateWriteOfALostRun(t *testing.T) {
+	t.Parallel()
+	store := catalog.NewMemoryStore()
+	scans := NewScans(scanjobs.Options{}, store)
+	t.Cleanup(scans.Close)
+	now := time.Now()
+	b := catalog.Batch{ID: "b1", Datasource: "shop", Owner: scans.batches.run(), StartedAt: now, Heartbeat: now,
+		Items: []catalog.BatchItem{{Schema: "a", State: "running"}}}
+	if err := store.PutBatch(context.Background(), b); err != nil {
+		t.Fatal(err)
+	}
+	later := now.Add(time.Minute)
+	if ok, _ := store.ClaimBatch(context.Background(), "b1", "other.run", later, later); !ok {
+		t.Fatal("not taken over")
+	}
+	late := &batchRun{batch: b}
+	late.batch.Items = []catalog.BatchItem{{Schema: "a", State: "done"}}
+	late.batch.FinishedAt = now
+	scans.save(late)
+	got := batchState(t, store, "b1")
+	if got.Owner != "other.run" || got.Items[0].State != "running" || !got.FinishedAt.IsZero() || !late.lost {
+		t.Fatalf("after the lost run's write: %+v (lost %v)", got, late.lost)
 	}
 }
 

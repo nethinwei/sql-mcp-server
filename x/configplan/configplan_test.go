@@ -4,7 +4,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
@@ -295,33 +294,9 @@ func TestDecode(t *testing.T) {
 	}
 }
 
-func TestExceptionLevelsAndStaleScans(t *testing.T) {
+// Exceptions are graded by what a reviewer has to do about them.
+func TestExceptionLevels(t *testing.T) {
 	t.Parallel()
-	base := decode(t, baseYAML)
-	sources := shop()
-	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	sources[0].ScannedAt = map[string]time.Time{"public": at, "sales": at.Add(time.Hour)}
-	in := Input{
-		Base:       base,
-		Published:  base,
-		Sources:    sources,
-		Now:        at.Add(30 * 24 * time.Hour),
-		StaleAfter: 7 * 24 * time.Hour,
-	}
-	p, err := Evaluate(in, Plan{Scope: Scope{Drift: true}, Sync: &SyncRule{Remove: true}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(p.Report.Exceptions) != 1 || p.Report.Exceptions[0].Kind != ExceptionStaleScan ||
-		p.Report.Exceptions[0].Level != LevelConfirm || !p.Report.ScannedFrom.Equal(at) {
-		t.Fatalf("report = %+v", p.Report)
-	}
-	in.Now = at.Add(time.Hour)
-	if p, _ = Evaluate(in, Plan{Scope: Scope{Drift: true}, Sync: &SyncRule{Remove: true}}); len(
-		p.Report.Exceptions,
-	) != 0 {
-		t.Fatalf("a fresh scan needs no confirmation: %+v", p.Report.Exceptions)
-	}
 	for kind, want := range map[[2]string]string{
 		{ExceptionQualified, "x"}: LevelInfo, {ExceptionNoKey, ""}: LevelInfo, {ExceptionNoKey, "update"}: LevelConfirm,
 		{ExceptionRenamed, "x"}: LevelInfo, {ExceptionReview, "role:a"}: LevelConfirm,

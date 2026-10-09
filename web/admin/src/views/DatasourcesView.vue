@@ -12,7 +12,7 @@ import type { CatalogFilter, CatalogQuery as CatalogResult, TableStatus } from '
 import { useWorkspace } from '@/stores/workspace'
 import { can } from '@/api/session'
 import { scans } from '@/lib/schemaScans'
-import { patterns, type Plan } from '@/lib/plan'
+import { patterns, scopeOf, type Plan } from '@/lib/plan'
 import { planDraft } from '@/lib/planDraft'
 import {
   checkPage, confirm, emptySelection, filterKey, hiddenSelected, isSelected, needsConfirm, planOf, selectMatched,
@@ -34,9 +34,6 @@ import PlanPreviewDialog from '@/components/plan/PlanPreviewDialog.vue'
 // unpicked from it); the selection is imported, or handed to the plan page,
 // as a plan that is previewed before it enters the workspace.
 type Row = CatalogResult['catalog']['tables'][number]
-
-/** Scans older than this are shown as stale. */
-const staleAfter = 7 * 24 * 3600 * 1000
 
 const { t } = useI18n()
 const ws = useWorkspace()
@@ -196,8 +193,6 @@ function openSync(r: Row) {
   Object.assign(syncing, { show: true, ref: r.ref, entity: r.entity ?? null })
 }
 
-const stale = (at?: string | null) => !!at && Date.now() - new Date(at).getTime() > staleAfter
-
 function statusCell(r: Row) {
   const s = statusTag[r.status]
   const tags = [h(NTag, { size: 'small', type: s.type, bordered: false }, () => t(s.key))]
@@ -212,10 +207,6 @@ function statusCell(r: Row) {
     }))
   }
   if (!r.hasKey) tags.push(h(NTag, { size: 'small', bordered: false, title: t('catalog.noKeyHint') }, () => t('catalog.noKey')))
-  if (stale(r.scannedAt)) {
-    tags.push(h(NTag, { size: 'small', type: 'warning', bordered: false,
-      title: t('catalog.staleHint', { at: new Date(r.scannedAt!).toLocaleString() }) }, () => t('catalog.stale')))
-  }
   return h('div', { class: 'tags' }, tags)
 }
 
@@ -263,6 +254,11 @@ function previewPlan(p: Plan) {
 function onApplied(r: { added: string[]; changed: number }) {
   applied.value = { added: r.added.length, changed: r.changed }
   clearSelection()
+}
+
+/** Sync the fields of every table the filter matches whose columns differ. */
+function syncAll() {
+  previewPlan({ scope: { ...scopeOf(filter.value), drift: true }, import: false, sync: { add: true, remove: true } })
 }
 
 function toPlanPage(withSelection: boolean) {
@@ -315,6 +311,9 @@ function toPlanPage(withSelection: boolean) {
             <n-switch v-model:value="drift" size="small" />
             <n-text class="meta">{{ t('catalog.driftOnly', { n: counts?.drift ?? 0 }) }}</n-text>
           </label>
+          <n-button size="small" :disabled="!counts?.drift" @click="syncAll">
+            {{ t('catalog.syncAll', { n: counts?.drift ?? 0 }) }}
+          </n-button>
         </div>
       </div>
       <n-text depth="3" class="meta scope">

@@ -41,6 +41,7 @@ func Run(t *testing.T, newStore NewStore) {
 		"DeleteSchemas":    testDeleteSchemas,
 		"Batches":          testBatches,
 		"ClaimBatches":     testClaimBatches,
+		"SaveBatches":      testSaveBatches,
 	}
 	for name, fn := range cases {
 		t.Run(name, func(t *testing.T) { fn(t, newStore(t)) })
@@ -206,5 +207,49 @@ func testClaimBatches(t *testing.T, s catalog.Store) {
 	}
 	if ok, _ := s.ClaimBatch(ctx, "missing", "p1", t0, t0); ok {
 		t.Fatal("claimed a missing batch")
+	}
+}
+
+// A run that lost its batch cannot write over the new owner's progress, even
+// when it writes after the takeover; the owner's writes keep a cancel.
+func testSaveBatches(t *testing.T, s catalog.Store) {
+	ctx := context.Background()
+	item := func(state string) []catalog.BatchItem { return []catalog.BatchItem{{Schema: "a", State: state}} }
+	_ = s.PutBatch(ctx, catalog.Batch{ID: "b1", Datasource: "ds", Owner: "p1.r1", StartedAt: t0, Heartbeat: t0,
+		Items: item("pending")})
+	if ok, err := s.SaveBatch(ctx, catalog.Batch{ID: "b1", Owner: "p1.r1", Heartbeat: t0.Add(time.Second),
+		Items: item("running")}); !ok || err != nil {
+		t.Fatalf("the owner cannot save: %v, %v", ok, err)
+	}
+	if ok, _ := s.SaveBatch(ctx, catalog.Batch{ID: "b1", Owner: "p1.r1", Heartbeat: t0.Add(time.Second),
+		Items: item("running")}); !ok {
+		t.Fatal("the owner cannot save what is already there")
+	}
+	_ = s.CancelBatch(ctx, "b1")
+	if ok, _ := s.ClaimBatch(ctx, "b1", "p2.r2", t0.Add(time.Minute), t0.Add(time.Minute)); !ok {
+		t.Fatal("not taken over")
+	}
+	if ok, _ := s.SaveBatch(ctx, catalog.Batch{ID: "b1", Owner: "p1.r1", Heartbeat: t0.Add(time.Hour),
+		Items: item("done"), FinishedAt: t0.Add(time.Hour)}); ok {
+		t.Fatal("the old run saved over the new owner")
+	}
+	got, _, _ := s.Batch(ctx, "b1")
+	if got.Owner != "p2.r2" || got.Items[0].State != "running" || !got.FinishedAt.IsZero() || !got.Canceled {
+		t.Fatalf("after the old run's write: %+v", got)
+	}
+	if ok, _ := s.SaveBatch(ctx, catalog.Batch{ID: "b1", Owner: "p2.r2", Heartbeat: t0.Add(time.Hour),
+		Items: item("canceled"), FinishedAt: t0.Add(time.Hour)}); !ok {
+		t.Fatal("the new owner cannot finish")
+	}
+	got, _, _ = s.Batch(ctx, "b1")
+	if got.Items[0].State != "canceled" || !got.FinishedAt.Equal(t0.Add(time.Hour)) || !got.Canceled {
+		t.Fatalf("finished = %+v", got)
+	}
+	if ok, _ := s.SaveBatch(ctx, catalog.Batch{ID: "b1", Owner: "p2.r2", Heartbeat: t0.Add(2 * time.Hour),
+		Items: item("done")}); ok {
+		t.Fatal("a finished batch was saved again")
+	}
+	if ok, _ := s.SaveBatch(ctx, catalog.Batch{ID: "missing", Owner: "p1"}); ok {
+		t.Fatal("saved a missing batch")
 	}
 }

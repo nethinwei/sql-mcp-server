@@ -215,9 +215,11 @@ func (s Service) Rollback(ctx context.Context, req RollbackRequest) (RollbackRes
 }
 
 // Diff returns a unified diff of two payloads in the current encoding, so
-// revisions stored by an older encoder differ only where their content does.
+// revisions stored by an older encoder differ only where their content does,
+// with their secrets redacted: a changed DSN password or token shows as
+// changed, never its value (the console and agents read this diff).
 func Diff(fromName string, from []byte, toName string, to []byte) (string, error) {
-	return RawDiff(fromName, Reencode(from), toName, Reencode(to))
+	return RawDiff(fromName, redacted(from, nil), toName, redacted(to, from))
 }
 
 // RawDiff compares stored bytes as they are.

@@ -23,10 +23,6 @@ type Input struct {
 	// Review reports every new table a grant covers, as a recurring
 	// template's proposal needs.
 	Review bool
-	// Now and StaleAfter report removals based on scans older than
-	// StaleAfter; zero StaleAfter never does.
-	Now        time.Time
-	StaleAfter time.Duration
 }
 
 // Proposal is the outcome of a plan.
@@ -120,9 +116,6 @@ const (
 	ExceptionDenied = "denied"
 	// ExceptionReview: a new table enters an existing grant.
 	ExceptionReview = "review"
-	// ExceptionStaleScan: fields are removed after a scan older than
-	// Input.StaleAfter; the columns may have come back since.
-	ExceptionStaleScan = "staleScan"
 )
 
 // Exception levels: what a reviewer has to do about an exception.

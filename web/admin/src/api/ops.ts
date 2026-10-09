@@ -244,8 +244,8 @@ export const PlanReportPartsFragment = graphql(`
 `)
 
 export const PreviewPlanQuery = graphql(`
-  query PreviewPlan($plan: JSON!, $draft: DraftInput) {
-    previewPlan(plan: $plan, draft: $draft) {
+  query PreviewPlan($plan: JSON!, $draft: DraftInput, $review: Boolean) {
+    previewPlan(input: { plan: $plan, draft: $draft, review: $review }) {
       planId
       report { ...PlanReportParts }
       added
