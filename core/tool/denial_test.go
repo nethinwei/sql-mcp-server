@@ -32,6 +32,7 @@ func TestDenialForSentinels(t *testing.T) {
 		{ErrTransactionNotFound, "TRANSACTION_NOT_FOUND", false},
 		{ErrTransactionScope, "TRANSACTION_SCOPE", false},
 		{ErrTransactionCapacity, "TRANSACTION_CAPACITY", true},
+		{ErrTransactionStale, "TRANSACTION_STALE", false},
 	}
 	for _, c := range cases {
 		denial, ok := DenialFor(c.err, "d1")

@@ -11,117 +11,37 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/tool"
 )
 
-func TestRuntimeReloadDrainsBeforePublishing(t *testing.T) {
+// A reload serves the new App at once: a request in flight on the old one
+// delays neither the reload nor new requests, and the old App closes once that
+// request finishes.
+func TestRuntimeReloadPublishesWithoutWaitingForLeases(t *testing.T) {
 	oldProvider := &fakeProvider{}
-	nextProvider := &fakeProvider{}
-	oldApp := &App{Provider: oldProvider}
-	nextApp := &App{Provider: nextProvider}
-	runtime := NewRuntimeWithBuilder(oldApp, func(string) (*App, error) {
+	nextApp := &App{Provider: &fakeProvider{}}
+	runtime := NewRuntimeWithBuilder(&App{Provider: oldProvider}, func(string) (*App, error) {
 		return nextApp, nil
 	})
-	release := acquireRuntimeApp(t, runtime, oldApp)
-	done := startRuntimeReload(runtime)
-	waitForRetiredRuntimeSnapshot(t, runtime)
-	newRequest := startRuntimeAcquire(runtime)
-	assertRuntimeReloadWaitsForLease(t, runtime, oldApp, done, newRequest)
+	_, release, err := runtime.Acquire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Reload("ignored"); err != nil {
+		t.Fatal(err)
+	}
+	got, releaseNext, err := runtime.Acquire()
+	if err != nil || got != nextApp {
+		t.Fatalf("Acquire during the old lease = %p, %v; want the new app", got, err)
+	}
+	releaseNext()
+	if oldProvider.closed != 0 {
+		t.Fatal("the old app closed while a request still used it")
+	}
 	release()
-	assertRuntimeReloadPublishedNewApp(t, runtime, nextApp, done, newRequest)
+	runtime.retiring.Wait()
 	if oldProvider.closed != 1 {
 		t.Fatalf("old provider closed %d times", oldProvider.closed)
 	}
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func acquireRuntimeApp(t *testing.T, runtime *Runtime, want *App) func() {
-	t.Helper()
-	leased, release, err := runtime.Acquire()
-	if err != nil || leased != want {
-		t.Fatalf("Acquire = %p, %v", leased, err)
-	}
-	return release
-}
-
-type runtimeAcquireResult struct {
-	app     *App
-	release func()
-	err     error
-}
-
-func startRuntimeReload(runtime *Runtime) chan error {
-	done := make(chan error, 1)
-	go func() { done <- runtime.Reload("ignored") }()
-	return done
-}
-
-func startRuntimeAcquire(runtime *Runtime) chan runtimeAcquireResult {
-	newRequest := make(chan runtimeAcquireResult, 1)
-	go func() {
-		app, release, err := runtime.Acquire()
-		newRequest <- runtimeAcquireResult{app: app, release: release, err: err}
-	}()
-	return newRequest
-}
-
-func waitForRetiredRuntimeSnapshot(t *testing.T, runtime *Runtime) {
-	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for {
-		snapshot := runtime.current.Load()
-		snapshot.mu.Lock()
-		retired := snapshot.retired
-		snapshot.mu.Unlock()
-		if retired {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("old authorization snapshot was not retired")
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
-func assertRuntimeReloadWaitsForLease(
-	t *testing.T, runtime *Runtime, oldApp *App, done chan error, newRequest chan runtimeAcquireResult,
-) {
-	t.Helper()
-	if runtime.Current() != oldApp {
-		t.Fatal("new app was published before old authorization snapshot drained")
-	}
-	select {
-	case err := <-done:
-		t.Fatalf("reload completed before old lease drained: %v", err)
-	default:
-	}
-	select {
-	case got := <-newRequest:
-		if got.release != nil {
-			got.release()
-		}
-		t.Fatalf("new request acquired draining snapshot: app=%p err=%v", got.app, got.err)
-	case <-time.After(20 * time.Millisecond):
-	}
-}
-
-func assertRuntimeReloadPublishedNewApp(
-	t *testing.T, runtime *Runtime, nextApp *App, done chan error, newRequest chan runtimeAcquireResult,
-) {
-	t.Helper()
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	got := <-newRequest
-	if got.err != nil {
-		t.Fatal(got.err)
-	}
-	if got.app != nextApp {
-		got.release()
-		t.Fatalf("new request acquired app %p, want tightened snapshot %p", got.app, nextApp)
-	}
-	got.release()
-	if runtime.Current() != nextApp {
-		t.Fatal("new app was not published after drain")
 	}
 }
 
@@ -160,24 +80,24 @@ func TestRuntimeReloadPreservesTransactionManager(t *testing.T) {
 	}
 }
 
-func TestRuntimeReloadRejectsTransactionLimitChanges(t *testing.T) {
+func TestRuntimeReloadUpdatesTransactionLimits(t *testing.T) {
 	oldManager := tool.NewTransactionManager(time.Minute, 2)
-	nextProvider := &fakeProvider{}
 	runtime := NewRuntimeWithBuilder(
 		&App{Provider: &fakeProvider{}, Transactions: oldManager},
 		func(string) (*App, error) {
 			return &App{
-				Provider: nextProvider, Transactions: tool.NewTransactionManager(2*time.Minute, 3),
+				Provider: &fakeProvider{}, Transactions: tool.NewTransactionManager(2*time.Minute, 3),
 			}, nil
 		},
 	)
-	if err := runtime.Reload("ignored"); err == nil {
-		t.Fatal("transaction ttl/maxOpen change was accepted")
+	defer runtime.Close()
+	if err := runtime.Reload("ignored"); err != nil {
+		t.Fatal(err)
 	}
-	if runtime.Current().Transactions != oldManager || nextProvider.closed != 1 {
-		t.Fatalf("failed reload changed runtime or leaked replacement: closed=%d", nextProvider.closed)
+	ttl, maxOpen := runtime.Current().Transactions.Configuration()
+	if runtime.Current().Transactions != oldManager || ttl != 2*time.Minute || maxOpen != 3 {
+		t.Fatalf("manager kept = %v, limits = %s/%d", runtime.Current().Transactions == oldManager, ttl, maxOpen)
 	}
-	_ = runtime.Close()
 }
 
 func TestRuntimeReloadUpdatesBudgetLimitsAndPreservesState(t *testing.T) {
@@ -297,5 +217,64 @@ func BenchmarkRuntimeAcquire(b *testing.B) {
 			b.Fatal(err)
 		}
 		release()
+	}
+}
+
+// While maxRetiring replaced snapshots still serve requests, a reload is
+// refused rather than piling up more; it succeeds once one drains.
+func TestRuntimeReloadRefusedWhileEarlierSnapshotsDrain(t *testing.T) {
+	runtime := NewRuntimeWithBuilder(&App{Provider: &fakeProvider{}}, func(string) (*App, error) {
+		return &App{Provider: &fakeProvider{}}, nil
+	})
+	defer runtime.Close()
+	var releases []func()
+	for range maxRetiring {
+		_, release, err := runtime.Acquire()
+		if err != nil {
+			t.Fatal(err)
+		}
+		releases = append(releases, release)
+		if err := runtime.Reload("ignored"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := runtime.Reload("ignored"); !errors.Is(err, ErrReloadBacklog) {
+		t.Fatalf("reload with %d snapshots draining = %v", maxRetiring, err)
+	}
+	releases[0]()
+	for runtime.draining.Load() >= maxRetiring {
+		time.Sleep(time.Millisecond)
+	}
+	if err := runtime.Reload("ignored"); err != nil {
+		t.Fatalf("reload once one drained: %v", err)
+	}
+	for _, release := range releases[1:] {
+		release()
+	}
+}
+
+// A transport subscribing while reloads run gets the current App at once and
+// then every App published after: none falls between reading the current
+// one and subscribing.
+func TestRuntimeOnPublishStartsWithTheCurrentApp(t *testing.T) {
+	app := func() *App { return &App{Provider: &fakeProvider{}} }
+	first, second, third := app(), app(), app()
+	next := []*App{second, third}
+	runtime := NewRuntimeWithBuilder(first, func(string) (*App, error) {
+		app := next[0]
+		next = next[1:]
+		return app, nil
+	})
+	defer runtime.Close()
+	if err := runtime.Reload("ignored"); err != nil {
+		t.Fatal(err)
+	}
+	var seen []*App
+	runtime.OnPublish(func(app *App) { seen = append(seen, app) })
+	if err := runtime.Reload("ignored"); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 2 || seen[0] != second || seen[1] != third {
+		t.Fatalf("seen %d apps; want the current one, then the published one", len(seen))
 	}
 }

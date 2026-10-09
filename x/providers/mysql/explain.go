@@ -31,40 +31,65 @@ func (e mysqlExplainer) Explain(ctx context.Context, query string, args []any) (
 	if err := rows.Scan(&raw); err != nil {
 		return cost.Plan{ScanType: cost.ScanUnknown}, nil
 	}
-	return parseMySQLExplain([]byte(raw))
+	return ParseExplain([]byte(raw))
 }
 
-type mysqlExplain struct {
-	QueryBlock struct {
-		CostInfo struct {
-			QueryCost string `json:"query_cost"`
-		} `json:"cost_info"`
-		Table struct {
-			AccessType     string `json:"access_type"`
-			Rows           int64  `json:"rows_examined_per_scan"`
-			UsingFilesort  bool   `json:"using_filesort"`
-			UsingTempTable bool   `json:"using_temporary_table"`
-		} `json:"table"`
-	} `json:"query_block"`
-}
-
-// parseMySQLExplain parses EXPLAIN FORMAT=JSON output, degrading on surprise.
-func parseMySQLExplain(b []byte) (cost.Plan, error) {
-	var ex mysqlExplain
-	if err := json.Unmarshal(b, &ex); err != nil {
+// ParseExplain parses MySQL EXPLAIN FORMAT=JSON output (OceanBase may mirror
+// it), degrading on
+// surprise. The tables a query reads may sit under grouping, ordering or
+// join steps, so the plan is as risky as the worst access among them, and
+// estimates the most rows any table is scanned for or a join produces; a sort
+// or temporary table at any step counts.
+func ParseExplain(b []byte) (cost.Plan, error) {
+	var root struct {
+		QueryBlock map[string]any `json:"query_block"`
+	}
+	if err := json.Unmarshal(b, &root); err != nil || root.QueryBlock == nil {
 		return cost.Plan{ScanType: cost.ScanUnknown, Raw: b}, nil
 	}
-	qb := ex.QueryBlock
-	c, _ := strconv.ParseFloat(strings.TrimSpace(qb.CostInfo.QueryCost), 64)
-	return cost.Plan{
-		TotalCost:     c,
-		EstimatedRows: qb.Table.Rows,
-		ScanType:      mysqlScanType(qb.Table.AccessType),
-		HasSort:       qb.Table.UsingFilesort,
-		HasTempTable:  qb.Table.UsingTempTable,
-		StatsFresh:    true,
-		Raw:           b,
-	}, nil
+	plan := cost.Plan{ScanType: cost.ScanUnknown, StatsFresh: true, Raw: b}
+	if info, ok := root.QueryBlock["cost_info"].(map[string]any); ok {
+		total, _ := info["query_cost"].(string)
+		plan.TotalCost, _ = strconv.ParseFloat(strings.TrimSpace(total), 64)
+	}
+	tables := 0
+	eachJSONObject(root.QueryBlock, func(node map[string]any) {
+		if sort, _ := node["using_filesort"].(bool); sort {
+			plan.HasSort = true
+		}
+		if temp, _ := node["using_temporary_table"].(bool); temp {
+			plan.HasTempTable = true
+		}
+		access, ok := node["access_type"].(string)
+		if !ok {
+			return
+		}
+		if scan := mysqlScanType(access); tables == 0 || cost.Worse(scan, plan.ScanType) {
+			plan.ScanType = scan
+		}
+		tables++
+		for _, key := range []string{"rows_examined_per_scan", "rows_produced_per_join"} {
+			if rows, ok := node[key].(float64); ok && int64(rows) > plan.EstimatedRows {
+				plan.EstimatedRows = int64(rows)
+			}
+		}
+	})
+	return plan, nil
+}
+
+// eachJSONObject calls fn for v and every object nested in it.
+func eachJSONObject(v any, fn func(map[string]any)) {
+	switch v := v.(type) {
+	case map[string]any:
+		fn(v)
+		for _, child := range v {
+			eachJSONObject(child, fn)
+		}
+	case []any:
+		for _, child := range v {
+			eachJSONObject(child, fn)
+		}
+	}
 }
 
 func mysqlScanType(at string) cost.ScanType {

@@ -17,6 +17,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/audit"
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/hook"
 	"github.com/nethinwei/sql-mcp-server/version"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
@@ -106,8 +107,8 @@ func runServe(ctx context.Context, args []string) error {
 		return err
 	}
 	defer otelShutdown()
-	build := serveBuilder(cfg, overrides, hooks)
-	runtime, err := newServeRuntime(cfg, build, hooks)
+	auths := &preparedAuths{http: *transport == "http", addr: *addr} // what each reload prepares
+	build, runtime, err := newServeRuntime(cfg, overrides, hooks, auths)
 	if err != nil {
 		return err
 	}
@@ -120,21 +121,27 @@ func runServe(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	return serveTransport(ctx, runtime, cfg, *transport, *addr, metrics, adminHandler)
+	return serveTransport(ctx, runtime, cfg, *transport, *addr, metrics, adminHandler, auths)
 }
 
-// newServeRuntime assembles the startup App; file reloads go through build.
+// newServeRuntime assembles the startup App and returns the reload builder
+// with the runtime; both assemble on the services every configuration of the
+// process shares (the cache, IO quota and connections). File reloads go
+// through build too.
 func newServeRuntime(
 	cfg *config.Config,
-	build func(*config.Config) (*bootstrap.App, error),
+	overrides serveOverrides,
 	hooks *hook.Hooks,
-) (*bootstrap.Runtime, error) {
-	app, err := bootstrap.Assemble(cfg)
+	auths *preparedAuths,
+) (func(*config.Config) (*bootstrap.App, error), *bootstrap.Runtime, error) {
+	shared := bootstrap.NewShared()
+	build := serveBuilder(cfg, overrides, hooks, shared, auths)
+	app, err := shared.Assemble(cfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	app.Hooks = hooks
-	return bootstrap.NewRuntimeWithBuilder(app, func(path string) (*bootstrap.App, error) {
+	return build, bootstrap.NewRuntimeWithBuilder(app, func(path string) (*bootstrap.App, error) {
 		next, err := bootstrap.Load(path)
 		if err != nil {
 			return nil, err
@@ -207,11 +214,14 @@ func applyUserOverride(cfg *config.Config, user string) error {
 }
 
 // serveBuilder returns the reload builder shared by file and store mode: it
-// rejects changes that need a restart, re-applies CLI overrides and assembles.
+// rejects changes that need a restart, re-applies CLI overrides and assembles
+// on the services every configuration shares.
 func serveBuilder(
 	startup *config.Config,
 	overrides serveOverrides,
 	hooks *hook.Hooks,
+	shared *bootstrap.Shared,
+	auths *preparedAuths,
 ) func(*config.Config) (*bootstrap.App, error) {
 	return func(next *config.Config) (*bootstrap.App, error) {
 		if err := bootstrap.CheckHotReload(startup, next); err != nil {
@@ -220,11 +230,16 @@ func serveBuilder(
 		if err := overrides.apply(next); err != nil {
 			return nil, err
 		}
-		app, err := bootstrap.Assemble(next)
+		auth, err := auths.prepare(next)
+		if err != nil {
+			return nil, err
+		}
+		app, err := shared.Assemble(next)
 		if err != nil {
 			return nil, err
 		}
 		app.Hooks = hooks
+		auths.keep(app, auth)
 		return app, nil
 	}
 }
@@ -245,7 +260,11 @@ func serveTransport(
 	transport, addr string,
 	metrics http.Handler,
 	adminHandler http.Handler,
+	auths *preparedAuths,
 ) error {
+	if scans, ok := adminHandler.(interface{ Close() }); ok {
+		defer scans.Close() // background schema scans
+	}
 	srv := mcpserver.NewRuntimeServer(runtime)
 	switch transport {
 	case "stdio":
@@ -255,15 +274,18 @@ func serveTransport(
 		}
 		return err
 	case "http":
+		// The current snapshot's: a reload may have published another one.
+		if current := runtime.Current(); current != nil && current.Config() != nil {
+			cfg = current.Config()
+		}
+		auth := httpAuth(cfg, runtime)
 		return mcpserver.ServeHTTP(ctx, srv, mcpserver.HTTPConfig{
-			Addr: addr, Token: cfg.Server.Auth.Token,
-			TrustProxyHeaders: cfg.Server.Auth.TrustProxyHeaders,
-			TrustedProxyCIDRs: cfg.Server.Auth.TrustedProxyCIDRs,
-			TLSCert:           cfg.Server.Auth.TLS.Cert, TLSKey: cfg.Server.Auth.TLS.Key,
-			ClientCA: cfg.Server.Auth.TLS.ClientCA, OnSessionClosed: runtime.RollbackSession,
+			Addr: addr, Token: auth.Token, TrustProxyHeaders: auth.TrustProxyHeaders,
+			TrustedProxyCIDRs: auth.TrustedProxyCIDRs, TLSCert: auth.TLSCert, TLSKey: auth.TLSKey,
+			ClientCA: auth.ClientCA, Users: auth.Users, OnSessionClosed: runtime.RollbackSession,
 			SnapshotReady: runtime.SnapshotReady, DatabaseReady: runtime.DatabasesReady,
-			Metrics: metrics, Users: httpUsers(cfg, runtime), RevokedPrincipals: runtime.OnRevokedPrincipals,
-			Admin: adminHandler,
+			Metrics: metrics, RevokedPrincipals: runtime.OnRevokedPrincipals,
+			Admin: adminHandler, AuthChanges: auths.follow(runtime),
 			SnapshotStale: func() int64 {
 				if stale, ok := runtime.Stale(); ok {
 					return stale.RevisionID
@@ -274,15 +296,6 @@ func serveTransport(
 	default:
 		return errors.New("unknown transport: " + transport)
 	}
-}
-
-// httpUsers returns the runtime user directory when users are configured.
-// Users cannot be switched on or off by reload, so the startup view holds.
-func httpUsers(cfg *config.Config, runtime *bootstrap.Runtime) mcpserver.UserDirectory {
-	if len(cfg.Users) == 0 {
-		return nil
-	}
-	return runtime
 }
 
 func resolveServeEndpoint(fs *flag.FlagSet, cfg *config.Config, transport, addr *string) {
@@ -319,11 +332,15 @@ func runAddEntity(args []string) error {
 	name := fs.String("name", "", "logical entity name")
 	source := fs.String("source", "", "database object name")
 	datasource := fs.String("datasource", "default", "datasource name")
+	schema := fs.String("schema", "", "database schema (empty: the connection's default)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *name == "" {
 		return errors.New("entity name is required")
+	}
+	if strings.ContainsRune(*name, '.') {
+		return errors.New("entity name has no dots: entities are named datasource.schema.name")
 	}
 	if *source == "" {
 		*source = *name
@@ -340,10 +357,11 @@ func runAddEntity(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := ensureEntityNameAvailable(entities, *name); err != nil {
+	id := entity.ID(*datasource, *schema, *name)
+	if err := ensureEntityAvailable(entities, id); err != nil {
 		return err
 	}
-	entities.Content = append(entities.Content, newEntityYAMLNode(*name, *source, *datasource))
+	entities.Content = append(entities.Content, newEntityYAMLNode(*name, *source, *datasource, *schema))
 	out, err := yaml.Marshal(&doc)
 	if err != nil {
 		return err
@@ -371,23 +389,30 @@ func entitiesSequenceNode(doc *yaml.Node) (*yaml.Node, error) {
 	return root.Content[len(root.Content)-1], nil
 }
 
-func ensureEntityNameAvailable(entities *yaml.Node, name string) error {
+// ensureEntityAvailable rejects an entity whose ID (datasource.schema.name)
+// one of entities already has; names may repeat in other namespaces.
+func ensureEntityAvailable(entities *yaml.Node, id string) error {
 	for _, item := range entities.Content {
+		keys := map[string]string{}
 		for i := 0; i+1 < len(item.Content); i += 2 {
-			if item.Content[i].Value == "name" && item.Content[i+1].Value == name {
-				return fmt.Errorf("entity %q already exists", name)
-			}
+			keys[item.Content[i].Value] = item.Content[i+1].Value
+		}
+		if entity.ID(keys["datasource"], keys["schema"], keys["name"]) == id {
+			return fmt.Errorf("entity %q already exists", id)
 		}
 	}
 	return nil
 }
 
-func newEntityYAMLNode(name, source, datasource string) *yaml.Node {
+func newEntityYAMLNode(name, source, datasource, schema string) *yaml.Node {
 	entityNode := &yaml.Node{Kind: yaml.MappingNode}
 	appendYAMLPair(entityNode, "name", name)
 	appendYAMLPair(entityNode, "source", source)
 	if datasource != "default" {
 		appendYAMLPair(entityNode, "datasource", datasource)
+	}
+	if schema != "" {
+		appendYAMLPair(entityNode, "schema", schema)
 	}
 	entityNode.Content = append(entityNode.Content,
 		&yaml.Node{Kind: yaml.ScalarNode, Value: "fields"},
@@ -463,7 +488,7 @@ func exportYAML(cfg *config.Config) ([]byte, error) {
 func runExplain(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("explain", flag.ContinueOnError)
 	path := fs.String("config", "config.yaml", "config file path")
-	name := fs.String("entity", "", "entity name")
+	name := fs.String("entity", "", "entity: name, schema.name, datasource.name or datasource.schema.name")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -472,33 +497,29 @@ func runExplain(args []string, stdout io.Writer) error {
 		return err
 	}
 	type explanation struct {
+		ID         string               `json:"id"`
 		Name       string               `json:"name"`
 		Source     string               `json:"source"`
 		Datasource string               `json:"datasource"`
+		Schema     string               `json:"schema,omitempty"`
 		Kind       string               `json:"kind"`
 		Fields     []config.FieldConfig `json:"fields"`
 		Roles      config.RoleConfig    `json:"roles"`
 	}
-	out := make([]explanation, 0)
-	for _, entity := range cfg.Entities {
-		if *name != "" && entity.Name != *name {
-			continue
+	entities := cfg.Entities
+	if *name != "" {
+		e, err := config.NewEntityRefs(cfg.Entities).Resolve(*name)
+		if err != nil {
+			return err
 		}
-		source := entity.Source
-		if source == "" {
-			source = entity.Name
-		}
-		datasource := entity.DataSource
-		if datasource == "" {
-			datasource = "default"
-		}
-		out = append(out, explanation{
-			Name: entity.Name, Source: source, Datasource: datasource,
-			Kind: entity.Kind, Fields: entity.Fields, Roles: entity.Roles,
-		})
+		entities = []config.EntityConfig{e}
 	}
-	if *name != "" && len(out) == 0 {
-		return fmt.Errorf("entity %q not found", *name)
+	out := make([]explanation, 0, len(entities))
+	for _, e := range entities {
+		out = append(out, explanation{
+			ID: e.ID(), Name: e.Name, Source: e.PhysicalSource(), Datasource: e.DatasourceName(), Schema: e.Schema,
+			Kind: e.Kind, Fields: e.Fields, Roles: e.Roles,
+		})
 	}
 	encoder := json.NewEncoder(stdout)
 	encoder.SetIndent("", "  ")

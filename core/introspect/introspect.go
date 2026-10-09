@@ -33,6 +33,35 @@ type Catalog struct {
 	// FoldCase matches schema and table names case-insensitively, as the
 	// database compares them (see Physical.FoldCase).
 	FoldCase bool
+	// byName indexes Tables by lower-cased table name; it serves lookups
+	// while it covers all of Tables (indexed of them).
+	byName  map[string][]int
+	indexed int
+}
+
+// Index builds the name index LoadCatalog returns catalogs with, so lookups
+// of every configured entity do not scan every table. A catalog put together
+// otherwise is indexed once its Tables are set.
+func (c *Catalog) Index() {
+	c.byName = make(map[string][]int, len(c.Tables))
+	for n, t := range c.Tables {
+		key := strings.ToLower(tableName(t))
+		c.byName[key] = append(c.byName[key], n)
+	}
+	c.indexed = len(c.Tables)
+}
+
+// positions lists the tables that may be named table: by the index while it
+// is current, else all of them.
+func (c Catalog) positions(table string) []int {
+	if c.byName != nil && c.indexed == len(c.Tables) {
+		return c.byName[strings.ToLower(table)]
+	}
+	all := make([]int, len(c.Tables))
+	for n := range all {
+		all[n] = n
+	}
+	return all
 }
 
 func (c Catalog) sameName(a, b string) bool {
@@ -48,7 +77,8 @@ func (c Catalog) Lookup(schema, table string) (entity.Entity, bool) {
 		schema = c.Default
 	}
 	var found []entity.Entity
-	for _, t := range c.Tables {
+	for _, n := range c.positions(table) {
+		t := c.Tables[n]
 		if !c.sameName(tableName(t), table) {
 			continue
 		}
@@ -85,6 +115,7 @@ func LoadCatalog(ctx context.Context, in Introspector, schemas []string, withDef
 		return cat, nil
 	}
 	cat.Tables, err = in.Discover(ctx, schemas)
+	cat.Index()
 	return cat, err
 }
 
@@ -104,6 +135,7 @@ func loadWithoutDefault(ctx context.Context, in Introspector, schemas []string, 
 		}
 		cat.Tables = append(cat.Tables, tables...)
 	}
+	cat.Index()
 	return cat, nil
 }
 

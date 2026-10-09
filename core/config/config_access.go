@@ -125,9 +125,8 @@ func canonicalAccessName(kind, name string) (string, error) {
 // validateAccess checks top-level roles, users, tenant policies and user
 // budgets. It runs after entity validation so entity references are known.
 func (c *Config) validateAccess() error {
-	entities := make(map[string]EntityConfig, len(c.Entities))
+	entities := NewEntityRefs(c.Entities)
 	for _, e := range c.Entities {
-		entities[e.Name] = e
 		if e.TenantPolicy != nil {
 			if err := validateRowPolicy(e.TenantPolicy); err != nil {
 				return fmt.Errorf("config: entity %q tenant policy: %w", e.Name, err)
@@ -145,7 +144,7 @@ func (c *Config) validateAccess() error {
 	return c.validateUsers(entities)
 }
 
-func (c *Config) validateUsers(entities map[string]EntityConfig) error {
+func (c *Config) validateUsers(entities EntityRefs) error {
 	known := c.knownRoles()
 	if len(c.Users) > 0 {
 		for role := range known {
@@ -187,7 +186,7 @@ func validateUser(
 	user UserConfig,
 	known map[string]bool,
 	hashes map[string]string,
-	entities map[string]EntityConfig,
+	entities EntityRefs,
 ) error {
 	if user.TokenHash != "" {
 		if other, exists := hashes[user.TokenHash]; exists {
@@ -244,12 +243,12 @@ func validatePermissions(kind, owner string, permissions []string) error {
 	return nil
 }
 
-func validateGrants(kind, owner string, grants []GrantConfig, entities map[string]EntityConfig) error {
+func validateGrants(kind, owner string, grants []GrantConfig, entities EntityRefs) error {
 	for i, grant := range grants {
 		where := fmt.Sprintf("config: %s %q grant %d", kind, owner, i)
-		e, ok := entities[grant.Entity]
-		if !ok {
-			return fmt.Errorf("%s references unknown entity %q", where, grant.Entity)
+		e, err := entities.Resolve(grant.Entity)
+		if err != nil {
+			return fmt.Errorf("%s: %w", where, err)
 		}
 		if duplicate, ok := firstDuplicate(grant.Actions); ok {
 			return fmt.Errorf("%s on entity %q lists action %q twice", where, grant.Entity, duplicate)

@@ -30,6 +30,14 @@ const (
 	ScanFull
 )
 
+// scanRisk orders scan types from the safest to the riskiest.
+var scanRisk = map[ScanType]int{ScanPoint: 0, ScanIndex: 1, ScanSeq: 2, ScanUnknown: 3, ScanFull: 4}
+
+// Worse reports whether a is a riskier access than b. A plan reading several
+// tables (a join, or a table under a grouping or sorting step) is as risky
+// as its worst access.
+func Worse(a, b ScanType) bool { return scanRisk[a] > scanRisk[b] }
+
 // Plan is the normalized physical plan from an EXPLAIN. TotalCost is the
 // dialect-native cost (reference only); decisions rely on the normalized Score.
 type Plan struct {

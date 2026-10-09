@@ -1,11 +1,21 @@
-# Initial configuration imported into the config store for the console demo
-# (data: init.sql). Entities, roles and users are then managed in the admin
-# console; datasources stay in this file (the console never handles
-# credentials). The finance and ops schemas are left out on purpose: import
-# them from the console.
+# Initial configuration imported into the config store for the console demo:
+# one datasource of each supported kind, each a business of its own that
+# shows every feature (README.md lists which table shows what).
+#   shop       PostgreSQL  e-commerce   init.sql
+#   warehouse  MySQL       warehousing  mysql-init.sql
+#   ledger     OceanBase   bookkeeping  ob-init.sql
+# Entities, roles and users are then managed in the admin console;
+# datasources stay in this file (the console never handles credentials). One
+# schema of each datasource is left out on purpose: import it from the console.
 #
 # Descriptions: an entity or field without one uses the database comment, so
 # only overrides are written here (sales.orders.amount, for example).
+#
+# Entities are named like their tables, in the namespace datasource.schema:
+# shop.crm.tenants, warehouse.logistics.tenants and ledger.ledger.tenants are
+# three entities. A reference (grants, relationships, affects) is the shortest
+# suffix naming one entity: "tenants" alone would be ambiguous, so it is
+# written crm.tenants; publishing rejects an ambiguous reference.
 version: "1"
 
 server:
@@ -13,12 +23,39 @@ server:
   addr: "0.0.0.0:8080"
 
 databases:
+  # Each datasource reaches its database through two accounts: reads go to
+  # the read-only one (a replica); writes, procedures and a session's reads
+  # for 5s after it writes go to the read-write one.
   shop:
     driver: postgres
-    dsn: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}/shop?sslmode=disable"
-  analytics:
-    driver: postgres
-    dsn: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}/analytics?sslmode=disable"
+    connections:
+      reader:
+        role: replica
+        dsn: "postgres://shop_ro:${PG_READER_PASSWORD}@${PG_HOST}/shop?sslmode=disable"
+      writer:
+        dsn: "postgres://shop_rw:${PG_WRITER_PASSWORD}@${PG_HOST}/shop?sslmode=disable"
+    routing: {read: reader, write: writer, execute: writer}
+    readAfterWrite: 5s
+  warehouse:
+    driver: mysql
+    connections:
+      reader:
+        role: replica
+        dsn: "warehouse_ro:${MYSQL_READER_PASSWORD}@tcp(${MYSQL_HOST})/inventory?parseTime=true"
+      writer:
+        dsn: "warehouse_rw:${MYSQL_WRITER_PASSWORD}@tcp(${MYSQL_HOST})/inventory?parseTime=true"
+    routing: {read: reader, write: writer, execute: writer}
+    readAfterWrite: 5s
+  ledger:
+    driver: oceanbase
+    connections:
+      reader:
+        role: replica
+        dsn: "ledger_ro:${OB_READER_PASSWORD}@tcp(${OB_HOST})/ledger?parseTime=true"
+      writer:
+        dsn: "ledger_rw:${OB_WRITER_PASSWORD}@tcp(${OB_HOST})/ledger?parseTime=true"
+    routing: {read: reader, write: writer, execute: writer}
+    readAfterWrite: 5s
 
 tools:
   describeEntities: true
@@ -26,6 +63,11 @@ tools:
   aggregateRecords: true
   createRecord: true
   updateRecord: true
+  deleteRecord: true
+  executeEntity: true
+  beginTransaction: true
+  commitTransaction: true
+  rollbackTransaction: true
 
 cost:
   enabled: true
@@ -33,6 +75,11 @@ cost:
   rejectFullScan: true
   whitelistPKPoint: true
   queryTimeout: 5s
+  # A procedure runs only when trusted and its CALL is allowed here.
+  allowTemplates:
+    - 'shop:CALL "crm"."close_ticket"($1)'
+    - "warehouse:CALL `inventory`.`restock`(?, ?, ?)"
+    - "ledger:CALL `ledger`.`post_entry`(?, ?, ?)"
 
 budget:
   roles:
@@ -78,7 +125,7 @@ entities:
       - {name: vip_level}
       - {name: created_at}
     relationships:
-      - {name: orders, target: orders, cardinality: many, joinOn: {id: customer_id}}
+      - {name: orders, target: sales.orders, cardinality: many, joinOn: {id: customer_id}}
       - {name: tickets, target: support_tickets, cardinality: many, joinOn: {id: customer_id}}
 
   - name: support_tickets
@@ -96,8 +143,20 @@ entities:
       - {name: priority}
       - {name: created_at}
       - {name: closed_at}
+      - {name: order_id}
     relationships:
       - {name: customer, target: customers, cardinality: belongs-to, joinOn: {customer_id: id}}
+      - {name: order, target: sales.orders, cardinality: belongs-to, joinOn: {order_id: id}}
+
+  # A stored procedure, exposed as its own MCP tool.
+  - name: close_ticket
+    datasource: shop
+    schema: crm
+    source: close_ticket
+    kind: procedure
+    params: [p_ticket]
+    affects: [support_tickets]
+    mcp: {customTool: true, trustedProcedure: true}
 
   # sales
   - name: products
@@ -144,12 +203,13 @@ entities:
     fields:
       - {name: id}
       - {name: order_id}
+      - {name: line_no}
       - {name: product_id}
       - {name: quantity}
       - {name: unit_price}
       - {name: discount}
     relationships:
-      - {name: order, target: orders, cardinality: belongs-to, joinOn: {order_id: id}}
+      - {name: order, target: sales.orders, cardinality: belongs-to, joinOn: {order_id: id}}
       - {name: product, target: products, cardinality: belongs-to, joinOn: {product_id: id}}
 
   - name: refunds
@@ -165,13 +225,13 @@ entities:
       - {name: status}
       - {name: created_at}
     relationships:
-      - {name: order, target: orders, cardinality: belongs-to, joinOn: {order_id: id}}
+      - {name: order, target: sales.orders, cardinality: belongs-to, joinOn: {order_id: id}}
 
-  # archive: same table name as sales.orders, a different schema
-  - name: archive_orders
+  # archive: same table name as sales.orders, a different schema; references
+  # say which (sales.orders, archive.orders)
+  - name: orders
     datasource: shop
     schema: archive
-    source: orders
     primaryKey: [id]
     fields:
       - {name: id}
@@ -180,10 +240,24 @@ entities:
       - {name: amount}
       - {name: created_at}
 
-  # analytics: a second datasource
+  - name: open_orders
+    datasource: shop
+    schema: sales
+    source: v_open_orders
+    kind: view
+    primaryKey: [id]
+    fields:
+      - {name: id}
+      - {name: tenant_id}
+      - {name: customer_id}
+      - {name: status}
+      - {name: amount}
+      - {name: created_at}
+
+  # partitioned by half-year; the partitions are not entities
   - name: daily_kpi
-    datasource: analytics
-    schema: public
+    datasource: shop
+    schema: sales
     source: daily_kpi
     primaryKey: [day, tenant_id]
     fields:
@@ -194,11 +268,205 @@ entities:
       - {name: new_buyers}
       - {name: refund_rate}
 
+
+  # warehouse (MySQL) ----------------------------------------------------------
+  # Same table name as shop's crm.tenants and ledger's ledger.tenants: another
+  # datasource, another database, another entity named tenants.
+  - name: tenants
+    datasource: warehouse
+    schema: logistics
+    primaryKey: [id]
+    fields:
+      - {name: id}
+      - {name: name}
+      - {name: contact}
+
+  - name: items
+    datasource: warehouse
+    schema: inventory
+    source: items
+    primaryKey: [sku]
+    fields:
+      - {name: sku}
+      - {name: title}
+      - {name: description}
+      - {name: barcode}
+      - {name: gtin}
+    relationships:
+      - {name: stock, target: stock, cardinality: many, joinOn: {sku: sku}}
+
+  - name: stock
+    datasource: warehouse
+    schema: inventory
+    source: stock
+    primaryKey: [warehouse_id, sku]
+    fields:
+      - {name: warehouse_id}
+      - {name: sku}
+      - {name: quantity}
+      - {name: updated_at}
+    relationships:
+      - {name: item, target: items, cardinality: belongs-to, joinOn: {sku: sku}}
+
+  - name: stock_daily
+    datasource: warehouse
+    schema: inventory
+    source: stock_daily
+    primaryKey: [day, warehouse_id]
+    fields:
+      - {name: day}
+      - {name: warehouse_id}
+      - {name: inbound}
+      - {name: outbound}
+
+  - name: low_stock
+    datasource: warehouse
+    schema: inventory
+    source: v_low_stock
+    kind: view
+    fields:
+      - {name: warehouse_id}
+      - {name: sku}
+      - {name: quantity}
+
+  - name: restock
+    datasource: warehouse
+    schema: inventory
+    source: restock
+    kind: procedure
+    params: [p_warehouse, p_sku, p_quantity]
+    affects: [stock]
+    mcp: {customTool: true, trustedProcedure: true}
+    # The columns of the result it returns; others are not returned.
+    fields:
+      - {name: warehouse_id}
+      - {name: sku}
+      - {name: quantity}
+
+  - name: waybills
+    datasource: warehouse
+    schema: logistics
+    source: waybills
+    primaryKey: [id]
+    tenantPolicy: {op: eq, field: tenant_id, value: "${subject.tenant_id}"}
+    fields:
+      - {name: id}
+      - {name: tenant_id}
+      - {name: warehouse_id}
+      - {name: carrier_id}
+      - {name: tracking_no}
+      - {name: receiver_phone, mask: phone}
+      - {name: shipped_at}
+
+  # archive: same table name as logistics.waybills, another database
+  - name: waybills
+    datasource: warehouse
+    schema: archive
+    primaryKey: [id]
+    fields:
+      - {name: id}
+      - {name: tenant_id}
+      - {name: tracking_no}
+      - {name: shipped_at}
+
+  # ledger (OceanBase) ---------------------------------------------------------
+  - name: tenants
+    datasource: ledger
+    schema: ledger
+    primaryKey: [id]
+    fields:
+      - {name: id}
+      - {name: name}
+      - {name: tax_id}
+
+  - name: accounts
+    datasource: ledger
+    schema: ledger
+    primaryKey: [id]
+    tenantPolicy: {op: eq, field: tenant_id, value: "${subject.tenant_id}"}
+    fields:
+      - {name: id}
+      - {name: tenant_id}
+      - {name: name}
+      - {name: account_no, mask: secret}
+      - {name: currency}
+      - {name: balance}
+    relationships:
+      - {name: entries, target: entries, cardinality: many, joinOn: {id: account_id}}
+
+  - name: entries
+    datasource: ledger
+    schema: ledger
+    primaryKey: [id]
+    tenantPolicy: {op: eq, field: tenant_id, value: "${subject.tenant_id}"}
+    fields:
+      - {name: id}
+      - {name: tenant_id}
+      - {name: account_id}
+      - {name: amount}
+      - {name: memo}
+      - {name: created_at}
+    relationships:
+      - {name: account, target: accounts, cardinality: belongs-to, joinOn: {account_id: id}}
+
+  - name: statements
+    datasource: ledger
+    schema: billing
+    source: statements
+    primaryKey: [period_start, account_id]
+    fields:
+      - {name: period_start}
+      - {name: account_id}
+      - {name: opening}
+      - {name: closing}
+
+  - name: account_overview
+    datasource: ledger
+    schema: ledger
+    source: v_accounts
+    kind: view
+    primaryKey: [account_id]
+    tenantPolicy: {op: eq, field: tenant_id, value: "${subject.tenant_id}"}
+    fields:
+      - {name: account_id}
+      - {name: tenant_id}
+      - {name: name}
+      - {name: currency}
+      - {name: balance}
+      - {name: branch}
+
+  - name: post_entry
+    datasource: ledger
+    schema: ledger
+    source: post_entry
+    kind: procedure
+    params: [p_account, p_amount, p_memo]
+    affects: [entries, accounts]
+    mcp: {customTool: true, trustedProcedure: true}
+    fields:
+      - {name: account_id}
+      - {name: balance}
+
+  # archive: same table name as ledger.entries, another database. Named
+  # differently here: in a datasource called like its schema, ledger.entries
+  # would name both, so the main table would need its full ID.
+  - name: archive_entries
+    datasource: ledger
+    schema: archive
+    source: entries
+    primaryKey: [id]
+    fields:
+      - {name: id}
+      - {name: tenant_id}
+      - {name: account_id}
+      - {name: amount}
+      - {name: created_at}
+
 roles:
   analyst:
     description: 平台经营分析：跨租户的交易与经营指标，不含个人信息与成本价
     grants:
-      - entity: orders
+      - entity: sales.orders
         actions: [read, aggregate]
         fields: {read: [id, tenant_id, status, amount, currency, region, channel, created_at, paid_at]}
       - entity: order_items
@@ -210,8 +478,12 @@ roles:
         actions: [read, aggregate]
       - entity: daily_kpi
         actions: [read, aggregate]
-      - entity: archive_orders
+      - entity: open_orders
+        actions: [read, aggregate]
+      - entity: archive.orders
         actions: [aggregate]
+      - entity: crm.tenants
+        actions: [read]
 
   support:
     description: 商家客服：本租户的客户（个人信息脱敏）、订单与工单
@@ -221,8 +493,12 @@ roles:
         fields: {read: [id, name, email, phone, region]}
       - entity: support_tickets
         actions: [read, update]
-        fields: {read: [id, customer_id, subject, status, priority, created_at, closed_at], write: [status, priority]}
-      - entity: orders
+        fields:
+          read: [id, customer_id, order_id, subject, status, priority, created_at, closed_at]
+          write: [status, priority]
+      - entity: close_ticket
+        actions: [execute]
+      - entity: sales.orders
         actions: [read]
         fields: {read: [id, customer_id, status, amount, created_at, paid_at]}
         rows:
@@ -244,12 +520,60 @@ roles:
   finance:
     description: 平台财务：跨租户的订单、退款与成本价
     grants:
-      - entity: orders
+      - entity: sales.orders
         actions: [read, aggregate]
         rows: {op: in, field: status, value: [paid, shipped, completed]}
       - entity: refunds
-        actions: [read, aggregate]
+        actions: [read, aggregate, create, delete]
+        fields:
+          read: [id, order_id, amount, reason, status, created_at]
+          write: [order_id, amount, reason, status]
       - entity: products
+        actions: [read]
+
+  ops:
+    description: 仓储运营（MySQL）：商品与库存、补货、本货主的运单（收件人手机号脱敏）
+    grants:
+      - entity: items
+        actions: [read]
+      - entity: stock
+        actions: [read, aggregate, update]
+        fields: {read: [warehouse_id, sku, quantity, updated_at], write: [quantity]}
+      - entity: stock_daily
+        actions: [read, aggregate]
+      - entity: low_stock
+        actions: [read]
+      - entity: restock
+        actions: [execute]
+      - entity: logistics.waybills
+        actions: [read, aggregate, create, delete]
+        fields:
+          read: [id, tenant_id, warehouse_id, carrier_id, tracking_no, receiver_phone, shipped_at]
+          write: [tenant_id, warehouse_id, carrier_id, tracking_no, receiver_phone, shipped_at]
+      - entity: archive.waybills
+        actions: [read, aggregate]
+      - entity: logistics.tenants
+        actions: [read]
+
+  bookkeeper:
+    description: 记账（OceanBase）：本租户的账户（账号脱敏）、分录与对账单
+    grants:
+      - entity: accounts
+        actions: [read]
+      - entity: entries
+        actions: [read, aggregate, create, update, delete]
+        fields:
+          read: [id, tenant_id, account_id, amount, memo, created_at]
+          write: [tenant_id, account_id, amount, memo]
+      - entity: account_overview
+        actions: [read]
+      - entity: statements
+        actions: [read, aggregate]
+      - entity: post_entry
+        actions: [execute]
+      - entity: archive_entries
+        actions: [aggregate]
+      - entity: ledger.tenants
         actions: [read]
 
 # MCP callers. LOCAL EXAMPLE ONLY: the matching tokens are listed in README.md;
@@ -279,8 +603,18 @@ users:
     tokenHash: "sha256:c58f00de71ecb3fc587ce7d18acc4f395112c2c267d3ea84dfd225cd506df3b6"
     roles: [finance]
     grants:
-      - entity: archive_orders
+      - entity: archive.orders
         actions: [read, aggregate]
+  ops-agent:
+    description: 仓储运营 Agent（MySQL，货主 1）
+    tokenHash: "sha256:0a11af364eb4ddfbb8a932c6b030cf15b13c5c786d156af631bc01bc276748cf"
+    roles: [ops]
+    subject: {tenant_id: 1}
+  ledger-agent:
+    description: 记账 Agent（OceanBase，租户 1）
+    tokenHash: "sha256:3157e6b8db95eb284d0bb19b1451a9e40416a926b74fc717350369cf333f22f7"
+    roles: [bookkeeper]
+    subject: {tenant_id: 1}
   legacy-bot:
     description: 已停用的旧报表脚本
     tokenHash: "sha256:218fdd3ff94b4e8b0d9367791623c5691f451b82de37fb5831dcce72bc4e2479"

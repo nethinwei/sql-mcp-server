@@ -1,7 +1,10 @@
 package entity
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"slices"
 	"testing"
 )
 
@@ -98,5 +101,73 @@ func TestActionString(t *testing.T) {
 	}
 	if Action(99).String() != "unknown" {
 		t.Fatal("unknown string mismatch")
+	}
+}
+
+func TestRegistryResolvesReferencesLikeTheConfiguration(t *testing.T) {
+	t.Parallel()
+	data, err := os.ReadFile("../config/testdata/entity_refs.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases struct {
+		Entities []struct{ Datasource, Schema, Name string }
+		Cases    []struct {
+			Ref, Want  string
+			Candidates []string
+		}
+		ShortNames map[string]string
+	}
+	if err := json.Unmarshal(data, &cases); err != nil {
+		t.Fatal(err)
+	}
+	var entities []Entity
+	for _, e := range cases.Entities {
+		entities = append(entities, Entity{
+			Name: ID(e.Datasource, e.Schema, e.Name), Local: e.Name, DataSource: e.Datasource, Schema: e.Schema,
+		})
+	}
+	reg, err := NewRegistry(entities)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cases.Cases {
+		var got []string
+		for _, e := range reg.Match(c.Ref) {
+			got = append(got, e.Name)
+		}
+		want := c.Candidates
+		if c.Want != "" {
+			want = []string{c.Want}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%q matches %q, want %q", c.Ref, got, want)
+		}
+		if _, ok := reg.Resolve(c.Ref); ok != (c.Want != "") {
+			t.Errorf("%q resolves = %v", c.Ref, ok)
+		}
+	}
+	for _, e := range entities {
+		if got := reg.ShortName(e, nil); got != cases.ShortNames[e.Name] {
+			t.Errorf("short name of %s = %q, want %q", e.Name, got, cases.ShortNames[e.Name])
+		}
+	}
+}
+
+func TestShortNameAmongVisibleEntities(t *testing.T) {
+	t.Parallel()
+	tenants := func(datasource string) Entity {
+		return Entity{Name: ID(datasource, "", "tenants"), Local: "tenants", DataSource: datasource}
+	}
+	reg, err := NewRegistry([]Entity{tenants("shop"), tenants("warehouse")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reg.ShortName(tenants("shop"), nil); got != "shop.tenants" {
+		t.Errorf("short name = %q, want shop.tenants", got)
+	}
+	onlyShop := func(e Entity) bool { return e.DataSource == "shop" }
+	if got := reg.ShortName(tenants("shop"), onlyShop); got != "tenants" {
+		t.Errorf("short name among shop entities = %q, want tenants", got)
 	}
 }

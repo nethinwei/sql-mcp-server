@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -20,10 +21,15 @@ var (
 	ErrTransactionNotFound = errors.New("tool: transaction not found")
 	ErrTransactionScope    = errors.New("tool: transaction scope mismatch")
 	ErrTransactionCapacity = errors.New("tool: transaction capacity reached")
+	// ErrTransactionStale rejects statements in a transaction whose datasource
+	// a reload has since pointed at another connection: the configuration they
+	// would be planned with no longer describes the database it runs on.
+	ErrTransactionStale = errors.New("tool: transaction datasource was reconfigured; roll it back and begin again")
 )
 
 type transactionHandle struct {
 	tx         store.Tx
+	connection store.TxBeginner // the connection begun on
 	role       string
 	subject    string
 	session    string
@@ -41,13 +47,24 @@ type transactionHandle struct {
 type TransactionManager struct {
 	mu      sync.Mutex
 	handles map[string]*transactionHandle
+	open    map[string]int // handles by scope
 	ttl     time.Duration
 	maxOpen int
 	closed  bool
 }
 
 func NewTransactionManager(ttl time.Duration, maxOpen int) *TransactionManager {
-	return &TransactionManager{handles: make(map[string]*transactionHandle), ttl: ttl, maxOpen: maxOpen}
+	return &TransactionManager{
+		handles: make(map[string]*transactionHandle), open: map[string]int{}, ttl: ttl, maxOpen: maxOpen,
+	}
+}
+
+// UpdateLimits applies new limits: ttl to the transactions begun from now
+// on, maxOpen to every later begin.
+func (m *TransactionManager) UpdateLimits(ttl time.Duration, maxOpen int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ttl, m.maxOpen = ttl, maxOpen
 }
 
 func (m *TransactionManager) Begin(
@@ -62,7 +79,8 @@ func (m *TransactionManager) Begin(
 	if err := m.checkBeginCapacity(scope); err != nil {
 		return "", err
 	}
-	lifetimeCtx, cancel := beginLifetimeContext(ctx, m.ttl)
+	ttl, _ := m.Configuration()
+	lifetimeCtx, cancel := beginLifetimeContext(ctx, ttl)
 	tx, err := beginTransaction(ctx, lifetimeCtx, cancel, beginner, opts)
 	if err != nil {
 		return "", err
@@ -74,8 +92,11 @@ func (m *TransactionManager) Begin(
 		return "", err
 	}
 	handle := &transactionHandle{
-		tx: tx, session: session, role: role, subject: scopeKey("", subject), datasource: datasource,
-		dirty: make(map[CacheTarget]struct{}), expires: time.Now().Add(m.ttl), cancel: cancel,
+		tx: tx, connection: beginner, session: session, role: role, subject: scopeKey("", subject),
+		datasource: datasource, dirty: make(map[CacheTarget]struct{}), cancel: cancel,
+	}
+	if ttl > 0 {
+		handle.expires = time.Now().Add(ttl)
 	}
 	if err := m.registerHandle(scope, token, handle); err != nil {
 		return "", err
@@ -89,7 +110,7 @@ func (m *TransactionManager) checkBeginCapacity(scope string) error {
 	if m.closed {
 		return ErrTransactionNotFound
 	}
-	if m.scopeCountLocked(scope) >= m.maxOpen && m.maxOpen > 0 {
+	if m.open[scope] >= m.maxOpen && m.maxOpen > 0 {
 		return ErrTransactionCapacity
 	}
 	return nil
@@ -143,25 +164,25 @@ func (m *TransactionManager) registerHandle(scope, token string, handle *transac
 		handle.abort()
 		return ErrTransactionNotFound
 	}
-	if m.maxOpen > 0 && m.scopeCountLocked(scope) >= m.maxOpen {
+	if m.maxOpen > 0 && m.open[scope] >= m.maxOpen {
 		handle.abort()
 		return ErrTransactionCapacity
 	}
 	m.handles[token] = handle
-	if m.ttl > 0 {
-		handle.timer = time.AfterFunc(m.ttl, func() { m.expire(token, handle) })
+	m.open[scope]++
+	if !handle.expires.IsZero() {
+		handle.timer = time.AfterFunc(time.Until(handle.expires), func() { m.expire(token, handle) })
 	}
 	return nil
 }
 
-func (m *TransactionManager) scopeCountLocked(scope string) int {
-	count := 0
-	for _, handle := range m.handles {
-		if handle.role+handle.subject == scope {
-			count++
-		}
+// removeLocked drops a handle; m.mu is held.
+func (m *TransactionManager) removeLocked(token string, handle *transactionHandle) {
+	delete(m.handles, token)
+	scope := handle.role + handle.subject
+	if m.open[scope]--; m.open[scope] <= 0 {
+		delete(m.open, scope)
 	}
-	return count
 }
 
 func (m *TransactionManager) expire(token string, handle *transactionHandle) {
@@ -173,7 +194,7 @@ func (m *TransactionManager) expire(token string, handle *transactionHandle) {
 	// Roll back before releasing m.mu: a lookup that misses the token then
 	// observes a finished rollback.
 	handle.abort()
-	delete(m.handles, token)
+	m.removeLocked(token, handle)
 	m.mu.Unlock()
 }
 
@@ -189,10 +210,13 @@ func (h *transactionHandle) abort() {
 	h.cancel()
 }
 
+// lookup finds the handle of token for the caller. Given connections, the
+// current ones of datasource, the transaction must run on one of them.
 func (m *TransactionManager) lookup(
 	token, session, role string,
 	subject map[string]any,
 	datasource string,
+	connections []store.TxBeginner,
 ) (*transactionHandle, error) {
 	m.mu.Lock()
 	handle := m.handles[token]
@@ -204,7 +228,10 @@ func (m *TransactionManager) lookup(
 		datasource != "" && handle.datasource != datasource {
 		return nil, ErrTransactionScope
 	}
-	if m.ttl > 0 && time.Now().After(handle.expires) {
+	if connections != nil && !slices.Contains(connections, handle.connection) {
+		return nil, ErrTransactionStale
+	}
+	if !handle.expires.IsZero() && time.Now().After(handle.expires) {
 		m.expire(token, handle)
 		return nil, ErrTransactionNotFound
 	}
@@ -215,8 +242,9 @@ func (m *TransactionManager) DB(
 	token, session, role string,
 	subject map[string]any,
 	datasource string,
+	connections []store.TxBeginner,
 ) (store.DB, error) {
-	handle, err := m.lookup(token, session, role, subject, datasource)
+	handle, err := m.lookup(token, session, role, subject, datasource, connections)
 	if err != nil {
 		return nil, err
 	}
@@ -226,11 +254,11 @@ func (m *TransactionManager) DB(
 // Validate verifies a token's transport and authorization identity without
 // exposing its transaction or datasource.
 func (m *TransactionManager) Validate(token, session, role string, subject map[string]any) error {
-	_, err := m.lookup(token, session, role, subject, "")
+	_, err := m.lookup(token, session, role, subject, "", nil)
 	return err
 }
 
-// Configuration returns the immutable limits used by this manager.
+// Configuration returns the limits in force.
 func (m *TransactionManager) Configuration() (time.Duration, int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -246,7 +274,7 @@ func (m *TransactionManager) finish(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	handle, err := m.lookup(token, session, role, subject, "")
+	handle, err := m.lookup(token, session, role, subject, "", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +283,7 @@ func (m *TransactionManager) finish(
 		m.mu.Unlock()
 		return nil, ErrTransactionNotFound
 	}
-	delete(m.handles, token)
+	m.removeLocked(token, handle)
 	if handle.timer != nil {
 		handle.timer.Stop()
 	}
@@ -304,14 +332,16 @@ func (m *TransactionManager) Rollback(ctx context.Context, token, session, role 
 	return err
 }
 
-// MarkDirty records the cache targets a write inside a transaction changed.
+// MarkDirty records the cache targets a write inside a transaction changed;
+// connections are as for DB.
 func (m *TransactionManager) MarkDirty(
 	token, session, role string,
 	subject map[string]any,
 	datasource string,
+	connections []store.TxBeginner,
 	targets ...CacheTarget,
 ) error {
-	handle, err := m.lookup(token, session, role, subject, datasource)
+	handle, err := m.lookup(token, session, role, subject, datasource, connections)
 	if err != nil {
 		return err
 	}
@@ -336,7 +366,7 @@ func (m *TransactionManager) RollbackSession(session string) {
 	handles := make([]*transactionHandle, 0)
 	for token, handle := range m.handles {
 		if handle.session == session {
-			delete(m.handles, token)
+			m.removeLocked(token, handle)
 			if handle.timer != nil {
 				handle.timer.Stop()
 			}
@@ -357,7 +387,7 @@ func (m *TransactionManager) Close() {
 	}
 	m.closed = true
 	handles := m.handles
-	m.handles = make(map[string]*transactionHandle)
+	m.handles, m.open = make(map[string]*transactionHandle), map[string]int{}
 	m.mu.Unlock()
 	for _, handle := range handles {
 		if handle.timer != nil {
@@ -476,6 +506,19 @@ func parseBeginTransactionInput(input json.RawMessage) (beginTransactionInput, e
 	return in, nil
 }
 
+// txConnections are the connections a transaction on datasource may run on
+// under tc: its read-write and its read-only one; nil when tc routes none.
+func txConnections(tc Context, datasource string) []store.TxBeginner {
+	if tc.TxBeginners == nil {
+		return nil
+	}
+	connections := []store.TxBeginner{tc.TxBeginners[datasource]}
+	if source, ok := tc.Sources[datasource]; ok && source.ReadTx != nil {
+		connections = append(connections, source.ReadTx)
+	}
+	return connections
+}
+
 func resolveTxBeginner(tc Context, datasource string) (store.TxBeginner, string, error) {
 	beginner := tc.TxBeginners[datasource]
 	if beginner == nil && datasource == "default" && len(tc.TxBeginners) == 1 {
@@ -579,10 +622,7 @@ func (CommitTransactionTool) Run(ctx context.Context, input json.RawMessage, tc 
 	if err != nil {
 		return Result{}, err
 	}
-	for _, target := range targets {
-		tc.Writes.Record(tc.Session, target.Database)
-	}
-	_ = invalidate(tc.Cache, targets)
+	_ = applyWrite(tc, writeTargets(tc), targets)
 	return Result{Content: []map[string]any{{"committed": true}}}, nil
 }
 

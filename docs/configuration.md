@@ -137,7 +137,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `auth.tls.key` | 字符串 |  |  | TLS 私钥文件路径。 |
 | `auth.tls.clientCA` | 字符串 |  |  | 设置后开启 mTLS，要求并校验客户端证书。 |
 | `auth.tls` | 对象 |  |  | TLS / mTLS。cert 与 key 必须同时设置。 |
-| `auth` | 对象 |  | 修改需重启 | HTTP 认证。trustProxyHeaders、trustedProxyCIDRs 与非 loopback 的信任规则见 security.md。 |
+| `auth` | 对象 |  |  | HTTP 认证。trustProxyHeaders、trustedProxyCIDRs 与非 loopback 的信任规则见 security.md。 |
 | `secrets.allowedRoots` | 字符串列表 | `["/run/secrets","/var/run/secrets"]` |  | 允许读取 secret 文件的根目录（绝对路径）；符号链接不能逃逸这些目录。 |
 | `secrets` | 对象 |  |  | DSN 中 ${file:...} 占位符的读取限制。 |
 | `user` | 字符串 |  |  | 没有用户身份的请求使用的默认用户，优先于 role；CLI --user 覆盖。必须是已配置且未禁用的用户。 |
@@ -156,7 +156,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `databases` | 映射（名称 → `database`） |  |  | 数据源名称到连接配置的映射。 |
+| `databases` | 映射（名称 → `database`） |  | 名称格式 `^[^.]+$` | 数据源名称到连接配置的映射。 |
 
 ### `entities`
 
@@ -176,11 +176,11 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 
 ### `users`
 
-通过 HTTP 访问的调用方：用户名 → 配置。增删、禁用、轮换 token 可热加载；首次配置用户或删除全部用户需要重启。
+通过 HTTP 访问的调用方：用户名 → 配置。增删、禁用、轮换 token，以及首次配置或删除全部用户，均可热加载。
 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `users` | 映射（名称 → `user`） |  | 名称格式 `^[a-z0-9][a-z0-9_-]*$` | 通过 HTTP 访问的调用方：用户名 → 配置。增删、禁用、轮换 token 可热加载；首次配置用户或删除全部用户需要重启。 |
+| `users` | 映射（名称 → `user`） |  | 名称格式 `^[a-z0-9][a-z0-9_-]*$` | 通过 HTTP 访问的调用方：用户名 → 配置。增删、禁用、轮换 token，以及首次配置或删除全部用户，均可热加载。 |
 
 ### `tools`：工具开关
 
@@ -298,8 +298,8 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `ttl` | 时长 | `"5m"` | ≥ 0；修改需重启 | 事务最长存活时间。 |
-| `maxOpen` | 整数 | `128` | ≥ 0；修改需重启 | 每个角色/subject 同时打开的事务上限。 |
+| `ttl` | 时长 | `"5m"` | ≥ 0 | 事务最长存活时间。 |
+| `maxOpen` | 整数 | `128` | ≥ 0 | 每个角色/subject 同时打开的事务上限。 |
 | `beginTimeout` | 时长 | `"5s"` | ≥ 0 | 开启事务超时。 |
 | `commitTimeout` | 时长 | `"30s"` | ≥ 0 | 提交超时。 |
 | `rollbackTimeout` | 时长 | `"30s"` | ≥ 0 | 回滚超时。 |
@@ -328,10 +328,10 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `name` | 字符串 |  | 必填；非空 | MCP 逻辑名。 |
+| `name` | 字符串 |  | 必填；格式 `^[^.]+$`；非空 | 实体名，在同一数据源与 schema 内唯一，不含点；实体的完整标识为 datasource.schema.name。 |
 | `source` | 字符串 |  |  | 数据库中的表、视图或过程名；省略时等于 name。不能使用保留前缀 smcp_。 |
 | `datasource` | 字符串 |  |  | 所在数据源；省略时为 default。 |
-| `schema` | 字符串 |  |  | 数据库 schema。 |
+| `schema` | 字符串 |  | 格式 `^[^.]+$` | 数据库 schema。 |
 | `kind` | 字符串 |  | 可选 `table`、`view`、`procedure` | 实体类型；省略时为 table。 |
 | `description` | 字符串 |  |  | 给 Agent 看的实体说明；留空时使用数据库中的表注释（启动或重载时读取）。 |
 | `primaryKey` | 字符串列表 |  |  | 主键字段。表以数据库中的主键为准，这里写的与之不同时启动告警；视图上声明的键只用于读取（keyset 分页、单行读取），不会让修改或删除通过写保护。 |
@@ -353,18 +353,18 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `fieldACL.write` | 字符串列表 |  |  | 可写字段。 |
 | `fieldACL` | 映射（名称 → 对象） |  |  | 旧式角色级字段白名单：角色 → 可读、可写字段。 |
 | `mcp.dmlTools` | 布尔 | `true` |  | 是否加入通用实体工具（读、写、聚合）；省略时为 true，显式 false 会保留。 |
-| `mcp.customTool` | 布尔 |  |  | 存储过程额外注册独立 MCP 工具；与 tools.executeEntity 无关。修改需要重启。 |
+| `mcp.customTool` | 布尔 |  |  | 存储过程额外注册独立 MCP 工具；与 tools.executeEntity 无关。修改可热加载，客户端会收到工具列表变更通知。 |
 | `mcp.trustedProcedure` | 布尔 |  |  | DBA 已审核该过程的权限与内部成本。只有为 true 且 CALL 指纹命中 allowTemplates 时才能执行。 |
 | `mcp` | 对象 |  |  | 实体在 MCP 中的暴露方式。 |
 | `rowPolicies` | 映射（名称 → 自由对象） |  |  | 旧式角色级行范围：角色 → 过滤条件（{op, field, value} 或 and/or 组合）。 |
 | `relationships.name` | 字符串 |  | 必填；非空 | 关系名，展开时使用。 |
-| `relationships.target` | 字符串 |  | 必填；非空 | 目标实体名。 |
+| `relationships.target` | 字符串 |  | 必填；非空 | 目标实体。引用实体可写 name、schema.name、datasource.name 或 datasource.schema.name，须只对应一个实体。 |
 | `relationships.cardinality` | 字符串 |  | 必填；可选 `one`、`one-to-one`、`belongs-to`、`many`、`one-to-many`、`has-many` | 基数；belongs-to/one 展开为单个对象，has-many/many 展开为列表。 |
 | `relationships.joinOn` | 映射（名称 → 字符串） |  | 必填 | 连接键：本实体字段 → 目标实体字段；多列外键写多对，全部相等才关联。 |
 | `relationships` | 对象列表 |  |  | 可展开的关系。当前只支持同数据源内的一层展开。 |
 | `tenantPolicy` | 自由对象 |  |  | 租户硬边界，语法同一条行过滤；对所有主体始终 AND，不参与多角色合并。引用的 ${subject.x} 缺失时匹配零行。 |
 | `params` | 字符串列表 |  |  | 存储过程参数的固定位置顺序；省略或空表示无参。 |
-| `affects` | 字符串列表 |  |  | 存储过程会写入的实体（须与过程同一数据源），用于读缓存失效；省略时过程执行后失效该数据源的全部缓存。 |
+| `affects` | 字符串列表 |  |  | 存储过程会写入的实体（须与过程同一数据源，引用写法同 grants），用于读缓存失效；省略时过程执行后失效该数据源的全部缓存。 |
 | `allowCascade` | 布尔 |  |  | 允许级联写入：删除本实体的行或修改其被引用列时，外键的 CASCADE、SET NULL、SET DEFAULT 会改写其他表的行。默认要求调用方对每个被级联的实体都有对应的删除或修改权限，且不带行范围限制；被级联的表未暴露为实体时拒绝。设为 true 则不做该检查，由管理员对级联负责。 |
 
 ### 定义 `role`
@@ -383,7 +383,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `entity` | 字符串 |  | 必填；非空 | 授权的实体名。 |
+| `entity` | 字符串 |  | 必填；非空 | 授权的实体。引用实体可写 name、schema.name、datasource.name 或 datasource.schema.name，须只对应一个实体。 |
 | `actions` | 字符串列表 |  | 必填；可选 `read`、`create`、`update`、`delete`、`execute`、`aggregate`；至少 1 项 | 允许的动作。 |
 | `fields.read` | 字符串列表 |  |  | 可读字段。 |
 | `fields.write` | 字符串列表 |  |  | 可写字段。 |

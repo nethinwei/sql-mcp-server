@@ -1,4 +1,7 @@
-# sql-mcp-server with the config store and the admin console.
+# sql-mcp-server with the config store and the admin console, on one database
+# of each supported kind: PostgreSQL (init.sql), MySQL (mysql-init.sql) and
+# OceanBase (ob-init.sql, run by ob-init once OceanBase is up; it takes a few
+# minutes and about 6 GB of memory the first time).
 # One-time setup and usage: docs/console.md#docker-部署.
 services:
   db:
@@ -17,16 +20,59 @@ services:
       timeout: 5s
       retries: 60
 
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+    volumes:
+      - ./mysql-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      # The gateway's accounts exist once mysql-init.sql has run.
+      test: ["CMD-SHELL", "mysql -uwarehouse_ro -pwarehouse_ro -h127.0.0.1 -e 'SELECT 1 FROM purchasing.purchase_orders LIMIT 1'"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+
+  ob:
+    image: oceanbase/oceanbase-ce:4.3.5.6-106000012026040916
+    environment:
+      MODE: mini
+    healthcheck:
+      test: ["CMD-SHELL", "obclient -h127.0.0.1 -P2881 -uroot -e 'SELECT 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 120s
+
+  ob-init:
+    image: mysql:8.4
+    depends_on:
+      ob:
+        condition: service_healthy
+    volumes:
+      - ./ob-init.sql:/ob-init.sql:ro
+    entrypoint: ["sh", "-c", "mysql -h ob -P2881 -uroot < /ob-init.sql"]
+
   mcp:
     image: ${SQL_MCP_IMAGE:-sql-mcp-server:local}
     build: ../..
     depends_on:
       db:
         condition: service_healthy
+      mysql:
+        condition: service_healthy
+      ob-init:
+        condition: service_completed_successfully
     environment:
-      POSTGRES_USER: shop
-      POSTGRES_PASSWORD: shop
-      POSTGRES_HOST: db:5432
+      PG_HOST: db:5432
+      PG_READER_PASSWORD: shop_ro
+      PG_WRITER_PASSWORD: shop_rw
+      MYSQL_HOST: mysql:3306
+      MYSQL_READER_PASSWORD: warehouse_ro
+      MYSQL_WRITER_PASSWORD: warehouse_rw
+      OB_HOST: ob:2881
+      OB_READER_PASSWORD: ledger_ro
+      OB_WRITER_PASSWORD: ledger_rw
       SQL_MCP_STORE: sqlite:/var/lib/sql-mcp-server/config.db
     command: ["serve", "--admin", "--watch"]
     volumes:

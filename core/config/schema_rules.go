@@ -62,6 +62,8 @@ var patterns = map[string]*regexp.Regexp{
 	"accessName": regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`),
 	"driver":     regexp.MustCompile(`^[a-z][a-z0-9_-]*$`),
 	"tokenHash":  regexp.MustCompile(`^sha256:[0-9a-f]{64}$`),
+	// An entity is named datasource.schema.name, so none of them has a dot.
+	"pathSegment": regexp.MustCompile(`^[^.]+$`),
 }
 
 // Rule is the parsed `schema` tag of one field.

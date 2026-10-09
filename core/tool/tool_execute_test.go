@@ -147,7 +147,7 @@ func TestProcedureToolRunsWhenDMLDisabled(t *testing.T) {
 		Registry: reg, Authorizer: auth,
 	}
 	pt := ProcedureTool{Entity: e}
-	if pt.Info().Name != ProcedureToolName(e.Name) || strings.Contains(pt.Info().Name, "execute_entity") {
+	if pt.Info().Name != ProcedureToolName(e) || strings.Contains(pt.Info().Name, "execute_entity") {
 		t.Fatalf("unstable or conflicting tool name %q", pt.Info().Name)
 	}
 	res, err := pt.Run(context.Background(), json.RawMessage(`{"tenant":"acme"}`), tc)

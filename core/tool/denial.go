@@ -43,9 +43,11 @@ const (
 	CodeTransactionNotFound = "TRANSACTION_NOT_FOUND"
 	CodeTransactionScope    = "TRANSACTION_SCOPE"
 	CodeTransactionCapacity = "TRANSACTION_CAPACITY"
+	CodeTransactionStale    = "TRANSACTION_STALE"
 	CodeAmbiguousFieldScope = "AMBIGUOUS_FIELD_SCOPE"
 	CodeConstraintViolation = "CONSTRAINT_VIOLATION"
 	CodeDatasourceForbidden = "DATASOURCE_FORBIDDEN"
+	CodeAmbiguousEntity     = "AMBIGUOUS_ENTITY"
 )
 
 var sentinelDenials = []struct {
@@ -63,6 +65,7 @@ var sentinelDenials = []struct {
 	{ErrTransactionNotFound, CodeTransactionNotFound, false},
 	{ErrTransactionScope, CodeTransactionScope, false},
 	{ErrTransactionCapacity, CodeTransactionCapacity, true},
+	{ErrTransactionStale, CodeTransactionStale, false},
 }
 
 // DenialFor maps a business-level error to the rejection contract. ok is
@@ -112,6 +115,14 @@ func typedDenial(err error) (Denial, bool) {
 			Code: CodeConstraintViolation, Reason: cv.Error(), Retryable: true,
 			Constraints: map[string]any{"kind": cv.Kind, "fields": cv.Fields},
 			Hints:       []string{"change the values of constraints.fields (or check referenced rows) and retry"},
+		}, true
+	}
+	var ee *AmbiguousEntityError
+	if errors.As(err, &ee) {
+		return Denial{
+			Code: CodeAmbiguousEntity, Reason: ee.Error(), Retryable: true,
+			Constraints: map[string]any{"candidates": ee.Candidates},
+			Hints:       []string{"retry with one of constraints.candidates as the entity"},
 		}, true
 	}
 	var ae *AmbiguousFieldScopeError

@@ -49,8 +49,9 @@ describe('generated configuration schema', () => {
   })
 
   it('marks sections that need a restart', () => {
-    expect(restartsBelow(generated, at(generated, generated, ['tools']))).toBe(true)
-    expect(restartsBelow(generated, at(generated, generated, ['transactions']))).toBe(true)
+    expect(restartsBelow(generated, at(generated, generated, ['server']))).toBe(true) // transport, addr
+    expect(restartsBelow(generated, at(generated, generated, ['tools']))).toBe(false)
+    expect(restartsBelow(generated, at(generated, generated, ['transactions']))).toBe(false)
     expect(restartsBelow(generated, at(generated, generated, ['cache']))).toBe(false)
   })
 })

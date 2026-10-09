@@ -23,11 +23,11 @@ type Config struct {
 	Version      string                    `yaml:"version"         json:"version"`
 	Server       ServerConfig              `yaml:"server"          json:"server"`
 	Database     DatabaseConfig            `yaml:"database"        json:"database" schema:"nodefault"`
-	Databases    map[string]DatabaseConfig `yaml:"databases"       json:"databases" schema:"nodefault"`
+	Databases    map[string]DatabaseConfig `yaml:"databases"       json:"databases" schema:"nodefault,keys=@pathSegment"`
 	Entities     []EntityConfig            `yaml:"entities"        json:"entities"`
 	Roles        map[string]RoleDefinition `yaml:"roles,omitempty" json:"roles,omitempty" schema:"keys=@accessName"`
 	Users        map[string]UserConfig     `yaml:"users,omitempty" json:"users,omitempty" schema:"keys=@accessName"`
-	Tools        ToolFlags                 `yaml:"tools"           json:"tools" schema:"restart,nodefault"`
+	Tools        ToolFlags                 `yaml:"tools"           json:"tools" schema:"nodefault"`
 	Cost         CostConfig                `yaml:"cost"            json:"cost"`
 	Budget       BudgetConfig              `yaml:"budget"          json:"budget"`
 	Cache        CacheConfig               `yaml:"cache"           json:"cache"`
@@ -77,7 +77,7 @@ type ServerConfig struct {
 	// Role is the runtime role; the --role flag overrides it.
 	Role string `yaml:"role" json:"role"`
 	// Auth configures HTTP transport authentication.
-	Auth    AuthConfig    `yaml:"auth"    json:"auth" schema:"restart"`
+	Auth    AuthConfig    `yaml:"auth"    json:"auth"`
 	Secrets SecretsConfig `yaml:"secrets" json:"secrets"`
 
 	// User is the default user for requests without a user identity; it takes
@@ -180,10 +180,10 @@ type RowPolicies map[string]FilterConfig
 // EntityConfig is the configuration view of one entity. Kind is table, view or
 // procedure.
 type EntityConfig struct {
-	Name          string                    `yaml:"name"                    json:"name" schema:"required,minLength=1"`
+	Name          string                    `yaml:"name" json:"name" schema:"required,minLength=1,pattern=@pathSegment"`
 	Source        string                    `yaml:"source,omitempty"        json:"source,omitempty"`
 	DataSource    string                    `yaml:"datasource,omitempty"    json:"datasource,omitempty"`
-	Schema        string                    `yaml:"schema,omitempty"        json:"schema,omitempty"`
+	Schema        string                    `yaml:"schema,omitempty" json:"schema,omitempty" schema:"pattern=@pathSegment"`
 	Kind          string                    `yaml:"kind,omitempty" json:"kind,omitempty" schema:"enum=@entityKind"`
 	Description   string                    `yaml:"description,omitempty"   json:"description,omitempty"`
 	PrimaryKey    []string                  `yaml:"primaryKey,omitempty"    json:"primaryKey,omitempty"`
@@ -352,8 +352,8 @@ func (f *ToolFlags) UnmarshalJSON(data []byte) error {
 
 // TransactionConfig bounds explicit transaction lifetime and cardinality.
 type TransactionConfig struct {
-	TTL             time.Duration `yaml:"ttl"             json:"ttl" schema:"min=0,restart"`
-	MaxOpen         int           `yaml:"maxOpen"         json:"maxOpen" schema:"min=0,restart"`
+	TTL             time.Duration `yaml:"ttl"             json:"ttl" schema:"min=0"`
+	MaxOpen         int           `yaml:"maxOpen"         json:"maxOpen" schema:"min=0"`
 	BeginTimeout    time.Duration `yaml:"beginTimeout"    json:"beginTimeout" schema:"min=0"`
 	CommitTimeout   time.Duration `yaml:"commitTimeout"   json:"commitTimeout" schema:"min=0"`
 	RollbackTimeout time.Duration `yaml:"rollbackTimeout" json:"rollbackTimeout" schema:"min=0"`

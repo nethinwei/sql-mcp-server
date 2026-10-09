@@ -42,6 +42,10 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	var stamp uint64 // invalidations before the query starts, see cache.Cache.Stamp
+	if plan.tc.Cache != nil {
+		stamp = plan.tc.Cache.Stamp(cacheKey.Database)
+	}
 	if cached, err, ok := readCacheHit(ctx, plan.tc, in, cacheKey); ok {
 		return cached, err
 	}
@@ -63,7 +67,7 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 		int64(len(out)),
 		time.Since(start),
 	)
-	storeReadCache(ctx, plan.tc, in, cacheKey, out)
+	storeReadCache(ctx, plan.tc, in, cacheKey, stamp, out)
 	estimatedRows := int64(0)
 	if estimatedPlan != nil {
 		estimatedRows = estimatedPlan.EstimatedRows
@@ -173,7 +177,8 @@ func compileReadQuery(
 		return codegen.Compiled{}, "", nil, cache.Key{}, err
 	}
 	key := cache.Key{
-		Database: res.Entity.DatasourceName(), Relation: cacheRelation(res.Entity),
+		Database: physicalDatabase(res.Entity), Relation: cacheRelation(res.Entity),
+		Datasource: res.Entity.DatasourceName(), Generation: tc.Generation,
 		SQL:  compiled.SQL + "\x00expand=" + strings.Join(in.Expand, ","),
 		Args: argsKey(compiled.Args), Scope: scopeKey(tc.Role, tc.Subject),
 	}
@@ -279,7 +284,7 @@ func trimExpandedJoinFields(parent entity.Entity, in readInput, out []map[string
 	}
 }
 
-func storeReadCache(ctx context.Context, tc Context, in readInput, key cache.Key, out []map[string]any) {
+func storeReadCache(ctx context.Context, tc Context, in readInput, key cache.Key, stamp uint64, out []map[string]any) {
 	if tc.Cache == nil || in.Transaction != "" || len(in.Expand) > 0 || tc.followsWrite {
 		return
 	}
@@ -287,7 +292,7 @@ func storeReadCache(ctx context.Context, tc Context, in readInput, key cache.Key
 	rowsAllowed := tc.CacheMaxEntryRows <= 0 || len(out) <= tc.CacheMaxEntryRows
 	bytesAllowed := tc.CacheMaxEntryBytes <= 0 || int64(len(encoded)) <= tc.CacheMaxEntryBytes
 	if encodeErr == nil && rowsAllowed && bytesAllowed {
-		_ = tc.Cache.Set(ctx, key, out)
+		_ = tc.Cache.Set(ctx, key, out, stamp)
 	}
 }
 

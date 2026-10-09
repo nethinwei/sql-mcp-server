@@ -189,7 +189,7 @@ onMounted(check)
           <n-tag v-for="c in ws.changes" :key="c.kind + c.name" size="small" :bordered="false"
             :closable="can('admin:write')" @close="ws.revert(c)"
             :type="c.type === 'added' ? 'success' : c.type === 'removed' ? 'error' : 'warning'">
-            {{ t(`changes.type.${c.type}`) }} · {{ t(`changes.kind.${c.kind}`) }} · {{ c.kind === 'settings' ? t('changes.settingsName') : c.name }}
+            {{ t(`changes.type.${c.type}`) }} · {{ t(`changes.kind.${c.kind}`) }} · {{ c.kind === 'settings' ? t('changes.settingsName') : c.kind === 'entity' ? ws.entityIndex.shortName(c.name) : c.name }}
           </n-tag>
         </n-space>
       </n-card>

@@ -22,7 +22,7 @@ import (
 	pgprov "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
 
-func setupPG(t *testing.T) (*pgprov.Provider, func()) {
+func setupPG(t testing.TB) (*pgprov.Provider, func()) {
 	t.Helper()
 	ctx := context.Background()
 	container, err := postgres.Run(ctx, "postgres:16-alpine",

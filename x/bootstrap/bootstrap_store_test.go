@@ -212,8 +212,8 @@ func TestRestartChangesIgnoresEncodingOnlyDifferences(t *testing.T) {
 	if changed := RestartChanges(old, next); len(changed) != 0 {
 		t.Fatalf("encoding-only differences reported as %v", changed)
 	}
-	next.Server.Auth.TrustedProxyCIDRs = []string{"10.0.0.0/8"}
-	next.Tools.DeleteRecord = !next.Tools.DeleteRecord
+	next.Server.Addr = ":9"
+	next.Server.Auth.TLS.Cert, next.Server.Auth.TLS.Key = "cert.pem", "key.pem"
 	if changed := RestartChanges(old, next); len(changed) != 2 {
 		t.Fatalf("real changes = %v", changed)
 	}

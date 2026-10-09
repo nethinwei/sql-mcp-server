@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -71,7 +70,7 @@ func Open(dsn string, opts providerregistry.Options) (*Provider, error) {
 		cfg.RuntimeParams["statement_timeout"] = strconv.FormatInt(opts.Timeout.Milliseconds(), 10)
 	}
 	db := stdlib.OpenDB(*cfg)
-	if err := db.PingContext(context.Background()); err != nil {
+	if err := db.PingContext(opts.OpenContext()); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("%w: %v", ErrPing, err)
 	}

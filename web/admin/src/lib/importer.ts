@@ -1,4 +1,5 @@
 import type { EntityInput } from '@/gql/graphql'
+import { entityId } from './entityRefs'
 
 // Tables of different schemas may share a name, so imported tables are
 // identified by schema and table, as the server's schemaImport does.
@@ -8,41 +9,53 @@ export interface TableRef {
   table: string
 }
 
+export const tableKey = (tb: TableRef) => `${tb.schema}.${tb.table}`
+
 /**
- * Whether entity e of datasource reads table tb, resolved like the server: an
- * entity without a schema reads defaultSchema (where unqualified names
- * resolve); when that is unknown, a table name unique among tables.
+ * The entity of datasource that reads each table (by tableKey), resolved like
+ * the server: an entity without a schema reads defaultSchema (where
+ * unqualified names resolve); when that is unknown, a table name unique among
+ * tables. The first such entity wins. It indexes tables by name once, so a
+ * scan of thousands of tables does not compare every entity with every table.
  */
-export function readsTable(
-  e: EntityInput, datasource: string, tb: TableRef, tables: TableRef[], defaultSchema?: string | null,
-): boolean {
-  if ((e.datasource ?? 'default') !== datasource || (e.source ?? e.name) !== tb.table) return false
-  const schema = e.schema || defaultSchema
-  if (schema) return schema === tb.schema
-  return tables.filter((x) => x.table === tb.table).length === 1
+export function entityByTable(
+  entities: EntityInput[], datasource: string, tables: TableRef[], defaultSchema?: string | null,
+): Map<string, EntityInput> {
+  const byName = new Map<string, TableRef[]>()
+  for (const tb of tables) {
+    const named = byName.get(tb.table)
+    if (named) named.push(tb)
+    else byName.set(tb.table, [tb])
+  }
+  const out = new Map<string, EntityInput>()
+  for (const e of entities) {
+    if ((e.datasource ?? 'default') !== datasource) continue
+    const named = byName.get(e.source ?? e.name) ?? []
+    const schema = e.schema || defaultSchema
+    const tb = schema ? named.find((x) => x.schema === schema) : named.length === 1 ? named[0] : undefined
+    if (tb && !out.has(tableKey(tb))) out.set(tableKey(tb), e)
+  }
+  return out
 }
 
 /**
- * Renames candidates whose names are already used in the workspace (for
- * example by unsaved imports the server does not know about) and points
- * relationships between them at the new names.
+ * Renames candidates whose IDs are already used in the workspace (for example
+ * by unsaved imports the server does not know about) by numbering them, and
+ * points relationships between candidates, which target each other by ID, at
+ * the new IDs. Entities of other datasources or schemas may share a name.
  */
-export function uniqueCandidates(candidates: (EntityInput & { schema?: string | null })[], used: string[]): EntityInput[] {
+export function uniqueCandidates(candidates: EntityInput[], used: string[]): EntityInput[] {
   const taken = new Set(used)
   const renamed = new Map<string, string>()
-  for (const c of candidates) {
+  const named = candidates.map((c) => {
     let name = c.name
-    if (taken.has(name)) {
-      const base = c.schema && !name.startsWith(`${c.schema}_`) ? `${c.schema}_${name}` : name
-      name = base
-      for (let i = 2; taken.has(name); i++) name = `${base}_${i}`
-    }
-    taken.add(name)
-    renamed.set(c.name, name)
-  }
-  return candidates.map((c) => ({
+    for (let n = 2; taken.has(entityId({ ...c, name })); n++) name = `${c.name}_${n}`
+    taken.add(entityId({ ...c, name }))
+    if (name !== c.name) renamed.set(entityId(c), entityId({ ...c, name }))
+    return name === c.name ? c : { ...c, name, source: c.source ?? c.name }
+  })
+  return named.map((c) => ({
     ...c,
-    name: renamed.get(c.name)!,
     relationships: c.relationships?.map((r) => ({ ...r, target: renamed.get(r.target) ?? r.target })),
   }))
 }

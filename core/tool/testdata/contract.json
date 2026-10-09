@@ -354,6 +354,7 @@
     }
   },
   "errorCodes": {
+    "AMBIGUOUS_ENTITY": true,
     "AMBIGUOUS_FIELD_SCOPE": true,
     "BUDGET_EXCEEDED": true,
     "CONSTRAINT_VIOLATION": true,
@@ -366,6 +367,7 @@
     "TRANSACTION_CAPACITY": true,
     "TRANSACTION_NOT_FOUND": false,
     "TRANSACTION_SCOPE": false,
+    "TRANSACTION_STALE": false,
     "UNAUTHORIZED": false,
     "UNSAFE_WRITE": true
   },

@@ -9,6 +9,100 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+### Changed
+
+- 控制台：导入的同名表不再加数据源或库前缀；实体列表与权限矩阵按 `数据源 · 库`
+  分组，名称与表名不同时才显示表名；引用因新增、改名或移动实体产生歧义时自动改为
+  限定写法。示例去掉 `warehouse_tenants`、`archive_orders` 等前缀，`verify.py`
+  增加实体命名验证。
+- CLI：`add entity` 新增 `--schema`，按 `数据源.库.名称` 查重；`explain --entity` 按引用
+  规则解析并输出 `id`。
+- 自省按 schema 批量读取元数据（参考 mysqldump）：PostgreSQL 与
+  MySQL/OceanBase 的表、列、键、外键、级联、触发器各一次查询，往返次数与表数
+  无关；MySQL 只读取目标库的 `information_schema`（此前读取全实例后在内存过滤）。
+  本地 600 张表：PostgreSQL 0.98s → 58ms，MySQL 1.32s → 18ms。连接权限探测按
+  schema 批量。
+- 热重载改为发布后排空（publish-then-drain）：新快照立即生效，新请求不再等待
+  旧快照的在途请求（此前一个慢查询或长时间的控制台扫描会让全部新请求停住）；
+  旧快照在后台关闭。新旧快照共享连接池（设置未变不重连）、IO 配额与限流熔断、
+  读缓存（按物理数据库失效，旧快照的写入同样使新快照的缓存失效，失效后不回填
+  旧值）；待回收快照最多 3 个。被吊销用户的会话在发布时关闭，排空后按会话 ID
+  回滚，重新启用后新建的会话不受影响（TM-007）。
+- 除传输方式、监听地址与 TLS 开关外的配置均可热加载：认证（token、可信代理、
+  用户的首次启用与全部删除；mTLS 下每个请求按当前 CA 校验连接出示的客户端
+  证书，切换前的连接不能冒充 mTLS 通道）、TLS 证书与客户端 CA 轮换、工具集合与 custom
+  procedure tool（客户端收到 `tools/list_changed`）、事务 `ttl`/`maxOpen`。新认证在
+  reload 装配前准备好（含读取证书，失败则 reload 失败），发布时直接切换，不再读文件。
+- 读缓存失效按数据库索引、写入时按到期堆淘汰，不再扫描全部条目；写入的失效
+  目标在装配时预计算，按（物理库, 关系）去重，整库失效合并同库其他目标；事务
+  容量按作用域计数。
+- 显式事务绑定开启时的连接：重载把其数据源改到别的连接后，事务内后续语句返回
+  新错误码 `TRANSACTION_STALE`，只能回滚后重新开启（此前会按新配置在旧连接上
+  执行，并失效新数据库的缓存）。连接未变的重载不受影响。
+- 启动与重载：各数据源并行对账、自省整体限时 1 分钟；连接权限探测移到发布后的
+  后台执行（限时 2 分钟），不再阻塞启动与重载。
+- 控制台导入改为“库 → 表”：先列出库，展开时才扫描该库；扫描是后台任务（有界
+  worker 池、独立单连接、可取消、限时），结果按读连接保留到下次重新扫描；候选
+  实体的命名与关系跨已扫描的库计算。导入页列出全部索引（结构、键部分、条件，
+  按各数据库自己的术语），键从同一次索引查询得出。导入页的状态计算不再是表数 × 实体数，表格
+  分页。
+
+- 新增热路径 Go benchmark（`make bench`，无需 Docker）与真实数据库的元数据
+  扫描、权限探测 benchmark（`make bench-integration`），基线与已知热点见
+  `docs/benchmarks/hot-paths.md`。e2e 套件共享一个 PostgreSQL 容器、每个测试
+  一个新数据库，`make test-e2e` 约 12 s → 4 s。
+
+### Fixed
+
+- 自动提交的写入级联到同一物理库的其他数据源时，会话随后经这些数据源的读取
+  也走写连接（此前只有直接写入的数据源如此，显式事务提交则记录全部）；两条
+  路径共用同一个写入后处理。
+- MySQL/OceanBase 成本闸门：`EXPLAIN` 解析遍历整棵计划树（聚合、排序与连接时表
+  节点嵌套在 `grouping_operation`/`ordering_operation`/`nested_loop` 或 OceanBase
+  的 `CHILD_n` 下），按最差的访问方式与最大的行估计评分；此前这些查询一律被判为
+  “未知扫描”并被拒绝，MySQL/OceanBase 上带过滤的聚合无法执行。
+- OceanBase 自省：表达式、全文与空间索引的键部分被报告为隐藏列
+  （`SYS_NC…$`、`__word_segment…`、`__cellid…`），此前被当成真实列，表达式唯一键
+  会被误认为能唯一定位行；现在不是表列的键部分按表达式处理。MySQL 8.0.13+ 与
+  OceanBase 的表达式索引显示表达式原文；OceanBase 全文与空间索引在
+  `information_schema` 中只报告内部列，改用其文档推荐的 `SHOW INDEX`（仅对这些表
+  逐表读取）得到真实列与类型。
+- MySQL/OceanBase 成本闸门的行估计取任一计划节点的最大值（连接的输出可能远大于
+  各表的扫描行数），此前只取扫描节点，可能低估连接结果。
+- 读缓存过期堆弹出时清空底层数组的引用，被删除的结果可以被回收。
+
+- 示例改为三种数据源各一套覆盖全部特性的业务（PostgreSQL 电商、MySQL 仓储、
+  OceanBase 记账，各经只读与读写两个账号接入，并有跨数据源的同名表），附特性矩阵与 `verify.py`
+  逐项验证；初始化脚本声明 `utf8mb4`，修正 MySQL/OceanBase 示例的中文乱码。
+
+### Breaking
+
+- 管理 API：移除 `schemaImport`，改为 `schemaList`、`schemaTables`（一次返回
+  数据源已扫描库的表）、`startSchemaScan`、`schemaScan`（只返回任务状态）、
+  `cancelSchemaScan`。
+- Go API：`introspect.PrivilegeInspector.TablePrivileges` 改为按 schema 批量
+  （`tables []string` → `map[string]TablePrivileges`）；`bootstrap.App.Capabilities`
+  字段改为方法 `Capabilities()`（评估完成前为 nil），新增 `WaitCapabilities`。
+- Go API：`cache.Cache` 新增 `Stamp`，`Set` 增加失效戳参数，`cache.Key.Database`
+  改为物理数据库标识（新增 `Datasource`、`Generation`）；`tool.CacheTarget` 改为
+  `Physical`/`Relation`，`tool.WriteTargets` 改为结构体；`Runtime.OnRevokedPrincipals` 回调改为返回关闭的会话 ID；
+  `App.OpenScan` 接收数据源配置；新增 `bootstrap.Shared`、`Runtime.OnPublish`、
+  `engine.Quota`/`WithQuota`、`mcpserver.HTTPAuth`/`PrepareHTTPAuth`/`PreparedAuth` 与
+  `HTTPConfig.AuthChanges`。
+- 实体改为命名空间身份 `数据源.库.名称`：名称只需在同一数据源与库内唯一（此前全局
+  唯一），不得含点（数据源名、库名同样）。授权、关系、`affects` 与 Agent 调用的
+  `entity` 写 `名称`、`库.名称`、`数据源.名称` 或完整 ID，必须恰好对应一个实体；
+  有歧义的配置引用使校验与发布失败，Agent 侧只在调用方能访问的实体中解析，歧义时
+  返回新错误码 `AMBIGUOUS_ENTITY`（`constraints.candidates` 列出无歧义写法）。
+  现有配置的名称全局唯一，无需修改。
+- describe 与授权 schema 资源的 `name` 为调用方可访问范围内的最短无歧义写法，
+  新增 `id`（规范 ID）；审计、能力报告与管理 API 的权限可见性按规范 ID 标识实体；
+  GraphQL `Entity` 新增 `id`。
+- 过程工具名的哈希改为对规范 ID 计算，工具名后缀随之变化（名称部分仍是过程名）。
+- Go API：`entity.Entity.Name` 为规范 ID，新增 `Local`、`entity.ID`/`ReferencesOf`、
+  `Registry.Match`/`ShortName`（`Resolve` 接受任一引用写法）；新增
+  `config.EntityRefs`、`EntityConfig.ID`；`tool.ProcedureToolName` 改为接收实体。
+
 ## 0.1.11 - 2026-10-08
 
 ### Added

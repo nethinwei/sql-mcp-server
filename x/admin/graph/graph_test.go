@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/99designs/gqlgen/client"
 	"github.com/99designs/gqlgen/graphql/handler"
@@ -18,6 +19,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
+	"github.com/nethinwei/sql-mcp-server/x/admin/scanjobs"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	_ "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
@@ -85,11 +87,15 @@ func newHarness(t *testing.T) *harness {
 				{Columns: []string{"customer_id"}, RefRelation: "customers", RefColumns: []string{"id"}},
 			}},
 	}}
-	introspection := func(_ context.Context, _ string, fn func(introspect.Introspector) error) error {
+	introspection := func(
+		_ context.Context, _ string, _ config.DatabaseConfig, fn func(introspect.Introspector) error,
+	) error {
 		return fn(tables)
 	}
+	scans := NewScans(scanjobs.Options{})
+	t.Cleanup(scans.Close)
 	return &harness{store: store, accounts: accountStore, tables: tables, resolver: &Resolver{
-		Store: store, Accounts: accounts.Service{Store: accountStore}, Introspect: introspection,
+		Store: store, Accounts: accounts.Service{Store: accountStore}, Introspect: introspection, Scans: scans,
 	}}
 }
 
@@ -147,6 +153,28 @@ func mustPost(t *testing.T, c *client.Client, query string, resp any, opts ...cl
 	}
 }
 
+// scanSchema starts a schema scan with args, waits for it and decodes the
+// selected fields of its result into result.
+func scanSchema(t *testing.T, c *client.Client, args string) {
+	t.Helper()
+	var started struct{ StartSchemaScan struct{ ID string } }
+	mustPost(t, c, `mutation { startSchemaScan(`+args+`) { id } }`, &started)
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		var resp struct {
+			SchemaScan struct{ State, Error *string }
+		}
+		mustPost(t, c, `query($id: ID!) { schemaScan(id: $id) { state error } }`, &resp,
+			client.Var("id", started.StartSchemaScan.ID))
+		switch *resp.SchemaScan.State {
+		case "DONE":
+			return
+		case "FAILED", "CANCELED":
+			t.Fatalf("scan %s: %v", *resp.SchemaScan.State, resp.SchemaScan.Error)
+		}
+	}
+	t.Fatal("the scan did not finish")
+}
+
 func TestCreateDraftMergesSectionsAndNormalizesValues(t *testing.T) {
 	h := newHarness(t)
 	c := h.client(auth.PermAll)
@@ -202,50 +230,59 @@ func TestDraftRejectsForbiddenSettingsAndPlaintextSecrets(t *testing.T) {
 	}
 }
 
+// importResponse is what the import tests read of schemaTables.
+type importResponse struct {
+	DefaultSchema string
+	Tables        []struct {
+		Table        string
+		Status       string
+		ConfiguredAs *string
+		Candidate    struct {
+			Name          string
+			Description   string
+			LegacyAccess  any
+			Relationships []struct{ Name, Target, Cardinality string }
+		}
+	}
+}
+
 func TestSchemaImportProposesZeroPermissionCandidates(t *testing.T) {
 	h := newHarness(t)
 	c := h.client(auth.PermAll)
-	var resp struct {
-		SchemaImport struct {
-			DefaultSchema string
-			Tables        []struct {
-				Table        string
-				Status       string
-				ConfiguredAs *string
-				Candidate    struct {
-					Name          string
-					Description   string
-					LegacyAccess  any
-					Relationships []struct{ Name, Target, Cardinality string }
-				}
-			}
-		}
-	}
-	mustPost(t, c, `{ schemaImport(datasource: "shop") { defaultSchema tables { table status configuredAs
-		candidate { name description legacyAccess relationships { name target cardinality } } } } }`, &resp)
-	tables := resp.SchemaImport.Tables
+	scanSchema(t, c, `datasource: "shop"`)
+	var wrapped struct{ SchemaTables importResponse }
+	mustPost(t, c, `{ schemaTables(datasource: "shop", schemas: ["public"]) { defaultSchema tables { table status
+		configuredAs candidate { name description legacyAccess relationships { name target cardinality } } } } }`,
+		&wrapped)
+	resp := wrapped.SchemaTables
+	tables := resp.Tables
 	if len(tables) != 2 || tables[0].Table != "customers" || tables[1].Table != "orders" {
 		t.Fatalf("tables = %+v", tables)
 	}
 	customers, orders := tables[0], tables[1]
-	if resp.SchemaImport.DefaultSchema != "public" ||
+	if resp.DefaultSchema != "public" ||
 		customers.Status != "CONFIGURED" || *customers.ConfiguredAs != "customers" {
 		t.Fatalf("customers = %+v", customers)
 	}
 	if orders.Status != "NEW" || orders.Candidate.LegacyAccess != nil {
 		t.Fatalf("orders = %+v", orders)
 	}
-	if rel := orders.Candidate.Relationships; len(rel) != 1 || rel[0].Target != "customers" ||
+	if rel := orders.Candidate.Relationships; len(rel) != 1 || rel[0].Target != "shop.customers" ||
 		rel[0].Cardinality != "belongs-to" {
 		t.Fatalf("orders relationships = %+v", rel)
 	}
-	if rel := customers.Candidate.Relationships; len(rel) != 1 || rel[0].Target != "orders" ||
+	if rel := customers.Candidate.Relationships; len(rel) != 1 || rel[0].Target != "shop.public.orders" ||
 		rel[0].Cardinality != "has-many" {
 		t.Fatalf("customers relationships = %+v", rel)
 	}
-	if _, err := h.resolver.Query().SchemaImport(auth.WithPrincipal(context.Background(),
+	if _, err := h.resolver.Mutation().StartSchemaScan(auth.WithPrincipal(context.Background(),
 		auth.Principal{Permissions: []string{auth.PermAll}}), "ghost", nil); err == nil {
 		t.Fatal("unknown datasource must fail")
+	}
+	var unknown map[string]any
+	mustPost(t, c, `{ schemaScan(id: "nope") { id } }`, &unknown)
+	if unknown["schemaScan"] != nil {
+		t.Fatalf("an unknown scan = %v, want null", unknown)
 	}
 }
 
@@ -298,15 +335,15 @@ func TestVisibilityMatchesSimulate(t *testing.T) {
 	for _, e := range resp.Visibility {
 		for _, a := range e.Actions {
 			got[e.Entity+"/"+a.Action] = a.Result.Allowed
-			if e.Entity == "customers" && a.Action == "READ" && a.Result.RowFilter["value"] != "CN" {
+			if e.Entity == "shop.customers" && a.Action == "READ" && a.Result.RowFilter["value"] != "CN" {
 				t.Fatalf("customers read row filter = %v", a.Result.RowFilter)
 			}
 		}
 	}
-	if !got["customers/READ"] || got["customers/AGGREGATE"] || got["customers/DELETE"] {
+	if !got["shop.customers/READ"] || got["shop.customers/AGGREGATE"] || got["shop.customers/DELETE"] {
 		t.Fatalf("visibility = %v", got)
 	}
-	if _, ok := got["customers/EXECUTE"]; ok {
+	if _, ok := got["shop.customers/EXECUTE"]; ok {
 		t.Fatal("execute must apply only to procedures")
 	}
 	err := c.Post(`query { visibility(input: {user: "ghost"}) { entity } }`, &resp)
@@ -397,7 +434,8 @@ func TestPermissionMatrix(t *testing.T) {
 		{[]string{auth.PermRead}, `{ published { id config { users { name hasToken } } } }`, true},
 		{[]string{auth.PermRead}, `mutation { createDraft(draft: {base: "1"}) { id } }`, false},
 		{[]string{auth.PermRead}, `mutation { generateUserToken { token } }`, false},
-		{[]string{auth.PermRead}, `{ schemaImport(datasource: "shop") { datasource } }`, false},
+		{[]string{auth.PermRead}, `mutation { startSchemaScan(datasource: "shop") { id } }`, false},
+		{[]string{auth.PermRead}, `{ schemaScan(id: "x") { id } }`, false},
 		{[]string{auth.PermWrite}, `mutation { publish(input: {id: "1"}) { id } }`, false},
 		{[]string{auth.PermWrite}, `{ adminAccounts { username } }`, false},
 		{[]string{auth.PermAccounts}, `{ adminAccounts { username } }`, true},
@@ -468,7 +506,7 @@ func mustJSON(s string) any {
 func TestCapabilitiesAndValidationWarnings(t *testing.T) {
 	h := newHarness(t)
 	h.resolver.Capabilities = func() bootstrap.EntityCapabilities {
-		return bootstrap.EntityCapabilities{"customers": {
+		return bootstrap.EntityCapabilities{"shop.customers": {
 			entity.ActionRead:   {Privilege: introspect.PrivilegeDenied, Connection: "ro", Reason: "no SELECT"},
 			entity.ActionUpdate: {Privilege: introspect.PrivilegeGranted, Connection: "rw", Columns: []string{"region"}},
 		}}

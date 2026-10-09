@@ -51,7 +51,7 @@ func (f serveAdminFlags) handler(
 		Status: runtimeStatus(runtime, src.rev, watching),
 		Capabilities: func() bootstrap.EntityCapabilities {
 			if app := runtime.Current(); app != nil {
-				return app.Capabilities
+				return app.Capabilities()
 			}
 			return nil
 		},
@@ -74,19 +74,32 @@ func runtimeStatus(runtime *bootstrap.Runtime, startup int64, watching bool) fun
 	}
 }
 
-// runtimeIntrospector introspects a datasource of the current snapshot.
-// runtimeIntrospection runs fn with the introspector of a connected datasource
-// of the current snapshot.
+// runtimeIntrospection runs fn with the introspector of datasource as
+// database configures it, on a connection of its own; an App assembled from
+// handed connections introspects its connected datasource instead.
 func runtimeIntrospection(runtime *bootstrap.Runtime) graph.Introspection {
-	return func(_ context.Context, datasource string, fn func(introspect.Introspector) error) error {
+	return func(
+		ctx context.Context, datasource string, database config.DatabaseConfig, fn func(introspect.Introspector) error,
+	) error {
 		app, release, err := runtime.Acquire()
 		if err != nil {
 			return err
 		}
-		defer release()
-		provider, ok := app.Providers[datasource]
-		if !ok {
-			return fmt.Errorf("datasource %q is not connected", datasource)
+		// The scan does not hold the snapshot, so serving and reloads do not
+		// wait for it.
+		provider, own, err := app.OpenScan(ctx, database)
+		if own {
+			release()
+			if err != nil {
+				return err
+			}
+			defer func() { _ = provider.Close() }()
+		} else {
+			defer release()
+			var ok bool
+			if provider, ok = app.Providers[datasource]; !ok {
+				return fmt.Errorf("datasource %q is not connected", datasource)
+			}
 		}
 		introspector := provider.Introspector()
 		if introspector == nil {

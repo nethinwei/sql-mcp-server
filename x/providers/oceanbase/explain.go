@@ -4,10 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"strconv"
 	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/core/cost"
+	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
 )
 
 // obExplainer estimates a plan via EXPLAIN FORMAT=JSON.
@@ -43,47 +43,49 @@ func (e obExplainer) Explain(ctx context.Context, query string, args []any) (cos
 	return parseOBExplain([]byte(sb.String()))
 }
 
-// parseOBExplain parses OceanBase EXPLAIN FORMAT=JSON output.
+// parseOBExplain parses OceanBase EXPLAIN FORMAT=JSON output: a tree of
+// operators ({OPERATOR, NAME, EST.ROWS, EST.TIME(us), CHILD_1, ...}) whose
+// table scans may sit under grouping, sorting or join operators, so the plan
+// is as risky as the worst scan, and estimates the most rows any operator
+// does (a join may output far more than it scans). A MySQL-compatible
+// query_block is parsed as MySQL's.
 func parseOBExplain(b []byte) (cost.Plan, error) {
-	// Real OceanBase shape: {OPERATOR, NAME, EST.ROWS, EST.TIME(us), ...}.
-	var ob struct {
-		Operator string  `json:"OPERATOR"`
-		Name     string  `json:"NAME"`
-		EstRows  int64   `json:"EST.ROWS"`
-		EstTime  float64 `json:"EST.TIME(us)"`
+	var root map[string]any
+	if err := json.Unmarshal(b, &root); err != nil {
+		return cost.Plan{ScanType: cost.ScanUnknown, Raw: b}, nil
 	}
-	if err := json.Unmarshal(b, &ob); err == nil && ob.Operator != "" {
-		return cost.Plan{
-			TotalCost:     ob.EstTime,
-			EstimatedRows: ob.EstRows,
-			ScanType:      obScanType(ob.Operator),
-			StatsFresh:    true,
-			Raw:           b,
-		}, nil
+	if _, ok := root["query_block"]; ok {
+		return mysql.ParseExplain(b)
 	}
-	// Fallback: MySQL-compatible query_block (OceanBase MySQL mode may mirror it).
-	var ex struct {
-		QueryBlock struct {
-			CostInfo struct {
-				QueryCost string `json:"query_cost"`
-			} `json:"cost_info"`
-			Table struct {
-				AccessType string `json:"access_type"`
-				Rows       int64  `json:"rows_examined_per_scan"`
-			} `json:"table"`
-		} `json:"query_block"`
+	if _, ok := root["OPERATOR"].(string); !ok {
+		return cost.Plan{ScanType: cost.ScanUnknown, Raw: b}, nil
 	}
-	if err := json.Unmarshal(b, &ex); err == nil && ex.QueryBlock.Table.AccessType != "" {
-		c, _ := strconv.ParseFloat(strings.TrimSpace(ex.QueryBlock.CostInfo.QueryCost), 64)
-		return cost.Plan{
-			TotalCost:     c,
-			EstimatedRows: ex.QueryBlock.Table.Rows,
-			ScanType:      obScanType(ex.QueryBlock.Table.AccessType),
-			StatsFresh:    true,
-			Raw:           b,
-		}, nil
+	plan := cost.Plan{ScanType: cost.ScanUnknown, StatsFresh: true, Raw: b}
+	plan.TotalCost, _ = root["EST.TIME(us)"].(float64)
+	scans := 0
+	var walk func(node map[string]any)
+	walk = func(node map[string]any) {
+		op, _ := node["OPERATOR"].(string)
+		if rows, ok := node["EST.ROWS"].(float64); ok && int64(rows) > plan.EstimatedRows {
+			plan.EstimatedRows = int64(rows)
+		}
+		switch {
+		case strings.Contains(op, "SORT"):
+			plan.HasSort = true
+		case strings.Contains(op, "SCAN") || strings.Contains(op, "GET"):
+			if scan := obScanType(op); scans == 0 || cost.Worse(scan, plan.ScanType) {
+				plan.ScanType = scan
+			}
+			scans++
+		}
+		for key, child := range node {
+			if c, ok := child.(map[string]any); ok && strings.HasPrefix(key, "CHILD_") {
+				walk(c)
+			}
+		}
 	}
-	return cost.Plan{ScanType: cost.ScanUnknown, Raw: b}, nil
+	walk(root)
+	return plan, nil
 }
 
 // obScanType maps an OceanBase operator (or MySQL access_type in the fallback

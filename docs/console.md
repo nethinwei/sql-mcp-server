@@ -47,7 +47,10 @@ sql-mcp-server serve --admin --watch --transport http --addr 127.0.0.1:8080
 2. **实体**：调整说明、字段别名、脱敏、排除字段、主键、关系与租户策略。说明留空
    时，服务使用数据库中的表注释与列注释（启动或重载时读取），控制台以灰色显示；
    填写后覆盖注释。导入时不会把注释复制进配置，因此之后修改注释仍会生效。改名时
-   授权和其他实体的关系会一起更新；删除实体会同时删除指向它的关系。
+   授权和其他实体的关系会一起更新；删除实体会同时删除指向它的关系。实体按
+   `数据源 · 库` 分组显示，名称与表名不同时才在名称后标出表名（`← 表名`）；不同
+   数据源或库的同名表各自导入为同名实体，引用写成能唯一确定实体的最短形式（如
+   `crm.tenants`），新增实体使已有引用产生歧义时，控制台自动把它们改成限定写法。
 3. **角色**：在权限矩阵中为每个实体勾选读、聚合、增、改、删、执行，支持按行或
    按列批量操作；可限制可读/可写字段与行过滤条件。右侧实时预览该角色最终能看到
    的字段和行条件。
@@ -112,14 +115,15 @@ sql-mcp-server admin set --username alice --permissions admin:*
 
 ## Docker 部署
 
-[`examples/console`](../examples/console) 用 Docker Compose 启动一个带示例数据的
-PostgreSQL（多租户电商：两个数据库、五个 schema，预置了实体、角色与用户）和开启
-控制台的服务，配置存储放在 SQLite 数据卷中。数据、角色、用户 token 与可体验的场景
+[`examples/console`](../examples/console) 用 Docker Compose 启动三种受支持的数据库
+（PostgreSQL：电商；MySQL：仓储；OceanBase：记账，各自一套覆盖全部特性的业务，
+都经只读与读写两个账号接入）并预置实体、角色与用户，以及开启控制台的服务，配置
+存储放在 SQLite 数据卷中。服务起来后在该目录运行 `python3 verify.py` 逐项验证。数据、角色、用户 token 与可体验的场景
 见该目录的 [README](../examples/console/README.md)。以下命令都在该目录下执行。
 
 ```sh
 cd examples/console
-docker compose up -d --wait db                       # 启动示例数据库（首次约需半分钟生成数据）
+docker compose up -d --wait db mysql ob              # 启动示例数据库（OceanBase 首次约需 3–5 分钟）
 docker compose run --rm mcp store init               # 初始化配置存储
 docker compose run --rm mcp store import --config /config/config.yaml --comment 初始配置
 docker compose run --rm mcp store publish 1
@@ -142,8 +146,9 @@ Compose 中各项的作用：
   可改用发布的镜像，如 `ghcr.io/nethinwei/sql-mcp-server:<版本>`。
 - `SQL_MCP_STORE=sqlite:/var/lib/sql-mcp-server/config.db` 指定配置存储，
   该目录挂载为命名卷 `store`，镜像以非 root 用户（uid 65532）运行并拥有此目录。
-- 数据库地址与密码通过环境变量（`POSTGRES_HOST`、`POSTGRES_USER`、
-  `POSTGRES_PASSWORD`）传入，`config.yaml` 中的 DSN 只写占位符。
+- 数据库地址与密码通过环境变量（如 `PG_HOST`、`PG_READER_PASSWORD`、
+  `PG_WRITER_PASSWORD`，MySQL 与 OceanBase 同理）传入，`config.yaml` 中的 DSN
+  只写占位符。
 - 服务监听容器内 `0.0.0.0:8080`，端口只映射到宿主机 `127.0.0.1`。对外开放前，
   在前面放一个终止 TLS 的反向代理。
 
@@ -158,12 +163,12 @@ Compose 中各项的作用：
 ```sh
 docker volume create smcp-store
 docker run --rm -v smcp-store:/var/lib/sql-mcp-server -v "$PWD/config.yaml:/config/config.yaml:ro" \
-  -e SQL_MCP_STORE=sqlite:/var/lib/sql-mcp-server/config.db -e POSTGRES_HOST -e POSTGRES_USER -e POSTGRES_PASSWORD \
+  -e SQL_MCP_STORE=sqlite:/var/lib/sql-mcp-server/config.db -e PG_HOST -e PG_READER_PASSWORD -e PG_WRITER_PASSWORD \
   ghcr.io/nethinwei/sql-mcp-server:<版本> store init
 # store import / store publish / admin create 同理
 docker run -d --name sql-mcp-server -p 127.0.0.1:8080:8080 \
   -v smcp-store:/var/lib/sql-mcp-server -e SQL_MCP_STORE=sqlite:/var/lib/sql-mcp-server/config.db \
-  -e POSTGRES_HOST -e POSTGRES_USER -e POSTGRES_PASSWORD \
+  -e PG_HOST -e PG_READER_PASSWORD -e PG_WRITER_PASSWORD \
   ghcr.io/nethinwei/sql-mcp-server:<版本> serve --admin --watch
 ```
 

@@ -73,20 +73,51 @@ export const RevisionYamlQuery = graphql(`
   query RevisionYaml($id: ID!) { revision(id: $id) { id yaml } }
 `)
 
-export const SchemaImportQuery = graphql(`
-  query SchemaImport($datasource: String!, $schemas: [String!]) {
-    schemaImport(datasource: $datasource, schemas: $schemas) {
-      datasource defaultSchema
-      tables {
-        schema table description status configuredAs
-        columns { name type nullable description primaryKey }
-        keys { name columns primary reason }
-        foreignKeys { name columns refSchema refTable refColumns onDelete onUpdate }
-        sideEffects
-        candidate { ...EntityParts }
-      }
+// Importing goes database by database: list the schemas, then scan the one
+// opened. A scan runs in the background on the server (start it, then poll);
+// the server keeps each schema's last scan until the next one.
+export const ImportPartsFragment = graphql(`
+  fragment ImportParts on SchemaImport {
+    datasource defaultSchema source
+    tables {
+      schema table description status configuredAs
+      columns { name type nullable description primaryKey }
+      keys { name columns primary reason }
+      indexes { name method parts unique primary where }
+      foreignKeys { name columns refSchema refTable refColumns onDelete onUpdate }
+      sideEffects
+      candidate { ...EntityParts }
     }
   }
+`)
+
+// The schema list and the tables of every scanned schema are read together:
+// candidate names and relationships span every scanned schema, so the tables
+// shown together come from one answer.
+export const SchemaSyncQuery = graphql(`
+  query SchemaSync($datasource: String!, $refresh: Boolean) {
+    schemaList(datasource: $datasource, refresh: $refresh) {
+      defaultSchema listedAt source
+      schemas { name scannedAt tables }
+    }
+    schemaTables(datasource: $datasource) { ...ImportParts }
+  }
+`)
+
+export const StartSchemaScanMutation = graphql(`
+  mutation StartSchemaScan($datasource: String!, $schemas: [String!]) {
+    startSchemaScan(datasource: $datasource, schemas: $schemas) { id state error }
+  }
+`)
+
+export const SchemaScanQuery = graphql(`
+  query SchemaScan($id: ID!) {
+    schemaScan(id: $id) { id state error }
+  }
+`)
+
+export const CancelSchemaScanMutation = graphql(`
+  mutation CancelSchemaScan($id: ID!) { cancelSchemaScan(id: $id) { id state } }
 `)
 
 export const TableCommentsQuery = graphql(`

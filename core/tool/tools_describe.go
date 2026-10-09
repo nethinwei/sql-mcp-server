@@ -56,7 +56,8 @@ func (DescribeTool) Run(ctx context.Context, input json.RawMessage, tc Context) 
 			continue
 		}
 		out = append(out, map[string]any{
-			"name": e.Name, "description": e.Description, "datasource": e.DatasourceName(),
+			"name": entityName(ctx, tc, e), "id": e.Name, "description": e.Description,
+			"datasource": e.DatasourceName(),
 		})
 	}
 	return Result{Content: out}, nil
@@ -88,7 +89,7 @@ func describeEntity(ctx context.Context, tc Context, name string) (Result, error
 		})
 	}
 	return Result{Content: []map[string]any{{
-		"name": res.Entity.Name, "description": res.Entity.Description,
+		"name": entityName(ctx, tc, res.Entity), "id": res.Entity.Name, "description": res.Entity.Description,
 		"datasource": res.Entity.DatasourceName(), "fields": fields,
 		"keys": VisibleKeys(res.Entity, fieldNames),
 	}}}, nil

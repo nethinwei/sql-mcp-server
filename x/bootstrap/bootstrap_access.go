@@ -43,8 +43,9 @@ func accessPolicy(cfg *config.Config) (rbac.Policy, error) {
 		Roles:      make(map[string]map[string][]rbac.Grant, len(cfg.Roles)),
 		Principals: make(map[string]rbac.Principal, len(cfg.Users)),
 	}
+	refs := config.NewEntityRefs(cfg.Entities)
 	for name, def := range cfg.Roles {
-		grants, err := compileGrants("role:"+name, def.Grants)
+		grants, err := compileGrants("role:"+name, def.Grants, refs)
 		if err != nil {
 			return rbac.Policy{}, fmt.Errorf("role %q: %w", name, err)
 		}
@@ -54,7 +55,7 @@ func accessPolicy(cfg *config.Config) (rbac.Policy, error) {
 		if user.Disabled {
 			continue
 		}
-		grants, err := compileGrants(UserPrincipal(name), user.Grants)
+		grants, err := compileGrants(UserPrincipal(name), user.Grants, refs)
 		if err != nil {
 			return rbac.Policy{}, fmt.Errorf("user %q: %w", name, err)
 		}
@@ -65,7 +66,8 @@ func accessPolicy(cfg *config.Config) (rbac.Policy, error) {
 	return policy, nil
 }
 
-func compileGrants(owner string, grants []config.GrantConfig) (map[string][]rbac.Grant, error) {
+// compileGrants compiles grants by the ID of the entity each grants.
+func compileGrants(owner string, grants []config.GrantConfig, refs config.EntityRefs) (map[string][]rbac.Grant, error) {
 	out := make(map[string][]rbac.Grant, len(grants))
 	for i, gc := range grants {
 		rows, err := filterConfigToPredicate(gc.Rows)
@@ -83,7 +85,8 @@ func compileGrants(owner string, grants []config.GrantConfig) (map[string][]rbac
 		if gc.Fields != nil {
 			g.Fields = &entity.FieldPermissions{Read: gc.Fields.Read, Write: gc.Fields.Write}
 		}
-		out[gc.Entity] = append(out[gc.Entity], g)
+		id := entityID(refs, gc.Entity)
+		out[id] = append(out[id], g)
 	}
 	return out, nil
 }

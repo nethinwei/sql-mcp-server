@@ -104,10 +104,12 @@ func TestRestartFieldChanges(t *testing.T) {
 		t.Fatalf("empty list and hot-reloadable changes reported: %v", got)
 	}
 	next.Server.Addr = ":9"
-	next.Tools.DeleteRecord = !next.Tools.DeleteRecord
-	next.Transactions.MaxOpen++
+	next.Server.Transport = "http"
+	next.Tools.DeleteRecord = !next.Tools.DeleteRecord // hot-reloadable
+	next.Transactions.MaxOpen++                        // hot-reloadable
+	next.Server.Auth.Token = "rotated"                 // hot-reloadable
 	got := strings.Join(RestartFieldChanges(old, next), " ")
-	if got != "server.addr tools transactions.maxOpen" {
+	if got != "server.transport server.addr" {
 		t.Fatalf("changes = %q", got)
 	}
 }

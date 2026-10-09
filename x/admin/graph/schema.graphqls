@@ -44,8 +44,22 @@ type Query {
   revision(id: ID!): Revision
   "Revisions, newest first."
   revisions(limit: Int = 50): [Revision!]!
-  "Introspect a configured datasource and propose zero-permission entities."
-  schemaImport(datasource: String!, schemas: [String!]): SchemaImport!
+  """
+  The schemas (MySQL databases) of a configured datasource, to scan one at a
+  time with startSchemaScan. The list is kept until refresh asks for a new one.
+  """
+  schemaList(datasource: String!, refresh: Boolean = false): SchemaList!
+  """
+  The tables of the scanned ones of `schemas`, or of every scanned schema
+  when omitted ("" is the default schema of a datasource that cannot list
+  schemas), compared with the published configuration. Candidate names and
+  relationships are worked out over every scanned schema of the datasource,
+  so tables shown together are read in one call. Scans are kept until the next
+  scan of the schema.
+  """
+  schemaTables(datasource: String!, schemas: [String!]): SchemaImport!
+  "A schema scan started with startSchemaScan; null when unknown or expired."
+  schemaScan(id: ID!): ScanJob
   """
   Database comments of tables: the default descriptions of entities and their
   fields, used when the configuration leaves them empty. Results follow the
@@ -56,8 +70,9 @@ type Query {
   validate(draft: DraftInput!): Validation!
   """
   What the routed datasource connections may do per entity action, as the
-  databases reported when the serving snapshot was assembled. It informs; each
-  database decides its statements.
+  databases reported after the serving snapshot was assembled (assessed in the
+  background; empty until then). It informs; each database decides its
+  statements.
   """
   capabilities: [EntityCapability!]!
   "Unified diff from revision `from` to revision `to` or an unsaved draft (default: published)."
@@ -70,6 +85,15 @@ type Query {
 }
 
 type Mutation {
+  """
+  Scan a configured datasource in the background; poll schemaScan until it is
+  done, then read the proposed zero-permission entities with schemaTables.
+  Each scan uses a connection of its own and a bounded pool of workers, so
+  serving never waits for it.
+  """
+  startSchemaScan(datasource: String!, schemas: [String!]): ScanJob!
+  "Stop a pending or running scan."
+  cancelSchemaScan(id: ID!): ScanJob
   "Save a draft revision."
   createDraft(draft: DraftInput!, comment: String): Revision!
   publish(input: PublishInput!): Revision!
@@ -143,6 +167,9 @@ type DatasourceRouting {
 }
 
 type Entity {
+  "The canonical identity, datasource.schema.name (datasource.name without a schema)."
+  id: String!
+  "Unique within the datasource and schema."
   name: String!
   "The table, view or procedure; null means the entity name."
   source: String
@@ -217,6 +244,47 @@ type User {
   hasToken: Boolean!
 }
 
+type SchemaList {
+  datasource: String!
+  """
+  Every user schema; when the database cannot list them, one named "" for its
+  default schema, which a scan without schemas reads.
+  """
+  schemas: [SchemaInfo!]!
+  "Where unqualified names resolve; null when unknown."
+  defaultSchema: String
+  listedAt: Time!
+  """
+  Identifies the database the datasource reads (its driver and read
+  connection); results of another source are stale.
+  """
+  source: String!
+}
+
+type SchemaInfo {
+  name: String!
+  "When its tables were last scanned; null when never."
+  scannedAt: Time
+  "How many tables the last scan found; null when never scanned."
+  tables: Int
+}
+
+enum ScanState {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+  CANCELED
+}
+
+type ScanJob {
+  id: ID!
+  datasource: String!
+  state: ScanState!
+  "Why the scan failed or stopped."
+  error: String
+}
+
 type SchemaImport {
   datasource: String!
   """
@@ -225,6 +293,11 @@ type SchemaImport {
   """
   defaultSchema: String
   tables: [ImportTable!]!
+  """
+  Identifies the database the datasource reads (its driver and read
+  connection); results of another source are stale.
+  """
+  source: String!
 }
 
 type ImportTable {
@@ -237,6 +310,8 @@ type ImportTable {
   columns: [ImportColumn!]!
   "The primary key and unique keys, including those that cannot identify a row."
   keys: [ImportKey!]!
+  "Every index, in the database's own terms; the unique ones are also keys."
+  indexes: [ImportIndex!]!
   foreignKeys: [ImportForeignKey!]!
   "Triggers or rules: a write may change other tables."
   sideEffects: Boolean!
@@ -250,6 +325,26 @@ type ImportKey {
   primary: Boolean!
   "Why the key cannot identify a row (partial, expression, prefix, nullable); null when it can."
   reason: String
+}
+
+type ImportIndex {
+  name: String!
+  """
+  The database's name for the index structure, lower-cased: for example
+  btree, hash, gin, gist, brin, spgist (PostgreSQL); btree, hash, fulltext,
+  spatial (MySQL, OceanBase).
+  """
+  method: String!
+  """
+  Key parts in order: a column, a column prefix such as title(20), or an
+  expression as the database prints it; parts the database does not report
+  are left out (empty when it reports none).
+  """
+  parts: [String!]!
+  unique: Boolean!
+  primary: Boolean!
+  "The predicate of a partial index; null for a full one."
+  where: String
 }
 
 type ImportForeignKey {

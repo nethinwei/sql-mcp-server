@@ -15,7 +15,7 @@ COPY core/config/schema.json /src/core/config/
 COPY core/config/testdata/rules.json /src/core/config/testdata/
 RUN pnpm build
 
-FROM golang:1.26.8-alpine AS build
+FROM golang:1.26.9-alpine AS build
 
 ARG VERSION=dev
 WORKDIR /src

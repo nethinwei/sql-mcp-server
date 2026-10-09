@@ -175,7 +175,7 @@ func TestCustomProcedureThroughMCP(t *testing.T) {
 	defer session.Close()
 
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{
-		Name: tool.ProcedureToolName(procedure.Name), Arguments: map[string]any{"tenant": "acme"},
+		Name: tool.ProcedureToolName(procedure), Arguments: map[string]any{"tenant": "acme"},
 	})
 	if err != nil || result.IsError {
 		t.Fatalf("custom procedure result = %+v, error = %v", result, err)

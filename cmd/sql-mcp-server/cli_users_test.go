@@ -77,7 +77,9 @@ users:
     subject: {tenant_id: t1}
 `
 
-func TestReloadRejectsTogglingUsers(t *testing.T) {
+// Configuring the first user is a reload like any other: the HTTP transport
+// follows whether users are configured.
+func TestReloadTogglesUsers(t *testing.T) {
 	t.Setenv("USERS_TEST_DSN", "postgres://localhost/test")
 	next, err := bootstrap.LoadBytes([]byte(usersConfigYAML))
 	if err != nil {
@@ -88,9 +90,9 @@ func TestReloadRejectsTogglingUsers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = serveBuilder(startup, serveOverrides{}, nil)(next)
-	if !errors.Is(err, bootstrap.ErrRestartRequired) || !strings.Contains(err.Error(), "users") {
-		t.Fatalf("enabling users by reload must require restart: %v", err)
+	_, err = serveBuilder(startup, serveOverrides{}, nil, bootstrap.NewShared(), nil)(next)
+	if errors.Is(err, bootstrap.ErrRestartRequired) {
+		t.Fatalf("enabling users by reload must not require a restart: %v", err)
 	}
 }
 

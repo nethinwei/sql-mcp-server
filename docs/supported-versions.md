@@ -7,7 +7,7 @@
 
 | 组件 | 范围 | 说明 |
 |---|---|---|
-| Go | 1.26.8+ | `go.mod` 语言版本为 1.26；CI 与发布均使用 1.26.8 |
+| Go | 1.26.9+ | `go.mod` 语言版本为 1.26；CI 与发布均使用 1.26.9 |
 | MCP Go SDK | 1.6.x | 当前构建固定 `github.com/modelcontextprotocol/go-sdk v1.6.1` |
 | MCP transport | stdio、streamable HTTP | HTTP 端点为 `/mcp` |
 | 容器平台 | linux/amd64、linux/arm64 | GHCR 发布 multi-arch manifest |

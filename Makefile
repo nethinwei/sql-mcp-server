@@ -23,7 +23,7 @@ CORE_PACKAGES := ./core/...
 .PHONY: fmt web fmt-check vet build test test-fuzz-smoke test-integration test-e2e lint coverage \
 	coverage-check govulncheck workflow-check release-check release-quality \
 	release-snapshot release-metadata-check release-image-check release-preflight-fast \
-	release-preflight release-bump modelscope-check smoke-protocol bench-overhead eval-pilot \
+	release-preflight release-bump modelscope-check smoke-protocol bench bench-integration bench-overhead eval-pilot \
 	eval-workload fixtures-v4 eval-diagnostic eval-coverage docs-check ci ci-local ci-full tidy web-check
 
 # Format all Go sources in place (gofmt + 120-column line shortening).
@@ -86,6 +86,14 @@ modelscope-check: build
 # Protocol smoke: stdio + streamable HTTP against a real database (Docker required).
 smoke-protocol: build
 	PROTOCOL_BINARY=./$(BINARY) $(GO) run ./internal/protocolsmoke
+
+# Go benchmarks of the hot paths, no Docker (see docs/benchmarks/hot-paths.md).
+bench:
+	$(GO) test -run '^$$' -bench . -benchmem ./core/... ./x/...
+
+# Metadata scans and privilege probes against real databases (Docker required).
+bench-integration:
+	$(GO) test -tags=integration -run '^$$' -bench . -benchtime 20x ./x/providers/postgres ./x/providers/mysql
 
 # Data-plane overhead benchmark (Docker required). See docs/benchmarks/.
 # Recipes are silenced (@) so stdout stays parseable JSON.

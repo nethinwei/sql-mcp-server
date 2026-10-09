@@ -51,13 +51,14 @@
 
 ## 在途请求一致性（结论）
 
-- 一次请求自始至终使用同一个 snapshot（`Acquire()` 租约），发布新 snapshot
-  采用 drain-before-publish：旧 snapshot 等待在途请求结束后才关闭；
-- 事务跨越多次请求，绑定创建时的事务 manager；`ttl`/`maxOpen` 变化无法安全
-  迁移在途事务，拒绝热发布、要求重启（现状保持）；
+- 一次请求自始至终使用同一个 snapshot（`Acquire()` 租约）；新 snapshot 构建
+  成功后立即发布，旧 snapshot 在其在途请求结束后由后台关闭（publish-then-drain，
+  新请求从不等待旧请求）；
+- 事务跨越多次请求，事务 manager 跨快照保留；`ttl`/`maxOpen` 变化原子应用，
+  `maxOpen` 约束之后的 begin，新 `ttl` 用于之后开启的事务；
 - budget session 用量在发布时保留并套用新限制（现状保持）；
-- `tools/list` 在会话创建时固定；改变工具发现集合的 revision 要求重启或
-  新会话，不做会话内热切换。
+- `tools/list` 跟随发布的快照：工具集合变化时服务端增删工具并发送
+  `tools/list_changed`，已连接的会话重新列出即可看到新集合。
 
 ## 评审通过的验收映射
 

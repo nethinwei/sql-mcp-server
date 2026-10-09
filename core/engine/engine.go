@@ -28,6 +28,7 @@ type config struct {
 	limiter       *ratelimit.Adaptive
 	rps           *ratelimit.TokenBucket
 	breaker       *ratelimit.Breaker
+	quota         *Quota
 	recordFailure func(error) bool
 }
 
@@ -46,6 +47,10 @@ func WithRPSLimiter(l *ratelimit.TokenBucket) Option { return func(c *config) { 
 // WithBreaker attaches a circuit breaker.
 func WithBreaker(b *ratelimit.Breaker) Option { return func(c *config) { c.breaker = b } }
 
+// WithQuota bounds IO by a quota shared with other engines; it replaces the
+// IO pool, limiter, rate limiter and breaker options.
+func WithQuota(q *Quota) Option { return func(c *config) { c.quota = q } }
+
 // WithFailureClassifier decides whether a non-nil execution error represents
 // provider/system health and should affect AIMD and the circuit breaker.
 func WithFailureClassifier(classify func(error) bool) Option {
@@ -54,12 +59,9 @@ func WithFailureClassifier(classify func(error) bool) Option {
 
 // Engine bounds concurrency and deduplicates concurrent identical requests.
 type Engine struct {
-	iosem         chan struct{}
+	quota         *Quota
 	inflight      chan struct{}
 	sf            singleflight
-	limiter       *ratelimit.Adaptive
-	rps           *ratelimit.TokenBucket
-	breaker       *ratelimit.Breaker
 	recordFailure func(error) bool
 	stateMu       sync.Mutex
 	closed        bool
@@ -75,15 +77,17 @@ func New(opts ...Option) (*Engine, error) {
 			o(&cfg)
 		}
 	}
-	if cfg.io <= 0 || cfg.inflight <= 0 {
+	if (cfg.quota == nil && cfg.io <= 0) || cfg.inflight <= 0 {
 		return nil, ErrInvalidConfig
 	}
+	quota := cfg.quota
+	if quota == nil {
+		quota = NewQuota(cfg.io)
+		quota.Update(cfg.io, cfg.limiter, cfg.rps, cfg.breaker)
+	}
 	return &Engine{
-		iosem:         make(chan struct{}, cfg.io),
+		quota:         quota,
 		inflight:      make(chan struct{}, cfg.inflight),
-		limiter:       cfg.limiter,
-		rps:           cfg.rps,
-		breaker:       cfg.breaker,
 		recordFailure: cfg.recordFailure,
 	}, nil
 }
@@ -103,13 +107,13 @@ func (e *Engine) Submit(ctx context.Context, key string, fn func(context.Context
 	e.active.Add(1)
 	e.stateMu.Unlock()
 	defer e.active.Done()
-	if e.rps != nil {
-		if err := e.rps.Allow(); err != nil {
+	if rps := e.quota.rps.Load(); rps != nil {
+		if err := rps.Allow(); err != nil {
 			return nil, err
 		}
 	}
-	if e.breaker != nil {
-		if err := e.breaker.Allow(); err != nil {
+	if breaker := e.quota.breaker.Load(); breaker != nil {
+		if err := breaker.Allow(); err != nil {
 			return nil, err
 		}
 	}
@@ -128,27 +132,26 @@ func (e *Engine) Submit(ctx context.Context, key string, fn func(context.Context
 }
 
 func (e *Engine) execute(ctx context.Context, fn func(context.Context) (any, error)) (any, error) {
-	if e.limiter != nil {
-		if err := e.limiter.Acquire(); err != nil {
+	limiter, breaker := e.quota.limiter.Load(), e.quota.breaker.Load()
+	if limiter != nil {
+		if err := limiter.Acquire(); err != nil {
 			return nil, err
 		}
-		defer e.limiter.Release()
+		defer limiter.Release()
 	}
-	select {
-	case e.iosem <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	if err := e.quota.io.acquire(ctx); err != nil {
+		return nil, err
 	}
-	defer func() { <-e.iosem }()
+	defer e.quota.io.release()
 	start := time.Now()
 	val, err := e.runSafe(ctx, fn)
 	record := err == nil || e.recordFailure == nil || e.recordFailure(err)
 	if record {
-		if e.limiter != nil {
-			e.limiter.OnResult(err, time.Since(start))
+		if limiter != nil {
+			limiter.OnResult(err, time.Since(start))
 		}
-		if e.breaker != nil {
-			e.breaker.Record(err == nil)
+		if breaker != nil {
+			breaker.Record(err == nil)
 		}
 	}
 	return val, err

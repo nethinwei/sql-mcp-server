@@ -46,7 +46,7 @@ func TestCapabilityWarnings(t *testing.T) {
 			{Entity: "orders", Actions: []string{"update"}},
 		}}},
 	}
-	caps := EntityCapabilities{"orders": {
+	caps := EntityCapabilities{"default.orders": {
 		entity.ActionRead:   {Privilege: introspect.PrivilegeGranted, Connection: "ro"},
 		entity.ActionUpdate: {Privilege: introspect.PrivilegeDenied, Connection: "ro", Reason: "read-only"},
 		entity.ActionDelete: {Privilege: introspect.PrivilegeDenied, Connection: "ro"},

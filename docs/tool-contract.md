@@ -30,6 +30,10 @@
    - `UNAUTHORIZED` 的 `reason` 为统一泛化文案，不携带实体、字段或角色细节
      （防止受限角色枚举隐藏 schema，见 TM-002）；详细拒绝原因仅写入审计
      事件，经 `decisionId` 关联；
+   - `AMBIGUOUS_ENTITY`（retryable）：`entity` 引用（`name`、`schema.name`、
+     `datasource.name` 或 `datasource.schema.name`）在调用方可用的实体中命中多个；
+     `constraints.candidates` 列出每个候选的无歧义写法，调用方不可用的实体不计入、
+     不列出；
    - `AMBIGUOUS_FIELD_SCOPE`（retryable）：多角色用户请求的字段没有被任一
      单个授权项完整覆盖；`constraints.fieldScopes` 列出调用方本就可读的各个字段
      集合，显式指定其中一个集合内的字段即可重试；

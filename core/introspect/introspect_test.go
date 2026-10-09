@@ -118,3 +118,27 @@ func TestReconcileKeepsConfiguredDescriptionsAndProcedures(t *testing.T) {
 		t.Fatal("input mutated")
 	}
 }
+
+// An indexed catalog finds tables as a scan does: by folded name when the
+// database folds case, per schema, and after Tables changed under the index.
+func TestCatalogIndexMatchesScan(t *testing.T) {
+	t.Parallel()
+	cat := Catalog{Tables: []entity.Entity{
+		{Name: "Orders", Schema: "a"}, {Name: "orders", Schema: "b"}, {Name: "users", Schema: "a"},
+	}, Default: "a"}
+	cat.Index()
+	if got, ok := cat.Lookup("b", "orders"); !ok || got.Schema != "b" {
+		t.Fatalf("b.orders = %+v, %v", got, ok)
+	}
+	if _, ok := cat.Lookup("", "orders"); ok {
+		t.Fatal("names compare exactly unless the database folds case")
+	}
+	cat.FoldCase = true
+	if got, ok := cat.Lookup("", "ORDERS"); !ok || got.Schema != "a" {
+		t.Fatalf("folded ORDERS = %+v, %v", got, ok)
+	}
+	cat.Tables = append(cat.Tables, entity.Entity{Name: "events", Schema: "a"})
+	if _, ok := cat.Lookup("", "events"); !ok {
+		t.Fatal("a table added after indexing must still be found")
+	}
+}

@@ -19,7 +19,11 @@ const error = computed(() => nameError(name.value, ws.roles.map((r) => r.name)))
 const cards = computed(() => ws.roles.map((r) => ({
   ...r,
   members: ws.users.filter((u) => (u.roles ?? []).includes(r.name)).map((u) => u.name),
-  entities: [...new Set((r.grants ?? []).map((g) => g.entity))],
+  // Grants may name one entity by different references: count it once.
+  entities: [...new Set((r.grants ?? []).map((g) => {
+    const id = ws.entityIndex.idOf(g.entity)
+    return id ? ws.entityIndex.shortName(id) : g.entity
+  }))],
 })))
 
 function create() {

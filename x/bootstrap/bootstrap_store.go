@@ -5,14 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
-	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
-	"github.com/nethinwei/sql-mcp-server/core/tool"
 	"github.com/nethinwei/sql-mcp-server/x/configyaml"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 )
@@ -22,9 +19,9 @@ import (
 var ErrRestartRequired = errors.New("config change requires restart")
 
 // CheckHotReload reports whether next can replace old without a restart.
-// File reload, store reload and store publish share this rule: transport,
-// address, auth/TLS/trusted proxy, the tool set, custom procedure tools,
-// switching users on or off, and transaction ttl/maxOpen need a restart.
+// File reload, store reload and store publish share this rule: the
+// transport, the address, and serving TLS or not need a restart; the rest,
+// authentication and the listed tools included, follows a reload.
 func CheckHotReload(old, next *config.Config) error {
 	if changed := RestartChanges(old, next); len(changed) > 0 {
 		return fmt.Errorf("%w: %s", ErrRestartRequired, strings.Join(changed, ", "))
@@ -36,11 +33,8 @@ func CheckHotReload(old, next *config.Config) error {
 func RestartChanges(old, next *config.Config) []string {
 	// Fields tagged `schema:"restart"`, by configuration path.
 	changed := config.RestartFieldChanges(old, next)
-	if procedureToolSignature(next.Entities) != procedureToolSignature(old.Entities) {
-		changed = append(changed, "custom procedure tools")
-	}
-	if (len(next.Users) > 0) != (len(old.Users) > 0) {
-		changed = append(changed, "users first configured or all removed")
+	if servesTLS(next) != servesTLS(old) {
+		changed = append(changed, "server.auth.tls (TLS turned on or off)")
 	}
 	return changed
 }
@@ -89,20 +83,9 @@ func CheckPublishable(current, target revision.Revision, restartRequired bool) e
 	return nil
 }
 
-// procedureToolSignature identifies the custom procedure tools as registered
-// with MCP clients (name, description and input schema), which are fixed at
-// startup: renaming a parameter changes the schema and needs a restart.
-func procedureToolSignature(entities []config.EntityConfig) string {
-	sigs := make([]string, 0)
-	for _, ec := range entities {
-		if ec.Kind != "procedure" || !ec.MCP.CustomTool || !ec.MCP.TrustedProcedure {
-			continue
-		}
-		info := tool.ProcedureTool{Entity: entity.Entity{Name: ec.Name, Params: ec.Params}}.Info()
-		sigs = append(sigs, info.Name+"\x00"+info.Description+"\x00"+string(info.InputSchema))
-	}
-	sort.Strings(sigs)
-	return strings.Join(sigs, "\x01")
+// servesTLS reports whether cfg serves HTTP over TLS: the listener's kind.
+func servesTLS(cfg *config.Config) bool {
+	return cfg.Server.Auth.TLS.Cert != "" && cfg.Server.Auth.TLS.Key != ""
 }
 
 // LoadBytes decodes, defaults and validates YAML configuration bytes and
