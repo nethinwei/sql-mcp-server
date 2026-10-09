@@ -1,7 +1,7 @@
 # 发布说明索引
 
-当前 GA 为 `v0.1.11`（[发布说明](v0.1.11.md)、
-[GitHub Release](https://github.com/nethinwei/sql-mcp-server/releases/tag/v0.1.11)）。
+当前 GA 为 `v0.1.12`（[发布说明](v0.1.12.md)、
+[GitHub Release](https://github.com/nethinwei/sql-mcp-server/releases/tag/v0.1.12)）。
 
 本目录中的发布说明描述各版本发布时点的能力、迁移和证据状态。当前运行时行为以
 [配置参考](../configuration.md)、[安全模型](../security.md)和
@@ -10,6 +10,9 @@
 
 ## 版本
 
+- [`v0.1.12`](v0.1.12.md)（2026-10-09）：元数据批量扫描与按库后台导入；发布后排空
+  的热重载、跨快照共享连接池/IO 配额/读缓存，大部分配置可热加载；实体命名空间
+  `数据源.库.名称`；包含 breaking 迁移；
 - [`v0.1.11`](v0.1.11.md)（2026-10-08）：管理面第一批——用户、角色与权限，
   配置存储与 revision，管理 API 与控制台；数据源模型（物理身份、身份键与级联、
   多连接路由、连接权限感知）；包含 breaking 迁移；

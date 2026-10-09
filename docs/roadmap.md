@@ -1,7 +1,7 @@
 # Roadmap
 
-当前稳定基线为 `v0.1.11`。已发布能力以
-[发布说明](releases/v0.1.11.md)、[CHANGELOG](../CHANGELOG.md)、
+当前稳定基线为 `v0.1.12`。已发布能力以
+[发布说明](releases/v0.1.12.md)、[CHANGELOG](../CHANGELOG.md)、
 [配置参考](configuration.md)和[安全模型](security.md)为准。
 
 本文件只给出未发布成果的顺序和门禁：
@@ -47,9 +47,12 @@
 
 ## Committed
 
-`v0.1.12` — [管理面 2 · Trusted SQL Escape Hatch](#管理面-2--trusted-sql-escape-hatch)。
+`v0.1.13` — [管理面 2 · Trusted SQL Escape Hatch](#管理面-2--trusted-sql-escape-hatch)。
 问题证据、非目标与退出门禁见该节；2026-09-30 路线图复审将管理面阶段提前到
 `Next` 之前。
+
+`v0.1.12` 交付管理面的规模化与运行时协调：元数据批量扫描与按库后台导入、发布后排空
+的热重载与跨快照共享服务、实体命名空间；见[发布说明](releases/v0.1.12.md)。
 
 `v0.1.11` 已交付管理面 1，以及管理面 3、4、5 的核心路径（配置存储与 revision、
 管理 API 与 schema 导入、管理控制台）和[数据源模型](design/datasource-model.md)；
@@ -188,7 +191,7 @@ delegation chain 仍属 L7）；不支持显式 deny 规则；stdio 保持进程
 
 ### 管理面 2 — Trusted SQL Escape Hatch
 
-预期 `v0.1.12`，前置：管理面 1。`execute` 已用于实体动作和
+预期 `v0.1.13`，前置：管理面 1。`execute` 已用于实体动作和
 `execute_entity`，新工具暂定名 `execute_sql`。
 
 **问题证据**：作为 SQL MCP Server，可信操作者需要完整 SQL 能力（排障、临时

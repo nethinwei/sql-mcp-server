@@ -9,6 +9,15 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+## 0.1.12 - 2026-10-09
+
+升级步骤汇总见 [`docs/releases/v0.1.12.md`](docs/releases/v0.1.12.md#迁移)。
+
+### Security
+
+- 构建与发布改用 Go 1.26.9 与 `golang.org/x/net` v0.60.0，修复 govulncheck 报告的
+  `net/http`、`crypto`、`html/template` 与 x/net 漏洞。
+
 ### Changed
 
 - 控制台：导入的同名表不再加数据源或库前缀；实体列表与权限矩阵按 `数据源 · 库`
@@ -46,7 +55,6 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   实体的命名与关系跨已扫描的库计算。导入页列出全部索引（结构、键部分、条件，
   按各数据库自己的术语），键从同一次索引查询得出。导入页的状态计算不再是表数 × 实体数，表格
   分页。
-
 - 新增热路径 Go benchmark（`make bench`，无需 Docker）与真实数据库的元数据
   扫描、权限探测 benchmark（`make bench-integration`），基线与已知热点见
   `docs/benchmarks/hot-paths.md`。e2e 套件共享一个 PostgreSQL 容器、每个测试
@@ -70,7 +78,6 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 - MySQL/OceanBase 成本闸门的行估计取任一计划节点的最大值（连接的输出可能远大于
   各表的扫描行数），此前只取扫描节点，可能低估连接结果。
 - 读缓存过期堆弹出时清空底层数组的引用，被删除的结果可以被回收。
-
 - 示例改为三种数据源各一套覆盖全部特性的业务（PostgreSQL 电商、MySQL 仓储、
   OceanBase 记账，各经只读与读写两个账号接入，并有跨数据源的同名表），附特性矩阵与 `verify.py`
   逐项验证；初始化脚本声明 `utf8mb4`，修正 MySQL/OceanBase 示例的中文乱码。

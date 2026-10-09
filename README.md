@@ -74,7 +74,7 @@ make build
 
 ### 版本与规划
 
-- 当前 GA：`v0.1.11`（[发布说明](docs/releases/v0.1.11.md)）；
+- 当前 GA：`v0.1.12`（[发布说明](docs/releases/v0.1.12.md)）；
 - 全版本摘要：[CHANGELOG](CHANGELOG.md)；历史能力与迁移：
   [发布说明索引](docs/releases/README.md)；
 - 未发布产品规划：[Roadmap](docs/roadmap.md)；
