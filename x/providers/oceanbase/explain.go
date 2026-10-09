@@ -71,30 +71,50 @@ func (e obExplainer) explainText(ctx context.Context, query string, args []any) 
 	return sb.String(), rows.Err()
 }
 
-var tableRowsLine = regexp.MustCompile(`(?m)^\s*table_rows:(\d+)\s*$`)
+var (
+	tableRowsLine = regexp.MustCompile(`^\s+table_rows:(\d+)\s*$`)
+	infoTableLine = regexp.MustCompile(`^  (\S[^:]*):\s*$`)
+)
 
-// obTableRows reads the rows of the largest table from EXPLAIN EXTENDED's
-// optimization info (one table_rows per table the plan accesses); false
-// unless every full scan's table is there.
+// obTableRows reads the rows of the largest table a full scan reads from
+// EXPLAIN EXTENDED: the plan table names each full scan's table (its alias,
+// with any index in parentheses) and the optimization info gives table_rows
+// per table. Every full scan's table must have its own entry, or the size is
+// unknown (false).
 func obTableRows(text string) (int64, bool) {
 	plan, info, ok := strings.Cut(text, "Optimization Info:")
 	if !ok {
 		return 0, false
 	}
-	matches := tableRowsLine.FindAllStringSubmatch(info, -1)
-	scans := strings.Count(plan, "TABLE FULL SCAN")
-	if scans == 0 || len(matches) < scans {
-		return 0, false
+	sizes := map[string]int64{}
+	current := ""
+	for line := range strings.SplitSeq(info, "\n") {
+		if m := infoTableLine.FindStringSubmatch(line); m != nil {
+			current = m[1]
+		} else if m := tableRowsLine.FindStringSubmatch(line); m != nil && current != "" {
+			n, err := strconv.ParseInt(m[1], 10, 64)
+			if err != nil {
+				return 0, false
+			}
+			sizes[current] = n
+		}
 	}
 	var rows int64
-	for _, m := range matches {
-		n, err := strconv.ParseInt(m[1], 10, 64)
-		if err != nil {
+	scans := 0
+	for line := range strings.SplitSeq(plan, "\n") {
+		cols := strings.Split(line, "|")
+		if len(cols) < 4 || !strings.Contains(cols[2], "TABLE FULL SCAN") {
+			continue
+		}
+		name, _, _ := strings.Cut(strings.TrimSpace(cols[3]), "(")
+		n, ok := sizes[name]
+		if !ok {
 			return 0, false
 		}
 		rows = max(rows, n)
+		scans++
 	}
-	return rows, true
+	return rows, scans > 0
 }
 
 // parseOBExplain parses OceanBase EXPLAIN FORMAT=JSON output: a tree of

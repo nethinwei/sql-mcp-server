@@ -1,6 +1,7 @@
 package oceanbase
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -84,25 +85,30 @@ func TestParseOBExplainKeepsJoinEstimate(t *testing.T) {
 }
 
 // The size of a full scan's table comes from EXPLAIN EXTENDED's optimization
-// info, not from the rows the filter outputs; without an entry for every
-// full scan it is not sized.
+// info, matched to the scan by its table: an entry of another table (one read
+// through an index) never stands in for a full scan's missing one.
 func TestOBTableRows(t *testing.T) {
 	t.Parallel()
-	text := `|ID|OPERATOR       |NAME|EST.ROWS|EST.TIME(us)|
-|0 |TABLE FULL SCAN|t   |1       |3           |
+	plan := `|ID|OPERATOR          |NAME |EST.ROWS|EST.TIME(us)|
+|0 |HASH JOIN         |     |1       |5           |
+|1 ||-TABLE RANGE SCAN|y(kb)|1       |3           |
+|2 |+-TABLE FULL SCAN |x    |1       |3           |
 Optimization Info:
 -------------------------------------
-  t:
-      table_rows:2000000
-      physical_range_rows:2000000
-      output_rows:1
 `
-	if rows, ok := obTableRows(text); !ok || rows != 2000000 {
+	entry := func(name string, rows int) string {
+		return fmt.Sprintf("  %s:\n      table_rows:%d\n      output_rows:1\n", name, rows)
+	}
+	if rows, ok := obTableRows(plan + entry("y", 20) + entry("x", 2000000) + "  Plan Type:\n      LOCAL\n"); !ok ||
+		rows != 2000000 {
 		t.Fatalf("rows = %d, %v", rows, ok)
 	}
-	join := strings.Replace(text, "|0 |TABLE FULL SCAN|t", "|0 |TABLE FULL SCAN|t|\n|1 |TABLE FULL SCAN|u", 1)
-	if _, ok := obTableRows(join); ok {
-		t.Fatal("sized with a full scan missing from the optimization info")
+	if _, ok := obTableRows(plan + entry("y", 20) + entry("z", 20)); ok {
+		t.Fatal("sized with the full scan's table missing from the optimization info")
+	}
+	join := strings.Replace(plan, "|1 ||-TABLE RANGE SCAN|y(kb)", "|1 ||-TABLE FULL SCAN |y(kb)", 1)
+	if rows, ok := obTableRows(join + entry("y", 20) + entry("x", 30)); !ok || rows != 30 {
+		t.Fatalf("two full scans: %d, %v", rows, ok)
 	}
 	if _, ok := obTableRows("|0 |TABLE FULL SCAN|t|"); ok {
 		t.Fatal("sized without optimization info")
