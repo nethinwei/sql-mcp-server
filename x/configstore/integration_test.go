@@ -16,6 +16,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/core/revision/revisiontest"
+	"github.com/nethinwei/sql-mcp-server/x/revisionops/revisionopstest"
 )
 
 // runServerConformance runs the conformance suite on one database; each
@@ -25,6 +26,9 @@ func runServerConformance(t *testing.T, spec Spec) {
 	revisiontest.Run(t, func(t *testing.T) revision.Store { return freshStore(t, spec) })
 	t.Run("MutateAdminsSerializes", func(t *testing.T) {
 		assertMutateAdminsSerializes(t, freshStore(t, spec))
+	})
+	t.Run("RevisionOpsEdge", func(t *testing.T) {
+		revisionopstest.Run(t, func(t *testing.T) revision.Store { return freshStore(t, spec) }, revisionopstest.Options{})
 	})
 }
 
