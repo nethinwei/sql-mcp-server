@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,6 +121,52 @@ func TestOBProviderQueryExecExplainIntrospect(t *testing.T) {
 	}
 
 	assertOBIntrospectUsers(t, ctx, prov)
+	assertOBIndexParts(t, ctx, prov)
+}
+
+// OceanBase reports an expression, and full-text words and spatial cells, as
+// hidden columns: they are not key columns, and a unique key on an expression
+// cannot identify a row.
+func assertOBIndexParts(t *testing.T, ctx context.Context, prov *oceanbase.Provider) {
+	t.Helper()
+	for _, stmt := range []string{
+		"CREATE TABLE test.docs (id int PRIMARY KEY, title varchar(100), body varchar(200), " +
+			"pos point NOT NULL SRID 0)",
+		"CREATE UNIQUE INDEX docs_lower_title ON test.docs ((lower(title)))",
+		"CREATE FULLTEXT INDEX docs_text ON test.docs (title, body)",
+		"CREATE SPATIAL INDEX docs_pos ON test.docs (pos)",
+	} {
+		if _, err := prov.ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	entities, err := prov.Introspector().Discover(ctx, []string{"test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entities {
+		if e.Name != "docs" {
+			continue
+		}
+		for _, k := range e.Keys {
+			if k.Name == "docs_lower_title" && (k.Reason != entity.KeyExpression || len(k.Columns) != 0) {
+				t.Fatalf("expression key = %+v", k)
+			}
+		}
+		for _, ix := range e.Indexes {
+			want := map[string]string{"docs_text": "fulltext title,body", "docs_pos": "spatial pos"}[ix.Name]
+			if got := ix.Method + " " + strings.Join(ix.Parts, ","); want != "" && got != want {
+				t.Fatalf("index %s = %q, want %q (SHOW INDEX names their columns and kind)", ix.Name, got, want)
+			}
+			for _, part := range ix.Parts {
+				if strings.HasPrefix(part, "__") || strings.HasPrefix(part, "SYS_") {
+					t.Fatalf("index %s reports a hidden column: %v", ix.Name, ix.Parts)
+				}
+			}
+		}
+		return
+	}
+	t.Fatal("docs not discovered")
 }
 
 func TestOBReadEnforceCap(t *testing.T) {

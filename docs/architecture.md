@@ -62,15 +62,19 @@ token 身份且不参与去重，避免不同 transport session 共享同一执�
 
 ## 热重载
 
-`bootstrap.Runtime` 先完整构建新 App，再将旧快照标记 retired，等待在途请求
-释放后发布新快照；reload 窗口的新请求等待，避免权限收紧时继续取得旧授权。
-构建失败保留旧快照。`serve --watch` 通过轮询配置文件内容 hash 触发。
-预算 manager 在切换时原子替换限制并保留 session 状态；事务 manager 仅在
-`ttl`/`maxOpen` 未变化时复用，否则拒绝 reload。
+`bootstrap.Runtime` 先完整构建新 App，构建成功后立即发布，旧快照在其在途请求
+结束后于后台关闭（publish-then-drain）；每个请求自始至终只用一个快照。构建失败
+保留旧快照。`serve --watch` 通过轮询配置文件内容 hash 触发。
 
-限制：MCP 工具列表在 server 创建时注册。CLI 会拒绝改变全局 tool flags 或
-trusted custom procedure 集合的 reload，要求重启，避免 tools/list 与执行快照
-不一致。schema resource 继续按当前快照动态生成。
+跨快照协调由 `bootstrap.Shared` 承担：连接池按设置复用并引用计数、IO 配额与
+限流熔断共享（`engine.Quota`）、读缓存共享且按物理数据库失效（键含配置代次以
+隔离读取）。预算与事务 manager 在切换时原子替换限制并保留状态。被吊销用户的会话
+在发布时关闭，旧快照排空后再按这些会话 ID 回滚其在途事务。
+
+MCP 工具列表跟随发布的快照（`Runtime.OnPublish`）：工具集合或 custom procedure
+变化时增删工具并通知客户端；HTTP 认证同样在发布时切换，TLS 证书在下一次握手
+生效。只有传输方式、监听地址与 TLS 开关需要重启。schema resource 继续按当前
+快照动态生成。
 
 ## 相关文档
 

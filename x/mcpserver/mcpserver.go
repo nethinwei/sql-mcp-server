@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,13 +39,20 @@ func NewServer(app *bootstrap.App) *mcp.Server {
 }
 
 // NewRuntimeServer builds a server whose handlers acquire the current app
-// snapshot for every request. Tool discovery reflects the snapshot at server
-// creation; request execution and resources always use the latest snapshot.
+// snapshot for every request. The tools it lists follow every snapshot a
+// reload publishes; clients are told the list changed.
 func NewRuntimeServer(runtime *bootstrap.Runtime) *mcp.Server {
-	return newServer(runtime.Acquire)
+	s, tools := newServerWithTools(runtime.Acquire)
+	runtime.OnPublish(func(app *bootstrap.App) { tools.sync(s, app) })
+	return s
 }
 
 func newServer(acquire appAcquire) *mcp.Server {
+	s, _ := newServerWithTools(acquire)
+	return s
+}
+
+func newServerWithTools(acquire appAcquire) (*mcp.Server, *listedTools) {
 	app, release, err := acquire()
 	if err != nil {
 		panic(err)
@@ -54,19 +62,56 @@ func newServer(acquire appAcquire) *mcp.Server {
 			"Tools are gated by role permissions and a multi-layer cost gate; " +
 			"unsafe writes and over-budget queries are rejected with rewrite hints.",
 	})
-	for _, t := range app.Tools.Enabled(app.ToolFlags) {
-		registerTool(s, t, acquire)
-	}
-	for _, t := range tool.ProcedureTools(app.Registry) {
-		registerTool(s, t, acquire)
-	}
+	tools := &listedTools{acquire: acquire, defs: map[string]string{}}
+	tools.sync(s, app)
 	release()
 	registerSchemaResource(s, acquire)
 	registerPrompts(s)
-	return s
+	return s, tools
 }
 
-func registerTool(s *mcp.Server, t tool.Tool, acquire appAcquire) {
+// listedTools are the tools a server lists, by name with their definition,
+// so that a new configuration's tools replace them.
+type listedTools struct {
+	mu      sync.Mutex
+	acquire appAcquire
+	defs    map[string]string
+}
+
+// sync lists app's enabled and procedure tools: it removes the others and
+// (re)registers the new and the changed ones, which notifies clients.
+func (l *listedTools) sync(s *mcp.Server, app *bootstrap.App) {
+	want := map[string]tool.Tool{}
+	for _, t := range app.Tools.Enabled(app.ToolFlags) {
+		want[t.Info().Name] = t
+	}
+	for _, t := range tool.ProcedureTools(app.Registry) {
+		want[t.Info().Name] = t
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var gone []string
+	for name := range l.defs {
+		if _, ok := want[name]; !ok {
+			gone = append(gone, name)
+			delete(l.defs, name)
+		}
+	}
+	if len(gone) > 0 {
+		s.RemoveTools(gone...)
+	}
+	for name, t := range want {
+		mt := mcpTool(t)
+		def, _ := json.Marshal(mt)
+		if l.defs[name] != string(def) {
+			registerTool(s, mt, t, l.acquire)
+			l.defs[name] = string(def)
+		}
+	}
+}
+
+// mcpTool is how a tool is listed.
+func mcpTool(t tool.Tool) *mcp.Tool {
 	info := t.Info()
 	schema := info.InputSchema
 	if len(schema) == 0 {
@@ -83,6 +128,11 @@ func registerTool(s *mcp.Server, t tool.Tool, acquire appAcquire) {
 	if info.ReadOnly {
 		mt.Annotations = &mcp.ToolAnnotations{ReadOnlyHint: true}
 	}
+	return mt
+}
+
+func registerTool(s *mcp.Server, mt *mcp.Tool, t tool.Tool, acquire appAcquire) {
+	info := t.Info()
 	handler := func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		app, release, err := acquire()
 		if err != nil {
@@ -441,8 +491,9 @@ type HTTPConfig struct {
 	// proxies may send X-MCP-User.
 	Users UserDirectory
 	// RevokedPrincipals registers a callback receiving users removed or
-	// disabled by a reload; their sessions are dropped and rolled back.
-	RevokedPrincipals func(func([]string))
+	// disabled by a reload; their sessions are dropped and rolled back, and
+	// the callback returns those sessions.
+	RevokedPrincipals func(func([]string) []string)
 	// SnapshotReady backs /readyz/snapshot: it returns nil when a
 	// configuration snapshot is published and servable. DatabaseReady backs
 	// /readyz/db: it returns nil when the configured databases are reachable.
@@ -455,6 +506,71 @@ type HTTPConfig struct {
 	// SnapshotStale returns the ID of a published store revision that is not
 	// applied (0 when none); it adds X-Snapshot-Stale to /readyz/snapshot.
 	SnapshotStale func() int64
+	// AuthChanges, when set, receives a function switching to a new
+	// authentication while serving, prepared with PrepareHTTPAuth: switching
+	// reads no file, so it cannot fail half way. It fails, keeping the
+	// current one, only when it would switch TLS on or off.
+	AuthChanges func(apply func(PreparedAuth) error)
+}
+
+// HTTPAuth is how HTTP callers authenticate: the part of HTTPConfig a
+// reload may change while serving (see HTTPConfig.AuthChanges). The address,
+// and serving TLS or not, are fixed for the listener.
+type HTTPAuth struct {
+	Token             string
+	TrustProxyHeaders bool
+	TrustedProxyCIDRs []string
+	TLSCert           string
+	TLSKey            string
+	ClientCA          string
+	Users             UserDirectory
+}
+
+func (c HTTPConfig) auth() HTTPAuth {
+	return HTTPAuth{
+		Token: c.Token, TrustProxyHeaders: c.TrustProxyHeaders, TrustedProxyCIDRs: c.TrustedProxyCIDRs,
+		TLSCert: c.TLSCert, TLSKey: c.TLSKey, ClientCA: c.ClientCA, Users: c.Users,
+	}
+}
+
+func (c *HTTPConfig) setAuth(a HTTPAuth) {
+	c.Token, c.TrustProxyHeaders, c.TrustedProxyCIDRs = a.Token, a.TrustProxyHeaders, a.TrustedProxyCIDRs
+	c.TLSCert, c.TLSKey, c.ClientCA, c.Users = a.TLSCert, a.TLSKey, a.ClientCA, a.Users
+}
+
+// PreparedAuth is an authentication PrepareHTTPAuth checked and whose
+// certificates it read, ready to switch to.
+type PreparedAuth struct {
+	auth HTTPAuth
+	tls  *tls.Config
+}
+
+// PrepareHTTPAuth checks that a listener on addr may authenticate callers as
+// auth does, under the rules ServeHTTP starts with, and reads its
+// certificates: a reload prepares the authentication it would switch to, and
+// fails when it cannot.
+func PrepareHTTPAuth(addr string, auth HTTPAuth) (PreparedAuth, error) {
+	c := HTTPConfig{Addr: addr}
+	c.setAuth(auth)
+	if err := validateHTTPSecurity(c); err != nil {
+		return PreparedAuth{}, err
+	}
+	prepared := PreparedAuth{auth: auth}
+	if c.tlsEnabled() {
+		var err error
+		if prepared.tls, err = loadTLS(c); err != nil {
+			return PreparedAuth{}, err
+		}
+	}
+	return prepared, nil
+}
+
+// WithUsers returns p resolving its users with users, when it has users.
+func (p PreparedAuth) WithUsers(users UserDirectory) PreparedAuth {
+	if p.auth.Users != nil {
+		p.auth.Users = users
+	}
+	return p
 }
 
 func (c HTTPConfig) tlsEnabled() bool  { return c.TLSCert != "" && c.TLSKey != "" }

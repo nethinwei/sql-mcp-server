@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"sync"
@@ -14,6 +13,13 @@ import (
 
 // ErrRuntimeClosed is returned when a closed runtime is used.
 var ErrRuntimeClosed = errors.New("bootstrap: runtime closed")
+
+// ErrReloadBacklog is returned by a reload while maxRetiring replaced
+// snapshots still serve requests: each holds its own engine and prepared
+// statements, so reloads wait for them to drain rather than pile them up.
+var ErrReloadBacklog = errors.New("bootstrap: earlier configurations are still draining; try again")
+
+const maxRetiring = 3
 
 type appSnapshot struct {
 	app     *App
@@ -34,21 +40,44 @@ func newAppSnapshot(app *App) *appSnapshot {
 // never wait for a reload, and drains and closes the old one in the
 // background; a failed build leaves the current App untouched.
 type Runtime struct {
-	current  atomic.Pointer[appSnapshot]
-	reload   sync.Mutex
-	retiring sync.WaitGroup
-	build    func(string) (*App, error)
-	revoked  atomic.Pointer[func([]string)]
-	stale    atomic.Pointer[StaleState]
-	applied  atomic.Int64
+	current   atomic.Pointer[appSnapshot]
+	reload    sync.Mutex
+	retiring  sync.WaitGroup
+	draining  atomic.Int32 // replaced snapshots not closed yet
+	build     func(string) (*App, error)
+	revoked   atomic.Pointer[func([]string) []string]
+	onPublish struct {
+		sync.Mutex
+		fns []func(*App)
+	}
+	stale   atomic.Pointer[StaleState]
+	applied atomic.Int64
 }
 
 // OnRevokedPrincipals registers fn to receive the principal keys of users that
-// a successful reload removed or disabled, after the new snapshot is published.
+// a successful reload removed or disabled, as the new snapshot is published.
 // Transports use it to drop those users' sessions and roll back their
-// transactions.
-func (r *Runtime) OnRevokedPrincipals(fn func([]string)) {
+// transactions; fn returns the sessions it dropped. Once requests on the old
+// snapshot finish, transactions they opened in those sessions are rolled back
+// too. Sessions are named by their IDs, never reused, so a user enabled again
+// keeps the sessions it opens meanwhile.
+func (r *Runtime) OnRevokedPrincipals(fn func([]string) []string) {
 	r.revoked.Store(&fn)
+}
+
+// OnPublish calls fn with the current App and then with every App a reload
+// publishes, as it is published. Registering and the first call happen
+// between reloads, so fn misses none. Transports use it to follow the
+// configuration: the tools they list, how they authenticate.
+func (r *Runtime) OnPublish(fn func(*App)) {
+	r.reload.Lock()
+	defer r.reload.Unlock()
+	r.onPublish.Lock()
+	r.onPublish.fns = append(r.onPublish.fns, fn)
+	r.onPublish.Unlock()
+	if current := r.Current(); current != nil {
+		fn(current)
+	}
 }
 
 // UserByTokenHash resolves a tokenHash against the current snapshot.
@@ -72,6 +101,7 @@ func (r *Runtime) UserByName(name string) (UserIdentity, bool) {
 // NewRuntimeWithBuilder creates a runtime with an injected reload builder.
 // It is useful for embedders and tests that assemble providers themselves.
 func NewRuntimeWithBuilder(app *App, build func(string) (*App, error)) *Runtime {
+	app.publishShared()
 	r := &Runtime{build: build}
 	r.current.Store(newAppSnapshot(app))
 	return r
@@ -127,6 +157,9 @@ func (r *Runtime) reloadWith(build func() (*App, error)) error {
 	if r.current.Load() == nil {
 		return ErrRuntimeClosed
 	}
+	if r.draining.Load() >= maxRetiring {
+		return ErrReloadBacklog
+	}
 	next, err := build()
 	if err != nil {
 		return err
@@ -139,6 +172,7 @@ func (r *Runtime) reloadWith(build func() (*App, error)) error {
 	if old.app.Writes != nil {
 		next.Writes = old.app.Writes // sessions keep reading their own writes across a reload
 	}
+	next.publishShared()
 	publishReload(r, old, next, revokedPrincipals(old.app, next))
 	return nil
 }
@@ -162,18 +196,8 @@ func preserveReloadTransactions(old, next *App) error {
 		_ = next.Close()
 		return errors.New("bootstrap: transaction configuration cannot be removed by reload")
 	}
-	oldTTL, oldMax := old.Transactions.Configuration()
-	nextTTL, nextMax := next.Transactions.Configuration()
-	if oldTTL != nextTTL || oldMax != nextMax {
-		_ = next.Close()
-		return fmt.Errorf(
-			"bootstrap: transaction ttl/maxOpen change requires restart (current %s/%d, requested %s/%d)",
-			oldTTL,
-			oldMax,
-			nextTTL,
-			nextMax,
-		)
-	}
+	// Open transactions carry on under the new limits.
+	old.Transactions.UpdateLimits(next.Transactions.Configuration())
 	if next.Transactions != old.Transactions {
 		next.Transactions.Close()
 	}
@@ -191,10 +215,10 @@ func preserveReloadBudget(old, next *App) {
 	next.Budget = old.Budget
 }
 
-// publishReload serves next at once and retires old in the background: once
-// the requests that leased old finish, the users the reload revoked are
-// reported (so transactions those requests opened are rolled back too) and old
-// is closed.
+// publishReload serves next at once, drops the sessions of the users the
+// reload revoked, and retires old in the background: once the requests that
+// leased old finish, transactions they opened in those sessions are rolled
+// back and old is closed.
 func publishReload(r *Runtime, old *appSnapshot, next *App, revoked []string) {
 	shared := next.Transactions == old.app.Transactions // the next App carries them on
 	r.current.Store(newAppSnapshot(next))
@@ -202,7 +226,18 @@ func publishReload(r *Runtime, old *appSnapshot, next *App, revoked []string) {
 	old.retired = true
 	old.cond.Broadcast()
 	old.mu.Unlock()
+	r.onPublish.Lock()
+	for _, fn := range r.onPublish.fns {
+		fn(next)
+	}
+	r.onPublish.Unlock()
+	var sessions []string
+	if fn := r.revoked.Load(); fn != nil && len(revoked) > 0 {
+		sessions = (*fn)(revoked)
+	}
+	r.draining.Add(1)
 	r.retiring.Go(func() {
+		defer r.draining.Add(-1)
 		old.mu.Lock()
 		for old.refs > 0 {
 			old.cond.Wait()
@@ -211,8 +246,8 @@ func publishReload(r *Runtime, old *appSnapshot, next *App, revoked []string) {
 			old.app.Transactions = nil
 		}
 		old.mu.Unlock()
-		if fn := r.revoked.Load(); fn != nil && len(revoked) > 0 {
-			(*fn)(revoked)
+		for _, session := range sessions {
+			r.RollbackSession(session)
 		}
 		if err := old.app.Close(); err != nil {
 			slog.Warn("closing the replaced snapshot failed", "error", err.Error())

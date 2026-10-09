@@ -103,6 +103,11 @@ export async function sync(ds: string, refresh = false) {
     s.result = schemaTables
     const keys = new Set(schemaTables.tables.map(tableKey))
     for (const n of s.schemas) n.checked = n.checked.filter((k) => keys.has(String(k)))
+    // A schema left open whose scan the server no longer keeps (it restarted,
+    // or the datasource reads another database) is scanned again.
+    for (const n of s.schemas) {
+      if (s.expanded.includes(n.name) && !n.scannedAt && !n.scanning && !n.error) void scanSchema(ds, n)
+    }
   } catch (e) {
     if (mine === s.seq) s.error = message(e)
   } finally {

@@ -52,7 +52,8 @@ type recordingCache struct {
 func (*recordingCache) Get(context.Context, cache.Key) ([]map[string]any, bool) {
 	return nil, false
 }
-func (*recordingCache) Set(context.Context, cache.Key, []map[string]any) error { return nil }
+func (*recordingCache) Stamp(string) uint64                                            { return 0 }
+func (*recordingCache) Set(context.Context, cache.Key, []map[string]any, uint64) error { return nil }
 func (c *recordingCache) Invalidate(string, string) error {
 	c.invalidations++
 	if c.events != nil {

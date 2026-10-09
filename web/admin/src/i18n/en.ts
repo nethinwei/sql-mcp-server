@@ -74,7 +74,7 @@ const en: typeof zh = {
     notNull: 'Not null', primaryKey: 'Primary key',
     keys: 'Keys', compositeKey: 'Column {n} of the composite primary key ({cols})', uniqueKey: 'Unique key', foreignKey: 'Foreign key',
     keyColumns: 'Columns', index: 'Index', indexMethod: 'Method', uniqueness: 'Uniqueness', indexWhere: 'Where',
-    unique: 'Unique', uniqueNotIdentity: 'Unique, cannot identify a row ({reason})', expression: '(expression)',
+    unique: 'Unique', uniqueNotIdentity: 'Unique, cannot identify a row ({reason})', expression: '(expression)', partsNotReported: 'not reported by the database',
     keyReason: { partial: 'partial index', expression: 'expression index', prefix: 'prefix index', nullable: 'nullable column' },
     onDelete: 'on delete {action}', onUpdate: 'on update {action}',
     fkAction: { cascade: 'cascade', set_null: 'set null', set_default: 'set default' },

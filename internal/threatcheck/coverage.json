@@ -60,6 +60,9 @@
     "severity": "critical",
     "tests": [
       {"file": "x/mcpserver/http_test.go", "name": "TestWithRequestSubjectOnlyWhenTrusted"},
+      {"file": "x/mcpserver/auth_reload_test.go", "name": "TestAuthChangesToMTLSRefuseOldConnections"},
+      {"file": "cmd/sql-mcp-server/cli_auth_test.go", "name": "TestPreparedAuthsFailOnUnreadableCertificate"},
+      {"file": "cmd/sql-mcp-server/cli_auth_test.go", "name": "TestPreparedAuthsFollowPublishedApps"},
       {"file": "x/mcpserver/http_test.go", "name": "TestWithRequestSubjectRejectsMalformedSubject"},
       {"file": "x/mcpserver/http_test.go", "name": "TestTrustedProxyOnly"},
       {"file": "x/mcpserver/http_test.go", "name": "TestTrustedProxyRejectsForgedIdentityFromUntrustedSource"},
@@ -90,12 +93,18 @@
       {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadPublishesWithoutWaitingForLeases"},
       {"file": "x/bootstrap/bootstrap_access_test.go", "name": "TestReloadReportsRevokedPrincipals"},
       {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadFailureKeepsOldApp"},
-      {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadRejectsTransactionLimitChanges"},
-      {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadUpdatesBudgetLimitsAndPreservesState"}
+      {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadUpdatesTransactionLimits"},
+      {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadUpdatesBudgetLimitsAndPreservesState"},
+      {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadRefusedWhileEarlierSnapshotsDrain"},
+      {"file": "x/bootstrap/bootstrap_access_test.go", "name": "TestRevocationSparesSessionsOpenedAfterIt"},
+      {"file": "x/bootstrap/shared_test.go", "name": "TestWriteOnOldGenerationInvalidatesNewOne"},
+      {"file": "x/bootstrap/shared_test.go", "name": "TestGenerationsShareTheIOPool"},
+      {"file": "x/bootstrap/shared_test.go", "name": "TestWriteWithCacheOffInvalidatesSharedCache"},
+      {"file": "x/bootstrap/shared_test.go", "name": "TestFailedReloadKeepsSharedSettings"}
     ],
     "gaps": [
       "race 测试不枚举所有调度交错；多进程/多实例配置发布不在当前一致性模型内",
-      "新旧快照重叠期间 engine 并发与连接池短暂最多为配置值的两倍"
+      "新旧快照重叠期间各自的 engine 在途队列与预编译语句并存（IO 配额、连接池与缓存已跨快照共享），待回收快照最多 3 个"
     ]
   },
   "TM-008": {

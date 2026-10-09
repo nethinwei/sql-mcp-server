@@ -363,7 +363,7 @@ func TestHealthAndReadinessEndpoints(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			mux := buildHTTPMux(http.NotFoundHandler(), tc.cfg)
+			mux := buildHTTPMux(http.NotFoundHandler(), nil, tc.cfg)
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
 			if rec.Code != tc.wantCode {
@@ -439,7 +439,7 @@ func TestNewServerRegistersProcedureCustomTools(t *testing.T) {
 func TestSnapshotReadinessMarksStaleRevision(t *testing.T) {
 	t.Parallel()
 	var stale int64
-	mux := buildHTTPMux(http.NotFoundHandler(), HTTPConfig{
+	mux := buildHTTPMux(http.NotFoundHandler(), nil, HTTPConfig{
 		SnapshotReady: func(context.Context) error { return nil },
 		SnapshotStale: func() int64 { return stale },
 	})

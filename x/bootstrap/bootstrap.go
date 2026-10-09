@@ -72,18 +72,38 @@ type App struct {
 	Transactions *tool.TransactionManager
 	Writes       *tool.WriteTracker
 	TxBeginners  map[string]store.TxBeginner
-	closeMu      sync.Mutex
-	closed       bool
+	// WriteTargets are what a write through each entity invalidates.
+	WriteTargets *tool.WriteTargets
+	// shared are the services the App shares with the other configurations
+	// of its process (see Shared), and generation is its configuration's
+	// generation there; releaseConnections returns its shared connections.
+	shared             *Shared
+	generation         uint64
+	releaseConnections func()
+	closeMu            sync.Mutex
+	closed             bool
 	// capabilities are assessed in the background once the App is assembled
 	// (see Capabilities); stopAssessing ends that work and assessed reports
 	// it ended.
 	capabilities atomic.Pointer[EntityCapabilities]
-	// scanCfg and scanResolver open scan connections (see OpenScan).
-	scanCfg       *config.Config
+	// config is the configuration the App was assembled from; scanResolver
+	// resolves its secrets to open scan connections (see OpenScan).
+	config        *config.Config
 	scanResolver  SecretResolver
 	stopAssessing context.CancelFunc
 	assessed      chan struct{}
 }
+
+// publishShared applies the App's configuration to the services it shares
+// with the other configurations of its process, as it is published.
+func (a *App) publishShared() {
+	if a.shared != nil {
+		a.shared.apply(a)
+	}
+}
+
+// Config returns the configuration the App was assembled from.
+func (a *App) Config() *config.Config { return a.config }
 
 // ToolContext builds a per-request tool.Context for the given role.
 func (a *App) ToolContext(role string) tool.Context {
@@ -106,6 +126,8 @@ func (a *App) ToolContext(role string) tool.Context {
 		Transactions: a.Transactions,
 		Writes:       a.Writes,
 		TxBeginners:  a.TxBeginners,
+		Generation:   a.generation,
+		WriteTargets: a.WriteTargets,
 	}
 	if a.Budget != nil { // a nil *MemoryManager must stay a nil interface
 		tc.Budget = a.Budget
@@ -156,10 +178,17 @@ func (a *App) CloseContext(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
-	for _, provider := range a.allProviders() {
-		if err := provider.Close(); err != nil {
-			errs = append(errs, err)
+	if a.releaseConnections != nil {
+		a.releaseConnections()
+	} else {
+		for _, provider := range a.allProviders() {
+			if err := provider.Close(); err != nil {
+				errs = append(errs, err)
+			}
 		}
+	}
+	if a.shared != nil {
+		a.shared.cache.DropGeneration(a.generation)
 	}
 	a.closed = true
 	return errors.Join(errs...)
@@ -287,7 +316,7 @@ func AssembleWithResolver(cfg *config.Config, r SecretResolver) (*App, error) {
 		closeConnections(connections)
 		return nil, err
 	}
-	app.scanCfg, app.scanResolver = cfg, r
+	app.scanResolver = r
 	return app, nil
 }
 
@@ -299,11 +328,11 @@ func AssembleWithResolver(cfg *config.Config, r SecretResolver) (*App, error) {
 // when the App was assembled from connections it was handed and cannot open
 // more.
 func (a *App) OpenScan(ctx context.Context, database config.DatabaseConfig) (p Provider, ok bool, err error) {
-	if a.scanCfg == nil {
+	if a.scanResolver == nil {
 		return nil, false, nil
 	}
 	read := database.Route().Read
-	p, err = openConnection(ctx, a.scanCfg, a.scanResolver, database.Driver, database.ConnectionsOrDSN()[read])
+	p, err = openConnection(ctx, a.config, a.scanResolver, database.Driver, database.ConnectionsOrDSN()[read])
 	if err != nil {
 		return nil, true, fmt.Errorf("connection %q: %w", read, err)
 	}
@@ -320,8 +349,13 @@ func openConnection(
 	if err != nil {
 		return nil, err
 	}
+	return openDSN(ctx, cfg, driver, dsn, c.Pooler)
+}
+
+// openDSN opens a connection to the resolved dsn.
+func openDSN(ctx context.Context, cfg *config.Config, driver, dsn, pooler string) (Provider, error) {
 	return providerregistry.New(driver, dsn,
-		providerregistry.Options{Timeout: cfg.Cost.QueryTimeout, Pooler: c.Pooler, Context: ctx})
+		providerregistry.Options{Timeout: cfg.Cost.QueryTimeout, Pooler: pooler, Context: ctx})
 }
 
 // openConnections opens every connection of every database.
@@ -372,7 +406,7 @@ func recordProviderFailure(err error) bool {
 		errors.Is(err, tool.ErrUnsafeWrite), errors.Is(err, tool.ErrConstraintViolation),
 		errors.Is(err, tool.ErrDatasourceForbidden),
 		errors.Is(err, tool.ErrTransactionNotFound), errors.Is(err, tool.ErrTransactionScope),
-		errors.Is(err, tool.ErrTransactionCapacity):
+		errors.Is(err, tool.ErrTransactionCapacity), errors.Is(err, tool.ErrTransactionStale):
 		return false
 	default:
 		return true

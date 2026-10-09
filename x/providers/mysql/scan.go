@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
@@ -27,6 +29,9 @@ type scanned struct {
 	fks      map[tableKey][]entity.ForeignKey
 	cascades map[tableKey][]entity.Cascade
 	triggers map[tableKey]bool
+	// hidden names, by table, the indexes information_schema reports on
+	// hidden columns (see shownIndexes).
+	hidden map[tableKey]map[string]bool
 }
 
 // forSchemas fills the {schemas} placeholder of query with one parameter per
@@ -87,9 +92,10 @@ func (i Introspector) scan(ctx context.Context, schemas []string) (scanned, erro
 		attrs: map[tableKey][]entity.Attribute{}, keys: map[tableKey][]entity.Key{},
 		indexes: map[tableKey][]entity.Index{}, fks: map[tableKey][]entity.ForeignKey{},
 		cascades: map[tableKey][]entity.Cascade{}, triggers: map[tableKey]bool{},
+		hidden: map[tableKey]map[string]bool{},
 	}
 	for _, load := range []func(context.Context, *scanned, []string) error{
-		i.columns, i.indexes, i.foreignKeys, i.writeEffects, i.triggers,
+		i.columns, i.indexes, i.shownIndexes, i.foreignKeys, i.writeEffects, i.triggers,
 	} {
 		if err := load(ctx, &s, schemas); err != nil {
 			return s, err
@@ -157,23 +163,35 @@ func (i Introspector) columns(ctx context.Context, s *scanned, schemas []string)
 // indexes reads every index. The primary key and the unique indexes (MySQL
 // enforces uniqueness through indexes) are also the keys, marked when they
 // cannot identify a row: an index on an expression (no column name), a
-// prefix of a column, or a nullable column.
+// prefix of a column, or a nullable column. An expression part shows the
+// expression where the server reports it (MySQL 8.0.13 and later,
+// OceanBase).
 func (i Introspector) indexes(ctx context.Context, s *scanned, schemas []string) error {
+	expression, err := i.indexExpression(ctx)
+	if err != nil {
+		return err
+	}
 	return i.each(ctx,
 		`SELECT table_schema, table_name, index_name, LOWER(index_type), non_unique = 0,
-		        COALESCE(column_name, ''), sub_part, nullable = 'YES'
+		        COALESCE(column_name, ''), `+expression+`, sub_part, nullable = 'YES'
 		 FROM information_schema.statistics
 		 WHERE table_schema IN ({schemas})
 		 ORDER BY table_schema, table_name, index_name = 'PRIMARY' DESC, index_name, seq_in_index`,
 		schemas, func(rows *sql.Rows) error {
 			var k tableKey
 			var ix entity.Index
-			var column string
+			var column, expr string
 			var prefix sql.NullInt64
 			var nullable bool
-			if err := rows.Scan(&k.schema, &k.table, &ix.Name, &ix.Method, &ix.Unique, &column, &prefix,
+			if err := rows.Scan(&k.schema, &k.table, &ix.Name, &ix.Method, &ix.Unique, &column, &expr, &prefix,
 				&nullable); err != nil {
 				return err
+			}
+			// OceanBase reports an expression, and the words of a full-text
+			// or the cells of a spatial index, as hidden columns of its own:
+			// a part naming no column of the table is not a column.
+			if !slices.ContainsFunc(s.attrs[k], func(a entity.Attribute) bool { return a.Name == column }) {
+				column = ""
 			}
 			indexes := s.indexes[k]
 			if n := len(indexes); n == 0 || indexes[n-1].Name != ix.Name {
@@ -183,19 +201,119 @@ func (i Introspector) indexes(ctx context.Context, s *scanned, schemas []string)
 					s.keys[k] = append(s.keys[k], entity.Key{Name: ix.Name, Primary: ix.Primary})
 				}
 			}
-			part := column
-			// A spatial index reports the whole geometry's length as a prefix.
-			if prefix.Valid && ix.Method != "spatial" {
-				part = fmt.Sprintf("%s(%d)", column, prefix.Int64)
-			}
+			part := indexPart(column, expr, prefix, ix.Method)
 			last := &indexes[len(indexes)-1]
-			last.Parts = append(last.Parts, part)
+			s.addPart(k, last, part)
 			s.indexes[k] = indexes
 			if last.Unique {
 				addKeyPart(&s.keys[k][len(s.keys[k])-1], column, prefix.Valid, nullable)
 			}
 			return nil
 		})
+}
+
+// addPart appends part to ix of the table k, or, when it names no column of
+// the table and no expression, notes ix for shownIndexes.
+func (s *scanned) addPart(k tableKey, ix *entity.Index, part string) {
+	if part != "" {
+		ix.Parts = append(ix.Parts, part)
+		return
+	}
+	if s.hidden[k] == nil {
+		s.hidden[k] = map[string]bool{}
+	}
+	s.hidden[k][ix.Name] = true
+}
+
+// shownIndexes reads, with SHOW INDEX, the indexes information_schema reports
+// on hidden columns: OceanBase reports a full-text index on the words and
+// documents it derives, and a spatial index on its cells as a B-tree, while
+// SHOW INDEX, the statement its documentation gives for viewing indexes,
+// names their columns and kind. One statement per table, for those tables
+// only.
+func (i Introspector) shownIndexes(ctx context.Context, s *scanned, _ []string) error {
+	for k, names := range s.hidden {
+		shown, err := i.showIndex(ctx, k)
+		if err != nil {
+			return err
+		}
+		for n, ix := range s.indexes[k] {
+			if got, ok := shown[ix.Name]; ok && names[ix.Name] {
+				s.indexes[k][n].Parts, s.indexes[k][n].Method = got.Parts, got.Method
+			}
+		}
+	}
+	return nil
+}
+
+// showIndex reads SHOW INDEX of a table, by index name. Its columns vary by
+// server and version, so they are read by name.
+func (i Introspector) showIndex(ctx context.Context, k tableKey) (map[string]entity.Index, error) {
+	quote := func(name string) string { return "`" + strings.ReplaceAll(name, "`", "``") + "`" }
+	rows, err := i.db.QueryContext(ctx, "SHOW INDEX FROM "+quote(k.schema)+"."+quote(k.table))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	names, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]entity.Index{}
+	for rows.Next() {
+		values := make([]sql.NullString, len(names))
+		dest := make([]any, len(names))
+		for n := range values {
+			dest[n] = &values[n]
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return nil, err
+		}
+		row := map[string]sql.NullString{}
+		for n, name := range names {
+			row[strings.ToLower(name)] = values[n]
+		}
+		ix := out[row["key_name"].String]
+		ix.Method = strings.ToLower(row["index_type"].String)
+		var prefix sql.NullInt64
+		if row["sub_part"].Valid {
+			prefix.Int64, err = strconv.ParseInt(row["sub_part"].String, 10, 64)
+			prefix.Valid = err == nil
+		}
+		column := row["column_name"].String
+		if row["expression"].Valid {
+			column = ""
+		}
+		ix.Parts = append(ix.Parts, indexPart(column, row["expression"].String, prefix, ix.Method))
+		out[row["key_name"].String] = ix
+	}
+	return out, rows.Err()
+}
+
+// indexExpression is the statistics column reporting the expression of an
+// index part, where the server has one.
+func (i Introspector) indexExpression(ctx context.Context) (string, error) {
+	var reported int
+	err := i.db.QueryRowContext(ctx, `SELECT count(*) FROM information_schema.columns
+		WHERE table_schema = 'information_schema' AND table_name = 'STATISTICS' AND column_name = 'EXPRESSION'`,
+	).Scan(&reported)
+	if err != nil || reported == 0 {
+		return "''", err
+	}
+	return "COALESCE(expression, '')", nil
+}
+
+// indexPart is how a key part reads: its column, an expression, or a
+// column prefix such as title(20). A spatial index reports the whole
+// geometry's length as a prefix, which is not one.
+func indexPart(column, expr string, prefix sql.NullInt64, method string) string {
+	switch {
+	case column == "":
+		return expr
+	case prefix.Valid && method != "spatial":
+		return fmt.Sprintf("%s(%d)", column, prefix.Int64)
+	}
+	return column
 }
 
 func addKeyPart(key *entity.Key, column string, prefix, nullable bool) {

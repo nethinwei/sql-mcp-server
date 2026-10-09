@@ -55,7 +55,6 @@
           "description": "HTTP authentication. Trust rules for proxies and non-loopback listeners are in security.md.",
           "x-description-zh-CN": "HTTP 认证。trustProxyHeaders、trustedProxyCIDRs 与非 loopback 的信任规则见 security.md。",
           "type": "object",
-          "x-restart": true,
           "properties": {
             "token": {
               "description": "Shared bearer token, read literally (no ${ENV} expansion). Configured users use their own tokens.",
@@ -185,8 +184,8 @@
       }
     },
     "users": {
-      "description": "HTTP callers: name → user. Adding, removing, disabling and rotating tokens hot-reload; configuring the first user or removing all users needs a restart.",
-      "x-description-zh-CN": "通过 HTTP 访问的调用方：用户名 → 配置。增删、禁用、轮换 token 可热加载；首次配置用户或删除全部用户需要重启。",
+      "description": "HTTP callers: name → user. Adding, removing, disabling and rotating tokens, and configuring the first user or removing all users, hot-reload.",
+      "x-description-zh-CN": "通过 HTTP 访问的调用方：用户名 → 配置。增删、禁用、轮换 token，以及首次配置或删除全部用户，均可热加载。",
       "type": "object",
       "propertyNames": {
         "pattern": "^[a-z0-9][a-z0-9_-]*$"
@@ -201,7 +200,6 @@
       "description": "Omitting the block enables every tool except deleteRecord; once the block is written, unlisted tools stay off.",
       "x-description-zh-CN": "省略整个块时除 deleteRecord 外全部开启；一旦写出该块，未写的工具保持关闭。",
       "type": "object",
-      "x-restart": true,
       "properties": {
         "describeEntities": {
           "description": "Lists the entities and fields the caller can access.",
@@ -689,16 +687,14 @@
           "x-format": "duration",
           "x-minimum": "0",
           "default": "5m",
-          "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$",
-          "x-restart": true
+          "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
         },
         "maxOpen": {
           "description": "Open transactions per role/subject.",
           "x-description-zh-CN": "每个角色/subject 同时打开的事务上限。",
           "type": "integer",
           "default": 128,
-          "minimum": 0,
-          "x-restart": true
+          "minimum": 0
         },
         "beginTimeout": {
           "description": "Begin timeout.",
@@ -1030,8 +1026,8 @@
               "default": true
             },
             "customTool": {
-              "description": "Registers a dedicated MCP tool for the procedure; independent of tools.executeEntity. Changes need a restart.",
-              "x-description-zh-CN": "存储过程额外注册独立 MCP 工具；与 tools.executeEntity 无关。修改需要重启。",
+              "description": "Registers a dedicated MCP tool for the procedure; independent of tools.executeEntity. Changes hot-reload, and clients are told the tool list changed.",
+              "x-description-zh-CN": "存储过程额外注册独立 MCP 工具；与 tools.executeEntity 无关。修改可热加载，客户端会收到工具列表变更通知。",
               "type": "boolean"
             },
             "trustedProcedure": {

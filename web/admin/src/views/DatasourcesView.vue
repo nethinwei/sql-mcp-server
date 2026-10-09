@@ -162,7 +162,9 @@ function indexes(tb: Table) {
     { title: t('datasources.indexMethod'), key: 'method', width: 90, render: (ix) => h('span', { class: 'mono' }, ix.method) },
     {
       title: t('datasources.keyColumns'), key: 'parts', minWidth: 160,
-      render: (ix) => h('span', { class: 'mono' }, ix.parts.map((p) => p || t('datasources.expression')).join(', ')),
+      render: (ix) => (ix.parts.length
+        ? h('span', { class: 'mono' }, ix.parts.map((p) => p || t('datasources.expression')).join(', '))
+        : h(NText, { depth: 3 }, () => t('datasources.partsNotReported'))),
     },
     { title: t('datasources.uniqueness'), key: 'unique', minWidth: 120, render: uniqueness },
     {
@@ -479,7 +481,7 @@ function applySync() {
 .ds.active { border-color: #2f6fed; box-shadow: 0 0 0 1px #2f6fed inset; }
 .ds-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .ds-dsn { font-size: 12px; opacity: .65; word-break: break-all; margin-bottom: 4px; }
-.ds-count { font-size: 12px; }
+.ds-count { display: block; font-size: 12px; }
 .schema-tag { margin-left: 8px; }
 .schema-meta { font-size: 12px; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }

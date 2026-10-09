@@ -103,19 +103,27 @@ sql-mcp-server serve --config config.yaml --watch --watch-interval 1s
 watcher 轮询文件内容 hash。新配置必须完整通过加载、secret 解析、数据库连接、
 自省和装配才会发布；失败会记录日志、继续使用旧快照，并对相同文件内容继续重试。
 新快照构建成功后立即发布，新请求不等待旧请求；旧快照的在途请求结束后，由后台
-关闭其 engine、审计、prepared statement 和 provider（重叠期间并发与连接数短暂
-最多为配置值的两倍）。被删除或禁用的用户从发布起即被拒绝，其会话与事务在旧快照
-排空后回滚。装配时的自省（读 schema、对账）各数据源并行、整体限时 1 分钟；
-连接权限探测只用于告警与控制台置灰，在发布后于后台进行（限时 2 分钟），不阻塞
-启动与重载。
-事务 manager 与 budget session 状态跨快照保留。新预算限制会原子应用到原
-manager；事务 `ttl` 或 `maxOpen` 变化会拒绝 reload，必须重启，不会静默沿用
-旧限制。
+关闭其 engine、审计和 prepared statement。新旧快照共享进程级服务：数据库连接
+（设置未变的连接直接复用，不再重连；无快照引用时关闭）、IO 配额与限流熔断状态
+（两代合计不超过配置的 `rateLimit.ioPool`），以及读缓存（按物理数据库失效，旧
+快照的写入同样使新快照的缓存失效）。待回收的旧快照最多 3 个，超过时 reload 返回
+“earlier configurations are still draining”，watcher 下一轮重试。
+被删除或禁用的用户在发布时即解除会话绑定并回滚事务；旧快照排空后，再按当时
+关闭的会话 ID 回滚其在途请求期间打开的事务，不影响用户重新启用后新建的会话。
+装配时的自省（读 schema、对账）各数据源并行、整体限时 1 分钟；连接权限探测只
+用于告警与控制台置灰，在发布后于后台进行（限时 2 分钟），不阻塞启动与重载。
+事务 manager 与 budget session 状态跨快照保留，新限制（预算、事务 `ttl` 与
+`maxOpen`）原子应用：`maxOpen` 约束之后的 begin，新 `ttl` 用于之后开启的事务。
 
-热重载拒绝[字段参考](configuration.md#字段参考)中标记“修改需重启”的字段
-（`server.transport`、`server.addr`、`server.auth`、`tools`、事务
-`ttl`/`maxOpen`），以及新增、移除 custom procedure tool 或修改其参数（参数决定
-注册给客户端的工具 schema）、首次启用或全部删除用户；这些变化必须重启服务。文件模式与 store 模式共用同一份规则。详见
+热重载只拒绝[字段参考](configuration.md#字段参考)中标记“修改需重启”的字段
+（`server.transport`、`server.addr`）以及开启或关闭 TLS：它们决定监听器本身。
+其余变化均可热加载，包括：认证（token、可信代理、用户的启用与全部删除）与 TLS
+证书/客户端 CA 轮换（下一次握手生效）、工具集合与 custom procedure tool（客户端
+收到 `tools/list_changed` 通知）、事务限制。新认证在装配前准备好（校验并读取证书），
+不合法或证书读不到时 reload 失败、继续用旧快照；发布时直接切换到准备好的认证，
+不再读取文件；共享设置（IO 配额、缓存上限、连接池大小）
+只在新快照发布时应用，失败的 reload 不改变正在服务的设置。关闭缓存的配置仍会
+向共享缓存传递写入失效。文件模式与 store 模式共用同一份规则。详见
 [architecture.md](architecture.md)。
 
 ## 配置存储

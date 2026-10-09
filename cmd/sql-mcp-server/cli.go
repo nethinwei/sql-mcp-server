@@ -106,8 +106,8 @@ func runServe(ctx context.Context, args []string) error {
 		return err
 	}
 	defer otelShutdown()
-	build := serveBuilder(cfg, overrides, hooks)
-	runtime, err := newServeRuntime(cfg, build, hooks)
+	auths := &preparedAuths{http: *transport == "http", addr: *addr} // what each reload prepares
+	build, runtime, err := newServeRuntime(cfg, overrides, hooks, auths)
 	if err != nil {
 		return err
 	}
@@ -120,21 +120,27 @@ func runServe(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	return serveTransport(ctx, runtime, cfg, *transport, *addr, metrics, adminHandler)
+	return serveTransport(ctx, runtime, cfg, *transport, *addr, metrics, adminHandler, auths)
 }
 
-// newServeRuntime assembles the startup App; file reloads go through build.
+// newServeRuntime assembles the startup App and returns the reload builder
+// with the runtime; both assemble on the services every configuration of the
+// process shares (the cache, IO quota and connections). File reloads go
+// through build too.
 func newServeRuntime(
 	cfg *config.Config,
-	build func(*config.Config) (*bootstrap.App, error),
+	overrides serveOverrides,
 	hooks *hook.Hooks,
-) (*bootstrap.Runtime, error) {
-	app, err := bootstrap.Assemble(cfg)
+	auths *preparedAuths,
+) (func(*config.Config) (*bootstrap.App, error), *bootstrap.Runtime, error) {
+	shared := bootstrap.NewShared()
+	build := serveBuilder(cfg, overrides, hooks, shared, auths)
+	app, err := shared.Assemble(cfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	app.Hooks = hooks
-	return bootstrap.NewRuntimeWithBuilder(app, func(path string) (*bootstrap.App, error) {
+	return build, bootstrap.NewRuntimeWithBuilder(app, func(path string) (*bootstrap.App, error) {
 		next, err := bootstrap.Load(path)
 		if err != nil {
 			return nil, err
@@ -207,11 +213,14 @@ func applyUserOverride(cfg *config.Config, user string) error {
 }
 
 // serveBuilder returns the reload builder shared by file and store mode: it
-// rejects changes that need a restart, re-applies CLI overrides and assembles.
+// rejects changes that need a restart, re-applies CLI overrides and assembles
+// on the services every configuration shares.
 func serveBuilder(
 	startup *config.Config,
 	overrides serveOverrides,
 	hooks *hook.Hooks,
+	shared *bootstrap.Shared,
+	auths *preparedAuths,
 ) func(*config.Config) (*bootstrap.App, error) {
 	return func(next *config.Config) (*bootstrap.App, error) {
 		if err := bootstrap.CheckHotReload(startup, next); err != nil {
@@ -220,11 +229,16 @@ func serveBuilder(
 		if err := overrides.apply(next); err != nil {
 			return nil, err
 		}
-		app, err := bootstrap.Assemble(next)
+		auth, err := auths.prepare(next)
+		if err != nil {
+			return nil, err
+		}
+		app, err := shared.Assemble(next)
 		if err != nil {
 			return nil, err
 		}
 		app.Hooks = hooks
+		auths.keep(app, auth)
 		return app, nil
 	}
 }
@@ -245,6 +259,7 @@ func serveTransport(
 	transport, addr string,
 	metrics http.Handler,
 	adminHandler http.Handler,
+	auths *preparedAuths,
 ) error {
 	if scans, ok := adminHandler.(interface{ Close() }); ok {
 		defer scans.Close() // background schema scans
@@ -258,15 +273,18 @@ func serveTransport(
 		}
 		return err
 	case "http":
+		// The current snapshot's: a reload may have published another one.
+		if current := runtime.Current(); current != nil && current.Config() != nil {
+			cfg = current.Config()
+		}
+		auth := httpAuth(cfg, runtime)
 		return mcpserver.ServeHTTP(ctx, srv, mcpserver.HTTPConfig{
-			Addr: addr, Token: cfg.Server.Auth.Token,
-			TrustProxyHeaders: cfg.Server.Auth.TrustProxyHeaders,
-			TrustedProxyCIDRs: cfg.Server.Auth.TrustedProxyCIDRs,
-			TLSCert:           cfg.Server.Auth.TLS.Cert, TLSKey: cfg.Server.Auth.TLS.Key,
-			ClientCA: cfg.Server.Auth.TLS.ClientCA, OnSessionClosed: runtime.RollbackSession,
+			Addr: addr, Token: auth.Token, TrustProxyHeaders: auth.TrustProxyHeaders,
+			TrustedProxyCIDRs: auth.TrustedProxyCIDRs, TLSCert: auth.TLSCert, TLSKey: auth.TLSKey,
+			ClientCA: auth.ClientCA, Users: auth.Users, OnSessionClosed: runtime.RollbackSession,
 			SnapshotReady: runtime.SnapshotReady, DatabaseReady: runtime.DatabasesReady,
-			Metrics: metrics, Users: httpUsers(cfg, runtime), RevokedPrincipals: runtime.OnRevokedPrincipals,
-			Admin: adminHandler,
+			Metrics: metrics, RevokedPrincipals: runtime.OnRevokedPrincipals,
+			Admin: adminHandler, AuthChanges: auths.follow(runtime),
 			SnapshotStale: func() int64 {
 				if stale, ok := runtime.Stale(); ok {
 					return stale.RevisionID
@@ -277,15 +295,6 @@ func serveTransport(
 	default:
 		return errors.New("unknown transport: " + transport)
 	}
-}
-
-// httpUsers returns the runtime user directory when users are configured.
-// Users cannot be switched on or off by reload, so the startup view holds.
-func httpUsers(cfg *config.Config, runtime *bootstrap.Runtime) mcpserver.UserDirectory {
-	if len(cfg.Users) == 0 {
-		return nil
-	}
-	return runtime
 }
 
 func resolveServeEndpoint(fs *flag.FlagSet, cfg *config.Config, transport, addr *string) {

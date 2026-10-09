@@ -117,8 +117,9 @@ type Index struct {
 	// btree, hash, fulltext or spatial on MySQL and OceanBase.
 	Method string
 	// Parts are the key parts in order: a column, a column prefix such as
-	// title(20), or an expression as the database prints it ("" when the
-	// database does not report it).
+	// title(20), or an expression as the database prints it. Parts the
+	// database does not report (OceanBase's full-text and spatial indexes)
+	// are left out.
 	Parts   []string
 	Unique  bool
 	Primary bool

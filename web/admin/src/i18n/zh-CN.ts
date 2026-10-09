@@ -70,7 +70,7 @@ export default {
     table: '表', description: '说明', columns: '列', relationships: '关系', status: '状态',
     notNull: '非空', primaryKey: '主键', keys: '键', compositeKey: '复合主键 ({cols}) 的第 {n} 列', uniqueKey: '唯一键', foreignKey: '外键',
     keyColumns: '列', index: '索引', indexMethod: '类型', uniqueness: '唯一性', indexWhere: '条件',
-    unique: '唯一', uniqueNotIdentity: '唯一，不能定位行（{reason}）', expression: '（表达式）',
+    unique: '唯一', uniqueNotIdentity: '唯一，不能定位行（{reason}）', expression: '（表达式）', partsNotReported: '数据库未报告',
     keyReason: { partial: '部分索引', expression: '表达式索引', prefix: '前缀索引', nullable: '含可空列' },
     onDelete: '删除时 {action}', onUpdate: '更新时 {action}',
     fkAction: { cascade: '级联', set_null: '置空', set_default: '置默认值' },

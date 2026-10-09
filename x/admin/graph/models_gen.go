@@ -224,7 +224,8 @@ type ImportIndex struct {
 	// spatial (MySQL, OceanBase).
 	Method string `json:"method"`
 	// Key parts in order: a column, a column prefix such as title(20), or an
-	// expression as the database prints it ("" when it does not report it).
+	// expression as the database prints it; parts the database does not report
+	// are left out (empty when it reports none).
 	Parts   []string `json:"parts"`
 	Unique  bool     `json:"unique"`
 	Primary bool     `json:"primary"`

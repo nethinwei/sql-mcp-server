@@ -43,6 +43,7 @@ const (
 	CodeTransactionNotFound = "TRANSACTION_NOT_FOUND"
 	CodeTransactionScope    = "TRANSACTION_SCOPE"
 	CodeTransactionCapacity = "TRANSACTION_CAPACITY"
+	CodeTransactionStale    = "TRANSACTION_STALE"
 	CodeAmbiguousFieldScope = "AMBIGUOUS_FIELD_SCOPE"
 	CodeConstraintViolation = "CONSTRAINT_VIOLATION"
 	CodeDatasourceForbidden = "DATASOURCE_FORBIDDEN"
@@ -63,6 +64,7 @@ var sentinelDenials = []struct {
 	{ErrTransactionNotFound, CodeTransactionNotFound, false},
 	{ErrTransactionScope, CodeTransactionScope, false},
 	{ErrTransactionCapacity, CodeTransactionCapacity, true},
+	{ErrTransactionStale, CodeTransactionStale, false},
 }
 
 // DenialFor maps a business-level error to the rejection contract. ok is

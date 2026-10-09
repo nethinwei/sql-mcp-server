@@ -137,7 +137,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `auth.tls.key` | 字符串 |  |  | TLS 私钥文件路径。 |
 | `auth.tls.clientCA` | 字符串 |  |  | 设置后开启 mTLS，要求并校验客户端证书。 |
 | `auth.tls` | 对象 |  |  | TLS / mTLS。cert 与 key 必须同时设置。 |
-| `auth` | 对象 |  | 修改需重启 | HTTP 认证。trustProxyHeaders、trustedProxyCIDRs 与非 loopback 的信任规则见 security.md。 |
+| `auth` | 对象 |  |  | HTTP 认证。trustProxyHeaders、trustedProxyCIDRs 与非 loopback 的信任规则见 security.md。 |
 | `secrets.allowedRoots` | 字符串列表 | `["/run/secrets","/var/run/secrets"]` |  | 允许读取 secret 文件的根目录（绝对路径）；符号链接不能逃逸这些目录。 |
 | `secrets` | 对象 |  |  | DSN 中 ${file:...} 占位符的读取限制。 |
 | `user` | 字符串 |  |  | 没有用户身份的请求使用的默认用户，优先于 role；CLI --user 覆盖。必须是已配置且未禁用的用户。 |
@@ -176,11 +176,11 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 
 ### `users`
 
-通过 HTTP 访问的调用方：用户名 → 配置。增删、禁用、轮换 token 可热加载；首次配置用户或删除全部用户需要重启。
+通过 HTTP 访问的调用方：用户名 → 配置。增删、禁用、轮换 token，以及首次配置或删除全部用户，均可热加载。
 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `users` | 映射（名称 → `user`） |  | 名称格式 `^[a-z0-9][a-z0-9_-]*$` | 通过 HTTP 访问的调用方：用户名 → 配置。增删、禁用、轮换 token 可热加载；首次配置用户或删除全部用户需要重启。 |
+| `users` | 映射（名称 → `user`） |  | 名称格式 `^[a-z0-9][a-z0-9_-]*$` | 通过 HTTP 访问的调用方：用户名 → 配置。增删、禁用、轮换 token，以及首次配置或删除全部用户，均可热加载。 |
 
 ### `tools`：工具开关
 
@@ -298,8 +298,8 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `ttl` | 时长 | `"5m"` | ≥ 0；修改需重启 | 事务最长存活时间。 |
-| `maxOpen` | 整数 | `128` | ≥ 0；修改需重启 | 每个角色/subject 同时打开的事务上限。 |
+| `ttl` | 时长 | `"5m"` | ≥ 0 | 事务最长存活时间。 |
+| `maxOpen` | 整数 | `128` | ≥ 0 | 每个角色/subject 同时打开的事务上限。 |
 | `beginTimeout` | 时长 | `"5s"` | ≥ 0 | 开启事务超时。 |
 | `commitTimeout` | 时长 | `"30s"` | ≥ 0 | 提交超时。 |
 | `rollbackTimeout` | 时长 | `"30s"` | ≥ 0 | 回滚超时。 |
@@ -353,7 +353,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `fieldACL.write` | 字符串列表 |  |  | 可写字段。 |
 | `fieldACL` | 映射（名称 → 对象） |  |  | 旧式角色级字段白名单：角色 → 可读、可写字段。 |
 | `mcp.dmlTools` | 布尔 | `true` |  | 是否加入通用实体工具（读、写、聚合）；省略时为 true，显式 false 会保留。 |
-| `mcp.customTool` | 布尔 |  |  | 存储过程额外注册独立 MCP 工具；与 tools.executeEntity 无关。修改需要重启。 |
+| `mcp.customTool` | 布尔 |  |  | 存储过程额外注册独立 MCP 工具；与 tools.executeEntity 无关。修改可热加载，客户端会收到工具列表变更通知。 |
 | `mcp.trustedProcedure` | 布尔 |  |  | DBA 已审核该过程的权限与内部成本。只有为 true 且 CALL 指纹命中 allowTemplates 时才能执行。 |
 | `mcp` | 对象 |  |  | 实体在 MCP 中的暴露方式。 |
 | `rowPolicies` | 映射（名称 → 自由对象） |  |  | 旧式角色级行范围：角色 → 过滤条件（{op, field, value} 或 and/or 组合）。 |

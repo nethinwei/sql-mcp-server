@@ -121,10 +121,14 @@ Provider 适用范围使用以下口径：
   冒充其他 tenant 或 role。
 - **控制**：默认忽略代理身份 header；启用 `trustProxyHeaders` 时必须同时配置
   mTLS `clientCA` 或非空 `trustedProxyCIDRs`；CIDR 模式校验来源地址；畸形
-  subject JSON 返回 400；热重载拒绝改变 auth/TLS/trusted proxy 边界。
-- **现有证据**：`core/config/config_test.go` 的信任边界校验，以及
+  subject JSON 返回 400。认证可热重载：新认证在装配前准备好（校验并读取证书，失败则 reload 失败），发布时
+  直接切换到准备好的对象，不再读取文件，不会出现配置已发布而认证仍是旧的；
+  启用 mTLS 时每个请求都按当前 `clientCA` 校验其连接实际出示的客户端证书，
+  切换前建立、未出示证书（或由已替换 CA 签发）的连接不会被视为 mTLS 通道。
+- **现有证据**：`core/config/config_test.go` 的信任边界校验，
   `x/mcpserver/http_test.go` 的 untrusted header、malformed subject、CIDR 和
-  session identity 测试。
+  session identity 测试，以及 `x/mcpserver/auth_reload_test.go` 的“热切换到
+  mTLS 后旧连接被拒”测试。
 - **持续验证**：`x/mcpserver/http_test.go` 覆盖不可信来源伪造身份、畸形和尾随
   subject JSON、body 边界与 session 身份切换；真实反向代理 e2e 仍是剩余工作。
 - **剩余风险**：服务不能证明代理已认证调用方或删除外部 header；错误配置 CIDR、
@@ -158,18 +162,25 @@ Provider 适用范围使用以下口径：
 - **控制**：新快照完整构建成功后才发布，失败保留旧 app；每个请求自始至终只用
   一个快照（`Acquire` 租约）。发布立即生效，新请求不等待旧请求（旧做法
   drain-before-publish 会让一个慢查询或长时间持有租约的操作卡住全部新请求）；
-  旧 app 由后台在其在途请求结束后关闭，被删除/禁用用户的会话解除与事务回滚
-  也在此时执行，从而覆盖旧请求中途打开的事务（新快照从发布起即拒绝这些用户）。
-  transaction manager 与 budget 状态保留并原子更新限制；事务容量/TTL 和
-  listener/auth/tool-set 等边界变化拒绝热重载。控制台 schema 扫描使用独立连接、
-  不持有租约。
+  旧 app 由后台在其在途请求结束后关闭。被删除/禁用用户的会话在发布时解除并回滚
+  事务，旧 app 排空后再按这些会话 ID 回滚旧请求中途打开的事务；会话 ID 不复用，
+  用户重新启用后新建的会话不受影响。新旧快照共享连接池、IO 配额与读缓存
+  （`bootstrap.Shared`）：两代合计不超过 IO 上限，任一代的写入按物理数据库使两代
+  缓存失效，读取在失效后不会回填旧值（失效戳）；待回收快照最多 3 个。
+  transaction manager 与 budget 状态保留并原子更新限制；事务绑定开启时的连接，
+  重载把其数据源改到别的连接后，该事务的后续语句返回 `TRANSACTION_STALE`（只能
+  回滚），不会按新配置的实体映射与失效目标在旧连接上执行。只有 listener（传输、
+  地址、TLS 开关）变化拒绝热重载。控制台 schema 扫描使用独立连接、不持有租约。
 - **现有证据**：`x/bootstrap/runtime_test.go` 的“发布不等待租约、旧 app 在租约
-  释放后关闭”、失败保旧、事务 manager 保留、限制拒绝和预算更新测试；
-  `x/bootstrap/bootstrap_access_test.go` 的吊销通知测试；CI 默认运行 race detector。
+  释放后关闭”、失败保旧、事务与预算限制更新、待回收上限测试；
+  `core/tool/transaction_test.go` 的“连接被重载改掉后事务拒绝语句”测试；
+  `x/bootstrap/bootstrap_access_test.go` 的吊销通知与“重新启用后新会话不受旧
+  撤销影响”测试；`x/bootstrap/shared_test.go` 的跨代缓存失效、共享 IO 配额与
+  连接复用测试；CI 默认运行 race detector。
 - **持续验证**：以上测试在默认单元测试中运行；CI race 检查并不枚举所有调度交错。
-- **剩余风险**：现有测试不是所有调度的形式化证明；新旧快照重叠期间，在途旧请求
-  与新请求同时执行，engine 并发与连接池短暂最多为配置值的两倍；多进程/多实例
-  配置发布不在当前一致性模型内。
+- **剩余风险**：现有测试不是所有调度的形式化证明；新旧快照重叠期间各自的 engine
+  在途队列与预编译语句并存（IO 配额、连接池与缓存已共享）；熔断器为进程级而非按
+  物理数据库；多进程/多实例配置发布不在当前一致性模型内。
 - **Provider**：runtime 控制为共享层；provider 资源 drain 依赖各 driver 行为，
   尚无三库专门的 reload integration。
 
@@ -222,7 +233,8 @@ Provider 适用范围使用以下口径：
   配置用户后，无共享 token 且非 mTLS/可信代理通道时必须携带用户 token；带用户
   token 的请求出现任何代理身份头返回 403；`X-MCP-User` 必须指向启用用户且不能与
   `X-MCP-Role` 同时出现；用户表跟随 snapshot，热重载删除或禁用用户后解除其会话
-  绑定并回滚在途事务；启用/关闭用户功能需要重启。
+  绑定并回滚在途事务；启用/关闭用户功能随重载切换（是否要求用户 token 跟随当前
+  快照是否配置了用户），新认证在装配前准备好。
 - **现有证据**：`x/mcpserver/users_test.go` 的认证矩阵、代理头、身份冲突与会话
   吊销测试；`x/bootstrap/bootstrap_access_test.go` 的吊销通知测试；
   `core/config/config_access_test.go` 的 tokenHash 与名称校验测试。

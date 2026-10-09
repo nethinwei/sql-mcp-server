@@ -18,8 +18,21 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   schema 批量。
 - 热重载改为发布后排空（publish-then-drain）：新快照立即生效，新请求不再等待
   旧快照的在途请求（此前一个慢查询或长时间的控制台扫描会让全部新请求停住）；
-  旧快照在后台关闭，被吊销用户的事务在旧快照排空后回滚。重叠期间并发与连接数
-  短暂最多为配置值的两倍（TM-007）。
+  旧快照在后台关闭。新旧快照共享连接池（设置未变不重连）、IO 配额与限流熔断、
+  读缓存（按物理数据库失效，旧快照的写入同样使新快照的缓存失效，失效后不回填
+  旧值）；待回收快照最多 3 个。被吊销用户的会话在发布时关闭，排空后按会话 ID
+  回滚，重新启用后新建的会话不受影响（TM-007）。
+- 除传输方式、监听地址与 TLS 开关外的配置均可热加载：认证（token、可信代理、
+  用户的首次启用与全部删除；mTLS 下每个请求按当前 CA 校验连接出示的客户端
+  证书，切换前的连接不能冒充 mTLS 通道）、TLS 证书与客户端 CA 轮换、工具集合与 custom
+  procedure tool（客户端收到 `tools/list_changed`）、事务 `ttl`/`maxOpen`。新认证在
+  reload 装配前准备好（含读取证书，失败则 reload 失败），发布时直接切换，不再读文件。
+- 读缓存失效按数据库索引、写入时按到期堆淘汰，不再扫描全部条目；写入的失效
+  目标在装配时预计算，按（物理库, 关系）去重，整库失效合并同库其他目标；事务
+  容量按作用域计数。
+- 显式事务绑定开启时的连接：重载把其数据源改到别的连接后，事务内后续语句返回
+  新错误码 `TRANSACTION_STALE`，只能回滚后重新开启（此前会按新配置在旧连接上
+  执行，并失效新数据库的缓存）。连接未变的重载不受影响。
 - 启动与重载：各数据源并行对账、自省整体限时 1 分钟；连接权限探测移到发布后的
   后台执行（限时 2 分钟），不再阻塞启动与重载。
 - 控制台导入改为“库 → 表”：先列出库，展开时才扫描该库；扫描是后台任务（有界
@@ -33,6 +46,29 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   `docs/benchmarks/hot-paths.md`。e2e 套件共享一个 PostgreSQL 容器、每个测试
   一个新数据库，`make test-e2e` 约 12 s → 4 s。
 
+### Fixed
+
+- 自动提交的写入级联到同一物理库的其他数据源时，会话随后经这些数据源的读取
+  也走写连接（此前只有直接写入的数据源如此，显式事务提交则记录全部）；两条
+  路径共用同一个写入后处理。
+- MySQL/OceanBase 成本闸门：`EXPLAIN` 解析遍历整棵计划树（聚合、排序与连接时表
+  节点嵌套在 `grouping_operation`/`ordering_operation`/`nested_loop` 或 OceanBase
+  的 `CHILD_n` 下），按最差的访问方式与最大的行估计评分；此前这些查询一律被判为
+  “未知扫描”并被拒绝，MySQL/OceanBase 上带过滤的聚合无法执行。
+- OceanBase 自省：表达式、全文与空间索引的键部分被报告为隐藏列
+  （`SYS_NC…$`、`__word_segment…`、`__cellid…`），此前被当成真实列，表达式唯一键
+  会被误认为能唯一定位行；现在不是表列的键部分按表达式处理。MySQL 8.0.13+ 与
+  OceanBase 的表达式索引显示表达式原文；OceanBase 全文与空间索引在
+  `information_schema` 中只报告内部列，改用其文档推荐的 `SHOW INDEX`（仅对这些表
+  逐表读取）得到真实列与类型。
+- MySQL/OceanBase 成本闸门的行估计取任一计划节点的最大值（连接的输出可能远大于
+  各表的扫描行数），此前只取扫描节点，可能低估连接结果。
+- 读缓存过期堆弹出时清空底层数组的引用，被删除的结果可以被回收。
+
+- 示例改为三种数据源各一套覆盖全部特性的业务（PostgreSQL 电商、MySQL 仓储、
+  OceanBase 记账，各经只读与读写两个账号接入，并有跨数据源的同名表），附特性矩阵与 `verify.py`
+  逐项验证；初始化脚本声明 `utf8mb4`，修正 MySQL/OceanBase 示例的中文乱码。
+
 ### Breaking
 
 - 管理 API：移除 `schemaImport`，改为 `schemaList`、`schemaTables`（一次返回
@@ -41,6 +77,12 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 - Go API：`introspect.PrivilegeInspector.TablePrivileges` 改为按 schema 批量
   （`tables []string` → `map[string]TablePrivileges`）；`bootstrap.App.Capabilities`
   字段改为方法 `Capabilities()`（评估完成前为 nil），新增 `WaitCapabilities`。
+- Go API：`cache.Cache` 新增 `Stamp`，`Set` 增加失效戳参数，`cache.Key.Database`
+  改为物理数据库标识（新增 `Datasource`、`Generation`）；`tool.CacheTarget` 新增
+  `Physical`；`Runtime.OnRevokedPrincipals` 回调改为返回关闭的会话 ID；
+  `App.OpenScan` 接收数据源配置；新增 `bootstrap.Shared`、`Runtime.OnPublish`、
+  `engine.Quota`/`WithQuota`、`mcpserver.HTTPAuth`/`PrepareHTTPAuth`/`PreparedAuth` 与
+  `HTTPConfig.AuthChanges`。
 
 ## 0.1.11 - 2026-10-08
 

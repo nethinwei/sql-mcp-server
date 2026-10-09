@@ -366,6 +366,7 @@
     "TRANSACTION_CAPACITY": true,
     "TRANSACTION_NOT_FOUND": false,
     "TRANSACTION_SCOPE": false,
+    "TRANSACTION_STALE": false,
     "UNAUTHORIZED": false,
     "UNSAFE_WRITE": true
   },

@@ -59,7 +59,7 @@ func routeEntity(tc Context, e entity.Entity, action entity.Action) (Context, er
 		if tc.Transactions == nil {
 			return tc, ErrTransactionNotFound
 		}
-		db, err := tc.Transactions.DB(tc.Transaction, tc.Session, tc.Role, tc.Subject, name)
+		db, err := tc.Transactions.DB(tc.Transaction, tc.Session, tc.Role, tc.Subject, name, txConnections(tc, name))
 		if err != nil {
 			return tc, err
 		}

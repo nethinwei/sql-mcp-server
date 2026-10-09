@@ -117,9 +117,15 @@ type Context struct {
 	Masker     mask.Masker
 	Gate       cost.Gate
 	Cache      cache.Cache[[]map[string]any]
-	Engine     *engine.Engine
-	Auditor    audit.Auditor
-	Hooks      *hook.Hooks
+	// Generation is the configuration generation serving the call; cached
+	// reads of different generations are kept apart.
+	Generation uint64
+	// WriteTargets, when set, holds what a write through each entity
+	// invalidates (see BuildWriteTargets).
+	WriteTargets *WriteTargets
+	Engine       *engine.Engine
+	Auditor      audit.Auditor
+	Hooks        *hook.Hooks
 	Limits
 	Feedback     cost.FeedbackStore
 	Analyze      cost.AnalyzePolicy

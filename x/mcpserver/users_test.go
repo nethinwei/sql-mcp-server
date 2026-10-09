@@ -167,9 +167,10 @@ func TestRevokeSessionsDropsBindingsAndRollsBack(t *testing.T) {
 	store.bind("s2", sessionIdentity{role: "user:alice", subject: `{"tenant_id":"t1"}`})
 	store.bind("s3", sessionIdentity{role: "user:bob"})
 	var closed []string
-	revokeSessions(store, func(s string) { closed = append(closed, s) })([]string{"user:alice"})
+	returned := revokeSessions(store, func(s string) { closed = append(closed, s) })([]string{"user:alice"})
 	slices.Sort(closed)
-	if !slices.Equal(closed, []string{"s1", "s2"}) {
+	slices.Sort(returned)
+	if !slices.Equal(closed, []string{"s1", "s2"}) || !slices.Equal(returned, closed) {
 		t.Fatalf("closed sessions = %v", closed)
 	}
 	if store.matches("s1", sessionIdentity{role: "user:alice"}) {

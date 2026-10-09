@@ -16,7 +16,6 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/mask"
-	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
@@ -28,6 +27,12 @@ import (
 // checked before any resource is acquired. Each datasource's read connection
 // serves introspection and EXPLAIN.
 func AssembleWithConnections(cfg *config.Config, connections Connections) (*App, error) {
+	return assembleWith(cfg, connections, nil)
+}
+
+// assembleWith wires an App on connections, on shared services when shared
+// is not nil and on services of its own otherwise.
+func assembleWith(cfg *config.Config, connections Connections, shared *Shared) (*App, error) {
 	providers, err := readConnections(cfg, connections)
 	if err != nil {
 		return nil, err
@@ -39,8 +44,10 @@ func AssembleWithConnections(cfg *config.Config, connections Connections) (*App,
 	if err != nil {
 		return nil, err
 	}
-	for _, p := range (&App{Connections: connections}).allProviders() {
-		configurePool(p, cfg.RateLimit.IOPool, cfg.RateLimit.ConnMaxIdleTime, cfg.RateLimit.ConnMaxLifetime)
+	if shared == nil { // shared connections are sized as the App is published (see Shared.apply)
+		for _, p := range (&App{Connections: connections}).allProviders() {
+			configurePool(p, cfg.RateLimit.IOPool, cfg.RateLimit.ConnMaxIdleTime, cfg.RateLimit.ConnMaxLifetime)
+		}
 	}
 	feedback := newFeedbackStore(cfg)
 	sources, txBeginners, prepared, err := buildDataSources(cfg, connections, providers, feedback)
@@ -48,7 +55,7 @@ func AssembleWithConnections(cfg *config.Config, connections Connections) (*App,
 		closePrepared(prepared)
 		return nil, err
 	}
-	eng, err := newAssembleEngine(cfg)
+	eng, err := newAssembleEngine(cfg, shared)
 	if err != nil {
 		closePrepared(prepared)
 		return nil, err
@@ -62,10 +69,14 @@ func AssembleWithConnections(cfg *config.Config, connections Connections) (*App,
 	defaultName, defaultSource := defaultDatasource(providers, sources)
 	app := newAssembledApp(
 		cfg, providers, prepared, sources, txBeginners, checked.registry,
-		rbac.NewGrantAuthorizer(checked.registry, checked.policy), aud, newAssembleCache(cfg), checked.masker,
+		rbac.NewGrantAuthorizer(checked.registry, checked.policy), aud, newAssembleCache(cfg, shared), checked.masker,
 		feedback, defaultSource, defaultName, eng, checked.tools,
 	)
-	app.Connections = connections
+	app.Connections, app.config = connections, cfg
+	app.WriteTargets = tool.BuildWriteTargets(checked.registry)
+	if shared != nil {
+		app.shared, app.generation = shared, shared.generation.Add(1)
+	}
 	app.assessInBackground(cfg, connections, checked.registry.Entities())
 	return app, nil
 }
@@ -211,14 +222,15 @@ func reconcileAll(providers map[string]Provider, entities []entity.Entity) ([]en
 	errs := make(map[string]error, len(providers))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+	byDatasource := map[string][]int{}
+	for i, e := range entities {
+		byDatasource[e.DataSource] = append(byDatasource[e.DataSource], i)
+	}
 	for name, prov := range providers {
-		var scoped []entity.Entity
-		var at []int
-		for i, e := range entities {
-			if e.DataSource == name {
-				scoped = append(scoped, e)
-				at = append(at, i)
-			}
+		at := byDatasource[name]
+		scoped := make([]entity.Entity, len(at))
+		for n, i := range at {
+			scoped[n] = entities[i]
 		}
 		wg.Go(func() {
 			reconciled, err := reconcileEntities(ctx, name, prov, scoped)
@@ -337,20 +349,11 @@ func dataSourceForProvider(
 	return tool.DataSource{DB: db, Dialect: prov.Dialect(), Gate: gate, Analyze: analyze}, nil
 }
 
-func newAssembleEngine(cfg *config.Config) (*engine.Engine, error) {
-	var limiter *ratelimit.Adaptive
-	var breaker *ratelimit.Breaker
-	var rps *ratelimit.TokenBucket
-	if cfg.RateLimit.EnabledOrDefault() {
-		limiter = ratelimit.NewAdaptive(
-			int64(cfg.RateLimit.IOPool),
-			int64(cfg.RateLimit.MinConcurrency),
-			int64(cfg.RateLimit.MaxInflight),
-			cfg.RateLimit.RTTThreshold,
-		)
-		breaker = ratelimit.NewBreaker(int64(cfg.RateLimit.BreakerThreshold), cfg.RateLimit.BreakerCooldown)
-		rps = ratelimit.NewTokenBucket(cfg.RateLimit.RPS)
+func newAssembleEngine(cfg *config.Config, shared *Shared) (*engine.Engine, error) {
+	if shared != nil {
+		return shared.engine(cfg)
 	}
+	limiter, rps, breaker := rateLimiters(cfg)
 	return engine.New(
 		engine.WithIOPool(cfg.RateLimit.IOPool),
 		engine.WithMaxInflight(cfg.RateLimit.MaxInflight),
@@ -372,7 +375,10 @@ func newAssembleAuditor(cfg *config.Config) (audit.Auditor, error) {
 	return audit.NewAsyncAuditorWithClose(sink.Record, sink.Close, cfg.Audit.QueueSize), nil
 }
 
-func newAssembleCache(cfg *config.Config) cache.Cache[[]map[string]any] {
+func newAssembleCache(cfg *config.Config, shared *Shared) cache.Cache[[]map[string]any] {
+	if shared != nil {
+		return shared.readCache(cfg)
+	}
 	if !cfg.Cache.Enabled {
 		return cache.NoopCache[[]map[string]any]{}
 	}

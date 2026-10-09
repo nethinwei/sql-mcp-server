@@ -80,24 +80,24 @@ func TestRuntimeReloadPreservesTransactionManager(t *testing.T) {
 	}
 }
 
-func TestRuntimeReloadRejectsTransactionLimitChanges(t *testing.T) {
+func TestRuntimeReloadUpdatesTransactionLimits(t *testing.T) {
 	oldManager := tool.NewTransactionManager(time.Minute, 2)
-	nextProvider := &fakeProvider{}
 	runtime := NewRuntimeWithBuilder(
 		&App{Provider: &fakeProvider{}, Transactions: oldManager},
 		func(string) (*App, error) {
 			return &App{
-				Provider: nextProvider, Transactions: tool.NewTransactionManager(2*time.Minute, 3),
+				Provider: &fakeProvider{}, Transactions: tool.NewTransactionManager(2*time.Minute, 3),
 			}, nil
 		},
 	)
-	if err := runtime.Reload("ignored"); err == nil {
-		t.Fatal("transaction ttl/maxOpen change was accepted")
+	defer runtime.Close()
+	if err := runtime.Reload("ignored"); err != nil {
+		t.Fatal(err)
 	}
-	if runtime.Current().Transactions != oldManager || nextProvider.closed != 1 {
-		t.Fatalf("failed reload changed runtime or leaked replacement: closed=%d", nextProvider.closed)
+	ttl, maxOpen := runtime.Current().Transactions.Configuration()
+	if runtime.Current().Transactions != oldManager || ttl != 2*time.Minute || maxOpen != 3 {
+		t.Fatalf("manager kept = %v, limits = %s/%d", runtime.Current().Transactions == oldManager, ttl, maxOpen)
 	}
-	_ = runtime.Close()
 }
 
 func TestRuntimeReloadUpdatesBudgetLimitsAndPreservesState(t *testing.T) {
@@ -217,5 +217,64 @@ func BenchmarkRuntimeAcquire(b *testing.B) {
 			b.Fatal(err)
 		}
 		release()
+	}
+}
+
+// While maxRetiring replaced snapshots still serve requests, a reload is
+// refused rather than piling up more; it succeeds once one drains.
+func TestRuntimeReloadRefusedWhileEarlierSnapshotsDrain(t *testing.T) {
+	runtime := NewRuntimeWithBuilder(&App{Provider: &fakeProvider{}}, func(string) (*App, error) {
+		return &App{Provider: &fakeProvider{}}, nil
+	})
+	defer runtime.Close()
+	var releases []func()
+	for range maxRetiring {
+		_, release, err := runtime.Acquire()
+		if err != nil {
+			t.Fatal(err)
+		}
+		releases = append(releases, release)
+		if err := runtime.Reload("ignored"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := runtime.Reload("ignored"); !errors.Is(err, ErrReloadBacklog) {
+		t.Fatalf("reload with %d snapshots draining = %v", maxRetiring, err)
+	}
+	releases[0]()
+	for runtime.draining.Load() >= maxRetiring {
+		time.Sleep(time.Millisecond)
+	}
+	if err := runtime.Reload("ignored"); err != nil {
+		t.Fatalf("reload once one drained: %v", err)
+	}
+	for _, release := range releases[1:] {
+		release()
+	}
+}
+
+// A transport subscribing while reloads run gets the current App at once and
+// then every App published after: none falls between reading the current
+// one and subscribing.
+func TestRuntimeOnPublishStartsWithTheCurrentApp(t *testing.T) {
+	app := func() *App { return &App{Provider: &fakeProvider{}} }
+	first, second, third := app(), app(), app()
+	next := []*App{second, third}
+	runtime := NewRuntimeWithBuilder(first, func(string) (*App, error) {
+		app := next[0]
+		next = next[1:]
+		return app, nil
+	})
+	defer runtime.Close()
+	if err := runtime.Reload("ignored"); err != nil {
+		t.Fatal(err)
+	}
+	var seen []*App
+	runtime.OnPublish(func(app *App) { seen = append(seen, app) })
+	if err := runtime.Reload("ignored"); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 2 || seen[0] != second || seen[1] != third {
+		t.Fatalf("seen %d apps; want the current one, then the published one", len(seen))
 	}
 }

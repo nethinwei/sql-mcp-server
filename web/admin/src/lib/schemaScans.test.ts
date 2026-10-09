@@ -95,4 +95,16 @@ describe('sync', () => {
     expect(s.schemas[0].scanning).toBe(false)
     expect(s.result?.tables).toHaveLength(1)
   })
+
+  it('scans a schema left open that the server no longer keeps', async () => {
+    answer.set(SchemaSyncQuery, () => synced('a', ['public', 'sales']))
+    await sync('reopened')
+    const s = scansOf('reopened')
+    s.expanded = ['sales']
+    answer.set(StartSchemaScanMutation, () => new Promise(() => {})) // stays starting
+    await sync('reopened')
+    expect(s.schemas[1].scanning).toBe(true)
+    expect(s.schemas[0].scanning).toBe(false)
+    expect(calls).toContainEqual([StartSchemaScanMutation, { datasource: 'reopened', schemas: ['sales'] }])
+  })
 })
