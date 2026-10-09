@@ -12,7 +12,7 @@ COPY web/admin ./
 # validation cases read by the type-checked tests.
 COPY x/admin/graph/schema.graphqls /src/x/admin/graph/
 COPY core/config/schema.json /src/core/config/
-COPY core/config/testdata/rules.json /src/core/config/testdata/
+COPY core/config/testdata/rules.json core/config/testdata/entity_refs.json /src/core/config/testdata/
 RUN pnpm build
 
 FROM golang:1.26.9-alpine AS build
