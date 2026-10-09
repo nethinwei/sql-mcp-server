@@ -87,9 +87,9 @@ func visibility(
 		if e.Kind == "procedure" {
 			actions = []Action{ActionExecute}
 		}
-		ev := EntityVisibility{Entity: e.Name, Actions: make([]ActionVisibility, 0, len(actions))}
+		ev := EntityVisibility{Entity: e.ID(), Actions: make([]ActionVisibility, 0, len(actions))}
 		for _, a := range actions {
-			sim, err := evaluate(ctx, authz, p, e.Name, a, nil)
+			sim, err := evaluate(ctx, authz, p, e.ID(), a, nil)
 			if err != nil {
 				return nil, err
 			}

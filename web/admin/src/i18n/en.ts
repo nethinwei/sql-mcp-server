@@ -93,12 +93,13 @@ const en: typeof zh = {
   entities: {
     search: 'Search entities', allDatasources: 'All datasources', importFromDb: 'Import from database',
     empty: 'No entities yet: start by importing tables', goImport: 'Import', entity: 'Entity',
-    description: 'Description', datasource: 'Datasource', location: 'Datasource · table', fields: 'Fields',
+    description: 'Description', datasource: 'Datasource', fields: 'Fields',
     whoCanAccess: 'Who can access',
     procedure: 'procedure', userTag: 'user {name}', legacyTag: 'entity-level roles', nobody: 'Nobody',
   },
   entity: {
     renameTitle: 'Rename entity', name: 'Name', renameHint: 'Grants and relationships of other entities follow; the table it reads stays the same.',
+    nameNoDot: 'Names have no dots: entities are referred to as datasource.schema.name',
     notFound: 'The workspace has no entity {name}', backToList: 'Back to entities', delete: 'Delete entity',
     basics: 'Basics', datasource: 'Datasource', table: 'Table', kind: 'Kind', primaryKey: 'Primary key',
     uniqueKeys: 'Unique keys',

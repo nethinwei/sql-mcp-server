@@ -1,4 +1,5 @@
 import type { EntityInput } from '@/gql/graphql'
+import { entityId } from './entityRefs'
 
 // Tables of different schemas may share a name, so imported tables are
 // identified by schema and table, as the server's schemaImport does.
@@ -38,34 +39,23 @@ export function entityByTable(
 }
 
 /**
- * Renames candidates whose names are already used in the workspace (for
- * example by unsaved imports the server does not know about, or a candidate
- * of another schema scanned separately) and points relationships between them
- * at the new names. A relationship targets a candidate by its name: the one of
- * the same schema when candidates of several schemas share it.
+ * Renames candidates whose IDs are already used in the workspace (for example
+ * by unsaved imports the server does not know about) by numbering them, and
+ * points relationships between candidates, which target each other by ID, at
+ * the new IDs. Entities of other datasources or schemas may share a name.
  */
-export function uniqueCandidates(candidates: (EntityInput & { schema?: string | null })[], used: string[]): EntityInput[] {
+export function uniqueCandidates(candidates: EntityInput[], used: string[]): EntityInput[] {
   const taken = new Set(used)
-  const byName = new Map<string, number[]>()
-  const names = candidates.map((c, i) => {
-    byName.set(c.name, [...(byName.get(c.name) ?? []), i])
+  const renamed = new Map<string, string>()
+  const named = candidates.map((c) => {
     let name = c.name
-    if (taken.has(name)) {
-      const base = c.schema && !name.startsWith(`${c.schema}_`) ? `${c.schema}_${name}` : name
-      name = base
-      for (let n = 2; taken.has(name); n++) name = `${base}_${n}`
-    }
-    taken.add(name)
-    return name
+    for (let n = 2; taken.has(entityId({ ...c, name })); n++) name = `${c.name}_${n}`
+    taken.add(entityId({ ...c, name }))
+    if (name !== c.name) renamed.set(entityId(c), entityId({ ...c, name }))
+    return name === c.name ? c : { ...c, name, source: c.source ?? c.name }
   })
-  const target = (name: string, schema?: string | null) => {
-    const same = byName.get(name) ?? []
-    const i = same.find((j) => candidates[j].schema === schema) ?? same[0]
-    return i === undefined ? name : names[i]
-  }
-  return candidates.map((c, i) => ({
+  return named.map((c) => ({
     ...c,
-    name: names[i],
-    relationships: c.relationships?.map((r) => ({ ...r, target: target(r.target, c.schema) })),
+    relationships: c.relationships?.map((r) => ({ ...r, target: renamed.get(r.target) ?? r.target })),
   }))
 }

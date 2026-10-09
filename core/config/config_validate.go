@@ -155,16 +155,16 @@ func (c *Config) validateAQEExplainAnalyze() error {
 }
 
 func (c *Config) validateEntities(databases map[string]DatabaseConfig) error {
-	entitySources := make(map[string]string, len(c.Entities))
-	entityConfigs := make(map[string]EntityConfig, len(c.Entities))
+	ids := make(map[string]bool, len(c.Entities))
 	relations := make(map[string]string, len(c.Entities))
 	for _, e := range c.Entities {
 		if e.Name == "" {
 			return ErrEmptyEntityName
 		}
-		if _, exists := entityConfigs[e.Name]; exists {
-			return fmt.Errorf("config: duplicate entity name %q", e.Name)
+		if ids[e.ID()] {
+			return fmt.Errorf("config: duplicate entity %q (names are unique within a datasource and schema)", e.ID())
 		}
+		ids[e.ID()] = true
 		source := e.DataSource
 		if source == "" {
 			source = "default"
@@ -175,22 +175,17 @@ func (c *Config) validateEntities(databases map[string]DatabaseConfig) error {
 		if err := claimRelation(relations, source, e); err != nil {
 			return err
 		}
-		entitySources[e.Name] = source
-		entityConfigs[e.Name] = e
 	}
+	refs := NewEntityRefs(c.Entities)
 	for _, e := range c.Entities {
-		if err := c.validateEntity(e, entitySources, entityConfigs); err != nil {
+		if err := c.validateEntity(e, refs); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (c *Config) validateEntity(
-	e EntityConfig,
-	entitySources map[string]string,
-	entityConfigs map[string]EntityConfig,
-) error {
+func (c *Config) validateEntity(e EntityConfig, refs EntityRefs) error {
 	if duplicate, ok := firstDuplicateField(e.Fields); ok {
 		return fmt.Errorf("config: entity %q has duplicate field %q", e.Name, duplicate)
 	}
@@ -216,13 +211,13 @@ func (c *Config) validateEntity(
 			return fmt.Errorf("config: entity %q row policy for role %q: %w", e.Name, role, err)
 		}
 	}
-	if err := validateProcedureAffects(e, entitySources, entityConfigs); err != nil {
+	if err := validateProcedureAffects(e, refs); err != nil {
 		return err
 	}
 	if err := validateKeys(e); err != nil {
 		return err
 	}
-	return validateEntityRelationships(e, entitySources, entityConfigs)
+	return validateEntityRelationships(e, refs)
 }
 
 // validateKeys checks that the primary and unique keys name configured
@@ -275,11 +270,7 @@ func claimRelation(relations map[string]string, datasource string, e EntityConfi
 
 // validateProcedureAffects checks that a procedure's affects names
 // non-procedure entities on its own datasource, each once.
-func validateProcedureAffects(
-	e EntityConfig,
-	entitySources map[string]string,
-	entityConfigs map[string]EntityConfig,
-) error {
+func validateProcedureAffects(e EntityConfig, refs EntityRefs) error {
 	if len(e.Affects) == 0 {
 		return nil
 	}
@@ -290,14 +281,15 @@ func validateProcedureAffects(
 		return fmt.Errorf("config: procedure %q lists %q twice in affects (duplicate)", e.Name, duplicate)
 	}
 	for _, name := range e.Affects {
-		target, ok := entityConfigs[name]
+		target, err := refs.Resolve(name)
 		switch {
-		case !ok:
-			return fmt.Errorf("config: procedure %q affects unknown entity %q", e.Name, name)
+		case err != nil:
+			return fmt.Errorf("config: procedure %q affects: %w", e.Name, err)
 		case target.Kind == "procedure":
 			return fmt.Errorf("config: procedure %q affects %q, which is a procedure", e.Name, name)
-		case entitySources[name] != entitySources[e.Name]:
-			return fmt.Errorf("config: procedure %q affects %q on another datasource %q", e.Name, name, entitySources[name])
+		case target.DatasourceName() != e.DatasourceName():
+			return fmt.Errorf("config: procedure %q affects %q on another datasource %q", e.Name, name,
+				target.DatasourceName())
 		}
 	}
 	return nil
@@ -350,15 +342,11 @@ func validateEntityFieldACL(e EntityConfig) error {
 	return nil
 }
 
-func validateEntityRelationships(
-	e EntityConfig,
-	entitySources map[string]string,
-	entityConfigs map[string]EntityConfig,
-) error {
+func validateEntityRelationships(e EntityConfig, refs EntityRefs) error {
 	relationNames := make(map[string]bool, len(e.Relationships))
 	localFields := configuredFields(e.Fields)
 	for _, relation := range e.Relationships {
-		if err := validateRelationship(e, relation, relationNames, localFields, entitySources, entityConfigs); err != nil {
+		if err := validateRelationship(e, relation, relationNames, localFields, refs); err != nil {
 			return err
 		}
 	}
@@ -370,24 +358,22 @@ func validateRelationship(
 	relation RelationshipConfig,
 	relationNames map[string]bool,
 	localFields map[string]bool,
-	entitySources map[string]string,
-	entityConfigs map[string]EntityConfig,
+	refs EntityRefs,
 ) error {
-	if err := validateRelationshipIdentity(e, relation, relationNames, entitySources); err != nil {
+	if err := validateRelationshipIdentity(e, relation, relationNames); err != nil {
 		return err
 	}
-	if err := validateRelationshipScope(e, relation, entitySources); err != nil {
-		return err
+	target, err := refs.Resolve(relation.Target)
+	if err != nil {
+		return fmt.Errorf("config: entity %q relationship %q target: %w", e.Name, relation.Name, err)
 	}
-	return validateRelationshipJoin(relation, localFields, entityConfigs)
+	if target.DatasourceName() != e.DatasourceName() {
+		return fmt.Errorf("config: cross-datasource relationship %q is not supported", relation.Name)
+	}
+	return validateRelationshipJoin(relation, localFields, target)
 }
 
-func validateRelationshipIdentity(
-	e EntityConfig,
-	relation RelationshipConfig,
-	relationNames map[string]bool,
-	entitySources map[string]string,
-) error {
+func validateRelationshipIdentity(e EntityConfig, relation RelationshipConfig, relationNames map[string]bool) error {
 	if relation.Name == "" {
 		return fmt.Errorf("config: entity %q has relationship with empty name", e.Name)
 	}
@@ -395,42 +381,14 @@ func validateRelationshipIdentity(
 		return fmt.Errorf("config: entity %q has duplicate relationship %q", e.Name, relation.Name)
 	}
 	relationNames[relation.Name] = true
-	if _, ok := entitySources[relation.Target]; !ok {
-		return fmt.Errorf(
-			"config: entity %q relationship %q references unknown target %q",
-			e.Name,
-			relation.Name,
-			relation.Target,
-		)
-	}
 	return nil
 }
 
-func validateRelationshipScope(
-	e EntityConfig,
-	relation RelationshipConfig,
-	entitySources map[string]string,
-) error {
-	targetSource := entitySources[relation.Target]
-	source := e.DataSource
-	if source == "" {
-		source = "default"
-	}
-	if targetSource != source {
-		return fmt.Errorf("config: cross-datasource relationship %q is not supported", relation.Name)
-	}
-	return nil
-}
-
-func validateRelationshipJoin(
-	relation RelationshipConfig,
-	localFields map[string]bool,
-	entityConfigs map[string]EntityConfig,
-) error {
+func validateRelationshipJoin(relation RelationshipConfig, localFields map[string]bool, target EntityConfig) error {
 	if len(relation.JoinOn) == 0 {
 		return fmt.Errorf("config: relationship %q requires at least one joinOn pair", relation.Name)
 	}
-	targetFields := configuredFields(entityConfigs[relation.Target].Fields)
+	targetFields := configuredFields(target.Fields)
 	for local, target := range relation.JoinOn {
 		if !localFields[local] {
 			return fmt.Errorf("config: relationship %q references unknown local field %q", relation.Name, local)

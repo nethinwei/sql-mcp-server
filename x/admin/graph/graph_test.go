@@ -267,11 +267,11 @@ func TestSchemaImportProposesZeroPermissionCandidates(t *testing.T) {
 	if orders.Status != "NEW" || orders.Candidate.LegacyAccess != nil {
 		t.Fatalf("orders = %+v", orders)
 	}
-	if rel := orders.Candidate.Relationships; len(rel) != 1 || rel[0].Target != "customers" ||
+	if rel := orders.Candidate.Relationships; len(rel) != 1 || rel[0].Target != "shop.customers" ||
 		rel[0].Cardinality != "belongs-to" {
 		t.Fatalf("orders relationships = %+v", rel)
 	}
-	if rel := customers.Candidate.Relationships; len(rel) != 1 || rel[0].Target != "orders" ||
+	if rel := customers.Candidate.Relationships; len(rel) != 1 || rel[0].Target != "shop.public.orders" ||
 		rel[0].Cardinality != "has-many" {
 		t.Fatalf("customers relationships = %+v", rel)
 	}
@@ -335,15 +335,15 @@ func TestVisibilityMatchesSimulate(t *testing.T) {
 	for _, e := range resp.Visibility {
 		for _, a := range e.Actions {
 			got[e.Entity+"/"+a.Action] = a.Result.Allowed
-			if e.Entity == "customers" && a.Action == "READ" && a.Result.RowFilter["value"] != "CN" {
+			if e.Entity == "shop.customers" && a.Action == "READ" && a.Result.RowFilter["value"] != "CN" {
 				t.Fatalf("customers read row filter = %v", a.Result.RowFilter)
 			}
 		}
 	}
-	if !got["customers/READ"] || got["customers/AGGREGATE"] || got["customers/DELETE"] {
+	if !got["shop.customers/READ"] || got["shop.customers/AGGREGATE"] || got["shop.customers/DELETE"] {
 		t.Fatalf("visibility = %v", got)
 	}
-	if _, ok := got["customers/EXECUTE"]; ok {
+	if _, ok := got["shop.customers/EXECUTE"]; ok {
 		t.Fatal("execute must apply only to procedures")
 	}
 	err := c.Post(`query { visibility(input: {user: "ghost"}) { entity } }`, &resp)
@@ -506,7 +506,7 @@ func mustJSON(s string) any {
 func TestCapabilitiesAndValidationWarnings(t *testing.T) {
 	h := newHarness(t)
 	h.resolver.Capabilities = func() bootstrap.EntityCapabilities {
-		return bootstrap.EntityCapabilities{"customers": {
+		return bootstrap.EntityCapabilities{"shop.customers": {
 			entity.ActionRead:   {Privilege: introspect.PrivilegeDenied, Connection: "ro", Reason: "no SELECT"},
 			entity.ActionUpdate: {Privilege: introspect.PrivilegeGranted, Connection: "rw", Columns: []string{"region"}},
 		}}

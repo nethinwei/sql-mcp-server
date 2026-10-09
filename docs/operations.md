@@ -12,7 +12,8 @@ sql-mcp-server explain --config config.yaml --entity users
 ```
 
 `init` 以 `0600` 创建文件且不覆盖已有文件。`add entity` 只追加实体骨架，不做
-数据库自省。`validate` 解析配置、应用默认值、执行静态校验并解析 DSN secret，
+数据库自省；`--datasource`、`--schema` 与 `--name` 组成实体身份，同一身份已存在时拒绝。
+`explain --entity` 接受任一引用写法（如 `archive.orders`），有歧义时报错。`validate` 解析配置、应用默认值、执行静态校验并解析 DSN secret，
 但不连接数据库。`explain` 只输出配置中的实体摘要，不执行 SQL `EXPLAIN`。
 
 ### 发布产物与完整性验证

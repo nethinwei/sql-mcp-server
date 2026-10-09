@@ -10,6 +10,12 @@
 #
 # Descriptions: an entity or field without one uses the database comment, so
 # only overrides are written here (sales.orders.amount, for example).
+#
+# Entities are named like their tables, in the namespace datasource.schema:
+# shop.crm.tenants, warehouse.logistics.tenants and ledger.ledger.tenants are
+# three entities. A reference (grants, relationships, affects) is the shortest
+# suffix naming one entity: "tenants" alone would be ambiguous, so it is
+# written crm.tenants; publishing rejects an ambiguous reference.
 version: "1"
 
 server:
@@ -119,7 +125,7 @@ entities:
       - {name: vip_level}
       - {name: created_at}
     relationships:
-      - {name: orders, target: orders, cardinality: many, joinOn: {id: customer_id}}
+      - {name: orders, target: sales.orders, cardinality: many, joinOn: {id: customer_id}}
       - {name: tickets, target: support_tickets, cardinality: many, joinOn: {id: customer_id}}
 
   - name: support_tickets
@@ -140,7 +146,7 @@ entities:
       - {name: order_id}
     relationships:
       - {name: customer, target: customers, cardinality: belongs-to, joinOn: {customer_id: id}}
-      - {name: order, target: orders, cardinality: belongs-to, joinOn: {order_id: id}}
+      - {name: order, target: sales.orders, cardinality: belongs-to, joinOn: {order_id: id}}
 
   # A stored procedure, exposed as its own MCP tool.
   - name: close_ticket
@@ -203,7 +209,7 @@ entities:
       - {name: unit_price}
       - {name: discount}
     relationships:
-      - {name: order, target: orders, cardinality: belongs-to, joinOn: {order_id: id}}
+      - {name: order, target: sales.orders, cardinality: belongs-to, joinOn: {order_id: id}}
       - {name: product, target: products, cardinality: belongs-to, joinOn: {product_id: id}}
 
   - name: refunds
@@ -219,13 +225,13 @@ entities:
       - {name: status}
       - {name: created_at}
     relationships:
-      - {name: order, target: orders, cardinality: belongs-to, joinOn: {order_id: id}}
+      - {name: order, target: sales.orders, cardinality: belongs-to, joinOn: {order_id: id}}
 
-  # archive: same table name as sales.orders, a different schema
-  - name: archive_orders
+  # archive: same table name as sales.orders, a different schema; references
+  # say which (sales.orders, archive.orders)
+  - name: orders
     datasource: shop
     schema: archive
-    source: orders
     primaryKey: [id]
     fields:
       - {name: id}
@@ -265,12 +271,10 @@ entities:
 
   # warehouse (MySQL) ----------------------------------------------------------
   # Same table name as shop's crm.tenants and ledger's ledger.tenants: another
-  # datasource, another database. Entity names are unique across datasources,
-  # so these carry the datasource (as an import would name them).
-  - name: warehouse_tenants
+  # datasource, another database, another entity named tenants.
+  - name: tenants
     datasource: warehouse
     schema: logistics
-    source: tenants
     primaryKey: [id]
     fields:
       - {name: id}
@@ -355,10 +359,9 @@ entities:
       - {name: shipped_at}
 
   # archive: same table name as logistics.waybills, another database
-  - name: archive_waybills
+  - name: waybills
     datasource: warehouse
     schema: archive
-    source: waybills
     primaryKey: [id]
     fields:
       - {name: id}
@@ -367,20 +370,18 @@ entities:
       - {name: shipped_at}
 
   # ledger (OceanBase) ---------------------------------------------------------
-  - name: ledger_tenants
+  - name: tenants
     datasource: ledger
     schema: ledger
-    source: tenants
     primaryKey: [id]
     fields:
       - {name: id}
       - {name: name}
       - {name: tax_id}
 
-  - name: ledger_accounts
+  - name: accounts
     datasource: ledger
     schema: ledger
-    source: accounts
     primaryKey: [id]
     tenantPolicy: {op: eq, field: tenant_id, value: "${subject.tenant_id}"}
     fields:
@@ -391,12 +392,11 @@ entities:
       - {name: currency}
       - {name: balance}
     relationships:
-      - {name: entries, target: ledger_entries, cardinality: many, joinOn: {id: account_id}}
+      - {name: entries, target: entries, cardinality: many, joinOn: {id: account_id}}
 
-  - name: ledger_entries
+  - name: entries
     datasource: ledger
     schema: ledger
-    source: entries
     primaryKey: [id]
     tenantPolicy: {op: eq, field: tenant_id, value: "${subject.tenant_id}"}
     fields:
@@ -407,7 +407,7 @@ entities:
       - {name: memo}
       - {name: created_at}
     relationships:
-      - {name: account, target: ledger_accounts, cardinality: belongs-to, joinOn: {account_id: id}}
+      - {name: account, target: accounts, cardinality: belongs-to, joinOn: {account_id: id}}
 
   - name: statements
     datasource: ledger
@@ -441,13 +441,15 @@ entities:
     source: post_entry
     kind: procedure
     params: [p_account, p_amount, p_memo]
-    affects: [ledger_entries, ledger_accounts]
+    affects: [entries, accounts]
     mcp: {customTool: true, trustedProcedure: true}
     fields:
       - {name: account_id}
       - {name: balance}
 
-  # archive: same table name as ledger.entries, another database
+  # archive: same table name as ledger.entries, another database. Named
+  # differently here: in a datasource called like its schema, ledger.entries
+  # would name both, so the main table would need its full ID.
   - name: archive_entries
     datasource: ledger
     schema: archive
@@ -464,7 +466,7 @@ roles:
   analyst:
     description: 平台经营分析：跨租户的交易与经营指标，不含个人信息与成本价
     grants:
-      - entity: orders
+      - entity: sales.orders
         actions: [read, aggregate]
         fields: {read: [id, tenant_id, status, amount, currency, region, channel, created_at, paid_at]}
       - entity: order_items
@@ -478,9 +480,9 @@ roles:
         actions: [read, aggregate]
       - entity: open_orders
         actions: [read, aggregate]
-      - entity: archive_orders
+      - entity: archive.orders
         actions: [aggregate]
-      - entity: tenants
+      - entity: crm.tenants
         actions: [read]
 
   support:
@@ -496,7 +498,7 @@ roles:
           write: [status, priority]
       - entity: close_ticket
         actions: [execute]
-      - entity: orders
+      - entity: sales.orders
         actions: [read]
         fields: {read: [id, customer_id, status, amount, created_at, paid_at]}
         rows:
@@ -518,7 +520,7 @@ roles:
   finance:
     description: 平台财务：跨租户的订单、退款与成本价
     grants:
-      - entity: orders
+      - entity: sales.orders
         actions: [read, aggregate]
         rows: {op: in, field: status, value: [paid, shipped, completed]}
       - entity: refunds
@@ -543,22 +545,22 @@ roles:
         actions: [read]
       - entity: restock
         actions: [execute]
-      - entity: waybills
+      - entity: logistics.waybills
         actions: [read, aggregate, create, delete]
         fields:
           read: [id, tenant_id, warehouse_id, carrier_id, tracking_no, receiver_phone, shipped_at]
           write: [tenant_id, warehouse_id, carrier_id, tracking_no, receiver_phone, shipped_at]
-      - entity: archive_waybills
+      - entity: archive.waybills
         actions: [read, aggregate]
-      - entity: warehouse_tenants
+      - entity: logistics.tenants
         actions: [read]
 
   bookkeeper:
     description: 记账（OceanBase）：本租户的账户（账号脱敏）、分录与对账单
     grants:
-      - entity: ledger_accounts
+      - entity: accounts
         actions: [read]
-      - entity: ledger_entries
+      - entity: entries
         actions: [read, aggregate, create, update, delete]
         fields:
           read: [id, tenant_id, account_id, amount, memo, created_at]
@@ -571,7 +573,7 @@ roles:
         actions: [execute]
       - entity: archive_entries
         actions: [aggregate]
-      - entity: ledger_tenants
+      - entity: ledger.tenants
         actions: [read]
 
 # MCP callers. LOCAL EXAMPLE ONLY: the matching tokens are listed in README.md;
@@ -601,7 +603,7 @@ users:
     tokenHash: "sha256:c58f00de71ecb3fc587ce7d18acc4f395112c2c267d3ea84dfd225cd506df3b6"
     roles: [finance]
     grants:
-      - entity: archive_orders
+      - entity: archive.orders
         actions: [read, aggregate]
   ops-agent:
     description: 仓储运营 Agent（MySQL，货主 1）

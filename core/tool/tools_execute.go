@@ -43,11 +43,17 @@ type ProcedureTool struct {
 	Entity entity.Entity
 }
 
-// ProcedureToolName returns a stable MCP-safe name. The prefix separates
-// procedure tools from built-ins; the hash prevents normalization collisions.
-func ProcedureToolName(entityName string) string {
+// ProcedureToolName returns a stable MCP-safe name for a procedure entity:
+// its local name, normalized, and a hash of its Name. The prefix separates
+// procedure tools from built-ins; the hash prevents normalization collisions
+// and tells same-named procedures of different namespaces apart.
+func ProcedureToolName(e entity.Entity) string {
+	local := e.Local
+	if local == "" {
+		local = e.Name
+	}
 	var normalized strings.Builder
-	for _, r := range entityName {
+	for _, r := range local {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
 			normalized.WriteRune(r)
@@ -59,7 +65,7 @@ func ProcedureToolName(entityName string) string {
 	if base == "" {
 		base = "procedure"
 	}
-	sum := sha256.Sum256([]byte(entityName))
+	sum := sha256.Sum256([]byte(e.Name))
 	return "procedure_" + base + "_" + hex.EncodeToString(sum[:4])
 }
 
@@ -78,7 +84,7 @@ func ProcedureTools(reg *entity.Registry) []ProcedureTool {
 // FindProcedureTool returns the exposed procedure tool named name.
 func FindProcedureTool(reg *entity.Registry, name string) (ProcedureTool, bool) {
 	for _, t := range ProcedureTools(reg) {
-		if ProcedureToolName(t.Entity.Name) == name {
+		if ProcedureToolName(t.Entity) == name {
 			return t, true
 		}
 	}
@@ -97,7 +103,7 @@ func (t ProcedureTool) Info() Info {
 		"required":   append([]string{}, t.Entity.Params...), // never null
 	})
 	return Info{
-		Name:        ProcedureToolName(t.Entity.Name),
+		Name:        ProcedureToolName(t.Entity),
 		Action:      entity.ActionExecute.String(),
 		Description: "Execute stored procedure " + t.Entity.Name,
 		InputSchema: schema,

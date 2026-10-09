@@ -210,8 +210,12 @@ func authorizedSchema(
 	subject map[string]any,
 ) (map[string]any, error) {
 	entities := make([]map[string]any, 0)
+	usable := tool.UsableBy(ctx, app.Authorizer, role, subject)
 	for _, e := range app.Registry.Entities() {
 		entry, ok, err := authorizedEntity(ctx, app, e, role, subject)
+		if ok {
+			entry["name"] = app.Registry.ShortName(e, usable)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -258,7 +262,7 @@ func authorizedEntity(
 		return nil, false, nil
 	}
 	return map[string]any{
-		"name": e.Name, "description": e.Description, "datasource": e.DatasourceName(),
+		"name": e.Name, "id": e.Name, "description": e.Description, "datasource": e.DatasourceName(),
 		"fields":    authorizedEntityFields(e, e.OrderedNames(union)),
 		"keys":      tool.VisibleKeys(e, e.OrderedNames(union)),
 		"actions":   actions,

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"os"
 	"path/filepath"
@@ -166,5 +167,51 @@ func TestValidateCommandResolvesSecrets(t *testing.T) {
 	}
 	if err := runCLI(context.Background(), []string{"validate", "--config", path}, &out); err == nil {
 		t.Fatal("validate should reject an unresolved secret")
+	}
+}
+
+func TestAddEntityChecksTheNamespacedIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("entities:\n  - name: orders\n    datasource: main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	add := func(args ...string) error { return runAddEntity(append([]string{"--config", path}, args...)) }
+	// Same name, another schema or datasource: another entity.
+	if err := add("--name", "orders", "--datasource", "main", "--schema", "archive"); err != nil {
+		t.Fatalf("orders in schema archive: %v", err)
+	}
+	if err := add("--name", "orders", "--datasource", "archive"); err != nil {
+		t.Fatalf("orders in datasource archive: %v", err)
+	}
+	err := add("--name", "orders", "--datasource", "main")
+	if err == nil || !strings.Contains(err.Error(), "main.orders") {
+		t.Fatalf("duplicate main.orders: %v", err)
+	}
+	if err := add("--name", "sales.orders"); err == nil {
+		t.Fatal("a dotted name was added")
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "schema: archive") {
+		t.Fatalf("config = %s", data)
+	}
+}
+
+func TestExplainResolvesEntityReferences(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := "databases:\n  main: {driver: postgres, dsn: postgres://x}\nentities:\n" +
+		"  - {name: orders, datasource: main, schema: sales, fields: [{name: id}]}\n" +
+		"  - {name: orders, datasource: main, schema: archive, fields: [{name: id}]}\n"
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runExplain([]string{"--config", path, "--entity", "archive.orders"}, &out); err != nil ||
+		!strings.Contains(out.String(), `"id": "main.archive.orders"`) ||
+		strings.Contains(out.String(), "main.sales.orders") {
+		t.Fatalf("explain archive.orders: %v %s", err, out.String())
+	}
+	err := runExplain([]string{"--config", path, "--entity", "orders"}, &out)
+	if !errors.Is(err, config.ErrAmbiguousEntity) {
+		t.Fatalf("explain orders: %v", err)
 	}
 }

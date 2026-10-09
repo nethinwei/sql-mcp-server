@@ -90,6 +90,9 @@ type DraftInput struct {
 }
 
 type Entity struct {
+	// The canonical identity, datasource.schema.name (datasource.name without a schema).
+	ID string `json:"id"`
+	// Unique within the datasource and schema.
 	Name string `json:"name"`
 	// The table, view or procedure; null means the entity name.
 	Source *string `json:"source,omitempty"`

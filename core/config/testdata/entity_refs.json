@@ -1,0 +1,37 @@
+{
+  "comment": "Entity reference resolution, shared by core/config, core/entity and the console (web/admin). want is the ID a reference names; candidates the IDs of an ambiguous one; neither means unknown.",
+  "entities": [
+    {"datasource": "shop", "schema": "crm", "name": "tenants"},
+    {"datasource": "warehouse", "schema": "logistics", "name": "tenants"},
+    {"datasource": "shop", "schema": "sales", "name": "orders"},
+    {"datasource": "shop", "schema": "archive", "name": "orders"},
+    {"datasource": "ledger", "name": "entries"},
+    {"datasource": "books", "schema": "books", "name": "tenants"},
+    {"name": "audit"}
+  ],
+  "cases": [
+    {"ref": "tenants", "candidates": ["shop.crm.tenants", "warehouse.logistics.tenants", "books.books.tenants"]},
+    {"ref": "books.tenants", "want": "books.books.tenants"},
+    {"ref": "crm.tenants", "want": "shop.crm.tenants"},
+    {"ref": "warehouse.tenants", "want": "warehouse.logistics.tenants"},
+    {"ref": "shop.crm.tenants", "want": "shop.crm.tenants"},
+    {"ref": "orders", "candidates": ["shop.sales.orders", "shop.archive.orders"]},
+    {"ref": "shop.orders", "candidates": ["shop.sales.orders", "shop.archive.orders"]},
+    {"ref": "archive.orders", "want": "shop.archive.orders"},
+    {"ref": "entries", "want": "ledger.entries"},
+    {"ref": "ledger.entries", "want": "ledger.entries"},
+    {"ref": "audit", "want": "default.audit"},
+    {"ref": "default.audit", "want": "default.audit"},
+    {"ref": "sales.tenants"},
+    {"ref": "shop.logistics.tenants"}
+  ],
+  "shortNames": {
+    "shop.crm.tenants": "crm.tenants",
+    "warehouse.logistics.tenants": "logistics.tenants",
+    "shop.sales.orders": "sales.orders",
+    "shop.archive.orders": "archive.orders",
+    "ledger.entries": "entries",
+    "default.audit": "audit",
+    "books.books.tenants": "books.tenants"
+  }
+}

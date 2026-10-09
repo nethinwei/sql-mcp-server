@@ -9,6 +9,7 @@ import { useWorkspace, toEntityInput } from '@/stores/workspace'
 import type { Action } from '@/gql/graphql'
 import { nameError } from '@/lib/names'
 import { entityByTable, tableKey as key, uniqueCandidates } from '@/lib/importer'
+import { entityId } from '@/lib/entityRefs'
 import {
   cancelScan, scanSchema, scans, scansOf, sync, tablesBySchema, type SchemaNode, type Table,
 } from '@/lib/schemaScans'
@@ -270,7 +271,7 @@ function addSelected() {
   if (!s) return
   const checked = new Set(s.schemas.flatMap((n) => n.checked.map(String)))
   const chosen = (s.result?.tables ?? []).filter((tb) => checked.has(key(tb)))
-  const candidates = uniqueCandidates(chosen.map((tb) => toEntityInput(tb.candidate)), ws.entities.map((e) => e.name))
+  const candidates = uniqueCandidates(chosen.map((tb) => toEntityInput(tb.candidate)), ws.entities.map(entityId))
   const added = candidates.map((e) => e.name)
   const dropped = ws.importEntities(candidates, grantRoles.value, grantActions.value)
   for (const n of s.schemas) n.checked = []
@@ -286,7 +287,7 @@ function addSelected() {
 // Field sync: a preview of the columns to add and the fields to remove, with
 // what references each removed field, applied item by item.
 interface SyncPlan {
-  entity: string
+  entity: string // the entity's ID
   added: Table['columns']
   removed: string[]
 }
@@ -301,7 +302,7 @@ function openSync(tb: Table) {
   if (!e) return
   const declared = new Set((e.fields ?? []).map((f) => f.name))
   const plan: SyncPlan = {
-    entity: e.name,
+    entity: entityId(e),
     added: tb.columns.filter((c) => !declared.has(c.name)),
     removed: [...declared].filter((n) => !tb.columns.some((c) => c.name === n)),
   }
@@ -322,7 +323,7 @@ function applySync() {
     .map((c) => (hideNew.value ? { name: c.name, exclude: true } : { name: c.name }))
   ws.syncFields(plan.entity, added, syncRemove.value)
   syncOpen.value = false
-  message.success(t('datasources.synced', { name: plan.entity, added: added.length, removed: syncRemove.value.length }))
+  message.success(t('datasources.synced', { name: ws.entityIndex.shortName(plan.entity), added: added.length, removed: syncRemove.value.length }))
 }
 </script>
 
@@ -405,7 +406,7 @@ function applySync() {
       </template>
     </n-card>
 
-    <n-modal v-model:show="syncOpen" preset="card" class="dialog" :title="t('datasources.syncTitle', { name: syncing?.entity ?? '' })">
+    <n-modal v-model:show="syncOpen" preset="card" class="dialog" :title="t('datasources.syncTitle', { name: syncing ? ws.entityIndex.shortName(syncing.entity) : '' })">
       <template v-if="syncing">
         <n-space vertical :size="14">
           <div v-if="syncing.added.length">
@@ -428,7 +429,7 @@ function applySync() {
                 <span class="mono">{{ f }}</span>
                 <n-tag v-for="r in references(f)" :key="r.kind + r.name" size="tiny" :bordered="false" class="ref"
                   :type="r.kind === 'role' || r.kind === 'user' ? 'default' : 'warning'">
-                  {{ t(`datasources.ref.${r.kind}`, { name: r.name }) }}
+                  {{ t(`datasources.ref.${r.kind}`, { name: r.kind === 'role' || r.kind === 'user' ? r.name : ws.entityIndex.shortName(r.name) }) }}
                 </n-tag>
               </n-checkbox>
             </n-checkbox-group>

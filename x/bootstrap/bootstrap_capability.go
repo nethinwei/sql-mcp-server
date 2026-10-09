@@ -257,8 +257,10 @@ func CapabilityWarnings(cfg *config.Config, capabilities EntityCapabilities) []s
 	return out
 }
 
-// grantedActions collects the actions any role or user is granted per entity.
+// grantedActions collects the actions any role or user is granted per entity
+// ID.
 func grantedActions(cfg *config.Config) map[string][]entity.Action {
+	refs := config.NewEntityRefs(cfg.Entities)
 	out := map[string][]entity.Action{}
 	add := func(entityName, action string) {
 		if a, ok := configActions[action]; ok && !slices.Contains(out[entityName], a) {
@@ -268,7 +270,7 @@ func grantedActions(cfg *config.Config) map[string][]entity.Action {
 	grants := func(gs []config.GrantConfig) {
 		for _, g := range gs {
 			for _, a := range g.Actions {
-				add(g.Entity, a)
+				add(entityID(refs, g.Entity), a)
 			}
 		}
 	}
@@ -284,7 +286,7 @@ func grantedActions(cfg *config.Config) map[string][]entity.Action {
 			"delete": e.Roles.Delete, "execute": e.Roles.Execute, "aggregate": e.Roles.Aggregate,
 		} {
 			if len(roles) > 0 {
-				add(e.Name, action)
+				add(e.ID(), action)
 			}
 		}
 	}

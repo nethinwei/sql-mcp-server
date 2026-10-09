@@ -167,6 +167,9 @@ type DatasourceRouting {
 }
 
 type Entity {
+  "The canonical identity, datasource.schema.name (datasource.name without a schema)."
+  id: String!
+  "Unique within the datasource and schema."
   name: String!
   "The table, view or procedure; null means the entity name."
   source: String

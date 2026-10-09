@@ -12,9 +12,11 @@ import { describeFilter, type Filter } from '@/lib/filter'
 import { useConfigSchema } from '@/lib/configSchema'
 import { can } from '@/api/session'
 import { loadTableComments, tableComments } from '@/lib/tableComments'
+import { entityId } from '@/lib/entityRefs'
 import type { FieldInput, GrantInput, RelationshipInput } from '@/gql/graphql'
 
-const props = defineProps<{ name: string }>()
+// id is the entity's ID (see entityId).
+const props = defineProps<{ id: string }>()
 const { t, te } = useI18n()
 const { options } = useConfigSchema()
 const ws = useWorkspace()
@@ -23,7 +25,9 @@ const dialog = useDialog()
 const message = useMessage()
 const editable = computed(() => can('admin:write'))
 
-const entity = computed(() => ws.entity(props.name))
+const entity = computed(() => ws.entity(props.id))
+// How grants and relationships refer to the entity.
+const shortName = computed(() => ws.entityIndex.shortName(props.id))
 // Empty descriptions fall back to the database comments at runtime; they are
 // shown as placeholders so only a written description overrides them.
 const comments = computed(() => (entity.value ? tableComments(entity.value) : null))
@@ -74,7 +78,7 @@ const fieldColumns = computed<DataTableColumns<FieldInput>>(() => [
 ])
 
 function summarize(grants: GrantInput[] | null | undefined) {
-  return (grants ?? []).filter((g) => g.entity === props.name).map((g) => t('entity.grantSummary', {
+  return (grants ?? []).filter((g) => ws.entityIndex.idOf(g.entity) === props.id).map((g) => t('entity.grantSummary', {
     actions: g.actions.map((a) => t(`grants.actions.${a}`)).join('/'),
     fields: g.fieldsRestricted ? t('entity.nFields', { count: g.readFields?.length ?? 0 }, g.readFields?.length ?? 0) : t('entity.allFields'),
     rows: describeFilter(g.rows as Filter),
@@ -89,8 +93,8 @@ const grantRole = ref<string | null>(null)
 function quickGrant() {
   const role = grantRole.value ? ws.role(grantRole.value) : undefined
   if (!role) return
-  role.grants = [...(role.grants ?? []), { entity: props.name, actions: ['READ'] }]
-  message.success(t('entity.granted', { role: role.name, entity: props.name }))
+  role.grants = [...(role.grants ?? []), { entity: shortName.value, actions: ['READ'] }]
+  message.success(t('entity.granted', { role: role.name, entity: shortName.value }))
   grantRole.value = null
 }
 
@@ -111,7 +115,14 @@ function addRelationship() {
   newRelLocal.value = null
   newRelRemote.value = null
 }
-const targetFields = computed(() => ws.entity(newRel.value.target)?.fields?.map((f) => ({ label: f.name, value: f.name })) ?? [])
+const targetFields = computed(() =>
+  ws.entity(ws.entityIndex.idOf(newRel.value.target) ?? '')?.fields?.map((f) => ({ label: f.name, value: f.name })) ?? [])
+// Relationships stay within a datasource; targets are named as references.
+const targetOptions = computed(() => ws.entities
+  .filter((e) => (e.datasource ?? 'default') === (entity.value?.datasource ?? 'default') && entityId(e) !== props.id)
+  .map((e) => ws.entityIndex.shortName(entityId(e)))
+  .map((ref) => ({ label: ref, value: ref })))
+const targetId = (ref: string) => ws.entityIndex.idOf(ref) ?? ref
 
 // Renaming moves every reference (see workspace.upsertEntity) and keeps the
 // table the entity reads.
@@ -120,29 +131,31 @@ const newName = ref('')
 const renameError = computed(() => {
   const name = newName.value.trim()
   if (!name) return t('common.required')
-  return name !== props.name && ws.entity(name) ? t('names.taken') : null
+  if (name.includes('.')) return t('entity.nameNoDot')
+  const id = entityId({ ...entity.value, name })
+  return id !== props.id && ws.entity(id) ? t('names.taken') : null
 })
 function startRename() {
-  newName.value = props.name
+  newName.value = entity.value?.name ?? ''
   renaming.value = true
 }
 function rename() {
   if (!entity.value || renameError.value) return
-  const name = newName.value.trim()
-  ws.upsertEntity({ ...entity.value, name }, props.name)
+  const renamed = { ...entity.value, name: newName.value.trim() }
+  ws.upsertEntity(renamed, props.id)
   renaming.value = false
-  void router.replace({ name: 'entity', params: { name } })
+  void router.replace({ name: 'entity', params: { id: entityId(renamed) } })
 }
 
 function remove() {
   const affected = [...new Set(access.value.map((a) => `${t(a.kind === 'role' ? 'entity.accessRole' : 'entity.accessUser')} ${a.who}`))]
   dialog.warning({
-    title: t('entity.deleteTitle', { name: props.name }),
+    title: t('entity.deleteTitle', { name: shortName.value }),
     content: affected.length ? t('entity.deleteAffects', { list: affected.join(', ') }) : t('entity.deleteNoAccess'),
     positiveText: t('common.delete'),
     negativeText: t('common.cancel'),
     onPositiveClick: () => {
-      ws.removeEntity(props.name)
+      ws.removeEntity(props.id)
       void router.push({ name: 'entities' })
     },
   })
@@ -150,12 +163,12 @@ function remove() {
 </script>
 
 <template>
-  <n-empty v-if="!entity" :description="t('entity.notFound', { name })">
+  <n-empty v-if="!entity" :description="t('entity.notFound', { name: id })">
     <template #extra><n-button @click="router.push({ name: 'entities' })">{{ t('entity.backToList') }}</n-button></template>
   </n-empty>
   <n-space v-else vertical :size="16">
     <n-page-header @back="router.push({ name: 'entities' })">
-      <template #title><span class="mono">{{ entity.name }}</span></template>
+      <template #title><span class="mono" :title="id">{{ shortName }}</span></template>
       <template #subtitle>{{ entity.description || comments?.description }}</template>
       <template #extra>
         <n-space v-if="editable">
@@ -257,7 +270,7 @@ function remove() {
           <n-tag size="small" :bordered="false">{{ r.cardinality }}</n-tag>
           <span class="mono">{{ r.name }}</span>
           <n-text depth="3">→</n-text>
-          <router-link class="mono link" :to="{ name: 'entity', params: { name: r.target } }">{{ r.target }}</router-link>
+          <router-link class="mono link" :to="{ name: 'entity', params: { id: targetId(r.target) } }">{{ r.target }}</router-link>
           <n-text depth="3" class="mono hint">{{ joinText(r) }}</n-text>
           <n-button v-if="editable" size="tiny" quaternary type="error"
             @click="entity!.relationships = (entity!.relationships ?? []).filter((_, j) => j !== i)">{{ t('common.remove') }}</n-button>
@@ -267,7 +280,7 @@ function remove() {
         <n-select v-model:value="newRel.cardinality" size="small" class="w140"
           :options="cardinalityOptions" />
         <n-select v-model:value="newRel.target" size="small" class="w160" :placeholder="t('entity.target')" filterable
-          :options="ws.entities.filter((e) => e.name !== name).map((e) => ({ label: e.name, value: e.name }))" />
+          :options="targetOptions" />
         <n-select v-model:value="newRelLocal" size="small" class="w140" :placeholder="t('entity.localField')" filterable
           :options="fieldNames.map((f) => ({ label: f, value: f }))" />
         <n-text depth="3">=</n-text>

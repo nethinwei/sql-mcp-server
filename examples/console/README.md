@@ -22,8 +22,8 @@
 | 特性 | `shop`（PostgreSQL） | `warehouse`（MySQL） | `ledger`（OceanBase） |
 | --- | --- | --- | --- |
 | 多个库（schema）、按库导入 | `crm` `sales` `archive`，未配置 `finance` | `inventory` `logistics` `archive`，未配置 `purchasing` | `ledger` `billing` `archive`，未配置 `audit` |
-| 同名表（同一数据源的不同库） | `sales.orders` / `archive.orders` | `logistics.waybills` / `archive.waybills` | `ledger.entries` / `archive.entries` |
-| 同名表（不同数据源） | `crm.tenants`（实体 `tenants`） | `logistics.tenants`（`warehouse_tenants`） | `ledger.tenants`（`ledger_tenants`） |
+| 同名表（同一数据源的不同库），实体同名 | `sales.orders` / `archive.orders` | `logistics.waybills` / `archive.waybills` | `ledger.entries` / `archive.entries`（实体另名 `archive_entries`） |
+| 同名表（不同数据源），实体同名 | `crm.tenants` | `logistics.tenants` | `ledger.tenants` |
 | 视图 | `sales.v_open_orders`（实体 `open_orders`） | `inventory.v_low_stock`（`low_stock`） | `ledger.v_accounts`（`account_overview`） |
 | 物化视图 | `sales.mv_product_sales`（导入） | 数据库不支持 | 不演示 |
 | 分区表（一张表对外） | `sales.daily_kpi` | `inventory.stock_daily` | `billing.statements` |
@@ -40,11 +40,11 @@
 | 外键 `ON UPDATE CASCADE` | `customers → tenants` | `stock → items` | `accounts → currencies` |
 | 触发器（写入使整个库的缓存失效） | `support_tickets` 写 `ticket_events` | `stock` 写 `stock_log` | `entries` 更新 `accounts.balance` |
 | 存储过程（独立 MCP 工具） | `crm.close_ticket` | `inventory.restock` | `ledger.post_entry` |
-| 租户行策略 | `customers` `support_tickets` | `waybills` | `ledger_accounts` `ledger_entries` `account_overview` |
+| 租户行策略 | `customers` `support_tickets` | `logistics.waybills` | `accounts` `entries` `account_overview` |
 | 脱敏 | 邮箱、手机号、身份证号 | 收件人手机号 | 银行账号 |
-| 关系展开 | `customers → tickets` | `items → stock` | `ledger_entries → account` |
+| 关系展开 | `customers → tickets` | `items → stock` | `entries → account` |
 | 读、聚合、新建、修改、删除、事务 | 是 | 是 | 是 |
-| 成本闸门（大表无过滤读取被拒） | `orders` | `archive_waybills` | `ledger_entries` |
+| 成本闸门（大表无过滤读取被拒） | `sales.orders` | `archive.waybills` | `entries` |
 | 两个账号：读走只读账号，写、过程与写后 5 秒的读走读写账号 | `shop_ro` / `shop_rw` | `warehouse_ro` / `warehouse_rw` | `ledger_ro` / `ledger_rw` |
 
 ## 角色与用户
@@ -66,7 +66,7 @@
 | `support-agent` | support | 1 | `smcp_sOwYBj4c-yPlpE25X2Ma7UDt5HsHs5PgFC_ow5O27G0` |
 | `support-agent-t2` | support | 2 | `smcp_hjLUmIu0MwoJQXy61MdJSevYyOBOzhDZSn0j-SGkuQo` |
 | `crm-agent` | support + marketing | 1 | `smcp_e764Haa2RiJd8dH1OnHzeyUZLtsGufIjPW_L1i6_j-M` |
-| `finance-bot` | finance，另直授 `archive_orders` | 跨租户 | `smcp_WwX5CLyiBP4uMCCG8JCrLFPzteuVOaDy37S9KqBJaBc` |
+| `finance-bot` | finance，另直授 `archive.orders` | 跨租户 | `smcp_WwX5CLyiBP4uMCCG8JCrLFPzteuVOaDy37S9KqBJaBc` |
 | `ops-agent` | ops | 1 | `smcp_9yrxe6J6_IJZZrzH-BOCuyBFJArH8bxWziaUDJh8GYY` |
 | `ledger-agent` | bookkeeper | 1 | `smcp_T8f0enbMwGVv40UZ3xpzdM70kwLjfde4VPBgtKL-43Q` |
 | `legacy-bot` | analyst，已停用 | — | `smcp_0iPLJ7bp1wmuNwZYtVIi7a7Hhtnv7gD1RJ3wI_k2LRg` |
@@ -75,10 +75,15 @@
 ## 可以体验的场景
 
 - **逐项验证**：`python3 verify.py`（默认连 `http://127.0.0.1:8080/mcp`，用
-  `SMCP_MCP_URL` 改），三个数据源各 18 项，另有一项跨数据源同名表。
-- **同名表**：三个数据源都有 `tenants` 表。实体名在整个配置中唯一，所以另外两个
-  带数据源前缀（`warehouse_tenants`、`ledger_tenants`），从控制台导入时也会这样
-  命名；读取各自返回自己数据库里的数据，缓存与路由按数据源和物理库区分。
+  `SMCP_MCP_URL` 改），三个数据源各 18 项，另有 3 项实体命名。
+- **实体命名**：实体按 `数据源.库.名称` 识别，名称默认就是表名，只需在同一数据源
+  与库内唯一：三个数据源各有一个 `tenants` 实体，`shop` 的 `sales`、`archive` 库各有
+  一个 `orders`。引用（授权、关系、`affects` 与 Agent 调用的 `entity`）写能唯一确定
+  实体的最短后缀，如 `crm.tenants`、`archive.orders`；有歧义时发布被拒，控制台会自动
+  补全限定。Agent 只在自己能访问的实体中解析：`bi-agent` 只能访问 `shop`，直接写
+  `tenants` 即可，写 `orders` 则返回 `AMBIGUOUS_ENTITY` 并列出 `sales.orders`、
+  `archive.orders`。`ledger` 的数据源与库同名，`ledger.entries` 会同时指向两张
+  `entries`，因此归档表另名 `archive_entries`，演示实体名与表名不同。
 - **租户隔离**：`support-agent` 与 `support-agent-t2` 读取同一个客户 ID，只有所属
   租户能读到；`ops-agent`、`ledger-agent` 同样只能读到租户 1 的运单与账户。
 - **脱敏**：邮箱、手机号显示为 `u***@example.com`、`100****7919` 形式，银行账号

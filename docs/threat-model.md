@@ -60,10 +60,13 @@ Provider 适用范围使用以下口径：
   错误差异或结果统计推断受保护值。
 - **控制**：未知字段与被排除字段返回同类错误；所有字段用途先做可见性/ACL 检查；
   mask 字段只允许投影，禁止值揭示用途；describe/schema/procedure 输出字段收敛，
-  所有结果路径返回前执行 mask；授权拒绝（`UNAUTHORIZED`）对客户端返回统一泛化
+  所有结果路径返回前执行 mask；实体引用只在调用方能访问的实体中解析，调用方不能
+  访问的同名实体既不让引用产生歧义，也不出现在 `AMBIGUOUS_ENTITY` 的候选或
+  describe 的名称中；授权拒绝（`UNAUTHORIZED`）对客户端返回统一泛化
   `reason`，不回显实体/字段/角色细节，详细拒绝原因仅写入审计并由 decision ID
   关联。
-- **现有证据**：`core/tool/tool_read_test.go` 的隐藏字段拒绝与授权范围缓存测试、
+- **现有证据**：`core/tool/entity_ref_test.go` 的可见范围内实体解析测试、
+  `core/tool/tool_read_test.go` 的隐藏字段拒绝与授权范围缓存测试、
   `core/tool/tool_aggregate_test.go` 的 mask 用途拒绝和结果 mask 测试，以及三库
   `Test*RLSRowFilterAndMasking` integration。
 - **持续验证**：`core/tool/adversarial_test.go` 对隐藏/mask 字段的 filter、cursor、

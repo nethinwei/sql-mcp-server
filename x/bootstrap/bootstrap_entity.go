@@ -8,11 +8,13 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
 )
 
-// configToEntities converts config entities to the core entity model.
+// configToEntities converts config entities to the core entity model, named
+// by their IDs, with the entities they refer to resolved to IDs.
 func configToEntities(ecs []config.EntityConfig) ([]entity.Entity, error) {
+	refs := config.NewEntityRefs(ecs)
 	out := make([]entity.Entity, 0, len(ecs))
 	for _, ec := range ecs {
-		e, err := configToEntity(ec)
+		e, err := configToEntity(ec, refs)
 		if err != nil {
 			return nil, err
 		}
@@ -21,7 +23,16 @@ func configToEntities(ecs []config.EntityConfig) ([]entity.Entity, error) {
 	return out, nil
 }
 
-func configToEntity(ec config.EntityConfig) (entity.Entity, error) {
+// entityID is the ID of the entity ref names; ref itself when it names none
+// or several, which validation rejects.
+func entityID(refs config.EntityRefs, ref string) string {
+	if e, err := refs.Resolve(ref); err == nil {
+		return e.ID()
+	}
+	return ref
+}
+
+func configToEntity(ec config.EntityConfig, refs config.EntityRefs) (entity.Entity, error) {
 	source, dataSource := ec.PhysicalSource(), ec.DatasourceName()
 	attrs := entityAttributesFromConfig(ec.Fields)
 	role := entityRoleFromConfig(ec.Roles)
@@ -35,9 +46,13 @@ func configToEntity(ec config.EntityConfig) (entity.Entity, error) {
 		return entity.Entity{}, fmt.Errorf("tenant policy for entity %q: %w", ec.Name, err)
 	}
 	keys := entityKeysFromConfig(ec.PrimaryKey, ec.UniqueKeys)
-	relations := entityRelationsFromConfig(ec.Relationships)
+	relations := entityRelationsFromConfig(ec.Relationships, refs)
+	var affects []string
+	for _, ref := range ec.Affects {
+		affects = append(affects, entityID(refs, ref))
+	}
 	return entity.Entity{
-		Name: ec.Name, Source: source, DataSource: dataSource, Schema: ec.Schema, Description: ec.Description,
+		Name: ec.ID(), Local: ec.Name, Source: source, DataSource: dataSource, Schema: ec.Schema, Description: ec.Description,
 		Kind: parseKind(ec.Kind), Attributes: attrs, Keys: keys, Role: role, FieldAccess: fieldAccess,
 		MCP: entity.MCPFlags{
 			DMLTools: ec.MCP.DMLTools, CustomTool: ec.MCP.CustomTool,
@@ -48,7 +63,7 @@ func configToEntity(ec config.EntityConfig) (entity.Entity, error) {
 		TenantPolicy: tenantPolicy,
 		Relations:    relations,
 		Params:       ec.Params,
-		Affects:      ec.Affects,
+		Affects:      affects,
 	}, nil
 }
 
@@ -105,11 +120,11 @@ func entityKeysFromConfig(primaryKey []string, uniqueKeys [][]string) []entity.K
 	return keys
 }
 
-func entityRelationsFromConfig(relations []config.RelationshipConfig) []entity.Relationship {
+func entityRelationsFromConfig(relations []config.RelationshipConfig, refs config.EntityRefs) []entity.Relationship {
 	out := make([]entity.Relationship, 0, len(relations))
 	for _, relation := range relations {
 		out = append(out, entity.Relationship{
-			Name: relation.Name, Target: relation.Target,
+			Name: relation.Name, Target: entityID(refs, relation.Target),
 			Cardinality: relation.Cardinality, JoinOn: relation.JoinOn,
 		})
 	}

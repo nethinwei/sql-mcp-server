@@ -1,12 +1,23 @@
 import { describe, expect, it } from 'vitest'
-import { physicalLocation } from './names'
+import { byNamespace, entityNamespace, sourceIfRenamed } from './names'
 
-describe('physicalLocation', () => {
-  it('names the datasource, schema and table', () => {
-    expect(physicalLocation({ name: 'orders_b', source: 'orders', schema: 'sales', datasource: 'crm' }))
-      .toBe('crm · sales.orders')
+describe('entity namespaces', () => {
+  it('names the datasource and schema, or the datasource alone', () => {
+    expect(entityNamespace({ name: 'orders', schema: 'sales', datasource: 'shop' })).toBe('shop · sales')
+    expect(entityNamespace({ name: 'orders' })).toBe('default')
   })
-  it('defaults the datasource and the table, and omits an unset schema', () => {
-    expect(physicalLocation({ name: 'orders' })).toBe('default · orders')
+  it('shows the table only when the entity is named differently', () => {
+    expect(sourceIfRenamed({ name: 'open_orders', source: 'v_open_orders' })).toBe('v_open_orders')
+    expect(sourceIfRenamed({ name: 'orders', source: 'orders' })).toBeNull()
+    expect(sourceIfRenamed({ name: 'orders' })).toBeNull()
+  })
+  it('groups by namespace, without a heading when there is one namespace', () => {
+    const a = { name: 'a', datasource: 'shop', schema: 'crm' }
+    const b = { name: 'b', datasource: 'shop', schema: 'sales' }
+    const c = { name: 'c', datasource: 'shop', schema: 'crm' }
+    expect(byNamespace([a, b, c])).toEqual([
+      { namespace: 'shop · crm', items: [a, c] }, { namespace: 'shop · sales', items: [b] },
+    ])
+    expect(byNamespace([a, c])).toEqual([{ namespace: '', items: [a, c] }])
   })
 })

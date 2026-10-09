@@ -34,7 +34,7 @@ func targets(e Entity) []string {
 }
 
 // Schemas scanned one at a time are compared together: same-named tables
-// get distinct names and foreign keys across schemas become relationships,
+// are told apart by their IDs and foreign keys across schemas become relationships,
 // to kept tables and to configured entities of schemas not scanned.
 func TestKeptSchemasAreImportedTogether(t *testing.T) {
 	t.Parallel()
@@ -54,19 +54,19 @@ func TestKeptSchemasAreImportedTogether(t *testing.T) {
 				RefColumns: []string{"id"}}),
 	}})
 	sales := candidatesOf(scans.importOf(src, []string{"sales"}, cfg))
-	if len(sales) != 2 || sales["sales.users"].Name != "sales_users" {
+	if len(sales) != 2 || sales["sales.users"].ID != "shop.sales.users" {
 		t.Fatalf("sales = %+v", sales)
 	}
 	if got := targets(sales["sales.orders"]); len(got) != 2 ||
-		got[0] != "belongs-to customers" || got[1] != "belongs-to accounts" {
+		got[0] != "belongs-to shop.public.customers" || got[1] != "belongs-to shop.crm.accounts" {
 		t.Fatalf("orders relationships = %v", got)
 	}
 	if both := scans.importOf(src, nil, cfg); len(both.Tables) != 4 {
 		t.Fatalf("both schemas in one call = %+v", both.Tables)
 	}
 	public := candidatesOf(scans.importOf(src, []string{"public"}, cfg))
-	if public["public.users"].Name != "public_users" ||
-		targets(public["public.customers"])[0] != "has-many orders" {
+	if public["public.users"].ID != "shop.public.users" ||
+		targets(public["public.customers"])[0] != "has-many shop.sales.orders" {
 		t.Fatalf("public = %+v", public)
 	}
 }

@@ -110,8 +110,8 @@ defs.entity:
   zh-CN: '一个表、视图（含物化视图）或存储过程。一个物理表或视图最多对应一个实体：同一数据源中名称完全相同的重复在校验时拒绝，按默认 schema、大小写规则和服务器身份（多个数据源指向同一库）解析后的重复在启动时拒绝。PostgreSQL 分区表只暴露父表，子分区不导入。'
   en: 'One table, view (including materialized views) or stored procedure. A physical table or view backs at most one entity: identical names on one datasource fail validation, and duplicates resolved through the default schema, case folding or server identity (several datasources on one database) fail at startup. Of a PostgreSQL partitioned table only the parent is exposed; partitions are not imported.'
 defs.entity.name:
-  zh-CN: MCP 逻辑名。
-  en: Logical MCP name.
+  zh-CN: 实体名，在同一数据源与 schema 内唯一，不含点；实体的完整标识为 datasource.schema.name。
+  en: Entity name, unique within its datasource and schema, without dots; the entity is identified as datasource.schema.name.
 defs.entity.source:
   zh-CN: 数据库中的表、视图或过程名；省略时等于 name。不能使用保留前缀 smcp_。
   en: Table, view or procedure in the database; defaults to name. The smcp_ prefix is reserved.
@@ -203,8 +203,8 @@ defs.entity.relationships.name:
   zh-CN: 关系名，展开时使用。
   en: Relationship name used when expanding.
 defs.entity.relationships.target:
-  zh-CN: 目标实体名。
-  en: Target entity.
+  zh-CN: 目标实体。引用实体可写 name、schema.name、datasource.name 或 datasource.schema.name，须只对应一个实体。
+  en: Target entity. Refer to an entity as name, schema.name, datasource.name or datasource.schema.name; it must name exactly one entity.
 defs.entity.relationships.cardinality:
   zh-CN: 基数；belongs-to/one 展开为单个对象，has-many/many 展开为列表。
   en: Cardinality; belongs-to/one expand to an object, has-many/many to a list.
@@ -221,8 +221,8 @@ defs.entity.allowCascade:
   zh-CN: '允许级联写入：删除本实体的行或修改其被引用列时，外键的 CASCADE、SET NULL、SET DEFAULT 会改写其他表的行。默认要求调用方对每个被级联的实体都有对应的删除或修改权限，且不带行范围限制；被级联的表未暴露为实体时拒绝。设为 true 则不做该检查，由管理员对级联负责。'
   en: 'Allow cascading writes: deleting this entity''s rows or updating their referenced columns makes foreign keys (CASCADE, SET NULL, SET DEFAULT) rewrite rows of other tables. By default the caller needs delete or update permission without a row scope on every cascaded entity, and a cascade into a table no entity exposes is rejected. true skips the check and leaves the cascade to the administrator.'
 defs.entity.affects:
-  zh-CN: 存储过程会写入的实体（须与过程同一数据源），用于读缓存失效；省略时过程执行后失效该数据源的全部缓存。
-  en: Entities the procedure writes (on its datasource), for read-cache invalidation; when omitted, every cached read of the datasource is invalidated after it runs.
+  zh-CN: 存储过程会写入的实体（须与过程同一数据源，引用写法同 grants），用于读缓存失效；省略时过程执行后失效该数据源的全部缓存。
+  en: Entities the procedure writes (on its datasource, referred to as in grants), for read-cache invalidation; when omitted, every cached read of the datasource is invalidated after it runs.
 
 roles:
   zh-CN: 顶层角色：角色名 → 授权。名称规范化为小写。
@@ -243,8 +243,8 @@ defs.grant:
   zh-CN: 一条实体授权。一次请求只使用覆盖其全部字段的授权项，它们的行范围取 OR，再 AND 实体 tenantPolicy。
   en: One entity grant. A request uses only the grants covering all its fields; their row scopes are ORed and then ANDed with the entity tenantPolicy.
 defs.grant.entity:
-  zh-CN: 授权的实体名。
-  en: Entity granted.
+  zh-CN: 授权的实体。引用实体可写 name、schema.name、datasource.name 或 datasource.schema.name，须只对应一个实体。
+  en: Entity granted. Refer to an entity as name, schema.name, datasource.name or datasource.schema.name; it must name exactly one entity.
 defs.grant.actions:
   zh-CN: 允许的动作。
   en: Allowed actions.

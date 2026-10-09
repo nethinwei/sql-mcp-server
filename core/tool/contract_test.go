@@ -49,6 +49,7 @@ func currentContract(t *testing.T) contractSnapshot {
 	codes := map[string]bool{
 		CodeCostExceeded:        true,
 		CodeBudgetExceeded:      true,
+		CodeAmbiguousEntity:     true,
 		CodeAmbiguousFieldScope: true,
 		CodeConstraintViolation: true,
 	}

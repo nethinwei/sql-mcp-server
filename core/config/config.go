@@ -23,7 +23,7 @@ type Config struct {
 	Version      string                    `yaml:"version"         json:"version"`
 	Server       ServerConfig              `yaml:"server"          json:"server"`
 	Database     DatabaseConfig            `yaml:"database"        json:"database" schema:"nodefault"`
-	Databases    map[string]DatabaseConfig `yaml:"databases"       json:"databases" schema:"nodefault"`
+	Databases    map[string]DatabaseConfig `yaml:"databases"       json:"databases" schema:"nodefault,keys=@pathSegment"`
 	Entities     []EntityConfig            `yaml:"entities"        json:"entities"`
 	Roles        map[string]RoleDefinition `yaml:"roles,omitempty" json:"roles,omitempty" schema:"keys=@accessName"`
 	Users        map[string]UserConfig     `yaml:"users,omitempty" json:"users,omitempty" schema:"keys=@accessName"`
@@ -180,10 +180,10 @@ type RowPolicies map[string]FilterConfig
 // EntityConfig is the configuration view of one entity. Kind is table, view or
 // procedure.
 type EntityConfig struct {
-	Name          string                    `yaml:"name"                    json:"name" schema:"required,minLength=1"`
+	Name          string                    `yaml:"name" json:"name" schema:"required,minLength=1,pattern=@pathSegment"`
 	Source        string                    `yaml:"source,omitempty"        json:"source,omitempty"`
 	DataSource    string                    `yaml:"datasource,omitempty"    json:"datasource,omitempty"`
-	Schema        string                    `yaml:"schema,omitempty"        json:"schema,omitempty"`
+	Schema        string                    `yaml:"schema,omitempty" json:"schema,omitempty" schema:"pattern=@pathSegment"`
 	Kind          string                    `yaml:"kind,omitempty" json:"kind,omitempty" schema:"enum=@entityKind"`
 	Description   string                    `yaml:"description,omitempty"   json:"description,omitempty"`
 	PrimaryKey    []string                  `yaml:"primaryKey,omitempty"    json:"primaryKey,omitempty"`

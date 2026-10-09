@@ -156,7 +156,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `databases` | 映射（名称 → `database`） |  |  | 数据源名称到连接配置的映射。 |
+| `databases` | 映射（名称 → `database`） |  | 名称格式 `^[^.]+$` | 数据源名称到连接配置的映射。 |
 
 ### `entities`
 
@@ -328,10 +328,10 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `name` | 字符串 |  | 必填；非空 | MCP 逻辑名。 |
+| `name` | 字符串 |  | 必填；格式 `^[^.]+$`；非空 | 实体名，在同一数据源与 schema 内唯一，不含点；实体的完整标识为 datasource.schema.name。 |
 | `source` | 字符串 |  |  | 数据库中的表、视图或过程名；省略时等于 name。不能使用保留前缀 smcp_。 |
 | `datasource` | 字符串 |  |  | 所在数据源；省略时为 default。 |
-| `schema` | 字符串 |  |  | 数据库 schema。 |
+| `schema` | 字符串 |  | 格式 `^[^.]+$` | 数据库 schema。 |
 | `kind` | 字符串 |  | 可选 `table`、`view`、`procedure` | 实体类型；省略时为 table。 |
 | `description` | 字符串 |  |  | 给 Agent 看的实体说明；留空时使用数据库中的表注释（启动或重载时读取）。 |
 | `primaryKey` | 字符串列表 |  |  | 主键字段。表以数据库中的主键为准，这里写的与之不同时启动告警；视图上声明的键只用于读取（keyset 分页、单行读取），不会让修改或删除通过写保护。 |
@@ -358,13 +358,13 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `mcp` | 对象 |  |  | 实体在 MCP 中的暴露方式。 |
 | `rowPolicies` | 映射（名称 → 自由对象） |  |  | 旧式角色级行范围：角色 → 过滤条件（{op, field, value} 或 and/or 组合）。 |
 | `relationships.name` | 字符串 |  | 必填；非空 | 关系名，展开时使用。 |
-| `relationships.target` | 字符串 |  | 必填；非空 | 目标实体名。 |
+| `relationships.target` | 字符串 |  | 必填；非空 | 目标实体。引用实体可写 name、schema.name、datasource.name 或 datasource.schema.name，须只对应一个实体。 |
 | `relationships.cardinality` | 字符串 |  | 必填；可选 `one`、`one-to-one`、`belongs-to`、`many`、`one-to-many`、`has-many` | 基数；belongs-to/one 展开为单个对象，has-many/many 展开为列表。 |
 | `relationships.joinOn` | 映射（名称 → 字符串） |  | 必填 | 连接键：本实体字段 → 目标实体字段；多列外键写多对，全部相等才关联。 |
 | `relationships` | 对象列表 |  |  | 可展开的关系。当前只支持同数据源内的一层展开。 |
 | `tenantPolicy` | 自由对象 |  |  | 租户硬边界，语法同一条行过滤；对所有主体始终 AND，不参与多角色合并。引用的 ${subject.x} 缺失时匹配零行。 |
 | `params` | 字符串列表 |  |  | 存储过程参数的固定位置顺序；省略或空表示无参。 |
-| `affects` | 字符串列表 |  |  | 存储过程会写入的实体（须与过程同一数据源），用于读缓存失效；省略时过程执行后失效该数据源的全部缓存。 |
+| `affects` | 字符串列表 |  |  | 存储过程会写入的实体（须与过程同一数据源，引用写法同 grants），用于读缓存失效；省略时过程执行后失效该数据源的全部缓存。 |
 | `allowCascade` | 布尔 |  |  | 允许级联写入：删除本实体的行或修改其被引用列时，外键的 CASCADE、SET NULL、SET DEFAULT 会改写其他表的行。默认要求调用方对每个被级联的实体都有对应的删除或修改权限，且不带行范围限制；被级联的表未暴露为实体时拒绝。设为 true 则不做该检查，由管理员对级联负责。 |
 
 ### 定义 `role`
@@ -383,7 +383,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `entity` | 字符串 |  | 必填；非空 | 授权的实体名。 |
+| `entity` | 字符串 |  | 必填；非空 | 授权的实体。引用实体可写 name、schema.name、datasource.name 或 datasource.schema.name，须只对应一个实体。 |
 | `actions` | 字符串列表 |  | 必填；可选 `read`、`create`、`update`、`delete`、`execute`、`aggregate`；至少 1 项 | 允许的动作。 |
 | `fields.read` | 字符串列表 |  |  | 可读字段。 |
 | `fields.write` | 字符串列表 |  |  | 可写字段。 |

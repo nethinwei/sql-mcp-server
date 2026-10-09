@@ -17,6 +17,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/audit"
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/hook"
 	"github.com/nethinwei/sql-mcp-server/version"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
@@ -331,11 +332,15 @@ func runAddEntity(args []string) error {
 	name := fs.String("name", "", "logical entity name")
 	source := fs.String("source", "", "database object name")
 	datasource := fs.String("datasource", "default", "datasource name")
+	schema := fs.String("schema", "", "database schema (empty: the connection's default)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *name == "" {
 		return errors.New("entity name is required")
+	}
+	if strings.ContainsRune(*name, '.') {
+		return errors.New("entity name has no dots: entities are named datasource.schema.name")
 	}
 	if *source == "" {
 		*source = *name
@@ -352,10 +357,11 @@ func runAddEntity(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := ensureEntityNameAvailable(entities, *name); err != nil {
+	id := entity.ID(*datasource, *schema, *name)
+	if err := ensureEntityAvailable(entities, id); err != nil {
 		return err
 	}
-	entities.Content = append(entities.Content, newEntityYAMLNode(*name, *source, *datasource))
+	entities.Content = append(entities.Content, newEntityYAMLNode(*name, *source, *datasource, *schema))
 	out, err := yaml.Marshal(&doc)
 	if err != nil {
 		return err
@@ -383,23 +389,30 @@ func entitiesSequenceNode(doc *yaml.Node) (*yaml.Node, error) {
 	return root.Content[len(root.Content)-1], nil
 }
 
-func ensureEntityNameAvailable(entities *yaml.Node, name string) error {
+// ensureEntityAvailable rejects an entity whose ID (datasource.schema.name)
+// one of entities already has; names may repeat in other namespaces.
+func ensureEntityAvailable(entities *yaml.Node, id string) error {
 	for _, item := range entities.Content {
+		keys := map[string]string{}
 		for i := 0; i+1 < len(item.Content); i += 2 {
-			if item.Content[i].Value == "name" && item.Content[i+1].Value == name {
-				return fmt.Errorf("entity %q already exists", name)
-			}
+			keys[item.Content[i].Value] = item.Content[i+1].Value
+		}
+		if entity.ID(keys["datasource"], keys["schema"], keys["name"]) == id {
+			return fmt.Errorf("entity %q already exists", id)
 		}
 	}
 	return nil
 }
 
-func newEntityYAMLNode(name, source, datasource string) *yaml.Node {
+func newEntityYAMLNode(name, source, datasource, schema string) *yaml.Node {
 	entityNode := &yaml.Node{Kind: yaml.MappingNode}
 	appendYAMLPair(entityNode, "name", name)
 	appendYAMLPair(entityNode, "source", source)
 	if datasource != "default" {
 		appendYAMLPair(entityNode, "datasource", datasource)
+	}
+	if schema != "" {
+		appendYAMLPair(entityNode, "schema", schema)
 	}
 	entityNode.Content = append(entityNode.Content,
 		&yaml.Node{Kind: yaml.ScalarNode, Value: "fields"},
@@ -475,7 +488,7 @@ func exportYAML(cfg *config.Config) ([]byte, error) {
 func runExplain(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("explain", flag.ContinueOnError)
 	path := fs.String("config", "config.yaml", "config file path")
-	name := fs.String("entity", "", "entity name")
+	name := fs.String("entity", "", "entity: name, schema.name, datasource.name or datasource.schema.name")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -484,33 +497,29 @@ func runExplain(args []string, stdout io.Writer) error {
 		return err
 	}
 	type explanation struct {
+		ID         string               `json:"id"`
 		Name       string               `json:"name"`
 		Source     string               `json:"source"`
 		Datasource string               `json:"datasource"`
+		Schema     string               `json:"schema,omitempty"`
 		Kind       string               `json:"kind"`
 		Fields     []config.FieldConfig `json:"fields"`
 		Roles      config.RoleConfig    `json:"roles"`
 	}
-	out := make([]explanation, 0)
-	for _, entity := range cfg.Entities {
-		if *name != "" && entity.Name != *name {
-			continue
+	entities := cfg.Entities
+	if *name != "" {
+		e, err := config.NewEntityRefs(cfg.Entities).Resolve(*name)
+		if err != nil {
+			return err
 		}
-		source := entity.Source
-		if source == "" {
-			source = entity.Name
-		}
-		datasource := entity.DataSource
-		if datasource == "" {
-			datasource = "default"
-		}
-		out = append(out, explanation{
-			Name: entity.Name, Source: source, Datasource: datasource,
-			Kind: entity.Kind, Fields: entity.Fields, Roles: entity.Roles,
-		})
+		entities = []config.EntityConfig{e}
 	}
-	if *name != "" && len(out) == 0 {
-		return fmt.Errorf("entity %q not found", *name)
+	out := make([]explanation, 0, len(entities))
+	for _, e := range entities {
+		out = append(out, explanation{
+			ID: e.ID(), Name: e.Name, Source: e.PhysicalSource(), Datasource: e.DatasourceName(), Schema: e.Schema,
+			Kind: e.Kind, Fields: e.Fields, Roles: e.Roles,
+		})
 	}
 	encoder := json.NewEncoder(stdout)
 	encoder.SetIndent("", "  ")

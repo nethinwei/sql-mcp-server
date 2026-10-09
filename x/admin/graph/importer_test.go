@@ -38,11 +38,11 @@ func TestSchemaImportKeepsSameNamedTablesApart(t *testing.T) {
 		t.Fatalf("public.users = %+v", pub)
 	}
 	arch := got["archive.users"]
-	if arch.Status != ImportStatusNew || arch.Candidate.Name != "archive_users" || *arch.Candidate.Schema != "archive" {
+	if arch.Status != ImportStatusNew || arch.Candidate.Name != "users" || arch.Candidate.ID != "shop.archive.users" {
 		t.Fatalf("archive.users = %+v / %+v", arch, arch.Candidate)
 	}
 	rels := got["archive.orders"].Candidate.Relationships
-	if len(rels) != 1 || rels[0].Target != "archive_users" {
+	if len(rels) != 1 || rels[0].Target != "shop.archive.users" {
 		t.Fatalf("archive.orders relationships = %+v", rels)
 	}
 }
@@ -59,7 +59,7 @@ func TestSchemaImportUnscopedEntityReadsTheDefaultSchema(t *testing.T) {
 		got[tb.Schema] = tb
 	}
 	if got["public"].Status != ImportStatusConfigured || got["archive"].Status != ImportStatusNew ||
-		got["archive"].Candidate.Name == "users" {
+		got["archive"].Candidate.ID != "shop.archive.users" {
 		t.Fatalf("public = %+v, archive = %+v", got["public"], got["archive"])
 	}
 	for _, tb := range buildSchemaImport("shop", introspect.Catalog{Tables: discovered}, cfg).Tables {

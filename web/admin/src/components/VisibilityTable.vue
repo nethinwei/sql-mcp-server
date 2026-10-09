@@ -9,7 +9,8 @@ import { run } from '@/api/client'
 import { VisibilityQuery } from '@/api/ops'
 import { canonical } from '@/stores/workspace'
 import { describeFilter, type Filter } from '@/lib/filter'
-import type { Action, DraftInput, VisibilityQuery as VisibilityResult } from '@/gql/graphql'
+import { EntityIndex } from '@/lib/entityRefs'
+import type { Action, DraftInput, EntityInput, VisibilityQuery as VisibilityResult } from '@/gql/graphql'
 
 type Simulation = VisibilityResult['visibility'][number]['actions'][number]['result']
 interface Row { entity: string; cells: Partial<Record<Action, Simulation>>; read: Simulation | null }
@@ -23,6 +24,8 @@ interface Row { entity: string; cells: Partial<Record<Action, Simulation>>; read
 const props = defineProps<{
   who: string | null
   draft: DraftInput | null
+  // The entities simulated, to name them; the draft's when unset.
+  entities?: EntityInput[]
   live?: boolean
   compact?: boolean
 }>()
@@ -31,6 +34,8 @@ const { t } = useI18n()
 const themeVars = useThemeVars()
 const actions: Action[] = ['READ', 'AGGREGATE', 'CREATE', 'UPDATE', 'DELETE', 'EXECUTE']
 
+// Rows are entity IDs, shown by their shortest reference.
+const entityIndex = computed(() => new EntityIndex(props.entities ?? props.draft?.entities ?? []))
 const rows = ref<Row[]>([])
 const loading = ref(false)
 const error = ref('')
@@ -101,7 +106,7 @@ function scopeTags(r: Row) {
 }
 
 const columns = computed<DataTableColumns<Row>>(() => [
-  { title: t('simulate.entity'), key: 'entity', minWidth: 120, render: (r) => h('span', { class: 'mono' }, r.entity) },
+  { title: t('simulate.entity'), key: 'entity', minWidth: 120, render: (r) => h('span', { class: 'mono', title: r.entity }, entityIndex.value.shortName(r.entity)) },
   ...actions.filter((a) => rows.value.some((r) => r.cells[a])).map((a) => ({
     title: t(`grants.actions.${a}`), key: a, width: 72, align: 'center' as const,
     render: (r: Row) => mark(r, a),

@@ -28,25 +28,23 @@ describe('entityByTable', () => {
 })
 
 describe('uniqueCandidates', () => {
-  it('renames clashing candidates and their relationship targets', () => {
+  const rel = (target: string) => ({ name: 'users', target, cardinality: 'belongs-to', joinOn: {} })
+
+  it('numbers candidates whose IDs are taken and moves relationships to them', () => {
     const out = uniqueCandidates([
-      { name: 'users', schema: 'archive' },
-      { name: 'orders', schema: 'archive', relationships: [{ name: 'users', target: 'users', cardinality: 'belongs-to', joinOn: {} }] },
-    ], ['users'])
-    expect(out.map((e) => e.name)).toEqual(['archive_users', 'orders'])
-    expect(out[1].relationships![0].target).toBe('archive_users')
+      { name: 'users', datasource: 'shop', schema: 'archive' },
+      { name: 'orders', datasource: 'shop', schema: 'archive', relationships: [rel('shop.archive.users')] },
+    ], ['shop.archive.users'])
+    expect(out.map((e) => [e.name, e.source])).toEqual([['users_2', 'users'], ['orders', undefined]])
+    expect(out[1].relationships![0].target).toBe('shop.archive.users_2')
   })
 
-  it('keeps same-named candidates of different schemas apart', () => {
-    const rel = { name: 'users', target: 'users', cardinality: 'belongs-to', joinOn: {} }
+  it('keeps same-named tables of other schemas and datasources as they are', () => {
     const out = uniqueCandidates([
-      { name: 'users', schema: 'public' },
-      { name: 'users', schema: 'archive' },
-      { name: 'orders', schema: 'archive', relationships: [rel] },
-      { name: 'carts', schema: 'public', relationships: [rel] },
-    ], [])
-    expect(out.map((e) => e.name)).toEqual(['users', 'archive_users', 'orders', 'carts'])
-    expect(out[2].relationships![0].target).toBe('archive_users')
-    expect(out[3].relationships![0].target).toBe('users')
+      { name: 'users', datasource: 'shop', schema: 'public' },
+      { name: 'users', datasource: 'shop', schema: 'archive' },
+      { name: 'users', datasource: 'warehouse' },
+    ], ['shop.crm.users'])
+    expect(out.map((e) => e.name)).toEqual(['users', 'users', 'users'])
   })
 })

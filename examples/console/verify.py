@@ -85,7 +85,7 @@ def domain(title, d):
 
     who, large = d["large"]
     err, body = session(who).call("read_records", {"entity": large})
-    check("cost gate refuses an unfiltered read of a large table", err, body)
+    check("cost gate refuses an unfiltered read of a large table", err and body.get("code") == "COST_EXCEEDED", body)
     who, entity, group, flt = d["aggregate"]
     err, body = session(who).call("aggregate_records", {"entity": entity, "groupBy": [group], "filter": flt,
                                                         "aggregates": [{"func": "count", "field": group}]})
@@ -149,12 +149,12 @@ domain("shop · PostgreSQL", {
     "datasource": "shop",
     "rls": ("support", "customers", 3, 1, "email"),
     "expand": ("support", "customers", [eq("id", 33)], "tickets"),
-    "large": ("bi", "orders"),
-    "aggregate": ("bi", "orders", "status", [eq("tenant_id", 1), ge("created_at", "2024-06-01T00:00:00Z")]),
+    "large": ("bi", "sales.orders"),
+    "aggregate": ("bi", "sales.orders", "status", [eq("tenant_id", 1), ge("created_at", "2024-06-01T00:00:00Z")]),
     "shapes": {
         "view": read_where("bi", "open_orders", [eq("id", 3)]),
         "partitioned table, composite key": count_where("bi", "daily_kpi", "day", [ge("day", "2024-12-01")]),
-        "same table name in another schema": count_where("bi", "archive_orders", "id", [le("id", 100)]),
+        "same table name in another schema": count_where("bi", "archive.orders", "id", [le("id", 100)]),
     },
     "create": ("finance", "refunds", {"order_id": 9, "amount": 1.5, "reason": "冒烟测试", "status": "requested"}),
     "update": ("support", "support_tickets", [eq("id", 5)], {"priority": "urgent"}),
@@ -163,16 +163,16 @@ domain("shop · PostgreSQL", {
 })
 domain("warehouse · MySQL", {
     "datasource": "warehouse",
-    "rls": ("ops", "waybills", 3, 1, "receiver_phone"),
+    "rls": ("ops", "logistics.waybills", 3, 1, "receiver_phone"),
     "expand": ("ops", "items", [eq("sku", "SKU-00002")], "stock"),
-    "large": ("ops", "archive_waybills"),
-    "aggregate": ("ops", "waybills", "carrier_id", [ge("shipped_at", "2024-12-01T00:00:00Z")]),
+    "large": ("ops", "archive.waybills"),
+    "aggregate": ("ops", "logistics.waybills", "carrier_id", [ge("shipped_at", "2024-12-01T00:00:00Z")]),
     "shapes": {
         "view": read_where("ops", "low_stock", [eq("warehouse_id", 1), eq("sku", "SKU-00036")]),
         "partitioned table, composite key": count_where("ops", "stock_daily", "day", [ge("day", "2024-12-01")]),
-        "same table name in another database": count_where("ops", "archive_waybills", "id", [le("id", 100)]),
+        "same table name in another database": count_where("ops", "archive.waybills", "id", [le("id", 100)]),
     },
-    "create": ("ops", "waybills", {"tenant_id": 1, "warehouse_id": 1, "carrier_id": 1,
+    "create": ("ops", "logistics.waybills", {"tenant_id": 1, "warehouse_id": 1, "carrier_id": 1,
                                     "tracking_no": f"SMOKE{stamp}", "receiver_phone": "10000000000",
                                     "shipped_at": "2024-06-01 08:00:00"}),
     "update": ("ops", "stock", [eq("warehouse_id", 1), eq("sku", "SKU-00002")], {"quantity": 100}),
@@ -181,28 +181,38 @@ domain("warehouse · MySQL", {
 })
 domain("ledger · OceanBase", {
     "datasource": "ledger",
-    "rls": ("ledger", "ledger_accounts", 1, 5, "account_no"),
-    "expand": ("ledger", "ledger_entries", [eq("id", 12)], "account"),
-    "large": ("ledger", "ledger_entries"),
-    "aggregate": ("ledger", "ledger_entries", "memo", [eq("account_id", 1), ge("created_at", "2024-12-01T00:00:00Z")]),
+    "rls": ("ledger", "accounts", 1, 5, "account_no"),
+    "expand": ("ledger", "entries", [eq("id", 12)], "account"),
+    "large": ("ledger", "entries"),
+    "aggregate": ("ledger", "entries", "memo", [eq("account_id", 1), ge("created_at", "2024-12-01T00:00:00Z")]),
     "shapes": {
         "view": read_where("ledger", "account_overview", [eq("account_id", 1)]),
         "partitioned table, composite key": count_where("ledger", "statements", "account_id",
                                                         [ge("period_start", "2024-12-01")]),
         "same table name in another database": count_where("ledger", "archive_entries", "id", [le("id", 100)]),
     },
-    "create": ("ledger", "ledger_entries", {"tenant_id": 1, "account_id": 1, "amount": 1.5, "memo": "冒烟测试"}),
-    "update": ("ledger", "ledger_entries", [eq("id", 12)], {"memo": "订单结算（已核对）"}),
+    "create": ("ledger", "entries", {"tenant_id": 1, "account_id": 1, "amount": 1.5, "memo": "冒烟测试"}),
+    "update": ("ledger", "entries", [eq("id", 12)], {"memo": "订单结算（已核对）"}),
     "procedure": ("ledger", "procedure_post_entry", {"p_account": 1, "p_amount": 2.5, "p_memo": "冒烟测试"},
-                  ("ledger_accounts", [eq("id", 1)], "balance", 2.5)),
+                  ("accounts", [eq("id", 1)], "balance", 2.5)),
 })
-print("\n== same table name in each datasource")
+print("\n== entity names: datasource.schema.name")
 names = {}
-for who, entity in (("bi", "tenants"), ("ops", "warehouse_tenants"), ("ledger", "ledger_tenants")):
-    err, body = session(who).call("read_records", {"entity": entity, "filter": [eq("id", 1)]})
-    names[entity] = body[0]["name"] if not err and body else None
-check("tenants 1 is read from each datasource's own database",
+for who in ("bi", "ops", "ledger"):
+    # Each caller can use one tenants entity, so the bare name is enough.
+    err, body = session(who).call("read_records", {"entity": "tenants", "filter": [eq("id", 1)]})
+    names[who] = body[0]["name"] if not err and body else None
+check("a bare name names the one entity the caller can use, each in its own database",
       None not in names.values() and len(set(names.values())) == 3, names)
+err, body = session("bi").call("read_records", {"entity": "orders", "filter": [eq("id", 1)]})
+check("a name the caller can use twice is ambiguous and lists qualified candidates",
+      err and body.get("code") == "AMBIGUOUS_ENTITY" and
+      sorted(body.get("constraints", {}).get("candidates", [])) == ["archive.orders", "sales.orders"], body)
+err, body = session("bi").call("describe_entities", {})
+listed = {e["name"]: e["id"] for e in body} if not err else {}
+check("describe names each entity by its shortest unambiguous reference",
+      listed.get("sales.orders") == "shop.sales.orders" and listed.get("archive.orders") == "shop.archive.orders" and
+      listed.get("tenants") == "shop.crm.tenants", listed)
 
 print(f"\n{len(failures)} failed" if failures else "\nall passed")
 raise SystemExit(1 if failures else 0)

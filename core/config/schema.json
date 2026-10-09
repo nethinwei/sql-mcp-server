@@ -138,6 +138,9 @@
       "description": "Datasource name to connection.",
       "x-description-zh-CN": "数据源名称到连接配置的映射。",
       "type": "object",
+      "propertyNames": {
+        "pattern": "^[^.]+$"
+      },
       "additionalProperties": {
         "$ref": "#/$defs/database"
       }
@@ -831,9 +834,10 @@
       ],
       "properties": {
         "name": {
-          "description": "Logical MCP name.",
-          "x-description-zh-CN": "MCP 逻辑名。",
+          "description": "Entity name, unique within its datasource and schema, without dots; the entity is identified as datasource.schema.name.",
+          "x-description-zh-CN": "实体名，在同一数据源与 schema 内唯一，不含点；实体的完整标识为 datasource.schema.name。",
           "type": "string",
+          "pattern": "^[^.]+$",
           "minLength": 1
         },
         "source": {
@@ -849,7 +853,8 @@
         "schema": {
           "description": "Database schema.",
           "x-description-zh-CN": "数据库 schema。",
-          "type": "string"
+          "type": "string",
+          "pattern": "^[^.]+$"
         },
         "kind": {
           "description": "Entity kind; table when omitted.",
@@ -1066,8 +1071,8 @@
                 "minLength": 1
               },
               "target": {
-                "description": "Target entity.",
-                "x-description-zh-CN": "目标实体名。",
+                "description": "Target entity. Refer to an entity as name, schema.name, datasource.name or datasource.schema.name; it must name exactly one entity.",
+                "x-description-zh-CN": "目标实体。引用实体可写 name、schema.name、datasource.name 或 datasource.schema.name，须只对应一个实体。",
                 "type": "string",
                 "minLength": 1
               },
@@ -1110,8 +1115,8 @@
           }
         },
         "affects": {
-          "description": "Entities the procedure writes (on its datasource), for read-cache invalidation; when omitted, every cached read of the datasource is invalidated after it runs.",
-          "x-description-zh-CN": "存储过程会写入的实体（须与过程同一数据源），用于读缓存失效；省略时过程执行后失效该数据源的全部缓存。",
+          "description": "Entities the procedure writes (on its datasource, referred to as in grants), for read-cache invalidation; when omitted, every cached read of the datasource is invalidated after it runs.",
+          "x-description-zh-CN": "存储过程会写入的实体（须与过程同一数据源，引用写法同 grants），用于读缓存失效；省略时过程执行后失效该数据源的全部缓存。",
           "type": "array",
           "items": {
             "type": "string"
@@ -1164,8 +1169,8 @@
       ],
       "properties": {
         "entity": {
-          "description": "Entity granted.",
-          "x-description-zh-CN": "授权的实体名。",
+          "description": "Entity granted. Refer to an entity as name, schema.name, datasource.name or datasource.schema.name; it must name exactly one entity.",
+          "x-description-zh-CN": "授权的实体。引用实体可写 name、schema.name、datasource.name 或 datasource.schema.name，须只对应一个实体。",
           "type": "string",
           "minLength": 1
         },

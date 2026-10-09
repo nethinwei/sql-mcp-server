@@ -132,13 +132,13 @@ func TestPGCapabilitiesAndRefusedWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	notes := capabilities["notes"]
+	notes := capabilities["default.notes"]
 	if notes[entity.ActionRead].Privilege != introspect.PrivilegeGranted ||
 		notes[entity.ActionCreate].Privilege != introspect.PrivilegeDenied ||
 		!strings.Contains(notes[entity.ActionCreate].Reason, "read-only") {
 		t.Fatalf("notes capabilities = %+v", notes)
 	}
-	if read := capabilities["salaries"][entity.ActionRead]; read.Privilege != introspect.PrivilegeGranted ||
+	if read := capabilities["default.salaries"][entity.ActionRead]; read.Privilege != introspect.PrivilegeGranted ||
 		!slices.Equal(read.Columns, []string{"id", "name"}) {
 		t.Fatalf("salaries read = %+v, want the column-level grant", read)
 	}

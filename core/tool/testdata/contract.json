@@ -354,6 +354,7 @@
     }
   },
   "errorCodes": {
+    "AMBIGUOUS_ENTITY": true,
     "AMBIGUOUS_FIELD_SCOPE": true,
     "BUDGET_EXCEEDED": true,
     "CONSTRAINT_VIOLATION": true,

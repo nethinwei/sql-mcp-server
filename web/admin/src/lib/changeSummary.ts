@@ -1,4 +1,5 @@
 import type { Action, EntityInput, GrantInput, RoleInput, UserInput } from '@/gql/graphql'
+import { EntityIndex, entityId } from './entityRefs'
 
 // A summary of how a change edits the authorization rules, shown before the
 // YAML diff at review: per user, the entity actions its rules grant or stop
@@ -11,7 +12,9 @@ import type { Action, EntityInput, GrantInput, RoleInput, UserInput } from '@/gq
 // rowPolicies of the user's roles). Changes this cannot evaluate, because they
 // depend on data or on subject values (tenant policies, user subjects), are
 // listed with the users they may affect, to be checked by simulation. The
-// server stays authoritative.
+// server stays authoritative. Entities are compared by ID (a reference may
+// name another entity after the change) and shown by their shortest
+// reference.
 
 export interface Config {
   entities: EntityInput[]
@@ -87,9 +90,10 @@ function accessOf(cfg: Config, user: UserInput): Map<string, string> {
     ...(user.grants ?? []),
     ...(user.roles ?? []).flatMap((r) => cfg.roles.find((x) => x.name === r)?.grants ?? []),
   ]
+  const index = new EntityIndex(cfg.entities)
   for (const g of grants) {
     for (const action of g.actions) {
-      add(g.entity, action, g.fieldsRestricted ? g.readFields ?? [] : null,
+      add(index.idOf(g.entity) ?? g.entity, action, g.fieldsRestricted ? g.readFields ?? [] : null,
         g.fieldsRestricted ? g.writeFields ?? [] : null, g.rows ?? null)
     }
   }
@@ -99,7 +103,7 @@ function accessOf(cfg: Config, user: UserInput): Map<string, string> {
     for (const [action, holders] of Object.entries(legacy.roles ?? {})) {
       for (const role of (holders ?? []).map((r) => r.toLowerCase()).filter((r) => roles.has(r))) {
         const acl = legacy.fieldACL?.[role] as { read?: string[]; write?: string[] } | undefined
-        add(e.name, action.toUpperCase(), acl ? acl.read ?? [] : null, acl ? acl.write ?? [] : null,
+        add(entityId(e), action.toUpperCase(), acl ? acl.read ?? [] : null, acl ? acl.write ?? [] : null,
           legacy.rowPolicies?.[role] ?? null)
       }
     }
@@ -134,14 +138,15 @@ function userChanges(before: Config, after: Config): UserChange[] {
 
 function fieldChanges(before: Config, after: Config): FieldChange[] {
   const out: FieldChange[] = []
+  const was = new EntityIndex(before.entities)
   for (const e of after.entities) {
-    const old = before.entities.find((x) => x.name === e.name)
+    const old = was.get(entityId(e))
     if (!old) continue
     const visible = (ent: EntityInput) => new Set((ent.fields ?? []).filter((f) => !f.exclude).map((f) => f.name))
     const masks = (ent: EntityInput) => new Map((ent.fields ?? []).map((f) => [f.name, f.mask ?? '']))
     const [v0, v1, m0, m1] = [visible(old), visible(e), masks(old), masks(e)]
     const change: FieldChange = {
-      entity: e.name,
+      entity: entityId(e),
       shown: [...v1].filter((f) => !v0.has(f)),
       hidden: [...v0].filter((f) => !v1.has(f)),
       masked: [...m1].filter(([f, m]) => m && m !== (m0.get(f) ?? '')).map(([f]) => f),
@@ -165,24 +170,30 @@ function usersReaching(entity: string, configs: Config[]): string[] {
 
 function boundaryChanges(before: Config, after: Config): BoundaryChange[] {
   const out: BoundaryChange[] = []
+  const was = new EntityIndex(before.entities)
   for (const e of after.entities) {
-    const old = before.entities.find((x) => x.name === e.name)
+    const old = was.get(entityId(e))
     if (old && json(old.tenantPolicy) !== json(e.tenantPolicy)) {
-      out.push({ entity: e.name, kind: 'tenantPolicy', users: usersReaching(e.name, [before, after]) })
+      out.push({ entity: entityId(e), kind: 'tenantPolicy', users: usersReaching(entityId(e), [before, after]) })
     }
   }
   return out
 }
 
 export function summarize(before: Config, after: Config): Summary {
-  const names = (c: Config) => new Set(c.entities.map((e) => e.name))
-  const [b, a] = [names(before), names(after)]
+  const ids = (c: Config) => new Set(c.entities.map(entityId))
+  const [b, a] = [ids(before), ids(after)]
+  const [was, now] = [new EntityIndex(before.entities), new EntityIndex(after.entities)]
+  const label = (id: string) => (now.get(id) ? now.shortName(id) : was.get(id) ? was.shortName(id) : id)
+  const labelled = (x: Access) => ({ ...x, entity: label(x.entity) })
   return {
-    users: userChanges(before, after),
-    boundaries: boundaryChanges(before, after),
-    entitiesAdded: [...a].filter((n) => !b.has(n)),
-    entitiesRemoved: [...b].filter((n) => !a.has(n)),
-    fields: fieldChanges(before, after),
+    users: userChanges(before, after).map((u) => ({
+      ...u, gained: u.gained.map(labelled), lost: u.lost.map(labelled), rescoped: u.rescoped.map(labelled),
+    })),
+    boundaries: boundaryChanges(before, after).map((c) => ({ ...c, entity: label(c.entity) })),
+    entitiesAdded: [...a].filter((n) => !b.has(n)).map(label),
+    entitiesRemoved: [...b].filter((n) => !a.has(n)).map(label),
+    fields: fieldChanges(before, after).map((c) => ({ ...c, entity: label(c.entity) })),
   }
 }
 

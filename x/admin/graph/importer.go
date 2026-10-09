@@ -3,6 +3,7 @@ package graph
 import (
 	"cmp"
 	"context"
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
@@ -40,7 +41,9 @@ func buildSchemaImport(datasource string, cat introspect.Catalog, cfg *config.Co
 	configured := configuredTables(datasource, cat, cfg)
 	taken := map[string]bool{}
 	for _, e := range cfg.Entities {
-		taken[e.Name] = true
+		if e.DatasourceName() == datasource {
+			taken[tableKey(cmp.Or(e.Schema, cat.Default), e.Name)] = true
+		}
 	}
 	candidates := candidateNames(datasource, cat.Tables, configured, taken)
 	// A foreign key may reference a table of a schema not scanned: it is
@@ -48,7 +51,7 @@ func buildSchemaImport(datasource string, cat introspect.Catalog, cfg *config.Co
 	for _, e := range cfg.Entities {
 		key := tableKey(cmp.Or(e.Schema, cat.Default), e.PhysicalSource())
 		if _, ok := candidates[key]; !ok && e.DatasourceName() == datasource && e.Kind != "procedure" {
-			candidates[key] = e.Name
+			candidates[key] = candidateName{name: e.Name, id: e.ID()}
 		}
 	}
 	out := &SchemaImport{
@@ -77,26 +80,26 @@ func buildSchemaImport(datasource string, cat introspect.Catalog, cfg *config.Co
 	return out
 }
 
-// candidateNames maps each table (by tableKey) to the entity name a candidate
-// would use: the configured name when the table is configured, otherwise the
-// table name, qualified by schema when several schemas have that table and by
-// datasource when another entity already uses the name.
+// candidateName is the entity a candidate for a table would be, by name and
+// ID.
+type candidateName struct{ name, id string }
+
+// candidateNames maps each table (by tableKey) to the entity a candidate
+// would be: the configured one when the table is configured, otherwise one
+// named like the table, numbered when another entity of the datasource and
+// schema (taken, by tableKey) already uses the name. Entities of other
+// namespaces may use it too: references tell them apart.
 func candidateNames(
 	datasource string,
 	discovered []entity.Entity,
 	configured map[string]config.EntityConfig,
 	taken map[string]bool,
-) map[string]string {
-	out := make(map[string]string, len(discovered))
-	used := map[string]bool{}
-	for name := range taken {
-		used[name] = true
-	}
-	perName := map[string]int{}
+) map[string]candidateName {
+	out := make(map[string]candidateName, len(discovered))
+	used := maps.Clone(taken)
 	for _, d := range discovered {
-		perName[d.Source]++
 		if e, ok := configured[tableKey(d.Schema, d.Source)]; ok {
-			out[tableKey(d.Schema, d.Source)] = e.Name
+			out[tableKey(d.Schema, d.Source)] = candidateName{name: e.Name, id: e.ID()}
 		}
 	}
 	for _, d := range discovered {
@@ -105,18 +108,11 @@ func candidateNames(
 			continue
 		}
 		name := d.Source
-		if perName[d.Source] > 1 && d.Schema != "" {
-			name = d.Schema + "_" + d.Source
+		for n := 2; used[tableKey(d.Schema, name)]; n++ {
+			name = d.Source + "_" + strconv.Itoa(n)
 		}
-		if used[name] {
-			name = datasource + "_" + name
-		}
-		base := name
-		for n := 2; used[name]; n++ {
-			name = base + "_" + strconv.Itoa(n)
-		}
-		used[name] = true
-		out[key] = name
+		used[tableKey(d.Schema, name)] = true
+		out[key] = candidateName{name: name, id: entity.ID(datasource, d.Schema, name)}
 	}
 	return out
 }
@@ -180,9 +176,10 @@ func identityUniqueKeys(d entity.Entity) [][]string {
 // later comment changes still apply and only a written description overrides.
 // It carries no roles, grants or row policies: nobody can access it until an
 // administrator grants access explicitly.
-func candidateEntity(datasource string, d entity.Entity, names map[string]string) Entity {
+func candidateEntity(datasource string, d entity.Entity, names map[string]candidateName) Entity {
+	self := names[tableKey(d.Schema, d.Source)]
 	out := Entity{
-		Name: names[tableKey(d.Schema, d.Source)], Source: optional(d.Source), Datasource: optional(datasource),
+		ID: self.id, Name: self.name, Source: optional(d.Source), Datasource: optional(datasource),
 		Schema:     optional(d.Schema),
 		PrimaryKey: orEmpty(d.PrimaryKey()), UniqueKeys: identityUniqueKeys(d), Params: []string{}, Affects: []string{},
 		Fields: make([]Field, 0, len(d.Attributes)), Relationships: []Relationship{},
@@ -208,7 +205,7 @@ func candidateEntity(datasource string, d entity.Entity, names map[string]string
 			joinOn[column] = fk.RefColumns[i]
 		}
 		out.Relationships = append(out.Relationships, Relationship{
-			Name: uniqueRelationshipName(out.Relationships, target), Target: target, Cardinality: "belongs-to",
+			Name: uniqueRelationshipName(out.Relationships, target.name), Target: target.id, Cardinality: "belongs-to",
 			JoinOn: joinOn,
 		})
 	}
@@ -218,9 +215,9 @@ func candidateEntity(datasource string, d entity.Entity, names map[string]string
 // addReverseRelationships adds a has-many relationship on each parent for
 // every belongs-to relationship pointing at it.
 func addReverseRelationships(tables []ImportTable) {
-	byName := make(map[string]*Entity, len(tables))
+	byID := make(map[string]*Entity, len(tables))
 	for i := range tables {
-		byName[tables[i].Candidate.Name] = tables[i].Candidate
+		byID[tables[i].Candidate.ID] = tables[i].Candidate
 	}
 	for i := range tables {
 		child := tables[i].Candidate
@@ -228,7 +225,7 @@ func addReverseRelationships(tables []ImportTable) {
 			if rel.Cardinality != "belongs-to" {
 				continue
 			}
-			parent, ok := byName[rel.Target]
+			parent, ok := byID[rel.Target]
 			if !ok {
 				continue
 			}
@@ -237,7 +234,7 @@ func addReverseRelationships(tables []ImportTable) {
 				joinOn[remote.(string)] = local
 			}
 			parent.Relationships = append(parent.Relationships, Relationship{
-				Name: uniqueRelationshipName(parent.Relationships, child.Name), Target: child.Name,
+				Name: uniqueRelationshipName(parent.Relationships, child.Name), Target: child.ID,
 				Cardinality: "has-many", JoinOn: joinOn,
 			})
 		}

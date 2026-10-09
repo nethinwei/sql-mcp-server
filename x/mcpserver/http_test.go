@@ -427,7 +427,7 @@ func TestNewServerRegistersProcedureCustomTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := tool.ProcedureToolName(e.Name)
+	want := tool.ProcedureToolName(e)
 	for _, registered := range list.Tools {
 		if registered.Name == want {
 			return

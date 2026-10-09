@@ -87,11 +87,12 @@ export default {
   },
   entities: {
     search: '搜索实体', allDatasources: '全部数据源', importFromDb: '从数据库导入', empty: '还没有实体：从数据库导入表开始',
-    goImport: '去导入', entity: '实体', description: '说明', datasource: '数据源', location: '数据源 · 表', fields: '字段', whoCanAccess: '谁能访问',
+    goImport: '去导入', entity: '实体', description: '说明', datasource: '数据源', fields: '字段', whoCanAccess: '谁能访问',
     procedure: '存储过程', userTag: '用户 {name}', legacyTag: '实体内角色', nobody: '无人可访问',
   },
   entity: {
     renameTitle: '重命名实体', name: '名称', renameHint: '授权与其他实体的关系会一起更新，读取的表不变。',
+    nameNoDot: '名称不能包含点（.）：实体按 数据源.库.名称 引用',
     notFound: '工作区中没有实体 {name}', backToList: '返回实体列表', delete: '删除实体',
     basics: '基本信息', datasource: '数据源', table: '表', kind: '类型', primaryKey: '主键', uniqueKeys: '唯一键',
     kinds: { table: '表', view: '视图', procedure: '存储过程' },

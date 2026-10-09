@@ -69,7 +69,7 @@ describe('rebase', () => {
     expect(ws.user('bob')).toBeDefined()
     expect(ws.role('analyst')!.description).toBe('mine')
     expect(ws.role('analyst')!.grants![0].actions).toEqual(['READ', 'AGGREGATE'])
-    expect(ws.changes.map((c) => `${c.kind}:${c.name}`).sort()).toEqual(['entity:refunds', 'role:analyst'])
+    expect(ws.changes.map((c) => `${c.kind}:${c.name}`).sort()).toEqual(['entity:default.refunds', 'role:analyst'])
   })
 })
 
@@ -100,7 +100,7 @@ describe('workspace', () => {
     ws.removeUser('alice')
     ws.setSettings({ cost: { maxRows: 20 } })
     expect(ws.changes).toEqual(expect.arrayContaining([
-      { kind: 'entity', name: 'refunds', type: 'added' },
+      { kind: 'entity', name: 'default.refunds', type: 'added' },
       { kind: 'role', name: 'analyst', type: 'modified' },
       { kind: 'user', name: 'alice', type: 'removed' },
       { kind: 'settings', name: 'settings', type: 'modified' },
@@ -111,8 +111,8 @@ describe('workspace', () => {
 
   it('treats cleared optional text as unchanged but not a revoked token', () => {
     const ws = seeded()
-    ws.entity('orders')!.fields![0].alias = 'order_id'
-    ws.entity('orders')!.fields![0].alias = ''
+    ws.entity('default.orders')!.fields![0].alias = 'order_id'
+    ws.entity('default.orders')!.fields![0].alias = ''
     ws.role('analyst')!.description = ''
     expect(ws.dirty).toBe(false)
     ws.user('alice')!.tokenHash = ''
@@ -125,9 +125,9 @@ describe('workspace', () => {
     ws.removeUser('alice')
     ws.upsertEntity({ name: 'refunds' })
     ws.revert({ kind: 'role', name: 'analyst' })
-    expect(ws.changes.map((c) => c.name).sort()).toEqual(['alice', 'refunds'])
+    expect(ws.changes.map((c) => c.name).sort()).toEqual(['alice', 'default.refunds'])
     ws.revert({ kind: 'user', name: 'alice' })
-    ws.revert({ kind: 'entity', name: 'refunds' })
+    ws.revert({ kind: 'entity', name: 'default.refunds' })
     expect(ws.dirty).toBe(false)
     expect(ws.user('alice')!.roles).toEqual(['analyst'])
   })
@@ -141,11 +141,11 @@ describe('workspace', () => {
       ] },
     ], ['analyst', 'support'], ['READ'])
     expect(dropped).toBe(1)
-    expect(ws.entity('refunds')!.relationships!.map((r) => r.target)).toEqual(['orders'])
+    expect(ws.entity('default.refunds')!.relationships!.map((r) => r.target)).toEqual(['orders'])
     expect(ws.role('analyst')!.grants!.at(-1)).toEqual({ entity: 'refunds', actions: ['READ'] })
     expect(ws.role('support')!.grants).toEqual([{ entity: 'refunds', actions: ['READ'] }])
     expect(ws.changes.map((c) => `${c.kind}:${c.name}:${c.type}`).sort())
-      .toEqual(['entity:refunds:added', 'role:analyst:modified', 'role:support:added'])
+      .toEqual(['entity:default.refunds:added', 'role:analyst:modified', 'role:support:added'])
   })
 
   it('imports without grants when no actions are chosen', () => {
@@ -156,7 +156,7 @@ describe('workspace', () => {
 
   it('removes grants with their entity and roles from users', () => {
     const ws = seeded()
-    ws.removeEntity('orders')
+    ws.removeEntity('default.orders')
     expect(ws.role('analyst')!.grants!.map((g) => g.entity)).toEqual(['customers'])
     expect(ws.user('alice')!.grants).toEqual([])
     ws.removeRole('analyst')
@@ -166,13 +166,13 @@ describe('workspace', () => {
   it('moves references when an entity is renamed or removed', () => {
     const ws = seeded()
     ws.upsertEntity({ name: 'customers', fields: [{ name: 'id' }] })
-    ws.entity('orders')!.relationships = [{ name: 'customer', target: 'customers', cardinality: 'belongs-to', joinOn: { customer_id: 'id' } }]
-    ws.upsertEntity({ ...ws.entity('customers')!, name: 'clients' }, 'customers')
+    ws.entity('default.orders')!.relationships = [{ name: 'customer', target: 'customers', cardinality: 'belongs-to', joinOn: { customer_id: 'id' } }]
+    ws.upsertEntity({ ...ws.entity('default.customers')!, name: 'clients' }, 'default.customers')
     expect(ws.role('analyst')!.grants!.map((g) => g.entity)).toEqual(['orders', 'clients'])
-    expect(ws.entity('orders')!.relationships![0].target).toBe('clients')
-    expect(ws.entity('clients')!.source).toBe('customers')
-    ws.removeEntity('clients')
-    expect(ws.entity('orders')!.relationships).toEqual([])
+    expect(ws.entity('default.orders')!.relationships![0].target).toBe('clients')
+    expect(ws.entity('default.clients')!.source).toBe('customers')
+    ws.removeEntity('default.clients')
+    expect(ws.entity('default.orders')!.relationships).toEqual([])
     expect(ws.role('analyst')!.grants!.map((g) => g.entity)).toEqual(['orders'])
   })
 
@@ -278,7 +278,7 @@ describe('publishing while editing', () => {
     ws.upsertEntity({ name: 'refunds' })
     ws.rebaseOnto(rev('5', 'C'), '5', snap.sections)
     expect(ws.role('analyst')!.description).toBe('C')
-    expect(ws.changes).toEqual([{ kind: 'entity', name: 'refunds', type: 'added' }])
+    expect(ws.changes).toEqual([{ kind: 'entity', name: 'default.refunds', type: 'added' }])
   })
 
   it('measures from the baseline without a snapshot', () => {
@@ -297,11 +297,11 @@ describe('fields', () => {
       relationships: [{ name: 'customer', target: 'customers', cardinality: 'belongs-to', joinOn: { customer_id: 'id' } }] })
     ws.upsertRole({ name: 'analyst', grants: [{ entity: 'orders', actions: ['READ'], fieldsRestricted: true,
       readFields: ['id'], writeFields: [], rows: { op: 'gt', field: 'customer_id', value: 0 } }] })
-    expect(ws.fieldReferences('orders', 'customer_id').map((r) => `${r.kind}:${r.name}`))
-      .toEqual(['role:analyst', 'relationship:orders'])
-    expect(ws.fieldReferences('orders', 'id').map((r) => `${r.kind}:${r.name}`))
-      .toEqual(['role:analyst', 'primaryKey:orders'])
-    expect(ws.fieldReferences('customers', 'id').map((r) => `${r.kind}:${r.name}`)).toEqual(['relationship:orders'])
+    expect(ws.fieldReferences('default.orders', 'customer_id').map((r) => `${r.kind}:${r.name}`))
+      .toEqual(['role:analyst', 'relationship:default.orders'])
+    expect(ws.fieldReferences('default.orders', 'id').map((r) => `${r.kind}:${r.name}`))
+      .toEqual(['role:analyst', 'primaryKey:default.orders'])
+    expect(ws.fieldReferences('default.customers', 'id').map((r) => `${r.kind}:${r.name}`)).toEqual(['relationship:default.orders'])
   })
 
   it('adds and removes fields and prunes grant field lists', () => {
@@ -309,8 +309,8 @@ describe('fields', () => {
     ws.upsertRole({ name: 'analyst', grants: [{ entity: 'orders', actions: ['READ'], fieldsRestricted: true,
       readFields: ['id', 'gone'], writeFields: ['gone'] }] })
     ws.upsertEntity({ name: 'orders', fields: [{ name: 'id' }, { name: 'gone' }] })
-    ws.syncFields('orders', [{ name: 'region', exclude: true }], ['gone'])
-    expect(ws.entity('orders')!.fields).toEqual([{ name: 'id' }, { name: 'region', exclude: true }])
+    ws.syncFields('default.orders', [{ name: 'region', exclude: true }], ['gone'])
+    expect(ws.entity('default.orders')!.fields).toEqual([{ name: 'id' }, { name: 'region', exclude: true }])
     expect(ws.role('analyst')!.grants![0]).toMatchObject({ readFields: ['id'], writeFields: [] })
   })
 })
@@ -339,5 +339,57 @@ describe('persistence', () => {
     expect(restored.restore()).toBe(true)
     expect(restored.datasources).toEqual([])
     expect(restored.entities.map((e) => e.name)).toEqual(['orders', 'customers'])
+  })
+})
+
+describe('namespaced entities', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  function twoDatasources() {
+    const ws = useWorkspace()
+    ws.$patch((s) => {
+      s.entities = [{ name: 'tenants', datasource: 'shop', schema: 'crm' }, { name: 'orders', datasource: 'shop', schema: 'sales' }]
+      s.roles = [{ name: 'analyst', grants: [{ entity: 'tenants', actions: ['READ'] }] }]
+      s.users = []
+    })
+    return ws
+  }
+
+  it('qualifies references an import makes ambiguous, and names the new entity unambiguously', () => {
+    const ws = twoDatasources()
+    ws.importEntities([{ name: 'tenants', datasource: 'warehouse', schema: 'logistics' }], ['analyst'], ['READ'])
+    expect(ws.role('analyst')!.grants!.map((g) => g.entity)).toEqual(['crm.tenants', 'logistics.tenants'])
+    expect(ws.accessTo('shop.crm.tenants').roles).toEqual(['analyst'])
+    expect(ws.accessTo('warehouse.logistics.tenants').roles).toEqual(['analyst'])
+  })
+
+  it('keeps references on an entity moved to another schema', () => {
+    const ws = twoDatasources()
+    ws.entity('shop.sales.orders')!.relationships = [{ name: 'tenant', target: 'tenants', cardinality: 'belongs-to', joinOn: {} }]
+    ws.upsertEntity({ ...ws.entity('shop.crm.tenants')!, schema: 'archive' }, 'shop.crm.tenants')
+    expect(ws.entity('shop.archive.tenants')).toBeDefined()
+    expect(ws.role('analyst')!.grants![0].entity).toBe('tenants')
+    // A same-named entity added later qualifies both references.
+    ws.upsertEntity({ name: 'tenants', datasource: 'shop', schema: 'crm' })
+    expect(ws.role('analyst')!.grants![0].entity).toBe('archive.tenants')
+    expect(ws.entity('shop.sales.orders')!.relationships![0].target).toBe('archive.tenants')
+  })
+})
+
+describe('importing next to same-named entities', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  it('grants what was imported, even where a reference meant another entity before', () => {
+    const ws = useWorkspace()
+    ws.$patch((s) => {
+      s.entities = [{ name: 'orders', datasource: 'main', schema: 'archive' }]
+      s.roles = [{ name: 'old', grants: [{ entity: 'archive.orders', actions: ['READ'] }] }]
+      s.users = []
+    })
+    // Its ID, archive.orders, is the reference "old" uses for main.archive.orders.
+    ws.importEntities([{ name: 'orders', datasource: 'archive' }], ['new'], ['READ'])
+    const named = (role: string) => ws.entityIndex.idOf(ws.role(role)!.grants![0].entity)
+    expect(named('new')).toBe('archive.orders')
+    expect(named('old')).toBe('main.archive.orders')
   })
 })

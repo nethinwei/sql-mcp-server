@@ -9,7 +9,8 @@ import { AddOutline, TrashOutline } from '@vicons/ionicons5'
 import FilterBuilder from './FilterBuilder.vue'
 import { describeFilter, type Filter } from '@/lib/filter'
 import { setActionOn } from '@/lib/grants'
-import { physicalLocation } from '@/lib/names'
+import { byNamespace, sourceIfRenamed } from '@/lib/names'
+import { EntityIndex, entityId } from '@/lib/entityRefs'
 import { capabilityOf, denied, indexCapabilities, type CapabilityIndex } from '@/lib/capabilities'
 import { run } from '@/api/client'
 import { CapabilitiesQuery } from '@/api/ops'
@@ -33,28 +34,44 @@ const onlyGranted = ref(false)
 
 interface Row {
   entity: EntityInput
+  id: string // the entity's ID
   grant: GrantInput | null
   index: number // position in modelValue, -1 when ungranted
   sub: number // 0 for the first grant of an entity
+  // The namespace (datasource · schema) of the entities from this row on,
+  // shown once above them; set on the first row of each.
+  namespace?: string
 }
+
+// Grants name entities by reference; they are matched by the entity it names.
+const entityIndex = computed(() => new EntityIndex(props.entities))
+const grantedId = (g: GrantInput) => entityIndex.value.idOf(g.entity)
 
 const rows = computed<Row[]>(() => {
   const q = search.value.trim().toLowerCase()
   const out: Row[] = []
-  const sorted = [...props.entities].sort((a, b) => a.name.localeCompare(b.name))
-  for (const entity of sorted) {
-    if (q && !entity.name.toLowerCase().includes(q) && !(entity.description ?? '').toLowerCase().includes(q)) continue
-    const grants = props.modelValue.map((g, index) => ({ g, index })).filter(({ g }) => g.entity === entity.name)
-    if (grants.length === 0) {
-      if (!onlyGranted.value) out.push({ entity, grant: null, index: -1, sub: 0 })
-      continue
+  const sorted = [...props.entities].sort((a, b) =>
+    (a.datasource ?? '').localeCompare(b.datasource ?? '') || (a.schema ?? '').localeCompare(b.schema ?? '') ||
+    a.name.localeCompare(b.name))
+  const shown = sorted.filter((e) => !q || e.name.toLowerCase().includes(q) || (e.description ?? '').toLowerCase().includes(q))
+  for (const group of byNamespace(shown)) {
+    const first = out.length
+    for (const entity of group.items) {
+      const id = entityId(entity)
+      const grants = props.modelValue.map((g, index) => ({ g, index })).filter(({ g }) => grantedId(g) === id)
+      if (grants.length === 0) {
+        if (!onlyGranted.value) out.push({ entity, id, grant: null, index: -1, sub: 0 })
+        continue
+      }
+      grants.forEach(({ g, index }, sub) => out.push({ entity, id, grant: g, index, sub }))
     }
-    grants.forEach(({ g, index }, sub) => out.push({ entity, grant: g, index, sub }))
+    if (group.namespace && out.length > first) out[first] = { ...out[first], namespace: group.namespace }
   }
   return out
 })
 
-const grantedCount = computed(() => new Set(props.modelValue.map((g) => g.entity)).size)
+const grantedCount = computed(() => new Set(props.modelValue.map(grantedId)).size)
+const refOf = (row: Row) => entityIndex.value.shortName(row.id)
 
 function emitWith(mutate: (list: GrantInput[]) => void) {
   const list = props.modelValue.map((g) => ({ ...g, actions: [...g.actions] }))
@@ -77,7 +94,7 @@ onMounted(async () => {
     // Without a report every cell stays editable; the database decides.
   }
 })
-const cap = (row: Row, action: Action) => capabilityOf(caps.value, row.entity.name, action)
+const cap = (row: Row, action: Action) => capabilityOf(caps.value, row.id, action)
 const grantable = (row: Row, action: Action) => applicable(row, action) && !denied(cap(row, action))
 
 function capabilityHint(row: Row, action: Action) {
@@ -92,7 +109,7 @@ function capabilityHint(row: Row, action: Action) {
 function toggle(row: Row, action: Action, on: boolean) {
   emitWith((list) => {
     if (!row.grant) {
-      if (on) list.push({ entity: row.entity.name, actions: [action] })
+      if (on) list.push({ entity: refOf(row), actions: [action] })
       return
     }
     const g = list[row.index]
@@ -104,14 +121,14 @@ function toggle(row: Row, action: Action, on: boolean) {
 // Bulk toggles act on the rows currently listed, so searching first narrows
 // them, e.g. search "order" and grant read on every match.
 function columnState(action: Action) {
-  const entities = [...new Set(rows.value.filter((r) => grantable(r, action)).map((r) => r.entity.name))]
-  const on = entities.filter((name) =>
-    props.modelValue.some((g) => g.entity === name && g.actions.includes(action))).length
+  const entities = [...new Set(rows.value.filter((r) => grantable(r, action)).map((r) => r.id))]
+  const on = entities.filter((id) =>
+    props.modelValue.some((g) => grantedId(g) === id && g.actions.includes(action))).length
   return { checked: entities.length > 0 && on === entities.length, partial: on > 0 && on < entities.length, any: entities.length > 0 }
 }
 function toggleColumn(action: Action, on: boolean) {
-  const entities = [...new Set(rows.value.filter((r) => grantable(r, action)).map((r) => r.entity.name))]
-  emit('update:modelValue', setActionOn(props.modelValue, entities, action, on))
+  const entities = [...new Set(rows.value.filter((r) => grantable(r, action)).map((r) => r.id))]
+  emit('update:modelValue', setActionOn(props.modelValue, entities, action, on, entityIndex.value))
 }
 const rowActions = (row: Row) => actions.filter((a) => grantable(row, a))
 function rowState(row: Row) {
@@ -125,12 +142,12 @@ function toggleRow(row: Row, on: boolean) {
       return
     }
     if (row.grant) list[row.index].actions = rowActions(row)
-    else list.push({ entity: row.entity.name, actions: rowActions(row) })
+    else list.push({ entity: refOf(row), actions: rowActions(row) })
   })
 }
 
 function addGrant(row: Row) {
-  emitWith((list) => list.push({ entity: row.entity.name, actions: ['READ'] }))
+  emitWith((list) => list.push({ entity: refOf(row), actions: ['READ'] }))
 }
 function removeGrant(row: Row) {
   emitWith((list) => list.splice(row.index, 1))
@@ -185,7 +202,7 @@ function saveEditor() {
 }
 
 const editorTitle = computed(() => editing.value
-  ? t(editing.value.mode === 'fields' ? 'grants.editorFields' : 'grants.editorRows', { entity: editing.value.row.entity.name })
+  ? t(editing.value.mode === 'fields' ? 'grants.editorFields' : 'grants.editorRows', { entity: refOf(editing.value.row) })
   : '')
 const editingFields = computed(() =>
   editing.value
@@ -244,13 +261,17 @@ const editingWrites = computed(() =>
         </thead>
         <tbody>
           <tr v-if="rows.length === 0"><td :colspan="actions.length + 5" class="empty">{{ t('grants.noMatch') }}</td></tr>
-          <tr v-for="row in rows" :key="row.entity.name + row.index" :class="{ granted: row.grant, sub: row.sub > 0 }">
+          <template v-for="row in rows" :key="row.id + row.index">
+          <tr v-if="row.namespace" class="namespace">
+            <td :colspan="actions.length + 5" class="mono">{{ row.namespace }}</td>
+          </tr>
+          <tr :class="{ granted: row.grant, sub: row.sub > 0 }">
             <td class="name">
               <template v-if="row.sub === 0">
-                <router-link :to="{ name: 'entity', params: { name: row.entity.name } }" class="entity mono">
+                <router-link :to="{ name: 'entity', params: { id: row.id } }" class="entity mono">
                   {{ row.entity.name }}
                 </router-link>
-                <div class="loc mono">{{ physicalLocation(row.entity) }}</div>
+                <span v-if="sourceIfRenamed(row.entity)" class="loc mono">← {{ sourceIfRenamed(row.entity) }}</span>
                 <div v-if="row.entity.description" class="desc" :title="row.entity.description">
                   {{ row.entity.description }}
                 </div>
@@ -301,6 +322,7 @@ const editingWrites = computed(() =>
               </n-space>
             </td>
           </tr>
+          </template>
         </tbody>
       </table>
     </div>
@@ -390,7 +412,8 @@ td.act.unknown { background: rgba(240, 160, 32, .08); }
 tr.granted td.name .entity { font-weight: 600; }
 .entity { color: inherit; text-decoration: none; }
 .entity:hover { color: #2f6fed; }
-.loc { font-size: 11px; opacity: .55; margin-top: 2px; }
+.loc { font-size: 11px; opacity: .55; margin-left: 6px; }
+tr.namespace td { font-size: 12px; opacity: .7; background: rgba(128,128,128,.06); padding-top: 6px; padding-bottom: 6px; }
 .desc { font-size: 12px; opacity: .6; max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
 .rows-text { display: inline-block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .empty { text-align: center; opacity: .6; padding: 20px; }

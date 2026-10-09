@@ -11,6 +11,12 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ### Changed
 
+- 控制台：导入的同名表不再加数据源或库前缀；实体列表与权限矩阵按 `数据源 · 库`
+  分组，名称与表名不同时才显示表名；引用因新增、改名或移动实体产生歧义时自动改为
+  限定写法。示例去掉 `warehouse_tenants`、`archive_orders` 等前缀，`verify.py`
+  增加实体命名验证。
+- CLI：`add entity` 新增 `--schema`，按 `数据源.库.名称` 查重；`explain --entity` 按引用
+  规则解析并输出 `id`。
 - 自省按 schema 批量读取元数据（参考 mysqldump）：PostgreSQL 与
   MySQL/OceanBase 的表、列、键、外键、级联、触发器各一次查询，往返次数与表数
   无关；MySQL 只读取目标库的 `information_schema`（此前读取全实例后在内存过滤）。
@@ -78,11 +84,24 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   （`tables []string` → `map[string]TablePrivileges`）；`bootstrap.App.Capabilities`
   字段改为方法 `Capabilities()`（评估完成前为 nil），新增 `WaitCapabilities`。
 - Go API：`cache.Cache` 新增 `Stamp`，`Set` 增加失效戳参数，`cache.Key.Database`
-  改为物理数据库标识（新增 `Datasource`、`Generation`）；`tool.CacheTarget` 新增
-  `Physical`；`Runtime.OnRevokedPrincipals` 回调改为返回关闭的会话 ID；
+  改为物理数据库标识（新增 `Datasource`、`Generation`）；`tool.CacheTarget` 改为
+  `Physical`/`Relation`，`tool.WriteTargets` 改为结构体；`Runtime.OnRevokedPrincipals` 回调改为返回关闭的会话 ID；
   `App.OpenScan` 接收数据源配置；新增 `bootstrap.Shared`、`Runtime.OnPublish`、
   `engine.Quota`/`WithQuota`、`mcpserver.HTTPAuth`/`PrepareHTTPAuth`/`PreparedAuth` 与
   `HTTPConfig.AuthChanges`。
+- 实体改为命名空间身份 `数据源.库.名称`：名称只需在同一数据源与库内唯一（此前全局
+  唯一），不得含点（数据源名、库名同样）。授权、关系、`affects` 与 Agent 调用的
+  `entity` 写 `名称`、`库.名称`、`数据源.名称` 或完整 ID，必须恰好对应一个实体；
+  有歧义的配置引用使校验与发布失败，Agent 侧只在调用方能访问的实体中解析，歧义时
+  返回新错误码 `AMBIGUOUS_ENTITY`（`constraints.candidates` 列出无歧义写法）。
+  现有配置的名称全局唯一，无需修改。
+- describe 与授权 schema 资源的 `name` 为调用方可访问范围内的最短无歧义写法，
+  新增 `id`（规范 ID）；审计、能力报告与管理 API 的权限可见性按规范 ID 标识实体；
+  GraphQL `Entity` 新增 `id`。
+- 过程工具名的哈希改为对规范 ID 计算，工具名后缀随之变化（名称部分仍是过程名）。
+- Go API：`entity.Entity.Name` 为规范 ID，新增 `Local`、`entity.ID`/`ReferencesOf`、
+  `Registry.Match`/`ShortName`（`Resolve` 接受任一引用写法）；新增
+  `config.EntityRefs`、`EntityConfig.ID`；`tool.ProcedureToolName` 改为接收实体。
 
 ## 0.1.11 - 2026-10-08
 

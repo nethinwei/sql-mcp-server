@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { run } from '@/api/client'
 import { PublishedQuery, RevisionHashQuery, WorkspaceQuery } from '@/api/ops'
+import { EntityIndex, entityId } from '@/lib/entityRefs'
 import { filterFields, type Filter } from '@/lib/filter'
 import type {
   Action,
@@ -41,6 +42,7 @@ export interface FieldReference {
 
 export interface Change {
   kind: 'entity' | 'role' | 'user' | 'settings'
+  /** The role or user name, or the entity ID (see entityId). */
   name: string
   type: 'added' | 'removed' | 'modified'
   /** For a settings conflict, the field paths changed on both sides. */
@@ -183,20 +185,25 @@ export function mergeDeep(base: unknown, local: unknown, next: unknown, path = '
   return { value, conflicts }
 }
 
+/** How a change names an item: an entity by its ID, others by name. */
+function keyOf(kind: Change['kind'], item: { name: string }): string {
+  return kind === 'entity' ? entityId(item) : item.name
+}
+
 /** The item a change refers to in sections, or undefined when absent. */
 function pick(s: Sections, c: Pick<Change, 'kind' | 'name'>): unknown {
   if (c.kind === 'settings') return s.settings
   const items: { name: string }[] = c.kind === 'entity' ? s.entities : c.kind === 'role' ? s.roles : s.users
-  return items.find((x) => x.name === c.name)
+  return items.find((x) => keyOf(c.kind, x) === c.name)
 }
 
-function byName<T extends { name: string }>(items: T[]): Map<string, string> {
-  return new Map(items.map((i) => [i.name, canonical(i)]))
+function byKey<T extends { name: string }>(kind: Change['kind'], items: T[]): Map<string, string> {
+  return new Map(items.map((i) => [keyOf(kind, i), canonical(i)]))
 }
 
 function diffNamed<T extends { name: string }>(kind: Change['kind'], base: T[], now: T[]): Change[] {
-  const before = byName(base)
-  const after = byName(now)
+  const before = byKey(kind, base)
+  const after = byKey(kind, now)
   const out: Change[] = []
   for (const [name, json] of after) {
     if (!before.has(name)) out.push({ kind, name, type: 'added' })
@@ -219,8 +226,46 @@ function changesBetween(base: Sections, now: Sections): Change[] {
   return out
 }
 
-function dropGrantsOn(grants: GrantInput[] | null | undefined, entity: string): GrantInput[] {
-  return (grants ?? []).filter((g) => g.entity !== entity)
+type References = Pick<Sections, 'entities' | 'roles' | 'users'>
+
+/**
+ * Rewrites every entity reference (grants, relationship targets, procedure
+ * affects): to returns its new form, or null to drop it.
+ */
+function rewriteReferences(s: References, to: (ref: string) => string | null) {
+  const grants = (gs: GrantInput[] | null | undefined) => (gs ?? []).flatMap((g) => {
+    const ref = to(g.entity)
+    return ref === null ? [] : [ref === g.entity ? g : { ...g, entity: ref }]
+  })
+  for (const r of s.roles) r.grants = grants(r.grants)
+  for (const u of s.users) u.grants = grants(u.grants)
+  for (const e of s.entities) {
+    if (e.relationships?.length) {
+      e.relationships = e.relationships.flatMap((rel) => {
+        const ref = to(rel.target)
+        return ref === null ? [] : [ref === rel.target ? rel : { ...rel, target: ref }]
+      })
+    }
+    if (e.affects?.length) e.affects = e.affects.flatMap((a) => to(a) ?? [])
+  }
+}
+
+/**
+ * Keeps every reference naming the entity it named before entities changed
+ * (before), qualifying it when the change made it ambiguous. moved maps the
+ * IDs of renamed entities to their new IDs, and of removed ones to null,
+ * whose references are dropped. References that named no single entity
+ * before are left as they are.
+ */
+function retarget(s: References, before: (ref: string) => string | undefined, moved = new Map<string, string | null>()) {
+  const after = new EntityIndex(s.entities)
+  rewriteReferences(s, (ref) => {
+    const was = before(ref)
+    if (was === undefined) return ref
+    const now = moved.has(was) ? moved.get(was)! : was
+    if (now === null) return null
+    return after.idOf(ref) === now ? ref : after.shortName(now)
+  })
 }
 
 export const useWorkspace = defineStore('workspace', {
@@ -264,34 +309,49 @@ export const useWorkspace = defineStore('workspace', {
         settings: state.settings,
       }
     },
-    entity: (state) => (name: string) => state.entities.find((e) => e.name === name),
+    /** The entities by ID and by reference (see EntityIndex). */
+    entityIndex: (state) => new EntityIndex(state.entities),
+    /** The entity with an ID. */
+    entity(): (id: string) => EntityInput | undefined {
+      return (id) => this.entityIndex.get(id)
+    },
     role: (state) => (name: string) => state.roles.find((r) => r.name === name),
     user: (state) => (name: string) => state.users.find((u) => u.name === name),
-    /** Roles and users holding a grant on an entity. */
-    accessTo: (state) => (entity: string) => ({
-      roles: state.roles.filter((r) => (r.grants ?? []).some((g) => g.entity === entity)).map((r) => r.name),
-      users: state.users.filter((u) => (u.grants ?? []).some((g) => g.entity === entity)).map((u) => u.name),
-    }),
-    /** Where roles, users and entities name a field of entity. */
-    fieldReferences: (state) => (entity: string, field: string): FieldReference[] => {
-      const out: FieldReference[] = []
-      const inGrant = (g: GrantInput) => g.entity === entity && (
-        (g.readFields ?? []).includes(field) || (g.writeFields ?? []).includes(field) ||
-        filterFields(g.rows as Filter | undefined).includes(field))
-      for (const r of state.roles) if ((r.grants ?? []).some(inGrant)) out.push({ kind: 'role', name: r.name })
-      for (const u of state.users) if ((u.grants ?? []).some(inGrant)) out.push({ kind: 'user', name: u.name })
-      for (const e of state.entities) {
-        const joins = (e.relationships ?? []).some((rel) => {
-          const on = (rel.joinOn ?? {}) as Record<string, string>
-          return (e.name === entity && field in on) || (rel.target === entity && Object.values(on).includes(field))
-        })
-        if (joins) out.push({ kind: 'relationship', name: e.name })
-        if (e.name !== entity) continue
-        if ((e.primaryKey ?? []).includes(field)) out.push({ kind: 'primaryKey', name: e.name })
-        if ((e.uniqueKeys ?? []).some((k) => k.includes(field))) out.push({ kind: 'uniqueKey', name: e.name })
-        if (filterFields(e.tenantPolicy as Filter | undefined).includes(field)) out.push({ kind: 'tenantPolicy', name: e.name })
+    /** Roles and users holding a grant on the entity with an ID. */
+    accessTo(state): (entity: string) => { roles: string[]; users: string[] } {
+      const on = (entity: string) => (g: GrantInput) => this.entityIndex.idOf(g.entity) === entity
+      return (entity) => ({
+        roles: state.roles.filter((r) => (r.grants ?? []).some(on(entity))).map((r) => r.name),
+        users: state.users.filter((u) => (u.grants ?? []).some(on(entity))).map((u) => u.name),
+      })
+    },
+    /**
+     * Where roles, users and entities name a field of the entity with an ID;
+     * an entity holding a reference is named by its ID.
+     */
+    fieldReferences(state): (entity: string, field: string) => FieldReference[] {
+      return (entity, field) => {
+        const index = this.entityIndex
+        const out: FieldReference[] = []
+        const inGrant = (g: GrantInput) => index.idOf(g.entity) === entity && (
+          (g.readFields ?? []).includes(field) || (g.writeFields ?? []).includes(field) ||
+          filterFields(g.rows as Filter | undefined).includes(field))
+        for (const r of state.roles) if ((r.grants ?? []).some(inGrant)) out.push({ kind: 'role', name: r.name })
+        for (const u of state.users) if ((u.grants ?? []).some(inGrant)) out.push({ kind: 'user', name: u.name })
+        for (const e of state.entities) {
+          const id = entityId(e)
+          const joins = (e.relationships ?? []).some((rel) => {
+            const on = (rel.joinOn ?? {}) as Record<string, string>
+            return (id === entity && field in on) || (index.idOf(rel.target) === entity && Object.values(on).includes(field))
+          })
+          if (joins) out.push({ kind: 'relationship', name: id })
+          if (id !== entity) continue
+          if ((e.primaryKey ?? []).includes(field)) out.push({ kind: 'primaryKey', name: id })
+          if ((e.uniqueKeys ?? []).some((k) => k.includes(field))) out.push({ kind: 'uniqueKey', name: id })
+          if (filterFields(e.tenantPolicy as Filter | undefined).includes(field)) out.push({ kind: 'tenantPolicy', name: id })
+        }
+        return out
       }
-      return out
     },
     hasToken: (state) => (user: UserInput) =>
       user.tokenHash != null ? user.tokenHash !== '' : Boolean(state.baseTokens[user.name]),
@@ -464,8 +524,8 @@ export const useWorkspace = defineStore('workspace', {
       const base = JSON.parse(this.baseline) as Sections
       if (change.kind === 'settings') return this.setSettings(base.settings)
       const restore = <T extends { name: string }>(items: T[], baseItems: T[]) => {
-        const original = baseItems.find((x) => x.name === change.name)
-        const i = items.findIndex((x) => x.name === change.name)
+        const original = baseItems.find((x) => keyOf(change.kind, x) === change.name)
+        const i = items.findIndex((x) => keyOf(change.kind, x) === change.name)
         if (!original) return false
         if (i >= 0) items.splice(i, 1, original)
         else items.splice(Math.min(baseItems.indexOf(original), items.length), 0, original)
@@ -484,54 +544,62 @@ export const useWorkspace = defineStore('workspace', {
 
     /**
      * Adds imported entities, keeping only relationships whose target exists,
-     * and grants them to the named roles (created when missing). Returns how
-     * many relationships were dropped.
+     * and grants them to the named roles (created when missing). Candidates
+     * target each other by ID; their references are written in the shortest
+     * unambiguous form, and existing references the new entities make
+     * ambiguous are qualified. Returns how many relationships were dropped.
      */
     importEntities(entities: EntityInput[], roles: string[] = [], actions: Action[] = []): number {
-      const names = new Set([...this.entities.map((e) => e.name), ...entities.map((e) => e.name)])
-      let dropped = 0
-      for (const e of entities) {
-        const relationships = (e.relationships ?? []).filter((r) => names.has(r.target))
-        dropped += (e.relationships?.length ?? 0) - relationships.length
-        this.upsertEntity({ ...e, relationships })
+      const before = this.entityIndex
+      const added = new Set(entities.map(entityId))
+      const targets = new EntityIndex([...this.entities.filter((e) => !added.has(entityId(e))), ...entities])
+      // Existing references first: those the new entities make ambiguous are
+      // qualified. What the import writes is added after, resolved against
+      // the entities after the import, never by what a reference meant before.
+      const relationships = entities.map((e) => (e.relationships ?? []).flatMap((r) => {
+        const id = targets.idOf(r.target)
+        return id === undefined ? [] : [{ ...r, target: id }]
+      }))
+      const dropped = entities.reduce((n, e, i) => n + (e.relationships?.length ?? 0) - relationships[i].length, 0)
+      this.entities = [
+        ...this.entities.filter((e) => !added.has(entityId(e))), ...entities.map((e) => ({ ...e, relationships: [] })),
+      ]
+      retarget(this.$state, (ref) => before.idOf(ref))
+      const after = this.entityIndex
+      for (const [i, e] of entities.entries()) {
+        this.entity(entityId(e))!.relationships = relationships[i].map((r) => ({ ...r, target: after.shortName(r.target) }))
       }
       if (actions.length) {
         for (const name of roles) {
           const role = this.role(name) ?? { name, grants: [] }
-          this.upsertRole({
-            ...role,
-            grants: [...(role.grants ?? []), ...entities.map((e) => ({ entity: e.name, actions: [...actions] }))],
-          })
+          const grants = [
+            ...(role.grants ?? []), ...entities.map((e) => ({ entity: after.shortName(entityId(e)), actions: [...actions] })),
+          ]
+          const i = this.roles.findIndex((r) => r.name === name)
+          if (i >= 0) this.roles.splice(i, 1, { ...role, grants })
+          else this.roles.push({ ...role, grants })
         }
       }
+      this.persist()
       return dropped
     },
 
     /**
-     * Adds or replaces an entity. Renaming it (previousName differs) keeps
-     * the table it reads (source defaults to the name) and moves every
-     * reference along: grants of roles and users, relationships of other
-     * entities that target it and procedures that affect it.
+     * Adds or replaces an entity. Renaming it or moving it to another
+     * datasource or schema (previousId differs) keeps the table it reads
+     * (source defaults to the name) and moves every reference along: grants
+     * of roles and users, relationships of other entities that target it and
+     * procedures that affect it. References the change makes ambiguous are
+     * qualified (see retarget).
      */
-    upsertEntity(e: EntityInput, previousName = e.name) {
-      if (previousName !== e.name && !e.source) e = { ...e, source: previousName }
-      const i = this.entities.findIndex((x) => x.name === previousName)
+    upsertEntity(e: EntityInput, previousId = entityId(e)) {
+      const before = this.entityIndex
+      const previous = before.get(previousId)
+      if (previous && previous.name !== e.name && !e.source) e = { ...e, source: previous.source || previous.name }
+      const i = this.entities.findIndex((x) => entityId(x) === previousId)
       if (i >= 0) this.entities.splice(i, 1, e)
       else this.entities.push(e)
-      if (previousName !== e.name) {
-        const rename = (g: GrantInput) => (g.entity === previousName ? { ...g, entity: e.name } : g)
-        for (const r of this.roles) r.grants = (r.grants ?? []).map(rename)
-        for (const u of this.users) u.grants = (u.grants ?? []).map(rename)
-        for (const other of this.entities) {
-          if (other.relationships?.some((rel) => rel.target === previousName)) {
-            other.relationships = other.relationships.map((rel) =>
-              (rel.target === previousName ? { ...rel, target: e.name } : rel))
-          }
-          if (other.affects?.includes(previousName)) {
-            other.affects = other.affects.map((name) => (name === previousName ? e.name : name))
-          }
-        }
-      }
+      retarget(this.$state, (ref) => before.idOf(ref), new Map([[previousId, entityId(e)]]))
       this.persist()
     },
 
@@ -540,16 +608,10 @@ export const useWorkspace = defineStore('workspace', {
      * place in procedures' affects (an emptied list invalidates the whole
      * datasource, the safe default).
      */
-    removeEntity(name: string) {
-      this.entities = this.entities.filter((e) => e.name !== name)
-      for (const r of this.roles) r.grants = dropGrantsOn(r.grants, name)
-      for (const u of this.users) u.grants = dropGrantsOn(u.grants, name)
-      for (const other of this.entities) {
-        if (other.relationships?.some((rel) => rel.target === name)) {
-          other.relationships = other.relationships.filter((rel) => rel.target !== name)
-        }
-        if (other.affects?.includes(name)) other.affects = other.affects.filter((a) => a !== name)
-      }
+    removeEntity(id: string) {
+      const before = this.entityIndex
+      this.entities = this.entities.filter((e) => entityId(e) !== id)
+      retarget(this.$state, (ref) => before.idOf(ref), new Map([[id, null]]))
       this.persist()
     },
 
@@ -565,7 +627,8 @@ export const useWorkspace = defineStore('workspace', {
       const gone = new Set(removed)
       const fields = (e.fields ?? []).filter((f) => !gone.has(f.name))
       this.upsertEntity({ ...e, fields: [...fields, ...added.filter((f) => !fields.some((x) => x.name === f.name))] })
-      const prune = (g: GrantInput) => (g.entity !== entity ? g : {
+      const index = this.entityIndex
+      const prune = (g: GrantInput) => (index.idOf(g.entity) !== entity ? g : {
         ...g,
         readFields: (g.readFields ?? []).filter((f) => !gone.has(f)),
         writeFields: (g.writeFields ?? []).filter((f) => !gone.has(f)),

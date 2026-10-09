@@ -13,6 +13,7 @@ import { SimulateQuery } from '@/api/ops'
 import { describeFilter, type Filter } from '@/lib/filter'
 import { parseSimulationQuery } from '@/lib/simulation'
 import { useSimulationConfig } from '@/lib/simulationConfig'
+import { EntityIndex, entityId } from '@/lib/entityRefs'
 import type { Action, SimulateQuery as SimulateResult } from '@/gql/graphql'
 
 type Simulation = SimulateResult['simulate']
@@ -39,7 +40,11 @@ const whoOptions = computed(() => [
   { type: 'group', label: t('simulate.group.users'), key: 'u', children: (config.value?.users ?? []).map((u) => ({ label: u.name, value: u.name })) },
   { type: 'group', label: t('simulate.group.roles'), key: 'r', children: (config.value?.roles ?? []).map((r) => ({ label: t('simulate.roleOption', { name: r.name }), value: `role:${r.name}` })) },
 ])
-const entityOptions = computed(() => (config.value?.entities ?? []).map((e) => ({ label: e.name, value: e.name })))
+// Entities are picked by ID and shown by their shortest reference.
+const entityIndex = computed(() => new EntityIndex(config.value?.entities ?? []))
+const entityLabel = (id: string) => entityIndex.value.shortName(id)
+const entityOptions = computed(() =>
+  (config.value?.entities ?? []).map((e) => ({ label: entityLabel(entityId(e)), value: entityId(e) })))
 
 // Single check.
 const entity = ref<string | null>(null)
@@ -49,7 +54,7 @@ const busy = ref(false)
 const actions: Action[] = ['READ', 'AGGREGATE', 'CREATE', 'UPDATE', 'DELETE', 'EXECUTE']
 const actionOptions = computed(() => actions.map((a) => ({ label: t(`grants.actions.${a}`), value: a })))
 const fieldOptions = computed(() =>
-  (config.value?.entities.find((e) => e.name === entity.value)?.fields ?? []).filter((f) => !f.exclude)
+  (entityIndex.value.get(entity.value ?? '')?.fields ?? []).filter((f) => !f.exclude)
     .map((f) => ({ label: f.name, value: f.name })))
 
 // Switching configuration drops picks it does not have.
@@ -59,7 +64,7 @@ watch(config, (c) => {
   const exists = (w: string) => (w.startsWith('role:')
     ? c.roles.some((r) => `role:${r.name}` === w) : c.users.some((u) => u.name === w))
   if (who.value && !exists(who.value)) { missing.push(who.value); who.value = null }
-  if (entity.value && !c.entities.some((e) => e.name === entity.value)) { missing.push(entity.value); entity.value = null }
+  if (entity.value && !c.entities.some((e) => entityId(e) === entity.value)) { missing.push(entity.value); entity.value = null }
   const known = new Set(fieldOptions.value.map((o) => o.value))
   if (fields.value.some((f) => !known.has(f))) fields.value = fields.value.filter((f) => known.has(f))
   if (missing.length) message.warning(t('simulate.notInConfig', { list: missing.join(', '), source: c.label }))
@@ -131,7 +136,8 @@ onMounted(() => {
   const stop = watch(config, (c) => {
     if (!c) return
     void Promise.resolve().then(stop)
-    void pick(e, a, linked.fields ?? [])
+    // A link may name the entity by any reference.
+    void pick(new EntityIndex(c.entities).idOf(e) ?? e, a, linked.fields ?? [])
   }, { immediate: true })
 })
 </script>
@@ -152,7 +158,7 @@ onMounted(() => {
     <n-tabs v-model:value="tab" type="line" animated>
       <n-tab-pane name="overview" :tab="t('simulate.overview')">
         <n-alert v-if="configError" type="error" :show-icon="false">{{ configError }}</n-alert>
-        <visibility-table v-else-if="config" :who="who" :draft="config.draft" @pick="pick" />
+        <visibility-table v-else-if="config" :who="who" :draft="config.draft" :entities="config.entities" @pick="pick" />
       </n-tab-pane>
       <n-tab-pane name="single" :tab="t('simulate.single')">
         <n-space vertical>
@@ -178,7 +184,7 @@ onMounted(() => {
             <div class="asked">
               <n-text depth="3">{{ t('simulate.askedFor') }}</n-text>
               <n-tag size="small" :bordered="false">{{ result.who }}</n-tag>
-              <n-tag size="small" :bordered="false" class="mono">{{ result.entity }}</n-tag>
+              <n-tag size="small" :bordered="false" class="mono">{{ entityLabel(result.entity) }}</n-tag>
               <n-tag size="small" :bordered="false">{{ t(`grants.actions.${result.action}`) }}</n-tag>
               <n-tag size="small" :bordered="false">
                 {{ result.fields.length ? result.fields.join(', ') : t('simulate.defaultProjectionShort') }}

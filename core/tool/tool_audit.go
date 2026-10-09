@@ -57,17 +57,19 @@ func denialCode(err error) string {
 // envelope, or for a procedure tool from its name, so an audit line can be
 // interpreted without replaying the input.
 func entityNameForTool(toolName string, input json.RawMessage, registry *entity.Registry) string {
+	// A procedure tool's input holds its parameters, whatever their names.
+	if strings.HasPrefix(toolName, "procedure_") {
+		if registry == nil {
+			return ""
+		}
+		t, _ := FindProcedureTool(registry, toolName)
+		return t.Entity.Name
+	}
 	var envelope struct {
 		Entity string `json:"entity"`
 	}
-	if decodeEnvelope(input, &envelope) == nil && envelope.Entity != "" {
+	if decodeEnvelope(input, &envelope) == nil {
 		return envelope.Entity
-	}
-	if registry == nil || !strings.HasPrefix(toolName, "procedure_") {
-		return ""
-	}
-	if t, ok := FindProcedureTool(registry, toolName); ok {
-		return t.Entity.Name
 	}
 	return ""
 }

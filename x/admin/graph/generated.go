@@ -92,6 +92,7 @@ type ComplexityRoot struct {
 		Datasource    func(childComplexity int) int
 		Description   func(childComplexity int) int
 		Fields        func(childComplexity int) int
+		ID            func(childComplexity int) int
 		Kind          func(childComplexity int) int
 		LegacyAccess  func(childComplexity int) int
 		Mcp           func(childComplexity int) int
@@ -581,6 +582,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Entity.Fields(childComplexity), true
+	case "Entity.id":
+		if e.ComplexityRoot.Entity.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Entity.ID(childComplexity), true
 	case "Entity.kind":
 		if e.ComplexityRoot.Entity.Kind == nil {
 			break
@@ -1833,6 +1840,8 @@ func (ec *executionContext) childFields_DatasourceRouting(ctx context.Context, f
 
 func (ec *executionContext) childFields_Entity(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
+	case "id":
+		return ec.fieldContext_Entity_id(ctx, field)
 	case "name":
 		return ec.fieldContext_Entity_name(ctx, field)
 	case "source":
@@ -3419,6 +3428,29 @@ func (ec *executionContext) _DatasourceRouting_execute(ctx context.Context, fiel
 }
 func (ec *executionContext) fieldContext_DatasourceRouting_execute(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("DatasourceRouting", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _Entity_id(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Entity_id(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Entity_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Entity", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _Entity_name(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
@@ -10067,6 +10099,11 @@ func (ec *executionContext) _Entity(ctx context.Context, sel ast.SelectionSet, o
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("Entity")
+		case "id":
+			out.Values[i] = ec._Entity_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "name":
 			out.Values[i] = ec._Entity_name(ctx, field, obj)
 			if out.Values[i] == graphql.Null {

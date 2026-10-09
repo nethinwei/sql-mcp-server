@@ -7,6 +7,7 @@ import {
   NAlert, NButton, NCard, NGrid, NGi, NList, NListItem, NSpace, NStatistic, NTag, NText, NTime,
 } from 'naive-ui'
 import { useWorkspace } from '@/stores/workspace'
+import { entityId } from '@/lib/entityRefs'
 import { RevisionsQuery } from '@/api/ops'
 import { can } from '@/api/session'
 
@@ -21,7 +22,7 @@ const stateType: Record<string, 'success' | 'default' | 'warning' | 'info'> = {
 
 const unreachable = computed(() =>
   ws.entities.filter((e) => {
-    const a = ws.accessTo(e.name)
+    const a = ws.accessTo(entityId(e))
     return a.roles.length === 0 && a.users.length === 0 && !e.legacyAccess
   }),
 )
@@ -51,7 +52,7 @@ const stats = computed(() => [
           <n-space vertical :size="12">
             <n-alert v-if="unreachable.length" type="info" :title="t('overview.unreachableTitle', { count: unreachable.length }, unreachable.length)">
               {{ t('overview.unreachableBody') }}
-              <span class="mono">{{ unreachable.slice(0, 6).map((e) => e.name).join(', ') }}</span>
+              <span class="mono">{{ unreachable.slice(0, 6).map((e) => ws.entityIndex.shortName(entityId(e))).join(', ') }}</span>
               <span v-if="unreachable.length > 6"> {{ t('overview.andMore') }}</span>
               <div class="alert-actions">
                 <n-button size="small" @click="router.push({ name: 'roles' })">{{ t('overview.grantNow') }}</n-button>

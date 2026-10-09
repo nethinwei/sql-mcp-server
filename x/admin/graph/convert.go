@@ -103,7 +103,7 @@ func orEmpty[T any](s []T) []T {
 
 func toEntity(e config.EntityConfig) Entity {
 	out := Entity{
-		Name: e.Name, Source: optional(e.Source), Datasource: optional(e.DataSource), Schema: optional(e.Schema),
+		ID: e.ID(), Name: e.Name, Source: optional(e.Source), Datasource: optional(e.DataSource), Schema: optional(e.Schema),
 		Kind:        optional(e.Kind),
 		Description: optional(e.Description), PrimaryKey: orEmpty(e.PrimaryKey),
 		UniqueKeys: orEmpty(e.UniqueKeys), Params: orEmpty(e.Params),

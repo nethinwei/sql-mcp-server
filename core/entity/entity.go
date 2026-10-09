@@ -210,7 +210,12 @@ type Relationship struct {
 
 // Entity is a complete description of an exposed relation.
 type Entity struct {
-	Name        string
+	// Name identifies the entity: its canonical ID (see ID) when Local is
+	// set, which every reference inside the gateway uses.
+	Name string
+	// Local is the configured name, unique within its datasource and schema;
+	// empty when Name is not namespaced.
+	Local       string
 	Source      string
 	DataSource  string
 	Schema      string
@@ -273,6 +278,45 @@ func (e Entity) DatasourceName() string {
 		return "default"
 	}
 	return e.DataSource
+}
+
+// ID is the canonical identity of a configured entity, its namespace path:
+// datasource.schema.name, or datasource.name without a schema. Entity names,
+// datasource names and schemas contain no dots.
+func ID(datasource, schema, name string) string {
+	if datasource == "" {
+		datasource = "default"
+	}
+	if schema == "" {
+		return datasource + "." + name
+	}
+	return datasource + "." + schema + "." + name
+}
+
+// References lists the ways to refer to the entity, shortest first (see
+// ReferencesOf); an entity without a local name is referred to by Name only.
+func (e Entity) References() []string {
+	if e.Local == "" {
+		return []string{e.Name}
+	}
+	return ReferencesOf(e.DataSource, e.Schema, e.Local)
+}
+
+// ReferencesOf lists the ways to refer to the entity named local in a
+// datasource and schema, shortest first, like partially qualified SQL names:
+// local, schema.local, datasource.local and datasource.schema.local, the last
+// being its ID.
+func ReferencesOf(datasource, schema, local string) []string {
+	if datasource == "" {
+		datasource = "default"
+	}
+	if schema == "" {
+		return []string{local, datasource + "." + local}
+	}
+	if schema == datasource { // schema.local and datasource.local are one
+		return []string{local, schema + "." + local, ID(datasource, schema, local)}
+	}
+	return []string{local, schema + "." + local, datasource + "." + local, ID(datasource, schema, local)}
 }
 
 // RelationKey identifies the physical relation the entity exposes: Relation
