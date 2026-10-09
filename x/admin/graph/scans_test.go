@@ -1,13 +1,16 @@
 package graph
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/admin/scanjobs"
+	"github.com/nethinwei/sql-mcp-server/x/catalog"
 )
 
 func scansConfig(dsn string) *config.Config {
@@ -38,14 +41,14 @@ func targets(e Entity) []string {
 // to kept tables and to configured entities of schemas not scanned.
 func TestKeptSchemasAreImportedTogether(t *testing.T) {
 	t.Parallel()
-	scans := NewScans(scanjobs.Options{})
+	scans := NewScans(scanjobs.Options{}, nil)
 	t.Cleanup(scans.Close)
 	cfg := scansConfig("postgres://a/shop")
 	src := sourceOf(cfg, "shop")
-	scans.keep(src, []string{"public"}, introspect.Catalog{
+	mustKeep(t, scans, src, []string{"public"}, introspect.Catalog{
 		Tables: []entity.Entity{table("public", "users"), table("public", "customers")},
 	})
-	scans.keep(src, []string{"sales"}, introspect.Catalog{Tables: []entity.Entity{
+	mustKeep(t, scans, src, []string{"sales"}, introspect.Catalog{Tables: []entity.Entity{
 		table("sales", "users"),
 		table("sales", "orders",
 			entity.ForeignKey{Columns: []string{"user_id"}, RefSchema: "public", RefRelation: "customers",
@@ -53,7 +56,7 @@ func TestKeptSchemasAreImportedTogether(t *testing.T) {
 			entity.ForeignKey{Columns: []string{"id"}, RefSchema: "crm", RefRelation: "accounts",
 				RefColumns: []string{"id"}}),
 	}})
-	sales := candidatesOf(scans.importOf(src, []string{"sales"}, cfg))
+	sales := candidatesOf(mustImport(t, scans, src, []string{"sales"}, cfg))
 	if len(sales) != 2 || sales["sales.users"].ID != "shop.sales.users" {
 		t.Fatalf("sales = %+v", sales)
 	}
@@ -61,50 +64,76 @@ func TestKeptSchemasAreImportedTogether(t *testing.T) {
 		got[0] != "belongs-to shop.public.customers" || got[1] != "belongs-to shop.crm.accounts" {
 		t.Fatalf("orders relationships = %v", got)
 	}
-	if both := scans.importOf(src, nil, cfg); len(both.Tables) != 4 {
+	if both := mustImport(t, scans, src, nil, cfg); len(both.Tables) != 4 {
 		t.Fatalf("both schemas in one call = %+v", both.Tables)
 	}
-	public := candidatesOf(scans.importOf(src, []string{"public"}, cfg))
+	public := candidatesOf(mustImport(t, scans, src, []string{"public"}, cfg))
 	if public["public.users"].ID != "shop.public.users" ||
 		targets(public["public.customers"])[0] != "has-many shop.sales.orders" {
 		t.Fatalf("public = %+v", public)
 	}
 }
 
-func keepSchemas(scans *Scans, src source, tables ...entity.Entity) {
-	var schemas []string
-	for _, t := range tables {
-		schemas = append(schemas, t.Schema)
+func mustKeep(t *testing.T, scans *Scans, src source, schemas []string, cat introspect.Catalog) {
+	t.Helper()
+	if err := scans.keep(context.Background(), src, schemas, cat); err != nil {
+		t.Fatal(err)
 	}
-	scans.keep(src, schemas, introspect.Catalog{Tables: tables})
+}
+
+func mustImport(t *testing.T, scans *Scans, src source, schemas []string, cfg *config.Config) *SchemaImport {
+	t.Helper()
+	out, err := scans.importOf(context.Background(), src, schemas, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func isKept(t *testing.T, scans *Scans, src source, schema string) bool {
+	t.Helper()
+	_, ok, err := scans.scanned(context.Background(), src, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ok
+}
+
+func keepSchemas(t *testing.T, scans *Scans, src source, tables ...entity.Entity) {
+	t.Helper()
+	var schemas []string
+	for _, tb := range tables {
+		schemas = append(schemas, tb.Schema)
+	}
+	mustKeep(t, scans, src, schemas, introspect.Catalog{Tables: tables})
 }
 
 // What was kept for a datasource is dropped once it reads another database,
 // and a refreshed list drops the schemas that are gone.
 func TestKeptScansFollowTheDatabase(t *testing.T) {
 	t.Parallel()
-	scans := NewScans(scanjobs.Options{})
+	scans := NewScans(scanjobs.Options{}, nil)
 	t.Cleanup(scans.Close)
 	old := sourceOf(scansConfig("postgres://a/shop"), "shop")
-	keepSchemas(scans, old, table("public", "users"), table("sales", "orders"))
+	keepSchemas(t, scans, old, table("public", "users"), table("sales", "orders"))
 	moved := scansConfig("postgres://b/shop")
-	if out := scans.importOf(sourceOf(moved, "shop"), []string{"public"}, moved); len(out.Tables) != 0 {
+	if out := mustImport(t, scans, sourceOf(moved, "shop"), []string{"public"}, moved); len(out.Tables) != 0 {
 		t.Fatalf("another database shows the old scan: %+v", out.Tables)
 	}
-	scans.current(sourceOf(moved, "shop"), time.Now())
-	if _, ok := scans.scanned(old, "public"); ok {
+	_ = scans.current(context.Background(), sourceOf(moved, "shop"), time.Now())
+	if isKept(t, scans, old, "public") {
 		t.Fatal("the old database's scan must be dropped")
 	}
-	keepSchemas(scans, old, table("public", "users"), table("sales", "orders"))
-	if _, err := scans.list(old, true, func() (listedSchemas, error) {
+	keepSchemas(t, scans, old, table("public", "users"), table("sales", "orders"))
+	if _, err := scans.list(context.Background(), old, true, func() (listedSchemas, error) {
 		return listedSchemas{all: []string{"public"}}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := scans.scanned(old, "sales"); ok {
+	if isKept(t, scans, old, "sales") {
 		t.Fatal("a schema no longer listed must be dropped")
 	}
-	if _, ok := scans.scanned(old, "public"); !ok {
+	if !isKept(t, scans, old, "public") {
 		t.Fatal("a listed schema keeps its scan")
 	}
 }
@@ -113,24 +142,140 @@ func TestKeptScansFollowTheDatabase(t *testing.T) {
 // moved, and after the new database was scanned, keep the new one's scans.
 func TestLateRequestsKeepNewerScans(t *testing.T) {
 	t.Parallel()
-	scans := NewScans(scanjobs.Options{})
+	scans := NewScans(scanjobs.Options{}, nil)
 	t.Cleanup(scans.Close)
 	old := sourceOf(scansConfig("postgres://a/shop"), "shop")
 	moved := scansConfig("postgres://b/shop")
 	seenOld := time.Now()
-	keepSchemas(scans, sourceOf(moved, "shop"), table("public", "accounts"))
-	keepSchemas(scans, old, table("public", "users"))
-	if out := scans.importOf(old, []string{"public"}, moved); len(out.Tables) != 1 ||
-		out.Source == sourceOf(moved, "shop").token() {
+	keepSchemas(t, scans, sourceOf(moved, "shop"), table("public", "accounts"))
+	keepSchemas(t, scans, old, table("public", "users"))
+	if out := mustImport(t, scans, old, []string{"public"}, moved); len(out.Tables) != 1 ||
+		out.Source == sourceOf(moved, "shop").Token() {
 		t.Fatalf("the late scan answers for its own database: %+v", out)
 	}
-	scans.current(old, seenOld)
-	if _, err := scans.list(old, true, func() (listedSchemas, error) {
+	_ = scans.current(context.Background(), old, seenOld)
+	if _, err := scans.list(context.Background(), old, true, func() (listedSchemas, error) {
 		return listedSchemas{all: []string{"public"}}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := scans.scanned(sourceOf(moved, "shop"), "public"); !ok {
+	if !isKept(t, scans, sourceOf(moved, "shop"), "public") {
 		t.Fatal("a late request for the old database must not drop the new one's scans")
+	}
+}
+
+// Scans are kept in the catalog store: another replica, or the process after
+// a restart, reads them, and a newer scan replaces what it cached.
+func TestScansAreSharedThroughTheStore(t *testing.T) {
+	t.Parallel()
+	store := catalog.NewMemoryStore()
+	a, b := NewScans(scanjobs.Options{}, store), NewScans(scanjobs.Options{}, store)
+	t.Cleanup(a.Close)
+	t.Cleanup(b.Close)
+	cfg := scansConfig("postgres://a/shop")
+	src := sourceOf(cfg, "shop")
+	keepSchemas(t, a, src, table("public", "users"))
+	if got := mustImport(t, b, src, nil, cfg); len(got.Tables) != 1 {
+		t.Fatalf("the other replica sees %+v", got.Tables)
+	}
+	keepSchemas(t, a, src, table("public", "users"), table("public", "orders"))
+	if got := mustImport(t, b, src, nil, cfg); len(got.Tables) != 2 {
+		t.Fatalf("a newer scan is not read again: %+v", got.Tables)
+	}
+}
+
+// A batch whose process stopped is taken over by another once its heartbeat
+// is stale: what was not scanned is scanned there, and the batch ends.
+func TestScanBatchIsTakenOver(t *testing.T) {
+	t.Parallel()
+	store := catalog.NewMemoryStore()
+	first := NewScans(scanjobs.Options{}, store)
+	blocked := func(string) func(context.Context) (struct{}, error) {
+		return func(ctx context.Context) (struct{}, error) {
+			<-ctx.Done()
+			return struct{}{}, ctx.Err()
+		}
+	}
+	b, err := first.startBatch(context.Background(), "shop", "root", []string{"a", "b", "c"}, blocked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	first.Close() // the process stops while scanning
+	second := NewScans(scanjobs.Options{}, store)
+	t.Cleanup(second.Close)
+	if second.takeOver(context.Background(), runners(nil)); batchState(t, store, b.ID).Owner == second.batches.owner {
+		t.Fatal("a batch with a fresh heartbeat was taken over")
+	}
+	second.clock = func() time.Time { return time.Now().Add(time.Minute) }
+	second.takeOver(context.Background(), runners(nil))
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		got := batchState(t, store, b.ID)
+		if !got.FinishedAt.IsZero() {
+			for _, item := range got.Items {
+				if item.State != "done" {
+					t.Fatalf("items = %+v", got.Items)
+				}
+			}
+			if got.Owner != second.batches.owner {
+				t.Fatalf("owner = %s", got.Owner)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("not finished: %+v", got)
+		}
+	}
+}
+
+func runners(err error) func(context.Context, string) (scanRunner, error) {
+	return func(context.Context, string) (scanRunner, error) {
+		return func(string) func(context.Context) (struct{}, error) {
+			return func(context.Context) (struct{}, error) { return struct{}{}, err }
+		}, nil
+	}
+}
+
+func batchState(t *testing.T, store catalog.Store, id string) catalog.Batch {
+	t.Helper()
+	b, ok, err := store.Batch(context.Background(), id)
+	if err != nil || !ok {
+		t.Fatalf("batch %s: %v %v", id, ok, err)
+	}
+	return b
+}
+
+// Canceling a batch stops its scans and settles what was left.
+func TestScanBatchCancel(t *testing.T) {
+	t.Parallel()
+	store := catalog.NewMemoryStore()
+	scans := NewScans(scanjobs.Options{}, store)
+	t.Cleanup(scans.Close)
+	r := &Resolver{Scans: scans}
+	blocked := func(string) func(context.Context) (struct{}, error) {
+		return func(ctx context.Context) (struct{}, error) {
+			<-ctx.Done()
+			return struct{}{}, ctx.Err()
+		}
+	}
+	b, err := scans.startBatch(context.Background(), "shop", "root", []string{"a", "b", "c"}, blocked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := auth.WithPrincipal(context.Background(), auth.Principal{Permissions: []string{auth.PermAll}})
+	if _, err := r.cancelScanBatch(ctx, b.ID); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		got := batchState(t, store, b.ID)
+		if !got.FinishedAt.IsZero() {
+			if view := viewBatch(got); view.State != "canceled" || view.Canceled != 3 || !got.Canceled {
+				t.Fatalf("view = %+v", view)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("not finished: %+v", got)
+		}
 	}
 }

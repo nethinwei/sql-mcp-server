@@ -1,5 +1,6 @@
 // Package admin serves the admin API under /admin: sign-in with local
-// accounts, cookie sessions with CSRF tokens, and the GraphQL endpoint.
+// accounts, cookie sessions with CSRF tokens, the GraphQL endpoint, and the
+// configuration MCP endpoint at /admin/mcp for administrators' tokens.
 package admin
 
 import (
@@ -25,10 +26,12 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
+	"github.com/nethinwei/sql-mcp-server/x/admin/configmcp"
 	"github.com/nethinwei/sql-mcp-server/x/admin/graph"
 	"github.com/nethinwei/sql-mcp-server/x/admin/scanjobs"
 	"github.com/nethinwei/sql-mcp-server/x/admin/ui"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
+	"github.com/nethinwei/sql-mcp-server/x/catalog"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
 )
 
@@ -46,8 +49,12 @@ const (
 
 // Config wires the admin API.
 type Config struct {
-	Store      revision.Store
-	Accounts   accounts.Store
+	Store    revision.Store
+	Accounts accounts.Store
+	// Catalog keeps what schema scans found; in memory when nil.
+	Catalog catalog.Store
+	// Plans keeps plan templates and MCP tokens; nil refuses them.
+	Plans      graph.PlanStore
 	Introspect graph.Introspection
 	// Status reports the serving process to the console; optional.
 	Status func() graph.RuntimeState
@@ -80,12 +87,14 @@ type Handler struct {
 func New(cfg Config) *Handler {
 	h := &Handler{
 		cfg: cfg, sessions: newSessions(cfg.Now), logins: newLoginGate(maxConcurrentLogins),
-		scans: graph.NewScans(scanjobs.Options{}), published: newPublishedFeed(cfg.Store, eventPollInterval),
+		scans: graph.NewScans(scanjobs.Options{}, cfg.Catalog), published: newPublishedFeed(cfg.Store, eventPollInterval),
 	}
-	srv := handler.New(graph.NewExecutableSchema(graph.Config{Resolvers: &graph.Resolver{
+	resolver := &graph.Resolver{
 		Store: cfg.Store, Accounts: accounts.Service{Store: cfg.Accounts}, Introspect: cfg.Introspect, Status: cfg.Status,
-		Capabilities: cfg.Capabilities, Scans: h.scans,
-	}}))
+		Capabilities: cfg.Capabilities, Scans: h.scans, Plans: cfg.Plans,
+	}
+	resolver.WatchScanBatches()
+	srv := handler.New(graph.NewExecutableSchema(graph.Config{Resolvers: resolver}))
 	srv.AddTransport(transport.POST{})
 	srv.Use(extension.FixedComplexityLimit(maxQueryComplexity))
 	srv.Use(depthLimit(maxQueryDepth))
@@ -109,6 +118,13 @@ func New(cfg Config) *Handler {
 	})
 	if cfg.Playground {
 		h.mux.HandleFunc("GET /admin/playground", h.playground)
+	}
+	if cfg.Plans != nil {
+		opts := configmcp.Options{PathPrefix: cfg.PathPrefix, Now: cfg.Now}
+		mcpHandler := configmcp.New(resolver, cfg.Plans, cfg.Accounts, opts)
+		for _, method := range []string{http.MethodPost, http.MethodGet, http.MethodDelete} {
+			h.mux.Handle(method+" /admin/mcp", mcpHandler)
+		}
 	}
 	return h
 }

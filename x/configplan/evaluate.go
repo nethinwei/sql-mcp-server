@@ -1,0 +1,310 @@
+package configplan
+
+import (
+	"maps"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/nethinwei/sql-mcp-server/core/config"
+)
+
+// Input is what a plan is evaluated against.
+type Input struct {
+	// Base is the configuration the plan changes: the console's workspace,
+	// or the published configuration.
+	Base *config.Config
+	// Published tells published tables from those only in Base; nil: none.
+	Published *config.Config
+	Sources   []Source
+	// Denied reports an entity action the serving connections cannot run,
+	// with why; nil reports none.
+	Denied func(entity, action string) (reason string, denied bool)
+	// Review reports every new table a grant covers, as a recurring
+	// template's proposal needs.
+	Review bool
+	// Now and StaleAfter report removals based on scans older than
+	// StaleAfter; zero StaleAfter never does.
+	Now        time.Time
+	StaleAfter time.Duration
+}
+
+// Proposal is the outcome of a plan.
+type Proposal struct {
+	// Config is Base with the changes applied.
+	Config *config.Config
+	// Entities are the entities added or changed, in configuration order.
+	Entities []config.EntityConfig
+	// Added are the IDs of the entities added.
+	Added []string
+	// Roles and Users are the principals added or changed.
+	Roles  map[string]config.RoleDefinition
+	Users  map[string]config.UserConfig
+	Report Report
+}
+
+// Empty reports a proposal that changes nothing.
+func (p Proposal) Empty() bool { return len(p.Entities) == 0 && len(p.Roles) == 0 && len(p.Users) == 0 }
+
+// Report is what a reviewer reads before taking a proposal.
+type Report struct {
+	// Matched counts the tables in scope; Excluded those left out of them.
+	Matched  int
+	Excluded int
+	Objects  []Objects
+	Changes  []Change
+	// Exceptions need a look: they may be excluded or changed.
+	Exceptions []Exception
+	// Unscanned are the schemas in scope never scanned, by datasource.
+	Unscanned map[string][]string
+	// ScannedFrom and ScannedTo bound when the tables in scope were scanned;
+	// zero when unknown.
+	ScannedFrom, ScannedTo time.Time
+}
+
+// Objects counts what the plan covers in one schema.
+type Objects struct {
+	Datasource string
+	Schema     string
+	Tables     int
+	Imported   int
+	Changed    int
+}
+
+// Change kinds.
+const (
+	ChangeImport     = "import"
+	ChangeCreateRole = "createRole"
+	ChangeGrant      = "grant"
+	ChangeExclude    = "exclude"
+	ChangeMask       = "mask"
+	ChangeSyncAdd    = "syncAdd"
+	ChangeSyncRemove = "syncRemove"
+)
+
+// Change summarizes one kind of change over the entities it applies to.
+type Change struct {
+	Kind      string
+	Principal string
+	Actions   []string
+	Mask      string
+	// Fields counts the fields a field change touches.
+	Fields   int
+	Entities []string
+}
+
+// Exception kinds.
+const (
+	// ExceptionRenamed: the entity name differs from the table, which another
+	// entity of the schema uses.
+	ExceptionRenamed = "renamed"
+	// ExceptionNoKey: no key identifies a row; updates and deletes are not
+	// granted.
+	ExceptionNoKey = "noKey"
+	// ExceptionSideEffects: triggers or rules may write other tables.
+	ExceptionSideEffects = "sideEffects"
+	// ExceptionRelationshipDropped: a foreign key references a table that has
+	// no entity.
+	ExceptionRelationshipDropped = "relationshipDropped"
+	// ExceptionQualified: an existing reference would name several entities
+	// once the plan adds its own; it is rewritten to the ID of the one it
+	// named.
+	ExceptionQualified = "qualified"
+	// ExceptionUnknownUser: a grant names a user that does not exist.
+	ExceptionUnknownUser = "unknownUser"
+	// ExceptionNoFields: a grant's field patterns match no field.
+	ExceptionNoFields = "noFields"
+	// ExceptionReferenced: a field to remove is still referenced.
+	ExceptionReferenced = "referenced"
+	// ExceptionDenied: the connection lacks the privilege for an action.
+	ExceptionDenied = "denied"
+	// ExceptionReview: a new table enters an existing grant.
+	ExceptionReview = "review"
+	// ExceptionStaleScan: fields are removed after a scan older than
+	// Input.StaleAfter; the columns may have come back since.
+	ExceptionStaleScan = "staleScan"
+)
+
+// Exception levels: what a reviewer has to do about an exception.
+const (
+	// LevelBlock exceptions keep the proposal from being taken. No rule of
+	// the engine raises one today; an outcome that does not validate blocks
+	// the same way.
+	LevelBlock = "block"
+	// LevelConfirm exceptions change what is granted or fail to apply: taking
+	// the proposal needs them acknowledged.
+	LevelConfirm = "confirm"
+	// LevelInfo exceptions only inform.
+	LevelInfo = "info"
+)
+
+// levelOf is the level of an exception of kind with detail.
+func levelOf(kind, detail string) string {
+	switch kind {
+	case ExceptionRenamed, ExceptionSideEffects, ExceptionRelationshipDropped, ExceptionQualified:
+		return LevelInfo
+	case ExceptionNoKey:
+		if detail == "" { // reads only: nothing left out
+			return LevelInfo
+		}
+	}
+	return LevelConfirm
+}
+
+// Exception is something a reviewer should look at.
+type Exception struct {
+	Kind string
+	// Level is block, confirm or info (see levelOf).
+	Level string
+	// Warning marks exceptions that are not only informative.
+	Warning bool
+	// Ref is the table, when excluding it is a way out.
+	Ref    string
+	Entity string
+	// Detail names what the exception is about: a name, an action, a field.
+	Detail string
+}
+
+// Evaluate applies p to in.Base. It does not validate the result: the
+// caller runs it through the configuration chain.
+func Evaluate(in Input, p Plan) (Proposal, error) {
+	if err := p.Check(); err != nil {
+		return Proposal{}, err
+	}
+	ev := newEvaluation(in, p)
+	rows := Rows(in.Sources, in.Base, in.Published, p.Scope)
+	exclude := set(p.Exclude)
+	rows = slices.DeleteFunc(rows, func(r Row) bool {
+		excluded := exclude[r.Ref]
+		if excluded {
+			ev.report.Excluded++
+		}
+		return excluded
+	})
+	ev.report.Matched = len(rows)
+	for _, r := range rows {
+		if r.ScannedAt.IsZero() {
+			continue
+		}
+		if ev.report.ScannedFrom.IsZero() || r.ScannedAt.Before(ev.report.ScannedFrom) {
+			ev.report.ScannedFrom = r.ScannedAt
+		}
+		if r.ScannedAt.After(ev.report.ScannedTo) {
+			ev.report.ScannedTo = r.ScannedAt
+		}
+	}
+	if len(p.Scope.Refs) == 0 {
+		ev.report.Unscanned = Unscanned(in.Sources, p.Scope)
+	}
+	targets := ev.importTables(rows)
+	// Sync first, so the field rules cover the fields it adds.
+	if p.Sync != nil {
+		for _, t := range targets {
+			ev.sync(t)
+		}
+	}
+	for _, t := range targets {
+		ev.applyFields(t)
+	}
+	for _, rule := range p.Grants {
+		ev.grant(rule, targets)
+	}
+	ev.qualifyReferences()
+	return ev.proposal(rows), nil
+}
+
+// evaluation is the state of one Evaluate.
+type evaluation struct {
+	in    Input
+	plan  Plan
+	cfg   *config.Config
+	index map[string]int // entity ID → position in cfg.Entities
+	added []string
+	// imported maps the Ref of each table imported to its entity.
+	imported map[string]string
+	changed  map[string]bool
+	roles    map[string]bool
+	users    map[string]bool
+	report   Report
+	changes  map[string]*Change
+	order    []string
+	// summarized tells which entities each change names, by change key.
+	summarized map[string]map[string]bool
+	// fieldRules are the plan's field rules, compiled.
+	fieldRules []compiledFieldRule
+	// refs resolves references among the entities once the plan's are
+	// added; uses indexes what names each field (see fieldUses).
+	refs *config.EntityRefs
+	uses map[string]map[string][]string
+}
+
+type compiledFieldRule struct {
+	FieldRule
+	columns, types globs
+}
+
+func newEvaluation(in Input, p Plan) *evaluation {
+	cfg := *in.Base
+	cfg.Entities = slices.Clone(in.Base.Entities)
+	cfg.Roles = maps.Clone(in.Base.Roles)
+	cfg.Users = maps.Clone(in.Base.Users)
+	if cfg.Roles == nil {
+		cfg.Roles = map[string]config.RoleDefinition{}
+	}
+	ev := &evaluation{
+		in: in, plan: p, cfg: &cfg, index: map[string]int{}, imported: map[string]string{}, changed: map[string]bool{},
+		roles: map[string]bool{}, users: map[string]bool{}, changes: map[string]*Change{},
+		summarized: map[string]map[string]bool{},
+	}
+	for _, r := range p.Fields {
+		ev.fieldRules = append(ev.fieldRules, compiledFieldRule{r, compileGlobs(r.Columns), compileGlobs(r.Types)})
+	}
+	for i, e := range cfg.Entities {
+		ev.index[e.ID()] = i
+	}
+	return ev
+}
+
+// target is an entity the plan applies to, with the table it reads.
+type target struct {
+	row Row
+	id  string
+	new bool
+}
+
+func (ev *evaluation) entity(t target) *config.EntityConfig { return &ev.cfg.Entities[ev.index[t.id]] }
+
+// change marks an entity changed, copying the slices a rule will modify.
+func (ev *evaluation) change(t target) *config.EntityConfig {
+	e := ev.entity(t)
+	if !ev.changed[t.id] {
+		ev.changed[t.id] = true
+		e.Fields = slices.Clone(e.Fields)
+	}
+	return e
+}
+
+func (ev *evaluation) except(x Exception) {
+	x.Level = levelOf(x.Kind, x.Detail)
+	x.Warning = x.Level != LevelInfo
+	ev.report.Exceptions = append(ev.report.Exceptions, x)
+}
+
+// summarize adds an entity to the change of its kind and details.
+func (ev *evaluation) summarize(c Change, entity string, fields int) {
+	key := strings.Join(append([]string{c.Kind, c.Principal, c.Mask}, c.Actions...), "\x00")
+	got, ok := ev.changes[key]
+	if !ok {
+		got = &c
+		ev.changes[key] = got
+		ev.order = append(ev.order, key)
+	}
+	got.Fields += fields
+	if entity != "" && !ev.summarized[key][entity] {
+		if ev.summarized[key] == nil {
+			ev.summarized[key] = map[string]bool{}
+		}
+		ev.summarized[key][entity] = true
+		got.Entities = append(got.Entities, entity)
+	}
+}

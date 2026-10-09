@@ -16,7 +16,7 @@ func (r *Resolver) schemaList(ctx context.Context, datasource string, refresh bo
 	if err != nil {
 		return nil, err
 	}
-	listed, err := scans.list(src, refresh, func() (listedSchemas, error) {
+	listed, err := scans.list(ctx, src, refresh, func() (listedSchemas, error) {
 		return r.listSchemas(ctx, datasource, cfg.Databases[datasource])
 	})
 	if err != nil {
@@ -24,16 +24,20 @@ func (r *Resolver) schemaList(ctx context.Context, datasource string, refresh bo
 	}
 	out := &SchemaList{
 		Datasource: datasource, Schemas: make([]SchemaInfo, 0, len(listed.all)),
-		DefaultSchema: optional(listed.current), ListedAt: listed.at, Source: src.token(),
+		DefaultSchema: optional(listed.current), ListedAt: listed.at, Source: src.Token(),
 	}
 	names := listed.all
 	if len(names) == 0 {
 		names = []string{""} // the default schema of a datasource that cannot list them
 	}
+	kept, err := scans.kept(ctx, src)
+	if err != nil {
+		return nil, err
+	}
 	for _, name := range names {
 		info := SchemaInfo{Name: name}
-		if found, ok := scans.scanned(src, name); ok {
-			info.ScannedAt, info.Tables = &found.at, new(len(found.cat.Tables))
+		if found, ok := kept[name]; ok {
+			info.ScannedAt, info.Tables = &found.at, new(len(found.tables))
 		}
 		out.Schemas = append(out.Schemas, info)
 	}
@@ -64,7 +68,7 @@ func (r *Resolver) schemaTables(ctx context.Context, datasource string, schemas 
 	if err != nil {
 		return nil, err
 	}
-	return scans.importOf(src, schemas, cfg), nil
+	return scans.importOf(ctx, src, schemas, cfg)
 }
 
 // startSchemaScan queues a scan of schemas of datasource (none: every schema
@@ -74,24 +78,7 @@ func (r *Resolver) startSchemaScan(ctx context.Context, datasource string, schem
 	if err != nil {
 		return nil, err
 	}
-	job, err := scans.pool.Start(datasource, func(ctx context.Context) (struct{}, error) {
-		var cat introspect.Catalog
-		var scanned []string
-		// The scan reads the database of the configuration it was started
-		// with, which src names, even when it is reloaded meanwhile.
-		err := r.Introspect(ctx, datasource, cfg.Databases[datasource], func(in introspect.Introspector) (err error) {
-			cat, scanned, err = importCatalog(ctx, in, schemas)
-			return err
-		})
-		if err != nil {
-			return struct{}{}, fmt.Errorf("introspect %q: %w", datasource, err)
-		}
-		if len(scanned) == 0 {
-			scanned = []string{""}
-		}
-		scans.keep(src, scanned, cat)
-		return struct{}{}, nil
-	})
+	job, err := scans.pool.Start(datasource, r.scanRun(cfg, scans, src, datasource, schemas))
 	if err != nil {
 		return nil, err
 	}
@@ -116,4 +103,28 @@ func (r *Resolver) schemaScan(ctx context.Context, id string, cancel bool) (*Sca
 		return nil, nil
 	}
 	return toScanJob(job), nil
+}
+
+// scanRun scans schemas of datasource (none: every schema it lists, or its
+// default one) and keeps what it finds. It reads the database of cfg, the
+// configuration the scan was started with, which src names, even when the
+// runtime reloads meanwhile.
+func (r *Resolver) scanRun(
+	cfg *config.Config, scans *Scans, src source, datasource string, schemas []string,
+) func(context.Context) (struct{}, error) {
+	return func(ctx context.Context) (struct{}, error) {
+		var cat introspect.Catalog
+		var scanned []string
+		err := r.Introspect(ctx, datasource, cfg.Databases[datasource], func(in introspect.Introspector) (err error) {
+			cat, scanned, err = importCatalog(ctx, in, schemas)
+			return err
+		})
+		if err != nil {
+			return struct{}{}, fmt.Errorf("introspect %q: %w", datasource, err)
+		}
+		if len(scanned) == 0 {
+			scanned = []string{""}
+		}
+		return struct{}{}, scans.keep(ctx, src, scanned, cat)
+	}
 }

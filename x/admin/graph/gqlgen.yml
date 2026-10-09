@@ -1,6 +1,7 @@
 # gqlgen configuration; regenerate with `go generate ./x/admin/graph`.
 schema:
   - schema.graphqls
+  - planning.graphqls
 exec:
   filename: generated.go
   package: graph

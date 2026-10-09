@@ -4,3 +4,4 @@ package graph
 
 //go:generate go tool gqlgen generate --config gqlgen.yml
 //go:generate go run github.com/segmentio/golines@v0.13.0 -w -m 120 --base-formatter gofmt schema.resolvers.go
+//go:generate go run github.com/segmentio/golines@v0.13.0 -w -m 120 --base-formatter gofmt planning.resolvers.go

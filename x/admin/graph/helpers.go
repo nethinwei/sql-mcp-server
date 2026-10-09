@@ -10,6 +10,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
+	"github.com/nethinwei/sql-mcp-server/x/configstore"
 	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
@@ -74,6 +75,10 @@ func apiError(err error) error {
 			Extensions: map[string]any{"code": "CONFLICT", "published": strconv.FormatInt(conflict.Published, 10)},
 		}
 	}
+	if errors.Is(err, configstore.ErrTemplateConflict) || errors.Is(err, configstore.ErrTemplateExists) ||
+		errors.Is(err, errPlanChanged) {
+		return &gqlerror.Error{Message: err.Error(), Extensions: map[string]any{"code": "CONFLICT"}}
+	}
 	return err
 }
 
@@ -103,4 +108,11 @@ func configSchema() (any, error) {
 		return nil, fmt.Errorf("decode config schema: %w", err)
 	}
 	return schema, nil
+}
+
+func derefInt(n *int, fallback int) int {
+	if n == nil {
+		return fallback
+	}
+	return *n
 }

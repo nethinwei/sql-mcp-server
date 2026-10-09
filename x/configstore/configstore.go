@@ -23,8 +23,9 @@ import (
 const TablePrefix = config.StoreTablePrefix
 
 // SchemaVersion is the store table layout this build understands. Version 2
-// added administrator accounts.
-const SchemaVersion = 2
+// added administrator accounts, version 3 the scanned catalog, plan templates
+// and administrator tokens.
+const SchemaVersion = 3
 
 // Errors returned when opening a store.
 var (

@@ -1,6 +1,7 @@
 package configstore
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -16,7 +17,104 @@ type dialect struct {
 }
 
 func storeMigrations(text, longText string) [][]string {
-	return [][]string{revisionDDL(text, longText), adminDDL()}
+	return [][]string{revisionDDL(text, longText), adminDDL(), slices.Concat(catalogDDL(longText), templatesDDL(longText),
+		tokensDDL(), pendingDDL(longText))}
+}
+
+// catalogDDL is schema version 3, with planningDDL: the scanned catalog.
+func catalogDDL(longText string) []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS smcp_catalog_lists (
+			source_id      VARCHAR(64)  NOT NULL PRIMARY KEY,
+			datasource     VARCHAR(255) NOT NULL,
+			payload        ` + longText + ` NOT NULL,
+			listed_us      BIGINT       NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS smcp_catalog_schemas (
+			source_id   VARCHAR(64)  NOT NULL,
+			schema_name VARCHAR(255) NOT NULL,
+			datasource  VARCHAR(255) NOT NULL,
+			table_count INT          NOT NULL,
+			payload     ` + longText + ` NOT NULL,
+			scanned_us  BIGINT       NOT NULL,
+			PRIMARY KEY (source_id, schema_name)
+		)`,
+		`CREATE TABLE IF NOT EXISTS smcp_scan_batches (
+			id           VARCHAR(32)  NOT NULL PRIMARY KEY,
+			datasource   VARCHAR(255) NOT NULL,
+			started_by   VARCHAR(64)  NOT NULL,
+			owner        VARCHAR(64)  NOT NULL,
+			started_us   BIGINT       NOT NULL,
+			finished_us  BIGINT       NOT NULL,
+			heartbeat_us BIGINT       NOT NULL,
+			canceled     INT          NOT NULL,
+			payload      ` + longText + ` NOT NULL
+		)`,
+	}
+}
+
+// templatesDDL, tokensDDL and pendingDDL are the rest of schema version 3:
+// plan templates and their versions, administrators' MCP tokens and the
+// state of pending work.
+func templatesDDL(longText string) []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS smcp_plan_templates (
+			name       VARCHAR(128) NOT NULL PRIMARY KEY,
+			payload    ` + longText + ` NOT NULL,
+			recurring  INT          NOT NULL,
+			version    INT          NOT NULL,
+			author     VARCHAR(255) NOT NULL,
+			updated_us BIGINT       NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS smcp_plan_template_versions (
+			name       VARCHAR(128) NOT NULL,
+			version    INT          NOT NULL,
+			payload    ` + longText + ` NOT NULL,
+			recurring  INT          NOT NULL,
+			author     VARCHAR(255) NOT NULL,
+			updated_us BIGINT       NOT NULL,
+			PRIMARY KEY (name, version)
+		)`,
+	}
+}
+
+func tokensDDL() []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS smcp_admin_tokens (
+			id           VARCHAR(32)  NOT NULL PRIMARY KEY,
+			username     VARCHAR(64)  NOT NULL,
+			name         VARCHAR(64)  NOT NULL,
+			token_hash   VARCHAR(80)  NOT NULL,
+			created_us   BIGINT       NOT NULL,
+			expires_us   BIGINT       NOT NULL,
+			last_used_us BIGINT       NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX smcp_admin_tokens_hash ON smcp_admin_tokens (token_hash)`,
+	}
+}
+
+func pendingDDL(longText string) []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS smcp_pending_states (
+			item_key   VARCHAR(255) NOT NULL PRIMARY KEY,
+			status     VARCHAR(16)  NOT NULL,
+			owner      VARCHAR(64)  NOT NULL,
+			reason     ` + longText + ` NOT NULL,
+			until_us   BIGINT       NOT NULL,
+			updated_by VARCHAR(64)  NOT NULL,
+			updated_us BIGINT       NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS smcp_pending_log (
+			item_key   VARCHAR(255) NOT NULL,
+			updated_us BIGINT       NOT NULL,
+			status     VARCHAR(16)  NOT NULL,
+			owner      VARCHAR(64)  NOT NULL,
+			reason     ` + longText + ` NOT NULL,
+			until_us   BIGINT       NOT NULL,
+			updated_by VARCHAR(64)  NOT NULL,
+			PRIMARY KEY (item_key, updated_us)
+		)`,
+	}
 }
 
 // adminDDL is schema version 2: administrator accounts for the admin API.

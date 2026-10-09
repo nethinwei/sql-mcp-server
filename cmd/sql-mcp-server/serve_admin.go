@@ -47,8 +47,9 @@ func (f serveAdminFlags) handler(
 		return nil, errors.New("--admin requires the http transport")
 	}
 	return admin.New(admin.Config{
-		Store: src.store, Accounts: src.store, Introspect: runtimeIntrospection(runtime),
-		Status: runtimeStatus(runtime, src.rev, watching),
+		Store: src.store, Accounts: src.store, Catalog: src.store, Plans: src.store,
+		Introspect: runtimeIntrospection(runtime),
+		Status:     runtimeStatus(runtime, src.rev, watching),
 		Capabilities: func() bootstrap.EntityCapabilities {
 			if app := runtime.Current(); app != nil {
 				return app.Capabilities()

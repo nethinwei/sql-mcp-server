@@ -162,5 +162,22 @@
     "gaps": [
       "有 store 写权限的账号可改写配置；payload 未加密、未签名"
     ]
+  },
+  "TM-012": {
+    "severity": "high",
+    "tests": [
+      {"file": "x/admin/configmcp/configmcp_test.go", "name": "TestAgentPlansAndSavesADraft"},
+      {"file": "x/admin/configmcp/configmcp_test.go", "name": "TestTokensAndPermissions"},
+      {"file": "x/admin/admin_test.go", "name": "TestConfigMCPEndpointNeedsAToken"},
+      {"file": "x/admin/graph/planning_test.go", "name": "TestPlanningPermissions"},
+      {"file": "x/admin/graph/planning_test.go", "name": "TestTemplatesPendingAndTokens"},
+      {"file": "x/configplan/property_test.go", "name": "TestPlansHoldTheirProperties"},
+      {"file": "x/configplan/configplan_test.go", "name": "TestGrantExceptions"},
+      {"file": "x/configplan/configplan_test.go", "name": "TestExceptionLevelsAndStaleScans"},
+      {"file": "x/admin/graph/planning_test.go", "name": "TestScanBatches"}
+    ],
+    "gaps": [
+      "令牌拥有管理员全部权限，无更细范围；/admin/mcp 无单独限速"
+    ]
   }
 }

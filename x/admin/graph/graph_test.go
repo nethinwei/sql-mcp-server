@@ -92,7 +92,7 @@ func newHarness(t *testing.T) *harness {
 	) error {
 		return fn(tables)
 	}
-	scans := NewScans(scanjobs.Options{})
+	scans := NewScans(scanjobs.Options{}, nil)
 	t.Cleanup(scans.Close)
 	return &harness{store: store, accounts: accountStore, tables: tables, resolver: &Resolver{
 		Store: store, Accounts: accounts.Service{Store: accountStore}, Introspect: introspection, Scans: scans,

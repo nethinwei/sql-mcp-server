@@ -3,11 +3,11 @@ package graph
 import (
 	"cmp"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +16,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/admin/scanjobs"
+	"github.com/nethinwei/sql-mcp-server/x/catalog"
 )
 
 // requestScanTimeout bounds the reads that answer within their request:
@@ -23,42 +24,53 @@ import (
 const requestScanTimeout = 30 * time.Second
 
 // Scans runs schema scans on a bounded pool of workers and keeps what each
-// scan found, per schema, until the next scan of that schema: coming back to
-// the console does not scan again.
+// scan found, per schema, in a catalog store until the next scan of that
+// schema: coming back to the console, restarting or reaching another replica
+// does not scan again. Decoded schemas are cached per process and read again
+// when the store holds a newer scan.
 type Scans struct {
-	pool    *scanjobs.Pool[struct{}]
-	mu      sync.Mutex
-	schemas map[scanKey]scannedSchema
-	lists   map[source]listedSchemas
-	now     func() time.Time
+	pool  *scanjobs.Pool[struct{}]
+	store catalog.Store
+	mu    sync.Mutex
+	cache map[scanKey]keptSchema
+	clock func() time.Time
+	last  time.Time
+	// batches are the scan batches started.
+	batches *batches
+	// built caches each source's catalog by the versions of its schemas;
+	// rows caches the rows of catalog filters.
+	builtMu sync.Mutex
+	built   map[string]builtCatalog
+	rows    rowsCache
 }
 
-// source is what a datasource reads: its driver and read connection. What is
-// kept belongs to a source, so a datasource that keeps its name but reads
-// another database does not show what the old one had.
-type source struct{ datasource, driver, dsn string }
-
-// token names src without revealing its DSN.
-func (src source) token() string {
-	sum := sha256.Sum256([]byte(src.driver + "\x00" + src.dsn))
-	return hex.EncodeToString(sum[:8])
+type builtCatalog struct {
+	key  string
+	cat  introspect.Catalog
+	kept map[string]keptSchema
 }
+
+// source is what a datasource reads; see catalog.Source.
+type source = catalog.Source
 
 func sourceOf(cfg *config.Config, datasource string) source {
 	d := cfg.Databases[datasource]
-	return source{datasource, d.Driver, d.ConnectionsOrDSN()[d.Route().Read].DSN}
+	return source{Datasource: datasource, Driver: d.Driver, DSN: d.ConnectionsOrDSN()[d.Route().Read].DSN}
 }
 
 // scanKey names a kept schema; "" is the default schema of a datasource that
 // cannot list its schemas.
 type scanKey struct {
-	source source
+	source string
 	schema string
 }
 
-type scannedSchema struct {
-	cat introspect.Catalog
-	at  time.Time
+// keptSchema is a schema as scanned, with its tables as introspected.
+type keptSchema struct {
+	at       time.Time
+	tables   []entity.Entity
+	def      string
+	foldCase bool
 }
 
 type listedSchemas struct {
@@ -67,63 +79,62 @@ type listedSchemas struct {
 	at      time.Time
 }
 
-// NewScans starts the scan workers; Close stops them.
-func NewScans(opts scanjobs.Options) *Scans {
+// NewScans starts the scan workers, keeping scans in store (in memory when
+// nil); Close stops them.
+func NewScans(opts scanjobs.Options, store catalog.Store) *Scans {
+	if store == nil {
+		store = catalog.NewMemoryStore()
+	}
 	return &Scans{
-		pool: scanjobs.New[struct{}](opts), schemas: map[scanKey]scannedSchema{},
-		lists: map[source]listedSchemas{}, now: time.Now,
+		pool: scanjobs.New[struct{}](opts), store: store, cache: map[scanKey]keptSchema{},
+		clock: time.Now, batches: newBatches(), built: map[string]builtCatalog{},
 	}
 }
 
-// Close cancels the scans and stops the workers.
-func (s *Scans) Close() { s.pool.Close() }
-
-// keep records a scan of schemas (keys of scanKey) per schema.
-func (s *Scans) keep(src source, schemas []string, cat introspect.Catalog) {
+// now is the store's microsecond time, increasing from call to call, so a
+// scan and a listing that started after it never share a timestamp.
+func (s *Scans) now() time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	at := s.now()
-	bySchema := map[string][]entity.Entity{}
-	for _, t := range cat.Tables {
-		bySchema[t.Schema] = append(bySchema[t.Schema], t)
+	t := s.clock().UTC().Truncate(time.Microsecond)
+	if !t.After(s.last) {
+		t = s.last.Add(time.Microsecond)
 	}
-	for _, schema := range schemas {
-		part := introspect.Catalog{Tables: bySchema[schema], Default: cat.Default, FoldCase: cat.FoldCase}
-		if schema == "" { // the default schema: all of the scan
-			part.Tables = cat.Tables
-		}
-		s.schemas[scanKey{src, schema}] = scannedSchema{cat: part, at: at}
-	}
+	s.last = t
+	return t
+}
+
+// Close cancels the scans and batches and stops the workers.
+func (s *Scans) Close() {
+	s.batches.close()
+	s.pool.Close()
+}
+
+// keep records a scan of schemas per schema.
+func (s *Scans) keep(ctx context.Context, src source, schemas []string, cat introspect.Catalog) error {
+	return s.store.PutCatalogSchemas(ctx, src.ID(), src.Datasource, catalog.FromCatalog(cat, schemas, s.now()))
 }
 
 // current drops what was kept for src's datasource when it read another
 // database, as configured before seen, when the caller read the configuration
 // naming src: what was kept since may belong to a configuration newer than the
 // caller's, so a slow request or scan never drops it.
-func (s *Scans) current(src source, seen time.Time) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for k, kept := range s.schemas {
-		if k.source.datasource == src.datasource && k.source != src && kept.at.Before(seen) {
-			delete(s.schemas, k)
-		}
-	}
-	for k, listed := range s.lists {
-		if k.datasource == src.datasource && k != src && listed.at.Before(seen) {
-			delete(s.lists, k)
-		}
-	}
+func (s *Scans) current(ctx context.Context, src source, seen time.Time) error {
+	return s.store.PruneCatalog(ctx, src.Datasource, src.ID(), seen)
 }
 
 // list returns the kept schema list of src, listing it with fn when there is
 // none or refresh is set. A new list drops the scans of schemas no longer
 // listed, except those scanned while it was listing.
-func (s *Scans) list(src source, refresh bool, fn func() (listedSchemas, error)) (listedSchemas, error) {
-	s.mu.Lock()
-	listed, ok := s.lists[src]
-	s.mu.Unlock()
+func (s *Scans) list(
+	ctx context.Context, src source, refresh bool, fn func() (listedSchemas, error),
+) (listedSchemas, error) {
+	kept, ok, err := s.store.CatalogList(ctx, src.ID())
+	if err != nil {
+		return listedSchemas{}, err
+	}
 	if ok && !refresh {
-		return listed, nil
+		return listedSchemas{all: kept.Schemas, current: kept.Current, at: kept.ListedAt}, nil
 	}
 	started := s.now()
 	listed, err := fn()
@@ -131,53 +142,127 @@ func (s *Scans) list(src source, refresh bool, fn func() (listedSchemas, error))
 		return listed, err
 	}
 	listed.at = s.now()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.lists[src] = listed
-	for k, kept := range s.schemas {
-		if k.source == src && k.schema != "" && !slices.Contains(listed.all, k.schema) && kept.at.Before(started) {
-			delete(s.schemas, k)
+	if err := s.store.PutCatalogList(ctx, src.ID(), src.Datasource,
+		catalog.List{Schemas: listed.all, Current: listed.current, ListedAt: listed.at}); err != nil {
+		return listed, err
+	}
+	versions, err := s.store.CatalogVersions(ctx, src.ID())
+	if err != nil {
+		return listed, err
+	}
+	var gone []string
+	for _, v := range versions {
+		if v.Name != "" && !slices.Contains(listed.all, v.Name) {
+			gone = append(gone, v.Name)
 		}
 	}
-	return listed, nil
+	return listed, s.store.DeleteCatalogSchemas(ctx, src.ID(), gone, started)
 }
 
-func (s *Scans) scanned(src source, schema string) (scannedSchema, bool) {
+// kept returns every kept schema of src by name, reading from the store only
+// the schemas scanned since the cache read them.
+func (s *Scans) kept(ctx context.Context, src source) (map[string]keptSchema, error) {
+	versions, err := s.store.CatalogVersions(ctx, src.ID())
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]keptSchema, len(versions))
+	var stale []string
+	s.mu.Lock()
+	for _, v := range versions {
+		if c, ok := s.cache[scanKey{src.ID(), v.Name}]; ok && c.at.Equal(v.ScannedAt) {
+			out[v.Name] = c
+		} else {
+			stale = append(stale, v.Name)
+		}
+	}
+	for k := range s.cache {
+		if _, ok := out[k.schema]; k.source == src.ID() && !ok && !slices.Contains(stale, k.schema) {
+			delete(s.cache, k)
+		}
+	}
+	s.mu.Unlock()
+	if len(stale) == 0 {
+		return out, nil
+	}
+	read, err := s.store.CatalogSchemas(ctx, src.ID(), stale)
+	if err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	found, ok := s.schemas[scanKey{src, schema}]
-	return found, ok
+	for _, sc := range read {
+		k := keptSchema{at: sc.ScannedAt, def: sc.Default, foldCase: sc.FoldCase,
+			tables: make([]entity.Entity, 0, len(sc.Tables))}
+		for _, t := range sc.Tables {
+			k.tables = append(k.tables, t.Entity())
+		}
+		s.cache[scanKey{src.ID(), sc.Name}] = k
+		out[sc.Name] = k
+	}
+	return out, nil
+}
+
+func (s *Scans) scanned(ctx context.Context, src source, schema string) (keptSchema, bool, error) {
+	all, err := s.kept(ctx, src)
+	found, ok := all[schema]
+	return found, ok, err
+}
+
+// catalogOf puts every kept schema of src together, sorted by schema and
+// table.
+func (s *Scans) catalogOf(ctx context.Context, src source) (introspect.Catalog, map[string]keptSchema, error) {
+	all, err := s.kept(ctx, src)
+	if err != nil {
+		return introspect.Catalog{}, nil, err
+	}
+	names := slices.Sorted(maps.Keys(all))
+	var key strings.Builder
+	for _, name := range names {
+		fmt.Fprintf(&key, "%s=%d;", name, all[name].at.UnixMicro())
+	}
+	s.builtMu.Lock()
+	b, ok := s.built[src.ID()]
+	s.builtMu.Unlock()
+	if ok && b.key == key.String() {
+		return b.cat, b.kept, nil
+	}
+	var cat introspect.Catalog
+	for _, kept := range all {
+		cat.Default, cat.FoldCase = kept.def, kept.foldCase
+		cat.Tables = append(cat.Tables, kept.tables...)
+	}
+	slices.SortFunc(cat.Tables, func(a, b entity.Entity) int {
+		return cmp.Or(cmp.Compare(a.Schema, b.Schema), cmp.Compare(a.Source, b.Source))
+	})
+	cat.Index()
+	s.builtMu.Lock()
+	s.built[src.ID()] = builtCatalog{key: key.String(), cat: cat, kept: all}
+	s.builtMu.Unlock()
+	return cat, all, nil
 }
 
 // importOf compares the tables of the kept ones of schemas (nil: all of
-// them) with cfg. Names
-// and relationships are worked out over every kept schema of src: a table may
-// reference, or share its name with, a table of another schema.
-func (s *Scans) importOf(src source, schemas []string, cfg *config.Config) *SchemaImport {
-	s.mu.Lock()
-	var all introspect.Catalog
+// them) with cfg. Names and relationships are worked out over every kept
+// schema of src: a table may reference, or share its name with, a table of
+// another schema.
+func (s *Scans) importOf(ctx context.Context, src source, schemas []string, cfg *config.Config) (*SchemaImport, error) {
+	all, kept, err := s.catalogOf(ctx, src)
+	if err != nil {
+		return nil, err
+	}
 	shown := map[string]bool{}
-	for k, kept := range s.schemas {
-		if k.source != src {
-			continue
-		}
-		all.Default, all.FoldCase = kept.cat.Default, kept.cat.FoldCase
-		all.Tables = append(all.Tables, kept.cat.Tables...)
-		if schemas == nil || slices.Contains(schemas, k.schema) {
-			for _, t := range kept.cat.Tables {
+	for name, k := range kept {
+		if schemas == nil || slices.Contains(schemas, name) {
+			for _, t := range k.tables {
 				shown[tableKey(t.Schema, t.Source)] = true
 			}
 		}
 	}
-	s.mu.Unlock()
-	slices.SortFunc(all.Tables, func(a, b entity.Entity) int {
-		return cmp.Or(cmp.Compare(a.Schema, b.Schema), cmp.Compare(a.Source, b.Source))
-	})
-	all.Index()
-	out := buildSchemaImport(src.datasource, all, cfg)
+	out := buildSchemaImport(src.Datasource, all, cfg)
 	out.Tables = slices.DeleteFunc(out.Tables, func(t ImportTable) bool { return !shown[tableKey(t.Schema, t.Table)] })
-	out.Source = src.token()
-	return out
+	out.Source = src.Token()
+	return out, nil
 }
 
 func (r *Resolver) scans() (*Scans, error) {
@@ -207,7 +292,9 @@ func (r *Resolver) scanContext(ctx context.Context, datasource string) (*config.
 		return nil, nil, source{}, fmt.Errorf("unknown datasource %q", datasource)
 	}
 	src := sourceOf(cfg, datasource)
-	scans.current(src, seen)
+	if err := scans.current(ctx, src, seen); err != nil {
+		return nil, nil, source{}, err
+	}
 	return cfg, scans, src, nil
 }
 

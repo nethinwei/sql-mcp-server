@@ -16,6 +16,8 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/core/revision/revisiontest"
+	"github.com/nethinwei/sql-mcp-server/x/catalog"
+	"github.com/nethinwei/sql-mcp-server/x/catalog/catalogtest"
 	"github.com/nethinwei/sql-mcp-server/x/revisionops/revisionopstest"
 )
 
@@ -28,8 +30,16 @@ func runServerConformance(t *testing.T, spec Spec) {
 		assertMutateAdminsSerializes(t, freshStore(t, spec))
 	})
 	t.Run("RevisionOpsEdge", func(t *testing.T) {
-		revisionopstest.Run(t, func(t *testing.T) revision.Store { return freshStore(t, spec) }, revisionopstest.Options{})
+		revisionopstest.Run(
+			t,
+			func(t *testing.T) revision.Store { return freshStore(t, spec) },
+			revisionopstest.Options{},
+		)
 	})
+	t.Run("Catalog", func(t *testing.T) {
+		catalogtest.Run(t, func(t *testing.T) catalog.Store { return freshStore(t, spec) })
+	})
+	t.Run("Planning", func(t *testing.T) { assertPlanning(t, freshStore(t, spec)) })
 }
 
 // freshStore drops the store tables and initializes them again.
@@ -40,7 +50,11 @@ func freshStore(t *testing.T, spec Spec) *SQLStore {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"smcp_revisions", "smcp_store_meta", "smcp_admin_accounts"} {
+	for _, table := range []string{
+		"smcp_revisions", "smcp_store_meta", "smcp_admin_accounts", "smcp_catalog_lists", "smcp_catalog_schemas",
+		"smcp_plan_templates", "smcp_plan_template_versions", "smcp_admin_tokens", "smcp_pending_states", "smcp_scan_batches",
+		"smcp_pending_log",
+	} {
 		if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
 			t.Fatal(err)
 		}

@@ -76,19 +76,23 @@ func (c Catalog) Lookup(schema, table string) (entity.Entity, bool) {
 	if schema == "" {
 		schema = c.Default
 	}
-	var found []entity.Entity
+	// Only an unqualified name needs the candidates: it must be unique.
+	found, matches := -1, 0
 	for _, n := range c.positions(table) {
-		t := c.Tables[n]
-		if !c.sameName(tableName(t), table) {
+		t := &c.Tables[n]
+		if !c.sameName(tableName(*t), table) {
 			continue
 		}
-		if schema != "" && c.sameName(t.Schema, schema) {
-			return t, true
+		if schema != "" {
+			if c.sameName(t.Schema, schema) {
+				return *t, true
+			}
+			continue
 		}
-		found = append(found, t)
+		found, matches = n, matches+1
 	}
-	if schema == "" && len(found) == 1 {
-		return found[0], true
+	if matches == 1 {
+		return c.Tables[found], true
 	}
 	return entity.Entity{}, false
 }

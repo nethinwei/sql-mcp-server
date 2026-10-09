@@ -3,8 +3,10 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"github.com/nethinwei/sql-mcp-server/x/configstore"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -290,5 +292,30 @@ func TestPlaygroundPathsUnderAGatewayPrefix(t *testing.T) {
 	if !strings.Contains(page, `const url = location.protocol + '//' + location.host + "/sql-mcp-server/admin/graphql";`) {
 		i := strings.Index(page, "location.host")
 		t.Fatalf("playground endpoint: %s", page[i:min(len(page), i+80)])
+	}
+}
+
+// The configuration MCP endpoint takes administrators' tokens, never the
+// console's session cookie, and is served only with a store for tokens.
+func TestConfigMCPEndpointNeedsAToken(t *testing.T) {
+	f := newFixture(t)
+	if rec := f.do(http.MethodPost, "/admin/mcp", "{}", nil, nil); rec.Code == http.StatusUnauthorized {
+		t.Fatal("without a token store the endpoint must not be served")
+	}
+	spec := configstore.Spec{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "store.db")}
+	if err := configstore.Init(context.Background(), spec, nil); err != nil {
+		t.Fatal(err)
+	}
+	store, err := configstore.Open(context.Background(), spec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	f.h = New(Config{Store: f.h.cfg.Store, Accounts: f.accounts, Plans: store, Now: f.h.cfg.Now})
+	_, cookie, csrf := f.login(t, "correct horse battery")
+	rec := f.do(http.MethodPost, "/admin/mcp", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`,
+		map[string]string{csrfHeader: csrf}, cookie)
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Header().Get("WWW-Authenticate"), "Bearer") {
+		t.Fatalf("a session cookie reached the endpoint: %d", rec.Code)
 	}
 }
