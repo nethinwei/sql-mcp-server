@@ -18,7 +18,11 @@ const password = ref('')
 const error = ref('')
 const busy = ref(false)
 
+// Enter in the password field submits the form: one sign-in, going where the
+// page was asked for when it started.
 async function submit() {
+  if (busy.value) return
+  const next = typeof route.query.next === 'string' ? route.query.next : '/'
   busy.value = true
   error.value = ''
   try {
@@ -28,7 +32,7 @@ async function submit() {
       return
     }
     if (!ws.baseId) await ws.loadPublished().catch(() => false)
-    await router.replace(typeof route.query.next === 'string' ? route.query.next : '/')
+    await router.replace(next)
   } finally {
     busy.value = false
   }
@@ -47,7 +51,7 @@ async function submit() {
         </n-form-item>
         <n-form-item :label="t('login.password')" :show-feedback="false" class="field last">
           <n-input v-model:value="password" type="password" show-password-on="click"
-            :input-props="{ autocomplete: 'current-password' }" @keyup.enter="submit" />
+            :input-props="{ autocomplete: 'current-password' }" />
         </n-form-item>
         <n-alert v-if="error" type="error" :show-icon="false" class="error">{{ error }}</n-alert>
         <n-button type="primary" block :loading="busy" :disabled="!username || !password" attr-type="submit">

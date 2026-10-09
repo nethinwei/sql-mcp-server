@@ -1,8 +1,8 @@
 import type { CodegenConfig } from '@graphql-codegen/cli'
 
-// Types are generated from the same schema file gqlgen serves.
+// Types are generated from the same schema files gqlgen serves.
 const config: CodegenConfig = {
-  schema: '../../x/admin/graph/schema.graphqls',
+  schema: ['../../x/admin/graph/schema.graphqls', '../../x/admin/graph/planning.graphqls'],
   documents: ['src/**/*.{ts,vue}', '!src/gql/**'],
   ignoreNoDocuments: true,
   generates: {

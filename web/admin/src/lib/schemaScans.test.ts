@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { CancelSchemaScanMutation, SchemaScanQuery, SchemaSyncQuery, StartSchemaScanMutation } from '@/api/ops'
+import { ScanBatchesQuery, SchemaListQuery, StartScanBatchMutation } from '@/api/ops'
 
 // The server is a map from document to answer.
 const calls: [unknown, unknown][] = []
@@ -15,15 +15,20 @@ vi.mock('@/api/client', () => ({
   },
 }))
 
-const { cancelScan, scanSchema, scansOf, sync, tablesBySchema } = await import('./schemaScans')
+const { batchState, followBatches, scans, scansOf, startBatch, sync } = await import('./schemaScans')
 
-/** A sync answer: schemas of source, and the scanned tables with their candidate names. */
-const synced = (source: string, schemas: string[], tables: [string, string][] = []) => ({
-  schemaList: { source, defaultSchema: 'public', listedAt: '', schemas: schemas.map((name) => ({ name })) },
-  schemaTables: {
-    datasource: 'shop', source,
-    tables: tables.map(([schema, candidate]) => ({ schema, table: 't', candidate: { name: candidate } })),
+const listed = (source: string, schemas: string[], scanned: string[] = []) => ({
+  schemaList: {
+    source, defaultSchema: 'public', listedAt: '',
+    schemas: schemas.map((name) => ({ name, scannedAt: scanned.includes(name) ? 'now' : null, tables: null })),
   },
+})
+
+const batch = (id: string, state: string, items: [string, string][]) => ({
+  id, datasource: 'shop', state, total: items.length, startedBy: 'root', startedAt: '', finishedAt: null,
+  done: items.filter(([, s]) => s === 'done').length, failed: items.filter(([, s]) => s === 'failed').length,
+  canceled: 0, pending: items.filter(([, s]) => s === 'pending' || s === 'running').length,
+  items: items.map(([schema, state]) => ({ schema, state, error: state === 'failed' ? 'boom' : null })),
 })
 
 beforeEach(() => {
@@ -31,80 +36,61 @@ beforeEach(() => {
   answer = new Map()
 })
 
-describe('cancelScan', () => {
-  it('cancels a scan canceled before the server answered its start', async () => {
-    let started: (v: unknown) => void = () => {}
-    answer.set(StartSchemaScanMutation, () => new Promise((resolve) => { started = resolve }))
-    const n = { name: 'public', scannedAt: null, tables: null, scanning: false, job: null, error: null, checked: [], seq: 0 }
-    const scanning = scanSchema('shop', n)
-    await cancelScan(n)
-    started({ startSchemaScan: { id: 'j1' } })
-    await scanning
-    expect(calls).toContainEqual([CancelSchemaScanMutation, { id: 'j1' }])
-  })
-})
-
 describe('sync', () => {
-  it('drops what was read once the datasource reads another database', async () => {
-    answer.set(SchemaSyncQuery, () => synced('a', ['public'], [['public', 'users']]))
+  it('drops the list once the datasource reads another database', async () => {
+    answer.set(SchemaListQuery, () => listed('a', ['public', 'sales']))
     await sync('moved')
-    scansOf('moved').schemas[0].checked = ['public.t']
-    answer.set(SchemaSyncQuery, () => synced('b', ['public']))
+    answer.set(SchemaListQuery, () => listed('b', ['public']))
     await sync('moved')
-    const s = scansOf('moved')
-    expect(s.result?.tables).toEqual([])
-    expect(s.schemas[0].checked).toEqual([])
+    expect(scansOf('moved').schemas.map((n) => n.name)).toEqual(['public'])
   })
 
-  it('shows only the latest sync: one started after the last scan sees every scan', async () => {
+  it('shows only the latest listing', async () => {
     const pending: ((v: unknown) => void)[] = []
-    answer.set(SchemaSyncQuery, () => new Promise((resolve) => pending.push(resolve)))
+    answer.set(SchemaListQuery, () => new Promise((resolve) => pending.push(resolve)))
     const first = sync('both')
     const second = sync('both')
-    pending[1](synced('a', ['public', 'sales'], [['public', 'public_users'], ['sales', 'sales_users']]))
+    pending[1](listed('a', ['public', 'sales'], ['sales']))
     await second
-    pending[0](synced('a', ['public', 'sales'], [['public', 'users']]))
+    pending[0](listed('a', ['public']))
     await first
     const s = scansOf('both')
     expect(s.syncing).toBe(false)
-    expect(tablesBySchema(s.result).get('public')?.[0].candidate.name).toBe('public_users')
+    expect(s.schemas.map((n) => [n.name, n.scannedAt])).toEqual([['public', null], ['sales', 'now']])
   })
 
-  it('keeps what it showed and the error after a failed sync, until a retry succeeds', async () => {
-    answer.set(SchemaSyncQuery, () => synced('a', ['public'], [['public', 'users']]))
+  it('keeps what it showed and the error after a failed listing, until a retry succeeds', async () => {
+    answer.set(SchemaListQuery, () => listed('a', ['public']))
     await sync('flaky')
-    answer.set(SchemaSyncQuery, () => { throw new Error('connection reset') })
+    answer.set(SchemaListQuery, () => { throw new Error('connection reset') })
     await sync('flaky')
     const s = scansOf('flaky')
     expect(s.error).toBe('connection reset')
-    expect(s.result?.tables).toHaveLength(1)
-    answer.set(SchemaSyncQuery, () => synced('a', ['public'], [['public', 'public_users']]))
-    await sync('flaky')
-    expect(s.error).toBeNull()
-    expect(s.result?.tables[0].candidate.name).toBe('public_users')
+    expect(s.schemas).toHaveLength(1)
+  })
+})
+
+describe('batches', () => {
+  it('follows a batch on the server until it ends, refreshing the catalog as schemas are scanned', async () => {
+    const answers = [
+      batch('b1', 'running', [['s1', 'done'], ['s2', 'running']]),
+      batch('b1', 'done', [['s1', 'done'], ['s2', 'failed']]),
+    ]
+    answer.set(StartScanBatchMutation, () => ({ startScanBatch: batch('b1', 'running', [['s1', 'pending'], ['s2', 'pending']]) }))
+    answer.set(ScanBatchesQuery, () => ({ scanBatches: [answers.shift() ?? answers[0]] }))
+    answer.set(SchemaListQuery, () => listed('a', ['s1', 's2'], ['s1']))
+    const version = scans.version
+    await startBatch('shop', ['s1', 's2'])
+    await vi.waitFor(() => expect(scansOf('shop').batches[0].state).toBe('done'), { timeout: 5000 })
+    expect(scans.version).toBeGreaterThan(version)
+    expect(batchState(scansOf('shop'), 's2')).toEqual({ state: 'failed', error: 'boom' })
+    expect(scansOf('shop').schemas.find((n) => n.name === 's1')?.scannedAt).toBe('now')
   })
 
-  it('syncs once a scan is done', async () => {
-    answer.set(SchemaSyncQuery, () => synced('a', ['public']))
-    await sync('scan')
-    answer.set(StartSchemaScanMutation, () => ({ startSchemaScan: { id: 'j2' } }))
-    answer.set(SchemaScanQuery, () => ({ schemaScan: { state: 'DONE' } }))
-    answer.set(SchemaSyncQuery, () => synced('a', ['public'], [['public', 'users']]))
-    const s = scansOf('scan')
-    await scanSchema('scan', s.schemas[0])
-    expect(s.schemas[0].scanning).toBe(false)
-    expect(s.result?.tables).toHaveLength(1)
-  })
-
-  it('scans a schema left open that the server no longer keeps', async () => {
-    answer.set(SchemaSyncQuery, () => synced('a', ['public', 'sales']))
-    await sync('reopened')
-    const s = scansOf('reopened')
-    s.expanded = ['sales']
-    answer.set(StartSchemaScanMutation, () => new Promise(() => {})) // stays starting
-    await sync('reopened')
-    expect(s.schemas[1].scanning).toBe(true)
-    expect(s.schemas[0].scanning).toBe(false)
-    expect(calls).toContainEqual([StartSchemaScanMutation, { datasource: 'reopened', schemas: ['sales'] }])
+  it('reads the running batches again when the console comes back', async () => {
+    answer.set(ScanBatchesQuery, () => ({ scanBatches: [batch('b9', 'done', [['x', 'done']])] }))
+    answer.set(SchemaListQuery, () => listed('a', ['x'], ['x']))
+    await followBatches('again')
+    expect(scansOf('again').batches.map((b) => b.id)).toEqual(['b9'])
   })
 })

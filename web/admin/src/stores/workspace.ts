@@ -13,6 +13,7 @@ import type {
   EntityPartsFragment,
   GrantInput,
   GrantPartsFragment,
+  PreviewPlanQuery,
   RoleInput,
   UserInput,
 } from '@/gql/graphql'
@@ -39,7 +40,18 @@ export interface FieldReference {
   kind: 'role' | 'user' | 'relationship' | 'primaryKey' | 'uniqueKey' | 'tenantPolicy'
   /** The role, user or entity holding the reference. */
   name: string
+  /**
+   * For a role or user: whether a grant lists the field (removing the field
+   * removes it there too) or filters rows by it (which must be fixed first).
+   */
+  via?: 'fields' | 'rows'
 }
+
+/** Whether removing a field takes care of a reference to it. */
+export const followsRemoval = (r: FieldReference) => r.via === 'fields'
+
+/** A plan's outcome as previewPlan answers it. */
+export type Proposal = PreviewPlanQuery['previewPlan']
 
 export interface Change {
   kind: 'entity' | 'role' | 'user' | 'settings'
@@ -336,6 +348,20 @@ export const useWorkspace = defineStore('workspace', {
       return draft
     },
     /**
+     * What every computation on the workspace (catalog status, scope counts,
+     * plan previews, table details) runs against: its base revision with the
+     * unsaved changes. Always the workspace, never "the published revision
+     * when nothing is unsaved": a loaded draft is a base of its own. Undefined
+     * before a revision is loaded.
+     */
+    computeDraft(): DraftInput | undefined {
+      return this.baseId ? this.draft : undefined
+    },
+    /** Changes whenever computeDraft would compute something else. */
+    contextKey(state): string {
+      return `${state.baseId ?? ''}\u0000${this.content}`
+    },
+    /**
      * The conflicts still to resolve: those whose value the workspace does
      * not already hold from the newer revision. mine is the workspace's
      * current value, edits since the conflict arose included: it is what
@@ -363,31 +389,53 @@ export const useWorkspace = defineStore('workspace', {
       })
     },
     /**
-     * Where roles, users and entities name a field of the entity with an ID;
-     * an entity holding a reference is named by its ID.
+     * Where roles, users and entities name each field, built in one pass:
+     * `${entity ID}\u0000${field}` → references. An entity holding a
+     * reference is named by its ID.
      */
-    fieldReferences(state): (entity: string, field: string) => FieldReference[] {
-      return (entity, field) => {
-        const index = this.entityIndex
-        const out: FieldReference[] = []
-        const inGrant = (g: GrantInput) => index.idOf(g.entity) === entity && (
-          (g.readFields ?? []).includes(field) || (g.writeFields ?? []).includes(field) ||
-          filterFields(g.rows as Filter | undefined).includes(field))
-        for (const r of state.roles) if ((r.grants ?? []).some(inGrant)) out.push({ kind: 'role', name: r.name })
-        for (const u of state.users) if ((u.grants ?? []).some(inGrant)) out.push({ kind: 'user', name: u.name })
-        for (const e of state.entities) {
-          const id = entityId(e)
-          const joins = (e.relationships ?? []).some((rel) => {
-            const on = (rel.joinOn ?? {}) as Record<string, string>
-            return (id === entity && field in on) || (index.idOf(rel.target) === entity && Object.values(on).includes(field))
-          })
-          if (joins) out.push({ kind: 'relationship', name: id })
-          if (id !== entity) continue
-          if ((e.primaryKey ?? []).includes(field)) out.push({ kind: 'primaryKey', name: id })
-          if ((e.uniqueKeys ?? []).some((k) => k.includes(field))) out.push({ kind: 'uniqueKey', name: id })
-          if (filterFields(e.tenantPolicy as Filter | undefined).includes(field)) out.push({ kind: 'tenantPolicy', name: id })
+    fieldReferenceIndex(state): Map<string, FieldReference[]> {
+      const index = this.entityIndex
+      const out = new Map<string, FieldReference[]>()
+      const add = (entity: string | undefined, field: string, ref: FieldReference) => {
+        if (entity === undefined) return
+        const key = `${entity}\u0000${field}`
+        const list = out.get(key) ?? []
+        if (!list.some((r) => r.kind === ref.kind && r.name === ref.name)) out.set(key, [...list, ref])
+      }
+      for (const [kind, holders] of [['role', state.roles], ['user', state.users]] as const) {
+        for (const h of holders) {
+          // Row filters first: a field a grant both lists and filters by blocks removal.
+          for (const g of h.grants ?? []) {
+            const entity = index.idOf(g.entity)
+            for (const f of filterFields(g.rows as Filter | undefined)) add(entity, f, { kind, name: h.name, via: 'rows' })
+          }
+          for (const g of h.grants ?? []) {
+            const entity = index.idOf(g.entity)
+            for (const f of [...(g.readFields ?? []), ...(g.writeFields ?? [])]) add(entity, f, { kind, name: h.name, via: 'fields' })
+          }
         }
-        return out
+      }
+      for (const e of state.entities) {
+        const id = entityId(e)
+        for (const rel of e.relationships ?? []) {
+          for (const [local, remote] of Object.entries((rel.joinOn ?? {}) as Record<string, string>)) {
+            add(id, local, { kind: 'relationship', name: id })
+            add(index.idOf(rel.target), remote, { kind: 'relationship', name: id })
+          }
+        }
+        for (const f of e.primaryKey ?? []) add(id, f, { kind: 'primaryKey', name: id })
+        for (const k of e.uniqueKeys ?? []) for (const f of k) add(id, f, { kind: 'uniqueKey', name: id })
+        for (const f of filterFields(e.tenantPolicy as Filter | undefined)) add(id, f, { kind: 'tenantPolicy', name: id })
+      }
+      return out
+    },
+    /** Where roles, users and entities name a field of the entity with an ID. */
+    fieldReferences(): (entity: string, field: string) => FieldReference[] {
+      return (entity, field) => {
+        const refs = this.fieldReferenceIndex.get(`${entity}\u0000${field}`) ?? []
+        // Roles and users first, as the previous listing did.
+        const order = { role: 0, user: 1, relationship: 2, primaryKey: 3, uniqueKey: 4, tenantPolicy: 5 }
+        return [...refs].sort((a, b) => order[a.kind] - order[b.kind])
       }
     },
     hasToken: (state) => (user: UserInput) =>
@@ -714,6 +762,38 @@ export const useWorkspace = defineStore('workspace', {
       })
       for (const r of this.roles) r.grants = (r.grants ?? []).map(prune)
       for (const u of this.users) u.grants = (u.grants ?? []).map(prune)
+      this.persist()
+    },
+
+    /**
+     * Takes a plan's outcome (see previewPlan) into the workspace, like an
+     * edit: the entities it adds are imported (references they make
+     * ambiguous are qualified), the entities it changes take its fields, and
+     * the roles and users it changes take its grants, which name entities by
+     * ID and are written in their shortest unambiguous form.
+     */
+    applyProposal(p: Proposal) {
+      const added = new Set(p.added)
+      const entities = p.entities.map(toEntityInput)
+      this.importEntities(entities.filter((e) => added.has(entityId(e))))
+      for (const e of entities) {
+        const current = added.has(entityId(e)) ? undefined : this.entity(entityId(e))
+        if (current) current.fields = e.fields
+      }
+      const index = this.entityIndex
+      const grants = (gs: GrantPartsFragment[]) => gs.map((g) => {
+        const grant = toGrantInput(g)
+        return index.get(g.entity) ? { ...grant, entity: index.shortName(g.entity) } : grant
+      })
+      for (const r of p.roles) {
+        const role = this.role(r.name)
+        if (role) role.grants = grants(r.grants)
+        else this.roles.push({ name: r.name, description: r.description ?? undefined, grants: grants(r.grants) })
+      }
+      for (const u of p.users) {
+        const user = this.user(u.name)
+        if (user) user.grants = grants(u.grants)
+      }
       this.persist()
     },
 

@@ -274,10 +274,11 @@ describe('fields', () => {
       relationships: [{ name: 'customer', target: 'customers', cardinality: 'belongs-to', joinOn: { customer_id: 'id' } }] })
     ws.upsertRole({ name: 'analyst', grants: [{ entity: 'orders', actions: ['READ'], fieldsRestricted: true,
       readFields: ['id'], writeFields: [], rows: { op: 'gt', field: 'customer_id', value: 0 } }] })
-    expect(ws.fieldReferences('default.orders', 'customer_id').map((r) => `${r.kind}:${r.name}`))
-      .toEqual(['role:analyst', 'relationship:default.orders'])
-    expect(ws.fieldReferences('default.orders', 'id').map((r) => `${r.kind}:${r.name}`))
-      .toEqual(['role:analyst', 'primaryKey:default.orders'])
+    // A row filter must be fixed before the field goes; a field list follows.
+    expect(ws.fieldReferences('default.orders', 'customer_id').map((r) => `${r.kind}:${r.name}:${r.via ?? ''}`))
+      .toEqual(['role:analyst:rows', 'relationship:default.orders:'])
+    expect(ws.fieldReferences('default.orders', 'id').map((r) => `${r.kind}:${r.name}:${r.via ?? ''}`))
+      .toEqual(['role:analyst:fields', 'primaryKey:default.orders:'])
     expect(ws.fieldReferences('default.customers', 'id').map((r) => `${r.kind}:${r.name}`)).toEqual(['relationship:default.orders'])
   })
 
@@ -563,5 +564,61 @@ describe('the local side of a conflict', () => {
     ws.resolveConflict(ws.openConflicts[0], 'mine')
     expect(ws.role('analyst')!.description).toBe('edited again')
     expect(ws.conflicts).toEqual([])
+  })
+})
+
+describe('applyProposal', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  const entity = (name: string, schema: string, fields: { name: string; mask?: string }[] = [{ name: 'id' }]) => ({
+    name, source: name, datasource: 'shop', schema, kind: null, description: null, primaryKey: ['id'], uniqueKeys: [],
+    params: [], affects: [], allowCascade: false, tenantPolicy: null, legacyAccess: null,
+    mcp: { dmlTools: true, customTool: false, trustedProcedure: false },
+    fields: fields.map((f) => ({ name: f.name, alias: null, description: null, mask: f.mask ?? null, exclude: false })),
+    relationships: [],
+  })
+  const grant = (e: string) => ({ entity: e, actions: ['READ' as const], fieldsRestricted: false, readFields: [], writeFields: [], rows: null })
+
+  it('imports, changes fields and grants by ID, qualifying what becomes ambiguous', () => {
+    const ws = useWorkspace()
+    ws.$patch((s) => {
+      s.entities = [
+        { name: 'orders', datasource: 'shop', schema: 'sales', fields: [{ name: 'id' }] },
+        { name: 'customers', datasource: 'shop', schema: 'sales', fields: [{ name: 'id' }, { name: 'phone' }] },
+      ]
+      s.roles = [{ name: 'analyst', grants: [{ entity: 'orders', actions: ['READ'] }] }]
+      s.users = [{ name: 'alice', grants: [] }]
+    })
+    ws.applyProposal({
+      added: ['shop.public.orders'],
+      entities: [entity('orders', 'public'), entity('customers', 'sales', [{ name: 'id' }, { name: 'phone', mask: 'phone' }])],
+      roles: [
+        { name: 'analyst', description: null, grants: [grant('shop.sales.orders'), grant('shop.public.orders')] },
+        { name: 'support', description: 'new', grants: [grant('shop.public.orders')] },
+      ],
+      users: [{ name: 'alice', grants: [grant('shop.sales.customers')] }],
+    } as never)
+    expect(ws.entities.map((e) => `${e.schema}.${e.name}`)).toEqual(['sales.orders', 'sales.customers', 'public.orders'])
+    expect(ws.entity('shop.sales.customers')!.fields![1].mask).toBe('phone')
+    expect(ws.role('analyst')!.grants!.map((g) => g.entity)).toEqual(['sales.orders', 'public.orders'])
+    expect(ws.role('support')).toMatchObject({ description: 'new', grants: [{ entity: 'public.orders' }] })
+    expect(ws.user('alice')!.grants!.map((g) => g.entity)).toEqual(['customers'])
+  })
+})
+
+describe('computeDraft', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  it('is the workspace base, a loaded draft included, never the published revision by default', () => {
+    const ws = useWorkspace()
+    expect(ws.computeDraft).toBeUndefined()
+    ws.apply(loaded('7', { entities: ['orders'], roles: [], users: [] }), '7')
+    // A loaded draft is the base: nothing unsaved, yet not the published one.
+    expect(ws.dirty).toBe(false)
+    expect(ws.computeDraft).toEqual({ base: '7' })
+    const key = ws.contextKey
+    ws.upsertEntity({ name: 'refunds' })
+    expect(ws.computeDraft?.entities?.map((e) => e.name)).toEqual(['orders', 'refunds'])
+    expect(ws.contextKey).not.toBe(key)
   })
 })

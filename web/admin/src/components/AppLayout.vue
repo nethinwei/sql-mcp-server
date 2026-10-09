@@ -8,7 +8,7 @@ import {
 } from 'naive-ui'
 import {
   GridOutline, ServerOutline, CubeOutline, ShieldCheckmarkOutline, PeopleOutline, FlaskOutline,
-  TimeOutline, SettingsOutline, KeyOutline, PersonCircleOutline,
+  TimeOutline, SettingsOutline, KeyOutline, PersonCircleOutline, ListOutline, NotificationsOutline, HardwareChipOutline,
 } from '@vicons/ionicons5'
 import ChangeBar from './ChangeBar.vue'
 import RuntimeBadge from './RuntimeBadge.vue'
@@ -42,6 +42,11 @@ const menu = computed<MenuOption[]>(() => [
   { type: 'group', label: t('nav.data'), key: 'g-data', children: [
     { key: 'datasources', label: link('datasources', 'nav.datasources'), icon: icon(ServerOutline) },
     { key: 'entities', label: link('entities', 'nav.entities'), icon: icon(CubeOutline) },
+  ] },
+  { type: 'group', label: t('nav.batch'), key: 'g-batch', children: [
+    { key: 'plans', label: link('plans', 'nav.plans'), icon: icon(ListOutline) },
+    { key: 'pending', label: link('pending', 'nav.pending'), icon: icon(NotificationsOutline) },
+    { key: 'agent', label: link('agent', 'nav.agent'), icon: icon(HardwareChipOutline) },
   ] },
   { type: 'group', label: t('nav.access'), key: 'g-access', children: [
     { key: 'roles', label: link('roles', 'nav.roles'), icon: icon(ShieldCheckmarkOutline) },

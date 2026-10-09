@@ -8,8 +8,9 @@ import { serviceBase } from '@/api/base'
 
 // Ready-to-paste client configuration for a user's token, one tab per MCP
 // client, as MCP services usually offer it: the remote endpoint and the
-// token as an Authorization: Bearer header.
-const props = defineProps<{ token: string }>()
+// token as an Authorization: Bearer header. admin is the configuration MCP
+// endpoint for an administrator's token, next to the service's own.
+const props = defineProps<{ token: string; admin?: boolean }>()
 const { t } = useI18n()
 const message = useMessage()
 
@@ -20,12 +21,15 @@ const ws = useWorkspace()
 const router = useRouter()
 const configured = computed(() => {
   const server = ws.settings.server as { publicURL?: string } | undefined
-  return server?.publicURL || ''
+  const v = server?.publicURL || ''
+  return v && props.admin ? v.replace(/\/mcp\/?$/, '') + '/admin/mcp' : v
 })
 const url = ref('')
-watch(configured, (v) => { url.value = v || `${window.location.origin}${serviceBase}mcp` }, { immediate: true })
+watch(configured, (v) => {
+  url.value = v || `${window.location.origin}${serviceBase}${props.admin ? 'admin/mcp' : 'mcp'}`
+}, { immediate: true })
 
-const name = 'sql-mcp-server'
+const name = props.admin ? 'sql-mcp-server-config' : 'sql-mcp-server'
 const header = computed(() => `Bearer ${props.token}`)
 const json = (v: unknown) => JSON.stringify(v, null, 2)
 
@@ -89,7 +93,7 @@ async function copy(text: string) {
         <pre class="code mono">{{ s.text }}</pre>
       </n-tab-pane>
     </n-tabs>
-    <n-text depth="3" class="hint">{{ t('connect.secretHint') }}</n-text>
+    <n-text depth="3" class="hint">{{ t(admin ? 'connect.adminSecretHint' : 'connect.secretHint') }}</n-text>
   </div>
 </template>
 
