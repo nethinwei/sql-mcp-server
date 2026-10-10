@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
@@ -76,6 +77,26 @@ func serverStatus(status func() RuntimeState) *ServerStatus {
 			ID: strconv.FormatInt(st.Pending.RevisionID, 10), RestartRequired: st.Pending.RestartRequired,
 			Error: st.Pending.Err,
 		}
+	}
+	if st.Execution != nil {
+		out.Execution = executionStatus(*st.Execution)
+	}
+	return out
+}
+
+func executionStatus(st bus.Stats) *ExecutionStatus {
+	slot := func(s bus.SlotStats) *SlotStatus {
+		return &SlotStatus{Size: s.Size, Used: s.Used, Waiting: s.Waiting}
+	}
+	out := &ExecutionStatus{Io: slot(st.IO), Aux: slot(st.Aux), Lanes: []LaneStatus{}, Tasks: []TaskStatus{}}
+	for _, l := range st.Lanes {
+		out.Lanes = append(out.Lanes, LaneStatus{
+			Name: string(l.Name), MaxConcurrent: l.MaxConcurrent, MaxQueue: l.MaxQueue, Inflight: l.Inflight,
+			Queued: l.Queued, Rejected: int(l.Rejected), Completed: int(l.Completed),
+		})
+	}
+	for _, t := range st.Tasks {
+		out.Tasks = append(out.Tasks, TaskStatus{Name: t.Name, Running: t.Running})
 	}
 	return out
 }

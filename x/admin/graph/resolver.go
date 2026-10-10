@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
@@ -13,6 +14,8 @@ type RuntimeState struct {
 	Watching bool
 	// Pending is a published revision not applied; nil when none.
 	Pending *bootstrap.StaleState
+	// Execution is a snapshot of the execution bus; nil when unknown.
+	Execution *bus.Stats
 }
 
 // Resolver is the root resolver. It holds no per-request state: the

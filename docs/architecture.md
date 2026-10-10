@@ -16,7 +16,7 @@ MCP client
 
 `core/` 包含 `config`、`relalg`、`codegen`、`entity`、`dialect`（接口与能力声明）、
 `store`、`rbac`、`mask`、`cost`、`budget`、`audit`、`tool`、`cache`、`hook`、
-`ratelimit`、`engine`、`introspect` 和 provider 契约。外部依赖位于 `x/` 或
+`ratelimit`、`bus`、`engine`、`introspect` 和 provider 契约。外部依赖位于 `x/` 或
 可执行入口，业务核心不反向依赖 `x/`；`.golangci.yml` 的 depguard 强制此边界。
 
 `x/mcpserver` 是唯一接触官方 MCP SDK 的业务适配层。provider 与方言实现位于
@@ -43,7 +43,8 @@ delete 和 procedure call。关系展开不是通用 SQL join：它只支持同�
 `tool.RunTool` 是 MCP 工具调用的统一入口，负责：
 
 - 按角色/租户获取进程内预算 lease；
-- 将调用提交到有界 engine，非事务读取工具可按身份作用域 singleflight；
+- 将调用提交到有界 engine（在执行总线的 `serve` 通道准入），非事务读取工具可按
+  身份作用域 singleflight；
 - 触发 hook，并以 best-effort 方式记录审计；
 - 汇总返回行数、耗时和近似 session cost。
 
@@ -53,6 +54,33 @@ delete 和 procedure call。关系展开不是通用 SQL join：它只支持同�
 失效缓存，视图、物化视图和外部表的条目在同一数据源的任何写入后失效，存储过程按
 `affects` 失效、未声明时失效整个数据源。一个物理关系最多对应一个实体，见
 [数据源模型设计](design/datasource-model.md)。
+
+## 执行总线
+
+进程级执行总线 `core/bus` 管控所有执行资源，`cmd` 创建它，`bootstrap.Shared`
+在每次发布时按配置设置上限（热重载生效）。
+
+- **通道（lane）**：触达数据库的工作都在某个通道上准入。`serve` 是工具调用，
+  上限为 `rateLimit.maxInflight`，满即拒绝（`OVERLOADED`），新旧快照共享同一上限；
+  `admin`（管理员请求内的自省，如模式列表、表注释、导入）、`scan`（扫描任务与扫描
+  批次）、`background`（能力评估、装配期自省）由 `execution.*` 配置并发与排队上限，
+  排队满立即返回繁忙；装配（启动与重载）只排队等待、不因繁忙失败，扫描任务在提交时即
+  进入 `scan` 队列并计入排队数。总线关闭时扫描任务、扫描批次与事件轮询随之停止，
+  批次保持未完成，由其他进程接管。
+- **IO 配额**：所有通道共享 `rateLimit.ioPool` 个 IO 槽（即 engine 的
+  `Quota`），非 `serve` 通道合计最多占一半（`max(1, ioPool/2)`），管理与扫描不会
+  挤占工具调用。准入信息随 context 传递，嵌套工作（扫描任务内的自省）用
+  `Ensure` 复用同一准入，不重复占槽。
+- **后台任务**：所有 goroutine 与定时器经 `bus.Go`、`bus.Fork`、`bus.AfterFunc`
+  启动（审计 flush、事务过期回滚、快照退役、扫描批次与心跳、事件轮询、配置
+  watch、HTTP 关停）：按名称计数、恢复 panic、关闭时取消并等待。
+  `internal/buscheck` 用类型信息检查 `core/`、`x/`、`cmd/` 的生产代码，出现
+  `go` 语句、`sync.WaitGroup.Go`、`errgroup.Group.Go` 或 `time.AfterFunc` 即
+  失败（仅 `core/bus` 与 engine 的 singleflight 例外，后者受 `serve` 准入约束）。
+- **可观测**：`Bus.Stats()` 经 `x/otel.RegisterBusMetrics` 导出 OTel 指标，并由
+  GraphQL `serverStatus.execution` 提供给控制台概览页。
+
+进程关闭时先关闭 Runtime（排空快照、关闭审计），再关闭总线等待剩余任务（最多 15 秒）。
 
 ## 多数据源与事务
 

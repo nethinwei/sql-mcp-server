@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
@@ -98,6 +99,23 @@ func storeResolver(secretRoots string) configstore.Resolver {
 }
 
 // watch reloads on file changes or newly published store revisions.
+// watchOn runs watch as a background task of execution when enabled
+// (--watch), until ctx ends.
+func (s serveSource) watchOn(
+	ctx context.Context,
+	execution *bus.Bus,
+	enabled bool,
+	runtime *bootstrap.Runtime,
+	build func(*config.Config) (*bootstrap.App, error),
+	interval time.Duration,
+	intervalExplicit bool,
+) {
+	if !enabled {
+		return
+	}
+	execution.Go("config watch", func(context.Context) { s.watch(ctx, runtime, build, interval, intervalExplicit) })
+}
+
 func (s serveSource) watch(
 	ctx context.Context,
 	runtime *bootstrap.Runtime,

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/cache"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/engine"
@@ -19,11 +20,13 @@ import (
 // Shared holds what the Apps of one process share across reloads, so the old
 // and the new configuration, serving side by side while the old one drains,
 // act as one process: the read cache, which a write through either
-// invalidates; the IO quota, which bounds both together; and the database
-// connections, reused while their settings stay the same.
+// invalidates; the execution bus and the IO quota on it, which bound both
+// together; and the database connections, reused while their settings stay
+// the same.
 type Shared struct {
 	generation atomic.Uint64
 	cache      *cache.TTLCache[[]map[string]any]
+	bus        *bus.Bus
 	quota      *engine.Quota
 
 	mu        sync.Mutex
@@ -48,11 +51,34 @@ type sharedConnection struct {
 	refs     int
 }
 
-// NewShared returns empty shared services.
+// NewShared returns empty shared services on an execution bus of their own.
 func NewShared() *Shared {
+	return NewSharedOn(bus.New(1, nil))
+}
+
+// NewSharedOn returns empty shared services on b, the process's execution
+// bus: the IO quota is b's IO semaphore, and publishing an App sets b's
+// limits. The caller closes b after the Runtime.
+func NewSharedOn(b *bus.Bus) *Shared {
 	return &Shared{
-		cache: cache.NewTTLCache[[]map[string]any](0, 0), quota: engine.NewQuota(1),
+		cache: cache.NewTTLCache[[]map[string]any](0, 0), bus: b, quota: engine.NewQuotaOn(b.IO()),
 		pools: map[string]*sharedConnection{},
+	}
+}
+
+// Bus returns the execution bus the services run on.
+func (s *Shared) Bus() *bus.Bus { return s.bus }
+
+// laneLimits are the lane limits cfg sets.
+func laneLimits(cfg *config.Config) map[bus.LaneName]bus.Limits {
+	lane := func(l config.LaneConfig) bus.Limits {
+		return bus.Limits{MaxConcurrent: l.MaxConcurrent, MaxQueue: l.MaxQueue}
+	}
+	return map[bus.LaneName]bus.Limits{
+		bus.Serve:      {MaxConcurrent: cfg.RateLimit.MaxInflight},
+		bus.Admin:      lane(cfg.Execution.Admin),
+		bus.Scan:       lane(cfg.Execution.Scan),
+		bus.Background: lane(cfg.Execution.Background),
 	}
 }
 
@@ -152,6 +178,7 @@ func (s *Shared) apply(app *App) {
 		s.rateLimit = &applied
 	}
 	s.mu.Unlock()
+	s.bus.Update(cfg.RateLimit.IOPool, laneLimits(cfg))
 	if cfg.Cache.Enabled {
 		s.cache.UpdateLimits(cfg.Cache.TTL, cfg.Cache.MaxSize)
 	}
@@ -160,11 +187,12 @@ func (s *Shared) apply(app *App) {
 	}
 }
 
-// engine returns an engine on the shared quota.
-func (s *Shared) engine(cfg *config.Config) (*engine.Engine, error) {
+// engine returns an engine on the shared quota, admitting calls on the bus's
+// Serve lane: the Apps of the process share its in-flight bound.
+func (s *Shared) engine(*config.Config) (*engine.Engine, error) {
 	return engine.New(
 		engine.WithQuota(s.quota),
-		engine.WithMaxInflight(cfg.RateLimit.MaxInflight),
+		engine.WithLane(s.bus.Lane(bus.Serve)),
 		engine.WithFailureClassifier(recordProviderFailure),
 	)
 }

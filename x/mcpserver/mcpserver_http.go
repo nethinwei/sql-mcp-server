@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 )
 
 func applyHTTPDefaults(cfg *HTTPConfig) {
@@ -183,13 +185,20 @@ func loadTLS(cfg HTTPConfig) (*tls.Config, error) {
 	return out, nil
 }
 
-func serveHTTPWithShutdown(ctx context.Context, srv *http.Server, tlsEnabled bool) error {
-	go func() {
-		<-ctx.Done()
+func serveHTTPWithShutdown(ctx context.Context, b *bus.Bus, srv *http.Server, tlsEnabled bool) error {
+	served := make(chan struct{})
+	defer close(served)
+	b.Go("http shutdown", func(busCtx context.Context) {
+		select {
+		case <-ctx.Done():
+		case <-busCtx.Done():
+		case <-served:
+			return
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
-	}()
+	})
 	var err error
 	if tlsEnabled {
 		err = srv.ListenAndServeTLS("", "") // certificates from srv.TLSConfig
@@ -303,5 +312,5 @@ func ServeHTTP(ctx context.Context, s *mcp.Server, cfg HTTPConfig) error {
 			GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) { return h.tls.Load(), nil },
 		}
 	}
-	return serveHTTPWithShutdown(ctx, srv, h.cfg.tlsEnabled())
+	return serveHTTPWithShutdown(ctx, h.cfg.Bus, srv, h.cfg.tlsEnabled())
 }

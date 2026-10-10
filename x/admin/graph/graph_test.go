@@ -13,6 +13,7 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
@@ -421,6 +422,38 @@ func TestServerStatus(t *testing.T) {
 	st := resp.ServerStatus
 	if st.AppliedRevision != "1" || !st.Watching || st.Pending.ID != "2" || !st.Pending.RestartRequired {
 		t.Fatalf("serverStatus = %+v", st)
+	}
+}
+
+// serverStatus reports the execution bus as the process gives it.
+func TestServerStatusExecution(t *testing.T) {
+	h := newHarness(t)
+	b := bus.New(4, map[bus.LaneName]bus.Limits{bus.Scan: {MaxConcurrent: 3, MaxQueue: 5}})
+	t.Cleanup(func() { _ = b.Close(context.Background()) })
+	h.resolver.Status = func() RuntimeState {
+		st := b.Stats()
+		return RuntimeState{Execution: &st}
+	}
+	var resp struct {
+		ServerStatus struct {
+			Execution struct {
+				Io    struct{ Size, Used int }
+				Aux   struct{ Size int }
+				Lanes []struct {
+					Name                    string
+					MaxConcurrent, MaxQueue int
+				}
+			}
+		}
+	}
+	mustPost(t, h.client(auth.PermRead),
+		`{ serverStatus { execution { io { size used } aux { size } lanes { name maxConcurrent maxQueue } } } }`, &resp)
+	ex := resp.ServerStatus.Execution
+	if ex.Io.Size != 4 || ex.Aux.Size != 2 || len(ex.Lanes) != len(bus.Lanes) {
+		t.Fatalf("execution = %+v", ex)
+	}
+	if l := ex.Lanes[2]; l.Name != "scan" || l.MaxConcurrent != 3 || l.MaxQueue != 5 {
+		t.Fatalf("scan lane = %+v", l)
 	}
 }
 

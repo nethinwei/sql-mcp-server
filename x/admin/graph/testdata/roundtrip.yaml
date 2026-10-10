@@ -73,3 +73,7 @@ cost:
 budget:
   users:
     alice: {maxConcurrent: 2}
+execution:
+  admin: {maxConcurrent: 3, maxQueue: 9}
+  scan: {maxConcurrent: 1, maxQueue: 4}
+  background: {maxConcurrent: 1, maxQueue: 32}

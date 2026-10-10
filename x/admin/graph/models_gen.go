@@ -177,6 +177,16 @@ type EntityVisibility struct {
 	Actions []ActionVisibility `json:"actions"`
 }
 
+type ExecutionStatus struct {
+	// IO slots every lane draws on.
+	Io *SlotStatus `json:"io"`
+	// The part of the IO slots the lanes other than serve hold together.
+	Aux   *SlotStatus  `json:"aux"`
+	Lanes []LaneStatus `json:"lanes"`
+	// Background tasks running, by name.
+	Tasks []TaskStatus `json:"tasks"`
+}
+
 type Field struct {
 	Name        string  `json:"name"`
 	Alias       *string `json:"alias,omitempty"`
@@ -272,6 +282,19 @@ type ImportTable struct {
 	SideEffects bool `json:"sideEffects"`
 	// A zero-permission entity proposal; add it to a draft to configure it.
 	Candidate *Entity `json:"candidate"`
+}
+
+type LaneStatus struct {
+	// serve, admin, scan or background.
+	Name          string `json:"name"`
+	MaxConcurrent int    `json:"maxConcurrent"`
+	MaxQueue      int    `json:"maxQueue"`
+	Inflight      int    `json:"inflight"`
+	Queued        int    `json:"queued"`
+	// Work turned away since the process started.
+	Rejected int `json:"rejected"`
+	// Work run since the process started.
+	Completed int `json:"completed"`
 }
 
 type Mutation struct {
@@ -389,6 +412,8 @@ type ServerStatus struct {
 	Watching bool `json:"watching"`
 	// A published revision this process has not applied.
 	Pending *PendingRevision `json:"pending,omitempty"`
+	// What the process runs on its execution bus; null when unknown.
+	Execution *ExecutionStatus `json:"execution,omitempty"`
 }
 
 type SetAdminPasswordInput struct {
@@ -411,6 +436,12 @@ type SimulationInput struct {
 	Subject any `json:"subject,omitempty"`
 }
 
+type SlotStatus struct {
+	Size    int `json:"size"`
+	Used    int `json:"used"`
+	Waiting int `json:"waiting"`
+}
+
 type TableComments struct {
 	Description string          `json:"description"`
 	Columns     []ColumnComment `json:"columns"`
@@ -421,6 +452,11 @@ type TableRef struct {
 	Schema     *string `json:"schema,omitempty"`
 	// Physical table name (entity source).
 	Table string `json:"table"`
+}
+
+type TaskStatus struct {
+	Name    string `json:"name"`
+	Running int    `json:"running"`
 }
 
 type User struct {

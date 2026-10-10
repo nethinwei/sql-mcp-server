@@ -18,6 +18,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
@@ -474,6 +475,8 @@ func parseSubjectHeader(raw string) (map[string]any, error) {
 // and hardening. Zero-valued timeout/size fields receive safe defaults. Metrics
 // is an optional handler mounted at /metrics.
 type HTTPConfig struct {
+	// Bus runs the server's background tasks; optional.
+	Bus               *bus.Bus
 	Addr              string
 	Token             string // shared-secret bearer token; empty disables token auth
 	TrustProxyHeaders bool   // trust X-MCP-Role/X-MCP-Subject identity headers

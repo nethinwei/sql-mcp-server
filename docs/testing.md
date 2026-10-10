@@ -17,7 +17,8 @@ govulncheck ./...
 ```
 
 `make fmt` 运行 `internal/fmtcheck`（gofmt + golines，并检查文件/函数/行宽
-上限）。仓库 `.vscode/settings.json` 为 gopls 配置 `integration,e2e` build
+上限）。`internal/buscheck` 是 `go test ./...` 的一部分，生产代码绕过执行总线
+启动 goroutine 或定时器时失败。仓库 `.vscode/settings.json` 为 gopls 配置 `integration,e2e` build
 tag，便于 IDE 分析带标签的测试文件。
 
 本次变更的最低验证也可使用 `go test ./...`；提交前按 CI 使用 `-race`。

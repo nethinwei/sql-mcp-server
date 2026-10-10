@@ -193,6 +193,8 @@ Web 控制台，管理员账号用 `sql-mcp-server admin create|passwd|set|list`
   transport 依赖事务 TTL 和 App 关闭。
 - 数据库连接上限与 `rateLimit.ioPool` 对齐，idle timeout 来自
   `connMaxIdleTime`。
+- 执行总线（见[架构 · 执行总线](architecture.md#执行总线)）在 Runtime 关闭后关闭：
+  取消剩余后台任务并最多等待 15 秒，超时时日志列出仍在运行的任务名。
 
 ## 监控与审计
 
@@ -200,6 +202,17 @@ Web 控制台，管理员账号用 `sql-mcp-server admin create|passwd|set|list`
 cost gate 属性）。设置标准 `OTEL_EXPORTER_OTLP_ENDPOINT`（或
 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`）后，`serve` 会初始化 OTLP
 HTTP/protobuf exporter 并真实导出 span；未设置时保持 no-op，不产生网络流量。
+
+设置 `OTEL_EXPORTER_OTLP_ENDPOINT`（或 `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`）
+后同样导出执行总线指标：
+
+- `smcp.bus.lane.inflight` / `.queued` / `.limit`（属性 `lane`：`serve`、`admin`、
+  `scan`、`background`）：各通道执行中、排队中与并发上限；
+- `smcp.bus.lane.rejected` / `.completed`：累计拒绝（繁忙）与完成数；
+- `smcp.bus.io.used` / `.size`（属性 `pool`：`io` 全部 IO 槽，`aux` 非工具调用份额）；
+- `smcp.bus.tasks`（属性 `task`）：按名称的后台任务数。
+
+控制台概览页的“执行资源”卡片展示同一快照。
 
 HTTP transport 在 `/metrics` 暴露最小 Prometheus 文本格式指标（配置
 `server.auth.token` 时需要同一 Bearer token）：

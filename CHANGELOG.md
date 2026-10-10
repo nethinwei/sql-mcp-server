@@ -11,6 +11,14 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ### Added
 
+- 执行总线 `core/bus`：所有触达数据库的执行按通道（工具调用 `serve`、管理读取
+  `admin`、扫描 `scan`、后台 `background`）准入并共享 `rateLimit.ioPool`，非工具调用
+  通道合计至多占一半；新增 `execution.{admin,scan,background}.{maxConcurrent,maxQueue}`
+  配置（热重载生效）；管理面自省不再无界开连接；热重载期间新旧快照共享
+  `maxInflight`；所有后台 goroutine 与定时器经总线登记、恢复 panic 并在关闭时排空，
+  `internal/buscheck` 强制；OTel 指标 `smcp.bus.*`、GraphQL
+  `serverStatus.execution` 与控制台概览页“执行资源”卡片。
+
 - 批量配置（设计见 `docs/design/planning.md`）：
   - 扫描结果保存在配置库（schema 版本 3，启动时自动迁移），重启和多副本共享；扫描
     在服务端按批次进行，批次保存在配置库（关闭控制台、重启或切换副本都会继续，所有者

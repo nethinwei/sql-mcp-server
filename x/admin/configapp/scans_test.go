@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
@@ -565,5 +566,35 @@ func TestScanBatchTakeoverWaitsForTheStore(t *testing.T) {
 		if it.State != catalog.ItemDone {
 			t.Fatalf("after the store is back: %+v", got.Items)
 		}
+	}
+}
+
+// Closing the bus stops the running batches as the process stopping does:
+// Close does not wait for them, and they stay unfinished for a takeover.
+func TestBusCloseStopsScanBatches(t *testing.T) {
+	t.Parallel()
+	store := catalog.NewMemoryStore()
+	b := bus.New(8, nil)
+	scans := NewScans(scanjobs.Options{Bus: b}, store)
+	t.Cleanup(scans.Close)
+	scans.WatchBatches(runners(nil))
+	blocked := func(string) func(context.Context) (struct{}, error) {
+		return func(ctx context.Context) (struct{}, error) {
+			<-ctx.Done()
+			return struct{}{}, ctx.Err()
+		}
+	}
+	batch, err := scans.startBatch(context.Background(), "shop", "root", "", []string{"a", "b"}, blocked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := b.Close(ctx); err != nil {
+		t.Fatalf("bus close = %v; tasks %+v", err, b.Stats().Tasks)
+	}
+	if got := batchState(t, store, batch.ID); !got.FinishedAt.IsZero() {
+		t.Fatalf("closing the bus finished the batch: %+v", got)
 	}
 }

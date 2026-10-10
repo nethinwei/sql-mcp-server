@@ -356,6 +356,12 @@ const en: typeof zh = {
     staleDraftBody: 'Publishing replaces #{current} with the draft as a whole, losing the changes made in #{current}. Load it into the workspace and re-apply it onto the latest revision first.',
     publishAnyway: 'Publish anyway',
   },
+  execution: {
+    title: 'Execution resources', lane: 'Lane', running: 'Load', inflight: 'Running', queued: 'Waiting',
+    rejected: 'Turned away', completed: 'Completed', io: 'IO slots', aux: 'Non-tool share',
+    tasks: 'Background tasks', noTasks: 'None',
+    lanes: { serve: 'Tool calls', admin: 'Admin reads', scan: 'Schema scans', background: 'Background' },
+  },
   runtime: {
     serving: 'Serving #{id}', loading: 'Loading #{id}', pendingRestart: '#{id} needs a restart', failed: '#{id} failed to apply',
     notWatching: '#{id} not loaded', published: 'Published', applied: 'Serving', watch: 'Hot reload',

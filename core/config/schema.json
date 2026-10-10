@@ -748,6 +748,82 @@
         }
       },
       "additionalProperties": false
+    },
+    "execution": {
+      "title": "Execution bus",
+      "x-title-zh-CN": "执行总线",
+      "description": "Lanes of database work other than tool calls; all lanes share rateLimit.ioPool and these together hold at most half of it.",
+      "x-description-zh-CN": "工具调用以外的数据库执行的通道上限；所有通道共享 rateLimit.ioPool，这些通道合计最多占用其一半。",
+      "type": "object",
+      "properties": {
+        "admin": {
+          "description": "Reads answering an administrator's request (schema lists, table comments, imports).",
+          "x-description-zh-CN": "管理员请求内的读取（模式列表、表注释、导入）。",
+          "type": "object",
+          "properties": {
+            "maxConcurrent": {
+              "description": "Work running at once.",
+              "x-description-zh-CN": "同时执行的上限。",
+              "type": "integer",
+              "default": 4,
+              "minimum": 0
+            },
+            "maxQueue": {
+              "description": "Work waiting; beyond it requests fail as busy at once.",
+              "x-description-zh-CN": "排队等待的上限；超过时立即返回繁忙。",
+              "type": "integer",
+              "default": 16,
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        "scan": {
+          "description": "Schema scans and scan batches.",
+          "x-description-zh-CN": "模式扫描与扫描批次。",
+          "type": "object",
+          "properties": {
+            "maxConcurrent": {
+              "description": "Scans running at once.",
+              "x-description-zh-CN": "同时执行的扫描上限。",
+              "type": "integer",
+              "default": 2,
+              "minimum": 0
+            },
+            "maxQueue": {
+              "description": "Scans waiting.",
+              "x-description-zh-CN": "排队等待的扫描上限。",
+              "type": "integer",
+              "default": 8,
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        "background": {
+          "description": "Work nobody waits for, such as capability assessment and introspection while assembling.",
+          "x-description-zh-CN": "无人等待的后台工作，如能力评估与装配期自省。",
+          "type": "object",
+          "properties": {
+            "maxConcurrent": {
+              "description": "Work running at once.",
+              "x-description-zh-CN": "同时执行的上限。",
+              "type": "integer",
+              "default": 2,
+              "minimum": 0
+            },
+            "maxQueue": {
+              "description": "Work waiting.",
+              "x-description-zh-CN": "排队等待的上限。",
+              "type": "integer",
+              "default": 64,
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false,

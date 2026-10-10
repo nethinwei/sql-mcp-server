@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/x/admin"
@@ -31,6 +32,7 @@ func newServeAdminFlags(fs *flag.FlagSet) serveAdminFlags {
 func (f serveAdminFlags) handler(
 	src serveSource,
 	runtime *bootstrap.Runtime,
+	execution *bus.Bus,
 	cfg *config.Config,
 	transport string,
 	watching bool,
@@ -50,7 +52,8 @@ func (f serveAdminFlags) handler(
 	return admin.New(admin.Config{
 		Store: src.store, Accounts: src.store, Catalog: src.store, Plans: src.store,
 		Introspect: runtimeIntrospection(runtime),
-		Status:     runtimeStatus(runtime, src.rev, watching),
+		Bus:        execution,
+		Status:     runtimeStatus(runtime, execution, src.rev, watching),
 		Capabilities: func() bootstrap.EntityCapabilities {
 			if app := runtime.Current(); app != nil {
 				return app.Capabilities()
@@ -62,11 +65,14 @@ func (f serveAdminFlags) handler(
 	}), nil
 }
 
-// runtimeStatus reports the served revision: the startup revision until the
-// store watcher tracks it.
-func runtimeStatus(runtime *bootstrap.Runtime, startup int64, watching bool) func() graph.RuntimeState {
+// runtimeStatus reports the served revision, the startup revision until the
+// store watcher tracks it, and what runs on the execution bus.
+func runtimeStatus(
+	runtime *bootstrap.Runtime, execution *bus.Bus, startup int64, watching bool,
+) func() graph.RuntimeState {
 	return func() graph.RuntimeState {
-		st := graph.RuntimeState{Applied: runtime.AppliedRevision(), Watching: watching}
+		stats := execution.Stats()
+		st := graph.RuntimeState{Applied: runtime.AppliedRevision(), Watching: watching, Execution: &stats}
 		if st.Applied == 0 {
 			st.Applied = startup
 		}
@@ -79,35 +85,51 @@ func runtimeStatus(runtime *bootstrap.Runtime, startup int64, watching bool) fun
 
 // runtimeIntrospection runs fn with the introspector of datasource as
 // database configures it, on a connection of its own; an App assembled from
-// handed connections introspects its connected datasource instead.
+// handed connections introspects its connected datasource instead. It runs
+// on the bus's Admin lane, or under the admission ctx carries (a scan's).
 func runtimeIntrospection(runtime *bootstrap.Runtime) configapp.Introspection {
 	return func(
 		ctx context.Context, datasource string, database config.DatabaseConfig, fn func(introspect.Introspector) error,
 	) error {
-		app, release, err := runtime.Acquire()
+		app := runtime.Current()
+		if app == nil {
+			return bootstrap.ErrRuntimeClosed
+		}
+		return app.Bus().Lane(bus.Admin).Ensure(ctx, func(ctx context.Context) error {
+			return introspectOn(ctx, runtime, datasource, database, fn)
+		})
+	}
+}
+
+// introspectOn runs fn with the introspector of datasource; see
+// runtimeIntrospection.
+func introspectOn(
+	ctx context.Context, runtime *bootstrap.Runtime, datasource string, database config.DatabaseConfig,
+	fn func(introspect.Introspector) error,
+) error {
+	app, release, err := runtime.Acquire()
+	if err != nil {
+		return err
+	}
+	// The scan does not hold the snapshot, so serving and reloads do not
+	// wait for it.
+	provider, own, err := app.OpenScan(ctx, database)
+	if own {
+		release()
 		if err != nil {
 			return err
 		}
-		// The scan does not hold the snapshot, so serving and reloads do not
-		// wait for it.
-		provider, own, err := app.OpenScan(ctx, database)
-		if own {
-			release()
-			if err != nil {
-				return err
-			}
-			defer func() { _ = provider.Close() }()
-		} else {
-			defer release()
-			var ok bool
-			if provider, ok = app.Providers[datasource]; !ok {
-				return fmt.Errorf("datasource %q is not connected", datasource)
-			}
+		defer func() { _ = provider.Close() }()
+	} else {
+		defer release()
+		var ok bool
+		if provider, ok = app.Providers[datasource]; !ok {
+			return fmt.Errorf("datasource %q is not connected", datasource)
 		}
-		introspector := provider.Introspector()
-		if introspector == nil {
-			return fmt.Errorf("datasource %q does not support introspection", datasource)
-		}
-		return fn(introspector)
 	}
+	introspector := provider.Introspector()
+	if introspector == nil {
+		return fmt.Errorf("datasource %q does not support introspection", datasource)
+	}
+	return fn(introspector)
 }
