@@ -251,6 +251,20 @@
         "softScore": 60,
         "whitelistPKPoint": true
       },
+      "execution": {
+        "admin": {
+          "maxConcurrent": 3,
+          "maxQueue": 9
+        },
+        "background": {
+          "maxConcurrent": 1,
+          "maxQueue": 32
+        },
+        "scan": {
+          "maxConcurrent": 1,
+          "maxQueue": 4
+        }
+      },
       "mask": {
         "enabled": true
       },
@@ -579,6 +593,20 @@
         "requirePKForWrite": true,
         "softScore": 60,
         "whitelistPKPoint": true
+      },
+      "execution": {
+        "admin": {
+          "maxConcurrent": 3,
+          "maxQueue": 9
+        },
+        "background": {
+          "maxConcurrent": 1,
+          "maxQueue": 32
+        },
+        "scan": {
+          "maxConcurrent": 1,
+          "maxQueue": 4
+        }
       },
       "mask": {
         "enabled": true
