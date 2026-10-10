@@ -183,6 +183,13 @@ type ComplexityRoot struct {
 		Entity  func(childComplexity int) int
 	}
 
+	ExecutionStatus struct {
+		Aux   func(childComplexity int) int
+		Io    func(childComplexity int) int
+		Lanes func(childComplexity int) int
+		Tasks func(childComplexity int) int
+	}
+
 	Field struct {
 		Alias       func(childComplexity int) int
 		Description func(childComplexity int) int
@@ -246,6 +253,16 @@ type ComplexityRoot struct {
 		SideEffects  func(childComplexity int) int
 		Status       func(childComplexity int) int
 		Table        func(childComplexity int) int
+	}
+
+	LaneStatus struct {
+		Completed     func(childComplexity int) int
+		Inflight      func(childComplexity int) int
+		MaxConcurrent func(childComplexity int) int
+		MaxQueue      func(childComplexity int) int
+		Name          func(childComplexity int) int
+		Queued        func(childComplexity int) int
+		Rejected      func(childComplexity int) int
 	}
 
 	McpToken struct {
@@ -514,6 +531,7 @@ type ComplexityRoot struct {
 
 	ServerStatus struct {
 		AppliedRevision func(childComplexity int) int
+		Execution       func(childComplexity int) int
 		Pending         func(childComplexity int) int
 		Watching        func(childComplexity int) int
 	}
@@ -527,6 +545,12 @@ type ComplexityRoot struct {
 		RowFilter   func(childComplexity int) int
 	}
 
+	SlotStatus struct {
+		Size    func(childComplexity int) int
+		Used    func(childComplexity int) int
+		Waiting func(childComplexity int) int
+	}
+
 	TableComments struct {
 		Columns     func(childComplexity int) int
 		Description func(childComplexity int) int
@@ -538,6 +562,11 @@ type ComplexityRoot struct {
 		Name       func(childComplexity int) int
 		Ref        func(childComplexity int) int
 		RefColumns func(childComplexity int) int
+	}
+
+	TaskStatus struct {
+		Name    func(childComplexity int) int
+		Running func(childComplexity int) int
 	}
 
 	UnscannedSchemas struct {
@@ -1262,6 +1291,31 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.EntityVisibility.Entity(childComplexity), true
 
+	case "ExecutionStatus.aux":
+		if e.ComplexityRoot.ExecutionStatus.Aux == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ExecutionStatus.Aux(childComplexity), true
+	case "ExecutionStatus.io":
+		if e.ComplexityRoot.ExecutionStatus.Io == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ExecutionStatus.Io(childComplexity), true
+	case "ExecutionStatus.lanes":
+		if e.ComplexityRoot.ExecutionStatus.Lanes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ExecutionStatus.Lanes(childComplexity), true
+	case "ExecutionStatus.tasks":
+		if e.ComplexityRoot.ExecutionStatus.Tasks == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ExecutionStatus.Tasks(childComplexity), true
+
 	case "Field.alias":
 		if e.ComplexityRoot.Field.Alias == nil {
 			break
@@ -1532,6 +1586,49 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ImportTable.Table(childComplexity), true
+
+	case "LaneStatus.completed":
+		if e.ComplexityRoot.LaneStatus.Completed == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LaneStatus.Completed(childComplexity), true
+	case "LaneStatus.inflight":
+		if e.ComplexityRoot.LaneStatus.Inflight == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LaneStatus.Inflight(childComplexity), true
+	case "LaneStatus.maxConcurrent":
+		if e.ComplexityRoot.LaneStatus.MaxConcurrent == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LaneStatus.MaxConcurrent(childComplexity), true
+	case "LaneStatus.maxQueue":
+		if e.ComplexityRoot.LaneStatus.MaxQueue == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LaneStatus.MaxQueue(childComplexity), true
+	case "LaneStatus.name":
+		if e.ComplexityRoot.LaneStatus.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LaneStatus.Name(childComplexity), true
+	case "LaneStatus.queued":
+		if e.ComplexityRoot.LaneStatus.Queued == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LaneStatus.Queued(childComplexity), true
+	case "LaneStatus.rejected":
+		if e.ComplexityRoot.LaneStatus.Rejected == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LaneStatus.Rejected(childComplexity), true
 
 	case "McpToken.createdAt":
 		if e.ComplexityRoot.McpToken.CreatedAt == nil {
@@ -2912,6 +3009,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ServerStatus.AppliedRevision(childComplexity), true
+	case "ServerStatus.execution":
+		if e.ComplexityRoot.ServerStatus.Execution == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServerStatus.Execution(childComplexity), true
 	case "ServerStatus.pending":
 		if e.ComplexityRoot.ServerStatus.Pending == nil {
 			break
@@ -2962,6 +3065,25 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Simulation.RowFilter(childComplexity), true
 
+	case "SlotStatus.size":
+		if e.ComplexityRoot.SlotStatus.Size == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SlotStatus.Size(childComplexity), true
+	case "SlotStatus.used":
+		if e.ComplexityRoot.SlotStatus.Used == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SlotStatus.Used(childComplexity), true
+	case "SlotStatus.waiting":
+		if e.ComplexityRoot.SlotStatus.Waiting == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SlotStatus.Waiting(childComplexity), true
+
 	case "TableComments.columns":
 		if e.ComplexityRoot.TableComments.Columns == nil {
 			break
@@ -3005,6 +3127,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.TableLink.RefColumns(childComplexity), true
+
+	case "TaskStatus.name":
+		if e.ComplexityRoot.TaskStatus.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TaskStatus.Name(childComplexity), true
+	case "TaskStatus.running":
+		if e.ComplexityRoot.TaskStatus.Running == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TaskStatus.Running(childComplexity), true
 
 	case "UnscannedSchemas.datasource":
 		if e.ComplexityRoot.UnscannedSchemas.Datasource == nil {
@@ -3721,6 +3856,20 @@ func (ec *executionContext) childFields_EntityVisibility(ctx context.Context, fi
 	return nil, fmt.Errorf("no field named %q was found under type EntityVisibility", field.Name)
 }
 
+func (ec *executionContext) childFields_ExecutionStatus(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "io":
+		return ec.fieldContext_ExecutionStatus_io(ctx, field)
+	case "aux":
+		return ec.fieldContext_ExecutionStatus_aux(ctx, field)
+	case "lanes":
+		return ec.fieldContext_ExecutionStatus_lanes(ctx, field)
+	case "tasks":
+		return ec.fieldContext_ExecutionStatus_tasks(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ExecutionStatus", field.Name)
+}
+
 func (ec *executionContext) childFields_Field(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "name":
@@ -3849,6 +3998,26 @@ func (ec *executionContext) childFields_ImportTable(ctx context.Context, field g
 		return ec.fieldContext_ImportTable_candidate(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ImportTable", field.Name)
+}
+
+func (ec *executionContext) childFields_LaneStatus(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_LaneStatus_name(ctx, field)
+	case "maxConcurrent":
+		return ec.fieldContext_LaneStatus_maxConcurrent(ctx, field)
+	case "maxQueue":
+		return ec.fieldContext_LaneStatus_maxQueue(ctx, field)
+	case "inflight":
+		return ec.fieldContext_LaneStatus_inflight(ctx, field)
+	case "queued":
+		return ec.fieldContext_LaneStatus_queued(ctx, field)
+	case "rejected":
+		return ec.fieldContext_LaneStatus_rejected(ctx, field)
+	case "completed":
+		return ec.fieldContext_LaneStatus_completed(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type LaneStatus", field.Name)
 }
 
 func (ec *executionContext) childFields_McpToken(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -4261,6 +4430,8 @@ func (ec *executionContext) childFields_ServerStatus(ctx context.Context, field 
 		return ec.fieldContext_ServerStatus_watching(ctx, field)
 	case "pending":
 		return ec.fieldContext_ServerStatus_pending(ctx, field)
+	case "execution":
+		return ec.fieldContext_ServerStatus_execution(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ServerStatus", field.Name)
 }
@@ -4281,6 +4452,18 @@ func (ec *executionContext) childFields_Simulation(ctx context.Context, field gr
 		return ec.fieldContext_Simulation_fieldScopes(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Simulation", field.Name)
+}
+
+func (ec *executionContext) childFields_SlotStatus(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "size":
+		return ec.fieldContext_SlotStatus_size(ctx, field)
+	case "used":
+		return ec.fieldContext_SlotStatus_used(ctx, field)
+	case "waiting":
+		return ec.fieldContext_SlotStatus_waiting(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type SlotStatus", field.Name)
 }
 
 func (ec *executionContext) childFields_TableComments(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -4307,6 +4490,16 @@ func (ec *executionContext) childFields_TableLink(ctx context.Context, field gra
 		return ec.fieldContext_TableLink_entity(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type TableLink", field.Name)
+}
+
+func (ec *executionContext) childFields_TaskStatus(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_TaskStatus_name(ctx, field)
+	case "running":
+		return ec.fieldContext_TaskStatus_running(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TaskStatus", field.Name)
 }
 
 func (ec *executionContext) childFields_UnscannedSchemas(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -7613,6 +7806,134 @@ func (ec *executionContext) fieldContext_EntityVisibility_actions(_ context.Cont
 	return fc, nil
 }
 
+func (ec *executionContext) _ExecutionStatus_io(ctx context.Context, field graphql.CollectedField, obj *ExecutionStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ExecutionStatus_io(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Io, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *SlotStatus) graphql.Marshaler {
+			return ec.marshalNSlotStatus2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐSlotStatus(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ExecutionStatus_io(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ExecutionStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_SlotStatus(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ExecutionStatus_aux(ctx context.Context, field graphql.CollectedField, obj *ExecutionStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ExecutionStatus_aux(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Aux, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *SlotStatus) graphql.Marshaler {
+			return ec.marshalNSlotStatus2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐSlotStatus(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ExecutionStatus_aux(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ExecutionStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_SlotStatus(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ExecutionStatus_lanes(ctx context.Context, field graphql.CollectedField, obj *ExecutionStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ExecutionStatus_lanes(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Lanes, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []LaneStatus) graphql.Marshaler {
+			return ec.marshalNLaneStatus2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐLaneStatusᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ExecutionStatus_lanes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ExecutionStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_LaneStatus(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ExecutionStatus_tasks(ctx context.Context, field graphql.CollectedField, obj *ExecutionStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ExecutionStatus_tasks(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Tasks, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []TaskStatus) graphql.Marshaler {
+			return ec.marshalNTaskStatus2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐTaskStatusᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ExecutionStatus_tasks(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ExecutionStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_TaskStatus(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Field_name(ctx context.Context, field graphql.CollectedField, obj *Field) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -8668,6 +8989,167 @@ func (ec *executionContext) fieldContext_ImportTable_candidate(_ context.Context
 		},
 	}
 	return fc, nil
+}
+
+func (ec *executionContext) _LaneStatus_name(ctx context.Context, field graphql.CollectedField, obj *LaneStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LaneStatus_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LaneStatus_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LaneStatus", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _LaneStatus_maxConcurrent(ctx context.Context, field graphql.CollectedField, obj *LaneStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LaneStatus_maxConcurrent(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.MaxConcurrent, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LaneStatus_maxConcurrent(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LaneStatus", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _LaneStatus_maxQueue(ctx context.Context, field graphql.CollectedField, obj *LaneStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LaneStatus_maxQueue(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.MaxQueue, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LaneStatus_maxQueue(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LaneStatus", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _LaneStatus_inflight(ctx context.Context, field graphql.CollectedField, obj *LaneStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LaneStatus_inflight(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Inflight, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LaneStatus_inflight(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LaneStatus", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _LaneStatus_queued(ctx context.Context, field graphql.CollectedField, obj *LaneStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LaneStatus_queued(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Queued, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LaneStatus_queued(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LaneStatus", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _LaneStatus_rejected(ctx context.Context, field graphql.CollectedField, obj *LaneStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LaneStatus_rejected(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Rejected, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LaneStatus_rejected(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LaneStatus", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _LaneStatus_completed(ctx context.Context, field graphql.CollectedField, obj *LaneStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LaneStatus_completed(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Completed, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LaneStatus_completed(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LaneStatus", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
 func (ec *executionContext) _McpToken_id(ctx context.Context, field graphql.CollectedField, obj *configapp.McpToken) (ret graphql.Marshaler) {
@@ -14371,6 +14853,38 @@ func (ec *executionContext) fieldContext_ServerStatus_pending(_ context.Context,
 	return fc, nil
 }
 
+func (ec *executionContext) _ServerStatus_execution(ctx context.Context, field graphql.CollectedField, obj *ServerStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServerStatus_execution(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Execution, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *ExecutionStatus) graphql.Marshaler {
+			return ec.marshalOExecutionStatus2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐExecutionStatus(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ServerStatus_execution(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ServerStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ExecutionStatus(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Simulation_allowed(ctx context.Context, field graphql.CollectedField, obj *configapp.Simulation) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -14507,6 +15021,75 @@ func (ec *executionContext) _Simulation_fieldScopes(ctx context.Context, field g
 }
 func (ec *executionContext) fieldContext_Simulation_fieldScopes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Simulation", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _SlotStatus_size(ctx context.Context, field graphql.CollectedField, obj *SlotStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SlotStatus_size(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Size, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_SlotStatus_size(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SlotStatus", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _SlotStatus_used(ctx context.Context, field graphql.CollectedField, obj *SlotStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SlotStatus_used(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Used, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_SlotStatus_used(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SlotStatus", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _SlotStatus_waiting(ctx context.Context, field graphql.CollectedField, obj *SlotStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SlotStatus_waiting(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Waiting, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_SlotStatus_waiting(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SlotStatus", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
 func (ec *executionContext) _TableComments_description(ctx context.Context, field graphql.CollectedField, obj *TableComments) (ret graphql.Marshaler) {
@@ -14677,6 +15260,52 @@ func (ec *executionContext) _TableLink_entity(ctx context.Context, field graphql
 }
 func (ec *executionContext) fieldContext_TableLink_entity(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("TableLink", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TaskStatus_name(ctx context.Context, field graphql.CollectedField, obj *TaskStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TaskStatus_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TaskStatus_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TaskStatus", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TaskStatus_running(ctx context.Context, field graphql.CollectedField, obj *TaskStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TaskStatus_running(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Running, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TaskStatus_running(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TaskStatus", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
 func (ec *executionContext) _UnscannedSchemas_datasource(ctx context.Context, field graphql.CollectedField, obj *configapp.UnscannedSchemas) (ret graphql.Marshaler) {
@@ -19404,6 +20033,59 @@ func (ec *executionContext) _EntityVisibility(ctx context.Context, sel ast.Selec
 	return out
 }
 
+var executionStatusImplementors = []string{"ExecutionStatus"}
+
+func (ec *executionContext) _ExecutionStatus(ctx context.Context, sel ast.SelectionSet, obj *ExecutionStatus) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, executionStatusImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ExecutionStatus")
+		case "io":
+			out.Values[i] = ec._ExecutionStatus_io(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "aux":
+			out.Values[i] = ec._ExecutionStatus_aux(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "lanes":
+			out.Values[i] = ec._ExecutionStatus_lanes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "tasks":
+			out.Values[i] = ec._ExecutionStatus_tasks(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var fieldImplementors = []string{"Field"}
 
 func (ec *executionContext) _Field(ctx context.Context, sel ast.SelectionSet, obj *Field) graphql.Marshaler {
@@ -19831,6 +20513,74 @@ func (ec *executionContext) _ImportTable(ctx context.Context, sel ast.SelectionS
 			}
 		case "candidate":
 			out.Values[i] = ec._ImportTable_candidate(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var laneStatusImplementors = []string{"LaneStatus"}
+
+func (ec *executionContext) _LaneStatus(ctx context.Context, sel ast.SelectionSet, obj *LaneStatus) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, laneStatusImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("LaneStatus")
+		case "name":
+			out.Values[i] = ec._LaneStatus_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "maxConcurrent":
+			out.Values[i] = ec._LaneStatus_maxConcurrent(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "maxQueue":
+			out.Values[i] = ec._LaneStatus_maxQueue(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "inflight":
+			out.Values[i] = ec._LaneStatus_inflight(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "queued":
+			out.Values[i] = ec._LaneStatus_queued(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "rejected":
+			out.Values[i] = ec._LaneStatus_rejected(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "completed":
+			out.Values[i] = ec._LaneStatus_completed(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -22345,6 +23095,11 @@ func (ec *executionContext) _ServerStatus(ctx context.Context, sel ast.Selection
 			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
+		case "execution":
+			out.Values[i] = ec._ServerStatus_execution(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -22406,6 +23161,54 @@ func (ec *executionContext) _Simulation(ctx context.Context, sel ast.SelectionSe
 		case "fieldScopes":
 			out.Values[i] = ec._Simulation_fieldScopes(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var slotStatusImplementors = []string{"SlotStatus"}
+
+func (ec *executionContext) _SlotStatus(ctx context.Context, sel ast.SelectionSet, obj *SlotStatus) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, slotStatusImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("SlotStatus")
+		case "size":
+			out.Values[i] = ec._SlotStatus_size(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "used":
+			out.Values[i] = ec._SlotStatus_used(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "waiting":
+			out.Values[i] = ec._SlotStatus_waiting(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
 		default:
@@ -22507,6 +23310,49 @@ func (ec *executionContext) _TableLink(ctx context.Context, sel ast.SelectionSet
 		case "entity":
 			out.Values[i] = ec._TableLink_entity(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var taskStatusImplementors = []string{"TaskStatus"}
+
+func (ec *executionContext) _TaskStatus(ctx context.Context, sel ast.SelectionSet, obj *TaskStatus) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, taskStatusImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("TaskStatus")
+		case "name":
+			out.Values[i] = ec._TaskStatus_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "running":
+			out.Values[i] = ec._TaskStatus_running(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
 		default:
@@ -24113,6 +24959,26 @@ func (ec *executionContext) marshalNJSON2interface(ctx context.Context, sel ast.
 	return res
 }
 
+func (ec *executionContext) marshalNLaneStatus2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐLaneStatus(ctx context.Context, sel ast.SelectionSet, v LaneStatus) graphql.Marshaler {
+	return ec._LaneStatus(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNLaneStatus2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐLaneStatusᚄ(ctx context.Context, sel ast.SelectionSet, v []LaneStatus) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNLaneStatus2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐLaneStatus(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
 func (ec *executionContext) marshalNMcpToken2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐMcpToken(ctx context.Context, sel ast.SelectionSet, v configapp.McpToken) graphql.Marshaler {
 	return ec._McpToken(ctx, sel, &v)
 }
@@ -24648,6 +25514,16 @@ func (ec *executionContext) unmarshalNSimulationInput2githubᚗcomᚋnethinwei�
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
+func (ec *executionContext) marshalNSlotStatus2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐSlotStatus(ctx context.Context, sel ast.SelectionSet, v *SlotStatus) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._SlotStatus(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNString2string(ctx context.Context, v any) (string, error) {
 	res, err := graphql.UnmarshalString(v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -24779,6 +25655,26 @@ func (ec *executionContext) unmarshalNTableStatus2githubᚗcomᚋnethinweiᚋsql
 
 func (ec *executionContext) marshalNTableStatus2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐTableStatus(ctx context.Context, sel ast.SelectionSet, v configapp.TableStatus) graphql.Marshaler {
 	return v
+}
+
+func (ec *executionContext) marshalNTaskStatus2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐTaskStatus(ctx context.Context, sel ast.SelectionSet, v TaskStatus) graphql.Marshaler {
+	return ec._TaskStatus(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNTaskStatus2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐTaskStatusᚄ(ctx context.Context, sel ast.SelectionSet, v []TaskStatus) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNTaskStatus2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐTaskStatus(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
 }
 
 func (ec *executionContext) unmarshalNTime2timeᚐTime(ctx context.Context, v any) (time.Time, error) {
@@ -25182,6 +26078,13 @@ func (ec *executionContext) unmarshalOEntityMCPInput2ᚖgithubᚗcomᚋnethinwei
 	}
 	res, err := ec.unmarshalInputEntityMCPInput(ctx, v)
 	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOExecutionStatus2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐExecutionStatus(ctx context.Context, sel ast.SelectionSet, v *ExecutionStatus) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._ExecutionStatus(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalOFieldInput2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐFieldInputᚄ(ctx context.Context, v any) ([]FieldInput, error) {

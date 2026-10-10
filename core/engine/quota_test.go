@@ -46,16 +46,16 @@ func TestEnginesShareQuotaSlots(t *testing.T) {
 func TestQuotaWaiterCanceled(t *testing.T) {
 	t.Parallel()
 	quota := NewQuota(1)
-	if err := quota.io.acquire(context.Background()); err != nil {
+	if err := quota.io.Acquire(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := quota.io.acquire(ctx); !errors.Is(err, context.Canceled) {
+	if err := quota.io.Acquire(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("acquire = %v", err)
 	}
-	quota.io.release()
-	if quota.io.used != 0 || len(quota.io.waiters) != 0 {
-		t.Fatalf("used %d, waiters %d", quota.io.used, len(quota.io.waiters))
+	quota.io.Release()
+	if st := quota.io.Stats(); st.Used != 0 || st.Waiting != 0 {
+		t.Fatalf("used %d, waiters %d", st.Used, st.Waiting)
 	}
 }

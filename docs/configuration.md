@@ -307,6 +307,22 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `commitTimeout` | 时长 | `"30s"` | ≥ 0 | 提交超时。 |
 | `rollbackTimeout` | 时长 | `"30s"` | ≥ 0 | 回滚超时。 |
 
+### `execution`：执行总线
+
+工具调用以外的数据库执行的通道上限；所有通道共享 rateLimit.ioPool，这些通道合计最多占用其一半。
+
+| 字段 | 类型 | 默认值 | 约束 | 说明 |
+| --- | --- | --- | --- | --- |
+| `admin.maxConcurrent` | 整数 | `4` | ≥ 0 | 同时执行的上限。 |
+| `admin.maxQueue` | 整数 | `16` | ≥ 0 | 排队等待的上限；超过时立即返回繁忙。 |
+| `admin` | 对象 |  |  | 管理员请求内的读取（模式列表、表注释、导入）。 |
+| `scan.maxConcurrent` | 整数 | `2` | ≥ 0 | 同时执行的扫描上限。 |
+| `scan.maxQueue` | 整数 | `8` | ≥ 0 | 排队等待的扫描上限。 |
+| `scan` | 对象 |  |  | 模式扫描与扫描批次。 |
+| `background.maxConcurrent` | 整数 | `2` | ≥ 0 | 同时执行的上限。 |
+| `background.maxQueue` | 整数 | `64` | ≥ 0 | 排队等待的上限。 |
+| `background` | 对象 |  |  | 无人等待的后台工作，如能力评估与装配期自省。 |
+
 ### 定义 `database`
 
 一个数据源连接。validate 会确认 driver 已注册，但不会建立连接。

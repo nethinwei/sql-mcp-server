@@ -423,6 +423,38 @@ type ServerStatus {
   watching: Boolean!
   "A published revision this process has not applied."
   pending: PendingRevision
+  "What the process runs on its execution bus; null when unknown."
+  execution: ExecutionStatus
+}
+type ExecutionStatus {
+  "IO slots every lane draws on."
+  io: SlotStatus!
+  "The part of the IO slots the lanes other than serve hold together."
+  aux: SlotStatus!
+  lanes: [LaneStatus!]!
+  "Background tasks running, by name."
+  tasks: [TaskStatus!]!
+}
+type SlotStatus {
+  size: Int!
+  used: Int!
+  waiting: Int!
+}
+type LaneStatus {
+  "serve, admin, scan or background."
+  name: String!
+  maxConcurrent: Int!
+  maxQueue: Int!
+  inflight: Int!
+  queued: Int!
+  "Work turned away since the process started."
+  rejected: Int!
+  "Work run since the process started."
+  completed: Int!
+}
+type TaskStatus {
+  name: String!
+  running: Int!
 }
 type PendingRevision {
   id: ID!

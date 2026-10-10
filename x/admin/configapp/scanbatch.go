@@ -137,9 +137,10 @@ func (s *Scans) runBatch(b catalog.Batch, run scanRunner) {
 			pending = append(pending, it)
 		}
 	}
-	s.batches.wg.Add(1)
-	go func() {
-		defer s.batches.wg.Done()
+	s.bus.Fork(&s.batches.wg, "scan batch", func(busCtx context.Context) {
+		// Closing the bus stops the batches as the process stopping does: they
+		// stay unfinished, for another run to take over.
+		defer context.AfterFunc(busCtx, s.batches.stop)()
 		defer cancel()
 		defer func() {
 			s.batches.mu.Lock()
@@ -147,7 +148,7 @@ func (s *Scans) runBatch(b catalog.Batch, run scanRunner) {
 			s.batches.mu.Unlock()
 		}()
 		s.execute(ctx, br, pending, run)
-	}()
+	})
 }
 
 // move moves an item from one of the states from; false when it was not in
@@ -209,20 +210,16 @@ func (s *Scans) written(br *batchRun, it catalog.BatchItem) (bool, error) {
 // execute scans the items, a few at a time, each when its NotBefore comes,
 // and ends the batch, unless the process stops or the run lost the batch.
 func (s *Scans) execute(ctx context.Context, br *batchRun, items []catalog.BatchItem, run scanRunner) {
-	go s.beat(ctx, br)
+	s.bus.Go("scan batch heartbeat", func(context.Context) { s.beat(ctx, br) })
 	work := make(chan catalog.BatchItem, len(items))
 	var left sync.WaitGroup
 	left.Add(len(items))
 	for _, it := range items {
-		later(ctx, work, it)
+		s.later(ctx, work, it)
 	}
-	go func() {
-		left.Wait()
-		close(work)
-	}()
 	var wg sync.WaitGroup
 	for range batchParallel {
-		wg.Go(func() {
+		s.bus.Fork(&wg, "scan batch worker", func(context.Context) {
 			for it := range work {
 				if ctx.Err() != nil || !s.runItem(ctx, br, it, run, work) {
 					left.Done()
@@ -230,6 +227,8 @@ func (s *Scans) execute(ctx context.Context, br *batchRun, items []catalog.Batch
 			}
 		})
 	}
+	left.Wait()
+	close(work)
 	wg.Wait()
 	if s.batches.ctx.Err() != nil || br.lost.Load() {
 		return // this process stops, or another runs the batch now
@@ -242,16 +241,16 @@ func (s *Scans) execute(ctx context.Context, br *batchRun, items []catalog.Batch
 
 // later queues it for a worker when its NotBefore comes, or at once when ctx
 // ends (the worker then lets it go).
-func later(ctx context.Context, work chan<- catalog.BatchItem, it catalog.BatchItem) {
+func (s *Scans) later(ctx context.Context, work chan<- catalog.BatchItem, it catalog.BatchItem) {
 	wait := time.Until(it.NotBefore)
 	if wait <= 0 {
 		work <- it
 		return
 	}
-	go func() {
+	s.bus.Fork(&s.batches.wg, "scan batch retry", func(context.Context) {
 		sleep(ctx, wait)
 		work <- it
-	}()
+	})
 }
 
 // beat records that this run still owns a batch, and stops it when it was
@@ -300,7 +299,7 @@ func (s *Scans) runItem(
 			it.State, it.Error = catalog.ItemPending, msg
 			it.NotBefore = s.now().Add(s.batches.backoff << (it.Attempts - 1))
 			if s.move(br, it, catalog.ItemRunning) {
-				later(ctx, work, it)
+				s.later(ctx, work, it)
 				return true
 			}
 			return false
@@ -415,9 +414,8 @@ func (s *Scans) requeueRunning(b *catalog.Batch) bool {
 // WatchBatches takes over the batches other processes stopped running, now
 // and every batchStale, until the scans close.
 func (s *Scans) WatchBatches(runner func(ctx context.Context, datasource string) (scanRunner, error)) {
-	s.batches.wg.Add(1)
-	go func() {
-		defer s.batches.wg.Done()
+	s.bus.Fork(&s.batches.wg, "scan batch takeover", func(busCtx context.Context) {
+		defer context.AfterFunc(busCtx, s.batches.stop)() // closing the bus stops the batches
 		for {
 			s.takeOver(s.batches.ctx, runner)
 			select {
@@ -426,7 +424,7 @@ func (s *Scans) WatchBatches(runner func(ctx context.Context, datasource string)
 			case <-time.After(batchStale):
 			}
 		}
-	}()
+	})
 }
 
 func viewBatch(b catalog.Batch) *ScanBatch {

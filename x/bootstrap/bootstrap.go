@@ -17,6 +17,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/audit"
 	"github.com/nethinwei/sql-mcp-server/core/budget"
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/cache"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
@@ -100,6 +101,15 @@ func (a *App) publishShared() {
 	if a.shared != nil {
 		a.shared.apply(a)
 	}
+}
+
+// Bus returns the execution bus the App runs on; nil for an App assembled
+// without shared services, whose work then runs unbounded by a bus.
+func (a *App) Bus() *bus.Bus {
+	if a.shared == nil {
+		return nil
+	}
+	return a.shared.bus
 }
 
 // Config returns the configuration the App was assembled from.

@@ -556,3 +556,35 @@ transactions.commitTimeout:
 transactions.rollbackTimeout:
   zh-CN: 回滚超时。
   en: Rollback timeout.
+
+execution:
+  title: {zh-CN: '执行总线', en: 'Execution bus'}
+  zh-CN: 工具调用以外的数据库执行的通道上限；所有通道共享 rateLimit.ioPool，这些通道合计最多占用其一半。
+  en: Lanes of database work other than tool calls; all lanes share rateLimit.ioPool and these together hold at most half of it.
+execution.admin:
+  zh-CN: 管理员请求内的读取（模式列表、表注释、导入）。
+  en: Reads answering an administrator's request (schema lists, table comments, imports).
+execution.admin.maxConcurrent:
+  zh-CN: 同时执行的上限。
+  en: Work running at once.
+execution.admin.maxQueue:
+  zh-CN: 排队等待的上限；超过时立即返回繁忙。
+  en: Work waiting; beyond it requests fail as busy at once.
+execution.scan:
+  zh-CN: 模式扫描与扫描批次。
+  en: Schema scans and scan batches.
+execution.scan.maxConcurrent:
+  zh-CN: 同时执行的扫描上限。
+  en: Scans running at once.
+execution.scan.maxQueue:
+  zh-CN: 排队等待的扫描上限。
+  en: Scans waiting.
+execution.background:
+  zh-CN: 无人等待的后台工作，如能力评估与装配期自省。
+  en: Work nobody waits for, such as capability assessment and introspection while assembling.
+execution.background.maxConcurrent:
+  zh-CN: 同时执行的上限。
+  en: Work running at once.
+execution.background.maxQueue:
+  zh-CN: 排队等待的上限。
+  en: Work waiting.

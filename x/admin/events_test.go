@@ -20,7 +20,7 @@ import (
 
 func TestEventsStreamThePublishedRevision(t *testing.T) {
 	f := newFixture(t)
-	f.h.published = newPublishedFeed(f.h.cfg.Store, 10*time.Millisecond)
+	f.h.published = newPublishedFeed(nil, f.h.cfg.Store, 10*time.Millisecond)
 	ctx := context.Background()
 	publish := func() {
 		current, _ := f.h.cfg.Store.Published(ctx)
@@ -63,7 +63,7 @@ func TestEventsStreamThePublishedRevision(t *testing.T) {
 // the drafts, so none between two signals is missed.
 func TestEventsSignalNewRevisions(t *testing.T) {
 	f := newFixture(t)
-	f.h.published = newPublishedFeed(f.h.cfg.Store, 10*time.Millisecond)
+	f.h.published = newPublishedFeed(nil, f.h.cfg.Store, 10*time.Millisecond)
 	ctx := context.Background()
 	draft := func() int64 {
 		current, _ := f.h.cfg.Store.Published(ctx)
@@ -180,7 +180,7 @@ func nextEventData(t *testing.T, lines *bufio.Scanner) string {
 // the store once nobody listens.
 func TestEventsUnderManySubscribersAndChurn(t *testing.T) {
 	store := revision.NewMemoryStore(nil)
-	feed := newPublishedFeed(store, time.Millisecond)
+	feed := newPublishedFeed(nil, store, time.Millisecond)
 	publish := func() { publishNext(t, store) }
 	publish()
 	const listeners, publishes = 50, 30
@@ -227,7 +227,7 @@ func TestEventsUnderManySubscribersAndChurn(t *testing.T) {
 // A listener that does not read keeps only the latest event.
 func TestEventsSlowListenerGetsTheLatest(t *testing.T) {
 	store := revision.NewMemoryStore(nil)
-	feed := newPublishedFeed(store, time.Millisecond)
+	feed := newPublishedFeed(nil, store, time.Millisecond)
 	events, stop := feed.subscribe()
 	defer stop()
 	<-events // nothing published yet

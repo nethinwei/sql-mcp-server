@@ -4,13 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
-	"runtime/debug"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 )
 
@@ -42,6 +41,7 @@ type feedState struct {
 // publishedFeed reads the published revision and the newest draft once per
 // interval for every listening console, and only while one listens.
 type publishedFeed struct {
+	bus      *bus.Bus
 	store    revision.Store
 	interval time.Duration
 
@@ -51,8 +51,8 @@ type publishedFeed struct {
 	cancel context.CancelFunc
 }
 
-func newPublishedFeed(store revision.Store, interval time.Duration) *publishedFeed {
-	return &publishedFeed{store: store, interval: interval, subs: map[chan feedState]struct{}{}}
+func newPublishedFeed(b *bus.Bus, store revision.Store, interval time.Duration) *publishedFeed {
+	return &publishedFeed{bus: b, store: store, interval: interval, subs: map[chan feedState]struct{}{}}
 }
 
 // subscribe returns a channel receiving the state now and on every change,
@@ -66,7 +66,10 @@ func (f *publishedFeed) subscribe() (<-chan feedState, func()) {
 		ctx, cancel := context.WithCancel(context.Background())
 		f.cancel = cancel
 		f.last = f.read(ctx)
-		go f.poll(ctx)
+		f.bus.Go("published feed", func(busCtx context.Context) {
+			defer context.AfterFunc(busCtx, cancel)() // closing the bus stops the feed
+			f.poll(ctx)
+		})
 	}
 	ch <- f.last
 	return ch, func() {
@@ -92,11 +95,6 @@ func (f *publishedFeed) read(ctx context.Context) feedState {
 }
 
 func (f *publishedFeed) poll(ctx context.Context) {
-	defer func() {
-		if r := recover(); r != nil {
-			slog.Error("published feed panicked", "panic", r, "stack", string(debug.Stack()))
-		}
-	}()
 	tick := time.NewTicker(f.interval)
 	defer tick.Stop()
 	for {

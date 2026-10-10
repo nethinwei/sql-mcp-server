@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
@@ -36,7 +37,7 @@ type transactionHandle struct {
 	datasource string
 	dirty      map[CacheTarget]struct{}
 	expires    time.Time
-	timer      *time.Timer
+	stopTimer  func() bool
 	cancel     context.CancelFunc
 	mu         sync.Mutex
 	closed     bool
@@ -51,12 +52,20 @@ type TransactionManager struct {
 	ttl     time.Duration
 	maxOpen int
 	closed  bool
+	bus     *bus.Bus // runs the expiry timers
 }
 
 func NewTransactionManager(ttl time.Duration, maxOpen int) *TransactionManager {
 	return &TransactionManager{
 		handles: make(map[string]*transactionHandle), open: map[string]int{}, ttl: ttl, maxOpen: maxOpen,
 	}
+}
+
+// UseBus runs the expiry timers as background tasks of b.
+func (m *TransactionManager) UseBus(b *bus.Bus) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.bus = b
 }
 
 // UpdateLimits applies new limits: ttl to the transactions begun from now
@@ -171,7 +180,9 @@ func (m *TransactionManager) registerHandle(scope, token string, handle *transac
 	m.handles[token] = handle
 	m.open[scope]++
 	if !handle.expires.IsZero() {
-		handle.timer = time.AfterFunc(time.Until(handle.expires), func() { m.expire(token, handle) })
+		handle.stopTimer = m.bus.AfterFunc("transaction expiry", time.Until(handle.expires), func() {
+			m.expire(token, handle)
+		})
 	}
 	return nil
 }
@@ -284,8 +295,8 @@ func (m *TransactionManager) finish(
 		return nil, ErrTransactionNotFound
 	}
 	m.removeLocked(token, handle)
-	if handle.timer != nil {
-		handle.timer.Stop()
+	if handle.stopTimer != nil {
+		handle.stopTimer()
 	}
 	m.mu.Unlock()
 	handle.mu.Lock()
@@ -367,8 +378,8 @@ func (m *TransactionManager) RollbackSession(session string) {
 	for token, handle := range m.handles {
 		if handle.session == session {
 			m.removeLocked(token, handle)
-			if handle.timer != nil {
-				handle.timer.Stop()
+			if handle.stopTimer != nil {
+				handle.stopTimer()
 			}
 			handles = append(handles, handle)
 		}
@@ -390,8 +401,8 @@ func (m *TransactionManager) Close() {
 	m.handles, m.open = make(map[string]*transactionHandle), map[string]int{}
 	m.mu.Unlock()
 	for _, handle := range handles {
-		if handle.timer != nil {
-			handle.timer.Stop()
+		if handle.stopTimer != nil {
+			handle.stopTimer()
 		}
 		handle.abort()
 	}

@@ -23,6 +23,7 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
@@ -57,6 +58,9 @@ type Config struct {
 	// Plans keeps plan templates and MCP tokens; nil refuses them.
 	Plans      configapp.PlanStore
 	Introspect configapp.Introspection
+	// Bus runs the scans and the console's event feed; optional (unbounded
+	// without one).
+	Bus *bus.Bus
 	// Status reports the serving process to the console; optional.
 	Status func() graph.RuntimeState
 	// Capabilities reports what the serving connections may do; optional.
@@ -88,7 +92,8 @@ type Handler struct {
 func New(cfg Config) *Handler {
 	h := &Handler{
 		cfg: cfg, sessions: newSessions(cfg.Now), logins: newLoginGate(maxConcurrentLogins),
-		scans: configapp.NewScans(scanjobs.Options{}, cfg.Catalog), published: newPublishedFeed(cfg.Store, eventPollInterval),
+		scans:     configapp.NewScans(scanjobs.Options{Bus: cfg.Bus}, cfg.Catalog),
+		published: newPublishedFeed(cfg.Bus, cfg.Store, eventPollInterval),
 	}
 	app := &configapp.Service{
 		Store: cfg.Store, Introspect: cfg.Introspect, Capabilities: cfg.Capabilities, Scans: h.scans, Plans: cfg.Plans,

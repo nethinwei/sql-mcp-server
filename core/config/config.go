@@ -35,6 +35,7 @@ type Config struct {
 	Mask         MaskConfig                `yaml:"mask"            json:"mask"`
 	Audit        AuditConfig               `yaml:"audit"           json:"audit"`
 	Transactions TransactionConfig         `yaml:"transactions"    json:"transactions"`
+	Execution    ExecutionConfig           `yaml:"execution"       json:"execution"`
 }
 
 // Presence records fields whose explicit presence affects defaulting. Loaders
@@ -364,6 +365,21 @@ type TransactionConfig struct {
 	BeginTimeout    time.Duration `yaml:"beginTimeout"    json:"beginTimeout" schema:"min=0"`
 	CommitTimeout   time.Duration `yaml:"commitTimeout"   json:"commitTimeout" schema:"min=0"`
 	RollbackTimeout time.Duration `yaml:"rollbackTimeout" json:"rollbackTimeout" schema:"min=0"`
+}
+
+// ExecutionConfig bounds the lanes of the execution bus other than tool
+// calls, which rateLimit bounds. All lanes share rateLimit.ioPool; these
+// lanes together hold at most half of it.
+type ExecutionConfig struct {
+	Admin      LaneConfig `yaml:"admin"      json:"admin"`
+	Scan       LaneConfig `yaml:"scan"       json:"scan"`
+	Background LaneConfig `yaml:"background" json:"background"`
+}
+
+// LaneConfig bounds one lane: work running at once and work waiting.
+type LaneConfig struct {
+	MaxConcurrent int `yaml:"maxConcurrent" json:"maxConcurrent" schema:"min=0"`
+	MaxQueue      int `yaml:"maxQueue"      json:"maxQueue" schema:"min=0"`
 }
 
 // CostConfig configures the defense-in-depth cost gate. SoftScore/HardScore are

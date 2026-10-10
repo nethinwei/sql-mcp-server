@@ -7,6 +7,7 @@ import {
   NAlert, NButton, NCard, NGrid, NGi, NList, NListItem, NSpace, NStatistic, NTag, NText, NTime,
 } from 'naive-ui'
 import { useWorkspace } from '@/stores/workspace'
+import ExecutionCard from '@/components/ExecutionCard.vue'
 import { entityId } from '@/lib/entityRefs'
 import { RevisionsQuery } from '@/api/ops'
 import { can } from '@/api/session'
@@ -87,6 +88,8 @@ const stats = computed(() => [
         </n-card>
       </n-gi>
     </n-grid>
+
+    <execution-card />
 
     <n-card :title="t('overview.recent')" size="small">
       <template #header-extra>

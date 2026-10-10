@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
 )
 
@@ -29,6 +30,7 @@ type config struct {
 	rps           *ratelimit.TokenBucket
 	breaker       *ratelimit.Breaker
 	quota         *Quota
+	lane          *bus.Lane
 	recordFailure func(error) bool
 }
 
@@ -51,6 +53,11 @@ func WithBreaker(b *ratelimit.Breaker) Option { return func(c *config) { c.break
 // IO pool, limiter, rate limiter and breaker options.
 func WithQuota(q *Quota) Option { return func(c *config) { c.quota = q } }
 
+// WithLane admits submissions on lane, such as the Serve lane of the
+// process's bus, instead of an in-flight bound of the engine's own; it
+// replaces the max in-flight option.
+func WithLane(l *bus.Lane) Option { return func(c *config) { c.lane = l } }
+
 // WithFailureClassifier decides whether a non-nil execution error represents
 // provider/system health and should affect AIMD and the circuit breaker.
 func WithFailureClassifier(classify func(error) bool) Option {
@@ -60,7 +67,7 @@ func WithFailureClassifier(classify func(error) bool) Option {
 // Engine bounds concurrency and deduplicates concurrent identical requests.
 type Engine struct {
 	quota         *Quota
-	inflight      chan struct{}
+	lane          *bus.Lane
 	sf            singleflight
 	recordFailure func(error) bool
 	stateMu       sync.Mutex
@@ -85,9 +92,13 @@ func New(opts ...Option) (*Engine, error) {
 		quota = NewQuota(cfg.io)
 		quota.Update(cfg.io, cfg.limiter, cfg.rps, cfg.breaker)
 	}
+	lane := cfg.lane
+	if lane == nil {
+		lane = bus.NewLane(bus.Serve, bus.Limits{MaxConcurrent: cfg.inflight})
+	}
 	return &Engine{
 		quota:         quota,
-		inflight:      make(chan struct{}, cfg.inflight),
+		lane:          lane,
 		recordFailure: cfg.recordFailure,
 	}, nil
 }
@@ -117,12 +128,14 @@ func (e *Engine) Submit(ctx context.Context, key string, fn func(context.Context
 			return nil, err
 		}
 	}
-	select {
-	case e.inflight <- struct{}{}:
-	default:
-		return nil, ErrOverloaded
+	leave, err := e.lane.TryEnter()
+	if err != nil {
+		if errors.Is(err, bus.ErrOverloaded) {
+			return nil, ErrOverloaded
+		}
+		return nil, ErrClosed
 	}
-	defer func() { <-e.inflight }()
+	defer leave()
 	if key == "" {
 		return e.execute(ctx, fn)
 	}
@@ -139,10 +152,10 @@ func (e *Engine) execute(ctx context.Context, fn func(context.Context) (any, err
 		}
 		defer limiter.Release()
 	}
-	if err := e.quota.io.acquire(ctx); err != nil {
+	if err := e.quota.io.Acquire(ctx); err != nil {
 		return nil, err
 	}
-	defer e.quota.io.release()
+	defer e.quota.io.Release()
 	start := time.Now()
 	val, err := e.runSafe(ctx, fn)
 	record := err == nil || e.recordFailure == nil || e.recordFailure(err)

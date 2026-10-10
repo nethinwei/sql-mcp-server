@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
@@ -30,6 +31,7 @@ const RequestScanTimeout = 30 * time.Second
 // does not scan again. Decoded schemas are cached per process and read again
 // when the store holds a newer scan.
 type Scans struct {
+	bus   *bus.Bus
 	pool  *scanjobs.Pool[struct{}]
 	store catalog.Store
 	mu    sync.Mutex
@@ -81,14 +83,14 @@ type listedSchemas struct {
 	at      time.Time
 }
 
-// NewScans starts the scan workers, keeping scans in store (in memory when
-// nil); Close stops them.
+// NewScans returns scans that run on opts.Bus (see scanjobs.Options),
+// keeping them in store (in memory when nil); Close stops them.
 func NewScans(opts scanjobs.Options, store catalog.Store) *Scans {
 	if store == nil {
 		store = catalog.NewMemoryStore()
 	}
 	return &Scans{
-		pool: scanjobs.New[struct{}](opts), store: store, cache: map[scanKey]keptSchema{},
+		bus: opts.Bus, pool: scanjobs.New[struct{}](opts), store: store, cache: map[scanKey]keptSchema{},
 		clock: time.Now, batches: newBatches(), built: map[string]builtCatalog{},
 		indexes: newLRU[*configplan.Index](indexBudget), matches: newLRU[[]int32](matchBudget),
 	}

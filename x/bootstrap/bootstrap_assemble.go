@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/audit"
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/cache"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
@@ -39,10 +40,11 @@ func assembleWith(cfg *config.Config, connections Connections, shared *Shared) (
 	if err != nil {
 		return nil, err
 	}
-	if err := checkDefaultSchemas(cfg, connections); err != nil {
+	b := sharedBus(shared)
+	if err := checkDefaultSchemas(b, cfg, connections); err != nil {
 		return nil, err
 	}
-	checked, err := checkAssembly(cfg, providers)
+	checked, err := checkAssembly(b, cfg, providers)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +64,7 @@ func assembleWith(cfg *config.Config, connections Connections, shared *Shared) (
 		closePrepared(prepared)
 		return nil, err
 	}
-	aud, err := newAssembleAuditor(cfg)
+	aud, err := newAssembleAuditor(cfg, sharedBus(shared))
 	if err != nil {
 		eng.Close()
 		closePrepared(prepared)
@@ -78,9 +80,18 @@ func assembleWith(cfg *config.Config, connections Connections, shared *Shared) (
 	app.WriteTargets = tool.BuildWriteTargets(checked.registry)
 	if shared != nil {
 		app.shared, app.generation = shared, shared.generation.Add(1)
+		app.Transactions.UseBus(shared.bus)
 	}
 	app.assessInBackground(cfg, connections, checked.registry.Entities())
 	return app, nil
+}
+
+// sharedBus is the bus of shared services; nil without them.
+func sharedBus(shared *Shared) *bus.Bus {
+	if shared == nil {
+		return nil
+	}
+	return shared.bus
 }
 
 // readConnections returns each datasource's read connection.
@@ -100,9 +111,15 @@ func readConnections(cfg *config.Config, connections Connections) (map[string]Pr
 // checkDefaultSchemas requires the connections of a datasource to resolve
 // unqualified names to the same schema (accounts may have different
 // search_paths or default databases); otherwise its entities must name one.
-func checkDefaultSchemas(cfg *config.Config, connections Connections) error {
+func checkDefaultSchemas(b *bus.Bus, cfg *config.Config, connections Connections) error {
 	ctx, cancel := context.WithTimeout(context.Background(), introspectTimeout)
 	defer cancel()
+	return b.Lane(bus.Background).RunWaiting(ctx, func(ctx context.Context) error {
+		return compareDefaultSchemas(ctx, cfg, connections)
+	})
+}
+
+func compareDefaultSchemas(ctx context.Context, cfg *config.Config, connections Connections) error {
 	for datasource, byName := range connections {
 		if !unqualifiedEntities(cfg, datasource) {
 			continue
@@ -142,7 +159,7 @@ type checkedAssembly struct {
 	tools    *tool.Registry
 }
 
-func checkAssembly(cfg *config.Config, providers map[string]Provider) (checkedAssembly, error) {
+func checkAssembly(b *bus.Bus, cfg *config.Config, providers map[string]Provider) (checkedAssembly, error) {
 	if err := prepareAssembleProviders(cfg, providers); err != nil {
 		return checkedAssembly{}, err
 	}
@@ -150,7 +167,7 @@ func checkAssembly(cfg *config.Config, providers map[string]Provider) (checkedAs
 	if err != nil {
 		return checkedAssembly{}, err
 	}
-	entities, err := validateAssembleEntities(off.entities, providers)
+	entities, err := validateAssembleEntities(b, off.entities, providers)
 	if err != nil {
 		return checkedAssembly{}, err
 	}
@@ -220,11 +237,13 @@ func prepareAssembleProviders(cfg *config.Config, providers map[string]Provider)
 
 // validateAssembleEntities checks entities against their datasources and
 // returns them with database comments as the default descriptions.
-func validateAssembleEntities(entities []entity.Entity, providers map[string]Provider) ([]entity.Entity, error) {
+func validateAssembleEntities(
+	b *bus.Bus, entities []entity.Entity, providers map[string]Provider,
+) ([]entity.Entity, error) {
 	if err := validateEntityDatasources(entities, providers); err != nil {
 		return nil, err
 	}
-	entities, err := reconcileAll(providers, entities)
+	entities, err := reconcileAll(b, providers, entities)
 	if err != nil {
 		return nil, err
 	}
@@ -245,8 +264,10 @@ func validateEntityDatasources(entities []entity.Entity, providers map[string]Pr
 const introspectTimeout = time.Minute
 
 // reconcileAll reconciles each datasource's entities with its schema, the
-// datasources in parallel; it reports the first failure by datasource name.
-func reconcileAll(providers map[string]Provider, entities []entity.Entity) ([]entity.Entity, error) {
+// datasources in parallel on b's Background lane, waiting for it however busy
+// it is (a startup or reload must not fail as busy); it reports the first
+// failure by datasource name.
+func reconcileAll(b *bus.Bus, providers map[string]Provider, entities []entity.Entity) ([]entity.Entity, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), introspectTimeout)
 	defer cancel()
 	out := slices.Clone(entities)
@@ -263,8 +284,12 @@ func reconcileAll(providers map[string]Provider, entities []entity.Entity) ([]en
 		for n, i := range at {
 			scoped[n] = entities[i]
 		}
-		wg.Go(func() {
-			reconciled, err := reconcileSafely(ctx, name, prov, scoped)
+		b.Fork(&wg, "reconcile "+name, func(context.Context) {
+			var reconciled []entity.Entity
+			err := b.Lane(bus.Background).RunWaiting(ctx, func(ctx context.Context) (err error) {
+				reconciled, err = reconcileSafely(ctx, name, prov, scoped)
+				return err
+			})
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -395,7 +420,7 @@ func newAssembleEngine(cfg *config.Config, shared *Shared) (*engine.Engine, erro
 	)
 }
 
-func newAssembleAuditor(cfg *config.Config) (audit.Auditor, error) {
+func newAssembleAuditor(cfg *config.Config, b *bus.Bus) (audit.Auditor, error) {
 	if !cfg.Audit.Enabled || cfg.Audit.Path == "" {
 		return audit.NoopAuditor{}, nil
 	}
@@ -403,7 +428,7 @@ func newAssembleAuditor(cfg *config.Config) (audit.Auditor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("assemble audit sink: %w", err)
 	}
-	return audit.NewAsyncAuditorWithClose(sink.Record, sink.Close, cfg.Audit.QueueSize), nil
+	return audit.NewAsyncAuditorOn(b, sink.Record, sink.Close, cfg.Audit.QueueSize), nil
 }
 
 func newAssembleCache(cfg *config.Config, shared *Shared) cache.Cache[[]map[string]any] {

@@ -373,6 +373,12 @@ const en: typeof zh = {
     publishConflictTitle: 'Revision #{id} was published in the meantime',
     publishConflictBody: 'Re-apply your changes onto #{id}, review them, then publish.',
   },
+  execution: {
+    title: 'Execution resources', lane: 'Lane', running: 'Load', inflight: 'Running', queued: 'Waiting',
+    rejected: 'Turned away', completed: 'Completed', io: 'IO slots', aux: 'Non-tool share',
+    tasks: 'Background tasks', noTasks: 'None',
+    lanes: { serve: 'Tool calls', admin: 'Admin reads', scan: 'Schema scans', background: 'Background' },
+  },
   runtime: {
     serving: 'Serving #{id}', loading: 'Loading #{id}', pendingRestart: '#{id} needs a restart', failed: '#{id} failed to apply',
     notWatching: '#{id} not loaded', published: 'Published', applied: 'Serving', watch: 'Hot reload',

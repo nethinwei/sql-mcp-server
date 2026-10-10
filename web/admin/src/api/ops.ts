@@ -46,7 +46,14 @@ export const WorkspaceQuery = graphql(`
 
 export const StatusQuery = graphql(`
   query Status {
-    serverStatus { appliedRevision watching pending { id restartRequired error } }
+    serverStatus {
+      appliedRevision watching pending { id restartRequired error }
+      execution {
+        io { size used waiting } aux { size used waiting }
+        lanes { name maxConcurrent maxQueue inflight queued rejected completed }
+        tasks { name running }
+      }
+    }
     published { ...RevisionParts }
   }
 `)

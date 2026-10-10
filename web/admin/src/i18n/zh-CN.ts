@@ -360,6 +360,12 @@ export default {
     publishConflictTitle: '期间已有新版本 #{id} 发布',
     publishConflictBody: '先基于 #{id} 重新应用你的修改，检查无误后再发布。',
   },
+  execution: {
+    title: '执行资源', lane: '通道', running: '负载', inflight: '执行中', queued: '排队',
+    rejected: '已拒绝', completed: '已完成', io: 'IO 槽位', aux: '非工具调用份额',
+    tasks: '后台任务', noTasks: '无',
+    lanes: { serve: '工具调用', admin: '管理读取', scan: '模式扫描', background: '后台' },
+  },
   runtime: {
     serving: '运行中 #{id}', loading: '正在加载 #{id}', pendingRestart: '#{id} 待重启生效', failed: '#{id} 应用失败',
     notWatching: '#{id} 未加载', published: '当前发布', applied: '运行中的版本', watch: '热加载',

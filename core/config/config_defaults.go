@@ -20,6 +20,7 @@ func (c *Config) ApplyDefaults() {
 	c.applyAuditDefaults()
 	c.applyCacheDefaults()
 	c.applyTransactionDefaults()
+	c.applyExecutionDefaults()
 }
 
 func (c *Config) applyServerDefaults() {
@@ -208,6 +209,21 @@ func (c *Config) applyTransactionDefaults() {
 	}
 	if c.Transactions.RollbackTimeout == 0 {
 		c.Transactions.RollbackTimeout = 30 * time.Second
+	}
+}
+
+func (c *Config) applyExecutionDefaults() {
+	laneDefaults(&c.Execution.Admin, 4, 16)
+	laneDefaults(&c.Execution.Scan, 2, 8)
+	laneDefaults(&c.Execution.Background, 2, 64)
+}
+
+func laneDefaults(l *LaneConfig, maxConcurrent, maxQueue int) {
+	if l.MaxConcurrent == 0 {
+		l.MaxConcurrent = maxConcurrent
+	}
+	if l.MaxQueue == 0 {
+		l.MaxQueue = maxQueue
 	}
 }
 

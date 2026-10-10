@@ -236,7 +236,7 @@ func publishReload(r *Runtime, old *appSnapshot, next *App, revoked []string) {
 		sessions = (*fn)(revoked)
 	}
 	r.draining.Add(1)
-	r.retiring.Go(func() {
+	next.Bus().Fork(&r.retiring, "retire snapshot", func(context.Context) {
 		defer r.draining.Add(-1)
 		old.mu.Lock()
 		for old.refs > 0 {
