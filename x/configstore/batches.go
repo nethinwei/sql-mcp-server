@@ -260,7 +260,13 @@ func (s *SQLStore) CancelBatch(ctx context.Context, id string) error {
 
 // dataMigrations move data when a schema version needs more than DDL; each
 // runs in the transaction of its version, after its DDL.
-var dataMigrations = map[int64]func(ctx context.Context, s *SQLStore, tx *sql.Tx) error{4: migrateBatchItems}
+var dataMigrations = map[int64]func(ctx context.Context, s *SQLStore, tx *sql.Tx) error{
+	4: migrateBatchItems,
+	5: func(ctx context.Context, s *SQLStore, tx *sql.Tx) error {
+		_, err := s.exec(ctx, tx, "INSERT INTO smcp_store_meta (meta_key, meta_value) VALUES (?, 0)", metaRevisionSeq)
+		return err
+	},
+}
 
 // migrateBatchItems moves the items of the batches kept before schema
 // version 4, a JSON array in their payload, to rows; a schema being scanned

@@ -1,9 +1,6 @@
 import { defineStore } from 'pinia'
-import { run } from '@/api/client'
-import { PublishedQuery, RevisionHashQuery, WorkspaceQuery } from '@/api/ops'
 import { EntityIndex, entityId } from '@/lib/entityRefs'
 import { filterFields, type Filter } from '@/lib/filter'
-import { getAt, merge, same, setAt, type Path } from '@/lib/merge'
 import type {
   Action,
   FieldInput,
@@ -16,6 +13,7 @@ import type {
   PreviewPlanQuery,
   RoleInput,
   UserInput,
+  WorkspacePartsFragment,
 } from '@/gql/graphql'
 
 export interface Datasource {
@@ -27,7 +25,7 @@ export interface Datasource {
   readAfterWrite?: string | null
 }
 
-/** What the workspace edits; also the shape persisted to localStorage. */
+/** What the workspace edits, as the server keeps it (see x/admin/configapp). */
 export interface Sections {
   entities: EntityInput[]
   roles: RoleInput[]
@@ -62,38 +60,63 @@ export interface Change {
   paths?: string[]
 }
 
-/**
- * A value this workspace and a newer published revision changed differently
- * (see lib/merge). The workspace keeps its value meanwhile; it cannot be
- * saved or published until every conflict is resolved.
- */
-export interface Conflict {
-  kind: Change['kind']
-  /** The item, as Change names it. */
-  name: string
-  /** Where in the item; empty for the whole item. */
-  path: Path
-  mine: unknown
-  /** The value in revision; undefined when removed there. */
-  theirs: unknown
-  revision: string
-}
+/** A conflict of the workspace, as the server holds it (see core/workspace). */
+export type Conflict = WorkspacePartsFragment['conflicts'][number]
+
+/** Where changes came from: a plan an agent applied, a draft taken in. */
+export type Note = WorkspacePartsFragment['notes'][number]
 
 interface State extends Sections {
+  /** The administrator this workspace is; '' until bound (see bindTo). */
+  owner: string
   baseId: string | null
   /** The published revision when the workspace was loaded or rebased. */
   basePublished: string | null
   baseHash: string
   datasources: Datasource[]
   /** Users that had a token in the base revision. */
-  baseTokens: Record<string, boolean>
+  /** Each user's token hash in the base revision ('' or absent: no token). */
+  baseTokens: Record<string, string>
   baseline: string
-  /** The draft last saved from this workspace and the content it holds. */
-  savedDraft: { id: string; content: string } | null
+  /** The workspace version the server last answered with. */
+  version: number
+  /** The workspace as the server last answered for it (see Copy); null: not read yet. */
+  copy: Copy | null
+  /** The server's: conflicts to resolve, notes, drafts taken or saved, the draft it holds. */
   conflicts: Conflict[]
+  notes: Note[]
+  taken: string[]
+  checkpoint: string | null
   loading: boolean
 }
 
+/**
+ * The items of the workspace kept on the server as this console last read
+ * or wrote them, by itemRef: an item edited here is what differs from it,
+ * written with the value it was edited from (raw), so the server merges
+ * what was written there meanwhile.
+ */
+export interface Copy {
+  values: Record<string, string>
+  raw: Record<string, unknown>
+}
+
+/** Sets ref's value in copy; undefined removes it. */
+function setCopy(copy: Copy, ref: string, value: unknown) {
+  if (value === undefined) {
+    delete copy.values[ref]
+    delete copy.raw[ref]
+    return
+  }
+  copy.values[ref] = canonical(value)
+  copy.raw[ref] = value
+}
+
+/** How the server names an item: its kind and key. */
+const itemRef = (kind: string, key: string) => `${kind}\u0000${key}`
+
+// Older consoles kept the workspace in this browser, for whoever was signed
+// in: it is never taken as anyone's without asking (see legacy).
 const storageKey = 'smcp.console.workspace.v1'
 
 export function toEntityInput(e: EntityPartsFragment): EntityInput {
@@ -111,7 +134,8 @@ export function toEntityInput(e: EntityPartsFragment): EntityInput {
     allowCascade: e.allowCascade || undefined,
     tenantPolicy: e.tenantPolicy ?? undefined,
     legacyAccess: e.legacyAccess ?? undefined,
-    mcp: { ...e.mcp },
+    // Field by field: the client adds __typename to what it reads.
+    mcp: { dmlTools: e.mcp.dmlTools, customTool: e.mcp.customTool, trustedProcedure: e.mcp.trustedProcedure },
     fields: e.fields.map((f) => ({
       name: f.name,
       alias: f.alias ?? undefined,
@@ -119,7 +143,9 @@ export function toEntityInput(e: EntityPartsFragment): EntityInput {
       mask: f.mask ?? undefined,
       exclude: f.exclude,
     })),
-    relationships: e.relationships.map((r) => ({ ...r, joinOn: { ...r.joinOn } })),
+    relationships: e.relationships.map((r) => ({
+      name: r.name, target: r.target, cardinality: r.cardinality, joinOn: { ...r.joinOn },
+    })),
   }
 }
 
@@ -132,6 +158,18 @@ function toGrantInput(g: GrantPartsFragment): GrantInput {
     writeFields: [...g.writeFields],
     rows: g.rows ?? undefined,
   }
+}
+
+/**
+ * Sections an older console kept, as the workspace holds them now. There a
+ * user without a token hash kept the base user's token; here such a user
+ * has none: the hash is taken from the base (baseTokens), and a revoked or
+ * new token stays as it is.
+ */
+export function upgradeLegacySections(old: Sections, baseTokens: Record<string, string>): Sections {
+  const users = old.users.map((u) =>
+    u.tokenHash == null && baseTokens[u.name] ? { ...u, tokenHash: baseTokens[u.name] } : u)
+  return { ...old, users }
 }
 
 /** The editable sections of a loaded revision. */
@@ -150,6 +188,7 @@ export function revisionSections(rev: NonNullable<WorkspaceResult['revision']>):
       roles: [...u.roles],
       subject: u.subject ?? undefined,
       disabled: u.disabled,
+      tokenHash: u.tokenHash ?? undefined,
       grants: u.grants.map(toGrantInput),
     })),
     settings: { ...(cfg.settings as Record<string, unknown>) },
@@ -160,13 +199,29 @@ function sections(s: State): Sections {
   return { entities: s.entities, roles: s.roles, users: s.users, settings: s.settings }
 }
 
-// Optional text where empty and unset mean the same, as in the server model;
-// tokenHash is excluded on purpose: an empty hash revokes the token.
-const optionalText = new Set(['source', 'datasource', 'schema', 'kind', 'description', 'alias', 'mask'])
+/**
+ * Canonical JSON for change detection: unset optional text is omitted and
+ * object keys are sorted, so the same content compares equal however it was
+ * built (the server keeps a workspace with its keys sorted).
+ */
+// Optional text where empty and unset mean the same, as in the server's
+// merge schema: a revoked token (an empty hash) is a user without one.
+const optionalText = new Set(['source', 'datasource', 'schema', 'kind', 'description', 'alias', 'mask', 'tokenHash'])
 
-/** Canonical JSON for change detection: unset optional text is omitted. */
+function normalize(v: unknown, key = ''): unknown {
+  if (optionalText.has(key) && (v === '' || v === null)) return undefined
+  if (Array.isArray(v)) return v.map((x) => normalize(x))
+  if (typeof v !== 'object' || v === null) return v
+  const out: Record<string, unknown> = {}
+  for (const k of Object.keys(v).sort()) {
+    const n = normalize((v as Record<string, unknown>)[k], k)
+    if (n !== undefined) out[k] = n
+  }
+  return out
+}
+
 export function canonical(value: unknown): string {
-  return JSON.stringify(value, (key, v: unknown) => (optionalText.has(key) && (v === '' || v === null) ? undefined : v))
+  return JSON.stringify(normalize(value) ?? null)
 }
 
 /** How a change names an item: an entity by its ID, others by name. */
@@ -174,53 +229,21 @@ function keyOf(kind: Change['kind'], item: { name: string }): string {
   return kind === 'entity' ? entityId(item) : item.name
 }
 
-/** Whether conflict c is on the value of outer's path or one under it. */
-function within(c: Conflict, outer: Conflict): boolean {
-  return c.kind === outer.kind && c.name === outer.name && c.path.length >= outer.path.length &&
-    same(c.path.slice(0, outer.path.length), outer.path)
-}
+const sectionOf = { entity: 'entities', role: 'roles', user: 'users' } as const
 
-/**
- * The part of path that still names one value in each of items: a path
- * through a list element that has since become a group (a second grant on
- * one entity, say) stops at the group, which the merge treats as a whole.
- */
-function addressable(path: Path, ...items: unknown[]): Path {
-  for (let i = 0; i < path.length - 1; i++) {
-    if (typeof path[i] !== 'string' && items.some((item) => Array.isArray(getAt(item, path.slice(0, i + 1))))) {
-      return path.slice(0, i + 1)
-    }
+/** Every item of sections by itemRef, as written. */
+function itemsOf(s: Sections): Map<string, { kind: Change['kind']; key: string; value: unknown }> {
+  const out = new Map<string, { kind: Change['kind']; key: string; value: unknown }>()
+  for (const [kind, list] of [['entity', s.entities], ['role', s.roles], ['user', s.users]] as const) {
+    for (const item of list) out.set(itemRef(kind, keyOf(kind, item)), { kind, key: keyOf(kind, item), value: item })
   }
-  return path
+  out.set(itemRef('settings', 'settings'), { kind: 'settings', key: 'settings', value: s.settings })
+  return out
 }
 
-/**
- * A conflict as it stands in the workspace s, against base, the newest
- * published revision: its path (see addressable), the workspace's value and
- * the published one; null when there is nothing left to choose, because the
- * workspace holds the published value already (for instance typed in by
- * hand) or has removed what holds it, the item or a list element or object
- * on the way (a removal made on the newer revision overwrites nothing unseen,
- * and taking theirs would rebuild it without its name or key). Values are compared in place, so unset optional text
- * equals empty text.
- */
-function view(s: Sections, base: Sections, c: Conflict): Conflict | null {
-  const [item, theirsItem] = [pick(s, c), pick(base, c)]
-  const path = addressable(c.path, item, theirsItem)
-  // The workspace removed what holds the value (the item, a list element or
-  // an object on the way).
-  for (let i = 0; i < path.length; i++) if (getAt(item, path.slice(0, i)) === undefined) return null
-  const [mine, theirs] = [getAt(item, path), getAt(theirsItem, path)]
-  const last = path[path.length - 1]
-  const settled = typeof last === 'string' ? same({ [last]: mine }, { [last]: theirs }) : same(mine, theirs)
-  return settled ? null : { ...c, path, mine, theirs }
-}
-
-/** The item a change refers to in sections, or undefined when absent. */
-function pick(s: Sections, c: Pick<Change, 'kind' | 'name'>): unknown {
-  if (c.kind === 'settings') return s.settings
-  const items: { name: string }[] = c.kind === 'entity' ? s.entities : c.kind === 'role' ? s.roles : s.users
-  return items.find((x) => keyOf(c.kind, x) === c.name)
+/** The sections of a document. */
+function pickSections(d: Sections): Sections {
+  return { entities: d.entities ?? [], roles: d.roles ?? [], users: d.users ?? [], settings: d.settings ?? {} }
 }
 
 function byKey<T extends { name: string }>(kind: Change['kind'], items: T[]): Map<string, string> {
@@ -238,6 +261,9 @@ function diffNamed<T extends { name: string }>(kind: Change['kind'], base: T[], 
   for (const name of before.keys()) if (!after.has(name)) out.push({ kind, name, type: 'removed' })
   return out
 }
+
+/** How many items (by kind and name, and the settings) differ between two sets of sections. */
+export const itemsChanged = (before: Sections, after: Sections) => changesBetween(before, after).length
 
 /** Item changes from base to now. */
 function changesBetween(base: Sections, now: Sections): Change[] {
@@ -294,16 +320,63 @@ function retarget(s: References, before: (ref: string) => string | undefined, mo
   })
 }
 
+/**
+ * The workspace's round trips to the server (taking a draft, reading or
+ * writing the workspace kept there), one at a time: each reads what it needs,
+ * then merges with the workspace as it is at that moment in one synchronous
+ * step, so neither another round trip nor an edit made meanwhile is lost.
+ */
+let lane: Promise<unknown> = Promise.resolve()
+export function serially<T>(fn: () => Promise<T>): Promise<T> {
+  const next = lane.then(fn, fn)
+  lane = next.catch(() => undefined)
+  return next
+}
+
+/**
+ * The workspace's lifetime as one administrator's (see bindTo): an answer
+ * to a request made for another's is never written into it.
+ */
+let lifetime = 0
+
+/** A request's answer arrived after the workspace became another administrator's. */
+export class WorkspaceSwitched extends Error {
+  constructor() {
+    super('the console signed in as another administrator meanwhile; nothing was changed')
+  }
+}
+
+/** The workspace's lifetime now (see owned). */
+export const currentLifetime = () => lifetime
+
+/**
+ * request's answer, made and taken only while the workspace is still the
+ * one the operation was asked for in (at: its lifetime then, which a
+ * queued operation runs well after); otherwise WorkspaceSwitched, the
+ * request not even made when the switch came first.
+ */
+export async function owned<T>(request: () => Promise<T>, at = lifetime): Promise<T> {
+  if (lifetime !== at) throw new WorkspaceSwitched()
+  const answer = await request()
+  if (lifetime !== at) throw new WorkspaceSwitched()
+  return answer
+}
+
 export const useWorkspace = defineStore('workspace', {
   state: (): State => ({
+    owner: '',
     baseId: null,
     basePublished: null,
     baseHash: '',
     datasources: [],
     baseTokens: {},
     baseline: '',
-    savedDraft: null,
+    version: 0,
+    copy: null,
     conflicts: [],
+    notes: [],
+    taken: [],
+    checkpoint: null,
     loading: false,
     entities: [],
     roles: [],
@@ -323,9 +396,9 @@ export const useWorkspace = defineStore('workspace', {
     content(state): string {
       return canonical(sections(state))
     },
-    /** The saved draft holding exactly the unsaved changes, or null. */
+    /** The draft saved from the workspace while nothing changed since, or null. */
     savedDraftId(state): string | null {
-      return this.dirty && state.savedDraft?.content === canonical(sections(state)) ? state.savedDraft.id : null
+      return this.dirty ? state.checkpoint : null
     },
     /**
      * The workspace as a draft of its base revision, holding only the
@@ -335,11 +408,14 @@ export const useWorkspace = defineStore('workspace', {
      */
     draft(state): DraftInput {
       const draft: DraftInput = { base: state.baseId ?? '' }
-      if (!state.baseline) return { ...draft, entities: state.entities, roles: state.roles, users: state.users, settings: state.settings }
+      // The users here are as they are, token included: one without a token
+      // hash has none (a missing hash would keep the base user's).
+      const users = state.users.map((u) => ({ ...u, tokenHash: u.tokenHash ?? '' }))
+      if (!state.baseline) return { ...draft, entities: state.entities, roles: state.roles, users, settings: state.settings }
       const base = JSON.parse(state.baseline) as Sections
       if (canonical(base.entities) !== canonical(state.entities)) draft.entities = state.entities
       if (canonical(base.roles) !== canonical(state.roles)) draft.roles = state.roles
-      if (canonical(base.users) !== canonical(state.users)) draft.users = state.users
+      if (canonical(base.users) !== canonical(state.users)) draft.users = users
       const settings: Record<string, unknown> = {}
       for (const key of new Set([...Object.keys(base.settings), ...Object.keys(state.settings)])) {
         if (canonical(base.settings[key]) !== canonical(state.settings[key])) settings[key] = state.settings[key] ?? null
@@ -361,17 +437,8 @@ export const useWorkspace = defineStore('workspace', {
     contextKey(state): string {
       return `${state.baseId ?? ''}\u0000${this.content}`
     },
-    /**
-     * The conflicts still to resolve: those whose value the workspace does
-     * not already hold from the newer revision. mine is the workspace's
-     * current value, edits since the conflict arose included: it is what
-     * keeping mine keeps.
-     */
-    openConflicts(state): Conflict[] {
-      const s = sections(state)
-      const base = JSON.parse(state.baseline || '{}') as Sections
-      return state.conflicts.flatMap((c) => view(s, base, c) ?? [])
-    },
+    /** The conflicts to resolve, as the server holds them. */
+    openConflicts: (state): Conflict[] => state.conflicts,
     /** The entities by ID and by reference (see EntityIndex). */
     entityIndex: (state) => new EntityIndex(state.entities),
     /** The entity with an ID. */
@@ -438,109 +505,10 @@ export const useWorkspace = defineStore('workspace', {
         return [...refs].sort((a, b) => order[a.kind] - order[b.kind])
       }
     },
-    hasToken: (state) => (user: UserInput) =>
-      user.tokenHash != null ? user.tokenHash !== '' : Boolean(state.baseTokens[user.name]),
+    hasToken: () => (user: UserInput) => Boolean(user.tokenHash),
   },
 
   actions: {
-    /** Loads a revision as the new baseline, discarding unsaved changes. */
-    async load(id: string) {
-      this.loading = true
-      try {
-        this.apply(await run(WorkspaceQuery, { id }), id)
-      } finally {
-        this.loading = false
-      }
-    },
-
-    /**
-     * Moves the workspace onto revision id and re-applies the unsaved
-     * changes with a three-way merge (see lib/merge). Returns the conflicts
-     * found: values id changed that this workspace changed differently,
-     * which keep the local value until resolved (see resolveConflict).
-     */
-    async rebase(id: string, from?: string): Promise<Conflict[]> {
-      this.loading = true
-      try {
-        return this.rebaseOnto(await run(WorkspaceQuery, { id }), id, from)
-      } finally {
-        this.loading = false
-      }
-    },
-
-    /**
-     * from (a snapshot's sections) replaces the baseline as the point the
-     * local edits are measured from: after publishing a snapshot, only edits
-     * made since it, including undoing part of it, are re-applied.
-     */
-    rebaseOnto(data: WorkspaceResult, id: string, from?: string): Conflict[] {
-      const oldBase = JSON.parse(from ?? this.baseline) as Sections
-      const local = JSON.parse(JSON.stringify(sections(this.$state))) as Sections
-      const changes = changesBetween(oldBase, local)
-      const pending = this.conflicts
-      this.apply(data, id)
-      const newBase = JSON.parse(this.baseline) as Sections
-      const found: Conflict[] = []
-      for (const c of changes) {
-        const merged = merge(pick(oldBase, c), pick(local, c), pick(newBase, c))
-        found.push(...merged.conflicts.map((v) => ({ kind: c.kind, name: c.name, ...v, revision: id })))
-        if (c.kind === 'settings') this.settings = (merged.value ?? {}) as Record<string, unknown>
-        else if (merged.value === undefined) this.removeItem(c.kind, c.name)
-        else this.upsertItem(c.kind, merged.value as never, c.name)
-      }
-      // Conflicts not resolved before stand against the newest revision's
-      // value, unless it now equals the local one.
-      const now = sections(this.$state)
-      // A new conflict replaces those under it (a removed item replaces the
-      // conflicts on its values); one under an older, still unresolved
-      // conflict is left to it, which now stands against the newest value of
-      // its whole path.
-      const carried = pending.flatMap((p) => {
-        if (found.some((f) => within(p, f))) return []
-        return view(now, newBase, { ...p, revision: id }) ?? []
-      })
-      const added = found.filter((f) => !carried.some((p) => within(f, p)))
-      this.conflicts = [...carried, ...added]
-      this.persist()
-      return added
-    },
-
-    /** Adds or replaces an item a change names. */
-    upsertItem(kind: Change['kind'], item: never, previous: string) {
-      if (kind === 'entity') this.upsertEntity(item, previous)
-      else if (kind === 'role') this.upsertRole(item, previous)
-      else if (kind === 'user') this.upsertUser(item, previous)
-    },
-
-    /** Removes an item a change names. */
-    removeItem(kind: Change['kind'], name: string) {
-      if (kind === 'entity') this.removeEntity(name)
-      else if (kind === 'role') this.removeRole(name)
-      else if (kind === 'user') this.removeUser(name)
-    },
-
-    /**
-     * Resolves a conflict: mine keeps the workspace's current value, theirs
-     * takes the value of the newer revision (removing it when removed there).
-     */
-    resolveConflict(conflict: Conflict, choice: 'mine' | 'theirs') {
-      if (choice === 'theirs') {
-        if (conflict.kind === 'settings') {
-          this.settings = (setAt(this.settings, conflict.path, conflict.theirs) ?? {}) as Record<string, unknown>
-        } else {
-          const item = setAt(pick(sections(this.$state), conflict), conflict.path, conflict.theirs)
-          if (item === undefined) this.removeItem(conflict.kind, conflict.name)
-          else this.upsertItem(conflict.kind, item as never, conflict.name)
-        }
-      }
-      // Its choice decides the values under it too, and what now matches the
-      // newer revision needs no choice.
-      const now = sections(this.$state)
-      const base = JSON.parse(this.baseline) as Sections
-      this.conflicts = this.conflicts.flatMap((c) => (within(c, conflict) ? [] : view(now, base, c) ?? []))
-      this.persist()
-    },
-
     /** Replaces the workspace with a loaded revision as the new baseline. */
     apply(data: WorkspaceResult, id: string) {
       const rev = data.revision
@@ -550,93 +518,136 @@ export const useWorkspace = defineStore('workspace', {
       this.basePublished = data.published?.id ?? null
       this.baseHash = rev.contentHash
       this.datasources = cfg.datasources.map((d) => ({ ...d }))
-      this.baseTokens = Object.fromEntries(cfg.users.map((u) => [u.name, u.hasToken]))
+      this.baseTokens = Object.fromEntries(cfg.users.map((u) => [u.name, u.tokenHash ?? '']))
       Object.assign(this, revisionSections(rev))
       this.baseline = JSON.stringify(sections(this.$state))
-      this.savedDraft = null
-      this.conflicts = []
-      this.persist()
     },
 
-    /**
-     * A copy of the workspace to submit, with its content key. Saving binds
-     * the draft id to this content, so edits made while the request is in
-     * flight stay unsaved.
-     */
+    /** A copy of the workspace as a draft and as sections, with its content key. */
     snapshot(): { draft: DraftInput; content: string; sections: string } {
       const draft = JSON.parse(JSON.stringify(this.draft)) as DraftInput
       return { draft, content: canonical(sections(this.$state)), sections: JSON.stringify(sections(this.$state)) }
     },
 
-    /** Records that draft id holds content (from snapshot). */
-    markDraftSaved(id: string, content: string) {
-      this.savedDraft = { id, content }
-      this.persist()
+    /**
+     * Takes in the workspace the server answered (w; baseData: its base
+     * revision, when it builds on another than this one): an item edited
+     * here and not written yet stays as edited (it is written with the value
+     * it was edited from, and the server merges); every other item becomes
+     * the server's.
+     */
+    take(w: WorkspacePartsFragment, baseData?: WorkspaceResult) {
+      const was = this.copy
+      const pending = new Map<string, { kind: Change['kind']; key: string; value: unknown } | undefined>()
+      if (was) {
+        const mine = itemsOf(sections(this.$state))
+        for (const ref of new Set([...mine.keys(), ...Object.keys(was.values)])) {
+          const it = mine.get(ref)
+          if (canonical(it?.value) !== (was.values[ref] ?? canonical(undefined))) pending.set(ref, it)
+        }
+      }
+      if (baseData) this.apply(baseData, w.base)
+      const server = itemsOf(w.sections as Sections)
+      const copy: Copy = { values: {}, raw: {} }
+      for (const [ref, it] of server) setCopy(copy, ref, it.value)
+      const next: Sections = { entities: [], roles: [], users: [], settings: {} }
+      const put = (it: { kind: Change['kind']; value: unknown }) => {
+        if (it.kind === 'settings') next.settings = it.value as Record<string, unknown>
+        else (next[sectionOf[it.kind]] as unknown[]).push(it.value)
+      }
+      for (const [ref, it] of server) {
+        if (pending.has(ref)) {
+          const mine = pending.get(ref)
+          if (mine) put(mine)
+        } else put(it)
+      }
+      for (const [ref, mine] of pending) {
+        if (mine && !server.has(ref)) put(mine)
+        // Still measured from what it was edited from.
+        setCopy(copy, ref, was?.values[ref] === undefined ? undefined : was.raw[ref])
+      }
+      this.$patch((st) => Object.assign(st, JSON.parse(JSON.stringify(next)) as Sections))
+      Object.assign(this, { copy, version: w.version, conflicts: w.conflicts, notes: w.notes, taken: w.taken,
+        checkpoint: w.checkpoint ?? null })
     },
 
-    /** Loads the published revision; returns false when nothing is published. */
-    async loadPublished(): Promise<boolean> {
-      const data = await run(PublishedQuery, {})
-      if (!data.published) return false
-      await this.load(data.published.id)
+    /** The items edited here since the copy, each with the value it was edited from (null: absent). */
+    pendingItems(): { kind: string; key: string; value: unknown; previous: unknown }[] {
+      const copy = this.copy
+      if (!copy) return []
+      const mine = itemsOf(sections(this.$state))
+      const out = []
+      for (const ref of new Set([...mine.keys(), ...Object.keys(copy.values)])) {
+        const m = mine.get(ref)
+        if (canonical(m?.value) === (copy.values[ref] ?? canonical(undefined))) continue
+        const [kind, key] = ref.split('\u0000') as [string, string]
+        // A copy: the item may be edited again while it is being written.
+        out.push({ kind, key, value: m ? JSON.parse(JSON.stringify(m.value)) : null, previous: copy.raw[ref] ?? null })
+      }
+      return out
+    },
+
+    /**
+     * Records in the copy the items a write sent, before taking in the
+     * answer: an item edited again while the write was in flight then still
+     * differs, and is written next, from what was sent.
+     */
+    wrote(items: { kind: string; key: string; value: unknown }[]) {
+      const copy = this.copy
+      if (!copy) return
+      for (const it of items) setCopy(copy, itemRef(it.kind, it.key), it.value ?? undefined)
+    },
+
+    /**
+     * Makes this the workspace of username: another administrator's (one
+     * signed in before in this browser) is dropped, to read username's from
+     * the server. Returns whether it changed.
+     */
+    bindTo(username: string): boolean {
+      if (this.owner === username) return false
+      lifetime++
+      this.$reset()
+      this.owner = username
       return true
     },
 
     /**
-     * Checks a restored workspace against the server: when its base revision
-     * no longer exists or holds other content (the store was replaced), the
-     * base is reloaded, re-applying unsaved changes onto it. Returns the
-     * revision the workspace was moved onto and the conflicting changes, or
-     * null when the base is current.
+     * The workspace an older console kept in this browser for whoever was
+     * signed in (no owner recorded), when it holds unpublished changes: its
+     * base and how many. One without changes is dropped, nothing to lose.
      */
-    async verifyBase(): Promise<{ id: string; conflicts: Conflict[] } | null> {
-      if (!this.baseId) return null
-      const { revision } = await run(RevisionHashQuery, { id: this.baseId })
-      if (revision?.contentHash === this.baseHash) {
-        // Datasources are read-only here and not persisted: take the server's.
-        this.datasources = revision.config.datasources.map((d) => ({ ...d }))
-        return null
-      }
-      const target = revision?.id ?? (await run(PublishedQuery, {})).published?.id
-      if (!target) return null
-      if (!this.dirty) {
-        await this.load(target)
-        return { id: target, conflicts: [] }
-      }
-      return { id: target, conflicts: await this.rebase(target) }
-    },
-
-    /** Restores a persisted workspace, if any. */
-    restore(): boolean {
+    legacy(): { base: string; changes: number } | null {
       try {
         const raw = localStorage.getItem(storageKey)
-        if (!raw) return false
-        // Older workspaces persisted datasources in an older shape; ignore them.
-        const { datasources: _datasources, ...saved } = JSON.parse(raw) as Partial<State>
-        this.$patch((state) => Object.assign(state, saved))
-        // Workspaces saved before basePublished existed tracked their base.
-        this.basePublished ??= this.baseId
-        return Boolean(this.baseId)
+        if (!raw) return null
+        const saved = JSON.parse(raw) as Partial<State>
+        const changes = saved.baseId && saved.baseline
+          ? itemsChanged(JSON.parse(saved.baseline) as Sections, pickSections(saved as Sections))
+          : 0
+        if (changes) return { base: saved.baseId!, changes }
+        localStorage.removeItem(storageKey)
       } catch {
-        return false
+        // unreadable: nothing to offer
       }
+      return null
     },
 
-    persist() {
+    /**
+     * The older console's workspace (see legacy): its base and its
+     * sections, for its owner to take in as edits on that base.
+     */
+    legacyWorkspace(): { base: string; sections: Sections } | null {
       try {
-        // Datasources come from the server on every load (see verifyBase).
-        const { loading: _loading, datasources: _datasources, ...rest } = this.$state
-        localStorage.setItem(storageKey, JSON.stringify(rest))
+        const saved = JSON.parse(localStorage.getItem(storageKey) ?? 'null') as Partial<State> | null
+        return saved?.baseId ? { base: saved.baseId, sections: pickSections(saved as Sections) } : null
       } catch {
-        // Storage may be unavailable (private mode); the workspace still works in memory.
+        return null
       }
     },
 
-    discard() {
-      if (!this.baseline) return
-      this.$patch((state) => Object.assign(state, JSON.parse(this.baseline) as Sections))
-      this.conflicts = []
-      this.persist()
+    /** Drops the older console's workspace (see legacy). */
+    dropLegacy() {
+      localStorage.removeItem(storageKey)
     },
 
     /**
@@ -647,8 +658,6 @@ export const useWorkspace = defineStore('workspace', {
     revert(change: Pick<Change, 'kind' | 'name'>) {
       if (!this.baseline) return
       const base = JSON.parse(this.baseline) as Sections
-      // The baseline holds the newer revision's values: its side of conflicts.
-      this.conflicts = this.conflicts.filter((c) => c.kind !== change.kind || c.name !== change.name)
       if (change.kind === 'settings') return this.setSettings(base.settings)
       const restore = <T extends { name: string }>(items: T[], baseItems: T[]) => {
         const original = baseItems.find((x) => keyOf(change.kind, x) === change.name)
@@ -666,7 +675,6 @@ export const useWorkspace = defineStore('workspace', {
         else if (change.kind === 'role') this.removeRole(change.name)
         else this.removeUser(change.name)
       }
-      this.persist()
     },
 
     /**
@@ -707,7 +715,6 @@ export const useWorkspace = defineStore('workspace', {
           else this.roles.push({ ...role, grants })
         }
       }
-      this.persist()
       return dropped
     },
 
@@ -727,7 +734,6 @@ export const useWorkspace = defineStore('workspace', {
       if (i >= 0) this.entities.splice(i, 1, e)
       else this.entities.push(e)
       retarget(this.$state, (ref) => before.idOf(ref), new Map([[previousId, entityId(e)]]))
-      this.persist()
     },
 
     /**
@@ -739,7 +745,6 @@ export const useWorkspace = defineStore('workspace', {
       const before = this.entityIndex
       this.entities = this.entities.filter((e) => entityId(e) !== id)
       retarget(this.$state, (ref) => before.idOf(ref), new Map([[id, null]]))
-      this.persist()
     },
 
     /**
@@ -762,7 +767,6 @@ export const useWorkspace = defineStore('workspace', {
       })
       for (const r of this.roles) r.grants = (r.grants ?? []).map(prune)
       for (const u of this.users) u.grants = (u.grants ?? []).map(prune)
-      this.persist()
     },
 
     /**
@@ -772,31 +776,6 @@ export const useWorkspace = defineStore('workspace', {
      * the roles and users it changes take its grants, which name entities by
      * ID and are written in their shortest unambiguous form.
      */
-    applyProposal(p: Proposal) {
-      const added = new Set(p.added)
-      const entities = p.entities.map(toEntityInput)
-      this.importEntities(entities.filter((e) => added.has(entityId(e))))
-      for (const e of entities) {
-        const current = added.has(entityId(e)) ? undefined : this.entity(entityId(e))
-        if (current) current.fields = e.fields
-      }
-      const index = this.entityIndex
-      const grants = (gs: GrantPartsFragment[]) => gs.map((g) => {
-        const grant = toGrantInput(g)
-        return index.get(g.entity) ? { ...grant, entity: index.shortName(g.entity) } : grant
-      })
-      for (const r of p.roles) {
-        const role = this.role(r.name)
-        if (role) role.grants = grants(r.grants)
-        else this.roles.push({ name: r.name, description: r.description ?? undefined, grants: grants(r.grants) })
-      }
-      for (const u of p.users) {
-        const user = this.user(u.name)
-        if (user) user.grants = grants(u.grants)
-      }
-      this.persist()
-    },
-
     upsertRole(r: RoleInput, previousName = r.name) {
       const i = this.roles.findIndex((x) => x.name === previousName)
       if (i >= 0) this.roles.splice(i, 1, r)
@@ -804,14 +783,12 @@ export const useWorkspace = defineStore('workspace', {
       if (previousName !== r.name) {
         for (const u of this.users) u.roles = (u.roles ?? []).map((x) => (x === previousName ? r.name : x))
       }
-      this.persist()
     },
 
     /** Removes a role and takes it away from every user. */
     removeRole(name: string) {
       this.roles = this.roles.filter((r) => r.name !== name)
       for (const u of this.users) u.roles = (u.roles ?? []).filter((x) => x !== name)
-      this.persist()
     },
 
     /** Sets which users hold a role. */
@@ -822,24 +799,20 @@ export const useWorkspace = defineStore('workspace', {
         if (want && !has) u.roles = [...(u.roles ?? []), role]
         if (!want && has) u.roles = (u.roles ?? []).filter((x) => x !== role)
       }
-      this.persist()
     },
 
     upsertUser(u: UserInput, previousName = u.name) {
       const i = this.users.findIndex((x) => x.name === previousName)
       if (i >= 0) this.users.splice(i, 1, u)
       else this.users.push(u)
-      this.persist()
     },
 
     removeUser(name: string) {
       this.users = this.users.filter((u) => u.name !== name)
-      this.persist()
     },
 
     setSettings(settings: Record<string, unknown>) {
       this.settings = settings
-      this.persist()
     },
   },
 })

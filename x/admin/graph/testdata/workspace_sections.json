@@ -1,0 +1,667 @@
+{
+  "configuration": {
+    "entities": [
+      {
+        "id": "shop.crm.customers",
+        "name": "customers",
+        "source": "customer_master",
+        "datasource": "shop",
+        "schema": "crm",
+        "kind": "view",
+        "description": "Customer master",
+        "primaryKey": [
+          "id"
+        ],
+        "uniqueKeys": [],
+        "fields": [
+          {
+            "name": "id",
+            "exclude": false
+          },
+          {
+            "name": "region",
+            "alias": "area",
+            "description": "Sales region",
+            "exclude": false
+          },
+          {
+            "name": "phone",
+            "mask": "phone",
+            "exclude": false
+          },
+          {
+            "name": "secret_col",
+            "exclude": true
+          }
+        ],
+        "relationships": [
+          {
+            "name": "orders",
+            "target": "orders",
+            "cardinality": "has-many",
+            "joinOn": {
+              "id": "customer_id"
+            }
+          }
+        ],
+        "tenantPolicy": {
+          "field": "region",
+          "op": "eq",
+          "value": "${subject.tenant}"
+        },
+        "legacyAccess": {
+          "fieldACL": {
+            "legacy_reader": {
+              "read": [
+                "id",
+                "region"
+              ],
+              "write": [
+                "region"
+              ]
+            }
+          },
+          "roles": {
+            "aggregate": [
+              "legacy_reader"
+            ],
+            "create": [
+              "legacy_writer"
+            ],
+            "delete": [
+              "legacy_writer"
+            ],
+            "execute": [
+              "legacy_writer"
+            ],
+            "read": [
+              "legacy_reader"
+            ],
+            "update": [
+              "legacy_writer"
+            ]
+          },
+          "rowPolicies": {
+            "legacy_reader": {
+              "field": "region",
+              "op": "eq",
+              "value": "CN"
+            }
+          }
+        },
+        "mcp": {
+          "dmlTools": false,
+          "customTool": false,
+          "trustedProcedure": false
+        },
+        "params": [],
+        "affects": [],
+        "allowCascade": false
+      },
+      {
+        "id": "shop.orders",
+        "name": "orders",
+        "datasource": "shop",
+        "primaryKey": [],
+        "uniqueKeys": [
+          [
+            "customer_id"
+          ]
+        ],
+        "fields": [
+          {
+            "name": "id",
+            "exclude": false
+          },
+          {
+            "name": "customer_id",
+            "exclude": false
+          }
+        ],
+        "relationships": [],
+        "mcp": {
+          "dmlTools": true,
+          "customTool": false,
+          "trustedProcedure": false
+        },
+        "params": [],
+        "affects": [],
+        "allowCascade": true
+      },
+      {
+        "id": "shop.refresh",
+        "name": "refresh",
+        "datasource": "shop",
+        "kind": "procedure",
+        "primaryKey": [],
+        "uniqueKeys": [],
+        "fields": [],
+        "relationships": [],
+        "mcp": {
+          "dmlTools": true,
+          "customTool": true,
+          "trustedProcedure": true
+        },
+        "params": [
+          "tenant"
+        ],
+        "affects": [
+          "orders"
+        ],
+        "allowCascade": false
+      }
+    ],
+    "roles": [
+      {
+        "name": "analyst",
+        "description": "Business analyst",
+        "grants": [
+          {
+            "entity": "orders",
+            "actions": [
+              "READ",
+              "AGGREGATE"
+            ],
+            "fieldsRestricted": true,
+            "readFields": [
+              "id"
+            ],
+            "writeFields": [
+              "customer_id"
+            ],
+            "rows": {
+              "or": [
+                {
+                  "field": "customer_id",
+                  "op": "gt",
+                  "value": 10
+                },
+                {
+                  "field": "id",
+                  "op": "is_null"
+                }
+              ]
+            }
+          }
+        ],
+        "members": [
+          "alice"
+        ]
+      }
+    ],
+    "settings": {
+      "audit": {
+        "enabled": false,
+        "path": "",
+        "queueSize": 1024
+      },
+      "budget": {
+        "roles": {},
+        "tenants": {},
+        "users": {
+          "alice": {
+            "maxConcurrent": 2,
+            "maxEstimatedScannedRows": 0,
+            "maxExecution": "0s",
+            "maxReturnedBytes": 0,
+            "maxReturnedRows": 0,
+            "maxSessionCost": 0
+          }
+        }
+      },
+      "cache": {
+        "enabled": false,
+        "maxEntryBytes": 0,
+        "maxEntryRows": 0,
+        "maxSize": 0,
+        "preparedMaxSize": 0,
+        "ttl": "0s"
+      },
+      "cost": {
+        "allowTemplates": [
+          "shop:CALL refresh(?)"
+        ],
+        "aqe": {
+          "anomalyFactor": 3,
+          "anomalyMinSamples": 5,
+          "explainAnalyze": false,
+          "maxFingerprints": 4096,
+          "readOnly": true,
+          "sampleRate": 0,
+          "timeout": "1s",
+          "windowSize": 32
+        },
+        "enabled": true,
+        "fullScanMaxRows": 1000,
+        "hardScore": 40,
+        "maxAggregates": 16,
+        "maxBytes": 16777216,
+        "maxExpand": 8,
+        "maxFilterConditions": 32,
+        "maxGroupByFields": 8,
+        "maxINListSize": 256,
+        "maxProcedureRows": 1000,
+        "maxRows": 500,
+        "queryTimeout": "30s",
+        "rejectFullScan": true,
+        "rejectTemplates": [],
+        "requireFreshStats": false,
+        "requireKnownScan": true,
+        "requirePKForWrite": true,
+        "softScore": 60,
+        "whitelistPKPoint": true
+      },
+      "mask": {
+        "enabled": true
+      },
+      "rateLimit": {
+        "breakerCooldown": "5s",
+        "breakerThreshold": 5,
+        "connMaxIdleTime": "5m0s",
+        "connMaxLifetime": "30m0s",
+        "enabled": true,
+        "ioPool": 16,
+        "maxInflight": 256,
+        "minConcurrency": 1,
+        "rps": 0,
+        "rttThreshold": "0s"
+      },
+      "server": {
+        "addr": "",
+        "auth": {
+          "tls": {
+            "cert": "",
+            "clientCA": "",
+            "key": ""
+          },
+          "token": "",
+          "trustProxyHeaders": false,
+          "trustedProxyCIDRs": []
+        },
+        "role": "",
+        "secrets": {
+          "allowedRoots": [
+            "/run/secrets",
+            "/var/run/secrets"
+          ]
+        },
+        "transport": "stdio"
+      },
+      "tools": {
+        "aggregateRecords": true,
+        "beginTransaction": true,
+        "commitTransaction": true,
+        "createRecord": true,
+        "deleteRecord": false,
+        "describeEntities": true,
+        "executeEntity": true,
+        "readRecords": true,
+        "rollbackTransaction": true,
+        "updateRecord": true
+      },
+      "transactions": {
+        "beginTimeout": "5s",
+        "commitTimeout": "30s",
+        "maxOpen": 128,
+        "rollbackTimeout": "30s",
+        "ttl": "5m0s"
+      },
+      "version": ""
+    },
+    "users": [
+      {
+        "name": "alice",
+        "description": "BI agent",
+        "roles": [
+          "analyst"
+        ],
+        "grants": [
+          {
+            "entity": "refresh",
+            "actions": [
+              "EXECUTE"
+            ],
+            "fieldsRestricted": false,
+            "readFields": [],
+            "writeFields": []
+          }
+        ],
+        "subject": {
+          "level": 3,
+          "tenant": "t1"
+        },
+        "disabled": true,
+        "hasToken": true,
+        "tokenHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      }
+    ]
+  },
+  "sections": {
+    "entities": [
+      {
+        "affects": [],
+        "datasource": "shop",
+        "description": "Customer master",
+        "fields": [
+          {
+            "exclude": false,
+            "name": "id"
+          },
+          {
+            "alias": "area",
+            "description": "Sales region",
+            "exclude": false,
+            "name": "region"
+          },
+          {
+            "exclude": false,
+            "mask": "phone",
+            "name": "phone"
+          },
+          {
+            "exclude": true,
+            "name": "secret_col"
+          }
+        ],
+        "kind": "view",
+        "legacyAccess": {
+          "fieldACL": {
+            "legacy_reader": {
+              "read": [
+                "id",
+                "region"
+              ],
+              "write": [
+                "region"
+              ]
+            }
+          },
+          "roles": {
+            "aggregate": [
+              "legacy_reader"
+            ],
+            "create": [
+              "legacy_writer"
+            ],
+            "delete": [
+              "legacy_writer"
+            ],
+            "execute": [
+              "legacy_writer"
+            ],
+            "read": [
+              "legacy_reader"
+            ],
+            "update": [
+              "legacy_writer"
+            ]
+          },
+          "rowPolicies": {
+            "legacy_reader": {
+              "field": "region",
+              "op": "eq",
+              "value": "CN"
+            }
+          }
+        },
+        "mcp": {
+          "customTool": false,
+          "dmlTools": false,
+          "trustedProcedure": false
+        },
+        "name": "customers",
+        "params": [],
+        "primaryKey": [
+          "id"
+        ],
+        "relationships": [
+          {
+            "cardinality": "has-many",
+            "joinOn": {
+              "id": "customer_id"
+            },
+            "name": "orders",
+            "target": "orders"
+          }
+        ],
+        "schema": "crm",
+        "source": "customer_master",
+        "tenantPolicy": {
+          "field": "region",
+          "op": "eq",
+          "value": "${subject.tenant}"
+        },
+        "uniqueKeys": []
+      },
+      {
+        "affects": [],
+        "allowCascade": true,
+        "datasource": "shop",
+        "fields": [
+          {
+            "exclude": false,
+            "name": "id"
+          },
+          {
+            "exclude": false,
+            "name": "customer_id"
+          }
+        ],
+        "mcp": {
+          "customTool": false,
+          "dmlTools": true,
+          "trustedProcedure": false
+        },
+        "name": "orders",
+        "params": [],
+        "primaryKey": [],
+        "relationships": [],
+        "uniqueKeys": [
+          [
+            "customer_id"
+          ]
+        ]
+      },
+      {
+        "affects": [
+          "orders"
+        ],
+        "datasource": "shop",
+        "fields": [],
+        "kind": "procedure",
+        "mcp": {
+          "customTool": true,
+          "dmlTools": true,
+          "trustedProcedure": true
+        },
+        "name": "refresh",
+        "params": [
+          "tenant"
+        ],
+        "primaryKey": [],
+        "relationships": [],
+        "uniqueKeys": []
+      }
+    ],
+    "roles": [
+      {
+        "description": "Business analyst",
+        "grants": [
+          {
+            "actions": [
+              "READ",
+              "AGGREGATE"
+            ],
+            "entity": "orders",
+            "fieldsRestricted": true,
+            "readFields": [
+              "id"
+            ],
+            "rows": {
+              "or": [
+                {
+                  "field": "customer_id",
+                  "op": "gt",
+                  "value": 10
+                },
+                {
+                  "field": "id",
+                  "op": "is_null"
+                }
+              ]
+            },
+            "writeFields": [
+              "customer_id"
+            ]
+          }
+        ],
+        "name": "analyst"
+      }
+    ],
+    "settings": {
+      "audit": {
+        "enabled": false,
+        "path": "",
+        "queueSize": 1024
+      },
+      "budget": {
+        "roles": {},
+        "tenants": {},
+        "users": {
+          "alice": {
+            "maxConcurrent": 2,
+            "maxEstimatedScannedRows": 0,
+            "maxExecution": "0s",
+            "maxReturnedBytes": 0,
+            "maxReturnedRows": 0,
+            "maxSessionCost": 0
+          }
+        }
+      },
+      "cache": {
+        "enabled": false,
+        "maxEntryBytes": 0,
+        "maxEntryRows": 0,
+        "maxSize": 0,
+        "preparedMaxSize": 0,
+        "ttl": "0s"
+      },
+      "cost": {
+        "allowTemplates": [
+          "shop:CALL refresh(?)"
+        ],
+        "aqe": {
+          "anomalyFactor": 3,
+          "anomalyMinSamples": 5,
+          "explainAnalyze": false,
+          "maxFingerprints": 4096,
+          "readOnly": true,
+          "sampleRate": 0,
+          "timeout": "1s",
+          "windowSize": 32
+        },
+        "enabled": true,
+        "fullScanMaxRows": 1000,
+        "hardScore": 40,
+        "maxAggregates": 16,
+        "maxBytes": 16777216,
+        "maxExpand": 8,
+        "maxFilterConditions": 32,
+        "maxGroupByFields": 8,
+        "maxINListSize": 256,
+        "maxProcedureRows": 1000,
+        "maxRows": 500,
+        "queryTimeout": "30s",
+        "rejectFullScan": true,
+        "rejectTemplates": [],
+        "requireFreshStats": false,
+        "requireKnownScan": true,
+        "requirePKForWrite": true,
+        "softScore": 60,
+        "whitelistPKPoint": true
+      },
+      "mask": {
+        "enabled": true
+      },
+      "rateLimit": {
+        "breakerCooldown": "5s",
+        "breakerThreshold": 5,
+        "connMaxIdleTime": "5m0s",
+        "connMaxLifetime": "30m0s",
+        "enabled": true,
+        "ioPool": 16,
+        "maxInflight": 256,
+        "minConcurrency": 1,
+        "rps": 0,
+        "rttThreshold": "0s"
+      },
+      "server": {
+        "addr": "",
+        "auth": {
+          "tls": {
+            "cert": "",
+            "clientCA": "",
+            "key": ""
+          },
+          "token": "",
+          "trustProxyHeaders": false,
+          "trustedProxyCIDRs": []
+        },
+        "role": "",
+        "secrets": {
+          "allowedRoots": [
+            "/run/secrets",
+            "/var/run/secrets"
+          ]
+        },
+        "transport": "stdio"
+      },
+      "tools": {
+        "aggregateRecords": true,
+        "beginTransaction": true,
+        "commitTransaction": true,
+        "createRecord": true,
+        "deleteRecord": false,
+        "describeEntities": true,
+        "executeEntity": true,
+        "readRecords": true,
+        "rollbackTransaction": true,
+        "updateRecord": true
+      },
+      "transactions": {
+        "beginTimeout": "5s",
+        "commitTimeout": "30s",
+        "maxOpen": 128,
+        "rollbackTimeout": "30s",
+        "ttl": "5m0s"
+      },
+      "version": ""
+    },
+    "users": [
+      {
+        "description": "BI agent",
+        "disabled": true,
+        "grants": [
+          {
+            "actions": [
+              "EXECUTE"
+            ],
+            "entity": "refresh",
+            "fieldsRestricted": false,
+            "readFields": [],
+            "writeFields": []
+          }
+        ],
+        "name": "alice",
+        "roles": [
+          "analyst"
+        ],
+        "subject": {
+          "level": 3,
+          "tenant": "t1"
+        },
+        "tokenHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      }
+    ]
+  }
+}

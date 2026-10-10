@@ -143,11 +143,15 @@ function clearSelection() {
   selection.value = emptySelection()
 }
 
-/** Every ref the filter matches, read for tables picked one by one. */
+/**
+ * Every ref the filter matches against the workspace (statuses depend on
+ * it), read for tables picked one by one.
+ */
 const matched = ref<{ key: string; refs: string[] } | null>(null)
 let matchedSeq = 0
-watch([() => (selection.value.mode === 'refs' ? selection.value.refs.size : 0), filter], async ([n]) => {
-  const key = filterKey(filter.value)
+const matchedKey = () => `${filterKey(filter.value)}\u0000${ws.contextKey}`
+watch([() => (selection.value.mode === 'refs' ? selection.value.refs.size : 0), filter, () => ws.contextKey], async ([n]) => {
+  const key = matchedKey()
   if (!n || matched.value?.key === key) return
   const mine = ++matchedSeq
   try {
@@ -158,7 +162,7 @@ watch([() => (selection.value.mode === 'refs' ? selection.value.refs.size : 0), 
   }
 }, { deep: true })
 const hidden = computed(() => hiddenSelected(selection.value,
-  matched.value?.key === filterKey(filter.value) ? matched.value.refs : null))
+  matched.value?.key === matchedKey() ? matched.value.refs : null))
 
 function describe(f: CatalogFilter) {
   const parts = [

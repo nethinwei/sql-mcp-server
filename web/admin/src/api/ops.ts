@@ -37,7 +37,7 @@ export const WorkspaceQuery = graphql(`
         datasources { ...DatasourceParts }
         entities { ...EntityParts }
         roles { name description members grants { ...GrantParts } }
-        users { name description roles subject disabled hasToken grants { ...GrantParts } }
+        users { name description roles subject disabled tokenHash grants { ...GrantParts } }
         settings
       }
     }
@@ -154,6 +154,10 @@ export const CreateDraftMutation = graphql(`
   }
 `)
 
+export const DiscardDraftMutation = graphql(`
+  mutation DiscardDraft($id: ID!) { discardDraft(id: $id) { id state } }
+`)
+
 export const PublishMutation = graphql(`
   mutation Publish($input: PublishInput!) {
     publish(input: $input) { ...RevisionParts }
@@ -238,7 +242,7 @@ export const PlanReportPartsFragment = graphql(`
     matched excluded scannedFrom scannedTo
     objects { datasource schema tables imported changed }
     changes { kind principal actions mask fields entities }
-    exceptions { kind level warning ref entity detail }
+    exceptions { id kind level warning ref entity detail }
     unscanned { datasource schemas }
   }
 `)
@@ -300,12 +304,12 @@ export const SetPendingStateMutation = graphql(`
 `)
 
 export const McpTokensQuery = graphql(`
-  query McpTokens { mcpTokens { id name createdAt expiresAt lastUsedAt readOnly datasources } }
+  query McpTokens { mcpTokens { id name createdAt expiresAt lastUsedAt datasources retired } }
 `)
 
 export const CreateMcpTokenMutation = graphql(`
   mutation CreateMcpToken($input: McpTokenInput!) {
-    createMcpToken(input: $input) { token info { id name createdAt expiresAt lastUsedAt readOnly datasources } }
+    createMcpToken(input: $input) { token info { id name createdAt expiresAt lastUsedAt datasources retired } }
   }
 `)
 
@@ -334,4 +338,55 @@ export const CancelScanBatchMutation = graphql(`
 
 export const RetryScanBatchMutation = graphql(`
   mutation RetryScanBatch($id: ID!) { retryScanBatch(id: $id) { ...ScanBatchParts } }
+`)
+
+export const WorkspaceStateQuery = graphql(`
+  query WorkspaceState { workspace { ...WorkspaceParts } }
+  fragment WorkspaceParts on Workspace {
+    base version sections updatedBy taken checkpoint
+    conflicts { id kind key path mine mineGone theirs theirsGone source fromId fromBy }
+    notes { source by text }
+  }
+`)
+
+export const EditWorkspaceMutation = graphql(`
+  mutation EditWorkspace($input: WorkspaceEditInput!) { editWorkspace(input: $input) { ...WorkspaceParts } }
+`)
+
+export const UpdateWorkspaceMutation = graphql(`
+  mutation UpdateWorkspace($to: ID!) { updateWorkspace(to: $to) { ...WorkspaceParts } }
+`)
+
+export const ResetWorkspaceMutation = graphql(`
+  mutation ResetWorkspace($to: ID!) { resetWorkspace(to: $to) { ...WorkspaceParts } }
+`)
+
+export const MergeDraftMutation = graphql(`
+  mutation MergeDraft($id: ID!) { mergeDraft(id: $id) { ...WorkspaceParts } }
+`)
+
+export const ResolveConflictMutation = graphql(`
+  mutation ResolveConflict($id: String!, $theirs: Boolean!) {
+    resolveConflict(id: $id, theirs: $theirs) { ...WorkspaceParts }
+  }
+`)
+
+export const CheckpointWorkspaceMutation = graphql(`
+  mutation CheckpointWorkspace($comment: String) { checkpointWorkspace(comment: $comment) { id } }
+`)
+
+export const CommitWorkspaceMutation = graphql(`
+  mutation CommitWorkspace($input: CommitInput!) { commitWorkspace(input: $input) { id } }
+`)
+
+export const WorkspaceLogQuery = graphql(`
+  query WorkspaceLog($limit: Int) { workspaceLog(limit: $limit) { version at by op items { kind key } note } }
+`)
+
+export const ApplyPlanMutation = graphql(`
+  mutation ApplyPlan($input: ApplyPlanInput!) { applyPlan(input: $input) { items { kind key } } }
+`)
+
+export const DraftsQuery = graphql(`
+  query Drafts { drafts { basedOn revision { ...RevisionParts } } }
 `)

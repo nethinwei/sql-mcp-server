@@ -10,14 +10,12 @@ import { run } from '@/api/client'
 import {
   AdminAccountsQuery, CreateAdminAccountMutation, SetAdminPasswordMutation, UpdateAdminAccountMutation,
 } from '@/api/ops'
-import { session, signedOut } from '@/api/session'
-import { useRouter } from 'vue-router'
+import { leave, session } from '@/api/session'
 import type { AdminAccountsQuery as AccountsResult } from '@/gql/graphql'
 
 type Account = AccountsResult['adminAccounts'][number]
 
 const { t } = useI18n()
-const router = useRouter()
 const message = useMessage()
 const accounts = useQuery({ query: AdminAccountsQuery, variables: {} })
 const refresh = () => accounts.executeQuery({ requestPolicy: 'network-only' })
@@ -105,8 +103,7 @@ async function savePassword() {
   try {
     await run(SetAdminPasswordMutation, { input: { username: u, password: pw.value } }, true)
     message.success(t('admins.ownPasswordUpdated'))
-    signedOut()
-    void router.push({ name: 'login' })
+    leave()
   } catch (e) {
     message.error(e instanceof Error ? e.message : String(e))
   }

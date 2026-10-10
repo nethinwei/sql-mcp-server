@@ -166,7 +166,7 @@
   "TM-012": {
     "severity": "high",
     "tests": [
-      {"file": "x/admin/configmcp/configmcp_test.go", "name": "TestAgentPlansAndSavesADraft"},
+      {"file": "x/admin/configmcp/configmcp_test.go", "name": "TestAgentAppliesPlansToTheWorkspace"},
       {"file": "x/admin/configmcp/configmcp_test.go", "name": "TestTokensAndPermissions"},
       {"file": "x/admin/admin_test.go", "name": "TestConfigMCPEndpointNeedsAToken"},
       {"file": "x/admin/graph/planning_test.go", "name": "TestPlanningPermissions"},
@@ -185,10 +185,13 @@
       {"file": "x/admin/configmcp/configmcp_test.go", "name": "TestScopedTokens"},
       {"file": "x/admin/configmcp/configmcp_test.go", "name": "TestScopedTokensReadNothingBeyond"},
       {"file": "x/admin/configmcp/configmcp_test.go", "name": "TestConfirmationsAreBoundToExceptions"},
-      {"file": "x/admin/auth/auth_test.go", "name": "TestDatasourceScope"}
+      {"file": "x/admin/auth/auth_test.go", "name": "TestDatasourceScope"},
+      {"file": "x/workspaceops/workspaceops_test.go", "name": "TestConcurrentWritesMerge"},
+      {"file": "x/workspaceops/workspaceops_test.go", "name": "TestCommit"},
+      {"file": "core/workspace/merge_props_test.go", "name": "TestMergeProperties"}
     ],
     "gaps": [
-      "令牌按只读与数据源收窄，不能按单个工具收窄；/admin/mcp 无单独限速"
+      "令牌只按数据源收窄，不能按操作或单个工具收窄；/admin/mcp 无单独限速"
     ]
   }
 }

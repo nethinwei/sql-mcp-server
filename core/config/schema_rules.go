@@ -34,7 +34,6 @@ import (
 //	enum=@name    one of a named enumeration (see enums)
 //	pattern=@name matches a named pattern (see patterns)
 //	keys=@name    map keys match a named pattern
-//	examples=@name suggested values (see suggestions); never enforced
 //	restart       a change applies only after a restart (see RestartFieldChanges)
 //	nodefault     the generated schema shows no defaults below this field
 //
@@ -50,12 +49,8 @@ var enums = map[string][]string{
 	"cardinality":    {"one", "one-to-one", "belongs-to", "many", "one-to-many", "has-many"},
 	"connectionRole": {"primary", "replica"},
 	"pooler":         {"transaction"},
-}
-
-// suggestions are offered to editors but not enforced: extensions may add
-// mask rules, which x/bootstrap checks against the configured masker.
-var suggestions = map[string]func() []string{
-	"maskRule": mask.BuiltinRules,
+	// Mask rules are the masker's; an unknown one would fail every startup.
+	"maskRule": mask.BuiltinRules(),
 }
 
 var patterns = map[string]*regexp.Regexp{
@@ -75,7 +70,6 @@ type Rule struct {
 	Min, Max            string
 	MinLength, MinItems int
 	Enum                []string
-	Examples            []string
 	// Pattern and Keys are regular expressions; the names are their keys in
 	// the named pattern table.
 	Pattern, Keys         string
@@ -108,8 +102,6 @@ func ParseRule(tag string) (Rule, error) {
 			r.MinItems, err = strconv.Atoi(val)
 		case "enum":
 			r.Enum, err = namedEnum(val)
-		case "examples":
-			r.Examples, err = namedSuggestion(val)
 		case "pattern":
 			r.PatternName, r.Pattern, err = namedPattern(val)
 		case "keys":
@@ -130,14 +122,6 @@ func namedEnum(ref string) ([]string, error) {
 		return nil, fmt.Errorf("unknown enum %q", ref)
 	}
 	return slices.Clone(values), nil
-}
-
-func namedSuggestion(ref string) ([]string, error) {
-	values, ok := suggestions[strings.TrimPrefix(ref, "@")]
-	if !strings.HasPrefix(ref, "@") || !ok {
-		return nil, fmt.Errorf("unknown suggestion list %q", ref)
-	}
-	return values(), nil
 }
 
 func namedPattern(ref string) (string, string, error) {

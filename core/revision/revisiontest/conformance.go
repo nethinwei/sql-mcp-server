@@ -26,6 +26,8 @@ func Run(t *testing.T, newStore NewStore) {
 		"RollbackExplicit":      testRollbackExplicit,
 		"ImportHistory":         testImportHistory,
 		"ConcurrentPublish":     testConcurrentPublish,
+		"Discard":               testDiscard,
+		"Sequence":              testSequence,
 	}
 	for name, fn := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -262,5 +264,64 @@ func testConcurrentPublish(t *testing.T, s revision.Store) {
 	}
 	if wins != 1 || published != 1 {
 		t.Fatalf("wins = %d, published = %d, want 1 and 1", wins, published)
+	}
+}
+
+// A discarded draft stays in the history and can be neither published nor
+// discarded again; only drafts are discarded.
+func testDiscard(t *testing.T, s revision.Store) {
+	ctx := context.Background()
+	d := mustCreate(t, s, "a: 1\n")
+	got, err := s.Discard(ctx, d.ID)
+	if err != nil || got.State != revision.StateDiscarded {
+		t.Fatalf("Discard = %+v, %v", got, err)
+	}
+	if again, _ := s.Get(ctx, d.ID); again.State != revision.StateDiscarded || string(again.Payload) != "a: 1\n" {
+		t.Fatalf("after discard = %+v", again)
+	}
+	if _, err := s.Publish(ctx, d.ID, 0, revision.Meta{}); !errors.Is(err, revision.ErrInvalidState) {
+		t.Fatalf("publishing a discarded draft: %v", err)
+	}
+	if _, err := s.Discard(ctx, d.ID); !errors.Is(err, revision.ErrInvalidState) {
+		t.Fatalf("discarding twice: %v", err)
+	}
+	p := mustCreate(t, s, "b: 1\n")
+	if _, err := s.Publish(ctx, p.ID, 0, revision.Meta{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Discard(ctx, p.ID); !errors.Is(err, revision.ErrInvalidState) {
+		t.Fatalf("discarding the published revision: %v", err)
+	}
+	if _, err := s.Discard(ctx, 999); !errors.Is(err, revision.ErrNotFound) {
+		t.Fatalf("discarding a missing revision: %v", err)
+	}
+}
+
+// testSequence: every write grows the sequence, a discard of an older draft
+// included.
+func testSequence(t *testing.T, s revision.Store) {
+	ctx := context.Background()
+	last := int64(-1)
+	grew := func(what string) {
+		t.Helper()
+		seq, err := s.Sequence(ctx)
+		if err != nil || seq <= last {
+			t.Fatalf("after %s: sequence %d (was %d), %v", what, seq, last, err)
+		}
+		last = seq
+	}
+	grew("nothing")
+	old := mustCreate(t, s, "a: 1\n")
+	grew("create")
+	p := mustCreate(t, s, "b: 1\n")
+	grew("create")
+	mustPublish(t, s, p.ID, 0)
+	grew("publish")
+	if _, err := s.Discard(ctx, old.ID); err != nil {
+		t.Fatal(err)
+	}
+	grew("discard of an older draft")
+	if _, err := s.Rollback(ctx, p.ID, 0, revision.Meta{}); err == nil {
+		grew("rollback")
 	}
 }

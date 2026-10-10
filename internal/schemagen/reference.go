@@ -62,9 +62,6 @@ func constraints(n node, rule config.Rule) string {
 	if rule.Enum != nil {
 		out = append(out, "可选 "+code(rule.Enum...))
 	}
-	if rule.Examples != nil {
-		out = append(out, "内置 "+code(rule.Examples...))
-	}
 	if rule.Pattern != "" {
 		out = append(out, "格式 "+code(rule.Pattern))
 	}

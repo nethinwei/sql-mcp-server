@@ -16,6 +16,8 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/core/revision/revisiontest"
+	"github.com/nethinwei/sql-mcp-server/core/workspace"
+	"github.com/nethinwei/sql-mcp-server/core/workspace/workspacetest"
 	"github.com/nethinwei/sql-mcp-server/x/catalog"
 	"github.com/nethinwei/sql-mcp-server/x/catalog/catalogtest"
 	"github.com/nethinwei/sql-mcp-server/x/revisionops/revisionopstest"
@@ -40,9 +42,16 @@ func runServerConformance(t *testing.T, spec Spec) {
 		catalogtest.Run(t, func(t *testing.T) catalog.Store { return freshStore(t, spec) })
 	})
 	t.Run("Planning", func(t *testing.T) { assertPlanning(t, freshStore(t, spec)) })
+	t.Run("Workspaces", func(t *testing.T) {
+		workspacetest.Run(t, func(t *testing.T) workspace.Store { return freshStore(t, spec) })
+	})
 	t.Run("MigratesVersionThree", func(t *testing.T) {
 		dropTables(t, spec)
 		assertMigratesVersionThree(t, spec)
+	})
+	t.Run("MigratesVersionFour", func(t *testing.T) {
+		dropTables(t, spec)
+		assertMigratesVersionFour(t, spec)
 	})
 }
 
@@ -72,7 +81,7 @@ func dropTables(t *testing.T, spec Spec) {
 	for _, table := range []string{
 		"smcp_revisions", "smcp_store_meta", "smcp_admin_accounts", "smcp_catalog_lists", "smcp_catalog_schemas",
 		"smcp_plan_templates", "smcp_plan_template_versions", "smcp_admin_tokens", "smcp_pending_states", "smcp_scan_batches",
-		"smcp_scan_batch_items", "smcp_pending_log",
+		"smcp_scan_batch_items", "smcp_pending_log", "smcp_workspaces", "smcp_workspace_log",
 	} {
 		if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
 			t.Fatal(err)

@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/core/workspace"
+	"github.com/nethinwei/sql-mcp-server/core/workspace/workspacetest"
 	"github.com/nethinwei/sql-mcp-server/x/catalog"
 	"github.com/nethinwei/sql-mcp-server/x/catalog/catalogtest"
 )
@@ -40,6 +42,10 @@ func assertPlanning(t *testing.T, s *SQLStore) {
 	assertTemplates(t, s)
 	assertTokens(t, s)
 	assertPending(t, s)
+}
+
+func TestSQLiteWorkspaceConformance(t *testing.T) {
+	workspacetest.Run(t, func(t *testing.T) workspace.Store { return openSQLite(t) })
 }
 
 func assertTemplates(t *testing.T, s *SQLStore) {
@@ -95,7 +101,7 @@ func assertTokens(t *testing.T, s *SQLStore) {
 	t.Helper()
 	ctx := context.Background()
 	expires := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
-	scope := TokenScope{ReadOnly: true, Datasources: []string{"shop"}}
+	scope := TokenScope{Datasources: []string{"shop"}}
 	laptop, err := s.CreateAdminToken(ctx, AdminToken{ID: "t1", Username: "root", Name: "laptop", TokenHash: "sha256:1",
 		ExpiresAt: expires, Scope: scope})
 	if err != nil || laptop.CreatedAt.IsZero() {

@@ -15,9 +15,11 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
+	"github.com/nethinwei/sql-mcp-server/core/workspace"
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
+	"github.com/nethinwei/sql-mcp-server/x/admin/graph"
 	"github.com/nethinwei/sql-mcp-server/x/admin/scanjobs"
 	"github.com/nethinwei/sql-mcp-server/x/catalog"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
@@ -76,7 +78,8 @@ func newEnv(t *testing.T) env {
 	)
 	scans := configapp.NewScans(scanjobs.Options{}, plans)
 	t.Cleanup(scans.Close)
-	app := &configapp.Service{Store: store, Scans: scans, Plans: plans}
+	app := &configapp.Service{Store: store, Scans: scans, Plans: plans, WorkspaceEdit: graph.WorkspaceEdit,
+		WorkspaceSections: graph.WorkspaceSections}
 	srv := httptest.NewServer(New(app, plans, admins, Options{}))
 	t.Cleanup(srv.Close)
 	return env{url: srv.URL, store: store, accounts: admins, plans: plans}
@@ -139,7 +142,7 @@ func call(t *testing.T, s *mcp.ClientSession, name string, args any, out any) *m
 	return res
 }
 
-func TestAgentPlansAndSavesADraft(t *testing.T) {
+func TestAgentAppliesPlansToTheWorkspace(t *testing.T) {
 	e := newEnv(t)
 	s, err := connect(t, e.url, e.token(t, "root"))
 	if err != nil {
@@ -167,13 +170,17 @@ func TestAgentPlansAndSavesADraft(t *testing.T) {
 	if added.Total != 1 || added.Items[0] != "shop.public.orders" {
 		t.Fatalf("details = %+v", added)
 	}
-	if res := call(t, s, "plan_save_draft", map[string]any{"plan": plan, "planId": "stale"}, nil); !res.IsError {
-		t.Fatal("a draft was saved for a plan that is not the one previewed")
+	if res := call(t, s, "plan_apply", map[string]any{"plan": plan, "planId": "stale"}, nil); !res.IsError {
+		t.Fatal("a plan was applied that is not the one previewed")
 	}
-	id := checkSavesADraft(t, s, plan, preview.PlanID)
-	checkContinuesADraft(t, s, id)
+	checkAppliesToTheWorkspace(t, e, s, plan, preview.PlanID)
+	checkPreviewsTheWorkspace(t, e, s)
+	checkEffectBound(t, e, s)
 	if pub, _ := e.store.Published(context.Background()); pub.ID != 1 {
-		t.Fatal("saving a draft must not publish")
+		t.Fatal("applying a plan must not publish")
+	}
+	if revs, _ := e.store.List(context.Background(), 0); len(revs) != 1 {
+		t.Fatalf("applying a plan saved revisions: %+v", revs)
 	}
 	res := call(t, s, "plan_preview", map[string]any{"plan": map[string]any{"scope": map[string]any{}}}, nil)
 	if !res.IsError {
@@ -193,56 +200,90 @@ func checkCatalogSearch(t *testing.T, s *mcp.ClientSession) {
 	}
 }
 
-// checkSavesADraft saves a previewed plan and reads the draft's diff.
-func checkSavesADraft(t *testing.T, s *mcp.ClientSession, plan map[string]any, planID string) string {
+// checkAppliesToTheWorkspace applies a previewed plan: the items it changes
+// are written into the administrator's workspace, at once, with a note of
+// who applied it and why.
+func checkAppliesToTheWorkspace(t *testing.T, e env, s *mcp.ClientSession, plan map[string]any, planID string) {
 	t.Helper()
-	var saved struct {
-		ID, Parent, State, ReviewURL string
-		DiffLines                    int
+	var applied struct{ Items []struct{ Kind, Key string } }
+	call(t, s, "plan_apply", map[string]any{"plan": plan, "planId": planID, "comment": "orders"}, &applied)
+	written := map[string]bool{}
+	for _, it := range applied.Items {
+		written[it.Kind+" "+it.Key] = true
 	}
-	call(t, s, "plan_save_draft", map[string]any{"plan": plan, "planId": planID, "comment": "orders"}, &saved)
-	if saved.State != "DRAFT" || saved.DiffLines == 0 ||
-		!strings.HasSuffix(saved.ReviewURL, "/admin/revisions?id="+saved.ID) {
-		t.Fatalf("saved = %+v", saved)
+	if len(written) != 2 || !written["entity shop.public.orders"] || !written["role analyst"] {
+		t.Fatalf("written = %+v", applied)
 	}
-	var diff struct {
-		Total int
-		Diff  string
+	w, ok, err := e.plans.Workspace(context.Background(), "root")
+	if err != nil || !ok || w.Base != 1 || !strings.HasPrefix(w.UpdatedBy, "agent:") ||
+		workspace.IsMissing(w.Items.Get(workspace.Ref{Kind: "entity", Key: "shop.public.orders"})) ||
+		len(w.Notes) != 1 || w.Notes[0].Text != "orders" {
+		t.Fatalf("workspace = %+v, %v %v", w, ok, err)
 	}
-	call(t, s, "diff", map[string]any{"from": saved.Parent, "to": saved.ID, "limit": 1000}, &diff)
-	if !strings.Contains(diff.Diff, "+      - entity: shop.public.orders") || diff.Total < saved.DiffLines {
-		t.Fatalf("diff = %+v", diff)
-	}
-	return saved.ID
 }
 
-// checkContinuesADraft applies a second plan to the draft the first one saved.
-func checkContinuesADraft(t *testing.T, s *mcp.ClientSession, draft string) {
+// putRole writes role into the administrator's workspace, as their console would.
+func putRole(t *testing.T, e env, role map[string]any) {
 	t.Helper()
-	more := map[string]any{"scope": map[string]any{"tables": []string{"orders"}},
+	ctx := context.Background()
+	w, _, err := e.plans.Workspace(ctx, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Items = w.Items.With(workspace.Ref{Kind: "role", Key: role["name"].(string)}, role)
+	if _, err := e.plans.PutWorkspace(ctx, w, w.Version, workspace.LogEntry{Op: "edit", By: "root"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// checkPreviewsTheWorkspace previews against the workspace as the console
+// left it, and applies a plan previewed before another value of the item it
+// changes was edited (as when another plan previewed with it was applied
+// first).
+func checkPreviewsTheWorkspace(t *testing.T, e env, s *mcp.ClientSession) {
+	t.Helper()
+	putRole(t, e, map[string]any{"name": "support", "grants": []any{}})
+	more := map[string]any{"scope": map[string]any{"tables": []string{"customers"}},
 		"grants": []any{map[string]any{"principal": "role:support", "actions": []string{"read"}}}}
-	var preview struct{ PlanID string }
-	call(t, s, "plan_preview", map[string]any{"plan": more, "base": draft}, &preview)
-	var second struct{ ID, Parent string }
-	call(t, s, "plan_save_draft", map[string]any{"plan": more, "base": draft, "planId": preview.PlanID}, &second)
-	var diff struct{ Diff string }
-	call(t, s, "diff", map[string]any{"from": draft, "to": second.ID}, &diff)
-	if second.Parent != draft || !strings.Contains(diff.Diff, "support") ||
-		strings.Contains(diff.Diff, "+  - name: orders") {
-		t.Fatalf("second draft = %+v, diff %s", second, diff.Diff)
+	var preview struct {
+		PlanID  string
+		Changes []struct{ Kind string }
 	}
-	var entities struct {
-		Total int
-		Items []string
+	call(t, s, "plan_preview", map[string]any{"plan": more}, &preview)
+	if len(preview.Changes) != 1 || preview.Changes[0].Kind != "grant" {
+		t.Fatalf("a role of the workspace is created again: %+v", preview)
 	}
-	call(t, s, "plan_details", map[string]any{"planId": preview.PlanID, "section": "changeEntities", "change": 1},
-		&entities)
-	if entities.Total != 1 || entities.Items[0] != "shop.public.orders" {
-		t.Fatalf("change entities = %+v", entities)
+	putRole(t, e, map[string]any{"name": "support", "description": "x", "grants": []any{}})
+	if res := call(t, s, "plan_apply", map[string]any{"plan": more, "planId": preview.PlanID}, nil); res.IsError {
+		t.Fatalf("a plan previewed before the workspace changed: %v", res.Content)
+	}
+	w, _, _ := e.plans.Workspace(context.Background(), "root")
+	support, _ := json.Marshal(w.Items.Get(workspace.Ref{Kind: "role", Key: "support"}))
+	if !strings.Contains(string(support), `"description":"x"`) ||
+		!strings.Contains(string(support), `"entity":"shop.public.customers"`) {
+		t.Fatalf("the console's edit of the role or the grant is lost: %s", support)
+	}
+	if res := call(t, s, "plan_apply", map[string]any{"plan": more, "planId": "stale"}, nil); !res.IsError {
+		t.Fatal("a plan was applied that is not the one previewed")
 	}
 }
 
-// checkNoPublishTool: an agent saves drafts, it never publishes.
+// A plan whose effect changed since its preview (the grant it adds was
+// changed meanwhile) is refused: it would not change what was reviewed.
+func checkEffectBound(t *testing.T, e env, s *mcp.ClientSession) {
+	t.Helper()
+	plan := map[string]any{"scope": map[string]any{"tables": []string{"customers"}},
+		"grants": []any{map[string]any{"principal": "role:auditor", "actions": []string{"read"}}}}
+	var preview struct{ PlanID string }
+	call(t, s, "plan_preview", map[string]any{"plan": plan}, &preview)
+	putRole(t, e, map[string]any{"name": "auditor", "grants": []any{
+		map[string]any{"entity": "shop.public.customers", "actions": []any{"AGGREGATE"}}}})
+	if res := call(t, s, "plan_apply", map[string]any{"plan": plan, "planId": preview.PlanID}, nil); !res.IsError {
+		t.Fatal("a plan was applied whose effect changed since its preview")
+	}
+}
+
+// checkNoPublishTool: an agent applies plans, it never publishes.
 func checkNoPublishTool(t *testing.T, s *mcp.ClientSession) {
 	t.Helper()
 	tools, err := s.ListTools(context.Background(), nil)
@@ -253,7 +294,7 @@ func checkNoPublishTool(t *testing.T, s *mcp.ClientSession) {
 	for _, tl := range tools.Tools {
 		names = append(names, tl.Name)
 	}
-	if !slices.Contains(names, "plan_save_draft") || slices.ContainsFunc(names, func(n string) bool {
+	if !slices.Contains(names, "plan_apply") || slices.ContainsFunc(names, func(n string) bool {
 		return strings.Contains(n, "publish") || strings.Contains(n, "rollback")
 	}) {
 		t.Fatalf("tools = %v", names)
@@ -272,10 +313,10 @@ func TestTokensAndPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = viewer.Close() }()
-	res := call(t, viewer, "plan_save_draft", map[string]any{"plan": map[string]any{
+	res := call(t, viewer, "plan_apply", map[string]any{"plan": map[string]any{
 		"scope": map[string]any{}, "import": true}}, nil)
 	if !res.IsError {
-		t.Fatal("a read-only administrator saved a draft")
+		t.Fatal("a read-only administrator applied a plan")
 	}
 	var revs []struct{ ID string }
 	call(t, viewer, "revisions", map[string]any{}, &revs)
@@ -306,8 +347,8 @@ func TestTokensAndPermissions(t *testing.T) {
 	}
 }
 
-// A draft is saved from a review only with each exception to confirm
-// confirmed by its ID; the confirmations are kept with the draft.
+// A plan is applied from a review only with each exception to confirm
+// confirmed by its ID; the confirmations go with it to the console.
 func TestConfirmationsAreBoundToExceptions(t *testing.T) {
 	e := newEnv(t)
 	s, err := connect(t, e.url, e.token(t, "root"))
@@ -326,29 +367,27 @@ func TestConfirmationsAreBoundToExceptions(t *testing.T) {
 	if preview.ToConfirm != 1 || len(preview.ToConfirmIDs) != 1 {
 		t.Fatalf("preview = %+v", preview)
 	}
-	save := map[string]any{"plan": plan, "review": true, "planId": preview.PlanID}
-	if res := call(t, s, "plan_save_draft", save, nil); !res.IsError {
-		t.Fatal("a draft was saved with an exception not confirmed")
+	apply := map[string]any{"plan": plan, "review": true, "planId": preview.PlanID}
+	if res := call(t, s, "plan_apply", apply, nil); !res.IsError {
+		t.Fatal("a plan was applied with an exception not confirmed")
 	}
-	save["confirmed"] = []string{"not-an-exception"}
-	if res := call(t, s, "plan_save_draft", save, nil); !res.IsError {
-		t.Fatal("a draft was saved confirming something else")
+	apply["confirmed"] = []string{"not-an-exception"}
+	if res := call(t, s, "plan_apply", apply, nil); !res.IsError {
+		t.Fatal("a plan was applied confirming something else")
 	}
-	save["confirmed"] = preview.ToConfirmIDs
-	var saved struct{ ID, Comment string }
-	call(t, s, "plan_save_draft", save, &saved)
-	if !strings.Contains(saved.Comment, "confirmed: review") {
-		t.Fatalf("saved = %+v", saved)
+	apply["confirmed"] = preview.ToConfirmIDs
+	var applied struct{ Items []struct{ Kind, Key string } }
+	call(t, s, "plan_apply", apply, &applied)
+	if len(applied.Items) == 0 {
+		t.Fatalf("nothing written once confirmed: %+v", applied)
 	}
 }
 
-// A token narrowed to reading cannot scan or save; one narrowed to some
-// datasources reads and plans within them only, and not what spans every
-// datasource.
+// A token limited to some datasources reads and plans within them only, and
+// not what spans every datasource.
 func TestScopedTokens(t *testing.T) {
 	e := newEnv(t)
 	plan := map[string]any{"scope": map[string]any{"status": []string{"new"}}, "import": true}
-	checkReadOnlyToken(t, e, plan)
 	shop, err := connect(t, e.url, e.scopedToken(t, "root", time.Time{},
 		configstore.TokenScope{Datasources: []string{"shop"}}))
 	if err != nil {
@@ -381,28 +420,6 @@ func TestScopedTokens(t *testing.T) {
 		if res := call(t, shop, name, args, nil); !res.IsError {
 			t.Errorf("a token limited to shop ran %s %v", name, args)
 		}
-	}
-}
-
-func checkReadOnlyToken(t *testing.T, e env, plan map[string]any) {
-	t.Helper()
-	reader, err := connect(t, e.url, e.scopedToken(t, "root", time.Time{}, configstore.TokenScope{ReadOnly: true}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = reader.Close() }()
-	for name, args := range map[string]any{
-		"plan_preview":    map[string]any{"plan": plan},
-		"plan_save_draft": map[string]any{"plan": plan, "planId": "x"},
-		"scan_schemas":    map[string]any{"datasource": "shop", "schemas": []string{"public"}},
-	} {
-		if res := call(t, reader, name, args, nil); !res.IsError {
-			t.Errorf("a read-only token ran %s", name)
-		}
-	}
-	var templates []any
-	if res := call(t, reader, "plan_templates", map[string]any{}, &templates); res.IsError {
-		t.Error("a read-only token cannot read templates")
 	}
 }
 
@@ -471,9 +488,9 @@ func checkScopeCounts(t *testing.T, root, shop *mcp.ClientSession) {
 	}
 }
 
-// A plan saves as previewed however it is written: the service puts it in
+// A plan applies as previewed however it is written: the service puts it in
 // its normal form (actions lower case, sorted, once each) before the plan ID.
-func TestPlanSavesAsWritten(t *testing.T) {
+func TestPlanAppliesAsWritten(t *testing.T) {
 	e := newEnv(t)
 	s, err := connect(t, e.url, e.token(t, "root"))
 	if err != nil {
@@ -484,8 +501,17 @@ func TestPlanSavesAsWritten(t *testing.T) {
 		"grants": []any{map[string]any{"principal": "role:analyst", "actions": []string{"READ", "Aggregate", "read"}}}}
 	var preview struct{ PlanID string }
 	call(t, s, "plan_preview", map[string]any{"plan": plan}, &preview)
-	var saved struct{ ID string }
-	if res := call(t, s, "plan_save_draft", map[string]any{"plan": plan, "planId": preview.PlanID}, &saved); res.IsError {
-		t.Fatalf("the plan as written does not save: %v", res.Content)
+	if res := call(t, s, "plan_apply", map[string]any{"plan": plan, "planId": preview.PlanID}, nil); res.IsError {
+		t.Fatalf("the plan as written does not apply: %v", res.Content)
+	}
+}
+
+// A token created read only (no longer offered) is refused: never given
+// the administrator's write permissions.
+func TestRetiredReadOnlyTokensAreRefused(t *testing.T) {
+	e := newEnv(t)
+	token := e.scopedToken(t, "root", time.Time{}, configstore.TokenScope{ReadOnly: true})
+	if _, err := connect(t, e.url, token); err == nil {
+		t.Fatal("a read-only token connected")
 	}
 }

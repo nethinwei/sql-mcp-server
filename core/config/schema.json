@@ -937,10 +937,10 @@
                 "type": "string"
               },
               "mask": {
-                "description": "Masking rule, built in or registered by an extension; unknown rules fail startup. Masked fields only appear in read results, never in filters, cursors, grouping, aggregates or write predicates.",
-                "x-description-zh-CN": "脱敏规则：内置规则或扩展程序注册的规则，未知规则会拒绝启动。脱敏字段只能出现在读取结果中，不能用于过滤、游标、分组、聚合或写谓词。",
+                "description": "Masking rule, one of the built-in rules; any other value fails validation. Masked fields only appear in read results, never in filters, cursors, grouping, aggregates or write predicates.",
+                "x-description-zh-CN": "脱敏规则，只能是内置规则之一，其他值校验失败。脱敏字段只能出现在读取结果中，不能用于过滤、游标、分组、聚合或写谓词。",
                 "type": "string",
-                "examples": [
+                "enum": [
                   "email",
                   "idcard",
                   "phone",

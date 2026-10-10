@@ -37,6 +37,16 @@ type AdminAccountUpdate struct {
 	Disabled    *bool    `json:"disabled,omitempty"`
 }
 
+// A plan previewed (planId) to write into the signed-in administrator's workspace.
+type ApplyPlanInput struct {
+	Plan   any    `json:"plan"`
+	PlanID string `json:"planId"`
+	// Previewed as a review.
+	Review *bool `json:"review,omitempty"`
+	// The IDs of the exceptions to confirm, every one of them, as the administrator confirmed them.
+	Confirmed []string `json:"confirmed,omitempty"`
+}
+
 type CatalogInput struct {
 	Filter *configapp.CatalogFilter `json:"filter"`
 	// Compare with this draft; default: the published configuration.
@@ -98,6 +108,12 @@ type DraftInput struct {
 	Users []UserInput `json:"users,omitempty"`
 	// Replaces the given top-level sections; datasources, entities, roles and users are not allowed here.
 	Settings any `json:"settings,omitempty"`
+}
+
+type DraftRevision struct {
+	Revision *Revision `json:"revision"`
+	// The first revision up its parents that is not a draft.
+	BasedOn *string `json:"basedOn,omitempty"`
 }
 
 type Entity struct {
@@ -284,24 +300,9 @@ type PendingRevision struct {
 	Error           string `json:"error"`
 }
 
-type PlanDraftInput struct {
-	Plan    any     `json:"plan"`
-	Comment *string `json:"comment,omitempty"`
-	// The revision to apply the plan to: a draft based on the published one, to continue it; default: the published one.
-	Base *string `json:"base,omitempty"`
-	// The planId previewPlan returned: the draft is saved only when the plan
-	// still evaluates to what was previewed, and every exception to confirm is
-	// confirmed.
-	PlanID *string `json:"planId,omitempty"`
-	// Whether planId is a review's (previewPlan with review).
-	Review *bool `json:"review,omitempty"`
-	// The IDs of the exceptions to confirm the administrator confirmed.
-	Confirmed []string `json:"confirmed,omitempty"`
-}
-
 type PlanPreview struct {
 	// Identifies the plan with what it was evaluated against (base revision,
-	// draft and scans); createPlanDraft takes it to save only that outcome.
+	// workspace and scans); an agent applies a plan only while it still evaluates to it.
 	PlanID string                `json:"planId"`
 	Report *configapp.PlanReport `json:"report"`
 	// Entities added or changed, whole.
@@ -431,6 +432,8 @@ type User struct {
 	Subject     any      `json:"subject,omitempty"`
 	Disabled    bool     `json:"disabled"`
 	HasToken    bool     `json:"hasToken"`
+	// The sha256 hash of the user's bearer token (never the token); null when none.
+	TokenHash *string `json:"tokenHash,omitempty"`
 }
 
 type UserInput struct {
@@ -640,6 +643,8 @@ const (
 	RevisionStatePublished  RevisionState = "PUBLISHED"
 	RevisionStateSuperseded RevisionState = "SUPERSEDED"
 	RevisionStateRolledBack RevisionState = "ROLLED_BACK"
+	// A draft an administrator decided not to publish.
+	RevisionStateDiscarded RevisionState = "DISCARDED"
 )
 
 var AllRevisionState = []RevisionState{
@@ -647,11 +652,12 @@ var AllRevisionState = []RevisionState{
 	RevisionStatePublished,
 	RevisionStateSuperseded,
 	RevisionStateRolledBack,
+	RevisionStateDiscarded,
 }
 
 func (e RevisionState) IsValid() bool {
 	switch e {
-	case RevisionStateDraft, RevisionStatePublished, RevisionStateSuperseded, RevisionStateRolledBack:
+	case RevisionStateDraft, RevisionStatePublished, RevisionStateSuperseded, RevisionStateRolledBack, RevisionStateDiscarded:
 		return true
 	}
 	return false

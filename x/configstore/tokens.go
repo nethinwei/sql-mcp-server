@@ -28,10 +28,12 @@ type AdminToken struct {
 // TokenScope narrows what a token may do below its administrator's
 // permissions.
 type TokenScope struct {
-	// ReadOnly limits the token to reading: no scans, drafts or templates.
-	ReadOnly bool `json:"readOnly,omitempty"`
 	// Datasources limits the token to these datasources; nil does not.
 	Datasources []string `json:"datasources,omitempty"`
+	// ReadOnly marks a token created read only, which is no longer
+	// offered: such a token is refused rather than given the administrator's
+	// write permissions. New tokens never set it.
+	ReadOnly bool `json:"readOnly,omitempty"`
 }
 
 // MaxAdminTokens bounds the tokens of one administrator.

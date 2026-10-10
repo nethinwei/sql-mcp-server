@@ -277,7 +277,7 @@ type FieldConfig struct {
 	Name        string `yaml:"name"                  json:"name" schema:"required,minLength=1"`
 	Alias       string `yaml:"alias,omitempty"       json:"alias,omitempty"`
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
-	Mask        string `yaml:"mask,omitempty"        json:"mask,omitempty" schema:"examples=@maskRule"`
+	Mask        string `yaml:"mask,omitempty"        json:"mask,omitempty" schema:"enum=@maskRule"`
 	Exclude     bool   `yaml:"exclude,omitempty"     json:"exclude,omitempty"`
 }
 

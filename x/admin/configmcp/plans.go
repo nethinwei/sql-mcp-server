@@ -4,11 +4,9 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 	"github.com/nethinwei/sql-mcp-server/x/configplan"
 )
@@ -18,8 +16,7 @@ import (
 // preview itself (it does not evaluate the plan again).
 
 type planIn struct {
-	Plan configplan.Plan `json:"plan"           jsonschema:"the plan: scope plus import, grants, fields or sync"`
-	Base string          `json:"base,omitempty" jsonschema:"a draft revision ID to continue (default: published)"`
+	Plan configplan.Plan `json:"plan" jsonschema:"the plan: scope plus import, grants, fields or sync"`
 	// Review is set to review a recurring template's proposal.
 	Review bool `json:"review,omitempty" jsonschema:"report every new table a grant covers, to confirm"`
 }
@@ -34,12 +31,12 @@ type detailsIn struct {
 	Limit   int    `json:"limit,omitempty"  jsonschema:"items to return, at most 200 (default 50)"`
 }
 
-type saveIn struct {
+type applyIn struct {
 	planIn
-	PlanID string `json:"planId"              jsonschema:"the planId plan_preview returned for this plan and base"`
+	PlanID string `json:"planId"              jsonschema:"the planId plan_preview returned for this plan"`
 	// Confirmed binds the administrator's confirmations to exceptions.
 	Confirmed []string `json:"confirmed,omitempty" jsonschema:"IDs of the exceptions the administrator confirmed"`
-	Comment   string   `json:"comment,omitempty"   jsonschema:"why, for the reviewer"`
+	Comment   string   `json:"comment,omitempty"   jsonschema:"what the plan does, shown to the administrator"`
 }
 
 type changeSummary struct {
@@ -77,13 +74,6 @@ type previewSummary struct {
 	Unscanned    int                   `json:"unscannedSchemas"`
 	ScannedFrom  any                   `json:"scannedFrom,omitempty"`
 	Validation   *configapp.Validation `json:"validation"`
-}
-
-func (in planIn) draft() *configapp.Draft {
-	if in.Base == "" {
-		return nil
-	}
-	return &configapp.Draft{Base: in.Base}
 }
 
 func summarize(p *configapp.Preview) previewSummary {
@@ -175,11 +165,11 @@ func details(p *configapp.Preview, in detailsIn) (any, error) {
 }
 
 func registerPlans(s *mcp.Server, app *configapp.Service) {
-	add(s, tool("plan_preview", "Evaluate a plan without saving: a summary of what it covers and changes, its "+
-		"exceptions by kind and level (with the IDs of those to confirm), whether the outcome validates, and the "+
-		"planId plan_details and plan_save_draft take.", true),
+	add(s, tool("plan_preview", "Evaluate a plan against the administrator's workspace without changing it: a "+
+		"summary of what it covers and changes, its exceptions by kind and level (with the IDs of those to "+
+		"confirm), whether the outcome validates, and the planId plan_details and plan_apply take.", true),
 		func(ctx context.Context, in planIn) (any, error) {
-			p, err := app.PreviewPlan(ctx, in.Plan, in.draft(), in.Review)
+			p, err := app.PreviewInWorkspace(ctx, in.Plan, in.Review)
 			if err != nil {
 				return nil, err
 			}
@@ -196,40 +186,17 @@ func registerPlans(s *mcp.Server, app *configapp.Service) {
 			}
 			return details(p, in)
 		})
-	add(s, tool("plan_save_draft", "Save the plan's outcome as a draft revision, applied to the published "+
-		"revision or to base (a draft, to continue it), only when it still evaluates to planId and every "+
-		"exception to confirm is confirmed (report them to the administrator first). Returns the draft, the size "+
-		"of its diff (read it with diff) and where an administrator reviews and publishes it; it never publishes.",
-		false),
-		saveDraft(app))
-}
-
-// saveDraft saves a plan's outcome as a draft and says where it is reviewed.
-func saveDraft(app *configapp.Service) func(context.Context, saveIn) (any, error) {
-	return func(ctx context.Context, in saveIn) (any, error) {
-		if in.PlanID == "" {
-			return nil, errors.New("pass the planId plan_preview returned")
-		}
-		req := configapp.SaveRequest{Plan: in.Plan, PlanID: in.PlanID, Review: in.Review, Confirmed: in.Confirmed,
-			Comment: in.Comment}
-		if in.Base != "" {
-			req.Base = &in.Base
-		}
-		rev, err := app.SaveDraft(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		out := toRevisionOut(rev)
-		if out.Parent != "" {
-			// A token limited to some datasources does not read the whole
-			// configuration's diff.
-			diff, err := app.Diff(ctx, out.Parent, &out.ID, nil)
-			if err != nil && !errors.Is(err, auth.ErrOutOfScope) {
-				return nil, err
+	add(s, tool("plan_apply", "Write the plan planId previewed into the administrator's workspace, the one "+
+		"they edit in the console, as they would there, with every exception to confirm confirmed (report them to "+
+		"the administrator first); returns the items written. Plans previewed together apply one after another, "+
+		"each on what the others wrote, unless one meets a new exception (preview it again). The administrator "+
+		"sees the changes at once, keeps, edits or reverts each and publishes. It never publishes.", false),
+		func(ctx context.Context, in applyIn) (any, error) {
+			if in.PlanID == "" {
+				return nil, errors.New("pass the planId plan_preview returned")
 			}
-			out.DiffLines = strings.Count(diff, "\n")
-		}
-		out.ReviewURL = reviewURL(ctx, app, out.ID)
-		return out, nil
-	}
+			agent, _ := ctx.Value(tokenKey).(string)
+			return app.ApplyPlan(ctx, configapp.ApplyRequest{Plan: in.Plan, PlanID: in.PlanID, Review: in.Review,
+				Confirmed: in.Confirmed, Comment: in.Comment, Agent: agent})
+		})
 }

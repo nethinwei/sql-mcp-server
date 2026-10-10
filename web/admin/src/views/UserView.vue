@@ -35,9 +35,10 @@ const newToken = ref('')
 const tokenState = computed(() => {
   const u = user.value
   if (!u) return 'none'
-  if (u.tokenHash === '') return 'revoked'
-  if (u.tokenHash) return 'new'
-  return ws.baseTokens[u.name] ? 'kept' : 'none'
+  const base = ws.baseTokens[u.name] ?? ''
+  const now = u.tokenHash ?? ''
+  if (now === base) return base ? 'kept' : 'none'
+  return now ? 'new' : 'revoked'
 })
 const tokenTag = computed(() => ({
   kept: { type: 'success' as const, label: t('users.tokenKept') },

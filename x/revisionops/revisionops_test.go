@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	_ "github.com/nethinwei/sql-mcp-server/x/providers/postgres" // CheckPublishable checks drivers
 )
@@ -224,5 +225,34 @@ func TestPublishRequiresADraftBuiltOnThePublishedRevision(t *testing.T) {
 	c, _, _ := s.Draft(ctx, DraftRequest{Payload: payload(t, "500"), Parent: b.ID})
 	if _, err := s.Publish(ctx, PublishRequest{ID: c.ID}); err != nil {
 		t.Fatalf("publish of a draft built on a draft of the published revision: %v", err)
+	}
+}
+
+// A configuration the runtime would refuse to assemble is never stored, even
+// one built in code that skipped validation.
+func TestNormalizeRefusesWhatCannotBeAssembled(t *testing.T) {
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{Driver: "postgres", DSN: "x"},
+		Entities: []config.EntityConfig{{Name: "orders", Fields: []config.FieldConfig{{Name: "id", Mask: "x"}}}},
+	}
+	cfg.ApplyDefaults()
+	if _, err := Normalize(cfg); err == nil || !strings.Contains(err.Error(), `unknown mask rule "x"`) {
+		t.Fatalf("Normalize = %v", err)
+	}
+}
+
+// A draft building on a discarded draft builds on what that one built on:
+// the discarded draft was never published, so it is no base to conflict with.
+func TestPublishOnADiscardedDraft(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, _ := newService(t)
+	parent, _, _ := s.Draft(ctx, DraftRequest{Payload: payload(t, "200")})
+	child, _, _ := s.Draft(ctx, DraftRequest{Payload: payload(t, "300"), Parent: parent.ID})
+	if _, err := s.Discard(ctx, parent.ID, "root"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Publish(ctx, PublishRequest{ID: child.ID}); err != nil {
+		t.Fatalf("publish = %v", err)
 	}
 }

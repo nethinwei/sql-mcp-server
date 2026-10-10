@@ -74,17 +74,27 @@ quickstart 和 attestation 验证脚本由本地 Make target 与 GitHub Actions 
   “读取 → 修改 → 发布，冲突则变基重试”不丢任何修改且历史线性、基于同一版本的草稿
   并发发布只有一个成功、发布与回滚交错、草稿链、回滚后的旧草稿、缺失父版本等；
   `x/admin/events_test.go` 压测发布推送（大量订阅与退订抖动、慢订阅者、会话结束）。
-- 控制台合并的性质测试：`web/admin/src/lib/merge.fuzz.test.ts` 用带种子的随机编辑
-  逐叶子校验合并规则（单方修改保留、双方不同即冲突且不漏报、两侧交换对称、采用
-  对方后取值一致），`workspace.test.ts` 随机生成“编辑 / 他人发布 / 变基 / 选择”
-  序列；失败信息给出可复现的种子。
+- 版本管理（`docs/design/versioning.md`）：`core/workspace` 的合并性质测试
+  （`merge_props_test.go`）用带种子的随机编辑逐叶子校验合并规则（单方修改保留、
+  双方不同即冲突且不漏报、两侧交换对称、采用对方后取值一致），
+  `conflicts_model_test.go` 随机生成“编辑 / 发布 / update / 解决”序列；失败信息给出
+  可复现的种子。`core/workspace/workspacetest` 是工作区存储的一致性套件（内存、
+  SQLite 单元测试，PostgreSQL/MySQL/OceanBase 配置库集成测试）；`x/workspaceops`
+  测试并发写合并、update、合并草稿、提交的原子性与写入记录，交错模型测试
+  （`interleave_test.go`）在提交与存草稿的构建期间插入随机操作并检查草稿记录、检查点
+  与提交内容的不变量。
 - 批量配置：`x/configplan` 的表驱动测试与随机性质测试（随机目录、配置与方案：
   结果总能通过配置校验，同一方案执行第二次没有修改，每个应授予而未授予的授权都
   有例外；改坏合并或规则顺序时测试失败）；`x/catalog/catalogtest` 与配置库的
   模板/令牌测试在 SQLite 与 PostgreSQL/MySQL/OceanBase 上运行；
   `x/admin/configmcp` 用真实 MCP 客户端端到端测试配置 MCP（没有发布工具、只读
-  管理员不能保存草稿、过期与停用账号的令牌失效、预览不一致时拒绝保存、在草稿上
-  继续）。控制台的操作链路有单元测试：乱序返回时只采用最新的方案预览
+  管理员不能应用方案、过期与停用账号的令牌失效、预览针对工作区、不是预览过的方案
+  拒绝应用、方案直接写进工作区且只写改动的项）；`x/admin/graph` 测试按项写入的哈希
+  冲突、整体写入的版本冲突与控制台的 `applyPlan`，`workspace_sections_test.go` 与
+  `src/stores/workspace.encoding.test.ts` 用同一份数据锁定服务端写出的项与控制台的
+  一致；控制台按项写入与读回（只有本地改的保留、双方都改的取服务端的、写入途中的
+  修改不丢）在 `src/stores/workspace.sync.test.ts`，草稿依次并入与冲突在
+  `src/stores/workspace.reviewDraft.test.ts`。控制台的操作链路有单元测试：乱序返回时只采用最新的方案预览
   （`src/lib/planPreview.test.ts`）、“选择全部匹配”的筛选快照与排除
   （`src/lib/selection.test.ts`，含匹配数变化后的确认）、模板载入不改变导入语义、
   扫描批次的跟随与刷新（`src/lib/schemaScans.test.ts`）、工作区计算上下文（载入

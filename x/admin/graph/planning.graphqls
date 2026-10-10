@@ -67,21 +67,39 @@ input PlanPreviewInput {
   review: Boolean = false
 }
 
-input PlanDraftInput {
+"A plan previewed (planId) to write into the signed-in administrator's workspace."
+input ApplyPlanInput {
   plan: JSON!
-  comment: String
-  "The revision to apply the plan to: a draft based on the published one, to continue it; default: the published one."
-  base: ID
-  """
-  The planId previewPlan returned: the draft is saved only when the plan
-  still evaluates to what was previewed, and every exception to confirm is
-  confirmed.
-  """
-  planId: String
-  "Whether planId is a review's (previewPlan with review)."
+  planId: String!
+  "Previewed as a review."
   review: Boolean = false
-  "The IDs of the exceptions to confirm the administrator confirmed."
+  "The IDs of the exceptions to confirm, every one of them, as the administrator confirmed them."
   confirmed: [String!]
+}
+
+"Items of the workspace written; an item written meanwhile merges three ways."
+input WorkspaceEditInput {
+  items: [WorkspaceItemInput!]!
+}
+
+input WorkspaceItemInput {
+  "entity, role, user or settings."
+  kind: String!
+  "An entity's ID, a role's or a user's name, or settings."
+  key: String!
+  "The item as the console edits it; null removes it."
+  value: JSON
+  "The item as its writer read it; null: it was absent."
+  previous: JSON
+}
+
+"The workspace at the version reviewed, to publish as a new revision."
+input CommitInput {
+  version: Int!
+  "The revision the reviewer saw published."
+  expectedPublished: ID!
+  comment: String
+  restartRequired: Boolean = false
 }
 
 input PendingStateInput {
@@ -100,8 +118,6 @@ input McpTokenInput {
   name: String!
   "Days until it expires; null or 0 never."
   expiresInDays: Int
-  "Reads only: no scans or drafts."
-  readOnly: Boolean = false
   "Limits it to these datasources; null: every one."
   datasources: [String!]
 }
@@ -139,6 +155,12 @@ extend type Query {
   pending(draft: DraftInput): PendingWork!
   "How the state of a pending item changed, newest first."
   pendingLog(key: String!): [PendingState!]!
+  "The signed-in administrator's workspace; null when nothing is published."
+  workspace: Workspace
+  "The writes of the signed-in administrator's workspace, newest first."
+  workspaceLog(limit: Int): [WorkspaceLogEntry!]!
+  "Every draft, newest first, with the revision it builds on."
+  drafts: [DraftRevision!]!
   "The signed-in administrator's tokens for the configuration MCP endpoint."
   mcpTokens: [McpToken!]!
   "Recent schema scan batches of a datasource, running ones first."
@@ -146,8 +168,33 @@ extend type Query {
 }
 
 extend type Mutation {
-  "Save a revision with a plan applied as a draft, for review in the console."
-  createPlanDraft(input: PlanDraftInput!): Revision!
+  """
+  Writes items of the signed-in administrator's workspace. An item written
+  meanwhile (another console, an agent) merges three ways; a value both
+  changed differently becomes a conflict, keeping this write's value.
+  """
+  editWorkspace(input: WorkspaceEditInput!): Workspace!
+  """
+  Writes a previewed plan into the signed-in administrator's workspace, the
+  items it changes, as an agent's plan_apply does; CONFLICT when it is not
+  the plan previewed or would now change something else.
+  """
+  applyPlan(input: ApplyPlanInput!): AppliedPlan!
+  "Moves the workspace onto revision to, re-applying what was changed in it."
+  updateWorkspace(to: ID!): Workspace!
+  "Makes the workspace revision to as it is, dropping what was changed in it."
+  resetWorkspace(to: ID!): Workspace!
+  "Takes a draft into the workspace, onto the published revision."
+  mergeDraft(id: ID!): Workspace!
+  "Resolves a conflict: theirs takes the other side's value, else the workspace's stays."
+  resolveConflict(id: String!, theirs: Boolean!): Workspace!
+  "Saves the workspace as a draft to share, in place of the one it saved before."
+  checkpointWorkspace(comment: String): Revision!
+  """
+  Publishes the workspace at the version reviewed as a new revision;
+  CONFLICT when the workspace or the published revision changed since.
+  """
+  commitWorkspace(input: CommitInput!): Revision!
   "Create a template (expectedVersion null) or save a new version of one."
   savePlanTemplate(input: PlanTemplateInput!): PlanTemplate!
   deletePlanTemplate(name: String!): Boolean!
@@ -284,7 +331,7 @@ type CatalogRow {
 type PlanPreview {
   """
   Identifies the plan with what it was evaluated against (base revision,
-  draft and scans); createPlanDraft takes it to save only that outcome.
+  workspace and scans); an agent applies a plan only while it still evaluates to it.
   """
   planId: String!
   report: PlanReport!
@@ -419,14 +466,87 @@ type McpToken {
   "null: never expires."
   expiresAt: Time
   lastUsedAt: Time
-  "Reads only: no scans or drafts."
-  readOnly: Boolean!
   "The datasources it reaches; null: every one."
   datasources: [String!]
+  "Refused: created read only, which is no longer offered; generate a new one."
+  retired: Boolean!
 }
 
 type McpTokenSecret {
   "Shown only once."
   token: String!
   info: McpToken!
+}
+
+"""
+An administrator's workspace: the one copy of their unpublished work that
+they, in any console, and their agents write.
+"""
+type Workspace {
+  "The revision it builds on."
+  base: ID!
+  version: Int!
+  "The console's sections (entities, roles, users, settings)."
+  sections: JSON!
+  "The conflicts to resolve before committing."
+  conflicts: [WorkspaceConflict!]!
+  "Where changes came from: plans agents applied, drafts taken in."
+  notes: [WorkspaceNote!]!
+  "Drafts taken in or saved from it, not to offer it for review."
+  taken: [ID!]!
+  "The draft saved from it while nothing changed since; null otherwise."
+  checkpoint: ID
+  updatedAt: Time
+  "The administrator, or agent:<token name>."
+  updatedBy: String!
+}
+
+"A value the workspace and another side changed differently."
+type WorkspaceConflict {
+  id: String!
+  kind: String!
+  key: String!
+  "Where in the item, e.g. fields[email].mask; empty: the whole item."
+  path: String!
+  mine: JSON
+  mineGone: Boolean!
+  theirs: JSON
+  theirsGone: Boolean!
+  "published (a newer revision), draft (one taken in) or workspace (a write made meanwhile)."
+  source: String!
+  fromId: String
+  fromBy: String
+}
+
+type WorkspaceNote {
+  "agent or draft."
+  source: String!
+  by: String!
+  text: String!
+}
+
+type WorkspaceRef {
+  kind: String!
+  key: String!
+}
+
+type WorkspaceLogEntry {
+  version: Int!
+  at: Time!
+  by: String!
+  "edit, apply, update, reset, merge, resolve, checkpoint or commit."
+  op: String!
+  items: [WorkspaceRef!]!
+  note: String
+}
+
+type AppliedPlan {
+  "The items written."
+  items: [WorkspaceRef!]!
+}
+
+type DraftRevision {
+  revision: Revision!
+  "The first revision up its parents that is not a draft."
+  basedOn: ID
 }

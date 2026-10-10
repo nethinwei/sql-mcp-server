@@ -146,30 +146,59 @@ func checkAssembly(cfg *config.Config, providers map[string]Provider) (checkedAs
 	if err := prepareAssembleProviders(cfg, providers); err != nil {
 		return checkedAssembly{}, err
 	}
-	entities, err := configToEntities(cfg.Entities)
+	off, err := offlineAssembly(cfg)
 	if err != nil {
 		return checkedAssembly{}, err
 	}
-	policy, err := accessPolicy(cfg)
+	entities, err := validateAssembleEntities(off.entities, providers)
 	if err != nil {
-		return checkedAssembly{}, fmt.Errorf("assemble: %w", err)
-	}
-	msk, err := newAssembleMasker(cfg, entities)
-	if err != nil {
-		return checkedAssembly{}, err
-	}
-	tools, err := tool.NewRegistry(tool.DefaultTools())
-	if err != nil {
-		return checkedAssembly{}, err
-	}
-	if entities, err = validateAssembleEntities(entities, providers); err != nil {
 		return checkedAssembly{}, err
 	}
 	reg, err := entity.NewRegistry(entities)
 	if err != nil {
 		return checkedAssembly{}, err
 	}
-	return checkedAssembly{registry: reg, policy: policy, masker: msk, tools: tools}, nil
+	return checkedAssembly{registry: reg, policy: off.policy, masker: off.masker, tools: off.tools}, nil
+}
+
+// offlineChecked is what assembling a configuration builds before it reads
+// any database.
+type offlineChecked struct {
+	entities []entity.Entity
+	policy   rbac.Policy
+	masker   mask.Masker
+	tools    *tool.Registry
+}
+
+// offlineAssembly runs the steps of assembling cfg that need no database.
+func offlineAssembly(cfg *config.Config) (offlineChecked, error) {
+	entities, err := configToEntities(cfg.Entities)
+	if err != nil {
+		return offlineChecked{}, err
+	}
+	policy, err := accessPolicy(cfg)
+	if err != nil {
+		return offlineChecked{}, fmt.Errorf("assemble: %w", err)
+	}
+	msk, err := newAssembleMasker(cfg, entities)
+	if err != nil {
+		return offlineChecked{}, err
+	}
+	tools, err := tool.NewRegistry(tool.DefaultTools())
+	if err != nil {
+		return offlineChecked{}, err
+	}
+	return offlineChecked{entities: entities, policy: policy, masker: msk, tools: tools}, nil
+}
+
+// CheckOffline reports whether cfg passes the steps of assembling it that
+// need no database (entities, grants, the masker), so a configuration the
+// runtime would refuse to load is refused before it is stored or published
+// even where validation misses a rule of those steps. What the databases
+// hold (tables, columns, default schemas) is checked only when assembling.
+func CheckOffline(cfg *config.Config) error {
+	_, err := offlineAssembly(cfg)
+	return err
 }
 
 func closePrepared(prepared map[string]*store.PreparedDB) {

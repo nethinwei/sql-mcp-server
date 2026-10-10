@@ -55,12 +55,16 @@ func LoadRevision(rev revision.Revision) (*config.Config, error) {
 	return cfg, nil
 }
 
-// CheckPublishable verifies that target loads under the store rules and,
-// when current is published (ID != 0), that switching to target needs no
-// restart unless restartRequired is set. A current revision that no longer
-// loads can only be replaced with restartRequired.
+// CheckPublishable verifies that target loads under the store rules and
+// passes the offline assembly checks (CheckOffline) and, when current is
+// published (ID != 0), that switching to target needs no restart unless
+// restartRequired is set. A current revision that no longer loads can only
+// be replaced with restartRequired.
 func CheckPublishable(current, target revision.Revision, restartRequired bool) error {
 	next, err := LoadRevision(target)
+	if err == nil {
+		err = CheckOffline(next)
+	}
 	if err != nil {
 		return fmt.Errorf("revision %d: %w", target.ID, err)
 	}

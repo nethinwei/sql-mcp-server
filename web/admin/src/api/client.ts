@@ -1,5 +1,5 @@
 import { Client, cacheExchange, fetchExchange, mapExchange } from '@urql/vue'
-import { resyncSession, session, signedOut } from './session'
+import { leave, resyncSession, session } from './session'
 import { adminURL } from './base'
 import { router } from '@/router'
 import { t } from '@/i18n'
@@ -21,13 +21,10 @@ export const client = new Client({
     mapExchange({
       onError(error) {
         const status = (error.response as Response | undefined)?.status
-        if (status === 401) {
-          signedOut()
-          void signIn()
-        }
+        if (status === 401) signIn()
         // Polling queries pick up the replacing session's token for the next
         // poll (run retries its own request).
-        if (status === 403) void resyncSession().then((same) => { if (!same) void signIn() })
+        if (status === 403) void resyncSession().then((same) => { if (!same) signIn() })
       },
     }),
     cacheExchange,
@@ -53,7 +50,8 @@ function networkError(response: Response | undefined): ApiError {
   return new ApiError(t(status === 504 ? 'network.timeout' : 'network.gateway', { status }), 'NETWORK', { status })
 }
 
-const signIn = () => router.push({ name: 'login', query: { next: router.currentRoute.value.fullPath } })
+// The session ended: the sign-in page is loaded anew (see leave).
+const signIn = () => leave(router.currentRoute.value.fullPath)
 
 /**
  * Runs a query or mutation and throws ApiError on GraphQL errors. A request
@@ -72,7 +70,7 @@ export async function run<Data, Vars extends object>(
     : await client.query(doc, variables, { requestPolicy: 'network-only' }).toPromise()
   if ((result.error?.response as Response | undefined)?.status === 403 && !retried) {
     if (await resyncSession()) return run(doc, variables, mutation, true)
-    void signIn()
+    signIn()
     throw new ApiError(t('login.sessionReplaced'))
   }
   if (result.error?.networkError) throw networkError(result.error.response as Response | undefined)

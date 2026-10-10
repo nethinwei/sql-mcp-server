@@ -1,11 +1,12 @@
 // Package configmcp serves the configuration MCP endpoint at /admin/mcp: an
-// agent, signed in with one of an administrator's tokens, searches the
-// scanned catalog, scans schemas, previews plans and saves them as drafts,
-// and diffs and simulates configurations. It has no tool to publish: an
-// administrator reviews and publishes drafts in the console. Each tool calls
-// the configuration service the console's API calls, so permissions, checks
-// and results are the console's; a token may narrow them (read only, some
-// datasources).
+// agent, signed in with one of an administrator's tokens, acts for the
+// administrator: it searches the scanned catalog, scans schemas, previews
+// plans against the administrator's workspace and writes them into it (the
+// one copy the administrator edits in the console, so they see the changes
+// as if made there), and diffs and simulates configurations. It has no tool to publish: the administrator
+// publishes in the console. Each tool calls the configuration service the
+// console's API calls, so permissions, checks and results are the console's;
+// a token may be limited to some datasources.
 package configmcp
 
 import (
@@ -33,9 +34,7 @@ type Tokens interface {
 
 // Options configure the endpoint.
 type Options struct {
-	// PathPrefix is the gateway prefix the console is served under.
-	PathPrefix string
-	Now        func() time.Time
+	Now func() time.Time
 }
 
 // touchEvery bounds how often a token's last use is written.
@@ -64,10 +63,11 @@ func New(app *configapp.Service, tokens Tokens, admins accounts.Store, opts Opti
 
 const instructions = `Configures sql-mcp-server for an administrator. Find tables with catalog_search (scan
 schemas with scan_schemas when they are not scanned), describe what to do as a plan, check it with
-plan_preview (a summary; page through what it previewed with plan_details and its planId) and save it
-with plan_save_draft, passing the planId and the IDs of the exceptions to confirm the administrator
-confirmed; continue a draft by passing it as base.
-An administrator reviews and publishes drafts in the console (the result links to it). A plan is
+plan_preview against the administrator's workspace (a summary; page through what it previewed with
+plan_details and its planId) and apply it with plan_apply, passing the planId and the IDs of the
+exceptions to confirm the administrator confirmed. You act for the administrator: you write the workspace
+they edit in the console, as if they made the changes; they keep, edit or revert each and publish.
+A plan is
 {scope, import, grants, fields, sync, exclude, names}: scope selects scanned tables by datasource,
 schema and table glob patterns, search text and status (new, workspace, published); import adds
 zero-permission entities for new tables; grants grant actions (read, aggregate, create, update,
@@ -77,23 +77,8 @@ level block must be resolved and those of level confirm reported to the administ
 
 type ctxKey int
 
-const (
-	baseURLKey ctxKey = iota
-	tokenKey
-)
-
-// requestBase is where the console is reached, as the request came.
-func requestBase(r *http.Request, prefix string) string {
-	scheme := "http"
-	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
-		scheme = "https"
-	}
-	host := r.Header.Get("X-Forwarded-Host")
-	if host == "" {
-		host = r.Host
-	}
-	return scheme + "://" + host + prefix
-}
+// tokenKey holds the name of the token (its client) on a request.
+const tokenKey ctxKey = iota
 
 func authenticate(tokens Tokens, admins accounts.Store, opts Options, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -109,7 +94,8 @@ func authenticate(tokens Tokens, admins accounts.Store, opts Options, next http.
 			return
 		}
 		now := opts.Now()
-		if !ok || !found.ExpiresAt.IsZero() && !now.Before(found.ExpiresAt) {
+		if !ok || !found.ExpiresAt.IsZero() && !now.Before(found.ExpiresAt) || found.Scope.ReadOnly {
+			// A read-only token (no longer offered) is refused, never widened.
 			unauthorized(w)
 			return
 		}
@@ -124,24 +110,15 @@ func authenticate(tokens Tokens, admins accounts.Store, opts Options, next http.
 			}
 		}
 		ctx := auth.WithPrincipal(r.Context(), scoped(account.Username, account.Permissions, found.Scope))
-		ctx = context.WithValue(ctx, baseURLKey, requestBase(r, opts.PathPrefix))
 		ctx = context.WithValue(ctx, tokenKey, found.Name)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
 // scoped is an administrator as one of their tokens acts: with the
-// administrator's current permissions, narrowed by the token's scope (read
-// only, some datasources).
+// administrator's current permissions, limited to the token's datasources.
 func scoped(username string, permissions []string, scope configstore.TokenScope) auth.Principal {
-	p := auth.Principal{Username: username, Permissions: permissions, Datasources: scope.Datasources}
-	if scope.ReadOnly {
-		p.Permissions = nil
-		if (auth.Principal{Permissions: permissions}).Has(auth.PermRead) {
-			p.Permissions = []string{auth.PermRead}
-		}
-	}
-	return p
+	return auth.Principal{Username: username, Permissions: permissions, Datasources: scope.Datasources}
 }
 
 func unauthorized(w http.ResponseWriter) {

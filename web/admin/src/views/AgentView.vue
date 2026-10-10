@@ -2,7 +2,7 @@
 import { computed, h, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
-  NAlert, NButton, NCard, NDataTable, NForm, NFormItem, NInput, NInputNumber, NPopconfirm, NSelect, NSpace, NSwitch, NTag,
+  NAlert, NButton, NCard, NDataTable, NForm, NFormItem, NInput, NPopconfirm, NSelect, NSpace, NTag,
   NText, useMessage, type DataTableColumns,
 } from 'naive-ui'
 import { run } from '@/api/client'
@@ -17,8 +17,8 @@ import { useWorkspace } from '@/stores/workspace'
 // administrator: search the catalog, scan, preview plans and save them as
 // drafts. It never publishes; drafts are reviewed and published here. Each
 // client gets a token of its own, named, with an expiry, revoked on its own;
-// a token acts with the administrator's permissions, narrowed to reading or
-// to some datasources when asked, and is shown once.
+// a token acts with the administrator's permissions, limited to some
+// datasources when asked, and is shown once.
 type Token = Tokens['mcpTokens'][number]
 
 const { t } = useI18n()
@@ -26,8 +26,11 @@ const message = useMessage()
 const tokens = ref<Token[]>([])
 const error = ref('')
 const name = ref('')
-const days = ref<number | null>(90)
-const readOnly = ref(false)
+/** Days until the token expires; 0 never. */
+const days = ref(90)
+const dayOptions = computed(() => [
+  { label: t('agent.days90'), value: 90 }, { label: t('agent.year'), value: 365 }, { label: t('agent.forever'), value: 0 },
+])
 /** The datasources the token reaches; empty: every one. */
 const datasources = ref<string[]>([])
 const ws = useWorkspace()
@@ -47,13 +50,12 @@ onMounted(load)
 async function create() {
   try {
     const input = {
-      name: name.value.trim(), expiresInDays: days.value ?? 0, readOnly: readOnly.value,
+      name: name.value.trim(), expiresInDays: days.value,
       datasources: datasources.value.length ? datasources.value : null,
     }
     const { createMcpToken } = await run(CreateMcpTokenMutation, { input }, true)
     created.value = { token: createMcpToken.token, name: createMcpToken.info.name }
     name.value = ''
-    readOnly.value = false
     datasources.value = []
     await load()
   } catch (e) {
@@ -74,8 +76,7 @@ const columns = computed<DataTableColumns<Token>>(() => [
   {
     title: t('agent.scope'), key: 'scope',
     render: (tk) => h('div', { class: 'tags' }, [
-      h(NTag, { size: 'small', bordered: false, type: tk.readOnly ? 'default' : 'warning' },
-        () => (tk.readOnly ? t('agent.readOnly') : t('agent.canDraft'))),
+      tk.retired ? h(NTag, { size: 'small', type: 'error', bordered: false }, () => t('agent.retired')) : null,
       h(NText, { depth: 2 }, () => (tk.datasources?.length ? tk.datasources.join(', ') : t('agent.allDatasources'))),
     ]),
   },
@@ -108,10 +109,7 @@ const columns = computed<DataTableColumns<Token>>(() => [
           <n-input v-model:value="name" maxlength="64" :placeholder="t('agent.clientHint')" />
         </n-form-item>
         <n-form-item :label="t('agent.expiresIn')">
-          <n-input-number v-model:value="days" :min="0" :max="3650" :placeholder="t('agent.never')" class="days" />
-        </n-form-item>
-        <n-form-item :label="t('agent.readOnly')">
-          <n-switch v-model:value="readOnly" />
+          <n-select v-model:value="days" :options="dayOptions" class="days" />
         </n-form-item>
         <n-form-item :label="t('agent.datasources')">
           <n-select v-model:value="datasources" multiple clearable :options="datasourceOptions" class="datasources"

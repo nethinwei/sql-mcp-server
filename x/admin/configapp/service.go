@@ -7,15 +7,18 @@
 package configapp
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
+	"github.com/nethinwei/sql-mcp-server/core/workspace"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/configedit"
@@ -39,6 +42,7 @@ type PlanStore interface {
 	PendingStates(ctx context.Context) ([]configstore.PendingState, error)
 	PendingLog(ctx context.Context, key string) ([]configstore.PendingState, error)
 	PutPendingState(ctx context.Context, p configstore.PendingState) (configstore.PendingState, error)
+	workspace.Store
 }
 
 // Introspection runs fn with the introspector of datasource, reading the
@@ -61,6 +65,12 @@ type Service struct {
 	// Capabilities reports the serving snapshot's capabilities; nil reports
 	// none.
 	Capabilities func() bootstrap.EntityCapabilities
+	// WorkspaceEdit reads the sections of a workspace (the console's JSON)
+	// as an edit of its base, and WorkspaceSections writes a configuration
+	// (with its payload) as such sections; the admin API provides both, with
+	// the types the console edits.
+	WorkspaceEdit     func(sections []byte) (configedit.Edit, error)
+	WorkspaceSections func(cfg *config.Config, payload []byte) ([]byte, error)
 	// previews keeps recent plan previews.
 	previews previews
 }
@@ -72,9 +82,10 @@ type Draft struct {
 	Edit configedit.Edit
 }
 
-// ErrPlanChanged: what a plan evaluates to changed since its preview.
-var ErrPlanChanged = errors.New("the plan's outcome changed since it was previewed (a publish, a draft edit or a " +
-	"new scan): preview it again")
+// ErrPlanChanged: a plan is not the one its preview ID names, or changed
+// while it was checked.
+var ErrPlanChanged = errors.New("the plan is not the one previewed, or its preview expired and what it evaluates " +
+	"to changed since (a publish, a workspace edit or a new scan): preview it again")
 
 func (r *Service) now() time.Time {
 	if r.Scans != nil {
@@ -178,6 +189,59 @@ func (r *Service) RestartChanges(ctx context.Context, next *config.Config) ([]st
 		return nil, err
 	}
 	return orEmpty(bootstrap.RestartChanges(cur, next)), nil
+}
+
+// DiscardDraft discards a draft, saved by anyone, an agent included: it
+// stays in the history and is never published.
+func (r *Service) DiscardDraft(ctx context.Context, id string) (revision.Revision, error) {
+	who, err := auth.RequireUnlimited(ctx, auth.PermWrite)
+	if err != nil {
+		return revision.Revision{}, err
+	}
+	n, err := ParseID(id)
+	if err != nil {
+		return revision.Revision{}, err
+	}
+	return r.Ops().Discard(ctx, n, who.Username)
+}
+
+// PendingDraft is a draft with the revision it builds on: the first up its
+// parents that is not a draft (0: none).
+type PendingDraft struct {
+	Revision revision.Revision
+	BasedOn  int64
+}
+
+// Drafts lists every draft, newest first, with what each builds on, worked
+// out over the whole history.
+func (r *Service) Drafts(ctx context.Context) ([]PendingDraft, error) {
+	if _, err := auth.RequireUnlimited(ctx, auth.PermRead); err != nil {
+		return nil, err
+	}
+	all, err := r.Store.List(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+	// A parent is older than its children: oldest first, a draft's parent
+	// already has its own answer.
+	sorted := slices.SortedFunc(slices.Values(all), func(a, b revision.Revision) int { return cmp.Compare(a.ID, b.ID) })
+	basedOn := make(map[int64]int64, len(sorted))
+	for _, rev := range sorted {
+		if !rev.State.Unpublished() {
+			basedOn[rev.ID] = rev.ID
+		} else if at, ok := basedOn[rev.ParentID]; ok && rev.ParentID < rev.ID {
+			basedOn[rev.ID] = at
+		} else {
+			basedOn[rev.ID] = rev.ParentID
+		}
+	}
+	out := []PendingDraft{}
+	for _, rev := range all {
+		if rev.State == revision.StateDraft {
+			out = append(out, PendingDraft{Revision: rev, BasedOn: basedOn[rev.ID]})
+		}
+	}
+	return out, nil
 }
 
 // Validate builds a draft and reports whether it validates, what of it

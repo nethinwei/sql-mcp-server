@@ -20,7 +20,6 @@ export type Schema = {
   propertyNames?: { pattern?: string }
   items?: Schema
   enum?: unknown[]
-  examples?: unknown[]
   minimum?: number
   maximum?: number
   minItems?: number

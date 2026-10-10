@@ -566,3 +566,30 @@ func TestDraftKeepsUnsentSectionsAndRemovesNullSettings(t *testing.T) {
 		t.Fatalf("draft = %+v: cost must be back to its defaults and the entities kept", rev.Revision.Config)
 	}
 }
+
+// A draft, saved by anyone, can be discarded by a writer: it stays in the
+// history, discarded, and is never published.
+func TestDiscardDraft(t *testing.T) {
+	h := newHarness(t)
+	c := h.client(auth.PermAll)
+	var draft struct{ CreateDraft struct{ ID string } }
+	mustPost(t, c, `mutation { createDraft(draft: {base: "1"}, comment: "x") { id } }`, &draft)
+	id := draft.CreateDraft.ID
+	discard := `mutation($id: ID!) { discardDraft(id: $id) { id state } }`
+	var resp struct{ DiscardDraft struct{ ID, State string } }
+	if err := h.client(auth.PermRead).Post(discard, &resp, client.Var("id", id)); err == nil {
+		t.Fatal("a reader discarded a draft")
+	}
+	mustPost(t, c, discard, &resp, client.Var("id", id))
+	if resp.DiscardDraft.State != "DISCARDED" {
+		t.Fatalf("discarded = %+v", resp)
+	}
+	var pub map[string]any
+	err := c.Post(`mutation($id: ID!) { publish(input: {id: $id}) { id } }`, &pub, client.Var("id", id))
+	if err == nil || !strings.Contains(err.Error(), "only drafts") {
+		t.Fatalf("publishing a discarded draft: %v", err)
+	}
+	if err := c.Post(discard, &resp, client.Var("id", "1")); err == nil {
+		t.Fatal("the published revision was discarded")
+	}
+}

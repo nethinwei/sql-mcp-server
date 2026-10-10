@@ -13,7 +13,6 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
-	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/configplan"
 )
 
@@ -59,13 +58,11 @@ type none struct{}
 
 // revisionOut is a revision without its configuration.
 type revisionOut struct {
-	ID        string `json:"id"`
-	Parent    string `json:"parent,omitempty"`
-	State     string `json:"state"`
-	Author    string `json:"author"`
-	Comment   string `json:"comment"`
-	DiffLines int    `json:"diffLines,omitempty"`
-	ReviewURL string `json:"reviewURL,omitempty"`
+	ID      string `json:"id"`
+	Parent  string `json:"parent,omitempty"`
+	State   string `json:"state"`
+	Author  string `json:"author"`
+	Comment string `json:"comment"`
 }
 
 func toRevisionOut(r revision.Revision) revisionOut {
@@ -136,19 +133,6 @@ func add[In any](s *mcp.Server, t *mcp.Tool, fn func(context.Context, In) (any, 
 		slog.Info("config MCP tool", attrs...)
 		return nil, out, nil
 	})
-}
-
-// reviewURL is where an administrator reviews a revision in the console:
-// next to server.publicURL when configured, otherwise where the request
-// came.
-func reviewURL(ctx context.Context, app *configapp.Service, id string) string {
-	base, _ := ctx.Value(baseURLKey).(string)
-	if rev, err := app.Store.Published(ctx); err == nil {
-		if cfg, err := bootstrap.LoadRevision(rev); err == nil && cfg.Server.PublicURL != "" {
-			base = strings.TrimSuffix(strings.TrimSuffix(cfg.Server.PublicURL, "/"), "/mcp")
-		}
-	}
-	return base + "/admin/revisions?id=" + id
 }
 
 func register(s *mcp.Server, app *configapp.Service) {

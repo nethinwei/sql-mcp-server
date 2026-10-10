@@ -93,10 +93,10 @@ type McpToken struct {
 	// null: never expires.
 	ExpiresAt  *time.Time `json:"expiresAt,omitempty"`
 	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
-	// Reads only: no scans or drafts.
-	ReadOnly bool `json:"readOnly"`
 	// The datasources it reaches; null: every one.
 	Datasources []string `json:"datasources,omitempty"`
+	// Refused: created read only, which is no longer offered; generate a new one.
+	Retired bool `json:"retired"`
 }
 
 type McpTokenInput struct {
@@ -104,8 +104,6 @@ type McpTokenInput struct {
 	Name string `json:"name"`
 	// Days until it expires; null or 0 never.
 	ExpiresInDays *int `json:"expiresInDays,omitempty"`
-	// Reads only: no scans or drafts.
-	ReadOnly *bool `json:"readOnly,omitempty"`
 	// Limits it to these datasources; null: every one.
 	Datasources []string `json:"datasources,omitempty"`
 }
@@ -462,4 +460,92 @@ func (e TableStatus) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil
+}
+
+// Workspace is an administrator's workspace as it stands: the one copy of
+// their unpublished work, written by them (in any console) and their agents.
+type Workspace struct {
+	// The revision it builds on.
+	Base    string `json:"base"`
+	Version int    `json:"version"`
+	// The console's sections (entities, roles, users, settings).
+	Sections  any                 `json:"sections"`
+	Conflicts []WorkspaceConflict `json:"conflicts"`
+	// Where changes came from: plans agents applied, drafts taken in.
+	Notes []WorkspaceNote `json:"notes"`
+	// Drafts taken in or saved from it (not to offer it for review), and the
+	// draft it holds as it is (saved from it, nothing changed since).
+	Taken      []string   `json:"taken"`
+	Checkpoint *string    `json:"checkpoint,omitempty"`
+	UpdatedAt  *time.Time `json:"updatedAt,omitempty"`
+	// The administrator, or agent:<token name>.
+	UpdatedBy string `json:"updatedBy"`
+}
+
+// WorkspaceRef names an item: entity (by ID), role or user (by name), or
+// settings.
+type WorkspaceRef struct {
+	Kind string `json:"kind"`
+	Key  string `json:"key"`
+}
+
+// WorkspaceConflict is a value the workspace and another side changed
+// differently; the workspace keeps its value until resolved.
+type WorkspaceConflict struct {
+	ID   string `json:"id"`
+	Kind string `json:"kind"`
+	Key  string `json:"key"`
+	// Where in the item, e.g. fields[email].mask; empty: the whole item.
+	Path string `json:"path"`
+	// The values (null when removed: MineGone, TheirsGone).
+	Mine       any  `json:"mine,omitempty"`
+	MineGone   bool `json:"mineGone"`
+	Theirs     any  `json:"theirs,omitempty"`
+	TheirsGone bool `json:"theirsGone"`
+	// published (a newer revision), draft (one taken in) or workspace (a
+	// write made meanwhile, by another console or an agent).
+	Source string  `json:"source"`
+	FromID *string `json:"fromId,omitempty"`
+	FromBy *string `json:"fromBy,omitempty"`
+}
+
+// WorkspaceNote says where changes came from.
+type WorkspaceNote struct {
+	// agent or draft.
+	Source string `json:"source"`
+	By     string `json:"by"`
+	Text   string `json:"text"`
+}
+
+// WorkspaceLogEntry is a write of a workspace.
+type WorkspaceLogEntry struct {
+	Version int       `json:"version"`
+	At      time.Time `json:"at"`
+	By      string    `json:"by"`
+	// edit, apply, update, reset, merge, resolve, checkpoint or commit.
+	Op    string         `json:"op"`
+	Items []WorkspaceRef `json:"items"`
+	Note  *string        `json:"note,omitempty"`
+}
+
+// WorkspaceEditInput writes items of the workspace.
+type WorkspaceEditInput struct {
+	Items []WorkspaceItemInput `json:"items"`
+}
+
+// WorkspaceItemInput writes one item: its value (null removes it) and the
+// value its writer read (null: absent). An item written meanwhile merges.
+type WorkspaceItemInput struct {
+	Kind     string `json:"kind"`
+	Key      string `json:"key"`
+	Value    any    `json:"value,omitempty"`
+	Previous any    `json:"previous,omitempty"`
+}
+
+// CommitInput commits the workspace at the version reviewed.
+type CommitInput struct {
+	Version           int     `json:"version"`
+	ExpectedPublished string  `json:"expectedPublished"`
+	Comment           *string `json:"comment,omitempty"`
+	RestartRequired   *bool   `json:"restartRequired,omitempty"`
 }

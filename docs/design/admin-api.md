@@ -49,6 +49,9 @@
   响应体返回 `csrfToken`；`POST /admin/logout` 注销；
 - 所有 `/admin/graphql` 请求都必须带有效会话，并在 `X-CSRF-Token` 头中携带该
   会话的 CSRF token；
+- 控制台里会话结束（退出、401、另一个标签页换了账号）时整页重新加载登录页，登录
+  成功后也整页加载：上一个账号未完成的操作随页面结束，不会以下一个账号发出；退出
+  前先保存本页尚未写回的编辑；
 - 会话保存在进程内存，默认 8 小时空闲过期；账号被禁用或删除后，该账号的会话
   在下一次请求时失效；
 - 登录失败按用户名计数，连续 5 次失败锁定 1 分钟；失败响应不区分"用户不存在"
@@ -86,7 +89,7 @@ type Configuration {
   datasources: [Datasource!]!   # driver 与脱敏后的 DSN
   entities: [Entity!]!          # 字段、主键、关系、旧式角色、租户约束
   roles: [Role!]!               # 授权项
-  users: [User!]!               # 角色、直授、subject；只暴露 hasToken
+  users: [User!]!               # 角色、直授、subject；hasToken 与 tokenHash（只有 hash，明文从不保存）
   settings: JSON!               # 其余部分（server、cost、budget 等）
 }
 ```
@@ -121,21 +124,33 @@ input DraftInput {
 - simulate 不访问数据库：用配置离线构建实体注册表与授权策略，返回是否允许、
   可见字段、行范围（以与 `rowPolicies` 相同的 JSON 形式）、覆盖授权项与
   `AMBIGUOUS_FIELD_SCOPE` 的可选字段集；
-- 发布只允许“快进”：草稿必须基于当前已发布 revision（沿父链找到的第一个非草稿
-  祖先），否则返回 `extensions.code = CONFLICT` 与最新的 `published`，CLI、API、
+- 发布只允许“快进”：草稿必须基于当前已发布 revision（沿父链找到的第一个发布过的
+  祖先，被丢弃的草稿同样跳过），否则返回 `extensions.code = CONFLICT` 与最新的 `published`，CLI、API、
   控制台一律如此——基于旧版本的草稿会整体覆盖期间别人的发布。`expectedPublished`
   另外校验调用方看到的已发布版本；检查与配置库发布之间被他人抢先同样报
   `CONFLICT`。
 - `GET /admin/events`（server-sent events，需登录会话）在连接时与每次发布时推送
   已发布 revision（`event: published`，`{"id","author"}`），包括其他进程经同一
-  配置库的发布；服务端每秒读取一次已发布 revision，只在有控制台连接时读取。
-  控制台据此立即刷新，10 秒轮询保留为兜底。
-- 控制台变基做三方合并：对象按键、命名列表按元素（字段与关系按名称，授权按实体；
-  同一实体的多条授权没有各自的身份，作为一组整体合并，避免一方删掉其中一条后按
-  位置错配）。空值与未设置的可选文本视为相同。只有一方改动的值自动合并；双方改了同一处且取值
-  不同即为冲突，工作区暂时保留本地值并列出冲突，必须逐项选择“保留我的 / 采用
-  新版本”，全部解决前不能保存草稿或发布；未解决的冲突在再次变基时改为对比最新
-  版本；
+  配置库的发布；连接之后版本有变化（另一个管理员保存或丢弃了草稿；按配置库的
+  变更序号判断，丢弃较早的草稿也算）时推送 `event: revisions`（`{"sequence"}`），控制台据此刷新草稿列表（`drafts`，每份带服务端
+  沿父链求得的基准版本）；登录管理员的工作区被写入（另一个控制台、Agent 的
+  `plan_apply`）时推送 `event: workspace`（`{"version"}`）。工作区每人一份，在服务端，
+  所有版本操作都是服务端操作：`workspace`、`workspaceLog` 读取；`editWorkspace` 按项
+  写入，每项带写入者读到的值，期间别处写过则三方合并（同一处改得不同成为冲突，不丢
+  任何一方）；`applyPlan` 把预览过的方案写进工作区（与配置 MCP 的 `plan_apply` 同一段
+  逻辑，绑定实际影响）；`updateWorkspace`、`resetWorkspace`、`mergeDraft`、
+  `resolveConflict`、`checkpointWorkspace`（`admin:write`）、`commitWorkspace`
+  （`admin:publish`；期间有写入为 `CONFLICT`，有未解决冲突为 `CONFLICTS`，基准落后为
+  `BEHIND`，发布被抢先为带 `published` 的 `CONFLICT`）。设计与不变量见
+  `docs/design/versioning.md`。`discardDraft(id)` 把草稿标为
+  `DISCARDED`（`admin:write`），留在历史中且不能再发布。服务端每秒读取一次已发布
+  revision、最新 revision 与该管理员工作区的版本号，只在有控制台连接时读取；10 秒
+  轮询保留为兜底。
+- 三方合并在服务端（`core/workspace`）：对象按键、命名列表按元素（字段与关系按名称，
+  授权按实体；同一实体的多条授权作为一组整体合并）。空值与未设置的可选文本视为
+  相同。只有一方改动的值自动合并；双方改了同一处且取值不同即为冲突，工作区保留
+  自己的值并列出冲突，逐项“保留我的 / 采用对方”（`resolveConflict`），全部解决前
+  不能提交；相对已发布的冲突在之后的发布等于我的值时自动关闭；
 - `serverStatus` 报告进程实际运行的 revision 与未应用的发布（需重启或加载失败），
   控制台顶栏据此显示运行状态；
 - visibility 用同一个离线授权器批量评估某个主体对全部实体、适用动作的默认投影结果，供
@@ -194,7 +209,7 @@ input DraftInput {
 
 - `x/configyaml`：新增 `Encode`（确定性 export），CLI 与 API 共用；
 - `x/configstore`：schema 版本 2、管理员账号表与迁移；版本 3 增加扫描目录、方案
-  模板与配置 MCP 令牌，版本 4 增加令牌范围与扫描批次的逐库记录（见
+  模板与配置 MCP 令牌，版本 4 增加令牌范围与扫描批次的逐库记录，版本 5 增加管理员工作区（见
   `docs/design/planning.md`）；
 - `x/providers/{postgres,mysql}`：注释与外键 introspection；
 - `x/admin`：会话、登录、权限、HTTP 挂载；`x/admin/graph`：gqlgen schema 与

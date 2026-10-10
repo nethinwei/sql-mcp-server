@@ -14,6 +14,8 @@ enum RevisionState {
   PUBLISHED
   SUPERSEDED
   ROLLED_BACK
+  "A draft an administrator decided not to publish."
+  DISCARDED
 }
 
 enum Action {
@@ -99,6 +101,8 @@ type Mutation {
   publish(input: PublishInput!): Revision!
   "Roll back to `to`, or to the newest earlier published content."
   rollback(input: RollbackInput!): Revision!
+  "Discards a draft: it stays in the history and is never published."
+  discardDraft(id: ID!): Revision!
   "A new random user token; only the hash belongs in a draft."
   generateUserToken: UserToken!
   createAdminAccount(input: AdminAccountInput!): AdminAccount!
@@ -242,6 +246,8 @@ type User {
   subject: JSON
   disabled: Boolean!
   hasToken: Boolean!
+  "The sha256 hash of the user's bearer token (never the token); null when none."
+  tokenHash: String
 }
 
 type SchemaList {

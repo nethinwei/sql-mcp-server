@@ -7,20 +7,64 @@ package graph
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 )
 
-// CreatePlanDraft is the resolver for the createPlanDraft field.
-func (r *mutationResolver) CreatePlanDraft(ctx context.Context, input PlanDraftInput) (*Revision, error) {
+// EditWorkspace is the resolver for the editWorkspace field.
+func (r *mutationResolver) EditWorkspace(ctx context.Context, input configapp.WorkspaceEditInput) (*configapp.Workspace, error) {
+	w, err := r.App.EditWorkspace(ctx, input)
+	return w, apiError(err)
+}
+
+// ApplyPlan is the resolver for the applyPlan field.
+func (r *mutationResolver) ApplyPlan(ctx context.Context, input ApplyPlanInput) (*configapp.AppliedPlan, error) {
 	p, err := configapp.DecodePlan(input.Plan)
 	if err != nil {
 		return nil, err
 	}
-	rev, err := r.App.SaveDraft(ctx, configapp.SaveRequest{
-		Plan: p, Base: input.Base, PlanID: deref(input.PlanID), Review: derefBool(input.Review),
-		Confirmed: input.Confirmed, Comment: deref(input.Comment),
-	})
+	applied, err := r.App.ApplyPlan(ctx, configapp.ApplyRequest{Plan: p, PlanID: input.PlanID,
+		Review: derefBool(input.Review), Confirmed: input.Confirmed})
+	return applied, apiError(err)
+}
+
+// UpdateWorkspace is the resolver for the updateWorkspace field.
+func (r *mutationResolver) UpdateWorkspace(ctx context.Context, to string) (*configapp.Workspace, error) {
+	w, err := r.App.UpdateWorkspace(ctx, to)
+	return w, apiError(err)
+}
+
+// ResetWorkspace is the resolver for the resetWorkspace field.
+func (r *mutationResolver) ResetWorkspace(ctx context.Context, to string) (*configapp.Workspace, error) {
+	w, err := r.App.ResetWorkspace(ctx, to)
+	return w, apiError(err)
+}
+
+// MergeDraft is the resolver for the mergeDraft field.
+func (r *mutationResolver) MergeDraft(ctx context.Context, id string) (*configapp.Workspace, error) {
+	w, err := r.App.MergeDraft(ctx, id)
+	return w, apiError(err)
+}
+
+// ResolveConflict is the resolver for the resolveConflict field.
+func (r *mutationResolver) ResolveConflict(ctx context.Context, id string, theirs bool) (*configapp.Workspace, error) {
+	w, err := r.App.ResolveConflict(ctx, id, theirs)
+	return w, apiError(err)
+}
+
+// CheckpointWorkspace is the resolver for the checkpointWorkspace field.
+func (r *mutationResolver) CheckpointWorkspace(ctx context.Context, comment *string) (*Revision, error) {
+	rev, err := r.App.CheckpointWorkspace(ctx, comment)
+	if err != nil {
+		return nil, apiError(err)
+	}
+	return toRevision(rev), nil
+}
+
+// CommitWorkspace is the resolver for the commitWorkspace field.
+func (r *mutationResolver) CommitWorkspace(ctx context.Context, input configapp.CommitInput) (*Revision, error) {
+	rev, err := r.App.CommitWorkspace(ctx, input)
 	if err != nil {
 		return nil, apiError(err)
 	}
@@ -161,6 +205,33 @@ func (r *queryResolver) Pending(ctx context.Context, draft *DraftInput) (*config
 // PendingLog is the resolver for the pendingLog field.
 func (r *queryResolver) PendingLog(ctx context.Context, key string) ([]configapp.PendingState, error) {
 	return r.App.PendingLog(ctx, key)
+}
+
+// Workspace is the resolver for the workspace field.
+func (r *queryResolver) Workspace(ctx context.Context) (*configapp.Workspace, error) {
+	return r.App.Workspace(ctx)
+}
+
+// WorkspaceLog is the resolver for the workspaceLog field.
+func (r *queryResolver) WorkspaceLog(ctx context.Context, limit *int) ([]configapp.WorkspaceLogEntry, error) {
+	return r.App.WorkspaceLog(ctx, limit)
+}
+
+// Drafts is the resolver for the drafts field.
+func (r *queryResolver) Drafts(ctx context.Context) ([]DraftRevision, error) {
+	all, err := r.App.Drafts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]DraftRevision, 0, len(all))
+	for _, d := range all {
+		dr := DraftRevision{Revision: toRevision(d.Revision)}
+		if d.BasedOn != 0 {
+			dr.BasedOn = optional(strconv.FormatInt(d.BasedOn, 10))
+		}
+		out = append(out, dr)
+	}
+	return out, nil
 }
 
 // McpTokens is the resolver for the mcpTokens field.

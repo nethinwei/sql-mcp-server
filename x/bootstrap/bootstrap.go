@@ -273,11 +273,14 @@ func Load(path string) (*config.Config, error) {
 	return LoadBytes(data)
 }
 
-// ValidateFile parses, defaults, validates, and resolves secrets without
-// opening database connections.
+// ValidateFile parses, defaults, validates, runs the offline assembly checks
+// (CheckOffline) and resolves secrets without opening database connections.
 func ValidateFile(path string, resolver SecretResolver) error {
 	cfg, err := Load(path)
 	if err != nil {
+		return err
+	}
+	if err := CheckOffline(cfg); err != nil {
 		return err
 	}
 	if resolver == nil {

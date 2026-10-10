@@ -217,7 +217,7 @@ func toUsers(cfg *config.Config) []User {
 	for name, u := range cfg.Users {
 		user := User{
 			Name: name, Description: optional(u.Description), Roles: orEmpty(u.Roles), Grants: toGrants(u.Grants),
-			Disabled: u.Disabled, HasToken: u.TokenHash != "",
+			Disabled: u.Disabled, HasToken: u.TokenHash != "", TokenHash: optional(u.TokenHash),
 		}
 		if len(u.Subject) > 0 {
 			user.Subject = u.Subject

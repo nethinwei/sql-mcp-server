@@ -93,6 +93,17 @@ func (s *SQLStore) lock(ctx context.Context, tx *sql.Tx) error {
 	return err
 }
 
+// lockRevisions locks like lock, for a write that changes revisions other
+// than by creating one, which it counts (see Sequence).
+func (s *SQLStore) lockRevisions(ctx context.Context, tx *sql.Tx) error {
+	if err := s.lock(ctx, tx); err != nil {
+		return err
+	}
+	_, err := s.exec(ctx, tx, "UPDATE smcp_store_meta SET meta_value = meta_value + 1 WHERE meta_key = ?",
+		metaRevisionSeq)
+	return err
+}
+
 func (s *SQLStore) allocateID(ctx context.Context, tx *sql.Tx) (int64, error) {
 	if _, err := s.exec(ctx, tx, "UPDATE smcp_store_meta SET meta_value = meta_value + 1 WHERE meta_key = ?",
 		metaNextID); err != nil {
@@ -220,7 +231,7 @@ func (s *SQLStore) setState(
 func (s *SQLStore) Publish(ctx context.Context, id, expectedCurrent int64, _ revision.Meta) (revision.Revision, error) {
 	var out revision.Revision
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		if err := s.lock(ctx, tx); err != nil {
+		if err := s.lockRevisions(ctx, tx); err != nil {
 			return err
 		}
 		target, err := s.get(ctx, tx, id)
@@ -250,6 +261,31 @@ func (s *SQLStore) Publish(ctx context.Context, id, expectedCurrent int64, _ rev
 	return out, nil
 }
 
+// Discard implements revision.Store.
+func (s *SQLStore) Discard(ctx context.Context, id int64) (revision.Revision, error) {
+	var out revision.Revision
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		if err := s.lockRevisions(ctx, tx); err != nil {
+			return err
+		}
+		target, err := s.get(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if target.State != revision.StateDraft {
+			return fmt.Errorf("%w: revision %d is %s, only drafts can be discarded",
+				revision.ErrInvalidState, id, target.State)
+		}
+		target.State = revision.StateDiscarded
+		out = target
+		return s.setState(ctx, tx, id, target.State, time.Time{})
+	})
+	if err != nil {
+		return revision.Revision{}, err
+	}
+	return out, nil
+}
+
 // Rollback implements revision.Store.
 func (s *SQLStore) Rollback(
 	ctx context.Context, expectedCurrent, target int64, m revision.Meta,
@@ -259,7 +295,7 @@ func (s *SQLStore) Rollback(
 	}
 	var out revision.Revision
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		if err := s.lock(ctx, tx); err != nil {
+		if err := s.lockRevisions(ctx, tx); err != nil {
 			return err
 		}
 		current, err := s.currentLocked(ctx, tx, expectedCurrent)
@@ -304,7 +340,7 @@ func (s *SQLStore) ImportHistory(ctx context.Context, revs []revision.Revision) 
 		return err
 	}
 	return s.withTx(ctx, func(tx *sql.Tx) error {
-		if err := s.lock(ctx, tx); err != nil {
+		if err := s.lockRevisions(ctx, tx); err != nil {
 			return err
 		}
 		var count int64
@@ -324,6 +360,16 @@ func (s *SQLStore) ImportHistory(ctx context.Context, revs []revision.Revision) 
 		_, err := s.exec(ctx, tx, "UPDATE smcp_store_meta SET meta_value = ? WHERE meta_key = ?", maxID+1, metaNextID)
 		return err
 	})
+}
+
+// Sequence implements revision.Store: the next ID (grown by every revision
+// created) plus the count of the other revision writes. Writes of anything
+// else (workspaces, tokens, accounts) leave it as it is.
+func (s *SQLStore) Sequence(ctx context.Context) (int64, error) {
+	var seq int64
+	err := s.queryRow(ctx, s.db, "SELECT SUM(meta_value) FROM smcp_store_meta WHERE meta_key IN (?, ?)",
+		metaNextID, metaRevisionSeq).Scan(&seq)
+	return seq, err
 }
 
 // Close implements revision.Store.

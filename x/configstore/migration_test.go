@@ -4,11 +4,59 @@ import (
 	"context"
 	"testing"
 
+	"github.com/nethinwei/sql-mcp-server/core/workspace"
 	"github.com/nethinwei/sql-mcp-server/x/catalog"
 )
 
 func TestSQLiteMigratesVersionThree(t *testing.T) {
 	assertMigratesVersionThree(t, sqliteSpec(t))
+}
+
+func TestSQLiteMigratesVersionFour(t *testing.T) {
+	assertMigratesVersionFour(t, sqliteSpec(t))
+}
+
+// assertMigratesVersionFour opens a store of schema version 4: workspaces
+// read and write once it is open, and the revision sequence reads, a
+// workspace write leaving it as it is.
+func assertMigratesVersionFour(t *testing.T, spec Spec) {
+	t.Helper()
+	ctx := context.Background()
+	s, err := connect(spec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range s.dialect.migrations[:4] {
+		for _, ddl := range step {
+			if _, err := s.db.ExecContext(ctx, ddl); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err := s.exec(ctx, s.db, "INSERT INTO smcp_store_meta (meta_key, meta_value) VALUES (?, ?), (?, ?), (?, ?)",
+		metaSchemaVersion, 4, metaNextID, 1, metaPublishLock, 0); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	store, err := Open(ctx, spec, nil)
+	if err != nil {
+		t.Fatalf("Open must migrate a version 4 store: %v", err)
+	}
+	defer store.Close()
+	if _, ok, err := store.Workspace(ctx, "root"); ok || err != nil {
+		t.Fatalf("workspace of a migrated store: %v %v", ok, err)
+	}
+	before, err := store.Sequence(ctx)
+	if err != nil {
+		t.Fatalf("sequence after migration: %v", err)
+	}
+	w := workspace.Workspace{Username: "root"}
+	if _, err := store.PutWorkspace(ctx, w, 0, workspace.LogEntry{Op: "edit"}); err != nil {
+		t.Fatalf("a workspace after migration: %v", err)
+	}
+	if after, _ := store.Sequence(ctx); after != before {
+		t.Fatalf("a workspace write moved the revision sequence: %d → %d", before, after)
+	}
 }
 
 // assertMigratesVersionThree opens a store of schema version 3 holding a
@@ -27,7 +75,7 @@ func assertMigratesVersionThree(t *testing.T, spec Spec) {
 		t.Fatalf("schema version after migration = %d, %v", version, err)
 	}
 	tok, ok, err := store.AdminTokenByHash(ctx, "sha256:1")
-	if err != nil || !ok || tok.Scope.Datasources != nil || tok.Scope.ReadOnly {
+	if err != nil || !ok || tok.Scope.Datasources != nil {
 		t.Fatalf("token = %+v %v %v", tok, ok, err)
 	}
 	assertMigratedBatch(t, store)

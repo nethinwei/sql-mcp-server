@@ -95,6 +95,15 @@ func (r *mutationResolver) Rollback(ctx context.Context, input RollbackInput) (*
 	return toRevision(res.Published), nil
 }
 
+// DiscardDraft is the resolver for the discardDraft field.
+func (r *mutationResolver) DiscardDraft(ctx context.Context, id string) (*Revision, error) {
+	rev, err := r.App.DiscardDraft(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return toRevision(rev), nil
+}
+
 // GenerateUserToken is the resolver for the generateUserToken field.
 func (r *mutationResolver) GenerateUserToken(ctx context.Context) (*UserToken, error) {
 	if _, err := auth.Require(ctx, auth.PermWrite); err != nil {

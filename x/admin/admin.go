@@ -92,6 +92,7 @@ func New(cfg Config) *Handler {
 	}
 	app := &configapp.Service{
 		Store: cfg.Store, Introspect: cfg.Introspect, Capabilities: cfg.Capabilities, Scans: h.scans, Plans: cfg.Plans,
+		WorkspaceEdit: graph.WorkspaceEdit, WorkspaceSections: graph.WorkspaceSections,
 	}
 	app.WatchScanBatches()
 	resolver := &graph.Resolver{App: app, Accounts: accounts.Service{Store: cfg.Accounts}, Status: cfg.Status}
@@ -121,7 +122,7 @@ func New(cfg Config) *Handler {
 		h.mux.HandleFunc("GET /admin/playground", h.playground)
 	}
 	if cfg.Plans != nil {
-		opts := configmcp.Options{PathPrefix: cfg.PathPrefix, Now: cfg.Now}
+		opts := configmcp.Options{Now: cfg.Now}
 		mcpHandler := configmcp.New(app, cfg.Plans, cfg.Accounts, opts)
 		for _, method := range []string{http.MethodPost, http.MethodGet, http.MethodDelete} {
 			h.mux.Handle(method+" /admin/mcp", mcpHandler)

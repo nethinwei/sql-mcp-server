@@ -18,7 +18,7 @@ type dialect struct {
 
 func storeMigrations(text, longText string) [][]string {
 	return [][]string{revisionDDL(text, longText), adminDDL(), slices.Concat(catalogDDL(longText), templatesDDL(longText),
-		tokensDDL(), pendingDDL(longText)), scopesAndItemsDDL(longText)}
+		tokensDDL(), pendingDDL(longText)), scopesAndItemsDDL(longText), workspacesDDL(longText)}
 }
 
 // catalogDDL is schema version 3, with planningDDL: the scanned catalog.
@@ -94,7 +94,7 @@ func tokensDDL() []string {
 }
 
 // scopesAndItemsDDL is schema version 4: the scopes of administrators'
-// tokens (none: unlimited), the request keys of scan batches, and their items
+// tokens (none: unlimited), the request keys of scan batches and their items
 // as rows. The items kept in the payload of earlier batches move to rows in
 // the same migration (migrateBatchItems); the payload is written empty since.
 func scopesAndItemsDDL(longText string) []string {
@@ -110,6 +110,32 @@ func scopesAndItemsDDL(longText string) []string {
 			attempts      INT          NOT NULL,
 			not_before_us BIGINT       NOT NULL,
 			PRIMARY KEY (batch_id, schema_name)
+		)`,
+	}
+}
+
+// workspacesDDL is schema version 5: administrators' workspaces and the log
+// of their writes.
+func workspacesDDL(longText string) []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS smcp_workspaces (
+			username   VARCHAR(64)  NOT NULL PRIMARY KEY,
+			base_id    BIGINT       NOT NULL,
+			items      ` + longText + ` NOT NULL,
+			review     ` + longText + ` NOT NULL,
+			version    BIGINT       NOT NULL,
+			updated_us BIGINT       NOT NULL,
+			updated_by VARCHAR(160) NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS smcp_workspace_log (
+			username VARCHAR(64)  NOT NULL,
+			version  BIGINT       NOT NULL,
+			at_us    BIGINT       NOT NULL,
+			author   VARCHAR(160) NOT NULL,
+			op       VARCHAR(32)  NOT NULL,
+			items    ` + longText + ` NOT NULL,
+			note     ` + longText + ` NOT NULL,
+			PRIMARY KEY (username, version)
 		)`,
 	}
 }

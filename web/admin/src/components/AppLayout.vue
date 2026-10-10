@@ -11,21 +11,50 @@ import {
   TimeOutline, SettingsOutline, KeyOutline, PersonCircleOutline, ListOutline, NotificationsOutline, HardwareChipOutline,
 } from '@vicons/ionicons5'
 import ChangeBar from './ChangeBar.vue'
+import DraftsInbox from './DraftsInbox.vue'
 import RuntimeBadge from './RuntimeBadge.vue'
 import ThemeSwitch from './ThemeSwitch.vue'
 import LocaleSwitch from './LocaleSwitch.vue'
-import { useWorkspace } from '@/stores/workspace'
+import { upgradeLegacySections, useWorkspace } from '@/stores/workspace'
 import { useStatus } from '@/stores/status'
 import { useSettingsEdits } from '@/stores/settingsEdits'
-import { can, logout, session } from '@/api/session'
+import { can, isLeaving, leave, logout, session } from '@/api/session'
 import { adminURL } from '@/api/base'
+import { draftsChanged } from '@/lib/draftFeed'
+import { useWorkspaceAction, useWorkspaceSync, workspace } from '@/lib/workspaceSync'
+import { useConflictSources } from '@/lib/conflicts'
 import logo from '@/assets/logo.svg'
 
 const { t } = useI18n()
 const ws = useWorkspace()
+// The workspace is the signed-in administrator's, read from the server: one
+// left by another administrator signed in before in this browser is dropped.
+ws.bindTo(session.username)
+// A workspace an older console kept here for whoever was signed in waits
+// for its owner to claim it, or to drop it.
+const legacy = ref(ws.legacy())
+// Claiming it moves the workspace onto its base and writes its changes as
+// edits there, so the server merges them with anything written meanwhile.
+async function claimLegacy() {
+  const old = ws.legacyWorkspace()
+  if (!old || ws.dirty) return
+  await action(async () => {
+    await workspace.reset(old.base)
+    const sections = upgradeLegacySections(old.sections, ws.baseTokens)
+    ws.$patch((st) => Object.assign(st, sections))
+    ws.dropLegacy()
+    legacy.value = null
+    message.success(t('legacy.claimed'))
+  })
+}
+function dropLegacy() {
+  ws.dropLegacy()
+  legacy.value = null
+}
 const route = useRoute()
 const router = useRouter()
 const message = useMessage()
+const action = useWorkspaceAction()
 const status = useStatus()
 const collapsed = ref(false)
 const nothingPublished = ref(false)
@@ -72,13 +101,22 @@ const activeKey = computed(() => {
 async function poll() {
   await status.refresh()
   if (!status.loaded) return
+  void status.settle()
   const id = status.publishedId
   nothingPublished.value = id === null
   if (id && id !== ws.basePublished && !ws.dirty && ws.baseId === ws.basePublished) {
-    await ws.load(id)
-    message.info(t('layout.switchedTo', { id, author: status.published?.author ?? '' }))
+    if (await action(() => workspace.follow(id))) {
+      message.info(t('layout.switchedTo', { id, author: status.published?.author ?? '' }))
+    }
   }
 }
+// The workspace is kept on the server, the one copy this administrator (in
+// any console) and their agents write: edits here are written there, and
+// what is written there is read here (see lib/workspaceSync).
+const sync = useWorkspaceSync()
+const { sources: conflictSources } = useConflictSources()
+ws.$subscribe(() => sync.schedulePush())
+
 function onVisible() {
   if (document.visibilityState === 'visible') void poll()
 }
@@ -87,44 +125,43 @@ const outdated = computed(() =>
   status.publishedId !== null && ws.basePublished !== null && status.publishedId !== ws.basePublished)
 
 async function rebase() {
-  try {
-    const count = await status.rebaseWorkspace()
+  const count = await action(() => status.rebaseWorkspace())
+  if (count !== undefined) {
     message.success(t('stale.rebased', { id: status.publishedId, count }, count))
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : String(e))
   }
 }
 
-// The workspace is kept in localStorage, but unapplied settings text is not.
+// Leaving loses what is not on the server yet: settings text not applied to
+// the workspace, and edits waiting to be sent, being sent or failed to send
+// (they are sent right away, in case the administrator stays).
 const settingsEdits = useSettingsEdits()
 function onBeforeUnload(e: BeforeUnloadEvent) {
-  if (settingsEdits.pending.length) e.preventDefault()
+  // Signed out (see onUserMenu) or the session ended: nothing can be saved.
+  if (isLeaving()) return
+  if (workspace.unsaved()) void workspace.flush().catch(() => {})
+  if (settingsEdits.pending.length || workspace.unsaved()) e.preventDefault()
 }
 
 let timer: number | undefined
 let events: EventSource | undefined
 onMounted(async () => {
   window.addEventListener('beforeunload', onBeforeUnload)
-  if (ws.baseId) {
-    try {
-      const moved = await ws.verifyBase()
-      if (moved) message.warning(t('layout.baseReloaded', { id: moved.id }))
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : String(e))
-    }
-  } else {
-    try {
-      nothingPublished.value = !(await ws.loadPublished())
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : String(e))
-    }
+  try {
+    nothingPublished.value = !(await sync.pull())
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : String(e))
   }
   await poll()
   // Publishes arrive as server-sent events at once; polling stays as the
   // fallback for a stream a proxy cuts off.
   events = new EventSource(adminURL('events'))
   events.addEventListener('published', () => void poll())
-  timer = window.setInterval(() => document.visibilityState === 'visible' && void poll(), 10000)
+  events.addEventListener('revisions', () => draftsChanged.value++)
+  events.addEventListener('workspace', () => void sync.pull())
+  events.addEventListener('open', () => void sync.pull())
+  timer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') void poll().catch(() => undefined).then(() => sync.pull())
+  }, 10000)
   document.addEventListener('visibilitychange', onVisible)
 })
 onBeforeUnmount(() => {
@@ -137,8 +174,10 @@ onBeforeUnmount(() => {
 const userMenu = computed(() => [{ key: 'logout', label: t('layout.logout') }])
 async function onUserMenu(key: string) {
   if (key === 'logout') {
+    // What is edited here is saved first, while signed in.
+    await action(() => workspace.flush())
     await logout()
-    await router.push({ name: 'login' })
+    leave()
   }
 }
 </script>
@@ -163,6 +202,7 @@ async function onUserMenu(key: string) {
         </n-space>
         <n-space align="center" :size="12" :wrap="false">
           <runtime-badge />
+          <drafts-inbox />
           <change-bar />
           <locale-switch />
           <theme-switch />
@@ -176,6 +216,16 @@ async function onUserMenu(key: string) {
       </n-layout-header>
       <n-layout-content class="content" content-style="padding: 20px 24px;" :native-scrollbar="false">
         <div class="page">
+          <n-alert v-if="legacy" type="info" class="banner" :title="t('legacy.title')">
+            {{ t('legacy.body', { base: legacy.base, count: legacy.changes }) }}
+            <div class="alert-actions">
+              <n-button size="small" type="primary" :disabled="ws.dirty" @click="claimLegacy">
+                {{ t('legacy.claim') }}
+              </n-button>
+              <n-button size="small" @click="dropLegacy">{{ t('legacy.drop') }}</n-button>
+              <n-text v-if="ws.dirty" depth="3">{{ t('legacy.dirty') }}</n-text>
+            </div>
+          </n-alert>
           <n-alert v-if="outdated" type="warning" class="banner"
             :title="t('stale.title', { id: status.publishedId, author: status.published?.author ?? '' })">
             {{ ws.dirty
@@ -185,7 +235,7 @@ async function onUserMenu(key: string) {
               <n-button v-if="ws.dirty" size="small" type="warning" @click="rebase">
                 {{ t('stale.rebase', { id: status.publishedId }) }}
               </n-button>
-              <n-button v-else size="small" type="warning" @click="ws.load(status.publishedId!)">
+              <n-button v-else size="small" type="warning" @click="action(() => workspace.reset(status.publishedId!))">
                 {{ t('stale.load', { id: status.publishedId }) }}
               </n-button>
               <n-button size="small" @click="router.push({ name: 'revisions' })">{{ t('stale.history') }}</n-button>
@@ -193,7 +243,7 @@ async function onUserMenu(key: string) {
           </n-alert>
           <n-alert v-if="ws.openConflicts.length && route.name !== 'review'" type="error" class="banner"
             :title="t('conflicts.bannerTitle', { count: ws.openConflicts.length })">
-            {{ t('conflicts.bannerBody') }}
+            {{ t('conflicts.bannerBody', { sources: conflictSources(ws.openConflicts) }) }}
             <div class="alert-actions">
               <n-button size="small" type="error" @click="router.push({ name: 'review' })">{{ t('conflicts.resolve') }}</n-button>
             </div>

@@ -20,8 +20,8 @@ import (
 const maxTokenDays = 3650
 
 func toMcpToken(t configstore.AdminToken) McpToken {
-	out := McpToken{ID: t.ID, Name: t.Name, CreatedAt: t.CreatedAt, ReadOnly: t.Scope.ReadOnly,
-		Datasources: t.Scope.Datasources}
+	out := McpToken{ID: t.ID, Name: t.Name, CreatedAt: t.CreatedAt, Datasources: t.Scope.Datasources,
+		Retired: t.Scope.ReadOnly}
 	if !t.ExpiresAt.IsZero() {
 		out.ExpiresAt = &t.ExpiresAt
 	}
@@ -113,7 +113,7 @@ func (r *Service) RevokeMcpToken(ctx context.Context, id string) (bool, error) {
 
 // tokenScope checks the datasources a token is limited to are configured.
 func (r *Service) tokenScope(ctx context.Context, in McpTokenInput) (configstore.TokenScope, error) {
-	scope := configstore.TokenScope{ReadOnly: derefBool(in.ReadOnly)}
+	var scope configstore.TokenScope
 	if in.Datasources == nil {
 		return scope, nil
 	}

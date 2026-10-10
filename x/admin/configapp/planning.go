@@ -154,7 +154,7 @@ func (r *Service) evaluate(ctx context.Context, pc planContext, p configplan.Pla
 		return nil, err
 	}
 	out := &Preview{PlanID: planID(pc, p, review), Plan: p, Review: review, Proposal: proposal, Base: pc.base,
-		Report: toPlanReport(proposal.Report), baseID: pc.baseID}
+		Report: toPlanReport(proposal.Report)}
 	cfg, payload, err := configedit.Apply(pc.payload, proposal.Edit())
 	if err != nil {
 		msg := err.Error()
@@ -166,8 +166,8 @@ func (r *Service) evaluate(ctx context.Context, pc planContext, p configplan.Pla
 		return nil, err
 	}
 	hash := revision.Hash(payload)
-	out.payload = payload
 	out.Validation = &Validation{Ok: true, ContentHash: &hash, RestartRequired: changes,
 		Warnings: orEmpty(bootstrap.CapabilityWarnings(cfg, r.capabilities()))}
-	return out, nil
+	out.changed, out.effect, err = r.changes(pc, cfg, payload)
+	return out, err
 }

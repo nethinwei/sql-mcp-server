@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/revision"
+	"github.com/nethinwei/sql-mcp-server/core/workspace"
+	"github.com/nethinwei/sql-mcp-server/x/configstore"
 )
 
 func TestEventsStreamThePublishedRevision(t *testing.T) {
@@ -55,7 +58,102 @@ func TestEventsStreamThePublishedRevision(t *testing.T) {
 	}
 }
 
-// nextEventData is the data of the next event on the stream, within 3s.
+// Revisions saved or discarded after a console connected, by another
+// console, are signaled with the store's sequence; the console then reads
+// the drafts, so none between two signals is missed.
+func TestEventsSignalNewRevisions(t *testing.T) {
+	f := newFixture(t)
+	f.h.published = newPublishedFeed(f.h.cfg.Store, 10*time.Millisecond)
+	ctx := context.Background()
+	draft := func() int64 {
+		current, _ := f.h.cfg.Store.Published(ctx)
+		d, err := f.h.cfg.Store.Create(ctx, revision.Draft{ParentID: current.ID, Payload: []byte("x: 1\n"), Author: "root"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d.ID
+	}
+	publishNext(t, f.h.cfg.Store)
+	old := draft()
+	srv := httptest.NewServer(f.h)
+	defer srv.Close()
+	_, cookie, _ := f.login(t, "correct horse battery")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/admin/events", nil)
+	req.AddCookie(cookie)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil || res.StatusCode != http.StatusOK {
+		t.Fatalf("stream = %v %v", res, err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	lines := bufio.NewScanner(res.Body)
+	if got := nextEventData(t, lines); !strings.Contains(got, `"id":"1"`) {
+		t.Fatalf("first event = %s, want the published revision", got)
+	}
+	for _, change := range []func(){
+		func() { draft(); draft() },
+		func() { _, _ = f.h.cfg.Store.Discard(ctx, old) }, // an older draft: the newest ID stays
+	} {
+		change()
+		seq, _ := f.h.cfg.Store.Sequence(ctx)
+		want := `{"sequence":` + strconv.FormatInt(seq, 10) + `}`
+		for deadline := time.Now().Add(3 * time.Second); ; {
+			got := nextEventData(t, lines)
+			if got == want {
+				break
+			}
+			if time.Now().After(deadline) || !strings.HasPrefix(got, `{"sequence":`) {
+				t.Fatalf("event = %s, want %s eventually", got, want)
+			}
+		}
+	}
+}
+
+// A change of the signed-in administrator's workspace made elsewhere (an
+// agent applying a plan, another console) is signaled with its version; the
+// workspace as it was on connecting is not.
+func TestEventsSignalWorkspaceChanges(t *testing.T) {
+	f := newFixture(t)
+	spec := configstore.Spec{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "store.db")}
+	if err := configstore.Init(context.Background(), spec, nil); err != nil {
+		t.Fatal(err)
+	}
+	store, err := configstore.Open(context.Background(), spec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	f.h = New(Config{Store: f.h.cfg.Store, Accounts: f.accounts, Plans: store, Now: f.h.cfg.Now})
+	ctx := context.Background()
+	publishNext(t, f.h.cfg.Store)
+	w, err := store.PutWorkspace(ctx, workspace.Workspace{Username: "root", Base: 1}, 0, workspace.LogEntry{Op: "edit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(f.h)
+	defer srv.Close()
+	_, cookie, _ := f.login(t, "correct horse battery")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/admin/events", nil)
+	req.AddCookie(cookie)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil || res.StatusCode != http.StatusOK {
+		t.Fatalf("stream = %v %v", res, err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	lines := bufio.NewScanner(res.Body)
+	if got := nextEventData(t, lines); !strings.Contains(got, `"id":"1"`) {
+		t.Fatalf("first event = %s, want the published revision", got)
+	}
+	w.UpdatedBy = "agent:laptop"
+	if _, err := store.PutWorkspace(ctx, w, w.Version, workspace.LogEntry{Op: "apply"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := nextEventData(t, lines); got != `{"version":2}` {
+		t.Fatalf("event = %s, want the workspace's new version", got)
+	}
+}
+
+// nextEventData is the data of the next event on the stream, within 10s
+// (the stream checks every second; a loaded race run is slow).
 func nextEventData(t *testing.T, lines *bufio.Scanner) string {
 	t.Helper()
 	done := make(chan string, 1)
@@ -71,8 +169,8 @@ func nextEventData(t *testing.T, lines *bufio.Scanner) string {
 	select {
 	case data := <-done:
 		return data
-	case <-time.After(3 * time.Second):
-		t.Fatal("no event within 3s")
+	case <-time.After(10 * time.Second):
+		t.Fatal("no event within 10s")
 		return ""
 	}
 }
@@ -96,7 +194,7 @@ func TestEventsUnderManySubscribersAndChurn(t *testing.T) {
 			for {
 				select {
 				case ev := <-events:
-					if ev.ID == final {
+					if ev.Published.ID == final {
 						return
 					}
 				case <-deadline:
@@ -142,7 +240,7 @@ func TestEventsSlowListenerGetsTheLatest(t *testing.T) {
 	for {
 		select {
 		case ev := <-events:
-			if ev.ID == want {
+			if ev.Published.ID == want {
 				return
 			}
 		case <-deadline:

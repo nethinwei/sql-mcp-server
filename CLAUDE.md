@@ -63,6 +63,11 @@ MCP SDK、YAML、gqlgen 都在 `x/` 或 `cmd/`。新增数据库只改 `x/provid
   - revision 操作：`x/revisionops`（规范化、草稿、发布只允许快进（草稿须基于当前已发布）
     及 `ExpectedPublished` 乐观并发、
     回滚、diff 统一重编码、审计）；
+  - 工作区（版本管理，`docs/design/versioning.md`）：`core/workspace`（纯逻辑：项、
+    三方合并 `Merge`、冲突、Store 接口 + `workspacetest` 一致性套件）→
+    `x/workspaceops`（Read/WriteItems/Update/Reset/MergeDraft/Resolve/Checkpoint/
+    Commit/Log；配置经 `Codec`/`History` 注入，depguard `versioning-generic` 禁止它导入
+    配置类型）；`x/admin/configapp/codec.go` 是配置 ⇄ 项与合并规则 `Schema`；
   - 草稿合并：`x/configedit.Apply`（类型化分区写入 base，整体校验，tokenHash 保留规则）。
 - **管理 API**：`x/admin`（会话 Cookie + CSRF、登录并发闸门、改密吊销会话）+
   `x/admin/graph`（gqlgen，schema-first，`schema.graphqls`；读模型如实返回配置值，
@@ -70,14 +75,18 @@ MCP SDK、YAML、gqlgen 都在 `x/` 或 `cmd/`。新增数据库只改 `x/provid
 - **批量配置**（`docs/design/planning.md`）：`x/catalog`（扫描目录 DTO、Store 与
   扫描批次，配置库 schema 3/4 持久化）→ `x/configplan`（纯计算：Plan → Proposal +
   Report、目录索引，候选实体命名也在这里）→ `x/admin/configapp`（配置服务：目录、
-  扫描批次、方案预览快照与草稿、模板、待处理、令牌、差异与模拟；鉴权与业务规则只在
+  扫描批次、方案预览快照、管理员工作区（委托 `x/workspaceops`；方案写入绑定实际影响）、
+  模板、待处理、令牌、差异与模拟；鉴权与业务规则只在
   这里）→ 适配器 `x/admin/graph`（GraphQL；服务类型经 `app_types.go` 别名由 gqlgen
-  绑定）与 `x/admin/configmcp`（`/admin/mcp`，管理员令牌可收窄为只读或部分数据源，
+  绑定）与 `x/admin/configmcp`（`/admin/mcp`，管理员令牌可限定部分数据源，
   无发布工具）。
 - **控制台**：`web/admin`（Vue 3 + Naive UI + urql + vue-i18n zh-CN/en），通过
-  `x/admin/ui` go:embed。工作区状态在 `src/stores/workspace.ts`（变更检测、按属性
-  三方合并 rebase（`src/lib/merge.ts`，冲突须逐项解决后才能发布）、实体/角色引用维护），
-  页面只调用其中的操作；`/admin/events`（SSE）推送新发布。
+  `x/admin/ui` go:embed。工作区状态在 `src/stores/workspace.ts`（服务端工作区的副本、
+  变更检测、实体/角色引用维护；不做合并与冲突计算），按项写回、读取与所有版本操作
+  （update/reset/合并草稿/解决冲突/检查点/提交，均调用服务端）在
+  `src/lib/workspaceSync.ts` 的 `workspace`；页面只调用其中的操作；`/admin/events`（SSE）推送新发布与工作区写入。服务端写出的项与控制台的
+  编码由 `x/admin/graph/testdata/workspace_sections.json` 锁定（`go test ./x/admin/graph
+  -run TestWorkspaceSections -update` 重新生成）。
 
 ## 配置规则的单一来源
 

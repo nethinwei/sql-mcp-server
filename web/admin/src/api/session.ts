@@ -1,6 +1,6 @@
 import { reactive } from 'vue'
 import { t } from '@/i18n'
-import { adminURL } from './base'
+import { adminBase, adminURL } from './base'
 
 // The signed-in administrator. The session itself is an HttpOnly cookie; the
 // CSRF token comes from /admin/login or /admin/session and is sent as a header.
@@ -81,6 +81,28 @@ export async function logout() {
   apply(null)
 }
 
-export function signedOut() {
+/**
+ * The console's page for path (a route path such as /roles/x), loaded
+ * anew. Only paths of the console: anything else is its home page.
+ */
+export function consolePage(path: string): string {
+  return adminBase + (path.startsWith('/') ? path.replace(/^\/+/, '') : '')
+}
+
+/**
+ * Ends this page's session: the browser loads the sign-in page anew (next:
+ * where to go after signing in). Nothing begun for the administrator signed
+ * in until now (a save waiting for another, a plan being applied) survives
+ * the page, so none of it can ever be sent for whoever signs in next.
+ */
+let leaving = false
+
+/** Whether the page is being left for the sign-in page (see leave). */
+export const isLeaving = () => leaving
+
+export function leave(next?: string) {
+  leaving = true
   apply(null)
+  const query = next && next !== '/' ? `?next=${encodeURIComponent(next)}` : ''
+  window.location.replace(consolePage('/login') + query)
 }

@@ -342,7 +342,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `fields.name` | 字符串 |  | 必填；非空 | 数据库列名。 |
 | `fields.alias` | 字符串 |  |  | 对 Agent 暴露的名称；省略时用列名。 |
 | `fields.description` | 字符串 |  |  | 给 Agent 看的字段说明；留空时使用数据库中的列注释（启动或重载时读取）。 |
-| `fields.mask` | 字符串 |  | 内置 `email`、`idcard`、`phone`、`secret` | 脱敏规则：内置规则或扩展程序注册的规则，未知规则会拒绝启动。脱敏字段只能出现在读取结果中，不能用于过滤、游标、分组、聚合或写谓词。 |
+| `fields.mask` | 字符串 |  | 可选 `email`、`idcard`、`phone`、`secret` | 脱敏规则，只能是内置规则之一，其他值校验失败。脱敏字段只能出现在读取结果中，不能用于过滤、游标、分组、聚合或写谓词。 |
 | `fields.exclude` | 布尔 |  |  | 隐藏该字段，Agent 不可见。 |
 | `fields` | 对象列表 |  |  | 暴露的字段。 |
 | `roles.read` | 字符串列表 |  |  | 可读取的角色。 |

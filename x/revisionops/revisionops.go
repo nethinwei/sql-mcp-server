@@ -38,10 +38,15 @@ func (e *ConflictError) Error() string {
 
 func (e *ConflictError) Unwrap() error { return revision.ErrConflict }
 
-// Normalize applies the store rules to a loaded configuration and returns
-// its payload in the deterministic encoding.
+// Normalize applies the store rules and the offline assembly checks
+// (bootstrap.CheckOffline) to a loaded configuration and returns its payload
+// in the deterministic encoding: a configuration the runtime would refuse to
+// load is never stored.
 func Normalize(cfg *config.Config) ([]byte, error) {
 	if err := bootstrap.ValidateStorePayload(cfg); err != nil {
+		return nil, err
+	}
+	if err := bootstrap.CheckOffline(cfg); err != nil {
 		return nil, err
 	}
 	return configyaml.Encode(cfg)
@@ -150,8 +155,9 @@ func (s Service) Publish(ctx context.Context, req PublishRequest) (revision.Revi
 	return rev, nil
 }
 
-// basedOn is the revision a draft builds on: the nearest ancestor that is
-// not a draft (a draft may build on another draft); 0 when none is.
+// basedOn is the revision a draft builds on: the nearest ancestor that was
+// published (a draft may build on another draft, discarded or not); 0 when
+// none was.
 func (s Service) basedOn(ctx context.Context, rev revision.Revision) (int64, error) {
 	seen := map[int64]bool{}
 	for id := rev.ParentID; id != 0 && !seen[id]; {
@@ -160,7 +166,7 @@ func (s Service) basedOn(ctx context.Context, rev revision.Revision) (int64, err
 		if err != nil {
 			return 0, err
 		}
-		if parent.State != revision.StateDraft {
+		if !parent.State.Unpublished() {
 			return parent.ID, nil
 		}
 		id = parent.ParentID
@@ -212,6 +218,16 @@ func (s Service) Rollback(ctx context.Context, req RollbackRequest) (RollbackRes
 	}
 	s.audit("rollback", rev, req.Author)
 	return RollbackResult{Published: rev, From: current.ID, Target: target.ID}, nil
+}
+
+// Discard discards a draft, recording who did.
+func (s Service) Discard(ctx context.Context, id int64, author string) (revision.Revision, error) {
+	rev, err := s.Store.Discard(ctx, id)
+	if err != nil {
+		return revision.Revision{}, err
+	}
+	s.audit("discard", rev, author)
+	return rev, nil
 }
 
 // Diff returns a unified diff of two payloads in the current encoding, so

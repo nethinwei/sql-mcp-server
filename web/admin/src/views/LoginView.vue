@@ -1,18 +1,15 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { NAlert, NButton, NCard, NForm, NFormItem, NInput, NSpace } from 'naive-ui'
-import { login } from '@/api/session'
-import { useWorkspace } from '@/stores/workspace'
+import { consolePage, login } from '@/api/session'
 import ThemeSwitch from '@/components/ThemeSwitch.vue'
 import LocaleSwitch from '@/components/LocaleSwitch.vue'
 import logo from '@/assets/logo.svg'
 
 const { t } = useI18n()
 const route = useRoute()
-const router = useRouter()
-const ws = useWorkspace()
 const username = ref('')
 const password = ref('')
 const error = ref('')
@@ -31,8 +28,8 @@ async function submit() {
       error.value = err || t('login.failed')
       return
     }
-    if (!ws.baseId) await ws.loadPublished().catch(() => false)
-    await router.replace(next)
+    // Loaded anew, as the sign-in page was (see leave).
+    window.location.replace(consolePage(next))
   } finally {
     busy.value = false
   }

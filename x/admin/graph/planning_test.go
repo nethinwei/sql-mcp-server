@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -11,7 +12,6 @@ import (
 	"github.com/99designs/gqlgen/client"
 
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
-	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
 )
 
@@ -30,6 +30,7 @@ func planningHarness(t *testing.T) (*harness, *client.Client) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	h.resolver.App.Plans = store
+	h.resolver.App.WorkspaceEdit, h.resolver.App.WorkspaceSections = WorkspaceEdit, WorkspaceSections
 	c := h.client(auth.PermAll)
 	var listed map[string]any
 	mustPost(t, c, `{ schemaList(datasource: "shop") { defaultSchema } }`, &listed)
@@ -111,8 +112,8 @@ func TestCatalogAcrossStatuses(t *testing.T) {
 const importPlan = `{"scope": {"status": ["new"]}, "import": true,
 	"grants": [{"principal": "role:analyst", "actions": ["read"]}]}`
 
-func TestPreviewPlanAndDraft(t *testing.T) {
-	h, c := planningHarness(t)
+func TestPreviewPlanAndWorkspace(t *testing.T) {
+	_, c := planningHarness(t)
 	var preview struct {
 		PreviewPlan struct {
 			Added    []string
@@ -140,60 +141,140 @@ func TestPreviewPlanAndDraft(t *testing.T) {
 		p.Roles[0].Grants[1].Entity != "shop.public.orders" || !p.Validation.Ok || p.Report.Matched != 1 {
 		t.Fatalf("preview = %+v", p)
 	}
-	checkPlanDrafts(t, h, c)
+	checkWorkspace(t, c)
 	if err := c.Post(`{ previewPlan(input: {plan: {scope: {}}}) { added } }`, &preview); err == nil {
 		t.Fatal("a plan with nothing to do must fail")
 	}
 }
 
-const draftMutation = `mutation($in: PlanDraftInput!) { createPlanDraft(input: $in) { id state parent } }`
+const (
+	readWorkspace = `{ workspace { base version sections conflicts { id path source mine theirs } } }`
+	editMutation  = `mutation($in: WorkspaceEditInput!) { editWorkspace(input: $in) {
+		version conflicts { id path source mine theirs } } }`
+)
 
-type draftResponse struct {
-	CreatePlanDraft struct{ ID, State, Parent string }
+type workspaceState struct {
+	Base      string
+	Version   int
+	Sections  map[string]any
+	Conflicts []struct{ ID, Path, Source, Mine, Theirs string }
 }
 
-// checkPlanDrafts saves a previewed plan, refuses one whose preview is
-// stale or empty, and continues a draft with another plan.
-func checkPlanDrafts(t *testing.T, h *harness, c *client.Client) {
+func (w workspaceState) role(name string) map[string]any {
+	for _, r := range w.Sections["roles"].([]any) {
+		if m := r.(map[string]any); m["name"] == name {
+			return m
+		}
+	}
+	return nil
+}
+
+func roleWrite(value, previous map[string]any) map[string]any {
+	in := map[string]any{"kind": "role", "key": "support", "value": value}
+	if previous != nil {
+		in["previous"] = previous
+	}
+	return map[string]any{"items": []any{in}}
+}
+
+// checkWorkspace reads the signed-in administrator's workspace (the base's
+// before anything is written) and writes items of it; two writes of one
+// value made from the same read conflict, the later one kept, until the
+// conflict is resolved; the workspace is then committed.
+func checkWorkspace(t *testing.T, c *client.Client) {
 	t.Helper()
+	var read struct{ Workspace workspaceState }
+	mustPost(t, c, readWorkspace, &read)
+	if read.Workspace.Version != 0 || read.Workspace.Base != "1" || read.Workspace.Sections["entities"] == nil {
+		t.Fatalf("a workspace before any was written = %+v", read)
+	}
+	var edited struct{ EditWorkspace workspaceState }
+	support := map[string]any{"name": "support"}
+	mustPost(t, c, editMutation, &edited, client.Var("in", roleWrite(support, nil)))
+	a := map[string]any{"name": "support", "description": "a"}
+	b := map[string]any{"name": "support", "description": "b"}
+	mustPost(t, c, editMutation, &edited, client.Var("in", roleWrite(a, support)))
+	mustPost(t, c, editMutation, &edited, client.Var("in", roleWrite(b, support)))
+	if len(edited.EditWorkspace.Conflicts) != 1 || edited.EditWorkspace.Conflicts[0].Source != "workspace" ||
+		edited.EditWorkspace.Conflicts[0].Path != "description" || edited.EditWorkspace.Conflicts[0].Mine != "b" {
+		t.Fatalf("conflicts = %+v", edited.EditWorkspace.Conflicts)
+	}
+	commit := `mutation($v: Int!) { commitWorkspace(input: {version: $v, expectedPublished: "1"}) { id state } }`
+	var committed struct{ CommitWorkspace struct{ ID, State string } }
+	err := c.Post(commit, &committed, client.Var("v", edited.EditWorkspace.Version))
+	if err == nil || !strings.Contains(err.Error(), `"code":"CONFLICTS"`) {
+		t.Fatalf("committed with a conflict: %v", err)
+	}
+	var resolved struct{ ResolveConflict workspaceState }
+	mustPost(t, c, `mutation($id: String!) { resolveConflict(id: $id, theirs: true) { version conflicts { id } } }`,
+		&resolved, client.Var("id", edited.EditWorkspace.Conflicts[0].ID))
+	mustPost(t, c, commit, &committed, client.Var("v", resolved.ResolveConflict.Version))
+	mustPost(t, c, readWorkspace, &read)
+	if committed.CommitWorkspace.State != "PUBLISHED" || read.Workspace.Base != committed.CommitWorkspace.ID ||
+		read.Workspace.role("support")["description"] != "a" {
+		t.Fatalf("committed = %+v, workspace = %+v", committed, read.Workspace)
+	}
+	var log struct{ WorkspaceLog []struct{ Op string } }
+	mustPost(t, c, `{ workspaceLog { op } }`, &log)
+	if len(log.WorkspaceLog) != 5 || log.WorkspaceLog[0].Op != "commit" {
+		t.Fatalf("log = %+v", log)
+	}
+}
+
+// The console's "add to the workspace" writes a previewed plan into the
+// workspace on the server, as an agent's plan_apply does.
+func TestApplyPlanFromTheConsole(t *testing.T) {
+	_, c := planningHarness(t)
 	var preview struct{ PreviewPlan struct{ PlanID string } }
-	mustPost(
-		t,
-		c,
-		`query($p: JSON!) { previewPlan(input: {plan: $p}) { planId } }`,
-		&preview,
-		client.Var("p", mustJSON(importPlan)),
-	)
-	var saved draftResponse
-	err := c.Post(
-		draftMutation,
-		&saved,
-		client.Var("in", map[string]any{"plan": mustJSON(importPlan), "planId": "stale"}),
-	)
-	if err == nil || !strings.Contains(err.Error(), "preview it again") {
-		t.Fatalf("a stale preview: %v", err)
+	mustPost(t, c, `query($p: JSON!) { previewPlan(input: {plan: $p}) { planId } }`, &preview,
+		client.Var("p", mustJSON(importPlan)))
+	var applied struct {
+		ApplyPlan struct{ Items []struct{ Kind, Key string } }
 	}
-	mustPost(t, c, draftMutation, &saved, client.Var("in", map[string]any{
-		"plan": mustJSON(importPlan), "planId": preview.PreviewPlan.PlanID, "comment": "import orders"}))
-	id, err := configapp.ParseID(saved.CreatePlanDraft.ID)
-	if err != nil || saved.CreatePlanDraft.State != "DRAFT" ||
-		!strings.Contains(h.payload(t, id), "shop.public.orders") {
-		t.Fatalf("draft = %+v", saved)
+	mustPost(t, c, `mutation($p: JSON!, $id: String!) { applyPlan(input: {plan: $p, planId: $id}) {
+		items { kind key } } }`, &applied, client.Var("p", mustJSON(importPlan)),
+		client.Var("id", preview.PreviewPlan.PlanID))
+	var read struct{ Workspace workspaceState }
+	mustPost(t, c, readWorkspace, &read)
+	entities, _ := json.Marshal(read.Workspace.Sections["entities"])
+	if len(applied.ApplyPlan.Items) == 0 || read.Workspace.Version != 1 ||
+		!strings.Contains(string(entities), `"name":"orders"`) {
+		t.Fatalf("applied = %+v, workspace = %+v", applied, read)
 	}
-	var second draftResponse
-	mustPost(t, c, draftMutation, &second, client.Var("in", map[string]any{"base": saved.CreatePlanDraft.ID,
-		"plan": mustJSON(
-			`{"scope": {"tables": ["orders"]}, "grants": [{"principal": "role:support", "actions": ["read"]}]}`,
-		)}))
-	next, _ := configapp.ParseID(second.CreatePlanDraft.ID)
-	if second.CreatePlanDraft.Parent != saved.CreatePlanDraft.ID || !strings.Contains(h.payload(t, next), "support") ||
-		!strings.Contains(h.payload(t, next), "shop.public.orders") {
-		t.Fatalf("continued draft = %+v", second)
+	err := c.Post(`mutation($p: JSON!) { applyPlan(input: {plan: $p, planId: "stale"}) { items { key } } }`,
+		&applied, client.Var("p", mustJSON(importPlan)))
+	if err == nil || !strings.Contains(err.Error(), `"code":"CONFLICT"`) {
+		t.Fatalf("a plan not previewed: %v", err)
 	}
-	err = c.Post(draftMutation, &saved, client.Var("in", map[string]any{
-		"plan": mustJSON(`{"scope": {"tables": ["none"]}, "import": true}`)}))
-	if err == nil || !strings.Contains(err.Error(), "changes nothing") {
-		t.Fatalf("an empty plan: %v", err)
+}
+
+// Drafts are listed with what each builds on, up a chain of drafts (and
+// discarded drafts).
+func TestDraftsWithTheirBase(t *testing.T) {
+	_, c := planningHarness(t)
+	var first, second struct{ CreateDraft struct{ ID string } }
+	mustPost(t, c, `mutation { createDraft(draft: {base: "1"}, comment: "a") { id } }`, &first)
+	mustPost(t, c, `mutation($b: ID!) { createDraft(draft: {base: $b}, comment: "b") { id } }`, &second,
+		client.Var("b", first.CreateDraft.ID))
+	var drafts struct {
+		Drafts []struct {
+			Revision struct{ ID string }
+			BasedOn  string
+		}
+	}
+	mustPost(t, c, `{ drafts { revision { id } basedOn } }`, &drafts)
+	if len(drafts.Drafts) != 2 || drafts.Drafts[0].Revision.ID != second.CreateDraft.ID ||
+		drafts.Drafts[0].BasedOn != "1" || drafts.Drafts[1].BasedOn != "1" {
+		t.Fatalf("drafts = %+v", drafts)
+	}
+	// A discarded draft was never published: one building on it still builds
+	// on what it built on.
+	var discarded map[string]any
+	mustPost(t, c, `mutation($id: ID!) { discardDraft(id: $id) { id } }`, &discarded,
+		client.Var("id", first.CreateDraft.ID))
+	mustPost(t, c, `{ drafts { revision { id } basedOn } }`, &drafts)
+	if len(drafts.Drafts) != 1 || drafts.Drafts[0].BasedOn != "1" {
+		t.Fatalf("drafts after discarding the first = %+v", drafts)
 	}
 }
 
@@ -440,7 +521,7 @@ func TestPlanningPermissions(t *testing.T) {
 		`{ catalog(input: {filter: {}}) { total } }`, `{ catalogRefs(filter: {}) }`, `{ pending { drift } }`,
 		`{ previewPlan(input: {plan: {scope: {}, import: true}}) { added } }`,
 		`{ catalogLinks(ref: "shop.public.orders") { incoming { ref } } }`,
-		`mutation { createPlanDraft(input: {plan: {scope: {}, import: true}}) { id } }`,
+		`mutation { saveWorkspace(input: {base: "1", sections: {}}) { version } }`,
 		`mutation { savePlanTemplate(input: {name: "x", plan: {scope: {}, import: true}, recurring: false}) { name } }`,
 		`mutation { startScanBatch(input: {datasource: "shop", schemas: ["public"]}) { id } }`,
 		`mutation { setPendingState(input: {key: "k", status: "open"}) { status } }`,

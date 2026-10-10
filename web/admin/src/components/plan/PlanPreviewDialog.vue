@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { NAlert, NButton, NCheckbox, NModal, NSpace, NSpin, NTag, NText } from 'naive-ui'
-import { run } from '@/api/client'
-import { PreviewPlanQuery } from '@/api/ops'
+import { NAlert, NButton, NCheckbox, NModal, NSpace, NSpin, NTag, NText, useMessage } from 'naive-ui'
+import { ApiError, run } from '@/api/client'
+import { ApplyPlanMutation, PreviewPlanQuery } from '@/api/ops'
+import { workspace } from '@/lib/workspaceSync'
 import type { PlanReportPartsFragment } from '@/gql/graphql'
 import { useWorkspace, type Proposal } from '@/stores/workspace'
 import type { Plan } from '@/lib/plan'
@@ -25,6 +26,7 @@ const show = defineModel<boolean>('show', { required: true })
 const emit = defineEmits<{ applied: [result: { added: string[]; changed: number; plan: Plan }] }>()
 const { t } = useI18n()
 const ws = useWorkspace()
+const message = useMessage()
 
 const current = ref<Plan | null>(null)
 const previewer = createPreviewer<Proposal>(
@@ -85,15 +87,32 @@ const blocked = computed(() => {
   return null
 })
 
-function apply() {
+// The plan is written into the workspace on the server, as an agent's
+// plan_apply writes it, what was edited here written first.
+const applying = ref(false)
+async function apply() {
   if (blocked.value) {
     if (!fresh.value && !state.loading) evaluate()
     return
   }
   const p = preview.value!
-  ws.applyProposal(p)
-  emit('applied', { added: [...p.added], changed: changed.value, plan: current.value! })
-  show.value = false
+  const plan = current.value!
+  applying.value = true
+  try {
+    await workspace.flush()
+    const confirmed = p.report.exceptions.filter((x) => x.level === 'confirm').map((x) => x.id)
+    await run(ApplyPlanMutation, { input: { plan, planId: p.planId, review: !!props.review, confirmed } }, true)
+    await workspace.refresh()
+    emit('applied', { added: [...p.added], changed: changed.value, plan })
+    show.value = false
+  } catch (e) {
+    if (e instanceof ApiError && e.code === 'CONFLICT') {
+      message.warning(t('plan.previewAgain'))
+      evaluate()
+    } else message.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    applying.value = false
+  }
 }
 
 const drilling = ref(false)
@@ -140,7 +159,8 @@ function drill(c: PlanReportPartsFragment['changes'][number]) {
         <span v-else />
         <n-space>
           <n-button @click="show = false">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :disabled="Boolean(blocked) && (fresh || state.loading)" @click="apply">
+          <n-button type="primary" :disabled="Boolean(blocked) && (fresh || state.loading)" :loading="applying"
+            @click="apply">
             {{ !fresh && preview && !state.loading ? t('plan.reevaluate')
               : preview ? t('plan.apply', { added: preview.added.length, changed }) : t('plan.applyPlain') }}
           </n-button>

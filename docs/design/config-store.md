@@ -123,7 +123,10 @@ smcp_revisions (
 `smcp_pending_states` 与 `smcp_pending_log`（待处理事项的状态与记录）（schema
 版本 3）；令牌的范围列 `scope`、批次的 `request_key` 与每个库一行的
 `smcp_scan_batch_items`（schema 版本 4；迁移在同一事务内把版本 3 批次 payload 中
-的各库进度转成行，此后 payload 只写空数组）。见 `docs/design/planning.md`。
+的各库进度转成行，此后 payload 只写空数组）；管理员工作区 `smcp_workspaces`（基准版本、各项、冲突与说明等、版本号）与写入记录 `smcp_workspace_log`
+与 `smcp_store_meta.revision_seq`（schema 版本 5；revision 变更序号 =
+`next_id` + `revision_seq`，只有发布、回滚、丢弃与导入增长后者，其他写入只增长
+`publish_lock`）。见 `docs/design/planning.md` 与 `docs/design/versioning.md`。
 
 - **store 自身 schema 版本化**：`smcp_store_meta.schema_version` 记录表结构
   版本；打开 store 时版本未知或更新于程序 → fail closed；旧版本按内置迁移
@@ -176,8 +179,11 @@ sql-mcp-server serve --store 'postgres:${file:/run/secrets/store_dsn}'
 
 ### 发布前校验
 
-`store publish` 会对目标 revision 与当前 published revision 运行同一套热重载
-守卫：
+`store publish` 先确认目标 revision 能被运行时加载：通过 store 规则与配置校验，
+并执行运行时组装中不依赖数据库的检查（`bootstrap.CheckOffline`：实体、授权、
+脱敏器；写入配置库前的规范化 `revisionops.Normalize` 也执行），否则拒绝，避免
+发布后热加载失败、重启无法启动。表、列等依赖数据库的检查只在组装时进行。
+然后对目标 revision 与当前 published revision 运行同一套热重载守卫：
 
 - 只包含可热应用的变化 → 直接发布；
 - 包含需要重启的变化（如监听地址、TLS）→ 拒绝，除非加 `--restart-required`；

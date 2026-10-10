@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { run } from '@/api/client'
 import { StatusQuery } from '@/api/ops'
+import { workspace } from '@/lib/workspaceSync'
 import { useWorkspace } from '@/stores/workspace'
 import type { StatusQuery as StatusResult } from '@/gql/graphql'
 
@@ -11,6 +12,7 @@ export const useStatus = defineStore('status', {
     server: null as StatusResult['serverStatus'] | null,
     published: null as StatusResult['published'] | null,
     loaded: false,
+    settling: false,
   }),
   getters: {
     publishedId: (s) => s.published?.id ?? null,
@@ -28,6 +30,27 @@ export const useStatus = defineStore('status', {
     },
 
     /**
+     * Refreshes, once a second for up to 15 seconds, until the serving process
+     * applies the published revision (it reloads a moment after a publish) or
+     * reports why it does not; a status read right at the publish would show
+     * the revision it served before.
+     */
+    async settle() {
+      if (this.settling) return
+      this.settling = true
+      try {
+        for (let i = 0; i < 15; i++) {
+          const s = this.server
+          if (!s?.watching || !this.publishedId || s.appliedRevision === this.publishedId || s.pending) return
+          await new Promise((r) => setTimeout(r, 1000))
+          await this.refresh()
+        }
+      } finally {
+        this.settling = false
+      }
+    },
+
+    /**
      * Re-applies the unsaved changes onto the published revision; conflicts
      * are left in the workspace to resolve.
      */
@@ -36,7 +59,7 @@ export const useStatus = defineStore('status', {
       const id = this.publishedId
       if (!id) return 0
       const count = ws.changes.length
-      await ws.rebase(id)
+      await workspace.update(id)
       return count
     },
   },

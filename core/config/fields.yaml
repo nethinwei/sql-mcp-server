@@ -152,8 +152,8 @@ defs.entity.fields.description:
   zh-CN: 给 Agent 看的字段说明；留空时使用数据库中的列注释（启动或重载时读取）。
   en: Field description shown to agents; the column comment in the database (read at startup and reload) when empty.
 defs.entity.fields.mask:
-  zh-CN: 脱敏规则：内置规则或扩展程序注册的规则，未知规则会拒绝启动。脱敏字段只能出现在读取结果中，不能用于过滤、游标、分组、聚合或写谓词。
-  en: Masking rule, built in or registered by an extension; unknown rules fail startup. Masked fields only appear in read results, never in filters, cursors, grouping, aggregates or write predicates.
+  zh-CN: 脱敏规则，只能是内置规则之一，其他值校验失败。脱敏字段只能出现在读取结果中，不能用于过滤、游标、分组、聚合或写谓词。
+  en: Masking rule, one of the built-in rules; any other value fails validation. Masked fields only appear in read results, never in filters, cursors, grouping, aggregates or write predicates.
 defs.entity.fields.exclude:
   zh-CN: 隐藏该字段，Agent 不可见。
   en: Hide the field from agents.

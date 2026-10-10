@@ -18,7 +18,8 @@ const overrides: GlobalThemeOverrides = {
     <n-global-style />
     <n-loading-bar-provider>
       <n-dialog-provider>
-        <n-notification-provider>
+        <!-- Bottom right: notices stay clear of the header and its buttons. -->
+        <n-notification-provider placement="bottom-right">
           <n-message-provider>
             <router-view />
           </n-message-provider>

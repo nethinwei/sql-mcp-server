@@ -84,13 +84,13 @@ function addPresets() {
 
 const sync = computed({ get: () => plan.value.sync ?? {}, set: (v) => (plan.value.sync = v) })
 
-// What the scope selects, read again as it is edited.
+// What the scope selects in the workspace, read again as either changes.
 const stats = ref<ScopeStats['planScope'] | null>(null)
 const statsError = ref('')
 const statsLoading = ref(false)
 let seq = 0
 let timer: ReturnType<typeof setTimeout> | undefined
-watch(() => JSON.stringify(cleanPlan(plan.value).scope), (scope) => {
+watch([() => JSON.stringify(cleanPlan(plan.value).scope), () => ws.contextKey], ([scope]) => {
   clearTimeout(timer)
   timer = setTimeout(async () => {
     const mine = ++seq

@@ -6,11 +6,13 @@ import { NButton, NEmpty, NIcon, NList, NListItem, NPopover, NSpace, NTag, NText
 import { ArrowUndoOutline } from '@vicons/ionicons5'
 import { useWorkspace, type Change } from '@/stores/workspace'
 import { can } from '@/api/session'
+import { saveState, useWorkspaceAction, workspace } from '@/lib/workspaceSync'
 
 const { t } = useI18n()
 const ws = useWorkspace()
 const router = useRouter()
 const dialog = useDialog()
+const action = useWorkspaceAction()
 
 const typeTag: Record<Change['type'], 'success' | 'error' | 'warning'> = {
   added: 'success', removed: 'error', modified: 'warning',
@@ -24,9 +26,12 @@ const routeFor = (c: Change) =>
 const displayName = (c: Change) => (c.kind === 'settings' ? t('changes.settingsName') : c.name)
 
 const count = computed(() => ws.changes.length)
-// Where the edits are: only in this browser, saved as a draft revision, or
-// nothing pending (the runtime badge then tells what the server applies).
-const state = computed(() => ws.savedDraftId
+// Where the edits are: in the workspace kept on the server (or, while saving
+// it fails, only in this browser), saved as a draft revision, or nothing
+// pending (the runtime badge then tells what the server applies).
+const state = computed(() => saveState.value === 'failed'
+  ? { type: 'error' as const, label: t('changes.saveFailed') }
+  : ws.savedDraftId
   ? { type: 'info' as const, label: t('changes.draftSaved', { id: ws.savedDraftId }) }
   : count.value
     ? { type: 'warning' as const, label: t('changes.unsavedCount', { count: count.value }, count.value) }
@@ -38,7 +43,7 @@ function discard() {
     content: t('changes.discardBody', { count: count.value, id: ws.baseId }, count.value),
     positiveText: t('changes.discardConfirm'),
     negativeText: t('common.cancel'),
-    onPositiveClick: () => ws.discard(),
+    onPositiveClick: () => action(() => workspace.reset(ws.baseId!)),
   })
 }
 </script>
@@ -51,6 +56,7 @@ function discard() {
       </template>
       <n-empty v-if="!count" :description="t('changes.inSync')" size="small" />
       <template v-else>
+        <n-text v-if="saveState === 'failed'" type="error" class="where">{{ t('changes.saveFailedHelp') }}</n-text>
         <n-text depth="3" class="where">
           {{ ws.savedDraftId ? t('changes.whereDraft', { id: ws.savedDraftId }) : t('changes.whereLocal') }}
         </n-text>
