@@ -44,7 +44,15 @@ func testAdversarialTransactionScopeAndTerminalReuse(t *testing.T, terminal stri
 	}
 	for _, test := range adversarialTransactionScopeTests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := manager.DB(token, test.session, test.role, test.subject, test.datasource, nil)
+			_, err := manager.DB(
+				context.Background(),
+				token,
+				test.session,
+				test.role,
+				test.subject,
+				test.datasource,
+				nil,
+			)
 			if !errors.Is(err, test.want) {
 				t.Fatalf("error = %v, want %v", err, test.want)
 			}
@@ -64,7 +72,7 @@ func testAdversarialTransactionScopeAndTerminalReuse(t *testing.T, terminal stri
 func assertTerminalTransactionTokenRejected(
 	t *testing.T, manager *TransactionManager, token string, subject map[string]any,
 ) {
-	_, err := manager.DB(token, "session-a", "writer", subject, "primary", nil)
+	_, err := manager.DB(bg, token, "session-a", "writer", subject, "primary", nil)
 	if !errors.Is(err, ErrTransactionNotFound) {
 		t.Fatalf("terminal token reuse error = %v", err)
 	}
@@ -113,15 +121,23 @@ func runFuzzTransactionOperation(
 	var err error
 	switch operation % 8 {
 	case 0, 7:
-		_, err = manager.DB(token, "session-a", "writer", subject, "primary", nil)
+		_, err = manager.DB(bg, token, "session-a", "writer", subject, "primary", nil)
 	case 1:
-		_, err = manager.DB(token, "session-b", "writer", subject, "primary", nil)
+		_, err = manager.DB(bg, token, "session-b", "writer", subject, "primary", nil)
 	case 2:
-		_, err = manager.DB(token, "session-a", "reader", subject, "primary", nil)
+		_, err = manager.DB(bg, token, "session-a", "reader", subject, "primary", nil)
 	case 3:
-		_, err = manager.DB(token, "session-a", "writer", map[string]any{"tenant_id": "b"}, "primary", nil)
+		_, err = manager.DB(
+			context.Background(),
+			token,
+			"session-a",
+			"writer",
+			map[string]any{"tenant_id": "b"},
+			"primary",
+			nil,
+		)
 	case 4:
-		_, err = manager.DB(token, "session-a", "writer", subject, "replica", nil)
+		_, err = manager.DB(bg, token, "session-a", "writer", subject, "replica", nil)
 	case 5:
 		_, err = manager.Commit(context.Background(), token, "session-a", "writer", subject)
 	case 6:

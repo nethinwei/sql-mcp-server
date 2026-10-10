@@ -35,14 +35,14 @@ func (r *Resolver) withPayload(ctx context.Context, obj *Revision) (revision.Rev
 	return r.App.Store.Get(ctx, obj.rev.ID)
 }
 
-// selectConfig selects a configuration: an unsaved draft, a revision, or,
-// when both are nil, the published revision.
-func (r *Resolver) selectConfig(ctx context.Context, draft *DraftInput, id *string) (*config.Config, error) {
-	d, err := toDraft(draft)
-	if err != nil {
-		return nil, err
-	}
-	return r.App.SelectConfig(ctx, d, id)
+// workspace is the signed-in administrator's workspace, which the console's
+// catalog, plans and pending work are compared with.
+var workspace = configapp.Against{Workspace: true}
+
+// workspaceOr is what the console reads: revision when given, else the
+// signed-in administrator's workspace (with what they edited written first).
+func workspaceOr(revision *string) configapp.Against {
+	return configapp.Against{Workspace: revision == nil, Revision: revision}
 }
 
 // apiError maps service errors that the console resolves itself to a
@@ -79,10 +79,10 @@ func serverStatus(status func() RuntimeState) *ServerStatus {
 		id := strconv.FormatInt(st.Applied, 10)
 		out.AppliedRevision = &id
 	}
-	if st.Pending != nil {
-		out.Pending = &PendingRevision{
-			ID: strconv.FormatInt(st.Pending.RevisionID, 10), RestartRequired: st.Pending.RestartRequired,
-			Error: st.Pending.Err,
+	if st.Unapplied != nil {
+		out.Unapplied = &UnappliedRevision{
+			ID: strconv.FormatInt(st.Unapplied.RevisionID, 10), RestartRequired: st.Unapplied.RestartRequired,
+			Error: st.Unapplied.Err,
 		}
 	}
 	if st.Execution != nil {

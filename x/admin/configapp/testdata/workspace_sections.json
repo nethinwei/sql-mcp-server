@@ -1,0 +1,225 @@
+{
+  "entities": [
+    {
+      "affects": [],
+      "datasource": "shop",
+      "description": "Customer master",
+      "fields": [
+        {
+          "name": "id"
+        },
+        {
+          "alias": "area",
+          "description": "Sales region",
+          "name": "region"
+        },
+        {
+          "mask": "phone",
+          "name": "phone"
+        },
+        {
+          "exclude": true,
+          "name": "secret_col"
+        }
+      ],
+      "kind": "view",
+      "legacyAccess": {
+        "fieldACL": {
+          "legacy_reader": {
+            "read": [
+              "id",
+              "region"
+            ],
+            "write": [
+              "region"
+            ]
+          }
+        },
+        "roles": {
+          "aggregate": [
+            "legacy_reader"
+          ],
+          "create": [
+            "legacy_writer"
+          ],
+          "delete": [
+            "legacy_writer"
+          ],
+          "execute": [
+            "legacy_writer"
+          ],
+          "read": [
+            "legacy_reader"
+          ],
+          "update": [
+            "legacy_writer"
+          ]
+        },
+        "rowPolicies": {
+          "legacy_reader": {
+            "field": "region",
+            "op": "eq",
+            "value": "CN"
+          }
+        }
+      },
+      "mcp": {
+        "dmlTools": false
+      },
+      "name": "customers",
+      "params": [],
+      "primaryKey": [
+        "id"
+      ],
+      "relationships": [
+        {
+          "cardinality": "has-many",
+          "joinOn": {
+            "id": "customer_id"
+          },
+          "name": "orders",
+          "target": "orders"
+        }
+      ],
+      "schema": "crm",
+      "source": "customer_master",
+      "tenantPolicy": {
+        "field": "region",
+        "op": "eq",
+        "value": "${subject.tenant}"
+      },
+      "uniqueKeys": []
+    },
+    {
+      "affects": [],
+      "allowCascade": true,
+      "datasource": "shop",
+      "fields": [
+        {
+          "name": "id"
+        },
+        {
+          "name": "customer_id"
+        }
+      ],
+      "name": "orders",
+      "params": [],
+      "primaryKey": [],
+      "relationships": [],
+      "uniqueKeys": [
+        [
+          "customer_id"
+        ]
+      ]
+    },
+    {
+      "affects": [
+        "orders"
+      ],
+      "datasource": "shop",
+      "fields": [],
+      "kind": "procedure",
+      "mcp": {
+        "customTool": true,
+        "trustedProcedure": true
+      },
+      "name": "refresh",
+      "params": [
+        "tenant"
+      ],
+      "primaryKey": [],
+      "relationships": [],
+      "uniqueKeys": []
+    }
+  ],
+  "roles": [
+    {
+      "description": "Business analyst",
+      "grants": [
+        {
+          "actions": [
+            "READ",
+            "AGGREGATE"
+          ],
+          "entity": "orders",
+          "fieldsRestricted": true,
+          "readFields": [
+            "id"
+          ],
+          "rows": {
+            "or": [
+              {
+                "field": "customer_id",
+                "op": "gt",
+                "value": 10
+              },
+              {
+                "field": "id",
+                "op": "is_null"
+              }
+            ]
+          },
+          "writeFields": [
+            "customer_id"
+          ]
+        }
+      ],
+      "name": "analyst"
+    }
+  ],
+  "settings": {
+    "budget": {
+      "users": {
+        "alice": {
+          "maxConcurrent": 2
+        }
+      }
+    },
+    "cost": {
+      "allowTemplates": [
+        "shop:CALL refresh(?)"
+      ],
+      "maxRows": 500
+    },
+    "execution": {
+      "admin": {
+        "maxConcurrent": 3,
+        "maxQueue": 9
+      },
+      "background": {
+        "maxConcurrent": 1,
+        "maxQueue": 32
+      },
+      "scan": {
+        "maxConcurrent": 1,
+        "maxQueue": 4
+      }
+    }
+  },
+  "users": [
+    {
+      "description": "BI agent",
+      "disabled": true,
+      "grants": [
+        {
+          "actions": [
+            "EXECUTE"
+          ],
+          "entity": "refresh",
+          "fieldsRestricted": false,
+          "readFields": [],
+          "writeFields": []
+        }
+      ],
+      "name": "alice",
+      "roles": [
+        "analyst"
+      ],
+      "subject": {
+        "level": 3,
+        "tenant": "t1"
+      },
+      "tokenHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    }
+  ]
+}

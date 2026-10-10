@@ -40,8 +40,12 @@ func newAppSnapshot(app *App) *appSnapshot {
 // never wait for a reload, and drains and closes the old one in the
 // background; a failed build leaves the current App untouched.
 type Runtime struct {
-	current   atomic.Pointer[appSnapshot]
+	current atomic.Pointer[appSnapshot]
+	// reload serializes reloads, builds included; publish guards what follows
+	// a build (carrying state over from the current App and publishing), which
+	// CloseContext waits for, as it never waits for a build.
 	reload    sync.Mutex
+	publish   sync.Mutex
 	retiring  sync.WaitGroup
 	draining  atomic.Int32 // replaced snapshots not closed yet
 	build     func(string) (*App, error)
@@ -52,6 +56,9 @@ type Runtime struct {
 	}
 	stale   atomic.Pointer[StaleState]
 	applied atomic.Int64
+	// held are the users a published revision not applied yet changes (see
+	// holdChanged); a reload that publishes releases them.
+	held atomic.Pointer[map[string]bool]
 }
 
 // OnRevokedPrincipals registers fn to receive the principal keys of users that
@@ -80,19 +87,25 @@ func (r *Runtime) OnPublish(fn func(*App)) {
 	}
 }
 
-// UserByTokenHash resolves a tokenHash against the current snapshot.
+// UserByTokenHash resolves a tokenHash against the current snapshot; a held
+// user is not found.
 func (r *Runtime) UserByTokenHash(hash string) (UserIdentity, bool) {
 	app := r.Current()
 	if app == nil {
 		return UserIdentity{}, false
 	}
-	return app.UserByTokenHash(hash)
+	name, ok := app.UserTokens[hash]
+	if !ok {
+		return UserIdentity{}, false
+	}
+	return r.UserByName(name)
 }
 
-// UserByName resolves an enabled user against the current snapshot.
+// UserByName resolves an enabled user against the current snapshot; a held
+// user is not found.
 func (r *Runtime) UserByName(name string) (UserIdentity, bool) {
 	app := r.Current()
-	if app == nil {
+	if app == nil || r.heldUser(name) {
 		return UserIdentity{}, false
 	}
 	return app.UserByName(name)
@@ -100,6 +113,10 @@ func (r *Runtime) UserByName(name string) (UserIdentity, bool) {
 
 // NewRuntimeWithBuilder creates a runtime with an injected reload builder.
 // It is useful for embedders and tests that assemble providers themselves.
+// Process state (transactions, budgets, write tracking) outlives a reload
+// only when every App is assembled on one Shared; an App assembled without
+// it owns that state, which goes as the App is retired (see
+// docs/design/lifetimes.md).
 func NewRuntimeWithBuilder(app *App, build func(string) (*App, error)) *Runtime {
 	app.publishShared()
 	r := &Runtime{build: build}
@@ -164,16 +181,18 @@ func (r *Runtime) reloadWith(build func() (*App, error)) error {
 	if err != nil {
 		return err
 	}
+	r.publish.Lock()
+	defer r.publish.Unlock()
 	old := r.current.Load()
-	if err := preserveReloadTransactions(old.app, next); err != nil {
-		return err
-	}
-	preserveReloadBudget(old.app, next)
-	if old.app.Writes != nil {
-		next.Writes = old.app.Writes // sessions keep reading their own writes across a reload
+	if old == nil { // closed while building (Close does not wait for a build)
+		_ = next.Close()
+		return ErrRuntimeClosed
 	}
 	next.publishShared()
-	publishReload(r, old, next, revokedPrincipals(old.app, next))
+	if err := publishReload(r, old, next, revokedPrincipals(old.app, next)); err != nil {
+		return err
+	}
+	r.held.Store(nil)
 	return nil
 }
 
@@ -188,40 +207,15 @@ func revokedPrincipals(old, next *App) []string {
 	return out
 }
 
-func preserveReloadTransactions(old, next *App) error {
-	if old.Transactions == nil {
-		return nil
-	}
-	if next.Transactions == nil {
-		_ = next.Close()
-		return errors.New("bootstrap: transaction configuration cannot be removed by reload")
-	}
-	// Open transactions carry on under the new limits.
-	old.Transactions.UpdateLimits(next.Transactions.Configuration())
-	if next.Transactions != old.Transactions {
-		next.Transactions.Close()
-	}
-	next.Transactions = old.Transactions
-	return nil
-}
-
-// preserveReloadBudget keeps the accumulated session state across a reload,
-// adopting the new configured limits.
-func preserveReloadBudget(old, next *App) {
-	if old.Budget == nil || next.Budget == nil {
-		return
-	}
-	old.Budget.UpdateLimits(next.Budget.ConfiguredLimits())
-	next.Budget = old.Budget
-}
-
 // publishReload serves next at once, drops the sessions of the users the
 // reload revoked, and retires old in the background: once the requests that
 // leased old finish, transactions they opened in those sessions are rolled
 // back and old is closed.
-func publishReload(r *Runtime, old *appSnapshot, next *App, revoked []string) {
-	shared := next.Transactions == old.app.Transactions // the next App carries them on
-	r.current.Store(newAppSnapshot(next))
+func publishReload(r *Runtime, old *appSnapshot, next *App, revoked []string) error {
+	if !r.current.CompareAndSwap(old, newAppSnapshot(next)) {
+		_ = next.Close() // closed meanwhile
+		return ErrRuntimeClosed
+	}
 	old.mu.Lock()
 	old.retired = true
 	old.cond.Broadcast()
@@ -242,9 +236,6 @@ func publishReload(r *Runtime, old *appSnapshot, next *App, revoked []string) {
 		for old.refs > 0 {
 			old.cond.Wait()
 		}
-		if shared {
-			old.app.Transactions = nil
-		}
 		old.mu.Unlock()
 		for _, session := range sessions {
 			r.RollbackSession(session)
@@ -253,6 +244,7 @@ func publishReload(r *Runtime, old *appSnapshot, next *App, revoked []string) {
 			slog.Warn("closing the replaced snapshot failed", "error", err.Error())
 		}
 	})
+	return nil
 }
 
 // Watch polls path for content changes and reloads it. Reload errors are
@@ -287,6 +279,9 @@ func (r *Runtime) Watch(ctx context.Context, path string, interval time.Duration
 			if err := r.Reload(path); err != nil {
 				if onError != nil {
 					onError(err)
+				}
+				if cfg, err := LoadBytes(data); err == nil {
+					r.holdChanged(cfg)
 				}
 				continue
 			}
@@ -332,12 +327,17 @@ func (r *Runtime) RollbackSession(session string) {
 	app.Writes.Forget(session)
 }
 
-// Close stops new acquisitions, drains leases, and closes the current App and
-// the ones reloads replaced.
+// Close is CloseContext without a deadline.
 func (r *Runtime) Close() error {
-	r.reload.Lock()
-	defer r.reload.Unlock()
-	defer r.retiring.Wait()
+	return r.CloseContext(context.Background())
+}
+
+// CloseContext stops new acquisitions at once, drains leases, and closes the
+// current App and the ones reloads replaced. It does not wait for a reload
+// being built: that reload closes what it built. Past ctx's deadline it
+// returns ctx's error and leaves the rest to finish in the background (a
+// stuck database call or audit sink must not hold up a process exit).
+func (r *Runtime) CloseContext(ctx context.Context) error {
 	old := r.current.Swap(nil)
 	if old == nil {
 		return nil
@@ -345,9 +345,30 @@ func (r *Runtime) Close() error {
 	old.mu.Lock()
 	old.retired = true
 	old.cond.Broadcast()
-	for old.refs > 0 {
-		old.cond.Wait()
-	}
 	old.mu.Unlock()
-	return old.app.Close()
+	done := make(chan error, 1)
+	var closing sync.WaitGroup
+	old.app.Bus().Fork(&closing, "close runtime", func(context.Context) {
+		// A reload past its build carries on from old and publishes: let it
+		// finish (it then finds the runtime closed) before closing old.
+		r.publish.Lock()
+		r.publish.Unlock() //nolint:staticcheck // a barrier
+		old.mu.Lock()
+		for old.refs > 0 {
+			old.cond.Wait()
+		}
+		old.mu.Unlock()
+		err := old.app.CloseContext(ctx)
+		r.retiring.Wait()
+		if old.app.shared != nil { // the last App: the process's transactions end
+			old.app.shared.Close()
+		}
+		done <- err
+	})
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

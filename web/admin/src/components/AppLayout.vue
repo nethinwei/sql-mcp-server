@@ -23,6 +23,8 @@ import { adminURL } from '@/api/base'
 import { draftsChanged } from '@/lib/draftFeed'
 import { useWorkspaceAction, useWorkspaceSync, workspace } from '@/lib/workspaceSync'
 import { useConflictSources } from '@/lib/conflicts'
+import { liveUpdates } from '@/lib/liveUpdates'
+import { guardUnload } from '@/lib/unloadGuard'
 import logo from '@/assets/logo.svg'
 
 const { t } = useI18n()
@@ -117,10 +119,6 @@ const sync = useWorkspaceSync()
 const { sources: conflictSources } = useConflictSources()
 ws.$subscribe(() => sync.schedulePush())
 
-function onVisible() {
-  if (document.visibilityState === 'visible') void poll()
-}
-
 const outdated = computed(() =>
   status.publishedId !== null && ws.basePublished !== null && status.publishedId !== ws.basePublished)
 
@@ -131,19 +129,30 @@ async function rebase() {
   }
 }
 
-// Leaving loses what is not on the server yet: settings text not applied to
-// the workspace, and edits waiting to be sent, being sent or failed to send
-// (they are sent right away, in case the administrator stays).
+// Leaving asks first while anything is not on the server (see unloadGuard).
 const settingsEdits = useSettingsEdits()
 function onBeforeUnload(e: BeforeUnloadEvent) {
-  // Signed out (see onUserMenu) or the session ended: nothing can be saved.
-  if (isLeaving()) return
-  if (workspace.unsaved()) void workspace.flush().catch(() => {})
-  if (settingsEdits.pending.length || workspace.unsaved()) e.preventDefault()
+  guardUnload(e, {
+    leaving: isLeaving, workspaceUnsaved: () => workspace.unsaved(),
+    settingsUnsaved: () => settingsEdits.unsaved.length > 0, flush: () => workspace.flush(),
+  })
 }
 
-let timer: number | undefined
-let events: EventSource | undefined
+// Publishes, drafts and workspace writes arrive as server-sent events;
+// polling covers a stream a proxy cuts off, and the execution status.
+const live = liveUpdates({
+  url: adminURL('events'),
+  poll: async () => {
+    await poll().catch(() => undefined)
+    await sync.pull()
+  },
+  events: {
+    published: () => void poll(),
+    revisions: () => draftsChanged.value++,
+    workspace: () => void sync.pull(),
+    open: () => void sync.pull(),
+  },
+})
 onMounted(async () => {
   window.addEventListener('beforeunload', onBeforeUnload)
   try {
@@ -152,23 +161,11 @@ onMounted(async () => {
     message.error(e instanceof Error ? e.message : String(e))
   }
   await poll()
-  // Publishes arrive as server-sent events at once; polling stays as the
-  // fallback for a stream a proxy cuts off.
-  events = new EventSource(adminURL('events'))
-  events.addEventListener('published', () => void poll())
-  events.addEventListener('revisions', () => draftsChanged.value++)
-  events.addEventListener('workspace', () => void sync.pull())
-  events.addEventListener('open', () => void sync.pull())
-  timer = window.setInterval(() => {
-    if (document.visibilityState === 'visible') void poll().catch(() => undefined).then(() => sync.pull())
-  }, 10000)
-  document.addEventListener('visibilitychange', onVisible)
+  live.start()
 })
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', onBeforeUnload)
-  window.clearInterval(timer)
-  events?.close()
-  document.removeEventListener('visibilitychange', onVisible)
+  live.stop()
 })
 
 const userMenu = computed(() => [{ key: 'logout', label: t('layout.logout') }])

@@ -86,18 +86,3 @@ func recordReadFeedback(
 		ActualRows: actualRows, Duration: duration,
 	})
 }
-
-func countReadRows(rows []map[string]any, expand []string) int64 {
-	count := int64(len(rows))
-	for _, row := range rows {
-		for _, name := range expand {
-			switch children := row[name].(type) {
-			case []map[string]any:
-				count += int64(len(children))
-			case map[string]any:
-				count++
-			}
-		}
-	}
-	return count
-}

@@ -30,6 +30,13 @@ race tests、核心 coverage 门槛和
 govulncheck，不需要 Docker。`make ci-full` 在此基础上增加三库 integration 和
 PostgreSQL MCP e2e，需要 Docker。
 
+控制台：`make web` 依次运行 `pnpm codegen`、`pnpm lint`（ESLint：`eslint-plugin-vue` +
+`typescript-eslint`，配置 `web/admin/eslint.config.js`，不检查排版）、`pnpm test`
+（vitest，jsdom）与 `pnpm build`（含 `vue-tsc`）。`src/i18n/keys.test.ts` 检查源码中每个
+字面量消息键都存在（en 与 zh-CN 的键由类型保持一致）；组件测试用 `@vue/test-utils`
+挂载（如 `src/components/RuntimeBadge.test.ts`），依赖较多的布局逻辑抽成可单测的模块
+（`src/lib/liveUpdates.ts`、`src/lib/unloadGuard.ts`）。
+
 发布构建由 GoReleaser 注入 tag 版本。安装 GoReleaser v2.17.0 与 Syft v1.46.0
 后可在本地检查：
 
@@ -82,8 +89,15 @@ quickstart 和 attestation 验证脚本由本地 Make target 与 GitHub Actions 
   可复现的种子。`core/workspace/workspacetest` 是工作区存储的一致性套件（内存、
   SQLite 单元测试，PostgreSQL/MySQL/OceanBase 配置库集成测试）；`x/workspaceops`
   测试并发写合并、update、合并草稿、提交的原子性与写入记录，交错模型测试
-  （`interleave_test.go`）在提交与存草稿的构建期间插入随机操作并检查草稿记录、检查点
-  与提交内容的不变量。
+  （`interleave_test.go`）在提交与存草稿的构建期间插入随机操作（含带 `renamedFrom`
+  的改名写入）并检查草稿记录、检查点与提交内容的不变量，以及改名的派生改动与写入同版本。
+- 编辑语义（`docs/design/editing.md`）：`x/configrefs` 用与控制台共用的
+  `core/config/testdata/entity_refs.json` 检查最短名，表驱动检查引用改写规则；
+  `x/admin/configapp` 的 `reconcile_test.go` 按原控制台级联用例逐条检查派生改动（删除、
+  改名、移动、角色改名与删除、导入造成的歧义、字段删除），并用 3000 个种子的性质测试
+  检查“已有引用变更后仍指向原实体（或随之删除）”；`x/admin/graph` 的
+  `TestEditWorkspaceRenamesAnEntity` 与 `TestWorkspaceRoundTripKeepsEveryField` 经 GraphQL
+  端到端检查改名与项的往返。
 - 批量配置：`x/configplan` 的表驱动测试与随机性质测试（随机目录、配置与方案：
   结果总能通过配置校验，同一方案执行第二次没有修改，每个应授予而未授予的授权都
   有例外；改坏合并或规则顺序时测试失败）；`x/catalog/catalogtest` 与配置库的
@@ -91,9 +105,9 @@ quickstart 和 attestation 验证脚本由本地 Make target 与 GitHub Actions 
   `x/admin/configmcp` 用真实 MCP 客户端端到端测试配置 MCP（没有发布工具、只读
   管理员不能应用方案、过期与停用账号的令牌失效、预览针对工作区、不是预览过的方案
   拒绝应用、方案直接写进工作区且只写改动的项）；`x/admin/graph` 测试按项写入的哈希
-  冲突、整体写入的版本冲突与控制台的 `applyPlan`，`workspace_sections_test.go` 与
-  `src/stores/workspace.encoding.test.ts` 用同一份数据锁定服务端写出的项与控制台的
-  一致；控制台按项写入与读回（只有本地改的保留、双方都改的取服务端的、写入途中的
+  冲突、整体写入的版本冲突与控制台的 `applyPlan`，`x/admin/configapp` 的
+  `TestSectionsShapeAndRoundTrip` 锁定工作区项的形状与往返，`x/admin/graph` 的
+  `TestRevisionSectionsAreTheWorkspaceShape` 检查控制台读取的 `Revision.sections` 与之一致；控制台按项写入与读回（只有本地改的保留、双方都改的取服务端的、写入途中的
   修改不丢）在 `src/stores/workspace.sync.test.ts`，草稿依次并入与冲突在
   `src/stores/workspace.reviewDraft.test.ts`。控制台的操作链路有单元测试：乱序返回时只采用最新的方案预览
   （`src/lib/planPreview.test.ts`）、“选择全部匹配”的筛选快照与排除

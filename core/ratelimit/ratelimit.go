@@ -14,10 +14,13 @@ var ErrCircuitOpen = errors.New("ratelimit: circuit open")
 
 // Adaptive implements AIMD concurrency control: additive increase on success,
 // multiplicative decrease on error or slow response. The limit moves between
-// min and max in response to observed DB health.
+// min and max in response to observed DB health. A decrease answers the
+// results of requests sent before it as well: those come back after it
+// without decreasing again, so one overload halves the limit once.
 type Adaptive struct {
 	concurrency  atomic.Int64
 	limit        atomic.Int64
+	decreased    atomic.Int64 // unix nano of the last decrease
 	min, max     int64
 	rttThreshold time.Duration
 }
@@ -47,34 +50,53 @@ func (a *Adaptive) Release() {
 	a.concurrency.Add(-1)
 }
 
-// OnResult adjusts the limit: multiplicative decrease on error or slow RTT,
+// OnResult adjusts the limit for a request that took d: multiplicative
+// decrease on error or slow RTT, unless it was sent before the last decrease;
 // additive increase otherwise.
 func (a *Adaptive) OnResult(err error, d time.Duration) {
+	now := time.Now().UnixNano()
 	if err != nil || (a.rttThreshold > 0 && d > a.rttThreshold) {
-		next := a.limit.Load() / 2
-		if next < a.min {
-			next = a.min
+		sent := now - int64(d)
+		for {
+			last := a.decreased.Load()
+			if sent < last {
+				return // already answered for
+			}
+			if a.decreased.CompareAndSwap(last, now) {
+				break
+			}
 		}
-		a.limit.Store(next)
+		a.update(func(l int64) int64 { return max(l/2, a.min) })
 		return
 	}
-	next := a.limit.Load() + 1
-	if next > a.max {
-		next = a.max
+	a.update(func(l int64) int64 { return min(l+1, a.max) })
+}
+
+// update sets the limit to next of it, atomically.
+func (a *Adaptive) update(next func(int64) int64) {
+	for {
+		l := a.limit.Load()
+		if a.limit.CompareAndSwap(l, next(l)) {
+			return
+		}
 	}
-	a.limit.Store(next)
 }
 
 // Limit returns the current concurrency limit (for introspection/testing).
 func (a *Adaptive) Limit() int64 { return a.limit.Load() }
 
-// Breaker is a simple circuit breaker: after threshold consecutive failures it
-// opens for cooldown, then allows a half-open probe.
+// Breaker is a circuit breaker: after threshold consecutive failures it opens
+// for cooldown, then lets one probe through at a time (half-open) until a
+// probe's result closes it, or reopens it.
 type Breaker struct {
 	failures  atomic.Int64
 	threshold int64
 	cooldown  time.Duration
-	openUntil atomic.Int64 // unix nano
+	openUntil atomic.Int64 // unix nano; 0 when closed
+	// probe is the probe through while half-open (0: none), numbered from
+	// probes, so that only that request frees its place.
+	probe  atomic.Uint64
+	probes atomic.Uint64
 }
 
 // NewBreaker returns a Breaker that opens after threshold consecutive failures,
@@ -83,30 +105,49 @@ func NewBreaker(threshold int64, cooldown time.Duration) *Breaker {
 	return &Breaker{threshold: threshold, cooldown: cooldown}
 }
 
-// Allow returns ErrCircuitOpen if the breaker is open and the cooldown has not
-// elapsed.
-func (b *Breaker) Allow() error {
+// Allow returns ErrCircuitOpen if the breaker is open, or half-open with a
+// probe already through. A request it lets through must end with Record, or
+// with Release when its outcome says nothing of health; probe is nonzero for
+// the half-open probe.
+func (b *Breaker) Allow() (probe uint64, err error) {
 	until := b.openUntil.Load()
 	if until == 0 {
-		return nil
+		return 0, nil
 	}
 	if time.Now().UnixNano() < until {
-		return ErrCircuitOpen
+		return 0, ErrCircuitOpen
 	}
-	return nil // half-open: allow a probe
+	probe = b.probes.Add(1)
+	if !b.probe.CompareAndSwap(0, probe) {
+		return 0, ErrCircuitOpen
+	}
+	return probe, nil
 }
 
-// Record updates failure count. A success resets it; a failure that crosses the
-// threshold opens the breaker for cooldown.
+// Release ends a request whose outcome says nothing of health (a cancelled
+// one), probe as Allow returned it: the probe frees its place, and any other
+// request (one let through before the breaker opened, an earlier probe)
+// leaves the current probe's alone.
+func (b *Breaker) Release(probe uint64) {
+	if probe != 0 {
+		b.probe.CompareAndSwap(probe, 0)
+	}
+}
+
+// Record counts a request's outcome. A success closes the breaker; a failure
+// reopens a half-open one, and opens a closed one at threshold consecutive
+// failures.
 func (b *Breaker) Record(success bool) {
 	if success {
 		b.failures.Store(0)
 		b.openUntil.Store(0)
+		b.probe.Store(0)
 		return
 	}
 	f := b.failures.Add(1)
-	if f >= b.threshold {
+	if f >= b.threshold || b.openUntil.Load() != 0 {
 		b.openUntil.Store(time.Now().Add(b.cooldown).UnixNano())
+		b.probe.Store(0)
 	}
 }
 

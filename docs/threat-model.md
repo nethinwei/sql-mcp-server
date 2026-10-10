@@ -93,7 +93,9 @@ Provider 适用范围使用以下口径：
 - **持续验证**：`core/tool/adversarial_test.go` 断言用户 tenant filter 与 policy
   始终 AND 合并；三库 integration 对宽松用户 filter 的尝试仍要求 policy 生效。
 - **剩余风险**：它不是数据库原生 RLS；任何直连数据库、受信 procedure 内部 SQL
-  或未来绕过统一 engine 的入口都不受此保证。配置错误的 policy 仍由管理员承担。
+  的入口都不受此保证。`core/tool` 内绕过授权的入口由结构测试阻止：数据库只由执行器
+  调用，语句只能由授权结果与过闸 SQL 构成（`core/tool/pipeline_test.go` 的
+  `TestOnlyTheExecutorCallsTheDatabase`、`TestStatementWithoutGrantIsRefused`）。配置错误的 policy 仍由管理员承担。
 - **Provider**：共享 policy/IR 逻辑适用于三库，基础路径已有三库 integration；
   procedure 内部行为不在 provider 证明范围。
 
@@ -178,12 +180,17 @@ Provider 适用范围使用以下口径：
   释放后关闭”、失败保旧、事务与预算限制更新、待回收上限测试；
   `core/tool/transaction_test.go` 的“连接被重载改掉后事务拒绝语句”测试；
   `x/bootstrap/bootstrap_access_test.go` 的吊销通知与“重新启用后新会话不受旧
-  撤销影响”测试；`x/bootstrap/shared_test.go` 的跨代缓存失效、共享 IO 配额与
+  撤销影响”测试；`x/bootstrap/hold_test.go` 的“禁用用户与 schema 漂移同在一个
+  revision，用户在下一次轮询即被拒绝”测试；`x/bootstrap/shared_test.go` 的跨代缓存失效、共享 IO 配额与
   连接复用测试；CI 默认运行 race detector。
 - **持续验证**：以上测试在默认单元测试中运行；CI race 检查并不枚举所有调度交错。
 - **剩余风险**：现有测试不是所有调度的形式化证明；新旧快照重叠期间各自的 engine
-  在途队列与预编译语句并存（IO 配额、连接池与缓存已共享）；熔断器为进程级而非按
-  物理数据库；多进程/多实例配置发布不在当前一致性模型内。
+  在途队列与预编译语句并存（IO 配额、连接池、缓存、事务、预算与写跟踪已归进程，
+  见 `docs/design/lifetimes.md`）；熔断与自适应并发按数据库连接隔离；撤销在新
+  revision 能加载而装配失败时先行生效（用户暂停），但只覆盖用户自身定义的变化，
+  角色定义收窄与无身份的默认主体（stdio、`server.user`）仍随完整重载生效；多进程/多实例配置发布不在当前一致性模型内：MCP 会话、显式事务与
+  读缓存失效都只作用于本进程，多副本部署须按 `Mcp-Session-Id` 粘滞，跨副本的
+  读缓存最长落后一个 `cache.ttl`（见 `docs/console.md`）。
 - **Provider**：runtime 控制为共享层；provider 资源 drain 依赖各 driver 行为，
   尚无三库专门的 reload integration。
 
@@ -197,12 +204,15 @@ Provider 适用范围使用以下口径：
   事务、返回行数/字节与执行时间均有容量或 deadline。
 - **现有证据**：`x/mcpserver/http_test.go` 的 oversized body 拒绝、
   `core/tool/tool_runtool_test.go` 的返回字节上限，以及 config/tool/engine/cache
-  的容量和 cardinality 单元测试。
+  的容量和 cardinality 单元测试；结果在迭代时逐行计量，越限的第一行即中止、其余行
+  不再读取，进程同时持有的结果字节受 `rateLimit.maxResultMemory` 约束
+  （`core/tool/pipeline_test.go` 的 `TestReadStopsAtTheByteLimitAsRowsArrive`、
+  `TestResultMemoryBoundsTheProcess`）。
 - **持续验证**：`x/mcpserver/http_test.go` 覆盖 body/subject 边界；
   `core/tool/adversarial_test.go` 和其 fuzz target 覆盖畸形、尾随、未知和受限字段
   payload，并断言拒绝时不进入数据库执行。
 - **剩余风险**：stdio 不受 HTTP body/header 限制；JSON 解析在结构校验前仍会消耗
-  资源；分布式限流和 durable audit 不在当前范围，应用限制不能替代上游连接限制。
+  资源；`database/sql` 会把单行完整读入，超大单行在计量前已读出（读到即停）；分布式限流和 durable audit 不在当前范围，应用限制不能替代上游连接限制。
 - **Provider**：transport/IR/engine 控制属于共享层；数据库 timeout 参数随 provider
   不同，连接级 timeout 的数据库触发路径尚未分别做 integration。
 
@@ -219,7 +229,9 @@ Provider 适用范围使用以下口径：
 - **现有证据**：`core/rbac/grant_test.go` 的跨授权项组合拒绝、租户硬边界、
   直授/顶层/实体级授权合并测试与覆盖不变量随机化测试；
   `x/mcpserver/e2e_users_test.go` 在真实 HTTP + PostgreSQL 上验证多角色用户
-  看不到其他角色行上的字段。
+  看不到其他角色行上的字段；`core/budget/budget_test.go` 的
+  `TestTenantConcurrencySpansSessions`：租户的 `maxConcurrent` 按租户聚合，
+  开新会话或换主体都无法绕过。
 - **持续验证**：覆盖不变量随机化测试在默认单元测试中运行；e2e 随
   `make test-e2e` 运行。
 - **剩余风险**：未实现逐行逐列的精确并集，部分合法组合需要 Agent 显式指定字段；

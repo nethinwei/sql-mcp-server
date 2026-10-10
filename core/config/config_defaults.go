@@ -162,6 +162,9 @@ func (c *Config) applyRateLimitDefaults() {
 	if c.RateLimit.BreakerThreshold == 0 {
 		c.RateLimit.BreakerThreshold = 5
 	}
+	if c.RateLimit.MaxResultMemory == 0 {
+		c.RateLimit.MaxResultMemory = 256 << 20
+	}
 	if c.RateLimit.BreakerCooldown == 0 {
 		c.RateLimit.BreakerCooldown = 5 * time.Second
 	}
@@ -200,6 +203,11 @@ func (c *Config) applyTransactionDefaults() {
 	}
 	if c.Transactions.MaxOpen == 0 {
 		c.Transactions.MaxOpen = 128
+	}
+	if c.Transactions.MaxOpenPerConnection == 0 {
+		// Half of each connection pool (sized rateLimit.ioPool) is left to
+		// queries.
+		c.Transactions.MaxOpenPerConnection = max(1, c.RateLimit.IOPool/2)
 	}
 	if c.Transactions.BeginTimeout == 0 {
 		c.Transactions.BeginTimeout = 5 * time.Second

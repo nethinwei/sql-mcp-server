@@ -2,10 +2,12 @@ package cost
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
+	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
 )
 
@@ -63,6 +65,9 @@ func (e Estimate) Check(ctx context.Context, c codegen.Compiled) (Decision, erro
 	}
 	th := e.Threshold
 	plan, err := e.explainPlan(ctx, c)
+	if unavailable(err) {
+		return Decision{}, err
+	}
 	plan = smallTable(plan, th)
 	score := ScorePlan(plan)
 	deny := func(soft bool) (Decision, error) {
@@ -87,6 +92,13 @@ func smallTable(plan Plan, th Threshold) Plan {
 		plan.ScanType = ScanSeq
 	}
 	return plan
+}
+
+// unavailable reports an EXPLAIN the connection refused rather than
+// answered (its breaker open, its concurrency limit reached): the gate has
+// no estimate to judge, and the statement would be refused the same way.
+func unavailable(err error) bool {
+	return errors.Is(err, ratelimit.ErrCircuitOpen) || errors.Is(err, ratelimit.ErrRateLimited)
 }
 
 func (e Estimate) explainPlan(ctx context.Context, c codegen.Compiled) (Plan, error) {

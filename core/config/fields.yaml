@@ -430,8 +430,11 @@ budget.roles:
   zh-CN: 按角色的预算：角色名 → 限额。
   en: 'Budgets by role: name → limits.'
 budget.tenants:
-  zh-CN: 按租户的预算，命中时覆盖而非合并角色限额。租户取自 subject 的 tenant / tenant_id / tenantID。
-  en: Budgets by tenant; replace role limits when matched. The tenant comes from subject tenant / tenant_id / tenantID.
+  zh-CN: 按租户的预算。maxConcurrent 约束该租户所有会话、所有主体的调用合计；其余各项逐字段收紧角色或用户的限额（取两者中已设置的较小值，租户未设置的项沿用角色的）。租户取自 subject 的 tenant / tenant_id / tenantID。
+  en: >-
+    Budgets by tenant. maxConcurrent bounds the calls of all the tenant's sessions and principals together; the
+    other limits tighten the role or user limits field by field (the smaller of the set values applies, and a limit
+    the tenant leaves unset keeps the role's). The tenant comes from subject tenant / tenant_id / tenantID.
 budget.users:
   zh-CN: 按用户的预算，优先于角色；未配置时逐项取其各角色中最宽松的值（任一角色未配置即视为不限）。
   en: Budgets by user; win over roles. Without one, each limit is the most permissive of the user's roles (a role without a budget means unlimited).
@@ -497,17 +500,24 @@ rateLimit.ioPool:
   zh-CN: IO 工作池大小；普通执行使用它。
   en: IO worker pool size, used by ordinary execution.
 rateLimit.minConcurrency:
-  zh-CN: 自适应并发的下限。
-  en: Lower bound of adaptive concurrency.
+  zh-CN: 自适应并发的下限（每个数据库连接各自调整）。
+  en: Lower bound of adaptive concurrency (adjusted per database connection).
 rateLimit.rttThreshold:
   zh-CN: 延迟超过该值时降低并发；0s 不触发。
   en: Reduce concurrency when latency exceeds this; 0s disables it.
 rateLimit.breakerThreshold:
-  zh-CN: 连续失败多少次后熔断。
-  en: Consecutive failures that open the breaker.
+  zh-CN: 连续失败多少次后熔断；每个数据库连接各自熔断，调用方取消或数据库因数据、权限拒绝的语句不计入。
+  en: >-
+    Consecutive failures that open the breaker; each database connection has its own, and calls the caller
+    cancelled or statements the database refused for their data or privileges do not count.
 rateLimit.breakerCooldown:
-  zh-CN: 熔断后多久重试。
-  en: Time before retrying after the breaker opens.
+  zh-CN: 熔断后多久重试；冷却后只放行一个探测调用，成功才恢复。
+  en: Time before retrying after the breaker opens; one probe call is then let through, and only its success closes it.
+rateLimit.maxResultMemory:
+  zh-CN: 进程同时在内存中持有的查询结果字节数上限（各调用合计，按读出的行计，调用结束释放），超出时调用以预算超限失败；默认 256 MiB。
+  en: >-
+    Bytes of query results the process holds in memory at once (all calls together, counted as rows are read and
+    released when a call ends); a call past it fails as over budget. Default 256 MiB.
 rateLimit.connMaxIdleTime:
   zh-CN: 数据库连接最长空闲时间。
   en: Maximum idle time of a database connection.
@@ -547,6 +557,9 @@ transactions.ttl:
 transactions.maxOpen:
   zh-CN: 每个角色/subject 同时打开的事务上限。
   en: Open transactions per role/subject.
+transactions.maxOpenPerConnection:
+  zh-CN: 同一个数据库连接上同时打开的事务上限，所有角色合计；未设置时取 rateLimit.ioPool 的一半（至少 1），给普通查询留出连接池的另一半。
+  en: "Open transactions holding one database connection, all roles together; unset: half of rateLimit.ioPool (at least 1), leaving queries the other half of the pool."
 transactions.beginTimeout:
   zh-CN: 开启事务超时。
   en: Begin timeout.

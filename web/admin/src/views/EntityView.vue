@@ -13,7 +13,7 @@ import { useConfigSchema } from '@/lib/configSchema'
 import { can } from '@/api/session'
 import { loadTableComments, tableComments } from '@/lib/tableComments'
 import { entityId } from '@/lib/entityRefs'
-import type { FieldInput, GrantInput, RelationshipInput } from '@/gql/graphql'
+import type { FieldInput, GrantInput, RelationshipInput } from '@/gql/schema'
 
 // id is the entity's ID (see entityId).
 const props = defineProps<{ id: string }>()
@@ -124,8 +124,8 @@ const targetOptions = computed(() => ws.entities
   .map((ref) => ({ label: ref, value: ref })))
 const targetId = (ref: string) => ws.entityIndex.idOf(ref) ?? ref
 
-// Renaming moves every reference (see workspace.upsertEntity) and keeps the
-// table the entity reads.
+// A rename is written as such (see workspace.upsertEntity): the server moves
+// every reference and keeps the table the entity reads.
 const renaming = ref(false)
 const newName = ref('')
 const renameError = computed(() => {

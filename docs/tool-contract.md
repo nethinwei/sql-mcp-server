@@ -44,6 +44,12 @@
    - `DATASOURCE_FORBIDDEN`（不可重试）：动作路由到的数据源连接没有对应的数据库权限
      （包括连接到只读服务器），授权本身允许；需要管理员补权限或调整路由，修改请求无法
      绕过；
+   - `OUTCOME_UNKNOWN`（不可重试）：写入或提交执行期间连接中断或超时，数据库可能已经
+     执行也可能没有；原样重试可能重复写入，应先读取受影响的行（或事务写过的内容）再决定；
+     相关读缓存已按“已写入”失效；
+   - `TRANSACTION_NOT_FOUND`：令牌对应的事务若在最近 10 分钟内结束，且请求来自同一会话
+     与身份，`constraints.outcome` 给出结束方式：`committed`、`rolledBack`、`expired`
+     或 `unknown`（提交结果未知）；其他调用方只得到不带 `constraints` 的未找到；
    - `constraints`：可选的机器可读限制（估算行数、生效上限等）；
    - `hints`：修复建议，只能收紧或等价改写请求，不得扩权；
    - `decisionId`：贯穿 MCP 响应、审计事件（`DecisionID` 字段）与 trace

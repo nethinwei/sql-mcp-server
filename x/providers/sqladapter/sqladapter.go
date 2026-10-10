@@ -135,6 +135,15 @@ func (t tx) ExecContext(ctx context.Context, query string, args ...any) (store.R
 	return t.db.result(t.Tx.ExecContext(ctx, query, args...))
 }
 
+// Commit classifies a failed commit like a failed statement: a connection
+// lost while committing leaves its outcome unknown.
+func (t tx) Commit() error {
+	if err := t.Tx.Commit(); err != nil {
+		return t.db.classify(err)
+	}
+	return nil
+}
+
 func isolation(l store.IsolationLevel) sql.IsolationLevel {
 	switch l {
 	case store.LevelReadUncommitted:

@@ -60,6 +60,44 @@ func (m *model) write() {
 	}
 }
 
+// lastRename is the item reconcileRenames keeps: the rename a write made.
+var lastRename = workspace.Ref{Kind: "derived", Key: "rename"}
+
+// reconcileRenames records each rename a write makes in lastRename, as a
+// configuration's Reconciler derives items from a write.
+func reconcileRenames(_, after workspace.Snapshot, renames map[workspace.Ref]workspace.Ref) (
+	workspace.Snapshot, error,
+) {
+	for to, from := range renames {
+		after = after.With(lastRename, map[string]any{"name": "rename", "from": from.Key, "to": to.Key})
+	}
+	return after, nil
+}
+
+// rename renames an item to an absent key: the old item goes and the
+// derived item lands with it, in the version of the write.
+func (m *model) rename() {
+	items := m.read().Workspace.Items
+	from := workspace.Ref{Kind: "role", Key: keys[m.r.intn(len(keys))]}
+	to := workspace.Ref{Kind: "role", Key: keys[m.r.intn(len(keys))]}
+	if workspace.IsMissing(items.Get(from)) || !workspace.IsMissing(items.Get(to)) {
+		m.write()
+		return
+	}
+	m.log = append(m.log, fmt.Sprintf("rename %s → %s", from.Key, to.Key))
+	st, err := m.svc.WriteItems(m.ctx, "root", "root", "edit", []Write{{Ref: to,
+		Value: roleItem(to.Key, "renamed"), Previous: workspace.Missing, From: &from}}, nil)
+	if err != nil {
+		m.fail("rename: %v", err)
+	}
+	got := st.Workspace.Items
+	derived, _ := got.Get(lastRename).(map[string]any)
+	if !workspace.IsMissing(got.Get(from)) || workspace.IsMissing(got.Get(to)) ||
+		derived["from"] != from.Key || derived["to"] != to.Key {
+		m.fail("rename %s → %s left %v", from.Key, to.Key, got)
+	}
+}
+
 // merge takes in a new draft of the published revision changing one item.
 func (m *model) merge() {
 	published, _ := m.revs.Published(m.ctx)
@@ -173,20 +211,22 @@ func (m *model) commit() {
 
 // step runs one random operation; commits only at the top level.
 func (m *model) step(top bool) {
-	switch n := m.r.intn(13); {
-	case n < 4:
+	switch n := m.r.intn(14); {
+	case n < 1:
+		m.rename()
+	case n < 5:
 		m.write()
-	case n < 6:
-		m.merge()
 	case n < 7:
-		m.resolve()
+		m.merge()
 	case n < 8:
-		m.publishOther()
+		m.resolve()
 	case n < 9:
+		m.publishOther()
+	case n < 10:
 		m.update()
-	case n < 10 || !top:
+	case n < 11 || !top:
 		m.checkpoint()
-	case n < 11:
+	case n < 12:
 		m.reset()
 	default:
 		m.commit()
@@ -228,6 +268,7 @@ func (m *model) check() {
 func TestInterleavedOperations(t *testing.T) {
 	for seed := uint32(1); seed <= 400; seed++ {
 		e := newEnv(t)
+		e.svc.Reconcile = reconcileRenames
 		m := &model{env: e, r: &rng{seed}, seed: seed, merged: map[int64]int64{}, dropped: map[int64]int64{}}
 		for range 30 {
 			m.step(true)

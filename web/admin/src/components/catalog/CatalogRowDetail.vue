@@ -2,9 +2,8 @@
 import { onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NAlert, NSpin } from 'naive-ui'
-import { run } from '@/api/client'
 import { CatalogTableQuery } from '@/api/ops'
-import { useWorkspace } from '@/stores/workspace'
+import { workspace } from '@/lib/workspaceSync'
 import { createResource } from '@/lib/asyncResource'
 import TableDetail from './TableDetail.vue'
 
@@ -12,9 +11,8 @@ import TableDetail from './TableDetail.vue'
 // only summaries.
 const props = defineProps<{ tableRef: string }>()
 const { t } = useI18n()
-const ws = useWorkspace()
 const resource = createResource(async (ref: string) =>
-  (await run(CatalogTableQuery, { ref, draft: ws.computeDraft })).catalogTable)
+  (await workspace.read(CatalogTableQuery, { ref })).catalogTable)
 onMounted(() => resource.load(props.tableRef))
 </script>
 

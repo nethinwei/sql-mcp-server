@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useWorkspace, type Sections } from './workspace'
-import type { RoleInput, WorkspacePartsFragment, WorkspaceQuery } from '@/gql/graphql'
+import type { WorkspacePartsFragment, WorkspaceQuery } from '@/gql/graphql'
+import type { RoleInput } from '@/gql/schema'
 
 /** Revision id with the given roles. */
 function revision(id: string, roles: RoleInput[]): WorkspaceQuery {
@@ -10,9 +11,10 @@ function revision(id: string, roles: RoleInput[]): WorkspaceQuery {
     revision: {
       id, parent: null, state: 'PUBLISHED', contentHash: 'sha256:' + id, author: 'root', comment: '', createdAt: '',
       publishedAt: '',
-      config: {
-        datasources: [], entities: [], users: [], settings: {},
-        roles: roles.map((r) => ({ name: r.name, description: r.description ?? null, members: [], grants: [] })),
+      config: { datasources: [] },
+      sections: {
+        entities: [], users: [], settings: {},
+        roles: roles.map((r) => ({ name: r.name, ...(r.description ? { description: r.description } : {}), grants: [] })),
       },
     },
   } as unknown as WorkspaceQuery
@@ -44,14 +46,71 @@ describe('the workspace kept on the server', () => {
     expect(ws.baseId).toBe('1')
     expect(ws.version).toBe(1)
     expect(ws.roles.map((r) => r.name)).toEqual(['analyst'])
-    expect(ws.pendingItems()).toEqual([])
+    expect(ws.unsavedItems()).toEqual([])
+  })
+
+  // A rename made while the write renaming the item is in flight follows
+  // that write: once answered, the server knows the item by the key it gave
+  // it; failed, by the first key still.
+  it('renames again while a rename is being written', () => {
+    const ws = read()
+    ws.upsertRole({ ...analyst, name: 'lead' }, 'analyst')
+    const sent = ws.unsavedItems()
+    ws.upsertRole({ ...analyst, name: 'head' }, 'lead')
+    ws.wrote(sent)
+    expect(ws.unsavedItems()).toEqual([
+      { kind: 'role', key: 'head', value: { ...analyst, name: 'head' }, previous: null, renamedFrom: 'lead' },
+      { kind: 'role', key: 'lead', value: null, previous: { ...analyst, name: 'lead' } },
+    ])
+  })
+
+  it('renames back while a rename is being written', () => {
+    const ws = read()
+    ws.upsertRole({ ...analyst, name: 'lead' }, 'analyst')
+    const sent = ws.unsavedItems()
+    ws.upsertRole({ ...analyst }, 'lead')
+    expect(ws.unsavedItems()).toEqual([])
+    ws.wrote(sent)
+    expect(ws.unsavedItems()).toEqual([
+      { kind: 'role', key: 'analyst', value: analyst, previous: null, renamedFrom: 'lead' },
+      { kind: 'role', key: 'lead', value: null, previous: { ...analyst, name: 'lead' } },
+    ])
+  })
+
+  it('renames from the first key when the write renaming the item failed', () => {
+    const ws = read()
+    ws.upsertRole({ ...analyst, name: 'lead' }, 'analyst')
+    ws.unsavedItems()
+    ws.upsertRole({ ...analyst, name: 'head' }, 'lead')
+    expect(ws.unsavedItems()).toEqual([
+      { kind: 'role', key: 'head', value: { ...analyst, name: 'head' }, previous: null, renamedFrom: 'analyst' },
+      { kind: 'role', key: 'analyst', value: null, previous: analyst },
+    ])
+  })
+
+  // The server moves the references to a renamed item (x/admin/configapp
+  // reconcile); the console writes the rename as such.
+  it('writes a rename with the key the server knows the item by', () => {
+    const ws = read()
+    ws.upsertRole({ ...analyst, name: 'lead' }, 'analyst')
+    ws.upsertRole({ ...analyst, name: 'head' }, 'lead')
+    ws.upsertRole({ name: 'support' })
+    ws.upsertRole({ name: 'helper' }, 'support')
+    const items = ws.unsavedItems()
+    expect(items).toEqual([
+      { kind: 'role', key: 'head', value: { ...analyst, name: 'head' }, previous: null, renamedFrom: 'analyst' },
+      { kind: 'role', key: 'helper', value: { name: 'helper' }, previous: null },
+      { kind: 'role', key: 'analyst', value: null, previous: analyst },
+    ])
+    ws.wrote(items)
+    expect(ws.renamed).toEqual({})
   })
 
   it('writes the items edited here, with the values they were edited from', () => {
     const ws = read()
     ws.role('analyst')!.description = 'mine'
     ws.upsertRole({ name: 'support' })
-    expect(ws.pendingItems()).toEqual([
+    expect(ws.unsavedItems()).toEqual([
       { kind: 'role', key: 'analyst', value: { ...analyst, description: 'mine' }, previous: analyst },
       { kind: 'role', key: 'support', value: { name: 'support' }, previous: null },
     ])
@@ -63,7 +122,7 @@ describe('the workspace kept on the server', () => {
     ws.take(answer(2, [{ ...analyst, description: 'agent' }]))
     expect(ws.role('analyst')!.description).toBe('agent')
     expect(ws.role('mine')).toBeDefined()
-    expect(ws.pendingItems().map((p) => p.key)).toEqual(['mine'])
+    expect(ws.unsavedItems().map((p) => p.key)).toEqual(['mine'])
   })
 
   it('keeps an unsent edit of an item changed there, still measured from what it was edited from', () => {
@@ -71,7 +130,7 @@ describe('the workspace kept on the server', () => {
     ws.role('analyst')!.description = 'mine'
     ws.take(answer(2, [{ ...analyst, description: 'agent' }]))
     expect(ws.role('analyst')!.description).toBe('mine')
-    expect(ws.pendingItems()).toEqual([
+    expect(ws.unsavedItems()).toEqual([
       { kind: 'role', key: 'analyst', value: { ...analyst, description: 'mine' }, previous: analyst },
     ])
   })
@@ -79,12 +138,12 @@ describe('the workspace kept on the server', () => {
   it('keeps an edit made while its item was being written', () => {
     const ws = read()
     ws.role('analyst')!.description = 'first'
-    const items = ws.pendingItems()
+    const items = ws.unsavedItems()
     ws.role('analyst')!.description = 'second' // while the write is in flight
     ws.wrote(items)
     ws.take(answer(2, [{ ...analyst, description: 'first' }]))
     expect(ws.role('analyst')!.description).toBe('second')
-    expect(ws.pendingItems()).toEqual([{ kind: 'role', key: 'analyst', value: { ...analyst, description: 'second' },
+    expect(ws.unsavedItems()).toEqual([{ kind: 'role', key: 'analyst', value: { ...analyst, description: 'second' },
       previous: { ...analyst, description: 'first' } }])
   })
 

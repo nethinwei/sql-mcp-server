@@ -72,8 +72,8 @@ type Query {
   schemaList(datasource: String!, refresh: Boolean): SchemaList!   # 库（schema）列表与各库最近扫描
   schemaTables(datasource: String!, schemas: [String!]): SchemaImport!  # 已扫描库的表（省略 schemas 为全部）
   schemaScan(id: ID!): ScanJob                                          # 扫描任务状态
-  validate(draft: DraftInput!): Validation!
-  diff(from: ID!, to: ID, draft: DraftInput): String!
+  validate(revision: ID): Validation!          # 省略：调用者的工作区
+  diff(from: ID!, to: ID): String!             # to 省略：调用者的工作区
   simulate(input: SimulationInput!): Simulation!
   visibility(input: VisibilityInput!): [EntityVisibility!]!  # 一次返回全部实体 × 适用动作
   adminAccounts: [AdminAccount!]!
@@ -98,7 +98,6 @@ type Configuration {
 
 ```graphql
 type Mutation {
-  createDraft(draft: DraftInput!, comment: String): Revision!
   publish(input: PublishInput!): Revision!   # id、restartRequired、expectedPublished
   rollback(input: RollbackInput!): Revision!
   generateUserToken: UserToken!          # 返回一次性明文 token 与 tokenHash
@@ -107,20 +106,17 @@ type Mutation {
   setAdminPassword(input: SetAdminPasswordInput!): AdminAccount!
 }
 
-input DraftInput {
-  base: ID!                 # 基于哪个 revision
-  entities: [EntityInput!]  # 提供则整块替换该部分
-  roles: [RoleInput!]
-  users: [UserInput!]       # tokenHash 省略时沿用 base 中同名用户的 hash
-  settings: JSON            # 提供则按顶层键覆盖其余部分
-}
 ```
 
-- 未提供的部分沿用 base；合并后的配置走与 `store import` 相同的链路（解码、
-  默认值、校验、store 模式密钥规则、规范化），因此 API 与 CLI 产出的 payload
-  完全一致；
+- 编辑写入调用者的工作区（`editWorkspace`，见 [版本管理](versioning.md) 与
+  [编辑语义](editing.md)），草稿由 `checkpointWorkspace` 保存；`EntityInput`、
+  `RoleInput`、`UserInput` 是工作区项的形状。由项构建配置走与 `store import`
+  相同的链路（解码、默认值、校验、store 模式密钥规则、规范化），因此 API 与 CLI
+  产出的 payload 完全一致；（原 `createDraft(draft: DraftInput!)` 与客户端上传整份
+  本地副本的 `DraftInput` 已删除，见 editing.md。）
 - 数据源与 DSN 本版不可通过 API 修改（避免经后台写入凭据），改由 CLI；
-- validate、diff、simulate 都接受未保存的 `DraftInput`，前端可在提交前预览；
+- validate、diff、simulate、visibility 默认针对调用者的工作区（控制台先写出本地
+  修改），也可指定 revision；配置 MCP 的查询读已发布配置；
 - simulate 不访问数据库：用配置离线构建实体注册表与授权策略，返回是否允许、
   可见字段、行范围（以与 `rowPolicies` 相同的 JSON 形式）、覆盖授权项与
   `AMBIGUOUS_FIELD_SCOPE` 的可选字段集；
@@ -202,8 +198,7 @@ input DraftInput {
   引用，并限定因此产生歧义的已有引用）、注释映射为 description、
   主键、全部列；单列外键生成候选关系（子表 `belongs-to` 父表，父表 `has-many`
   子表）；**不含任何角色、授权或行策略**，即导入后对任何主体都不可访问；
-- 导入本身不写入 store：前端把选中的候选实体放进 `DraftInput.entities` 后
-  `createDraft`，授权必须另外显式配置。
+- 导入写入调用者的工作区（候选实体作为实体项写入），授权必须另外显式配置。
 
 ## 实现落点
 

@@ -102,7 +102,7 @@ func entityOf(t *testing.T, p Proposal, id string) config.EntityConfig {
 // does before it shows or saves one.
 func valid(t *testing.T, base *config.Config, p Proposal) *config.Config {
 	t.Helper()
-	payload, err := revisionops.Normalize(base)
+	payload, err := revisionops.Normalize(config.SpecOf(base))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,6 +200,18 @@ func TestSyncFollowsReferences(t *testing.T) {
 	) {
 		t.Fatalf("exceptions = %v", got)
 	}
+
+	// A row filter names its field by value ({op, field, value}), within
+	// and/or too; a key such as "op" is no field.
+	filtered := decode(t, strings.Replace(baseYAML, "fields: {read: [id, gone]}",
+		"fields: {read: [id]}\n        rows: {and: [{op: eq, field: gone, value: 1}, {op: is_null, field: id}]}", 1))
+	p = evaluate(t, filtered, Plan{Scope: Scope{Drift: true}, Sync: &SyncRule{Remove: true}})
+	if got := kinds(p.Report.Exceptions); !slices.Equal(
+		got,
+		[]string{"referenced shop.public.customers gone: rows of role:analyst"},
+	) {
+		t.Fatalf("exceptions = %v", got)
+	}
 }
 
 func TestNamesExclusionsAndAmbiguity(t *testing.T) {
@@ -220,11 +232,11 @@ roles:
 	}
 	if got := kinds(p.Report.Exceptions); !slices.Equal(
 		got,
-		[]string{"qualified role:ops orders → shop.sales.orders"},
+		[]string{"qualified role:ops orders → sales.orders"},
 	) {
 		t.Fatalf("exceptions = %v", got)
 	}
-	if g := p.Config.Roles["ops"].Grants[0]; g.Entity != "shop.sales.orders" {
+	if g := p.Config.Roles["ops"].Grants[0]; g.Entity != "sales.orders" {
 		t.Fatalf("the ambiguous reference is kept: %+v", g)
 	}
 	valid(t, base, p)

@@ -1,6 +1,7 @@
 package mysql
 
 import (
+	"database/sql/driver"
 	"errors"
 	"slices"
 	"testing"
@@ -50,5 +51,17 @@ func TestClassifyRefusals(t *testing.T) {
 		if !errors.Is(err, store.ErrPermissionDenied) {
 			t.Errorf("%d: %v", number, err)
 		}
+	}
+}
+
+// A connection broken in the middle of a command leaves the command's outcome
+// unknown; one found broken before it was sent does not.
+func TestClassifyLostConnections(t *testing.T) {
+	t.Parallel()
+	if err := classify(mysqldriver.ErrInvalidConn); !errors.Is(err, store.ErrConnectionLost) {
+		t.Errorf("ErrInvalidConn = %v", err)
+	}
+	if err := classify(driver.ErrBadConn); errors.Is(err, store.ErrConnectionLost) {
+		t.Errorf("ErrBadConn = %v", err)
 	}
 }

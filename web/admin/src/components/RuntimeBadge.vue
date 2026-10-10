@@ -13,12 +13,12 @@ const state = computed(() => {
   const applied = server?.appliedRevision
   const published = status.publishedId
   if (!server || !applied) return null
-  if (server.pending) {
-    return server.pending.restartRequired
-      ? { type: 'warning' as const, label: t('runtime.pendingRestart', { id: server.pending.id }),
+  if (server.unapplied) {
+    return server.unapplied.restartRequired
+      ? { type: 'warning' as const, label: t('runtime.pendingRestart', { id: server.unapplied.id }),
           hint: t('runtime.restartHint', { applied }) }
-      : { type: 'error' as const, label: t('runtime.failed', { id: server.pending.id }),
-          hint: `${t('runtime.failedHint', { applied })} ${server.pending.error}` }
+      : { type: 'error' as const, label: t('runtime.failed', { id: server.unapplied.id }),
+          hint: `${t('runtime.failedHint', { applied })} ${server.unapplied.error}` }
   }
   if (published && published !== applied) {
     return server.watching

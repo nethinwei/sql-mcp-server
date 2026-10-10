@@ -116,7 +116,7 @@ func runServe(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = runtime.Close() }()
+	defer closeRuntime(runtime)
 	metrics.SetAuditDropped(auditDroppedReader(runtime))
 	src.watchOn(ctx, execution, *watch, runtime, build, *watchInterval, explicit["watch-interval"])
 	adminHandler, err := adminFlags.handler(src, runtime, execution, cfg, *transport, *watch)
@@ -145,6 +145,17 @@ func closeBus(b *bus.Bus) {
 	defer cancel()
 	if err := b.Close(ctx); err != nil {
 		slog.Warn("background tasks did not stop in time", "tasks", fmt.Sprint(b.Stats().Tasks))
+	}
+}
+
+// closeRuntime drains the requests in flight and closes the runtime's
+// configurations, giving up past the deadline (a database call or audit sink
+// that hangs must not hold up the exit), as closeBus does.
+func closeRuntime(r *bootstrap.Runtime) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := r.CloseContext(ctx); err != nil {
+		slog.Warn("closing the configuration did not finish in time", "error", err.Error())
 	}
 }
 
@@ -511,8 +522,9 @@ func runExport(args []string, stdout io.Writer) error {
 	return err
 }
 
-// exportYAML is the deterministic export encoding, also used as the payload
-// of configuration store revisions.
+// exportYAML is the deterministic export encoding of the configuration in
+// effect (store revisions keep what a configuration says instead; see
+// configyaml.EncodeSpec).
 func exportYAML(cfg *config.Config) ([]byte, error) {
 	return configyaml.Encode(cfg)
 }

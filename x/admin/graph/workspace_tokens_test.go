@@ -6,6 +6,9 @@ import (
 	"testing"
 
 	"github.com/99designs/gqlgen/client"
+
+	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/x/configedit"
 )
 
 const rotated = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
@@ -16,14 +19,12 @@ func TestMergeDraftCarriesTokenChanges(t *testing.T) {
 	for name, token := range map[string]string{"revoked": "", "rotated": rotated} {
 		t.Run(name, func(t *testing.T) {
 			h, c := planningHarness(t)
-			var drafted struct{ CreateDraft struct{ ID string } }
-			mustPost(t, c, `mutation($d: DraftInput!) { createDraft(draft: $d, comment: "token") { id } }`, &drafted,
-				client.Var("d", map[string]any{"base": "1", "users": []any{
-					map[string]any{"name": "alice", "roles": []any{"analyst"}, "tokenHash": token},
-				}}))
+			drafted := h.draftOn(t, "1", configedit.Edit{Users: []configedit.User{
+				{Name: "alice", UserSpec: config.UserSpec{Roles: config.List[string]{"analyst"}, TokenHash: &token}},
+			}})
 			var merged struct{ MergeDraft workspaceState }
 			mustPost(t, c, `mutation($id: ID!) { mergeDraft(id: $id) { base version sections conflicts { id } } }`,
-				&merged, client.Var("id", drafted.CreateDraft.ID))
+				&merged, client.Var("id", drafted))
 			// A user without a token has no hash in the workspace.
 			alice := merged.MergeDraft.Sections["users"].([]any)[0].(map[string]any)
 			if hash, _ := alice["tokenHash"].(string); hash != token || len(merged.MergeDraft.Conflicts) != 0 {
@@ -66,7 +67,7 @@ func TestConcurrentTokenRotationsConflict(t *testing.T) {
 // A token revoked here and in a draft taken in is the same change: an empty
 // hash is no token.
 func TestRevokedTwiceDoesNotConflict(t *testing.T) {
-	_, c := planningHarness(t)
+	h, c := planningHarness(t)
 	var read struct{ Workspace workspaceState }
 	mustPost(t, c, readWorkspace, &read)
 	alice := read.Workspace.Sections["users"].([]any)[0].(map[string]any)
@@ -75,12 +76,12 @@ func TestRevokedTwiceDoesNotConflict(t *testing.T) {
 	mustPost(t, c, editMutation, &edited, client.Var("in", map[string]any{"items": []any{
 		map[string]any{"kind": "user", "key": "alice", "value": revoked, "previous": alice},
 	}}))
-	var drafted struct{ CreateDraft struct{ ID string } }
-	mustPost(t, c, `mutation($d: DraftInput!) { createDraft(draft: $d, comment: "revoke") { id } }`, &drafted,
-		client.Var("d", map[string]any{"base": "1", "users": []any{revoked}}))
+	drafted := h.draftOn(t, "1", configedit.Edit{Users: []configedit.User{
+		{Name: "alice", UserSpec: config.UserSpec{Roles: config.List[string]{"analyst"}}},
+	}})
 	var merged struct{ MergeDraft workspaceState }
 	mustPost(t, c, `mutation($id: ID!) { mergeDraft(id: $id) { base version sections conflicts { id path } } }`,
-		&merged, client.Var("id", drafted.CreateDraft.ID))
+		&merged, client.Var("id", drafted))
 	if len(merged.MergeDraft.Conflicts) != 0 {
 		t.Fatalf("conflicts = %+v", merged.MergeDraft.Conflicts)
 	}

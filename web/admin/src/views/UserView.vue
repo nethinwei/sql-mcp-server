@@ -16,7 +16,8 @@ import { run } from '@/api/client'
 import { GenerateUserTokenMutation } from '@/api/ops'
 import McpConnect from '@/components/McpConnect.vue'
 import { can } from '@/api/session'
-import type { Action, GrantInput } from '@/gql/graphql'
+import type { Action } from '@/gql/graphql'
+import type { GrantInput } from '@/gql/schema'
 
 const props = defineProps<{ name: string }>()
 const { t } = useI18n()
@@ -178,7 +179,7 @@ onMounted(() => { if (route.query.token && editable.value && tokenState.value ==
     </n-card>
 
     <n-card size="small" :title="t('visibility.userTitle')">
-      <visibility-table :who="user.name" :draft="ws.draft" live compact
+      <visibility-table :who="user.name" :revision="null" :entities="ws.entities" :context="ws.contextKey" live compact
         @pick="(e, a, f) => simulatePick(name, e, a, f)" />
     </n-card>
   </n-space>

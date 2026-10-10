@@ -68,7 +68,7 @@ make build
 
 ### 开发与维护
 
-- [架构](docs/architecture.md)与[不变量](docs/invariants.md)；
+- [架构](docs/architecture.md)、[不变量](docs/invariants.md)与[术语表](docs/glossary.md)；
 - [测试与 CI](docs/testing.md)：测试命令、CI、fuzz 和发布前门禁；
 - [贡献指南](CONTRIBUTING.md)。
 

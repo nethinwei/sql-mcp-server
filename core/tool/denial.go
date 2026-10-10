@@ -48,6 +48,7 @@ const (
 	CodeConstraintViolation = "CONSTRAINT_VIOLATION"
 	CodeDatasourceForbidden = "DATASOURCE_FORBIDDEN"
 	CodeAmbiguousEntity     = "AMBIGUOUS_ENTITY"
+	CodeOutcomeUnknown      = "OUTCOME_UNKNOWN"
 )
 
 var sentinelDenials = []struct {
@@ -105,6 +106,21 @@ func DenialFor(err error, decisionID string) (Denial, bool) {
 
 // typedDenial maps the error types that carry constraints for the agent.
 func typedDenial(err error) (Denial, bool) {
+	if errors.Is(err, ErrOutcomeUnknown) {
+		// Not retryable as is: a blind retry may apply the write twice.
+		return Denial{
+			Code: CodeOutcomeUnknown, Reason: ErrOutcomeUnknown.Error(), Retryable: false,
+			Hints: []string{"read the rows the write affects (or, for a commit, what the transaction wrote) " +
+				"before deciding to retry"},
+		}, true
+	}
+	var ended *TransactionEndedError
+	if errors.As(err, &ended) {
+		return Denial{
+			Code: CodeTransactionNotFound, Reason: ended.Error(), Retryable: false,
+			Constraints: map[string]any{"outcome": ended.Outcome},
+		}, true
+	}
 	var ce *cost.ExceededError
 	if errors.As(err, &ce) {
 		return costDenial(ce, ""), true

@@ -6,10 +6,10 @@ import {
   NAlert, NBadge, NButton, NCard, NCollapse, NCollapseItem, NDataTable, NInput, NRadioButton, NRadioGroup,
   NSwitch, NTag, NText, NTooltip, useThemeVars, type DataTableColumns, type DataTableRowKey,
 } from 'naive-ui'
-import { run } from '@/api/client'
 import { CatalogQuery, CatalogRefsQuery } from '@/api/ops'
 import type { CatalogFilter, CatalogQuery as CatalogResult, TableStatus } from '@/gql/graphql'
 import { useWorkspace } from '@/stores/workspace'
+import { workspace } from '@/lib/workspaceSync'
 import { can } from '@/api/session'
 import { scans } from '@/lib/schemaScans'
 import { patterns, scopeOf, type Plan } from '@/lib/plan'
@@ -58,7 +58,6 @@ const filter = computed<CatalogFilter>(() => ({
   status: status.value === 'ALL' ? undefined : [status.value],
   drift: drift.value || undefined,
 }))
-const draft = () => (ws.computeDraft)
 
 const result = ref<CatalogResult['catalog'] | null>(null)
 /** The filter the shown rows answer. */
@@ -74,8 +73,8 @@ async function load() {
   const key = filterKey(filter.value)
   loading.value = true
   try {
-    const { catalog } = await run(CatalogQuery, { input: {
-      filter: filter.value, draft: draft(), offset: (page.page - 1) * page.pageSize, limit: page.pageSize,
+    const { catalog } = await workspace.read(CatalogQuery, { input: {
+      filter: filter.value, offset: (page.page - 1) * page.pageSize, limit: page.pageSize,
     } })
     if (mine !== seq) return
     result.value = catalog
@@ -126,7 +125,7 @@ function onCheck(keys: DataTableRowKey[]) {
 async function recount() {
   const s = selection.value
   if (s.mode !== 'filter') return
-  const { catalog } = await run(CatalogQuery, { input: { filter: s.filter, draft: draft(), offset: 0, limit: 0 } })
+  const { catalog } = await workspace.read(CatalogQuery, { input: { filter: s.filter, offset: 0, limit: 0 } })
   selection.value = withTotal(selection.value, catalog.total)
 }
 const toConfirm = computed(() => needsConfirm(selection.value))
@@ -155,7 +154,7 @@ watch([() => (selection.value.mode === 'refs' ? selection.value.refs.size : 0), 
   if (!n || matched.value?.key === key) return
   const mine = ++matchedSeq
   try {
-    const { catalogRefs } = await run(CatalogRefsQuery, { filter: filter.value, draft: draft() })
+    const { catalogRefs } = await workspace.read(CatalogRefsQuery, { filter: filter.value })
     if (mine === matchedSeq) matched.value = { key, refs: catalogRefs }
   } catch {
     if (mine === matchedSeq) matched.value = null

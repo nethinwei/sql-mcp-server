@@ -65,6 +65,10 @@ type revisionOut struct {
 	Comment string `json:"comment"`
 }
 
+// agentsRead is what agents read, but for plans (preview and apply), which
+// they make in their administrator's workspace.
+var agentsRead = configapp.Against{}
+
 func toRevisionOut(r revision.Revision) revisionOut {
 	state := strings.ToUpper(strings.ReplaceAll(string(r.State), "-", "_"))
 	out := revisionOut{ID: id(r.ID), State: state, Author: r.Author, Comment: r.Comment}
@@ -135,14 +139,14 @@ func add[In any](s *mcp.Server, t *mcp.Tool, fn func(context.Context, In) (any, 
 	})
 }
 
-func register(s *mcp.Server, app *configapp.Service) {
+func register(s *mcp.Server, app Service) {
 	registerCatalog(s, app)
 	registerScans(s, app)
 	registerPlans(s, app)
 	registerReads(s, app)
 }
 
-func registerCatalog(s *mcp.Server, app *configapp.Service) {
+func registerCatalog(s *mcp.Server, app Service) {
 	add(s, tool("catalog_search", "Search the scanned tables of every datasource (the token's), a page at a time, "+
 		"with their status against the published configuration, counts by status and what is scanned of each "+
 		"datasource.", true),
@@ -151,37 +155,37 @@ func registerCatalog(s *mcp.Server, app *configapp.Service) {
 			if limit == 0 {
 				limit = 50
 			}
-			return app.Catalog(ctx, in.CatalogFilter, nil, in.Offset, limit)
+			return app.Catalog(ctx, in.CatalogFilter, agentsRead, in.Offset, limit)
 		})
 	add(s, tool("catalog_table", "One scanned table in full: columns, keys, indexes, foreign keys and the entity "+
 		"proposed for it.", true),
 		func(ctx context.Context, in refIn) (any, error) {
-			c, err := app.CatalogTable(ctx, in.Ref, nil)
+			c, err := app.CatalogTable(ctx, in.Ref, agentsRead)
 			if err != nil || c == nil {
 				return nil, err
 			}
 			return toTableOut(in.Ref, *c), nil
 		})
 	add(s, tool("catalog_links", "The foreign keys of a scanned table and those of other tables referencing it.", true),
-		func(ctx context.Context, in refIn) (any, error) { return app.CatalogLinks(ctx, in.Ref, nil) })
+		func(ctx context.Context, in refIn) (any, error) { return app.CatalogLinks(ctx, in.Ref, agentsRead) })
 	add(s, tool("plan_scope", "How many tables a plan scope selects, the first few, and how many each condition "+
 		"selects alone: check a scope before writing rules.", true),
-		func(ctx context.Context, in scopeIn) (any, error) { return app.PlanScope(ctx, in.Scope, nil) })
+		func(ctx context.Context, in scopeIn) (any, error) { return app.PlanScope(ctx, in.Scope, agentsRead) })
 }
 
-func registerReads(s *mcp.Server, app *configapp.Service) {
+func registerReads(s *mcp.Server, app Service) {
 	add(s, tool("plan_templates", "The saved plan templates.", true),
 		func(ctx context.Context, _ none) (any, error) { return app.PlanTemplates(ctx) })
 	add(s, tool("pending", "What waits for review: recurring templates with new matches or rules they cannot "+
 		"apply, tables whose fields differ from their columns, tables not imported and schemas never scanned.", true),
-		func(ctx context.Context, _ none) (any, error) { return app.Pending(ctx, nil) })
+		func(ctx context.Context, _ none) (any, error) { return app.Pending(ctx, agentsRead) })
 	add(s, tool("diff", "Unified diff between two revisions, a page of lines at a time; secrets are redacted.", true),
 		func(ctx context.Context, in diffIn) (any, error) {
-			var to *string
+			var to configapp.Against
 			if in.To != "" {
-				to = &in.To
+				to.Revision = &in.To
 			}
-			out, err := app.Diff(ctx, in.From, to, nil)
+			out, err := app.Diff(ctx, in.From, to)
 			if err != nil {
 				return nil, err
 			}
@@ -193,7 +197,7 @@ func registerReads(s *mcp.Server, app *configapp.Service) {
 			req := configapp.SimulateRequest{User: in.User, Entity: in.Entity, Action: in.Action, Fields: in.Fields,
 				Subject: in.Subject}
 			if in.Revision != "" {
-				req.Revision = &in.Revision
+				req.Against.Revision = &in.Revision
 			}
 			return app.Simulate(ctx, req)
 		})

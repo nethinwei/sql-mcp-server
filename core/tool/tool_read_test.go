@@ -365,7 +365,7 @@ func TestBuildReadExpressionKeysetSort(t *testing.T) {
 		Limit:  10,
 	}
 	plan := readPlan{
-		dec: rbac.Decision{Allowed: true, Fields: []string{"a", "b"}},
+		grant: grant{rbac.Decision{Allowed: true, Fields: []string{"a", "b"}}},
 	}
 	plan.full, plan.keysetCols = keysetAfter(e.PrimaryKey(), in.Cursor)
 	expr := buildReadExpression(res, in, plan)

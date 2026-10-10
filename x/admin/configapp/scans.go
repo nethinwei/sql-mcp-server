@@ -302,7 +302,7 @@ func (r *Service) scanContext(ctx context.Context, datasource string) (*config.C
 		return nil, nil, source{}, err
 	}
 	seen := scans.now()
-	cfg, err := r.SelectConfig(ctx, nil, nil)
+	cfg, err := r.SelectConfig(ctx, Against{})
 	if err != nil {
 		return nil, nil, source{}, err
 	}

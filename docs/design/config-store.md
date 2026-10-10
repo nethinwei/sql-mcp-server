@@ -50,14 +50,17 @@
 | `id` | 单调递增，发布后不可复用 |
 | `parent_id` | 创建该 draft 时基于的 revision（可空） |
 | `content_hash` | `sha256:` + payload 字节的 SHA-256 |
-| `payload` | 规范化后的确定性 export YAML |
+| `payload` | 配置写了什么（`config.Spec`）的规范确定性 YAML，默认值不写出 |
 | `state` | `draft` / `published` / `superseded` / `rolled-back` |
 | `author`、`comment` | 操作者与说明（本版来自 CLI 参数或 OS 用户名） |
 | `created_at`、`published_at` | 时间戳（UTC） |
 
-- **规范化**：任何写入 store 的配置都先经 `configyaml.Decode`（解码、默认值、
-  完整校验），再用 export 序列化成 payload。因此 store 里只会有通过校验的
-  配置，同一语义的配置得到同一 `content_hash`。
+- **规范化**：任何写入 store 的配置都先解码为 `config.Spec`（严格、规范化：
+  `omitempty` 字段写出的零值与空集合视为未写），经 `config.Resolve`（默认值、完整
+  校验）与离线装配检查后，编码 Spec 作为 payload（`revisionops.Normalize`）。因此
+  store 里只会有通过校验的配置，写法相同的配置得到同一 `content_hash`；默认值不写进
+  payload，加载时生效（见 [意图与生效值](spec.md)）。此前存储的 payload 写出了全部
+  生效值，按 Spec 读出时每个值都“写过”，生效值不变，重新编码逐字节相同。
 - **append-only**：revision 内容写入后不再修改，只有 `state` 与
   `published_at` 会变化。
 - **唯一 published**：任一时刻最多一个 revision 处于 `published`。

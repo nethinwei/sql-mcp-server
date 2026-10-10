@@ -36,6 +36,12 @@ func AssembleWithConnections(cfg *config.Config, connections Connections) (*App,
 // assembleWith wires an App on connections, on shared services when shared
 // is not nil and on services of its own otherwise.
 func assembleWith(cfg *config.Config, connections Connections, shared *Shared) (*App, error) {
+	return assembleOn(cfg, connections, shared, nil)
+}
+
+// assembleOn is assembleWith with the shared connections (gs) the work
+// reaches the connections through; nil reaches them as they are.
+func assembleOn(cfg *config.Config, connections Connections, shared *Shared, gs guards) (*App, error) {
 	providers, err := readConnections(cfg, connections)
 	if err != nil {
 		return nil, err
@@ -54,7 +60,7 @@ func assembleWith(cfg *config.Config, connections Connections, shared *Shared) (
 		}
 	}
 	feedback := newFeedbackStore(cfg)
-	sources, txBeginners, prepared, err := buildDataSources(cfg, connections, providers, feedback)
+	sources, txBeginners, prepared, err := buildDataSources(cfg, connections, providers, feedback, gs)
 	if err != nil {
 		closePrepared(prepared)
 		return nil, err
@@ -78,12 +84,22 @@ func assembleWith(cfg *config.Config, connections Connections, shared *Shared) (
 	)
 	app.Connections, app.config = connections, cfg
 	app.WriteTargets = tool.BuildWriteTargets(checked.registry)
-	if shared != nil {
-		app.shared, app.generation = shared, shared.generation.Add(1)
-		app.Transactions.UseBus(shared.bus)
-	}
+	app.attachProcess(cfg, shared)
 	app.assessInBackground(cfg, connections, checked.registry.Entities())
 	return app, nil
+}
+
+// attachProcess gives the App the process's call state when it runs on
+// shared services: that state is the process's, not the configuration's
+// (see Shared). An App on its own keeps its own.
+func (a *App) attachProcess(cfg *config.Config, shared *Shared) {
+	if shared == nil {
+		a.Transactions.SetConnectionLimit(cfg.Transactions.MaxOpenPerConnection)
+		return
+	}
+	a.shared, a.generation = shared, shared.generation.Add(1)
+	a.Transactions, a.Budget, a.Writes, a.ResultMemory = shared.transactions, shared.budget, shared.writes,
+		shared.results
 }
 
 // sharedBus is the bus of shared services; nil without them.
@@ -330,6 +346,7 @@ func buildDataSources(
 	connections Connections,
 	readers map[string]Provider,
 	feedback cost.FeedbackStore,
+	gs guards,
 ) (map[string]tool.DataSource, map[string]store.TxBeginner, map[string]*store.PreparedDB, error) {
 	sources := make(map[string]tool.DataSource, len(connections))
 	txBeginners := make(map[string]store.TxBeginner, len(connections))
@@ -349,14 +366,22 @@ func buildDataSources(
 			return prepared[key]
 		}
 		route := database.Route()
-		source, err := dataSourceForProvider(cfg, name, readers[name], cached(route.Read), feedback, len(connections) == 1)
+		// Each connection's work runs under its own health (see Shared).
+		on := func(connection string) store.DB {
+			wrap, _ := gs.guard(name, connection, byName[connection])
+			return wrap(cached(connection))
+		}
+		source, err := dataSourceForProvider(
+			cfg, name, readers[name], gs.health(name, route.Read), cached(route.Read), feedback, len(connections) == 1,
+		)
 		if err != nil {
 			return nil, nil, prepared, err
 		}
-		source.Write, source.Execute = cached(route.Write), cached(route.Execute)
-		source.ReadTx, source.ReadAfterWrite = readers[name], database.ReadAfterWrite
+		source.DB, source.Write, source.Execute = on(route.Read), on(route.Write), on(route.Execute)
+		_, source.ReadTx = gs.guard(name, route.Read, readers[name])
+		source.ReadAfterWrite = database.ReadAfterWrite
 		sources[name] = source
-		txBeginners[name] = byName[route.Write]
+		_, txBeginners[name] = gs.guard(name, route.Write, byName[route.Write])
 	}
 	return sources, txBeginners, prepared, nil
 }
@@ -365,11 +390,12 @@ func dataSourceForProvider(
 	cfg *config.Config,
 	name string,
 	prov Provider,
+	h *health,
 	db *store.PreparedDB,
 	feedback cost.FeedbackStore,
 	legacyExactSQL bool,
 ) (tool.DataSource, error) {
-	explainer := prov.Explainer()
+	explainer, sampler, supportsAnalyze := planners(prov, h)
 	if cfg.Cost.EnabledOrDefault() && prov.Dialect().Capabilities().ExplainCost && explainer == nil {
 		return tool.DataSource{}, fmt.Errorf(
 			"datasource %q (%s) has no EXPLAIN implementation",
@@ -377,7 +403,6 @@ func dataSourceForProvider(
 			prov.Dialect().Name(),
 		)
 	}
-	sampler, supportsAnalyze := prov.(cost.AnalyzeSampler)
 	if cfg.Cost.AQE.ExplainAnalyze && !supportsAnalyze {
 		return tool.DataSource{}, fmt.Errorf(
 			"datasource %q (%s) does not support EXPLAIN ANALYZE sampling",
@@ -403,6 +428,23 @@ func dataSourceForProvider(
 	}
 	gate := cost.NewGateFromCapabilities(prov.Dialect().Capabilities(), explainer, threshold, feedback)
 	return tool.DataSource{DB: db, Dialect: prov.Dialect(), Gate: gate, Analyze: analyze}, nil
+}
+
+// planners are prov's EXPLAIN and EXPLAIN ANALYZE, under the health of the
+// connection when it has one: they reach the database as its queries do.
+func planners(prov Provider, h *health) (cost.Explainer, cost.AnalyzeSampler, bool) {
+	explainer := prov.Explainer()
+	sampler, supportsAnalyze := prov.(cost.AnalyzeSampler)
+	if h == nil {
+		return explainer, sampler, supportsAnalyze
+	}
+	if explainer != nil {
+		explainer = guardedExplainer{Explainer: explainer, health: h}
+	}
+	if supportsAnalyze {
+		sampler = guardedSampler{AnalyzeSampler: sampler, health: h}
+	}
+	return explainer, sampler, supportsAnalyze
 }
 
 func newAssembleEngine(cfg *config.Config, shared *Shared) (*engine.Engine, error) {
@@ -498,6 +540,7 @@ func newAssembledApp(
 		Budget:       newBudgetManager(cfg.Budget, userBudgets(cfg)),
 		Transactions: tool.NewTransactionManager(cfg.Transactions.TTL, cfg.Transactions.MaxOpen),
 		Writes:       tool.NewWriteTracker(),
+		ResultMemory: tool.NewResultMemory(cfg.RateLimit.MaxResultMemory),
 		TxBeginners:  txBeginners,
 	}
 	applyAssembledAppConfig(app, cfg)

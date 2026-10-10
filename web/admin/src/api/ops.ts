@@ -33,13 +33,8 @@ export const WorkspaceQuery = graphql(`
     published { id }
     revision(id: $id) {
       ...RevisionParts
-      config {
-        datasources { ...DatasourceParts }
-        entities { ...EntityParts }
-        roles { name description members grants { ...GrantParts } }
-        users { name description roles subject disabled tokenHash grants { ...GrantParts } }
-        settings
-      }
+      sections
+      config { datasources { ...DatasourceParts } }
     }
   }
 `)
@@ -47,7 +42,7 @@ export const WorkspaceQuery = graphql(`
 export const StatusQuery = graphql(`
   query Status {
     serverStatus {
-      appliedRevision watching pending { id restartRequired error }
+      appliedRevision watching unapplied { id restartRequired error }
       execution {
         io { size used waiting } aux { size used waiting }
         lanes { name maxConcurrent maxQueue inflight queued rejected completed }
@@ -129,7 +124,7 @@ export const TableCommentsQuery = graphql(`
 `)
 
 export const ValidateQuery = graphql(`
-  query Validate($draft: DraftInput!) { validate(draft: $draft) { ok error contentHash restartRequired warnings } }
+  query Validate($revision: ID) { validate(revision: $revision) { ok error contentHash restartRequired warnings } }
 `)
 
 export const CapabilitiesQuery = graphql(`
@@ -137,7 +132,7 @@ export const CapabilitiesQuery = graphql(`
 `)
 
 export const DiffQuery = graphql(`
-  query Diff($from: ID!, $to: ID, $draft: DraftInput) { diff(from: $from, to: $to, draft: $draft) }
+  query Diff($from: ID!, $to: ID) { diff(from: $from, to: $to) }
 `)
 
 export const SimulateQuery = graphql(`
@@ -152,12 +147,6 @@ export const VisibilityQuery = graphql(`
       entity
       actions { action result { allowed reason fields rowFilter grants fieldScopes } }
     }
-  }
-`)
-
-export const CreateDraftMutation = graphql(`
-  mutation CreateDraft($draft: DraftInput!, $comment: String) {
-    createDraft(draft: $draft, comment: $comment) { ...RevisionParts }
   }
 `)
 
@@ -218,18 +207,18 @@ export const CatalogQuery = graphql(`
 `)
 
 export const CatalogRefsQuery = graphql(`
-  query CatalogRefs($filter: CatalogFilter!, $draft: DraftInput) { catalogRefs(filter: $filter, draft: $draft) }
+  query CatalogRefs($filter: CatalogFilter!) { catalogRefs(filter: $filter) }
 `)
 
 export const CatalogTableQuery = graphql(`
-  query CatalogTable($ref: String!, $draft: DraftInput) {
-    catalogTable(ref: $ref, draft: $draft) { ...ImportTableParts }
+  query CatalogTable($ref: String!) {
+    catalogTable(ref: $ref) { ...ImportTableParts }
   }
 `)
 
 export const CatalogLinksQuery = graphql(`
-  query CatalogLinks($ref: String!, $draft: DraftInput) {
-    catalogLinks(ref: $ref, draft: $draft) {
+  query CatalogLinks($ref: String!) {
+    catalogLinks(ref: $ref) {
       outgoing { ref name columns refColumns entity }
       incoming { ref name columns refColumns entity }
     }
@@ -237,8 +226,8 @@ export const CatalogLinksQuery = graphql(`
 `)
 
 export const PlanScopeQuery = graphql(`
-  query PlanScope($scope: JSON!, $draft: DraftInput) {
-    planScope(scope: $scope, draft: $draft) {
+  query PlanScope($scope: JSON!) {
+    planScope(scope: $scope) {
       total samples { ...CatalogRowParts } conditions { name value matched }
     }
   }
@@ -255,8 +244,8 @@ export const PlanReportPartsFragment = graphql(`
 `)
 
 export const PreviewPlanQuery = graphql(`
-  query PreviewPlan($plan: JSON!, $draft: DraftInput, $review: Boolean) {
-    previewPlan(input: { plan: $plan, draft: $draft, review: $review }) {
+  query PreviewPlan($plan: JSON!, $review: Boolean) {
+    previewPlan(input: { plan: $plan, review: $review }) {
       planId
       report { ...PlanReportParts }
       added
@@ -293,8 +282,8 @@ export const PendingStatePartsFragment = graphql(`
 `)
 
 export const PendingQuery = graphql(`
-  query Pending($draft: DraftInput) {
-    pending(draft: $draft) {
+  query Pending {
+    pending {
       drift newTables unscannedSchemas unlistedDatasources
       plans { key template { ...PlanTemplateParts } report { ...PlanReportParts } state { ...PendingStateParts } }
       driftTables { key ref entity added missing state { ...PendingStateParts } }
@@ -396,4 +385,8 @@ export const ApplyPlanMutation = graphql(`
 
 export const DraftsQuery = graphql(`
   query Drafts { drafts { basedOn revision { ...RevisionParts } } }
+`)
+
+export const FieldReferencesQuery = graphql(`
+  query FieldReferences($entity: ID!) { fieldReferences(entity: $entity) { field kind name via } }
 `)

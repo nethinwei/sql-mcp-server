@@ -85,9 +85,11 @@ func (s *Scans) catalogRows(pc planContext, f CatalogFilter) ([]int32, CatalogCo
 	return out, counts, x
 }
 
-// Catalog pages through the scanned tables matching f, against draft
-// (default: the published configuration).
-func (r *Service) Catalog(ctx context.Context, f CatalogFilter, draft *Draft, offset, limit int) (*CatalogPage, error) {
+// Catalog pages through the scanned tables matching f, against the
+// configuration against is.
+func (r *Service) Catalog(
+	ctx context.Context, f CatalogFilter, against Against, offset, limit int,
+) (*CatalogPage, error) {
 	who, err := auth.Require(ctx, auth.PermWrite)
 	if err != nil {
 		return nil, err
@@ -95,7 +97,7 @@ func (r *Service) Catalog(ctx context.Context, f CatalogFilter, draft *Draft, of
 	if err := withinFilter(who, &f); err != nil {
 		return nil, err
 	}
-	pc, err := r.planContext(ctx, draft)
+	pc, err := r.planContextOf(ctx, against)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +121,7 @@ func refSchema(t entity.Entity, fk entity.ForeignKey) string {
 }
 
 // CatalogRefs lists the refs of every table matching f.
-func (r *Service) CatalogRefs(ctx context.Context, f CatalogFilter, draft *Draft) ([]string, error) {
+func (r *Service) CatalogRefs(ctx context.Context, f CatalogFilter, against Against) ([]string, error) {
 	who, err := auth.Require(ctx, auth.PermWrite)
 	if err != nil {
 		return nil, err
@@ -127,7 +129,7 @@ func (r *Service) CatalogRefs(ctx context.Context, f CatalogFilter, draft *Draft
 	if err := withinFilter(who, &f); err != nil {
 		return nil, err
 	}
-	pc, err := r.planContext(ctx, draft)
+	pc, err := r.planContextOf(ctx, against)
 	if err != nil {
 		return nil, err
 	}
@@ -195,11 +197,11 @@ func sourceOfRef(pc planContext, ref string) (configplan.Source, bool) {
 
 // CatalogTable is one scanned table in full, with the entity proposed for
 // it; nil when no scanned table has the ref.
-func (r *Service) CatalogTable(ctx context.Context, ref string, draft *Draft) (*configplan.Candidate, error) {
+func (r *Service) CatalogTable(ctx context.Context, ref string, against Against) (*configplan.Candidate, error) {
 	if _, err := auth.RequireDatasource(ctx, auth.PermWrite, refDatasource(ref)); err != nil {
 		return nil, err
 	}
-	pc, err := r.planContext(ctx, draft)
+	pc, err := r.planContextOf(ctx, against)
 	if err != nil {
 		return nil, err
 	}
@@ -225,11 +227,11 @@ func (r *Service) CatalogTable(ctx context.Context, ref string, draft *Draft) (*
 // CatalogLinks lists the foreign keys of a table and those referencing it,
 // among the scanned tables of its datasource, with the entities reading the
 // other tables.
-func (r *Service) CatalogLinks(ctx context.Context, ref string, draft *Draft) (*CatalogLinks, error) {
+func (r *Service) CatalogLinks(ctx context.Context, ref string, against Against) (*CatalogLinks, error) {
 	if _, err := auth.RequireDatasource(ctx, auth.PermWrite, refDatasource(ref)); err != nil {
 		return nil, err
 	}
-	pc, err := r.planContext(ctx, draft)
+	pc, err := r.planContextOf(ctx, against)
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +268,7 @@ func (r *Service) CatalogLinks(ctx context.Context, ref string, draft *Draft) (*
 }
 
 // PlanScope counts what a scope selects, and each of its conditions alone.
-func (r *Service) PlanScope(ctx context.Context, scope configplan.Scope, draft *Draft) (*ScopeStats, error) {
+func (r *Service) PlanScope(ctx context.Context, scope configplan.Scope, against Against) (*ScopeStats, error) {
 	who, err := auth.Require(ctx, auth.PermWrite)
 	if err != nil {
 		return nil, err
@@ -277,7 +279,7 @@ func (r *Service) PlanScope(ctx context.Context, scope configplan.Scope, draft *
 	if err := (&configplan.Plan{Scope: scope, Import: true}).Check(); err != nil {
 		return nil, err
 	}
-	pc, err := r.planContext(ctx, draft)
+	pc, err := r.planContextOf(ctx, against)
 	if err != nil {
 		return nil, err
 	}

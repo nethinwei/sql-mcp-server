@@ -5,8 +5,8 @@ import {
   NAlert, NButton, NCheckbox, NCheckboxGroup, NCollapse, NCollapseItem, NDivider, NForm, NFormItem, NInput, NSelect,
   NSpace, NSpin, NSwitch, NTag, NText,
 } from 'naive-ui'
-import { run } from '@/api/client'
 import { PlanScopeQuery } from '@/api/ops'
+import { workspace } from '@/lib/workspaceSync'
 import type { PlanScopeQuery as ScopeStats } from '@/gql/graphql'
 import { useWorkspace } from '@/stores/workspace'
 import { cleanPlan, patterns, tasksOf, type Plan, type PlanStatus, type PlanTask } from '@/lib/plan'
@@ -96,7 +96,7 @@ watch([() => JSON.stringify(cleanPlan(plan.value).scope), () => ws.contextKey], 
     const mine = ++seq
     statsLoading.value = true
     try {
-      const { planScope } = await run(PlanScopeQuery, { scope: JSON.parse(scope), draft: ws.computeDraft })
+      const { planScope } = await workspace.read(PlanScopeQuery, { scope: JSON.parse(scope) })
       if (mine !== seq) return
       stats.value = planScope
       statsError.value = ''

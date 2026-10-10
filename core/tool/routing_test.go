@@ -170,8 +170,8 @@ func TestReadsFollowingAWriteSkipSharedResults(t *testing.T) {
 		t.Fatalf("statements on %v, transactions on %v: the writer must read its write, not the shared cache",
 			used, began)
 	}
-	mine, _ := engineSubmitKey(ReadTool{}, json.RawMessage(read), tc)
-	theirs, _ := engineSubmitKey(ReadTool{}, json.RawMessage(read), other)
+	mine, _ := engineSubmitKey(bg, ReadTool{}, json.RawMessage(read), tc)
+	theirs, _ := engineSubmitKey(bg, ReadTool{}, json.RawMessage(read), other)
 	if mine == theirs {
 		t.Fatal("a session reading its writes must not share another session's in-flight read")
 	}

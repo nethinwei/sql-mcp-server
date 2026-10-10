@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"context"
 	"maps"
 	"slices"
 	"strings"
@@ -172,7 +173,7 @@ func physicalDatabase(e entity.Entity) string {
 
 // afterWrite applies a write through e outside a transaction, or marks what it
 // changed for the commit of one.
-func afterWrite(tc Context, e entity.Entity, transaction string) error {
+func afterWrite(ctx context.Context, tc Context, e entity.Entity, transaction string) error {
 	w := writeTargets(tc)
 	targets, ok := w.byEntity[e.Name]
 	if !ok {
@@ -184,7 +185,7 @@ func afterWrite(tc Context, e entity.Entity, transaction string) error {
 	if tc.Transactions == nil {
 		return ErrTransactionNotFound
 	}
-	return tc.Transactions.MarkDirty(transaction, tc.Session, tc.Role, tc.Subject, e.DatasourceName(),
+	return tc.Transactions.MarkDirty(ctx, transaction, tc.Session, tc.Role, tc.Subject, e.DatasourceName(),
 		txConnections(tc, e.DatasourceName()), targets...)
 }
 

@@ -54,7 +54,7 @@ func catalogBench(b *testing.B) (*Service, context.Context) {
 }
 
 func catalogPage(ctx context.Context, b *testing.B, r *Service, search string, offset int, schemas ...string) {
-	out, err := r.Catalog(ctx, CatalogFilter{Search: &search, Schemas: schemas}, nil, offset, 50)
+	out, err := r.Catalog(ctx, CatalogFilter{Search: &search, Schemas: schemas}, Against{}, offset, 50)
 	if err != nil || out.Total != 5000 {
 		b.Fatalf("total = %v, %v", out, err)
 	}

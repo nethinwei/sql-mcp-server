@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,7 +24,9 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 	"github.com/nethinwei/sql-mcp-server/x/admin/scanjobs"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
+	"github.com/nethinwei/sql-mcp-server/x/configedit"
 	_ "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
+	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 )
 
 const baseYAML = `databases:
@@ -178,55 +181,63 @@ func scanSchema(t *testing.T, c *client.Client, args string) {
 	t.Fatal("the scan did not finish")
 }
 
-func TestCreateDraftMergesSectionsAndNormalizesValues(t *testing.T) {
-	h := newHarness(t)
-	c := h.client(auth.PermAll)
-	var resp struct{ CreateDraft struct{ ID string } }
-	mustPost(t, c, `mutation($d: DraftInput!) { createDraft(draft: $d, comment: "c") { id } }`, &resp,
-		client.Var("d", map[string]any{
-			"base": "1",
-			"entities": []any{
-				map[string]any{
-					"name":       "customers",
-					"datasource": "shop",
-					"fields":     []any{map[string]any{"name": "id"}, map[string]any{"name": "region"}},
-				},
-			},
-			"roles": []any{map[string]any{"name": "analyst", "grants": []any{map[string]any{
+// Items written into the workspace replace their kind's item whole; JSON
+// numbers stay numbers, defaults are left to apply, and what was not written
+// (a user's token) is kept.
+func TestWorkspaceItemsReplaceAndNormalize(t *testing.T) {
+	h, c := planningHarness(t)
+	var read struct{ Workspace workspaceState }
+	mustPost(t, c, readWorkspace, &read)
+	customers := read.Workspace.Sections["entities"].([]any)[0].(map[string]any)
+	analyst := read.Workspace.role("analyst")
+	payload := h.checkpoint(t, c,
+		map[string]any{"kind": "entity", "key": "shop.customers", "previous": customers, "value": map[string]any{
+			"name": "customers", "datasource": "shop",
+			"fields": []any{map[string]any{"name": "id"}, map[string]any{"name": "region"}},
+		}},
+		map[string]any{"kind": "role", "key": "analyst", "previous": analyst, "value": map[string]any{
+			"name": "analyst", "grants": []any{map[string]any{
 				"entity": "customers", "actions": []any{"READ"}, "rows": map[string]any{"op": "eq", "field": "id", "value": 7},
-			}}}},
-			"users": []any{map[string]any{"name": "alice", "roles": []any{"analyst"}}},
-		}))
-	payload := h.payload(t, 2)
+			}},
+		}})
 	for _, want := range []string{
 		"value: 7\n",
 		"tokenHash: sha256:1111111111111111111111111111111111111111111111111111111111111111",
-		"dmlTools: true",
 	} {
 		if !strings.Contains(payload, want) {
 			t.Errorf("draft payload lacks %q:\n%s", want, payload)
 		}
 	}
 	if strings.Contains(payload, "legacy_col") {
-		t.Error("entities must be replaced as a whole")
+		t.Error("an entity must be replaced as a whole")
+	}
+	// What was not written stays unwritten: defaults apply when it loads.
+	if strings.Contains(payload, "dmlTools") || strings.Contains(payload, "maxRows") {
+		t.Errorf("defaults were written out:\n%s", payload)
 	}
 }
 
-func TestDraftRejectsForbiddenSettingsAndPlaintextSecrets(t *testing.T) {
-	h := newHarness(t)
-	c := h.client(auth.PermAll)
-	var resp struct {
-		Validate struct {
-			Ok    bool
-			Error *string
-		}
-	}
+// Validating the workspace rejects settings that are not the workspace's to
+// set and plaintext secrets.
+func TestValidateRejectsForbiddenSettingsAndPlaintextSecrets(t *testing.T) {
 	for settings, want := range map[string]string{
 		`{"databases": {}}`:                    "datasources are managed by the CLI",
 		`{"server": {"auth": {"token": "x"}}}`: "plaintext secrets",
 	} {
-		mustPost(t, c, `query($d: DraftInput!) { validate(draft: $d) { ok error } }`, &resp,
-			client.Var("d", map[string]any{"base": "1", "settings": mustJSON(settings)}))
+		_, c := planningHarness(t)
+		var read struct{ Workspace workspaceState }
+		mustPost(t, c, readWorkspace, &read)
+		var edited struct{ EditWorkspace workspaceState }
+		mustPost(t, c, editMutation, &edited, client.Var("in", map[string]any{"items": []any{map[string]any{
+			"kind": "settings", "key": "settings", "value": mustJSON(settings), "previous": read.Workspace.Sections["settings"],
+		}}}))
+		var resp struct {
+			Validate struct {
+				Ok    bool
+				Error *string
+			}
+		}
+		mustPost(t, c, `{ validate { ok error } }`, &resp)
 		if resp.Validate.Ok || resp.Validate.Error == nil || !strings.Contains(*resp.Validate.Error, want) {
 			t.Errorf("settings %s: %+v", settings, resp.Validate)
 		}
@@ -358,16 +369,14 @@ func TestVisibilityMatchesSimulate(t *testing.T) {
 func TestPublishGuardsRestartAndRollback(t *testing.T) {
 	h := newHarness(t)
 	c := h.client(auth.PermAll)
-	var draft struct{ CreateDraft struct{ ID string } }
-	mustPost(t, c, `mutation { createDraft(draft: {base: "1", settings: {server: {addr: ":9999"}}}) { id } }`, &draft)
+	id := h.draftOn(t, "1", configedit.Edit{Settings: map[string]any{"server": map[string]any{"addr": ":9999"}}})
 	var pub struct{ Publish struct{ State string } }
-	err := c.Post(`mutation($id: ID!) { publish(input: {id: $id}) { state } }`, &pub,
-		client.Var("id", draft.CreateDraft.ID))
+	err := c.Post(`mutation($id: ID!) { publish(input: {id: $id}) { state } }`, &pub, client.Var("id", id))
 	if err == nil || !strings.Contains(err.Error(), "requires restart") {
 		t.Fatalf("restart-required publish err = %v", err)
 	}
 	mustPost(t, c, `mutation($id: ID!) { publish(input: {id: $id, restartRequired: true}) { state } }`, &pub,
-		client.Var("id", draft.CreateDraft.ID))
+		client.Var("id", id))
 	var rb struct{ Rollback struct{ Parent string } }
 	mustPost(t, c, `mutation { rollback(input: {restartRequired: true, comment: "undo"}) { parent } }`, &rb)
 	if rb.Rollback.Parent != "1" {
@@ -378,49 +387,43 @@ func TestPublishGuardsRestartAndRollback(t *testing.T) {
 func TestPublishRejectsStaleBase(t *testing.T) {
 	h := newHarness(t)
 	c := h.client(auth.PermAll)
-	var draft struct{ CreateDraft struct{ ID string } }
-	create := `mutation { createDraft(draft: {base: "1"}, comment: "x") { id } }`
-	mustPost(t, c, create, &draft)
-	first := draft.CreateDraft.ID
-	mustPost(t, c, create, &draft)
+	first, second := h.draftOn(t, "1", configedit.Edit{}), h.draftOn(t, "1", configedit.Edit{})
 	var pub struct{ Publish struct{ ID string } }
 	publish := `mutation($id: ID!, $e: ID) { publish(input: {id: $id, expectedPublished: $e}) { id } }`
 	mustPost(t, c, publish, &pub, client.Var("id", first), client.Var("e", "1"))
-	err := c.Post(publish, &pub, client.Var("id", draft.CreateDraft.ID), client.Var("e", "1"))
+	err := c.Post(publish, &pub, client.Var("id", second), client.Var("e", "1"))
 	if err == nil || !strings.Contains(err.Error(), `"code":"CONFLICT"`) {
 		t.Fatalf("stale publish err = %v", err)
 	}
 	// Naming the new published revision does not help: the draft still
 	// builds on revision 1 and would undo it. Rebased, it publishes.
-	err = c.Post(publish, &pub, client.Var("id", draft.CreateDraft.ID), client.Var("e", first))
+	err = c.Post(publish, &pub, client.Var("id", second), client.Var("e", first))
 	if err == nil || !strings.Contains(err.Error(), `"code":"CONFLICT"`) {
 		t.Fatalf("publish of a draft built on an older revision err = %v", err)
 	}
-	mustPost(t, c, `mutation($b: ID!) { createDraft(draft: {base: $b}, comment: "x") { id } }`, &draft,
-		client.Var("b", first))
-	mustPost(t, c, publish, &pub, client.Var("id", draft.CreateDraft.ID), client.Var("e", first))
+	mustPost(t, c, publish, &pub, client.Var("id", h.draftOn(t, first, configedit.Edit{})), client.Var("e", first))
 }
 
 func TestServerStatus(t *testing.T) {
 	h := newHarness(t)
 	h.resolver.Status = func() RuntimeState {
 		return RuntimeState{Applied: 1, Watching: true,
-			Pending: &bootstrap.StaleState{RevisionID: 2, Err: "x", RestartRequired: true}}
+			Unapplied: &bootstrap.StaleState{RevisionID: 2, Err: "x", RestartRequired: true}}
 	}
 	var resp struct {
 		ServerStatus struct {
 			AppliedRevision string
 			Watching        bool
-			Pending         struct {
+			Unapplied       struct {
 				ID              string
 				RestartRequired bool
 			}
 		}
 	}
-	mustPost(t, h.client(auth.PermRead), `{ serverStatus { appliedRevision watching pending { id restartRequired } } }`,
+	mustPost(t, h.client(auth.PermRead), `{ serverStatus { appliedRevision watching unapplied { id restartRequired } } }`,
 		&resp)
 	st := resp.ServerStatus
-	if st.AppliedRevision != "1" || !st.Watching || st.Pending.ID != "2" || !st.Pending.RestartRequired {
+	if st.AppliedRevision != "1" || !st.Watching || st.Unapplied.ID != "2" || !st.Unapplied.RestartRequired {
 		t.Fatalf("serverStatus = %+v", st)
 	}
 }
@@ -567,36 +570,9 @@ func TestCapabilitiesAndValidationWarnings(t *testing.T) {
 		t.Fatalf("capabilities = %+v", caps.Capabilities)
 	}
 	var resp struct{ Validate struct{ Warnings []string } }
-	mustPost(t, c, `query($d: DraftInput!) { validate(draft: $d) { warnings } }`, &resp,
-		client.Var("d", map[string]any{"base": "1"}))
+	mustPost(t, c, `{ validate(revision: "1") { warnings } }`, &resp)
 	if len(resp.Validate.Warnings) != 1 || !strings.Contains(resp.Validate.Warnings[0], `connection "ro"`) {
 		t.Fatalf("warnings = %q", resp.Validate.Warnings)
-	}
-}
-
-// A draft sends only the sections it changes; a settings section sent as
-// null is removed, and the others are kept from the base.
-func TestDraftKeepsUnsentSectionsAndRemovesNullSettings(t *testing.T) {
-	h := newHarness(t)
-	c := h.client(auth.PermAll)
-	var draft struct{ CreateDraft struct{ ID string } }
-	mustPost(t, c, `mutation($d: DraftInput!) { createDraft(draft: $d) { id } }`, &draft,
-		client.Var("d", map[string]any{"base": "1", "settings": map[string]any{"cost": map[string]any{"maxRows": 7}}}))
-	mustPost(t, c, `mutation($d: DraftInput!) { createDraft(draft: $d) { id } }`, &draft,
-		client.Var("d", map[string]any{"base": draft.CreateDraft.ID, "settings": map[string]any{"cost": nil}}))
-	var rev struct {
-		Revision struct {
-			Config struct {
-				Settings map[string]any
-				Entities []struct{ Name string }
-			}
-		}
-	}
-	mustPost(t, c, `query($id: ID!) { revision(id: $id) { config { settings entities { name } } } }`, &rev,
-		client.Var("id", draft.CreateDraft.ID))
-	cost, _ := rev.Revision.Config.Settings["cost"].(map[string]any)
-	if cost["maxRows"] == float64(7) || len(rev.Revision.Config.Entities) == 0 {
-		t.Fatalf("draft = %+v: cost must be back to its defaults and the entities kept", rev.Revision.Config)
 	}
 }
 
@@ -605,9 +581,7 @@ func TestDraftKeepsUnsentSectionsAndRemovesNullSettings(t *testing.T) {
 func TestDiscardDraft(t *testing.T) {
 	h := newHarness(t)
 	c := h.client(auth.PermAll)
-	var draft struct{ CreateDraft struct{ ID string } }
-	mustPost(t, c, `mutation { createDraft(draft: {base: "1"}, comment: "x") { id } }`, &draft)
-	id := draft.CreateDraft.ID
+	id := h.draftOn(t, "1", configedit.Edit{})
 	discard := `mutation($id: ID!) { discardDraft(id: $id) { id state } }`
 	var resp struct{ DiscardDraft struct{ ID, State string } }
 	if err := h.client(auth.PermRead).Post(discard, &resp, client.Var("id", id)); err == nil {
@@ -624,5 +598,88 @@ func TestDiscardDraft(t *testing.T) {
 	}
 	if err := c.Post(discard, &resp, client.Var("id", "1")); err == nil {
 		t.Fatal("the published revision was discarded")
+	}
+}
+
+// draftOn saves edit on revision base as a draft, as another administrator
+// would have (by checkpointing their workspace); returns its ID.
+func (h *harness) draftOn(t *testing.T, base string, edit configedit.Edit) string {
+	t.Helper()
+	ctx := auth.WithPrincipal(context.Background(), auth.Principal{Username: "other", Permissions: []string{auth.PermAll}})
+	built, err := h.resolver.App.BuildDraft(ctx, configapp.Draft{Base: base, Edit: edit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev, _, err := h.resolver.App.Ops().Draft(ctx, revisionops.DraftRequest{
+		Payload: built.Payload, Parent: built.Base.ID, Author: "other", Comment: "x",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strconv.FormatInt(rev.ID, 10)
+}
+
+// checkpoint writes items into the workspace and saves it as a draft;
+// returns the draft's payload.
+func (h *harness) checkpoint(t *testing.T, c *client.Client, items ...map[string]any) string {
+	t.Helper()
+	var edited struct{ EditWorkspace workspaceState }
+	in := make([]any, 0, len(items))
+	for _, it := range items {
+		in = append(in, it)
+	}
+	mustPost(t, c, editMutation, &edited, client.Var("in", map[string]any{"items": in}))
+	var saved struct{ CheckpointWorkspace struct{ ID string } }
+	mustPost(t, c, `mutation { checkpointWorkspace(comment: "c") { id } }`, &saved)
+	id, _ := strconv.ParseInt(saved.CheckpointWorkspace.ID, 10, 64)
+	return h.payload(t, id)
+}
+
+// A settings section removed in the workspace is removed from what is
+// validated, diffed and simulated against the workspace, as from the draft
+// saved of it.
+func TestWorkspaceRemovesASettingsSection(t *testing.T) {
+	h, c := planningHarness(t)
+	id := h.draftOn(t, "1", configedit.Edit{Settings: map[string]any{"cost": map[string]any{"maxRows": 7}}})
+	n, _ := strconv.ParseInt(id, 10, 64)
+	if _, err := h.store.Publish(context.Background(), n, 1, revision.Meta{}); err != nil {
+		t.Fatal(err)
+	}
+	var read struct{ Workspace workspaceState }
+	mustPost(t, c, readWorkspace, &read)
+	var edited struct{ EditWorkspace workspaceState }
+	mustPost(t, c, editMutation, &edited, client.Var("in", map[string]any{"items": []any{map[string]any{
+		"kind": "settings", "key": "settings", "value": map[string]any{}, "previous": read.Workspace.Sections["settings"],
+	}}}))
+	var diff struct{ Diff string }
+	mustPost(t, c, `query($from: ID!) { diff(from: $from) }`, &diff, client.Var("from", id))
+	if !strings.Contains(diff.Diff, "maxRows") {
+		t.Fatalf("the workspace kept the settings section it removed:\n%s", diff.Diff)
+	}
+	if saved := h.checkpoint(t, c); strings.Contains(saved, "maxRows") {
+		t.Fatalf("the draft saved kept the removed section:\n%s", saved)
+	}
+}
+
+// A workspace whose items do not read as configuration (an agent wrote an
+// item of the wrong shape) validates as failed, like one that reads but is
+// wrong: the review page shows why, instead of the request failing.
+func TestValidateReportsAWorkspaceThatDoesNotRead(t *testing.T) {
+	_, c := planningHarness(t)
+	var read struct{ Workspace workspaceState }
+	mustPost(t, c, readWorkspace, &read)
+	var edited struct{ EditWorkspace workspaceState }
+	mustPost(t, c, editMutation, &edited, client.Var("in", map[string]any{"items": []any{map[string]any{
+		"kind": "settings", "key": "settings", "value": "not settings", "previous": read.Workspace.Sections["settings"],
+	}}}))
+	var resp struct {
+		Validate struct {
+			Ok    bool
+			Error *string
+		}
+	}
+	mustPost(t, c, `{ validate { ok error } }`, &resp)
+	if resp.Validate.Ok || resp.Validate.Error == nil || !strings.Contains(*resp.Validate.Error, "not a configuration") {
+		t.Fatalf("a workspace that does not read validated as %+v", resp.Validate)
 	}
 }

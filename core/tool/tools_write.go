@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/nethinwei/sql-mcp-server/core/codegen"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 )
@@ -54,9 +53,7 @@ func (UpdateTool) Run(ctx context.Context, input json.RawMessage, tc Context) (R
 	if err := normalizeMapValues(in.Set); err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
-	return runFilteredWrite(ctx, tc, in.Transaction, func(ctx context.Context, tc Context) (
-		writePlan, codegen.Compiled, error,
-	) {
+	return runFilteredWrite(ctx, tc, in.Transaction, func(ctx context.Context, tc Context) (statement, error) {
 		return prepareUpdate(ctx, tc, in)
 	})
 }
@@ -79,9 +76,7 @@ func (DeleteTool) Run(ctx context.Context, input json.RawMessage, tc Context) (R
 	if err := decodeInput(input, &in); err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
-	return runFilteredWrite(ctx, tc, in.Transaction, func(ctx context.Context, tc Context) (
-		writePlan, codegen.Compiled, error,
-	) {
+	return runFilteredWrite(ctx, tc, in.Transaction, func(ctx context.Context, tc Context) (statement, error) {
 		return prepareDelete(ctx, tc, in)
 	})
 }

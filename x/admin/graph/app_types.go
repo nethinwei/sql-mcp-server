@@ -6,6 +6,7 @@ import "github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 // GraphQL types (gqlgen binds those names in this package).
 type (
 	CatalogCounts      = configapp.CatalogCounts
+	FieldReference     = configapp.FieldReference
 	CatalogCoverage    = configapp.CatalogCoverage
 	CatalogFilter      = configapp.CatalogFilter
 	CatalogLinks       = configapp.CatalogLinks

@@ -97,8 +97,35 @@ PostgreSQL sampler 始终使用独立 read-only transaction 并 rollback，调�
 
 ## Budget 与执行控制
 
-预算在 session 关闭时清理；行数与 cost 限制的执行时点见
-[security.md](security.md)。`rateLimit.ioPool` 限制并发执行的工具调用数。
+资源限制分层，自外向内逐层收紧，任一层越限即拒绝：
+
+| 层 | 限制 | 计数范围 |
+|---|---|---|
+| 进程 | `rateLimit.maxInflight`、`rps`、`ioPool`、`maxResultMemory`、`transactions.maxOpen` | 进程内所有调用（跨配置重载） |
+| 数据库连接 | 熔断与自适应并发（`rateLimit.breaker*`、`minConcurrency`、`rttThreshold`）、`transactions.maxOpenPerConnection` | 每个连接各自 |
+| 租户 | `budget.tenants.<t>.maxConcurrent` | 该租户所有会话、所有主体的调用合计 |
+| 会话 | `budget.users` / `budget.roles` 的各项，经租户的其余各项逐字段收紧 | 一个主体在一个租户下的一个 MCP 会话 |
+| 调用 | `cost.*`（闸门与 `maxBytes`）、预算的 `maxExecution`、`maxReturnedRows`、`maxReturnedBytes`、`maxEstimatedScannedRows` | 单次工具调用，结果逐行计量 |
+
+会话层的主体限额：用户配置了 `budget.users` 时用它，否则逐项取其各角色中最宽松的值。
+租户层只有 `maxConcurrent` 按租户聚合；其余各项逐字段收紧会话或调用层的限制。
+`maxSessionCost` 是一个会话的累计成本，不跨会话累加。预算状态在进程内存中，有界，
+会话关闭时清理，空闲 30 分钟后回收，重启后清零；多实例部署各自计数（见下文“部署
+模式”）。行数与 cost 限制的执行时点见 [security.md](security.md)。
+
+## 部署模式
+
+当前支持单实例，或多个实例并按 `Mcp-Session-Id` 做会话粘滞（负载均衡把同一 MCP 会话
+始终发往同一实例）：MCP 会话、显式事务、会话预算与读跟随写都只存在于处理该会话的实例。
+多实例时：
+
+- 各实例的读缓存独立失效，另一实例的写入最多在 `cache.ttl` 之后可见；需要即时可见时
+  关闭缓存或缩短 `ttl`；
+- 预算、事务上限、结果内存与熔断按实例计数，整体上限约为单实例配置乘以实例数；
+- 配置库模式（`serve --store … --watch`）下各实例各自轮询已发布 revision，切换时间
+  相差最多一个轮询间隔。
+
+跨实例的会话与事务迁移、共享预算、缓存失效广播不在当前范围内。
 
 ## 事务
 
@@ -244,7 +271,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
 | `roles` | 映射（名称 → `budgetLimits`） |  |  | 按角色的预算：角色名 → 限额。 |
-| `tenants` | 映射（名称 → `budgetLimits`） |  |  | 按租户的预算，命中时覆盖而非合并角色限额。租户取自 subject 的 tenant / tenant_id / tenantID。 |
+| `tenants` | 映射（名称 → `budgetLimits`） |  |  | 按租户的预算。maxConcurrent 约束该租户所有会话、所有主体的调用合计；其余各项逐字段收紧角色或用户的限额（取两者中已设置的较小值，租户未设置的项沿用角色的）。租户取自 subject 的 tenant / tenant_id / tenantID。 |
 | `users` | 映射（名称 → `budgetLimits`） |  |  | 按用户的预算，优先于角色；未配置时逐项取其各角色中最宽松的值（任一角色未配置即视为不限）。 |
 
 ### `cache`：缓存
@@ -270,12 +297,13 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `rps` | 数字 |  | ≥ 0 | 每秒请求数上限（令牌桶）；0 表示只做并发限制。 |
 | `maxInflight` | 整数 | `256` | ≥ 0 | 同时进行的请求上限。 |
 | `ioPool` | 整数 | `16` | ≥ 0 | IO 工作池大小；普通执行使用它。 |
-| `minConcurrency` | 整数 | `1` | ≥ 0 | 自适应并发的下限。 |
+| `minConcurrency` | 整数 | `1` | ≥ 0 | 自适应并发的下限（每个数据库连接各自调整）。 |
 | `rttThreshold` | 时长 |  | ≥ 0 | 延迟超过该值时降低并发；0s 不触发。 |
-| `breakerThreshold` | 整数 | `5` | ≥ 0 | 连续失败多少次后熔断。 |
-| `breakerCooldown` | 时长 | `"5s"` | ≥ 0 | 熔断后多久重试。 |
+| `breakerThreshold` | 整数 | `5` | ≥ 0 | 连续失败多少次后熔断；每个数据库连接各自熔断，调用方取消或数据库因数据、权限拒绝的语句不计入。 |
+| `breakerCooldown` | 时长 | `"5s"` | ≥ 0 | 熔断后多久重试；冷却后只放行一个探测调用，成功才恢复。 |
 | `connMaxIdleTime` | 时长 | `"5m"` | ≥ 0 | 数据库连接最长空闲时间。 |
 | `connMaxLifetime` | 时长 | `"30m"` | ≥ 0 | 数据库连接最长存活时间。 |
+| `maxResultMemory` | 整数 | `268435456` | ≥ 0 | 进程同时在内存中持有的查询结果字节数上限（各调用合计，按读出的行计，调用结束释放），超出时调用以预算超限失败；默认 256 MiB。 |
 
 ### `mask`：脱敏
 
@@ -303,6 +331,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | --- | --- | --- | --- | --- |
 | `ttl` | 时长 | `"5m"` | ≥ 0 | 事务最长存活时间。 |
 | `maxOpen` | 整数 | `128` | ≥ 0 | 每个角色/subject 同时打开的事务上限。 |
+| `maxOpenPerConnection` | 整数 | `8` | ≥ 0 | 同一个数据库连接上同时打开的事务上限，所有角色合计；未设置时取 rateLimit.ioPool 的一半（至少 1），给普通查询留出连接池的另一半。 |
 | `beginTimeout` | 时长 | `"5s"` | ≥ 0 | 开启事务超时。 |
 | `commitTimeout` | 时长 | `"30s"` | ≥ 0 | 提交超时。 |
 | `rollbackTimeout` | 时长 | `"30s"` | ≥ 0 | 回滚超时。 |
@@ -454,3 +483,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 
 同一有效配置重复导出字节级一致，导出结果可直接通过 `validate` 并再次导出得到
 相同字节。输出的兼容规则见 [tool-contract.md](tool-contract.md)。
+
+`export` 展示的是**生效配置**；配置库中的 revision 存的是配置**写了什么**
+（`config.Spec`，未写的值不出现，加载时取默认值，见
+[设计：意图与生效值](design/spec.md)），所以导入的 payload 一般比 export 短。

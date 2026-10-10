@@ -8,6 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/x/configyaml"
 	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 )
@@ -21,11 +22,11 @@ func TestSendingUnchangedSectionsChangesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := configyaml.Decode(raw)
+	spec, err := configyaml.DecodeSpec(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	base, err := revisionops.Normalize(cfg)
+	base, err := revisionops.Normalize(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +58,7 @@ func TestSendingUnchangedSectionsChangesNothing(t *testing.T) {
 // would send it.
 func editOf(t *testing.T, payload []byte) Edit {
 	t.Helper()
-	cfg, err := configyaml.Decode(payload)
+	spec, err := configyaml.DecodeSpec(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,12 +66,12 @@ func editOf(t *testing.T, payload []byte) Edit {
 	if err := yaml.Unmarshal(payload, &doc); err != nil {
 		t.Fatal(err)
 	}
-	edit := Edit{Entities: cfg.Entities, Settings: map[string]any{}}
-	for _, name := range sortedKeys(cfg.Roles) {
-		edit.Roles = append(edit.Roles, Role{Name: name, RoleDefinition: cfg.Roles[name]})
+	edit := Edit{Entities: []config.EntitySpec(spec.Entities), Settings: map[string]any{}}
+	for _, name := range sortedKeys(spec.Roles) {
+		edit.Roles = append(edit.Roles, Role{Name: name, RoleDefinitionSpec: spec.Roles[name]})
 	}
-	for _, name := range sortedKeys(cfg.Users) {
-		edit.Users = append(edit.Users, User{Name: name, UserConfig: cfg.Users[name]})
+	for _, name := range sortedKeys(spec.Users) {
+		edit.Users = append(edit.Users, User{Name: name, UserSpec: spec.Users[name]})
 	}
 	for key, value := range doc {
 		if !slices.Contains(structured, key) {

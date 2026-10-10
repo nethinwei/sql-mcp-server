@@ -4,6 +4,7 @@ import (
 	"slices"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/x/configrefs"
 )
 
 // resolver resolves references among the entities, the plan's included: it
@@ -45,7 +46,7 @@ func (ev *evaluation) fieldUses() map[string]map[string][]string {
 	for _, p := range ev.principals() {
 		for _, g := range ev.grantsOf(p) {
 			if id, ok := ev.resolve(g.Entity); ok {
-				for _, f := range filterKeys(g.Rows) {
+				for _, f := range configrefs.FilterFields(g.Rows) {
 					use(id, f, "rows of "+p.String())
 				}
 			}
@@ -64,11 +65,11 @@ func (ev *evaluation) entityUses(e config.EntityConfig, use func(id, field, wher
 			use(id, f, "uniqueKeys")
 		}
 	}
-	for _, f := range filterKeys(e.TenantPolicy) {
+	for _, f := range configrefs.FilterFields(e.TenantPolicy) {
 		use(id, f, "access")
 	}
 	for _, policy := range e.RowPolicies {
-		for _, f := range filterKeys(policy) {
+		for _, f := range configrefs.FilterFields(policy) {
 			use(id, f, "access")
 		}
 	}
@@ -94,28 +95,6 @@ func (ev *evaluation) entityUses(e config.EntityConfig, use func(id, field, wher
 func (ev *evaluation) fieldReferences(id, field string) []string {
 	out := slices.Clone(ev.fieldUses()[id][field])
 	slices.Sort(out)
-	return out
-}
-
-// filterKeys lists the keys a filter (decoded YAML or JSON) names anywhere:
-// the fields it reads.
-func filterKeys(v any) []string {
-	var out []string
-	var walk func(any)
-	walk = func(v any) {
-		switch x := v.(type) {
-		case map[string]any:
-			for k, inner := range x {
-				out = append(out, k)
-				walk(inner)
-			}
-		case []any:
-			for _, inner := range x {
-				walk(inner)
-			}
-		}
-	}
-	walk(v)
 	return out
 }
 
@@ -145,25 +124,22 @@ func (ev *evaluation) dropGrantField(id, field string) {
 	}
 }
 
-// qualifyReferences rewrites the references of the base configuration that
-// would name several entities once the plan added its own to the ID of the
-// entity they named, as the console does when tables are imported, and
+// qualifyReferences keeps the references of the base configuration naming
+// the entities they named once the plan added its own (configrefs.Retarget:
+// one the additions made ambiguous, or that now names an added entity, is
+// rewritten in its shortest unambiguous form), as console edits do, and
 // reports each rewrite.
 func (ev *evaluation) qualifyReferences() {
 	if len(ev.added) == 0 {
 		return
 	}
-	before, after := config.NewEntityRefs(ev.in.Base.Entities), ev.resolver()
+	before, after := configrefs.NewIndex(ev.in.Base.Entities), configrefs.NewIndex(ev.cfg.Entities)
 	fix := func(owner, ref string) string {
-		e, err := before.Resolve(ref)
-		if err != nil {
-			return ref
+		out, _ := configrefs.Retarget(ref, before, after, nil) // a plan removes no entity
+		if out != ref {
+			ev.except(Exception{Kind: ExceptionQualified, Entity: owner, Detail: ref + " → " + out})
 		}
-		if _, err := after.Resolve(ref); err == nil {
-			return ref
-		}
-		ev.except(Exception{Kind: ExceptionQualified, Entity: owner, Detail: ref + " → " + e.ID()})
-		return e.ID()
+		return out
 	}
 	for _, p := range ev.principals() {
 		grants := slices.Clone(ev.grantsOf(p))

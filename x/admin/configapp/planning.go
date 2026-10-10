@@ -168,6 +168,6 @@ func (r *Service) evaluate(ctx context.Context, pc planContext, p configplan.Pla
 	hash := revision.Hash(payload)
 	out.Validation = &Validation{Ok: true, ContentHash: &hash, RestartRequired: changes,
 		Warnings: orEmpty(bootstrap.CapabilityWarnings(cfg, r.capabilities()))}
-	out.changed, out.effect, err = r.changes(pc, cfg, payload)
+	out.changed, out.effect, err = r.changes(pc, payload)
 	return out, err
 }

@@ -12,7 +12,9 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 )
 
-var schema = workspace.Schema{ListKeys: []string{"name", "entity"}, OptionalText: []string{"description"}}
+var schema = workspace.Schema{
+	Lists: map[string]string{"fields[]": "name", "grants[]": "entity"}, Unset: map[string]bool{"description": true},
+}
 
 // codec keeps a revision's items as its JSON payload; an item with
 // "invalid": true does not build. onBuild runs while building.
@@ -329,5 +331,78 @@ func TestLog(t *testing.T) {
 	log, err := e.svc.Log(e.ctx, "root", 0)
 	if err != nil || len(log) != 2 || log[0].By != "agent:laptop" || log[0].Items[0] != analyst || log[1].By != "root" {
 		t.Fatalf("log = %+v %v", log, err)
+	}
+}
+
+// A write renaming an item replaces the one it came from, and what Reconcile
+// derives from it lands in the same version, logged with the write.
+func TestWriteReconcilesRenames(t *testing.T) {
+	e := newEnv(t)
+	lead := workspace.Ref{Kind: "role", Key: "lead"}
+	note := workspace.Ref{Kind: "note", Key: "renames"}
+	var gotBefore, gotAfter workspace.Snapshot
+	var gotRenames map[workspace.Ref]workspace.Ref
+	e.svc.Reconcile = func(before, after workspace.Snapshot, renames map[workspace.Ref]workspace.Ref) (
+		workspace.Snapshot, error,
+	) {
+		gotBefore, gotAfter, gotRenames = before, after, renames
+		return after.With(note, map[string]any{"name": "renames", "count": len(renames)}), nil
+	}
+	renamed := map[string]any{"name": "lead", "grants": []any{}}
+	st, err := e.svc.WriteItems(e.ctx, "root", "root", "edit",
+		[]Write{{Ref: lead, Value: renamed, Previous: workspace.Missing, From: &analyst}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workspace.IsMissing(gotBefore.Get(analyst)) || !workspace.IsMissing(gotAfter.Get(analyst)) ||
+		gotRenames[lead] != analyst {
+		t.Fatalf("reconcile saw before %v, after %v, renames %v", gotBefore, gotAfter, gotRenames)
+	}
+	if st.Workspace.Version != 1 || !workspace.IsMissing(st.Workspace.Items.Get(analyst)) ||
+		workspace.IsMissing(st.Workspace.Items.Get(note)) {
+		t.Fatalf("workspace = %+v", st.Workspace)
+	}
+	log, err := e.svc.Log(e.ctx, "root", 0)
+	if err != nil || len(log) != 1 || !slices.Contains(log[0].Items, analyst) || !slices.Contains(log[0].Items, note) {
+		t.Fatalf("log = %+v %v", log, err)
+	}
+}
+
+// A failing Reconcile writes nothing.
+func TestWriteFailsWithReconcile(t *testing.T) {
+	e := newEnv(t)
+	e.svc.Reconcile = func(_, _ workspace.Snapshot, _ map[workspace.Ref]workspace.Ref) (workspace.Snapshot, error) {
+		return nil, errors.New("inconsistent")
+	}
+	if _, err := e.svc.WriteItems(e.ctx, "root", "root", "edit",
+		[]Write{{Ref: analyst, Value: role("mine"), Previous: role("base")}}, nil); err == nil {
+		t.Fatal("wrote despite a failing reconcile")
+	}
+	if e.read().Workspace.Version != 0 {
+		t.Fatal("a failed write was kept")
+	}
+}
+
+// A rename written as the console writes it, with the removal of the item it
+// renames, merges like any write: a change an agent made meanwhile to the
+// renamed item is a conflict, never dropped silently.
+func TestRenameKeepsAChangeMadeMeanwhile(t *testing.T) {
+	e := newEnv(t)
+	read := role("base")
+	e.write("agent:bot", role("base", "orders"), read)
+	lead := workspace.Ref{Kind: "role", Key: "lead"}
+	renamed := map[string]any{"name": "lead", "description": "base", "grants": []any{}}
+	st, err := e.svc.WriteItems(e.ctx, "root", "root", "edit", []Write{
+		{Ref: lead, Value: renamed, Previous: workspace.Missing, From: &analyst},
+		{Ref: analyst, Value: workspace.Missing, Previous: read},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Open) != 1 || st.Open[0].Ref != analyst || workspace.IsMissing(st.Open[0].TheirsValue) {
+		t.Fatalf("the agent's change was dropped: conflicts %+v", st.Open)
+	}
+	if workspace.IsMissing(st.Workspace.Items.Get(lead)) {
+		t.Fatal("the renamed item was not written")
 	}
 }

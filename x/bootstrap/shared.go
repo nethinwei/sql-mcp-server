@@ -10,11 +10,14 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/nethinwei/sql-mcp-server/core/budget"
 	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/cache"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/engine"
 	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
+	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/tool"
 )
 
 // Shared holds what the Apps of one process share across reloads, so the old
@@ -22,33 +25,50 @@ import (
 // act as one process: the read cache, which a write through either
 // invalidates; the execution bus and the IO quota on it, which bound both
 // together; and the database connections, reused while their settings stay
-// the same.
+// the same, each with its own health (circuit breaker and adaptive limit:
+// one database failing or slowing down is held back on its own).
 type Shared struct {
 	generation atomic.Uint64
 	cache      *cache.TTLCache[[]map[string]any]
 	bus        *bus.Bus
 	quota      *engine.Quota
+	// The state of the process's calls, which outlives every configuration:
+	// open transactions, the sessions' budgets, the writes sessions follow,
+	// and the results calls hold. Publishing an App applies its limits to
+	// them.
+	transactions *tool.TransactionManager
+	budget       *budget.MemoryManager
+	writes       *tool.WriteTracker
+	results      *tool.ResultMemory
 
 	mu        sync.Mutex
-	rateLimit *rateLimits // applied to quota
+	rateLimit *rateLimits            // applied to quota and to each connection's health
+	limits    config.RateLimitConfig // the rate limits applied, for connections opened later
 	pools     map[string]*sharedConnection
 }
 
 // rateLimits are the rate-limit settings, comparable.
 type rateLimits struct {
-	config.RateLimitConfig // Enabled cleared
+	config.RateLimitConfig // Enabled and MaxResultMemory cleared
 	enabled                bool
 }
 
+// rateLimitsOf are cfg's rate limits, but for the result memory bound: it is
+// applied on its own (Shared.apply), and changing it must not reset the
+// connections' health.
 func rateLimitsOf(cfg *config.Config) rateLimits {
 	out := rateLimits{RateLimitConfig: cfg.RateLimit, enabled: cfg.RateLimit.EnabledOrDefault()}
-	out.Enabled = nil
+	out.Enabled, out.MaxResultMemory = nil, 0
 	return out
 }
 
 type sharedConnection struct {
 	provider Provider
 	refs     int
+	health   *health
+	// beginner begins the connection's transactions under its health, the
+	// same for every App (transactions compare connections by identity).
+	beginner *guardedBeginner
 }
 
 // NewShared returns empty shared services on an execution bus of their own.
@@ -60,10 +80,21 @@ func NewShared() *Shared {
 // bus: the IO quota is b's IO semaphore, and publishing an App sets b's
 // limits. The caller closes b after the Runtime.
 func NewSharedOn(b *bus.Bus) *Shared {
-	return &Shared{
+	s := &Shared{
 		cache: cache.NewTTLCache[[]map[string]any](0, 0), bus: b, quota: engine.NewQuotaOn(b.IO()),
-		pools: map[string]*sharedConnection{},
+		pools:        map[string]*sharedConnection{},
+		transactions: tool.NewTransactionManager(0, 0),
+		budget:       budget.New(nil, nil),
+		writes:       tool.NewWriteTracker(),
+		results:      tool.NewResultMemory(0),
 	}
+	s.transactions.UseBus(b)
+	return s
+}
+
+// Close rolls back the transactions still open; the Runtime closes it last.
+func (s *Shared) Close() {
+	s.transactions.Close()
 }
 
 // Bus returns the execution bus the services run on.
@@ -89,11 +120,11 @@ func (s *Shared) Assemble(cfg *config.Config) (*App, error) {
 		return nil, errors.New("assemble: no database configured")
 	}
 	r := EnvFileResolver{AllowedRoots: cfg.Server.Secrets.AllowedRoots}
-	connections, keys, err := s.acquire(cfg, r)
+	connections, gs, keys, err := s.acquire(cfg, r)
 	if err != nil {
 		return nil, err
 	}
-	app, err := assembleWith(cfg, connections, s)
+	app, err := assembleOn(cfg, connections, s, gs)
 	if err != nil {
 		s.release(keys)
 		return nil, err
@@ -105,17 +136,19 @@ func (s *Shared) Assemble(cfg *config.Config) (*App, error) {
 
 // acquire takes a reference on a connection per configured connection,
 // opening the ones no App holds with the same settings.
-func (s *Shared) acquire(cfg *config.Config, r SecretResolver) (Connections, []string, error) {
+func (s *Shared) acquire(cfg *config.Config, r SecretResolver) (Connections, guards, []string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	connections := make(Connections, len(cfg.Databases))
+	gs := guards{}
 	var keys []string
-	fail := func(err error) (Connections, []string, error) {
+	fail := func(err error) (Connections, guards, []string, error) {
 		s.releaseLocked(keys)
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	for name, database := range cfg.Databases {
 		connections[name] = map[string]Provider{}
+		gs[name] = map[string]*sharedConnection{}
 		for connection, c := range database.ConnectionsOrDSN() {
 			dsn, err := r.Resolve(c.DSN)
 			if err != nil {
@@ -128,15 +161,18 @@ func (s *Shared) acquire(cfg *config.Config, r SecretResolver) (Connections, []s
 				if err != nil {
 					return fail(fmt.Errorf("database %q connection %q: %w", name, connection, err))
 				}
-				shared = &sharedConnection{provider: p}
+				shared = &sharedConnection{provider: p, health: &health{}}
+				shared.health.set(s.healthParts())
+				shared.beginner = &guardedBeginner{TxBeginner: p, health: shared.health}
 				s.pools[key] = shared
 			}
 			shared.refs++
 			keys = append(keys, key)
 			connections[name][connection] = shared.provider
+			gs[name][connection] = shared
 		}
 	}
-	return connections, keys, nil
+	return connections, gs, keys, nil
 }
 
 // connectionKey names a connection's settings without keeping its DSN.
@@ -173,12 +209,21 @@ func (s *Shared) apply(app *App) {
 	cfg := app.config
 	s.mu.Lock()
 	if applied := rateLimitsOf(cfg); s.rateLimit == nil || *s.rateLimit != applied {
-		limiter, rps, breaker := rateLimiters(cfg)
-		s.quota.Update(cfg.RateLimit.IOPool, limiter, rps, breaker)
-		s.rateLimit = &applied
+		_, rps, _ := rateLimiters(cfg)
+		s.quota.Update(cfg.RateLimit.IOPool, nil, rps, nil)
+		s.rateLimit, s.limits = &applied, cfg.RateLimit
+		for _, c := range s.pools {
+			c.health.set(s.healthParts())
+		}
 	}
 	s.mu.Unlock()
 	s.bus.Update(cfg.RateLimit.IOPool, laneLimits(cfg))
+	// Open transactions carry on under the new limits; ttl applies to those
+	// begun from now on.
+	s.transactions.UpdateLimits(cfg.Transactions.TTL, cfg.Transactions.MaxOpen)
+	s.transactions.SetConnectionLimit(cfg.Transactions.MaxOpenPerConnection)
+	s.budget.UpdateLimits(budgetLimits(cfg.Budget, userBudgets(cfg)))
+	s.results.SetCapacity(cfg.RateLimit.MaxResultMemory)
 	if cfg.Cache.Enabled {
 		s.cache.UpdateLimits(cfg.Cache.TTL, cfg.Cache.MaxSize)
 	}
@@ -204,6 +249,39 @@ func (s *Shared) readCache(cfg *config.Config) cache.Cache[[]map[string]any] {
 		return cache.InvalidateOnly[[]map[string]any]{Cache: s.cache}
 	}
 	return s.cache
+}
+
+// healthParts are a connection's new breaker and adaptive limiter under the
+// rate limits applied; nil before any are, or when rate limiting is off.
+func (s *Shared) healthParts() (*ratelimit.Breaker, *ratelimit.Adaptive) {
+	if s.rateLimit == nil {
+		return nil, nil
+	}
+	limiter, _, breaker := rateLimiters(&config.Config{RateLimit: s.limits})
+	return breaker, limiter
+}
+
+// guards are the shared connections of an App, by datasource and connection
+// name: how its work reaches each (see guard).
+type guards map[string]map[string]*sharedConnection
+
+// guard is how work reaches the connection of a datasource: under its
+// health, its transactions through its shared beginner; p as it is without
+// shared services.
+func (g guards) guard(datasource, connection string, p Provider) (func(store.DB) store.DB, store.TxBeginner) {
+	if c := g[datasource][connection]; c != nil {
+		return func(db store.DB) store.DB { return guardedDB{DB: db, health: c.health} }, c.beginner
+	}
+	return func(db store.DB) store.DB { return db }, p
+}
+
+// health is the health of the connection of a datasource; nil without
+// shared services.
+func (g guards) health(datasource, connection string) *health {
+	if c := g[datasource][connection]; c != nil {
+		return c.health
+	}
+	return nil
 }
 
 // rateLimiters builds cfg's adaptive limiter, rate limiter and breaker; all

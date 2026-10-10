@@ -3,8 +3,11 @@ package bootstrap
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -72,6 +75,7 @@ type App struct {
 	Budget       *budget.MemoryManager
 	Transactions *tool.TransactionManager
 	Writes       *tool.WriteTracker
+	ResultMemory *tool.ResultMemory
 	TxBeginners  map[string]store.TxBeginner
 	// WriteTargets are what a write through each entity invalidates.
 	WriteTargets *tool.WriteTargets
@@ -135,6 +139,7 @@ func (a *App) ToolContext(role string) tool.Context {
 		Sources:      a.Sources,
 		Transactions: a.Transactions,
 		Writes:       a.Writes,
+		ResultMemory: a.ResultMemory,
 		TxBeginners:  a.TxBeginners,
 		Generation:   a.generation,
 		WriteTargets: a.WriteTargets,
@@ -175,7 +180,7 @@ func (a *App) CloseContext(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
-	if a.Transactions != nil {
+	if a.Transactions != nil && a.shared == nil { // shared ones outlive the App
 		a.Transactions.Close()
 	}
 	if a.Auditor != nil {
@@ -408,22 +413,18 @@ func AssembleWithProviders(cfg *config.Config, providers map[string]Provider) (*
 	return AssembleWithConnections(cfg, connections)
 }
 
+// recordProviderFailure reports whether err tells of the database's health
+// and so feeds the adaptive limit and the breaker. It counts only what the
+// database or the connection to it reported (fail closed: an error of any
+// other kind, such as a new business error, never opens the breaker); a
+// cancelled or timed-out call is the caller's doing.
 func recordProviderFailure(err error) bool {
-	switch {
-	case err == nil:
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded),
-		errors.Is(err, budget.ErrExceeded), errors.Is(err, cost.ErrCostExceeded),
-		errors.Is(err, tool.ErrUnauthorized), errors.Is(err, tool.ErrEntityNotFound),
-		errors.Is(err, tool.ErrInvalidInput), errors.Is(err, tool.ErrDMLToolsDisabled),
-		errors.Is(err, tool.ErrUnsafeWrite), errors.Is(err, tool.ErrConstraintViolation),
-		errors.Is(err, tool.ErrDatasourceForbidden),
-		errors.Is(err, tool.ErrTransactionNotFound), errors.Is(err, tool.ErrTransactionScope),
-		errors.Is(err, tool.ErrTransactionCapacity), errors.Is(err, tool.ErrTransactionStale):
-		return false
-	default:
-		return true
 	}
+	var netErr net.Error
+	return errors.Is(err, tool.ErrDatabase) || errors.Is(err, driver.ErrBadConn) ||
+		errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &netErr)
 }
 
 // Connections are opened providers by datasource and connection name.
@@ -613,6 +614,13 @@ func validateMaskRules(m *mask.RuleMasker, entities []entity.Entity) error {
 }
 
 func newBudgetManager(c config.BudgetConfig, principals map[string]config.BudgetLimits) *budget.MemoryManager {
+	return budget.New(budgetLimits(c, principals))
+}
+
+// budgetLimits are the role (and user principal) and tenant limits c sets.
+func budgetLimits(c config.BudgetConfig, principals map[string]config.BudgetLimits) (
+	map[string]budget.Limits, map[string]budget.Limits,
+) {
 	roles := make(map[string]budget.Limits, len(c.Roles)+len(principals))
 	for name, limits := range c.Roles {
 		roles[name] = toBudgetLimits(limits)
@@ -624,7 +632,7 @@ func newBudgetManager(c config.BudgetConfig, principals map[string]config.Budget
 	for name, limits := range c.Tenants {
 		tenants[name] = toBudgetLimits(limits)
 	}
-	return budget.New(roles, tenants)
+	return roles, tenants
 }
 
 func toBudgetLimits(c config.BudgetLimits) budget.Limits {

@@ -42,7 +42,7 @@ func TestWriteInvalidatesByRelation(t *testing.T) {
 			}
 			// Through the targets worked out once per configuration.
 			tcx := Context{Registry: reg, Cache: c, WriteTargets: BuildWriteTargets(reg)}
-			if err := afterWrite(tcx, tc.writer, ""); err != nil {
+			if err := afterWrite(bg, tcx, tc.writer, ""); err != nil {
 				t.Fatal(err)
 			}
 			for _, e := range tc.gone {
@@ -122,7 +122,8 @@ func TestWriteInvalidatesDatasourcesReachingTheSameDatabase(t *testing.T) {
 			_ = c.Set(context.Background(), key(e), []map[string]any{{}}, 0)
 		}
 		writes := NewWriteTracker()
-		if err := afterWrite(Context{Registry: reg, Cache: c, Writes: writes, Session: "s"}, byName[writer], ""); err != nil {
+		tcx := Context{Registry: reg, Cache: c, Writes: writes, Session: "s"}
+		if err := afterWrite(bg, tcx, byName[writer], ""); err != nil {
 			t.Fatal(err)
 		}
 		// The session's reads through every datasource reaching pg1 follow the write.

@@ -110,24 +110,11 @@ func New(opts ...Option) (*Engine, error) {
 // (singleflight) and all receive the leader's result. An empty key opts out of
 // de-duplication (writes/unique ops). Panics in fn are recovered as errors.
 func (e *Engine) Submit(ctx context.Context, key string, fn func(context.Context) (any, error)) (any, error) {
-	e.stateMu.Lock()
-	if e.closed {
-		e.stateMu.Unlock()
-		return nil, ErrClosed
+	done, err := e.admit()
+	if err != nil {
+		return nil, err
 	}
-	e.active.Add(1)
-	e.stateMu.Unlock()
-	defer e.active.Done()
-	if rps := e.quota.rps.Load(); rps != nil {
-		if err := rps.Allow(); err != nil {
-			return nil, err
-		}
-	}
-	if breaker := e.quota.breaker.Load(); breaker != nil {
-		if err := breaker.Allow(); err != nil {
-			return nil, err
-		}
-	}
+	defer done()
 	leave, err := e.lane.TryEnter()
 	if err != nil {
 		if errors.Is(err, bus.ErrOverloaded) {
@@ -144,8 +131,57 @@ func (e *Engine) Submit(ctx context.Context, key string, fn func(context.Context
 	})
 }
 
-func (e *Engine) execute(ctx context.Context, fn func(context.Context) (any, error)) (any, error) {
+// Run runs fn under the rate limit, its panics recovered, but outside the
+// lane, the breaker, the adaptive limit and the IO slots: for a call ending
+// a transaction, which must reach its database however it is held back, and
+// holds its connection already.
+func (e *Engine) Run(ctx context.Context, fn func(context.Context) (any, error)) (any, error) {
+	done, err := e.admit()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	return e.runSafe(ctx, fn)
+}
+
+// admit counts a call as active while the engine serves, under the rate
+// limit; done ends it.
+func (e *Engine) admit() (done func(), err error) {
+	e.stateMu.Lock()
+	if e.closed {
+		e.stateMu.Unlock()
+		return nil, ErrClosed
+	}
+	e.active.Add(1)
+	e.stateMu.Unlock()
+	if rps := e.quota.rps.Load(); rps != nil {
+		if err := rps.Allow(); err != nil {
+			e.active.Done()
+			return nil, err
+		}
+	}
+	return e.active.Done, nil
+}
+
+// execute runs fn under the breaker, the adaptive limit and an IO slot; the
+// breaker is asked here, by the one execution, so every request it lets
+// through ends with Record or Release.
+func (e *Engine) execute(ctx context.Context, fn func(context.Context) (any, error)) (val any, err error) {
 	limiter, breaker := e.quota.limiter.Load(), e.quota.breaker.Load()
+	record := false
+	if breaker != nil {
+		probe, allowErr := breaker.Allow()
+		if allowErr != nil {
+			return nil, allowErr
+		}
+		defer func() {
+			if record {
+				breaker.Record(err == nil)
+			} else {
+				breaker.Release(probe)
+			}
+		}()
+	}
 	if limiter != nil {
 		if err := limiter.Acquire(); err != nil {
 			return nil, err
@@ -157,15 +193,10 @@ func (e *Engine) execute(ctx context.Context, fn func(context.Context) (any, err
 	}
 	defer e.quota.io.Release()
 	start := time.Now()
-	val, err := e.runSafe(ctx, fn)
-	record := err == nil || e.recordFailure == nil || e.recordFailure(err)
-	if record {
-		if limiter != nil {
-			limiter.OnResult(err, time.Since(start))
-		}
-		if breaker != nil {
-			breaker.Record(err == nil)
-		}
+	val, err = e.runSafe(ctx, fn)
+	record = err == nil || e.recordFailure == nil || e.recordFailure(err)
+	if record && limiter != nil {
+		limiter.OnResult(err, time.Since(start))
 	}
 	return val, err
 }

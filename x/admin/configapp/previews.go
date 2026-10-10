@@ -74,10 +74,10 @@ func (k *previews) get(id, owner string, now time.Time) (*Preview, bool) {
 	return nil, false
 }
 
-// PreviewPlan evaluates a plan against draft (default: the published
-// configuration), as a review of a recurring template's proposal when
-// review is set, and keeps the result for its maker.
-func (r *Service) PreviewPlan(ctx context.Context, p configplan.Plan, draft *Draft, review bool) (*Preview, error) {
+// PreviewPlan evaluates a plan against the configuration against is, as a
+// review of a recurring template's proposal when review is set, and keeps
+// the result for its maker.
+func (r *Service) PreviewPlan(ctx context.Context, p configplan.Plan, against Against, review bool) (*Preview, error) {
 	who, err := auth.Require(ctx, auth.PermWrite)
 	if err != nil {
 		return nil, err
@@ -85,7 +85,7 @@ func (r *Service) PreviewPlan(ctx context.Context, p configplan.Plan, draft *Dra
 	if err := normalized(who, &p); err != nil {
 		return nil, err
 	}
-	pc, err := r.planContext(ctx, draft)
+	pc, err := r.planContextOf(ctx, against)
 	if err != nil {
 		return nil, err
 	}

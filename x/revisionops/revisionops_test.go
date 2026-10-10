@@ -236,7 +236,7 @@ func TestNormalizeRefusesWhatCannotBeAssembled(t *testing.T) {
 		Entities: []config.EntityConfig{{Name: "orders", Fields: []config.FieldConfig{{Name: "id", Mask: "x"}}}},
 	}
 	cfg.ApplyDefaults()
-	if _, err := Normalize(cfg); err == nil || !strings.Contains(err.Error(), `unknown mask rule "x"`) {
+	if _, err := Normalize(config.SpecOf(cfg)); err == nil || !strings.Contains(err.Error(), `mask is "x"`) {
 		t.Fatalf("Normalize = %v", err)
 	}
 }

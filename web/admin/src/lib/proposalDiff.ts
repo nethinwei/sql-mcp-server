@@ -1,4 +1,4 @@
-import type { EntityInput, FieldInput, GrantInput } from '@/gql/graphql'
+import type { EntityInput, FieldInput, GrantInput } from '@/gql/schema'
 import type { Proposal } from '@/stores/workspace'
 import type { EntityIndex } from './entityRefs'
 

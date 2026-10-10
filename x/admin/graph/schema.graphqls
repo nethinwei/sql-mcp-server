@@ -68,8 +68,8 @@ type Query {
   order of `tables`; an entry is null when its table is not found.
   """
   tableComments(tables: [TableRef!]!): [TableComments]!
-  "Validate a draft without saving it."
-  validate(draft: DraftInput!): Validation!
+  "Validate a configuration: a revision, or (default) the signed-in administrator's workspace."
+  validate(revision: ID): Validation!
   """
   What the routed datasource connections may do per entity action, as the
   databases reported after the serving snapshot was assembled (assessed in the
@@ -77,9 +77,9 @@ type Query {
   statements.
   """
   capabilities: [EntityCapability!]!
-  "Unified diff from revision `from` to revision `to` or an unsaved draft (default: published)."
-  diff(from: ID!, to: ID, draft: DraftInput): String!
-  "Evaluate one authorization offline against a draft or a revision (default: published)."
+  "Unified diff from revision `from` to revision `to` (default: the signed-in administrator's workspace)."
+  diff(from: ID!, to: ID): String!
+  "Evaluate one authorization offline against a revision (default: the signed-in administrator's workspace)."
   simulate(input: SimulationInput!): Simulation!
   "Every entity and applicable action for one principal, default projection."
   visibility(input: VisibilityInput!): [EntityVisibility!]!
@@ -96,8 +96,6 @@ type Mutation {
   startSchemaScan(datasource: String!, schemas: [String!]): ScanJob!
   "Stop a pending or running scan."
   cancelSchemaScan(id: ID!): ScanJob
-  "Save a draft revision."
-  createDraft(draft: DraftInput!, comment: String): Revision!
   publish(input: PublishInput!): Revision!
   "Roll back to `to`, or to the newest earlier published content."
   rollback(input: RollbackInput!): Revision!
@@ -129,6 +127,11 @@ type Revision {
   createdAt: Time!
   publishedAt: Time
   config: Configuration!
+  """
+  The configuration as a workspace holds it: entities, roles, users and
+  settings, in the shape of EntityInput, RoleInput and UserInput.
+  """
+  sections: JSON!
   "The normalized YAML payload."
   yaml: String!
 }
@@ -422,7 +425,7 @@ type ServerStatus {
   "Whether the process applies newly published revisions (--watch)."
   watching: Boolean!
   "A published revision this process has not applied."
-  pending: PendingRevision
+  unapplied: UnappliedRevision
   "What the process runs on its execution bus; null when unknown."
   execution: ExecutionStatus
 }
@@ -456,14 +459,14 @@ type TaskStatus {
   name: String!
   running: Int!
 }
-type PendingRevision {
+type UnappliedRevision {
   id: ID!
   "True when only a restart applies it; otherwise building it failed."
   restartRequired: Boolean!
   error: String!
 }
 input VisibilityInput {
-  draft: DraftInput
+  "Default: the signed-in administrator's workspace."
   revision: ID
   "A configured user name, or role:<name> to evaluate a role."
   user: String!
@@ -492,18 +495,6 @@ type Simulation {
 type UserToken {
   token: String!
   tokenHash: String!
-}
-
-input DraftInput {
-  base: ID!
-  "Replaces the entities section when provided."
-  entities: [EntityInput!]
-  "Replaces the roles section when provided."
-  roles: [RoleInput!]
-  "Replaces the users section when provided; a missing tokenHash keeps the base user's hash."
-  users: [UserInput!]
-  "Replaces the given top-level sections; datasources, entities, roles and users are not allowed here."
-  settings: JSON
 }
 
 input EntityInput {
@@ -572,9 +563,7 @@ input UserInput {
 }
 
 input SimulationInput {
-  "Simulate against this unsaved draft..."
-  draft: DraftInput
-  "...or this revision; default: the published revision."
+  "Default: the signed-in administrator's workspace."
   revision: ID
   "A configured user name, or role:<name> to evaluate a role."
   user: String!

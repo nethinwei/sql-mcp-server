@@ -117,7 +117,7 @@ func (r *Service) tokenScope(ctx context.Context, in McpTokenInput) (configstore
 	if in.Datasources == nil {
 		return scope, nil
 	}
-	cfg, err := r.SelectConfig(ctx, nil, nil)
+	cfg, err := r.SelectConfig(ctx, Against{})
 	if err != nil {
 		return scope, err
 	}

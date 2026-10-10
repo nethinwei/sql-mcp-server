@@ -30,25 +30,6 @@ func (r *mutationResolver) CancelSchemaScan(ctx context.Context, id string) (*co
 	return r.App.SchemaScan(ctx, id, true)
 }
 
-// CreateDraft is the resolver for the createDraft field.
-func (r *mutationResolver) CreateDraft(ctx context.Context, draft DraftInput, comment *string) (*Revision, error) {
-	p, err := auth.Require(ctx, auth.PermWrite)
-	if err != nil {
-		return nil, err
-	}
-	d, err := r.buildDraft(ctx, draft)
-	if err != nil {
-		return nil, err
-	}
-	rev, _, err := r.ops().Draft(ctx, revisionops.DraftRequest{
-		Payload: d.payload, Parent: d.base.ID, Author: p.Username, Comment: deref(comment),
-	})
-	if err != nil {
-		return nil, err
-	}
-	return toRevision(rev), nil
-}
-
 // Publish is the resolver for the publish field.
 func (r *mutationResolver) Publish(ctx context.Context, input PublishInput) (*Revision, error) {
 	p, err := auth.Require(ctx, auth.PermPublish)
@@ -256,7 +237,7 @@ func (r *queryResolver) TableComments(ctx context.Context, tables []TableRef) ([
 	if _, err := auth.Require(ctx, auth.PermRead); err != nil {
 		return nil, err
 	}
-	cfg, err := r.selectConfig(ctx, nil, nil)
+	cfg, err := r.App.SelectConfig(ctx, configapp.Against{})
 	if err != nil {
 		return nil, err
 	}
@@ -279,16 +260,11 @@ func (r *queryResolver) TableComments(ctx context.Context, tables []TableRef) ([
 }
 
 // Validate is the resolver for the validate field.
-func (r *queryResolver) Validate(ctx context.Context, draft DraftInput) (*configapp.Validation, error) {
+func (r *queryResolver) Validate(ctx context.Context, revision *string) (*configapp.Validation, error) {
 	if _, err := auth.Require(ctx, auth.PermRead); err != nil {
 		return nil, err
 	}
-	d, err := toDraft(&draft)
-	if err != nil {
-		msg := err.Error()
-		return &configapp.Validation{Error: &msg, RestartRequired: []string{}, Warnings: []string{}}, nil
-	}
-	return r.App.Validate(ctx, *d)
+	return r.App.Validate(ctx, workspaceOr(revision))
 }
 
 // Capabilities is the resolver for the capabilities field.
@@ -300,25 +276,17 @@ func (r *queryResolver) Capabilities(ctx context.Context) ([]EntityCapability, e
 }
 
 // Diff is the resolver for the diff field.
-func (r *queryResolver) Diff(ctx context.Context, from string, to *string, draft *DraftInput) (string, error) {
-	d, err := toDraft(draft)
-	if err != nil {
-		return "", err
-	}
-	return r.App.Diff(ctx, from, to, d)
+func (r *queryResolver) Diff(ctx context.Context, from string, to *string) (string, error) {
+	return r.App.Diff(ctx, from, workspaceOr(to))
 }
 
 // Simulate is the resolver for the simulate field.
 func (r *queryResolver) Simulate(ctx context.Context, input SimulationInput) (*configapp.Simulation, error) {
-	attrs, _ := normalizeJSON(input.Subject).(map[string]any)
+	attrs, _ := configapp.NormalizeJSON(input.Subject).(map[string]any)
 	if input.Subject != nil && attrs == nil {
 		return nil, errors.New("subject must be an object")
 	}
-	d, err := toDraft(input.Draft)
-	if err != nil {
-		return nil, err
-	}
-	return r.App.Simulate(ctx, configapp.SimulateRequest{Draft: d, Revision: input.Revision, User: input.User,
+	return r.App.Simulate(ctx, configapp.SimulateRequest{Against: workspaceOr(input.Revision), User: input.User,
 		Entity: input.Entity, Action: graphActions[input.Action].String(), Fields: input.Fields, Subject: attrs})
 }
 
@@ -327,11 +295,11 @@ func (r *queryResolver) Visibility(ctx context.Context, input VisibilityInput) (
 	if _, err := auth.Require(ctx, auth.PermRead); err != nil {
 		return nil, err
 	}
-	cfg, err := r.selectConfig(ctx, input.Draft, input.Revision)
+	cfg, err := r.App.SelectConfig(ctx, workspaceOr(input.Revision))
 	if err != nil {
 		return nil, err
 	}
-	attrs, _ := normalizeJSON(input.Subject).(map[string]any)
+	attrs, _ := configapp.NormalizeJSON(input.Subject).(map[string]any)
 	if input.Subject != nil && attrs == nil {
 		return nil, errors.New("subject must be an object")
 	}
@@ -365,6 +333,18 @@ func (r *revisionResolver) Config(ctx context.Context, obj *Revision) (*Configur
 		return nil, err
 	}
 	return toConfiguration(cfg, rev.Payload)
+}
+
+// Sections is the resolver for the sections field.
+func (r *revisionResolver) Sections(ctx context.Context, obj *Revision) (any, error) {
+	rev, err := r.withPayload(ctx, obj)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := bootstrap.LoadRevision(rev); err != nil {
+		return nil, err
+	}
+	return configapp.SectionsOfPayload(rev.Payload)
 }
 
 // Yaml is the resolver for the yaml field.

@@ -49,9 +49,7 @@ type ApplyPlanInput struct {
 
 type CatalogInput struct {
 	Filter *configapp.CatalogFilter `json:"filter"`
-	// Compare with this draft; default: the published configuration.
-	Draft  *DraftInput `json:"draft,omitempty"`
-	Offset *int        `json:"offset,omitempty"`
+	Offset *int                     `json:"offset,omitempty"`
 	// At most 500.
 	Limit *int `json:"limit,omitempty"`
 }
@@ -96,18 +94,6 @@ type DatasourceRouting struct {
 	Read    string `json:"read"`
 	Write   string `json:"write"`
 	Execute string `json:"execute"`
-}
-
-type DraftInput struct {
-	Base string `json:"base"`
-	// Replaces the entities section when provided.
-	Entities []EntityInput `json:"entities,omitempty"`
-	// Replaces the roles section when provided.
-	Roles []RoleInput `json:"roles,omitempty"`
-	// Replaces the users section when provided; a missing tokenHash keeps the base user's hash.
-	Users []UserInput `json:"users,omitempty"`
-	// Replaces the given top-level sections; datasources, entities, roles and users are not allowed here.
-	Settings any `json:"settings,omitempty"`
 }
 
 type DraftRevision struct {
@@ -316,13 +302,6 @@ type LaneStatus struct {
 type Mutation struct {
 }
 
-type PendingRevision struct {
-	ID string `json:"id"`
-	// True when only a restart applies it; otherwise building it failed.
-	RestartRequired bool   `json:"restartRequired"`
-	Error           string `json:"error"`
-}
-
 type PlanPreview struct {
 	// Identifies the plan with what it was evaluated against (base revision,
 	// workspace and scans); an agent applies a plan only while it still evaluates to it.
@@ -341,8 +320,6 @@ type PlanPreview struct {
 
 type PlanPreviewInput struct {
 	Plan any `json:"plan"`
-	// Evaluate against this draft; default: the published configuration.
-	Draft *DraftInput `json:"draft,omitempty"`
 	// Report every new table a grant covers (exception review, to confirm), as
 	// reviewing a recurring template's proposal needs.
 	Review *bool `json:"review,omitempty"`
@@ -412,7 +389,7 @@ type ServerStatus struct {
 	// Whether the process applies newly published revisions (--watch).
 	Watching bool `json:"watching"`
 	// A published revision this process has not applied.
-	Pending *PendingRevision `json:"pending,omitempty"`
+	Unapplied *UnappliedRevision `json:"unapplied,omitempty"`
 	// What the process runs on its execution bus; null when unknown.
 	Execution *ExecutionStatus `json:"execution,omitempty"`
 }
@@ -423,9 +400,7 @@ type SetAdminPasswordInput struct {
 }
 
 type SimulationInput struct {
-	// Simulate against this unsaved draft...
-	Draft *DraftInput `json:"draft,omitempty"`
-	// ...or this revision; default: the published revision.
+	// Default: the signed-in administrator's workspace.
 	Revision *string `json:"revision,omitempty"`
 	// A configured user name, or role:<name> to evaluate a role.
 	User   string `json:"user"`
@@ -460,6 +435,13 @@ type TaskStatus struct {
 	Running int    `json:"running"`
 }
 
+type UnappliedRevision struct {
+	ID string `json:"id"`
+	// True when only a restart applies it; otherwise building it failed.
+	RestartRequired bool   `json:"restartRequired"`
+	Error           string `json:"error"`
+}
+
 type User struct {
 	Name        string   `json:"name"`
 	Description *string  `json:"description,omitempty"`
@@ -488,8 +470,8 @@ type UserToken struct {
 }
 
 type VisibilityInput struct {
-	Draft    *DraftInput `json:"draft,omitempty"`
-	Revision *string     `json:"revision,omitempty"`
+	// Default: the signed-in administrator's workspace.
+	Revision *string `json:"revision,omitempty"`
 	// A configured user name, or role:<name> to evaluate a role.
 	User    string `json:"user"`
 	Subject any    `json:"subject,omitempty"`

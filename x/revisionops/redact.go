@@ -18,64 +18,80 @@ const changedSecret = " (changed)"
 // (the payload compared with) is marked changed, so a diff shows that it
 // changed but never its value.
 func redacted(payload, other []byte) []byte {
-	cfg, err := configyaml.Decode(payload)
+	spec, err := loadable(payload)
 	if err != nil {
 		return []byte(undecodable)
 	}
-	var was *config.Config
+	var was *config.Spec
 	if other != nil {
-		if o, err := configyaml.Decode(other); err == nil {
+		if o, err := loadable(other); err == nil {
 			was = o
 		}
 	}
-	redactConfig(cfg, was)
-	out, err := configyaml.Encode(cfg)
+	redactSpec(spec, was)
+	out, err := configyaml.EncodeSpec(spec)
 	if err != nil {
 		return []byte(undecodable)
 	}
 	return out
 }
 
-func redactConfig(cfg, was *config.Config) {
-	if cfg.Server.Auth.Token != "" {
-		changed := was != nil && was.Server.Auth.Token != cfg.Server.Auth.Token
-		cfg.Server.Auth.Token = "***" + marked(changed)
+// loadable is what payload says, when it loads.
+func loadable(payload []byte) (*config.Spec, error) {
+	spec, err := configyaml.DecodeSpec(payload)
+	if err != nil {
+		return nil, err
 	}
-	var then *config.DatabaseConfig
-	if was != nil {
-		then = &was.Database
+	_, err = config.Resolve(spec)
+	return spec, err
+}
+
+func redactSpec(spec, was *config.Spec) {
+	if spec.Server != nil && spec.Server.Auth != nil && deref(spec.Server.Auth.Token) != "" {
+		var then string
+		if was != nil && was.Server != nil && was.Server.Auth != nil {
+			then = deref(was.Server.Auth.Token)
+		}
+		spec.Server.Auth.Token = ptr("***" + marked(was != nil && then != deref(spec.Server.Auth.Token)))
 	}
-	redactDatabase(&cfg.Database, then)
-	for name, db := range cfg.Databases {
-		then = nil
+	if spec.Database != nil {
+		var then *config.DatabaseSpec
+		if was != nil {
+			then = was.Database
+		}
+		redactDatabase(spec.Database, then)
+	}
+	for name, db := range spec.Databases {
+		var then *config.DatabaseSpec
 		if was != nil {
 			if old, ok := was.Databases[name]; ok {
 				then = &old
 			}
 		}
 		redactDatabase(&db, then)
-		cfg.Databases[name] = db
+		spec.Databases[name] = db
 	}
 }
 
 // redactDatabase redacts the DSNs of db, marking those that differ from
 // then's (nil: nothing to compare with).
-func redactDatabase(db, then *config.DatabaseConfig) {
-	if db.DSN != "" {
-		changed := then != nil && then.DSN != db.DSN
-		db.DSN = bootstrap.RedactDSN(db.Driver, db.DSN) + marked(changed)
+func redactDatabase(db, then *config.DatabaseSpec) {
+	driver := deref(db.Driver)
+	if dsn := deref(db.DSN); dsn != "" {
+		changed := then != nil && deref(then.DSN) != dsn
+		db.DSN = ptr(bootstrap.RedactDSN(driver, dsn) + marked(changed))
 	}
 	if db.Connections == nil {
 		return
 	}
-	conns := make(config.Connections, len(db.Connections))
+	conns := make(config.Map[string, config.ConnectionSpec], len(db.Connections))
 	for name, c := range db.Connections {
 		changed := false
 		if then != nil {
 			old, ok := then.Connections[name]
-			changed = ok && old.DSN != c.DSN
+			changed = ok && deref(old.DSN) != deref(c.DSN)
 		}
-		c.DSN = bootstrap.RedactDSN(db.Driver, c.DSN) + marked(changed)
+		c.DSN = ptr(bootstrap.RedactDSN(driver, deref(c.DSN)) + marked(changed))
 		conns[name] = c
 	}
 	db.Connections = conns
@@ -87,3 +103,12 @@ func marked(changed bool) string {
 	}
 	return ""
 }
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+func ptr[T any](v T) *T { return &v }

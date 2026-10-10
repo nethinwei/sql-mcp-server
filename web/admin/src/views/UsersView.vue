@@ -9,7 +9,7 @@ import {
 import { useWorkspace } from '@/stores/workspace'
 import { nameError } from '@/lib/names'
 import { can } from '@/api/session'
-import type { UserInput } from '@/gql/graphql'
+import type { UserInput } from '@/gql/schema'
 
 const { t } = useI18n()
 const ws = useWorkspace()

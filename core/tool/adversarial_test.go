@@ -150,11 +150,11 @@ func TestAdversarialCacheAndSingleflightScopeIsolation(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			leftKey, err := engineSubmitKey(ReadTool{}, input, test.left)
+			leftKey, err := engineSubmitKey(bg, ReadTool{}, input, test.left)
 			if err != nil {
 				t.Fatal(err)
 			}
-			rightKey, err := engineSubmitKey(ReadTool{}, input, test.right)
+			rightKey, err := engineSubmitKey(bg, ReadTool{}, input, test.right)
 			if err != nil {
 				t.Fatal(err)
 			}

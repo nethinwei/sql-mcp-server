@@ -30,14 +30,18 @@ func IsMissing(v any) bool {
 	return ok
 }
 
-// Schema holds the rules the merge needs of the values it merges.
+// Schema holds the rules the merge needs of the values it merges, by path
+// from an item's root as Path.Pattern writes it ("fields[].mask": the mask
+// of any element of fields). A rule applies at its path only, never to a
+// property of the same name elsewhere.
 type Schema struct {
-	// ListKeys are the properties that key the elements of a list, tried in
-	// order (e.g. name, then entity); a list with an element keyed by none
-	// of them is one value.
-	ListKeys []string
-	// OptionalText are the properties whose empty text means unset.
-	OptionalText []string
+	// Lists are the lists whose elements are keyed, by the pattern of their
+	// elements ("fields[]"), with the property keying them ("name"); any
+	// other list is one value.
+	Lists map[string]string
+	// Unset are the values whose zero (empty text, false, null) means unset,
+	// equal to no value at all.
+	Unset map[string]bool
 }
 
 // Step is a step into a value: an object property, or the element of a list
@@ -49,6 +53,34 @@ type Step struct {
 
 // Path is a sequence of steps; empty is the whole value.
 type Path []Step
+
+// Pattern is the path without its element keys, e.g. fields[].mask: the
+// form Schema rules are written in.
+func (p Path) Pattern() string {
+	var b strings.Builder
+	for _, s := range p {
+		b.WriteString(patternStep(b.Len() == 0, s))
+	}
+	return b.String()
+}
+
+func patternStep(first bool, s Step) string {
+	switch {
+	case s.Element != "" || s.Field == "":
+		return "[]"
+	case first:
+		return s.Field
+	}
+	return "." + s.Field
+}
+
+// field is the pattern of property k under pattern p.
+func field(p, k string) string {
+	if p == "" {
+		return k
+	}
+	return p + "." + k
+}
 
 // String is a readable path, e.g. fields[email].mask.
 func (p Path) String() string {
@@ -86,22 +118,23 @@ func object(v any) (map[string]any, bool) {
 	return m, ok
 }
 
-// normalize drops unset optional text (empty or null) and Missing values.
-func (s Schema) normalize(v any, key string) any {
-	if slices.Contains(s.OptionalText, key) && (v == "" || v == nil) {
+// normalize drops the values at Unset patterns that are zero, and Missing
+// values; v is at pattern p.
+func (s Schema) normalize(v any, p string) any {
+	if s.Unset[p] && (v == "" || v == false || v == nil) {
 		return Missing
 	}
 	switch x := v.(type) {
 	case []any:
 		out := make([]any, len(x))
 		for i, el := range x {
-			out[i] = s.normalize(el, "")
+			out[i] = s.normalize(el, p+"[]")
 		}
 		return out
 	case map[string]any:
 		out := make(map[string]any, len(x))
 		for k, el := range x {
-			if n := s.normalize(el, k); !IsMissing(n) {
+			if n := s.normalize(el, field(p, k)); !IsMissing(n) {
 				out[k] = n
 			}
 		}
@@ -110,9 +143,9 @@ func (s Schema) normalize(v any, key string) any {
 	return v
 }
 
-// Canonical is v's canonical JSON: keys sorted, unset optional text dropped.
-func (s Schema) Canonical(v any) string {
-	n := s.normalize(v, "")
+// canonicalAt is the canonical JSON of v at pattern p.
+func (s Schema) canonicalAt(p string, v any) string {
+	n := s.normalize(v, p)
 	if IsMissing(n) {
 		n = nil
 	}
@@ -120,31 +153,45 @@ func (s Schema) Canonical(v any) string {
 	return string(data)
 }
 
-// Same reports whether two values mean the same, regardless of key order or
-// unset optional text.
+// Canonical is the canonical JSON of an item: keys sorted, unset values
+// dropped.
+func (s Schema) Canonical(v any) string { return s.canonicalAt("", v) }
+
+// Same reports whether two items mean the same, regardless of key order or
+// unset values.
 func (s Schema) Same(a, b any) bool { return s.Canonical(a) == s.Canonical(b) }
 
-// sameAt compares two values in place at path: an optional text property
-// unset equals it empty.
+// sameAt compares two values at path.
 func (s Schema) sameAt(path Path, a, b any) bool {
-	if len(path) > 0 && path[len(path)-1].Field != "" {
-		last := path[len(path)-1].Field
-		return s.Same(map[string]any{last: a}, map[string]any{last: b})
+	if n := len(path); n > 0 && (path[n-1].Element != "" || path[n-1].Field == "") {
+		return s.sameElements(path, a, b)
 	}
-	return s.Same(a, b)
+	p := path.Pattern()
+	return s.canonicalAt(p, a) == s.canonicalAt(p, b)
 }
 
-func (s Schema) elementKey(el any) (string, bool) {
+// sameElements compares two values at path, an element of a keyed list,
+// either of which may be a group of the elements sharing its key.
+func (s Schema) sameElements(path Path, a, b any) bool {
+	p := path.Pattern()
+	canonical := func(v any) string {
+		if group, ok := v.([]any); ok {
+			return s.canonicalAt(strings.TrimSuffix(p, "[]"), group)
+		}
+		return s.canonicalAt(p, v)
+	}
+	return canonical(a) == canonical(b)
+}
+
+// elementKey is the key of el, an element of the list at pattern p.
+func (s Schema) elementKey(el any, p string) (string, bool) {
+	prop, keyed := s.Lists[p+"[]"]
 	m, ok := object(el)
-	if !ok {
+	if !keyed || !ok {
 		return "", false
 	}
-	for _, k := range s.ListKeys {
-		if key, ok := m[k].(string); ok {
-			return key, true
-		}
-	}
-	return "", false
+	key, ok := m[prop].(string)
+	return key, ok
 }
 
 // keyedList is a list of keyed elements, in order of first appearance;
@@ -154,7 +201,8 @@ type keyedList struct {
 	byKey map[string]any
 }
 
-func (s Schema) keyed(v any) (keyedList, bool) {
+// keyed is v, a list at pattern p, by key; false when it is not a keyed list.
+func (s Schema) keyed(v any, p string) (keyedList, bool) {
 	list, ok := v.([]any)
 	if !ok {
 		return keyedList{}, false
@@ -162,7 +210,7 @@ func (s Schema) keyed(v any) (keyedList, bool) {
 	k := keyedList{byKey: map[string]any{}}
 	groups := map[string][]any{}
 	for _, el := range list {
-		key, ok := s.elementKey(el)
+		key, ok := s.elementKey(el, p)
 		if !ok {
 			return keyedList{}, false
 		}
@@ -211,9 +259,10 @@ func (s Schema) Merge(base, local, next any, path Path) (any, []ValueConflict) {
 	if IsMissing(base) {
 		base = []any{}
 	}
-	b, okB := s.keyed(base)
-	l, okL := s.keyed(local)
-	n, okN := s.keyed(next)
+	p := path.Pattern()
+	b, okB := s.keyed(base, p)
+	l, okL := s.keyed(local, p)
+	n, okN := s.keyed(next, p)
 	if okB && okL && okN {
 		return s.mergeLists(b, l, n, path)
 	}
@@ -277,10 +326,10 @@ func isGroup(v any) bool {
 
 // whole merges a value as a whole: either side's change, or a conflict.
 func (s Schema) whole(base, local, next any, path Path) (any, []ValueConflict) {
-	if s.Same(local, base) {
+	if s.sameElements(path, local, base) {
 		return next, nil
 	}
-	if s.Same(next, base) || s.Same(next, local) {
+	if s.sameElements(path, next, base) || s.sameElements(path, next, local) {
 		return local, nil
 	}
 	return local, []ValueConflict{{Path: path, Mine: local, Theirs: next}}
@@ -293,7 +342,7 @@ func sortConflicts(cs []ValueConflict) {
 // GetAt is the value at path, or Missing; a group for elements sharing a key.
 func (s Schema) GetAt(root any, path Path) any {
 	v := root
-	for _, step := range path {
+	for i, step := range path {
 		if step.Element == "" && step.Field != "" {
 			m, ok := object(v)
 			if !ok {
@@ -302,7 +351,7 @@ func (s Schema) GetAt(root any, path Path) any {
 			v = get(m, step.Field)
 			continue
 		}
-		k, ok := s.keyed(v)
+		k, ok := s.keyed(v, path[:i].Pattern())
 		if !ok {
 			return Missing
 		}
@@ -314,7 +363,10 @@ func (s Schema) GetAt(root any, path Path) any {
 // SetAt returns root with the value at path replaced, or removed when value
 // is Missing; missing objects on the way are created, and a missing list
 // element is appended.
-func (s Schema) SetAt(root any, path Path, value any) any {
+func (s Schema) SetAt(root any, path Path, value any) any { return s.setAt(root, "", path, value) }
+
+// setAt is SetAt for root at pattern p.
+func (s Schema) setAt(root any, p string, path Path, value any) any {
 	if len(path) == 0 {
 		return value
 	}
@@ -324,23 +376,24 @@ func (s Schema) SetAt(root any, path Path, value any) any {
 		if m, ok := object(root); ok {
 			maps.Copy(obj, m)
 		}
-		if v := s.SetAt(get(obj, step.Field), rest, value); IsMissing(v) {
+		if v := s.setAt(get(obj, step.Field), field(p, step.Field), rest, value); IsMissing(v) {
 			delete(obj, step.Field)
 		} else {
 			obj[step.Field] = v
 		}
 		return obj
 	}
-	return s.setElement(root, step.Element, rest, value)
+	return s.setElement(root, p, step.Element, rest, value)
 }
 
-// setElement replaces the elements with key where the first of them was.
-func (s Schema) setElement(root any, key string, rest Path, value any) any {
+// setElement replaces the elements with key, of root, the list at pattern p,
+// where the first of them was.
+func (s Schema) setElement(root any, p, key string, rest Path, value any) any {
 	list, _ := root.([]any)
 	var mine, others []any
 	at := -1
 	for _, el := range list {
-		if k, ok := s.elementKey(el); ok && k == key {
+		if k, ok := s.elementKey(el, p); ok && k == key {
 			if at < 0 {
 				at = len(others)
 			}
@@ -357,7 +410,7 @@ func (s Schema) setElement(root any, key string, rest Path, value any) any {
 	default:
 		current = mine
 	}
-	v := s.SetAt(current, rest, value)
+	v := s.setAt(current, p+"[]", rest, value)
 	var replacement []any
 	switch x := v.(type) {
 	case missing:
@@ -427,8 +480,8 @@ func (s Schema) diff(a, b any, path Path, out *[]Change) {
 		}
 		return
 	}
-	ka, okA := s.keyed(a)
-	kb, okB := s.keyed(b)
+	ka, okA := s.keyed(a, path.Pattern())
+	kb, okB := s.keyed(b, path.Pattern())
 	if okA && okB {
 		order := slices.Clone(ka.order)
 		for _, k := range kb.order {
@@ -440,7 +493,7 @@ func (s Schema) diff(a, b any, path Path, out *[]Change) {
 			at := append(slices.Clone(path), Step{Element: k})
 			ae, be := ka.get(k), kb.get(k)
 			if isGroup(ae) || isGroup(be) {
-				if !s.Same(ae, be) {
+				if !s.sameElements(at, ae, be) {
 					*out = append(*out, Change{Path: at, Value: be})
 				}
 				continue

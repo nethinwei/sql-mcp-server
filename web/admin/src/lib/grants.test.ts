@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { setActionOn } from './grants'
-import type { GrantInput } from '@/gql/graphql'
+import type { GrantInput } from '@/gql/schema'
 
 const base: GrantInput[] = [
   { entity: 'orders', actions: ['READ'], rows: { field: 'region', op: 'eq', value: 'CN' } },

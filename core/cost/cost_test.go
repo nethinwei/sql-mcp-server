@@ -8,6 +8,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
+	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
 	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
 )
@@ -553,5 +554,16 @@ func TestEstimateSmallTableFullScan(t *testing.T) {
 		if d.Allow != c.allow {
 			t.Errorf("%+v: allow = %v", c, d.Allow)
 		}
+	}
+}
+
+// An EXPLAIN the connection refused (its breaker open) is the call's error,
+// not an estimate to judge: the hold-back is reported as such, never as a
+// cost denial.
+func TestEstimateReportsARefusedExplain(t *testing.T) {
+	est := Estimate{Explainer: FakeExplainer{Err: ratelimit.ErrCircuitOpen}, FailClosed: true}
+	_, err := est.Check(context.Background(), codegen.Compiled{SQL: "SELECT * FROM t"})
+	if !errors.Is(err, ratelimit.ErrCircuitOpen) {
+		t.Fatalf("a refused EXPLAIN became %v", err)
 	}
 }

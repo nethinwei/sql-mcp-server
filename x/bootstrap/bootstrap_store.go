@@ -176,7 +176,8 @@ func (r *Runtime) ReloadWith(build func() (*App, error)) error {
 // WatchStore polls store for a newly published revision and reloads it with
 // build. current is the revision the runtime already serves. Failures keep
 // the current snapshot (fail-static) and are recorded in Stale; a later
-// successful reload clears it.
+// successful reload clears it. The users a revision that loads but fails to
+// apply changes are held meanwhile (see holdChanged).
 func (r *Runtime) WatchStore(
 	ctx context.Context,
 	store revision.Store,
@@ -216,6 +217,9 @@ func (r *Runtime) WatchStore(
 		}
 		if err != nil {
 			r.markStale(rev.ID, err, report)
+			if cfg, err := LoadRevision(rev); err == nil {
+				r.holdChanged(cfg)
+			}
 			continue
 		}
 		r.stale.Store(nil)

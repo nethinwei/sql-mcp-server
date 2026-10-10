@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"errors"
 	"time"
 )
@@ -36,38 +35,6 @@ type Config struct {
 	Audit        AuditConfig               `yaml:"audit"           json:"audit"`
 	Transactions TransactionConfig         `yaml:"transactions"    json:"transactions"`
 	Execution    ExecutionConfig           `yaml:"execution"       json:"execution"`
-}
-
-// Presence records fields whose explicit presence affects defaulting. Loaders
-// for any encoding can populate it after decoding and call ApplyPresence.
-type Presence struct {
-	Tools          bool
-	Cost           map[string]bool
-	CostAQE        map[string]bool
-	EntityDMLTools []bool
-}
-
-// ApplyPresence applies encoding-specific field presence to a decoded Config.
-func (c *Config) ApplyPresence(p Presence) {
-	c.Tools.present = p.Tools
-	c.Cost.present = copyPresence(p.Cost)
-	c.Cost.AQE.present = copyPresence(p.CostAQE)
-	for i := range c.Entities {
-		if i < len(p.EntityDMLTools) {
-			c.Entities[i].MCP.dmlToolsSet = p.EntityDMLTools[i]
-		}
-	}
-}
-
-func copyPresence(src map[string]bool) map[string]bool {
-	if src == nil {
-		return nil
-	}
-	dst := make(map[string]bool, len(src))
-	for key, present := range src {
-		dst[key] = present
-	}
-	return dst
 }
 
 // ServerConfig holds transport and role settings.
@@ -158,7 +125,8 @@ type RoutingConfig struct {
 const DefaultConnection = "default"
 
 // ConnectionsOrDSN returns the database's connections: the DSN shorthand as
-// one primary connection named DefaultConnection, or Connections.
+// one primary connection named DefaultConnection, or Connections. A
+// configuration built in code may hold either until ApplyDefaults.
 func (d DatabaseConfig) ConnectionsOrDSN() Connections {
 	if len(d.Connections) > 0 {
 		return d.Connections
@@ -299,8 +267,9 @@ type FieldACLConfig struct {
 	Write []string `yaml:"write,omitempty" json:"write,omitempty"`
 }
 
-// MCPFlags controls entity participation in MCP. Zero value means "not set";
-// ApplyDefaults sets DMLTools=true for unset entities.
+// MCPFlags controls entity participation in MCP. DMLTools defaults on: a
+// Spec that does not set it resolves with dmlToolsSet false, and
+// ApplyDefaults turns it on.
 type MCPFlags struct {
 	DMLTools         bool `yaml:"dmlTools"                   json:"dmlTools"`
 	CustomTool       bool `yaml:"customTool,omitempty"       json:"customTool,omitempty"`
@@ -308,30 +277,8 @@ type MCPFlags struct {
 	dmlToolsSet      bool
 }
 
-// MCPFlagsWithDMLTools constructs MCP flags with an explicit dmlTools value.
-// Use it for programmatic configuration when false must differ from omission.
-func MCPFlagsWithDMLTools(enabled bool) MCPFlags {
-	return MCPFlags{DMLTools: enabled, dmlToolsSet: true}
-}
-
-// UnmarshalJSON preserves an explicit false dmlTools value.
-func (f *MCPFlags) UnmarshalJSON(data []byte) error {
-	type plain MCPFlags
-	var decoded plain
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	*f = MCPFlags(decoded)
-	_, f.dmlToolsSet = raw["dmlTools"]
-	return nil
-}
-
-// ToolFlags toggles each DML tool. Decoding tracks whether the tools node was
-// present so an explicit all-false object differs from omission.
+// ToolFlags toggles each DML tool. present records that the tools section was
+// written (see Spec), so an explicit all-false object differs from omission.
 type ToolFlags struct {
 	DescribeEntities    bool `yaml:"describeEntities"    json:"describeEntities"`
 	ReadRecords         bool `yaml:"readRecords"         json:"readRecords"`
@@ -346,25 +293,16 @@ type ToolFlags struct {
 	present             bool
 }
 
-// UnmarshalJSON records that the tools object was present.
-func (f *ToolFlags) UnmarshalJSON(data []byte) error {
-	type plain ToolFlags
-	var decoded plain
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-	*f = ToolFlags(decoded)
-	f.present = true
-	return nil
-}
-
 // TransactionConfig bounds explicit transaction lifetime and cardinality.
 type TransactionConfig struct {
-	TTL             time.Duration `yaml:"ttl"             json:"ttl" schema:"min=0"`
-	MaxOpen         int           `yaml:"maxOpen"         json:"maxOpen" schema:"min=0"`
-	BeginTimeout    time.Duration `yaml:"beginTimeout"    json:"beginTimeout" schema:"min=0"`
-	CommitTimeout   time.Duration `yaml:"commitTimeout"   json:"commitTimeout" schema:"min=0"`
-	RollbackTimeout time.Duration `yaml:"rollbackTimeout" json:"rollbackTimeout" schema:"min=0"`
+	TTL     time.Duration `yaml:"ttl"             json:"ttl" schema:"min=0"`
+	MaxOpen int           `yaml:"maxOpen"         json:"maxOpen" schema:"min=0"`
+	// MaxOpenPerConnection bounds the transactions holding one database
+	// connection at once, so they leave queries a share of its pool.
+	MaxOpenPerConnection int           `yaml:"maxOpenPerConnection" json:"maxOpenPerConnection" schema:"min=0"`
+	BeginTimeout         time.Duration `yaml:"beginTimeout"    json:"beginTimeout" schema:"min=0"`
+	CommitTimeout        time.Duration `yaml:"commitTimeout"   json:"commitTimeout" schema:"min=0"`
+	RollbackTimeout      time.Duration `yaml:"rollbackTimeout" json:"rollbackTimeout" schema:"min=0"`
 }
 
 // ExecutionConfig bounds the lanes of the execution bus other than tool
@@ -409,25 +347,6 @@ type CostConfig struct {
 	present             map[string]bool
 }
 
-// UnmarshalJSON tracks each cost field independently.
-func (c *CostConfig) UnmarshalJSON(data []byte) error {
-	type plain CostConfig
-	var decoded plain
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	*c = CostConfig(decoded)
-	c.present = make(map[string]bool, len(raw))
-	for key := range raw {
-		c.present[key] = true
-	}
-	return nil
-}
-
 // AQEConfig controls bounded estimate feedback and optional read-only
 // EXPLAIN ANALYZE sampling.
 type AQEConfig struct {
@@ -440,25 +359,6 @@ type AQEConfig struct {
 	Timeout           time.Duration `yaml:"timeout"           json:"timeout" schema:"min=0,max=5s"`
 	MaxFingerprints   int           `yaml:"maxFingerprints"   json:"maxFingerprints" schema:"min=1"`
 	present           map[string]bool
-}
-
-// UnmarshalJSON tracks optional safety fields.
-func (c *AQEConfig) UnmarshalJSON(data []byte) error {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	type plain AQEConfig
-	var decoded plain
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-	*c = AQEConfig(decoded)
-	c.present = make(map[string]bool, len(raw))
-	for key := range raw {
-		c.present[key] = true
-	}
-	return nil
 }
 
 // BudgetConfig contains role and tenant scoped resource limits.
@@ -519,6 +419,7 @@ type RateLimitConfig struct {
 	BreakerCooldown  time.Duration `yaml:"breakerCooldown"   json:"breakerCooldown" schema:"min=0"`
 	ConnMaxIdleTime  time.Duration `yaml:"connMaxIdleTime"   json:"connMaxIdleTime" schema:"min=0"`
 	ConnMaxLifetime  time.Duration `yaml:"connMaxLifetime"   json:"connMaxLifetime" schema:"min=0"`
+	MaxResultMemory  int64         `yaml:"maxResultMemory"   json:"maxResultMemory" schema:"min=0"`
 }
 
 // EnabledOrDefault reports whether rate limiting is on; nil means default true.

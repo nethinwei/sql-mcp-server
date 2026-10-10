@@ -152,7 +152,9 @@ func candidateEntity(datasource string, d entity.Entity, names map[string]candid
 	out := config.EntityConfig{
 		Name: self.name, Source: d.Source, DataSource: datasource, Schema: d.Schema,
 		PrimaryKey: d.PrimaryKey(), UniqueKeys: IdentityUniqueKeys(d),
-		Fields: make([]config.FieldConfig, 0, len(d.Attributes)), MCP: config.MCPFlagsWithDMLTools(true),
+		Fields: make([]config.FieldConfig, 0, len(d.Attributes)),
+		// As in effect: DML tools on by default, not written (config.SpecOf).
+		MCP: config.MCPFlags{DMLTools: true},
 	}
 	if d.Kind == entity.KindView {
 		out.Kind = "view"

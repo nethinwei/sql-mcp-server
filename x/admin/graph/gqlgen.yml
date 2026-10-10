@@ -34,5 +34,7 @@ models:
     fields:
       config:
         resolver: true
+      sections:
+        resolver: true
       yaml:
         resolver: true

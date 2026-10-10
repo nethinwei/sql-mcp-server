@@ -13,6 +13,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/hook"
 	"github.com/nethinwei/sql-mcp-server/core/mask"
+	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
@@ -305,5 +306,71 @@ func TestRunToolPostExecutionLimitsDoNotFailWrites(t *testing.T) {
 	})
 	if err != nil || writes != 1 || len(res.Content) != 1 {
 		t.Fatalf("writes = %d, result = %+v, error = %v", writes, res, err)
+	}
+}
+
+// Ending a transaction releases its connection: commit and rollback pass when
+// the breaker is open and the session's budget is spent, which would refuse a
+// statement.
+func TestRunToolEndsTransactionsPastBreakerAndBudget(t *testing.T) {
+	breaker := ratelimit.NewBreaker(1, time.Hour)
+	breaker.Record(false)
+	eng, _ := engine.New(engine.WithIOPool(1), engine.WithBreaker(breaker))
+	spent := budget.New(map[string]budget.Limits{"writer": {MaxSessionCost: 1}}, nil)
+	lease, err := spent.Acquire(context.Background(), budget.Scope{Role: "writer", Session: "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = lease.Complete(budget.Usage{Cost: 1})
+	manager := NewTransactionManager(time.Minute, 0)
+	defer manager.Close()
+	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+		return &store.FakeTx{}, nil
+	}}
+	tc := Context{Role: "writer", Session: "s", Engine: eng, Budget: spent, Transactions: manager}
+	for _, end := range []Tool{CommitTransactionTool{}, RollbackTransactionTool{}} {
+		token, err := manager.Begin(context.Background(), db, "s", "writer", nil, "default", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input := json.RawMessage(`{"transaction":"` + token + `"}`)
+		if _, err := RunTool(context.Background(), end, input, tc); err != nil {
+			t.Fatalf("%s: %v", end.Info().Name, err)
+		}
+	}
+	if _, err := RunTool(context.Background(), BeginTransactionTool{}, json.RawMessage(`{}`), tc); err == nil {
+		t.Fatal("begin passed an open breaker and a spent budget")
+	}
+}
+
+// panickingEnd ends a transaction by panicking.
+type panickingEnd struct{ RollbackTransactionTool }
+
+func (panickingEnd) Run(context.Context, json.RawMessage, Context) (Result, error) { panic("end") }
+
+// A tool ending a transaction runs past the breaker and the slots, not past
+// every bound: the engine's rate limit still applies, and its panics are
+// recovered as any tool's are.
+func TestRunToolEndsTransactionsUnderTheRateLimit(t *testing.T) {
+	eng, _ := engine.New(engine.WithIOPool(1), engine.WithRPSLimiter(ratelimit.NewTokenBucket(1)))
+	manager := NewTransactionManager(time.Minute, 0)
+	defer manager.Close()
+	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+		return &store.FakeTx{}, nil
+	}}
+	tc := Context{Role: "writer", Session: "s", Engine: eng, Transactions: manager}
+	token, err := manager.Begin(context.Background(), db, "s", "writer", nil, "default", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := json.RawMessage(`{"transaction":"` + token + `"}`)
+	if _, err := RunTool(context.Background(), panickingEnd{}, input, tc); err == nil {
+		t.Fatal("a panic ending a transaction was not recovered")
+	}
+	if _, err := RunTool(context.Background(), RollbackTransactionTool{}, input, tc); !errors.Is(
+		err,
+		ratelimit.ErrRateLimited,
+	) {
+		t.Fatalf("a second end within the second passed the rate limit: %v", err)
 	}
 }

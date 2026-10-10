@@ -3,7 +3,11 @@ package bootstrap
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"fmt"
+	"io"
+	"net"
 	"os"
 	"slices"
 	"strings"
@@ -28,18 +32,27 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/providers/sqladapter"
 )
 
+// Only what the database or the connection to it reports counts against its
+// health; an error of any other kind, including one added later, does not.
 func TestRecordProviderFailureClassification(t *testing.T) {
 	t.Parallel()
 	for _, err := range []error{
 		context.Canceled, context.DeadlineExceeded, tool.ErrUnauthorized,
-		tool.ErrInvalidInput, cost.ErrCostExceeded,
+		tool.ErrInvalidInput, cost.ErrCostExceeded, errors.New("a business error added later"),
+		tool.WrapDBError(store.ErrPermissionDenied), tool.WrapDBError(context.Canceled),
+		&tool.ConstraintViolationError{Kind: "unique"},
 	} {
 		if recordProviderFailure(err) {
 			t.Errorf("business/context error counted as provider failure: %v", err)
 		}
 	}
-	if !recordProviderFailure(errors.New("connection reset")) {
-		t.Fatal("provider error was not counted")
+	for _, err := range []error{
+		tool.WrapDBError(errors.New("connection reset")), driver.ErrBadConn,
+		fmt.Errorf("read: %w", io.ErrUnexpectedEOF), &net.OpError{Op: "dial", Err: errors.New("refused")},
+	} {
+		if !recordProviderFailure(err) {
+			t.Errorf("provider error was not counted: %v", err)
+		}
 	}
 }
 

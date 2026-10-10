@@ -2,7 +2,6 @@ package configapp
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -95,10 +94,8 @@ func (s *Simulator) Evaluate(ctx context.Context, entityName, action string, fie
 
 // SimulateRequest is one authorization to evaluate.
 type SimulateRequest struct {
-	// Draft or Revision selects the configuration; default: the published
-	// one.
-	Draft    *Draft
-	Revision *string
+	// Against selects the configuration.
+	Against Against
 	// User is a configured user name, or role:<name>.
 	User, Entity, Action string
 	Fields               []string
@@ -110,7 +107,7 @@ func (r *Service) Simulate(ctx context.Context, in SimulateRequest) (*Simulation
 	if _, err := auth.RequireUnlimited(ctx, auth.PermRead); err != nil {
 		return nil, err
 	}
-	cfg, err := r.SelectConfig(ctx, in.Draft, in.Revision)
+	cfg, err := r.SelectConfig(ctx, in.Against)
 	if err != nil {
 		return nil, err
 	}
@@ -144,9 +141,9 @@ func predicateList(ps []relalg.Predicate) []any {
 	return out
 }
 
-// Diff is the unified diff, secrets redacted, from a revision to draft, to
-// another revision or (both nil) to the published one.
-func (r *Service) Diff(ctx context.Context, from string, to *string, draft *Draft) (string, error) {
+// Diff is the unified diff, secrets redacted, from a revision to the
+// configuration to is.
+func (r *Service) Diff(ctx context.Context, from string, to Against) (string, error) {
 	if _, err := auth.RequireUnlimited(ctx, auth.PermRead); err != nil {
 		return "", err
 	}
@@ -155,19 +152,22 @@ func (r *Service) Diff(ctx context.Context, from string, to *string, draft *Draf
 		return "", err
 	}
 	name := func(id int64) string { return fmt.Sprintf("revision %d", id) }
-	switch {
-	case draft != nil && to != nil:
-		return "", errors.New("pass either draft or to, not both")
-	case draft != nil:
-		d, err := r.BuildDraft(ctx, *draft)
+	if to.Workspace && to.Revision == nil {
+		draft, err := r.draftOf(ctx, to)
 		if err != nil {
 			return "", err
 		}
-		return revisionops.Diff(name(a.ID), a.Payload, "draft", d.Payload)
+		if draft != nil {
+			d, err := r.BuildDraft(ctx, *draft)
+			if err != nil {
+				return "", err
+			}
+			return revisionops.Diff(name(a.ID), a.Payload, "workspace", d.Payload)
+		}
 	}
 	var b revision.Revision
-	if to != nil {
-		b, err = r.Revision(ctx, *to)
+	if to.Revision != nil {
+		b, err = r.Revision(ctx, *to.Revision)
 	} else {
 		b, err = r.Store.Published(ctx)
 	}

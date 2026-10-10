@@ -1,4 +1,5 @@
-import type { Action, GrantInput } from '@/gql/graphql'
+import type { Action } from '@/gql/graphql'
+import type { GrantInput } from '@/gql/schema'
 import type { EntityIndex } from './entityRefs'
 
 /**

@@ -105,16 +105,21 @@ watcher 轮询文件内容 hash。新配置必须完整通过加载、secret 解
 自省和装配才会发布；失败会记录日志、继续使用旧快照，并对相同文件内容继续重试。
 新快照构建成功后立即发布，新请求不等待旧请求；旧快照的在途请求结束后，由后台
 关闭其 engine、审计和 prepared statement。新旧快照共享进程级服务：数据库连接
-（设置未变的连接直接复用，不再重连；无快照引用时关闭）、IO 配额与限流熔断状态
-（两代合计不超过配置的 `rateLimit.ioPool`），以及读缓存（按物理数据库失效，旧
+（设置未变的连接直接复用，不再重连；无快照引用时关闭），连同每个连接的熔断与
+自适应并发状态；IO 配额（两代合计不超过配置的 `rateLimit.ioPool`），以及读缓存（按物理数据库失效，旧
 快照的写入同样使新快照的缓存失效）。待回收的旧快照最多 3 个，超过时 reload 返回
 “earlier configurations are still draining”，watcher 下一轮重试。
 被删除或禁用的用户在发布时即解除会话绑定并回滚事务；旧快照排空后，再按当时
 关闭的会话 ID 回滚其在途请求期间打开的事务，不影响用户重新启用后新建的会话。
 装配时的自省（读 schema、对账）各数据源并行、整体限时 1 分钟；连接权限探测只
 用于告警与控制台置灰，在发布后于后台进行（限时 2 分钟），不阻塞启动与重载。
-事务 manager 与 budget session 状态跨快照保留，新限制（预算、事务 `ttl` 与
-`maxOpen`）原子应用：`maxOpen` 约束之后的 begin，新 `ttl` 用于之后开启的事务。
+事务 manager、预算与写跟踪属于进程，新限制（预算、事务 `ttl`、`maxOpen` 与
+`maxOpenPerConnection`）在发布时应用：上限约束之后的 begin，新 `ttl` 用于之后开启
+的事务。
+已发布的 revision 能加载、校验但装配失败（数据库不可达、schema 漂移、需重启）
+时，它删除、禁用或改动了定义（角色、subject、token、授权、权限）的用户立即暂停：
+新旧配置都不再认证这些用户，其会话关闭、事务回滚，日志记录
+“users held until the published revision applies”；下一次成功重载解除暂停。
 
 热重载只拒绝[字段参考](configuration.md#字段参考)中标记“修改需重启”的字段
 （`server.transport`、`server.addr`）以及开启或关闭 TLS：它们决定监听器本身。

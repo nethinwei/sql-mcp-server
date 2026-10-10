@@ -19,12 +19,41 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/version"
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
+	"github.com/nethinwei/sql-mcp-server/x/configplan"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
 )
+
+// Service is what the endpoint may do with the configuration service: read
+// the catalog, revisions and pending work, scan schemas, preview plans and
+// apply them to the administrator's workspace, diff and simulate. Nothing
+// else of configapp.Service (publishing, tokens, the workspace's versioning
+// operations, saving templates) is reachable from an agent's token: the type
+// says so, not a review.
+type Service interface {
+	ApplyPlan(ctx context.Context, in configapp.ApplyRequest) (*configapp.AppliedPlan, error)
+	Catalog(ctx context.Context, f configapp.CatalogFilter, against configapp.Against, offset, limit int) (
+		*configapp.CatalogPage, error)
+	CatalogLinks(ctx context.Context, ref string, against configapp.Against) (*configapp.CatalogLinks, error)
+	CatalogTable(ctx context.Context, ref string, against configapp.Against) (*configplan.Candidate, error)
+	Diff(ctx context.Context, from string, to configapp.Against) (string, error)
+	Pending(ctx context.Context, against configapp.Against) (*configapp.PendingWork, error)
+	PlanScope(ctx context.Context, scope configplan.Scope, against configapp.Against) (*configapp.ScopeStats, error)
+	PlanTemplates(ctx context.Context) ([]configapp.PlanTemplate, error)
+	PreviewInWorkspace(ctx context.Context, p configplan.Plan, review bool) (*configapp.Preview, error)
+	Previewed(ctx context.Context, planID string) (*configapp.Preview, error)
+	Revisions(ctx context.Context, limit int) ([]revision.Revision, error)
+	ScanBatches(ctx context.Context, datasource string) ([]configapp.ScanBatch, error)
+	SchemaList(ctx context.Context, datasource string, refresh bool) (*configapp.SchemaList, error)
+	Simulate(ctx context.Context, in configapp.SimulateRequest) (*configapp.Simulation, error)
+	StartScanBatch(ctx context.Context, in configapp.ScanBatchInput) (*configapp.ScanBatch, error)
+}
+
+var _ Service = (*configapp.Service)(nil)
 
 // Tokens finds and records the use of administrators' tokens.
 type Tokens interface {
@@ -45,7 +74,7 @@ const touchEvery = time.Minute
 // console for one client; it acts with the administrator's current
 // permissions and stops working when it expires, is revoked or the account
 // is disabled.
-func New(app *configapp.Service, tokens Tokens, admins accounts.Store, opts Options) http.Handler {
+func New(app Service, tokens Tokens, admins accounts.Store, opts Options) http.Handler {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}

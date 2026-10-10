@@ -86,8 +86,9 @@ async function check() {
   const mine = ++seq
   checking.value = true
   try {
-    const v = (await run(ValidateQuery, { draft: snap.draft })).validate
-    const d = v.ok ? (await run(DiffQuery, { from: ws.baseId, draft: snap.draft })).diff : ''
+    // Both read the workspace on the server, what was edited here written first.
+    const v = (await workspace.read(ValidateQuery, {})).validate
+    const d = v.ok ? (await workspace.read(DiffQuery, { from: ws.baseId })).diff : ''
     if (mine !== seq) return
     error.value = v.ok ? null : v.error ?? t('review.validateFailed')
     restart.value = v.restartRequired
@@ -200,9 +201,9 @@ onMounted(check)
 </script>
 
 <template>
-  <n-alert v-if="settingsEdits.pending.length" type="warning" class="settings-pending"
+  <n-alert v-if="settingsEdits.unsaved.length" type="warning" class="settings-pending"
     :title="t('review.settingsPendingTitle')">
-    {{ t('review.settingsPendingBody', { list: settingsEdits.pending.join(', ') }) }}
+    {{ t('review.settingsPendingBody', { list: settingsEdits.unsaved.join(', ') }) }}
     <div class="alert-actions">
       <n-button size="small" @click="router.push({ name: 'settings' })">{{ t('review.toSettings') }}</n-button>
     </div>

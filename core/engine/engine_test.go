@@ -483,3 +483,19 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+// Run holds to the rate limit and recovers panics, and passes the breaker.
+func TestRunPassesTheBreakerUnderTheRateLimit(t *testing.T) {
+	t.Parallel()
+	breaker := ratelimit.NewBreaker(1, time.Hour)
+	breaker.Record(false)
+	e, _ := New(WithIOPool(1), WithBreaker(breaker), WithRPSLimiter(ratelimit.NewTokenBucket(1)))
+	if _, err := e.Run(context.Background(), func(context.Context) (any, error) { panic("boom") }); err == nil {
+		t.Fatal("a panic was not recovered")
+	}
+	if _, err := e.Run(context.Background(), func(context.Context) (any, error) { return nil, nil }); !errors.Is(
+		err, ratelimit.ErrRateLimited,
+	) {
+		t.Fatalf("a second run within the second passed the rate limit: %v", err)
+	}
+}

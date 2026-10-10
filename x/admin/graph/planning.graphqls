@@ -29,8 +29,6 @@ input CatalogFilter {
 
 input CatalogInput {
   filter: CatalogFilter!
-  "Compare with this draft; default: the published configuration."
-  draft: DraftInput
   offset: Int = 0
   "At most 500."
   limit: Int = 50
@@ -58,8 +56,6 @@ input ScanBatchInput {
 
 input PlanPreviewInput {
   plan: JSON!
-  "Evaluate against this draft; default: the published configuration."
-  draft: DraftInput
   """
   Report every new table a grant covers (exception review, to confirm), as
   reviewing a recurring template's proposal needs.
@@ -91,6 +87,11 @@ input WorkspaceItemInput {
   value: JSON
   "The item as its writer read it; null: it was absent."
   previous: JSON
+  """
+  For an entity or a role renamed or moved: the key it had. The item it
+  replaces is removed, and references to it follow (see docs/design/editing.md).
+  """
+  renamedFrom: String
 }
 
 "The workspace at the version reviewed, to publish as a new revision."
@@ -125,23 +126,24 @@ input McpTokenInput {
 extend type Query {
   """
   Scanned tables of every datasource matching filter, a page at a time,
-  compared with the draft (default: the published configuration).
+  compared with the signed-in administrator's workspace (as are catalogRefs,
+  catalogTable, catalogLinks, planScope, previewPlan and pending).
   """
   catalog(input: CatalogInput!): CatalogPage!
   "The refs of every table matching filter, to select them all."
-  catalogRefs(filter: CatalogFilter!, draft: DraftInput): [String!]!
+  catalogRefs(filter: CatalogFilter!): [String!]!
   "One scanned table in full, with the entity proposed for it; null when not scanned."
-  catalogTable(ref: String!, draft: DraftInput): ImportTable
+  catalogTable(ref: String!): ImportTable
   "The foreign keys of a scanned table, and those of other scanned tables referencing it."
-  catalogLinks(ref: String!, draft: DraftInput): CatalogLinks!
+  catalogLinks(ref: String!): CatalogLinks!
   """
   How many tables a plan scope (the scope part of a plan) selects, a few of
   them, and how many each of its conditions selects alone.
   """
-  planScope(scope: JSON!, draft: DraftInput): ScopeStats!
+  planScope(scope: JSON!): ScopeStats!
   """
-  Evaluate a plan against the draft (default: the published configuration)
-  without saving anything.
+  Evaluate a plan against the signed-in administrator's workspace without
+  saving anything.
   """
   previewPlan(input: PlanPreviewInput!): PlanPreview!
   planTemplates: [PlanTemplate!]!
@@ -152,13 +154,18 @@ extend type Query {
   rules they cannot apply, tables whose fields differ, tables not imported
   and schemas never scanned, each with how it is being handled.
   """
-  pending(draft: DraftInput): PendingWork!
+  pending: PendingWork!
   "How the state of a pending item changed, newest first."
   pendingLog(key: String!): [PendingState!]!
   "The signed-in administrator's workspace; null when nothing is published."
   workspace: Workspace
   "The writes of the signed-in administrator's workspace, newest first."
   workspaceLog(limit: Int): [WorkspaceLogEntry!]!
+  """
+  Where the signed-in administrator's workspace names the fields of an entity
+  (by its ID): roles and users first, a row filter before a field list.
+  """
+  fieldReferences(entity: ID!): [FieldReference!]!
   "Every draft, newest first, with the revision it builds on."
   drafts: [DraftRevision!]!
   "The signed-in administrator's tokens for the configuration MCP endpoint."
@@ -549,4 +556,16 @@ type DraftRevision {
   revision: Revision!
   "The first revision up its parents that is not a draft."
   basedOn: ID
+}
+
+"""
+A place naming a field: a role or user (via fields: a grant lists it, which
+removing the field takes care of; rows: a grant filters by it, to fix first),
+or an entity's relationship, primaryKey, uniqueKey or tenantPolicy (name: its ID).
+"""
+type FieldReference {
+  field: String!
+  kind: String!
+  name: String!
+  via: String
 }

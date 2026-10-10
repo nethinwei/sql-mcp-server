@@ -19,7 +19,6 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
-	"github.com/nethinwei/sql-mcp-server/x/admin/graph"
 	"github.com/nethinwei/sql-mcp-server/x/admin/scanjobs"
 	"github.com/nethinwei/sql-mcp-server/x/catalog"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
@@ -78,8 +77,7 @@ func newEnv(t *testing.T) env {
 	)
 	scans := configapp.NewScans(scanjobs.Options{}, plans)
 	t.Cleanup(scans.Close)
-	app := &configapp.Service{Store: store, Scans: scans, Plans: plans, WorkspaceEdit: graph.WorkspaceEdit,
-		WorkspaceSections: graph.WorkspaceSections}
+	app := &configapp.Service{Store: store, Scans: scans, Plans: plans}
 	srv := httptest.NewServer(New(app, plans, admins, Options{}))
 	t.Cleanup(srv.Close)
 	return env{url: srv.URL, store: store, accounts: admins, plans: plans}

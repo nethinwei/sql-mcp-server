@@ -77,7 +77,7 @@ func runtimeStatus(
 			st.Applied = startup
 		}
 		if stale, ok := runtime.Stale(); ok {
-			st.Pending = &stale
+			st.Unapplied = &stale
 		}
 		return st
 	}

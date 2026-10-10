@@ -164,7 +164,7 @@ func details(p *configapp.Preview, in detailsIn) (any, error) {
 	return nil, errors.New("section is changes, changeEntities, exceptions, added, entities or objects")
 }
 
-func registerPlans(s *mcp.Server, app *configapp.Service) {
+func registerPlans(s *mcp.Server, app Service) {
 	add(s, tool("plan_preview", "Evaluate a plan against the administrator's workspace without changing it: a "+
 		"summary of what it covers and changes, its exceptions by kind and level (with the IDs of those to "+
 		"confirm), whether the outcome validates, and the planId plan_details and plan_apply take.", true),

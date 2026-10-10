@@ -41,7 +41,7 @@ export const useStatus = defineStore('status', {
       try {
         for (let i = 0; i < 15; i++) {
           const s = this.server
-          if (!s?.watching || !this.publishedId || s.appliedRevision === this.publishedId || s.pending) return
+          if (!s?.watching || !this.publishedId || s.appliedRevision === this.publishedId || s.unapplied) return
           await new Promise((r) => setTimeout(r, 1000))
           await this.refresh()
         }

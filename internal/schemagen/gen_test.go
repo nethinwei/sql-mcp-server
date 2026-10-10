@@ -12,11 +12,11 @@ const repoRoot = "../.."
 
 // schema.json and the field reference must match the structs and fields.yaml.
 func TestGeneratedFilesAreCurrent(t *testing.T) {
-	schema, doc, err := outputs(repoRoot)
+	files, err := outputs(repoRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for path, want := range map[string][]byte{schemaPath: schema, docPath: doc} {
+	for path, want := range files {
 		got, err := os.ReadFile(filepath.Join(repoRoot, path))
 		if err != nil {
 			t.Fatal(err)

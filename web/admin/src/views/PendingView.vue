@@ -6,10 +6,9 @@ import {
   NAlert, NButton, NCard, NDataTable, NEmpty, NGi, NGrid, NSpin, NStatistic, NSwitch, NTag, NText,
   type DataTableColumns,
 } from 'naive-ui'
-import { run } from '@/api/client'
 import { PendingQuery } from '@/api/ops'
+import { workspace } from '@/lib/workspaceSync'
 import type { PendingQuery as PendingResult } from '@/gql/graphql'
-import { useWorkspace } from '@/stores/workspace'
 import { can } from '@/api/session'
 import { loadPlan, type Plan } from '@/lib/plan'
 import PlanReport from '@/components/plan/PlanReport.vue'
@@ -27,7 +26,6 @@ type DriftTable = Pending['driftTables'][number]
 
 const { t } = useI18n()
 const router = useRouter()
-const ws = useWorkspace()
 const pending = ref<Pending | null>(null)
 const error = ref('')
 const loading = ref(false)
@@ -36,7 +34,7 @@ const showHandled = ref(false)
 async function load() {
   loading.value = true
   try {
-    pending.value = (await run(PendingQuery, { draft: ws.computeDraft })).pending
+    pending.value = (await workspace.read(PendingQuery, {})).pending
     error.value = ''
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)

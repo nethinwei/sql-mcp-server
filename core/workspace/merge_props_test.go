@@ -160,10 +160,10 @@ func propEdit(r *rng, base any) any {
 
 // listKeys are the keys of a list the merge treats element by element, in
 // order; false for any other list.
-func listKeys(list []any) ([]string, bool) {
+func listKeys(list []any, p string) ([]string, bool) {
 	var keys []string
 	for _, el := range list {
-		key, ok := schema.elementKey(el)
+		key, ok := schema.elementKey(el, p)
 		if !ok {
 			return nil, false
 		}
@@ -197,7 +197,7 @@ func leaves(values []any, path Path, out map[string]Path) {
 			allObjects = false
 		}
 		l, ok := v.([]any)
-		ks, keyed := listKeys(l)
+		ks, keyed := listKeys(l, path.Pattern())
 		if !ok || !keyed {
 			allLists = false
 		}

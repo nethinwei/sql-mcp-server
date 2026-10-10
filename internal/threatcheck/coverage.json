@@ -31,6 +31,8 @@
   "TM-003": {
     "severity": "critical",
     "tests": [
+      {"file": "core/tool/pipeline_test.go", "name": "TestStatementWithoutGrantIsRefused"},
+      {"file": "core/tool/pipeline_test.go", "name": "TestOnlyTheExecutorCallsTheDatabase"},
       {"file": "core/rbac/rbac_test.go", "name": "TestAuthorizeResolvesSubjectPlaceholder"},
       {"file": "core/tool/adversarial_test.go", "name": "TestAdversarialRowPolicyIsAlwaysConjoined"},
       {"file": "x/providers/postgres/integration_test.go", "name": "TestRLSRowFilterAndMasking"},
@@ -93,8 +95,8 @@
       {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadPublishesWithoutWaitingForLeases"},
       {"file": "x/bootstrap/bootstrap_access_test.go", "name": "TestReloadReportsRevokedPrincipals"},
       {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadFailureKeepsOldApp"},
-      {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadUpdatesTransactionLimits"},
-      {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadUpdatesBudgetLimitsAndPreservesState"},
+      {"file": "x/bootstrap/runtime_test.go", "name": "TestReloadKeepsTheProcessState"},
+      {"file": "x/bootstrap/hold_test.go", "name": "TestRevocationAppliesWhileTheRevisionFails"},
       {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadRefusedWhileEarlierSnapshotsDrain"},
       {"file": "x/bootstrap/bootstrap_access_test.go", "name": "TestRevocationSparesSessionsOpenedAfterIt"},
       {"file": "x/bootstrap/shared_test.go", "name": "TestWriteOnOldGenerationInvalidatesNewOne"},
@@ -110,6 +112,8 @@
   "TM-008": {
     "severity": "high",
     "tests": [
+      {"file": "core/tool/pipeline_test.go", "name": "TestResultMemoryBoundsTheProcess"},
+      {"file": "core/tool/pipeline_test.go", "name": "TestReadStopsAtTheByteLimitAsRowsArrive"},
       {"file": "x/mcpserver/http_test.go", "name": "TestLimitBodyBoundary"},
       {"file": "core/tool/tool_runtool_test.go", "name": "TestRunToolEnforcesReturnedByteLimit"},
       {"file": "core/tool/adversarial_test.go", "name": "FuzzToolPayloadDecodeNormalizeFieldGate"}
@@ -121,6 +125,7 @@
   "TM-009": {
     "severity": "critical",
     "tests": [
+      {"file": "core/budget/budget_test.go", "name": "TestTenantConcurrencySpansSessions"},
       {"file": "core/rbac/grant_test.go", "name": "TestGrantAuthorizerRejectsCrossGrantFieldRowCombination"},
       {"file": "core/rbac/grant_test.go", "name": "TestGrantAuthorizerUnrestrictedGrantWidensRowsNotTenant"},
       {"file": "core/rbac/grant_test.go", "name": "TestGrantAuthorizerCoverageInvariant"},

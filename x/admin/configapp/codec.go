@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/core/workspace"
@@ -13,11 +12,9 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/configedit"
 )
 
-// A configuration as workspace items is the console's sections, item by
-// item: each entity (keyed by its ID), each role and each user (by name),
-// and the settings as one item. The values are the types the console edits
-// (the admin API provides the encoding, Service.WorkspaceSections and
-// WorkspaceEdit).
+// A configuration as workspace items is its Sections, item by item: each
+// entity (keyed by its ID), each role and each user (by name), and the
+// settings as one item.
 
 // The kinds of workspace items, as the console names its changes.
 const (
@@ -27,16 +24,13 @@ const (
 	ItemSettings = "settings"
 )
 
-// Schema is how the configuration's values merge: list elements by name
-// (fields, relationships), else by the entity they grant; empty text of
-// these properties means unset (an empty token hash: no token, as a user
-// without one).
-var Schema = workspace.Schema{
-	ListKeys:     []string{"name", "entity"},
-	OptionalText: []string{"source", "datasource", "schema", "kind", "description", "alias", "mask", "tokenHash"},
-}
+// Schema is how the configuration's values merge, read off the item types
+// (see mergeSchema): fields and relationships keyed by name, grants by the
+// entity they name; optional text, and switches off unless set, unset when
+// empty or false (an empty token hash: no token).
+var Schema = mergeSchema(EntityItem{}, RoleItem{}, UserItem{})
 
-// sectionsDoc is the console's sections.
+// sectionsDoc is Sections with each item as it is stored.
 type sectionsDoc struct {
 	Entities []json.RawMessage `json:"entities"`
 	Roles    []json.RawMessage `json:"roles"`
@@ -69,7 +63,7 @@ func itemKey(kind string, raw json.RawMessage) (string, error) {
 	return id.Name, nil
 }
 
-// itemsOfSections are the items of the console's sections, in order.
+// itemsOfSections are the items of encoded Sections, in order.
 func itemsOfSections(data []byte) (workspace.Snapshot, error) {
 	var d sectionsDoc
 	if err := json.Unmarshal(data, &d); err != nil {
@@ -98,7 +92,7 @@ func itemsOfSections(data []byte) (workspace.Snapshot, error) {
 	return append(out, workspace.Item{Ref: workspace.Ref{Kind: ItemSettings, Key: ItemSettings}, Value: settings}), nil
 }
 
-// sectionsOfItems are the console's sections of items.
+// sectionsOfItems are the encoded Sections of items.
 func sectionsOfItems(items workspace.Snapshot) ([]byte, error) {
 	d := sectionsDoc{Entities: []json.RawMessage{}, Roles: []json.RawMessage{}, Users: []json.RawMessage{},
 		Settings: json.RawMessage(`{}`)}
@@ -123,28 +117,21 @@ func sectionsOfItems(items workspace.Snapshot) ([]byte, error) {
 // codec is the configuration's workspaceops.Codec.
 type codec struct{ r *Service }
 
-func (c codec) ready() error {
-	if c.r.WorkspaceEdit == nil || c.r.WorkspaceSections == nil {
-		return errors.New("workspaces cannot be read here")
-	}
-	return nil
-}
-
 // Items implements workspaceops.Codec.
 func (c codec) Items(rev revision.Revision) (workspace.Snapshot, error) {
-	cfg, err := bootstrap.LoadRevision(rev)
+	if _, err := bootstrap.LoadRevision(rev); err != nil {
+		return nil, err
+	}
+	return c.itemsOf(rev.Payload)
+}
+
+// itemsOf are the items of a payload, as it says.
+func (c codec) itemsOf(payload []byte) (workspace.Snapshot, error) {
+	sections, err := SectionsOfPayload(payload)
 	if err != nil {
 		return nil, err
 	}
-	return c.itemsOf(cfg, rev.Payload)
-}
-
-// itemsOf are cfg's items (payload its encoding).
-func (c codec) itemsOf(cfg *config.Config, payload []byte) (workspace.Snapshot, error) {
-	if err := c.ready(); err != nil {
-		return nil, err
-	}
-	data, err := c.r.WorkspaceSections(cfg, payload)
+	data, err := json.Marshal(sections)
 	if err != nil {
 		return nil, err
 	}
@@ -153,15 +140,29 @@ func (c codec) itemsOf(cfg *config.Config, payload []byte) (workspace.Snapshot, 
 
 // edit is items as an edit of a base revision.
 func (c codec) edit(items workspace.Snapshot) (configedit.Edit, error) {
-	if err := c.ready(); err != nil {
-		return configedit.Edit{}, err
+	edit, err := c.decode(items)
+	if err != nil {
+		return configedit.Edit{}, fmt.Errorf("%w: %w", ErrWorkspaceContent, err)
 	}
+	return edit, nil
+}
+
+func (c codec) decode(items workspace.Snapshot) (configedit.Edit, error) {
 	data, err := sectionsOfItems(items)
 	if err != nil {
 		return configedit.Edit{}, err
 	}
-	return c.r.WorkspaceEdit(data)
+	var sections Sections
+	if err := json.Unmarshal(data, &sections); err != nil {
+		return configedit.Edit{}, fmt.Errorf("workspace: %w", err)
+	}
+	return sections.Edit()
 }
+
+// ErrWorkspaceContent is a workspace whose items do not read as
+// configuration (an agent wrote a section of the wrong shape): what it
+// would configure cannot be told, as a validation of it reports.
+var ErrWorkspaceContent = errors.New("workspace items are not a configuration")
 
 // Build implements workspaceops.Codec: the configuration items make on
 // base, checked as a whole.
@@ -170,22 +171,20 @@ func (c codec) Build(base revision.Revision, items workspace.Snapshot) ([]byte, 
 	if err != nil {
 		return nil, err
 	}
-	if err := c.removeSettings(base, &edit); err != nil {
+	was, err := c.Items(base)
+	if err != nil {
 		return nil, err
 	}
+	removeSettings(was, &edit)
 	_, payload, err := configedit.Apply(base.Payload, edit)
 	return payload, err
 }
 
 // removeSettings makes the settings item the settings as they are: the edit
-// overlays base key by key, so a key base has and the item does not is
-// removed (null), its default applying.
-func (c codec) removeSettings(base revision.Revision, edit *configedit.Edit) error {
-	was, err := c.Items(base)
-	if err != nil {
-		return err
-	}
-	settings, _ := was.Get(workspace.Ref{Kind: ItemSettings, Key: ItemSettings}).(map[string]any)
+// overlays base (its items) key by key, so a key base has and the item does
+// not is removed (null), its default applying.
+func removeSettings(base workspace.Snapshot, edit *configedit.Edit) {
+	settings, _ := base.Get(workspace.Ref{Kind: ItemSettings, Key: ItemSettings}).(map[string]any)
 	for key := range settings {
 		if _, kept := edit.Settings[key]; !kept {
 			if edit.Settings == nil {
@@ -194,5 +193,4 @@ func (c codec) removeSettings(base revision.Revision, edit *configedit.Edit) err
 			edit.Settings[key] = nil
 		}
 	}
-	return nil
 }

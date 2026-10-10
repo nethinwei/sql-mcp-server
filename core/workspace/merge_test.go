@@ -7,11 +7,15 @@ import (
 	"testing"
 )
 
-// schema is the configuration's: list elements by name, else the entity a
-// grant names; optional text as the configuration has it.
+// schema is like the configuration's: fields and relationships keyed by name,
+// grants by the entity they name, a top-level list (as the edge cases merge)
+// by name; optional text unset when empty.
 var schema = Schema{
-	ListKeys:     []string{"name", "entity"},
-	OptionalText: []string{"source", "datasource", "schema", "kind", "description", "alias", "mask"},
+	Lists: map[string]string{"fields[]": "name", "relationships[]": "name", "grants[]": "entity", "[]": "name"},
+	Unset: map[string]bool{
+		"source": true, "datasource": true, "schema": true, "kind": true, "description": true,
+		"fields[].alias": true, "fields[].description": true, "fields[].mask": true,
+	},
 }
 
 // js decodes a JSON literal; "" is Missing.
@@ -59,7 +63,7 @@ func TestMergeGroupsGrantsOnOneEntity(t *testing.T) {
 		data, _ := json.Marshal(map[string]any{"entity": entity, "actions": actions})
 		return string(data)
 	}
-	list := func(gs ...string) string { return "[" + strings.Join(gs, ",") + "]" }
+	list := func(gs ...string) string { return `{"grants":[` + strings.Join(gs, ",") + "]}" }
 	base := list(g("a", "READ"), g("a", "AGGREGATE"))
 	v, cs := schema.Merge(js(t, base), js(t, list(g("a", "READ", "CREATE"), g("a", "AGGREGATE"))),
 		js(t, list(g("a", "READ"), g("a", "AGGREGATE"), g("b", "READ"))), nil)
@@ -69,10 +73,27 @@ func TestMergeGroupsGrantsOnOneEntity(t *testing.T) {
 	}
 	// Removing one grant of the group on one side and changing another on
 	// the other is a conflict on the group, not a change to the wrong grant.
-	_, cs = schema.Merge(js(t, base), js(t, `[{"entity":"a","actions":["READ"]},{"entity":"a","actions":["DELETE"]}]`),
-		js(t, `[{"entity":"a","actions":["AGGREGATE"]}]`), nil)
-	if len(cs) != 1 || cs[0].Path.String() != "[a]" {
+	_, cs = schema.Merge(js(t, base), js(t, list(g("a", "READ"), g("a", "DELETE"))),
+		js(t, list(g("a", "AGGREGATE"))), nil)
+	if len(cs) != 1 || cs[0].Path.String() != "grants[a]" {
 		t.Fatalf("conflicts = %+v", cs)
+	}
+}
+
+// A rule applies at its path only: a list elsewhere whose elements happen to
+// have a name merges whole, and empty text elsewhere is a value.
+func TestRulesApplyAtTheirPathOnly(t *testing.T) {
+	_, cs := schema.Merge(js(t, `{"settings":{"hosts":[{"name":"a","port":1}]}}`),
+		js(t, `{"settings":{"hosts":[{"name":"a","port":2}]}}`),
+		js(t, `{"settings":{"hosts":[{"name":"a","port":1},{"name":"b","port":1}]}}`), nil)
+	if len(cs) != 1 || cs[0].Path.String() != "settings.hosts" {
+		t.Fatalf("an undeclared list must merge whole: %+v", cs)
+	}
+	if schema.Same(js(t, `{"settings":{"description":""}}`), js(t, `{"settings":{}}`)) {
+		t.Fatal("empty text where no rule says so is a value")
+	}
+	if !schema.Same(js(t, `{"fields":[{"name":"id","mask":""}]}`), js(t, `{"fields":[{"name":"id"}]}`)) {
+		t.Fatal("empty text where a rule says so is unset")
 	}
 }
 

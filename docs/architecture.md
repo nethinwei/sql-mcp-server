@@ -98,9 +98,10 @@ token 身份且不参与去重，避免不同 transport session 共享同一执�
 结束后于后台关闭（publish-then-drain）；每个请求自始至终只用一个快照。构建失败
 保留旧快照。`serve --watch` 通过轮询配置文件内容 hash 触发。
 
-跨快照协调由 `bootstrap.Shared` 承担：连接池按设置复用并引用计数、IO 配额与
-限流熔断共享（`engine.Quota`）、读缓存共享且按物理数据库失效（键含配置代次以
-隔离读取）。预算与事务 manager 在切换时原子替换限制并保留状态。被吊销用户的会话
+跨快照协调由 `bootstrap.Shared` 承担（进程层，见 `docs/design/lifetimes.md`）：
+连接池按设置复用并引用计数，每个连接带自己的熔断与自适应并发；IO 配额与 RPS
+共享（`engine.Quota`）；读缓存共享且按物理数据库失效（键含配置代次以隔离读取）；
+事务、预算与写跟踪归进程，发布时只更新其限制。被吊销用户的会话
 在发布时关闭，旧快照排空后再按这些会话 ID 回滚其在途事务。
 
 MCP 工具列表跟随发布的快照（`Runtime.OnPublish`）：工具集合或 custom procedure

@@ -364,6 +364,7 @@
     "DML_TOOLS_DISABLED": false,
     "ENTITY_NOT_FOUND": false,
     "INVALID_INPUT": true,
+    "OUTCOME_UNKNOWN": false,
     "TRANSACTION_CAPACITY": true,
     "TRANSACTION_NOT_FOUND": false,
     "TRANSACTION_SCOPE": false,

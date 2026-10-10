@@ -20,9 +20,11 @@ users:
 
 func TestApplyKeepsUnsetSectionsAndMeanings(t *testing.T) {
 	t.Parallel()
-	cfg, payload, err := Apply([]byte(base), Edit{Entities: []config.EntityConfig{
-		{Name: "orders", Fields: []config.FieldConfig{{Name: "id"}}},
-		{Name: "hidden", Fields: []config.FieldConfig{{Name: "id"}}, MCP: config.MCPFlagsWithDMLTools(false)},
+	off := false
+	cfg, payload, err := Apply([]byte(base), Edit{Entities: []config.EntitySpec{
+		{Name: ptr("orders"), Fields: config.List[config.FieldSpec]{{Name: ptr("id")}}},
+		{Name: ptr("hidden"), Fields: config.List[config.FieldSpec]{{Name: ptr("id")}},
+			MCP: &config.MCPFlagsSpec{DMLTools: &off}},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -33,16 +35,20 @@ func TestApplyKeepsUnsetSectionsAndMeanings(t *testing.T) {
 	if cfg.Users["alice"].TokenHash != hash {
 		t.Fatal("a section the edit does not set must stay as it was")
 	}
-	if !strings.Contains(string(payload), "dmlTools: false") {
-		t.Fatalf("payload lost the explicit false:\n%s", payload)
+	if !strings.Contains(string(payload), "dmlTools: false") || strings.Count(string(payload), "dmlTools") != 1 {
+		t.Fatalf("the payload must keep the explicit false and leave the default unset:\n%s", payload)
 	}
 }
 
+func ptr[T any](v T) *T { return &v }
+
+// A user is as written, its token included: one without a hash has none.
 func TestApplyUserTokens(t *testing.T) {
 	t.Parallel()
-	kept, _, err := Apply([]byte(base), Edit{Users: []User{{Name: "Alice", KeepToken: true}}})
+	alice := User{Name: "Alice", UserSpec: config.UserSpec{TokenHash: ptr(hash)}}
+	kept, _, err := Apply([]byte(base), Edit{Users: []User{alice}})
 	if err != nil || kept.Users["alice"].TokenHash != hash {
-		t.Fatalf("KeepToken: %+v, %v", kept.Users["alice"], err)
+		t.Fatalf("kept: %+v, %v", kept.Users["alice"], err)
 	}
 	revoked, _, err := Apply([]byte(base), Edit{Users: []User{{Name: "alice"}}})
 	if err != nil || revoked.Users["alice"].TokenHash != "" {
@@ -58,7 +64,7 @@ func TestApplyUserTokens(t *testing.T) {
 func TestApplyValidatesTheWholeResult(t *testing.T) {
 	t.Parallel()
 	_, _, err := Apply([]byte(base), Edit{
-		Users: []User{{Name: "alice", KeepToken: true}, {Name: "bob"}},
+		Users: []User{{Name: "alice", UserSpec: config.UserSpec{TokenHash: ptr(hash)}}, {Name: "bob"}},
 		Settings: map[string]any{"budget": map[string]any{
 			"users": map[string]any{"bob": map[string]any{"maxConcurrent": 1}},
 		}},

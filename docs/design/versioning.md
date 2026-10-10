@@ -61,7 +61,7 @@ depguard 规则 `versioning-generic` 禁止它导入 `core/config`、`x/configed
 | 列表，元素有 `name` 或 `entity`（`Schema.ListKeys`） | 按键识别元素：字段、关系按 `name`，授权按 `entity`；新增、删除、修改各自合并，顺序按我方，再追加只有对方新增的；同一键出现多次的元素成组整体比较 |
 | 其他列表、标量 | 整体比较：只有一侧改了取那一侧，两侧改得一样取之，改得不同为冲突 |
 | `Schema.OptionalText` 中的文本 | 空串等同未设置 |
-| 用户的 `tokenHash` | 项里是用户的完整状态：哈希就是令牌，生成、轮换、撤销都是这个值的修改；空串（撤销）等同没有令牌（在 `OptionalText` 中），所以两边都撤销不算冲突，改成不同的值才是冲突。项写回配置时，没有哈希即没有令牌（`DraftInput` 里省略 tokenHash 表示沿用基准，工作区不用这个语义） |
+| 用户的 `tokenHash` | 项里是用户的完整状态：哈希就是令牌，生成、轮换、撤销都是这个值的修改；空串（撤销）等同没有令牌（在 `OptionalText` 中），所以两边都撤销不算冲突，改成不同的值才是冲突。项写回配置时，没有哈希即没有令牌 |
 
 冲突保留“我的”值（工作区的），记录路径（如 `fields[email].mask`，空路径为整项）
 与对方的值。路径 `within` 关系用于：整项冲突覆盖其下的值冲突，解决上层冲突同时关闭
@@ -98,9 +98,9 @@ depguard 规则 `versioning-generic` 禁止它导入 `core/config`、`x/configed
 的值为原值写下一次。其他操作（update、reset、合并草稿、解决冲突、检查点、提交）先写出
 本地修改，再调用服务端，读回结果。控制台不做合并，不算冲突。
 
-服务端把配置写成项的编码（`graph.WorkspaceSections`）与控制台从修订构造的
-（`revisionSections`）完全一致，由 `x/admin/graph/testdata/workspace_sections.json`
-同时锁定 Go 与 vitest 两侧。
+配置 ⇄ 项的编码只在服务端（`x/admin/configapp/items.go`，见
+[编辑语义](editing.md)），控制台从 `Revision.sections` 读取修订的项；形状由
+`x/admin/configapp/testdata/workspace_sections.json` 锁定。
 
 ## 取舍
 

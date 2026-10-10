@@ -133,6 +133,12 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   以其他管理员的身份操作；检查失败时显示错误与“重新检查”。
 - 两个管理员几乎同时发布时，后提交的一方被配置库拒绝但没有 `CONFLICT` 错误码，
   控制台不提示基于新版本变基；现在返回 `CONFLICT` 与最新的已发布版本。
+- 预算：租户限额与角色限额逐字段取更严的值（此前整体替换，租户未设的项会解除角色
+  限制）。
+- 事务：过期回收不再在全局锁内等待数据库回滚；提交与回滚不再受熔断、自适应并发与
+  IO 槽阻挡（仍受每秒请求数限制，panic 同样被恢复）；等待一个正在结束的事务以调用方
+  的超时为限；关闭进程有统一期限（15 秒）。
+- 熔断只计数据库与连接错误（白名单），调用方取消、约束违反与权限拒绝不再触发熔断。
 
 ### Changed
 
@@ -158,6 +164,38 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   作为一组），双方改了同一处时
   记为冲突，必须逐项选择保留哪一方，全部解决前不能保存或发布（此前默认保留本地
   值，可直接发布覆盖对方）。
+- 编辑领域收归服务端（`docs/design/editing.md`）：工作区项的类型与编解码只在
+  `x/admin/configapp`；改名、删除引起的引用维护由服务端 `Reconcile` 完成，控制台只写
+  `renamedFrom`；目录、方案预览、校验、diff、模拟默认读调用者的工作区。
+- 配置分为意图（`config.Spec`）与生效值（`docs/design/spec.md`）：配置库只存写过的
+  值，旧 payload 逐字节兼容；工作区合并规则按路径由项类型标签声明，控制台共用。
+- 进程级状态（连接及其熔断/自适应并发、事务、预算、写跟踪、缓存、结果内存）归
+  `bootstrap.Shared`，重载不再搬运状态（`docs/design/lifetimes.md`）。熔断与自适应并发
+  按数据库连接隔离，半开只放行一个探测，一批同时超时只减半一次；新增
+  `transactions.maxOpenPerConnection`（默认 `ioPool/2`）。
+- 已发布 revision 能加载但装配失败（如 schema 漂移）时，它删除、禁用或改动的用户
+  立即暂停并关闭会话，不再等待整个版本应用（TM-007/TM-010）。
+- 数据面固定管线（`docs/design/pipeline.md`）：数据库只由执行器调用，语句须由授权
+  结果与过闸 SQL 构成（结构测试强制）；结果逐行计量，越过 `cost.maxBytes`/预算的第一行
+  即中止；新增 `rateLimit.maxResultMemory`（默认 256 MiB）约束进程同时持有的结果。
+- 新增错误码 `OUTCOME_UNKNOWN`（不可重试）：写入或提交期间连接中断或超时；相关
+  缓存按已写入失效。事务令牌结束后 10 分钟内，同一调用方再用会得到
+  `TRANSACTION_NOT_FOUND` 附 `constraints.outcome`（`committed`/`rolledBack`/`expired`/
+  `unknown`）。
+- 控制台：ESLint 进入 `make web`；消息键存在性测试；实时更新在 SSE 连接期间把
+  轮询从 10 秒降到 60 秒。新增术语表 `docs/glossary.md`，部署模式与预算分层写入
+  `docs/configuration.md`。
+
+### Breaking
+
+- 租户 `budget.tenants.<t>.maxConcurrent` 改为按租户聚合（所有会话、所有主体合计），
+  此前按会话计数，开新会话即可绕过。
+- 新增 `transactions.maxOpenPerConnection`，默认 `max(1, rateLimit.ioPool/2)`：同一连接上
+  同时打开的显式事务此前不限（只受 `transactions.maxOpen` 约束），升级后超出的 `begin`
+  返回 `TRANSACTION_CAPACITY`；需要原行为时设为 `rateLimit.ioPool`（事务可占满连接池）。
+- GraphQL：`ServerStatus.pending: PendingRevision` 改名为
+  `unapplied: UnappliedRevision`；移除 `DraftInput` 与 `createDraft`（改用工作区与
+  `checkpointWorkspace`），查询的 `draft` 参数改为 `revision`（默认调用者的工作区）。
 
 ## 0.1.12 - 2026-10-09
 

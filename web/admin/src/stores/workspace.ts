@@ -1,20 +1,14 @@
 import { defineStore } from 'pinia'
+import mergeSchema from '../../../../x/admin/configapp/testdata/merge_schema.json'
 import { EntityIndex, entityId } from '@/lib/entityRefs'
-import { filterFields, type Filter } from '@/lib/filter'
 import type {
   Action,
-  FieldInput,
   WorkspaceQuery as WorkspaceResult,
-  DraftInput,
-  EntityInput,
   EntityPartsFragment,
-  GrantInput,
-  GrantPartsFragment,
   PreviewPlanQuery,
-  RoleInput,
-  UserInput,
   WorkspacePartsFragment,
 } from '@/gql/graphql'
+import type { FieldInput, EntityInput, GrantInput, RoleInput, UserInput } from '@/gql/schema'
 
 export interface Datasource {
   name: string
@@ -32,21 +26,6 @@ export interface Sections {
   users: UserInput[]
   settings: Record<string, unknown>
 }
-
-/** A place that names one field of an entity. */
-export interface FieldReference {
-  kind: 'role' | 'user' | 'relationship' | 'primaryKey' | 'uniqueKey' | 'tenantPolicy'
-  /** The role, user or entity holding the reference. */
-  name: string
-  /**
-   * For a role or user: whether a grant lists the field (removing the field
-   * removes it there too) or filters rows by it (which must be fixed first).
-   */
-  via?: 'fields' | 'rows'
-}
-
-/** Whether removing a field takes care of a reference to it. */
-export const followsRemoval = (r: FieldReference) => r.via === 'fields'
 
 /** A plan's outcome as previewPlan answers it. */
 export type Proposal = PreviewPlanQuery['previewPlan']
@@ -88,6 +67,12 @@ interface State extends Sections {
   taken: string[]
   checkpoint: string | null
   loading: boolean
+  /**
+   * Items renamed or moved here and not yet written, by itemRef: the key the
+   * server knows them by. They are written with renamedFrom, so the server
+   * moves the references to them (see x/admin/configapp reconcile).
+   */
+  renamed: Record<string, string>
 }
 
 /**
@@ -149,17 +134,6 @@ export function toEntityInput(e: EntityPartsFragment): EntityInput {
   }
 }
 
-function toGrantInput(g: GrantPartsFragment): GrantInput {
-  return {
-    entity: g.entity,
-    actions: [...g.actions],
-    fieldsRestricted: g.fieldsRestricted,
-    readFields: [...g.readFields],
-    writeFields: [...g.writeFields],
-    rows: g.rows ?? undefined,
-  }
-}
-
 /**
  * Sections an older console kept, as the workspace holds them now. There a
  * user without a token hash kept the base user's token; here such a user
@@ -172,27 +146,9 @@ export function upgradeLegacySections(old: Sections, baseTokens: Record<string, 
   return { ...old, users }
 }
 
-/** The editable sections of a loaded revision. */
+/** The sections of a loaded revision (see Revision.sections), a copy to edit. */
 export function revisionSections(rev: NonNullable<WorkspaceResult['revision']>): Sections {
-  const cfg = rev.config
-  return {
-    entities: cfg.entities.map(toEntityInput),
-    roles: cfg.roles.map((r) => ({
-      name: r.name,
-      description: r.description ?? undefined,
-      grants: r.grants.map(toGrantInput),
-    })),
-    users: cfg.users.map((u) => ({
-      name: u.name,
-      description: u.description ?? undefined,
-      roles: [...u.roles],
-      subject: u.subject ?? undefined,
-      disabled: u.disabled,
-      tokenHash: u.tokenHash ?? undefined,
-      grants: u.grants.map(toGrantInput),
-    })),
-    settings: { ...(cfg.settings as Record<string, unknown>) },
-  }
+  return JSON.parse(JSON.stringify(rev.sections)) as Sections
 }
 
 function sections(s: State): Sections {
@@ -204,24 +160,35 @@ function sections(s: State): Sections {
  * object keys are sorted, so the same content compares equal however it was
  * built (the server keeps a workspace with its keys sorted).
  */
-// Optional text where empty and unset mean the same, as in the server's
-// merge schema: a revoked token (an empty hash) is a user without one.
-const optionalText = new Set(['source', 'datasource', 'schema', 'kind', 'description', 'alias', 'mask', 'tokenHash'])
+// The values whose zero (empty text, false, null) means unset, by path from
+// an item's root: the server's merge rules (x/admin/configapp), so items
+// compare here as they do there. A revoked token (an empty hash) is a user
+// without one; a field excluded: false, one not excluded.
+const unset = new Set(mergeSchema.unset)
 
-function normalize(v: unknown, key = ''): unknown {
-  if (optionalText.has(key) && (v === '' || v === null)) return undefined
-  if (Array.isArray(v)) return v.map((x) => normalize(x))
+function normalize(v: unknown, path = ''): unknown {
+  if (unset.has(path) && (v === '' || v === false || v === null)) return undefined
+  if (Array.isArray(v)) return v.map((x) => normalize(x, `${path}[]`))
   if (typeof v !== 'object' || v === null) return v
   const out: Record<string, unknown> = {}
   for (const k of Object.keys(v).sort()) {
-    const n = normalize((v as Record<string, unknown>)[k], k)
+    const n = normalize((v as Record<string, unknown>)[k], path ? `${path}.${k}` : k)
     if (n !== undefined) out[k] = n
   }
   return out
 }
 
+/** An item's canonical JSON. */
 export function canonical(value: unknown): string {
   return JSON.stringify(normalize(value) ?? null)
+}
+
+/** The canonical JSON of sections, item by item. */
+function canonicalSections(s: Sections): string {
+  return JSON.stringify({
+    entities: s.entities.map((e) => normalize(e)), roles: s.roles.map((r) => normalize(r)),
+    users: s.users.map((u) => normalize(u)), settings: normalize(s.settings),
+  })
 }
 
 /** How a change names an item: an entity by its ID, others by name. */
@@ -276,48 +243,6 @@ function changesBetween(base: Sections, now: Sections): Change[] {
     out.push({ kind: 'settings', name: 'settings', type: 'modified' })
   }
   return out
-}
-
-type References = Pick<Sections, 'entities' | 'roles' | 'users'>
-
-/**
- * Rewrites every entity reference (grants, relationship targets, procedure
- * affects): to returns its new form, or null to drop it.
- */
-function rewriteReferences(s: References, to: (ref: string) => string | null) {
-  const grants = (gs: GrantInput[] | null | undefined) => (gs ?? []).flatMap((g) => {
-    const ref = to(g.entity)
-    return ref === null ? [] : [ref === g.entity ? g : { ...g, entity: ref }]
-  })
-  for (const r of s.roles) r.grants = grants(r.grants)
-  for (const u of s.users) u.grants = grants(u.grants)
-  for (const e of s.entities) {
-    if (e.relationships?.length) {
-      e.relationships = e.relationships.flatMap((rel) => {
-        const ref = to(rel.target)
-        return ref === null ? [] : [ref === rel.target ? rel : { ...rel, target: ref }]
-      })
-    }
-    if (e.affects?.length) e.affects = e.affects.flatMap((a) => to(a) ?? [])
-  }
-}
-
-/**
- * Keeps every reference naming the entity it named before entities changed
- * (before), qualifying it when the change made it ambiguous. moved maps the
- * IDs of renamed entities to their new IDs, and of removed ones to null,
- * whose references are dropped. References that named no single entity
- * before are left as they are.
- */
-function retarget(s: References, before: (ref: string) => string | undefined, moved = new Map<string, string | null>()) {
-  const after = new EntityIndex(s.entities)
-  rewriteReferences(s, (ref) => {
-    const was = before(ref)
-    if (was === undefined) return ref
-    const now = moved.has(was) ? moved.get(was)! : was
-    if (now === null) return null
-    return after.idOf(ref) === now ? ref : after.shortName(now)
-  })
 }
 
 /**
@@ -378,6 +303,7 @@ export const useWorkspace = defineStore('workspace', {
     taken: [],
     checkpoint: null,
     loading: false,
+    renamed: {},
     entities: [],
     roles: [],
     users: [],
@@ -394,46 +320,17 @@ export const useWorkspace = defineStore('workspace', {
     },
     /** A key of the current content, as snapshot() records it. */
     content(state): string {
-      return canonical(sections(state))
+      return canonicalSections(sections(state))
     },
     /** The draft saved from the workspace while nothing changed since, or null. */
     savedDraftId(state): string | null {
       return this.dirty ? state.checkpoint : null
     },
     /**
-     * The workspace as a draft of its base revision, holding only the
-     * sections it changed: the server keeps the others from the base, so
-     * requests stay small (each check of the review page sends one). A removed
-     * settings section is sent as null.
+     * Changes whenever what is computed on the workspace (catalog status,
+     * scope counts, plan previews, simulations) could change: its base or
+     * its content.
      */
-    draft(state): DraftInput {
-      const draft: DraftInput = { base: state.baseId ?? '' }
-      // The users here are as they are, token included: one without a token
-      // hash has none (a missing hash would keep the base user's).
-      const users = state.users.map((u) => ({ ...u, tokenHash: u.tokenHash ?? '' }))
-      if (!state.baseline) return { ...draft, entities: state.entities, roles: state.roles, users, settings: state.settings }
-      const base = JSON.parse(state.baseline) as Sections
-      if (canonical(base.entities) !== canonical(state.entities)) draft.entities = state.entities
-      if (canonical(base.roles) !== canonical(state.roles)) draft.roles = state.roles
-      if (canonical(base.users) !== canonical(state.users)) draft.users = users
-      const settings: Record<string, unknown> = {}
-      for (const key of new Set([...Object.keys(base.settings), ...Object.keys(state.settings)])) {
-        if (canonical(base.settings[key]) !== canonical(state.settings[key])) settings[key] = state.settings[key] ?? null
-      }
-      if (Object.keys(settings).length) draft.settings = settings
-      return draft
-    },
-    /**
-     * What every computation on the workspace (catalog status, scope counts,
-     * plan previews, table details) runs against: its base revision with the
-     * unsaved changes. Always the workspace, never "the published revision
-     * when nothing is unsaved": a loaded draft is a base of its own. Undefined
-     * before a revision is loaded.
-     */
-    computeDraft(): DraftInput | undefined {
-      return this.baseId ? this.draft : undefined
-    },
-    /** Changes whenever computeDraft would compute something else. */
     contextKey(state): string {
       return `${state.baseId ?? ''}\u0000${this.content}`
     },
@@ -455,56 +352,6 @@ export const useWorkspace = defineStore('workspace', {
         users: state.users.filter((u) => (u.grants ?? []).some(on(entity))).map((u) => u.name),
       })
     },
-    /**
-     * Where roles, users and entities name each field, built in one pass:
-     * `${entity ID}\u0000${field}` → references. An entity holding a
-     * reference is named by its ID.
-     */
-    fieldReferenceIndex(state): Map<string, FieldReference[]> {
-      const index = this.entityIndex
-      const out = new Map<string, FieldReference[]>()
-      const add = (entity: string | undefined, field: string, ref: FieldReference) => {
-        if (entity === undefined) return
-        const key = `${entity}\u0000${field}`
-        const list = out.get(key) ?? []
-        if (!list.some((r) => r.kind === ref.kind && r.name === ref.name)) out.set(key, [...list, ref])
-      }
-      for (const [kind, holders] of [['role', state.roles], ['user', state.users]] as const) {
-        for (const h of holders) {
-          // Row filters first: a field a grant both lists and filters by blocks removal.
-          for (const g of h.grants ?? []) {
-            const entity = index.idOf(g.entity)
-            for (const f of filterFields(g.rows as Filter | undefined)) add(entity, f, { kind, name: h.name, via: 'rows' })
-          }
-          for (const g of h.grants ?? []) {
-            const entity = index.idOf(g.entity)
-            for (const f of [...(g.readFields ?? []), ...(g.writeFields ?? [])]) add(entity, f, { kind, name: h.name, via: 'fields' })
-          }
-        }
-      }
-      for (const e of state.entities) {
-        const id = entityId(e)
-        for (const rel of e.relationships ?? []) {
-          for (const [local, remote] of Object.entries((rel.joinOn ?? {}) as Record<string, string>)) {
-            add(id, local, { kind: 'relationship', name: id })
-            add(index.idOf(rel.target), remote, { kind: 'relationship', name: id })
-          }
-        }
-        for (const f of e.primaryKey ?? []) add(id, f, { kind: 'primaryKey', name: id })
-        for (const k of e.uniqueKeys ?? []) for (const f of k) add(id, f, { kind: 'uniqueKey', name: id })
-        for (const f of filterFields(e.tenantPolicy as Filter | undefined)) add(id, f, { kind: 'tenantPolicy', name: id })
-      }
-      return out
-    },
-    /** Where roles, users and entities name a field of the entity with an ID. */
-    fieldReferences(): (entity: string, field: string) => FieldReference[] {
-      return (entity, field) => {
-        const refs = this.fieldReferenceIndex.get(`${entity}\u0000${field}`) ?? []
-        // Roles and users first, as the previous listing did.
-        const order = { role: 0, user: 1, relationship: 2, primaryKey: 3, uniqueKey: 4, tenantPolicy: 5 }
-        return [...refs].sort((a, b) => order[a.kind] - order[b.kind])
-      }
-    },
     hasToken: () => (user: UserInput) => Boolean(user.tokenHash),
   },
 
@@ -513,20 +360,20 @@ export const useWorkspace = defineStore('workspace', {
     apply(data: WorkspaceResult, id: string) {
       const rev = data.revision
       if (!rev) throw new Error(`revision ${id} not found`)
-      const cfg = rev.config
+      const loaded = revisionSections(rev)
       this.baseId = rev.id
       this.basePublished = data.published?.id ?? null
       this.baseHash = rev.contentHash
-      this.datasources = cfg.datasources.map((d) => ({ ...d }))
-      this.baseTokens = Object.fromEntries(cfg.users.map((u) => [u.name, u.tokenHash ?? '']))
-      Object.assign(this, revisionSections(rev))
+      this.datasources = rev.config.datasources.map((d) => ({ ...d }))
+      this.baseTokens = Object.fromEntries(loaded.users.map((u) => [u.name, u.tokenHash ?? '']))
+      this.renamed = {}
+      Object.assign(this, loaded)
       this.baseline = JSON.stringify(sections(this.$state))
     },
 
-    /** A copy of the workspace as a draft and as sections, with its content key. */
-    snapshot(): { draft: DraftInput; content: string; sections: string } {
-      const draft = JSON.parse(JSON.stringify(this.draft)) as DraftInput
-      return { draft, content: canonical(sections(this.$state)), sections: JSON.stringify(sections(this.$state)) }
+    /** A copy of the workspace as sections, with its content key. */
+    snapshot(): { content: string; sections: string } {
+      return { content: canonicalSections(sections(this.$state)), sections: JSON.stringify(sections(this.$state)) }
     },
 
     /**
@@ -571,8 +418,11 @@ export const useWorkspace = defineStore('workspace', {
         checkpoint: w.checkpoint ?? null })
     },
 
-    /** The items edited here since the copy, each with the value it was edited from (null: absent). */
-    pendingItems(): { kind: string; key: string; value: unknown; previous: unknown }[] {
+    /**
+     * The items edited here since the copy, each with the value it was edited
+     * from (null: absent), and the key one renamed here had.
+     */
+    unsavedItems(): { kind: string; key: string; value: unknown; previous: unknown; renamedFrom?: string }[] {
       const copy = this.copy
       if (!copy) return []
       const mine = itemsOf(sections(this.$state))
@@ -582,7 +432,9 @@ export const useWorkspace = defineStore('workspace', {
         if (canonical(m?.value) === (copy.values[ref] ?? canonical(undefined))) continue
         const [kind, key] = ref.split('\u0000') as [string, string]
         // A copy: the item may be edited again while it is being written.
-        out.push({ kind, key, value: m ? JSON.parse(JSON.stringify(m.value)) : null, previous: copy.raw[ref] ?? null })
+        const value = m ? JSON.parse(JSON.stringify(m.value)) : null
+        const from = m && this.renamed[ref] !== key ? this.renamed[ref] : undefined
+        out.push({ kind, key, value, previous: copy.raw[ref] ?? null, ...(from ? { renamedFrom: from } : {}) })
       }
       return out
     },
@@ -592,10 +444,38 @@ export const useWorkspace = defineStore('workspace', {
      * answer: an item edited again while the write was in flight then still
      * differs, and is written next, from what was sent.
      */
-    wrote(items: { kind: string; key: string; value: unknown }[]) {
+    wrote(items: { kind: string; key: string; value: unknown; renamedFrom?: string }[]) {
       const copy = this.copy
       if (!copy) return
-      for (const it of items) setCopy(copy, itemRef(it.kind, it.key), it.value ?? undefined)
+      for (const it of items) {
+        const ref = itemRef(it.kind, it.key)
+        setCopy(copy, ref, it.value ?? undefined)
+        if (it.renamedFrom) {
+          delete this.renamed[ref]
+          // The server knows the item by this key now: one renamed from it
+          // while the write was in flight is renamed from this key.
+          for (const [other, origin] of Object.entries(this.renamed)) {
+            if (origin === it.renamedFrom && other.startsWith(it.kind + '\u0000')) this.renamed[other] = it.key
+          }
+        }
+        if (this.renamed[ref] === it.key) delete this.renamed[ref]
+      }
+    },
+
+    /**
+     * Records that the item of kind once keyed from is now keyed to, when
+     * the server knows it by its first key (one added here and renamed
+     * before it was written is just written under its new key). Renamed
+     * back to that key, the item is recorded as renamed to itself: a write
+     * renaming it that is in flight then gives it the key to rename it from.
+     */
+    rename(kind: 'entity' | 'role', from: string, to: string) {
+      if (from === to) return
+      const origin = this.renamed[itemRef(kind, from)] ?? from
+      delete this.renamed[itemRef(kind, from)]
+      if (this.copy?.values[itemRef(kind, origin)] !== undefined) {
+        this.renamed[itemRef(kind, to)] = origin
+      }
     },
 
     /**
@@ -681,16 +561,13 @@ export const useWorkspace = defineStore('workspace', {
      * Adds imported entities, keeping only relationships whose target exists,
      * and grants them to the named roles (created when missing). Candidates
      * target each other by ID; their references are written in the shortest
-     * unambiguous form, and existing references the new entities make
-     * ambiguous are qualified. Returns how many relationships were dropped.
+     * unambiguous form. Returns how many relationships were dropped.
      */
     importEntities(entities: EntityInput[], roles: string[] = [], actions: Action[] = []): number {
-      const before = this.entityIndex
       const added = new Set(entities.map(entityId))
       const targets = new EntityIndex([...this.entities.filter((e) => !added.has(entityId(e))), ...entities])
-      // Existing references first: those the new entities make ambiguous are
-      // qualified. What the import writes is added after, resolved against
-      // the entities after the import, never by what a reference meant before.
+      // What the import writes is resolved against the entities after it;
+      // existing references it makes ambiguous are qualified by the server.
       const relationships = entities.map((e) => (e.relationships ?? []).flatMap((r) => {
         const id = targets.idOf(r.target)
         return id === undefined ? [] : [{ ...r, target: id }]
@@ -699,7 +576,6 @@ export const useWorkspace = defineStore('workspace', {
       this.entities = [
         ...this.entities.filter((e) => !added.has(entityId(e))), ...entities.map((e) => ({ ...e, relationships: [] })),
       ]
-      retarget(this.$state, (ref) => before.idOf(ref))
       const after = this.entityIndex
       for (const [i, e] of entities.entries()) {
         this.entity(entityId(e))!.relationships = relationships[i].map((r) => ({ ...r, target: after.shortName(r.target) }))
@@ -720,38 +596,30 @@ export const useWorkspace = defineStore('workspace', {
 
     /**
      * Adds or replaces an entity. Renaming it or moving it to another
-     * datasource or schema (previousId differs) keeps the table it reads
-     * (source defaults to the name) and moves every reference along: grants
-     * of roles and users, relationships of other entities that target it and
-     * procedures that affect it. References the change makes ambiguous are
-     * qualified (see retarget).
+     * datasource or schema (previousId differs) is written as such: the
+     * server keeps the table it reads and moves the references to it.
      */
     upsertEntity(e: EntityInput, previousId = entityId(e)) {
-      const before = this.entityIndex
-      const previous = before.get(previousId)
-      if (previous && previous.name !== e.name && !e.source) e = { ...e, source: previous.source || previous.name }
       const i = this.entities.findIndex((x) => entityId(x) === previousId)
       if (i >= 0) this.entities.splice(i, 1, e)
       else this.entities.push(e)
-      retarget(this.$state, (ref) => before.idOf(ref), new Map([[previousId, entityId(e)]]))
+      this.rename('entity', previousId, entityId(e))
     },
 
     /**
-     * Removes an entity, every grant on it, every relationship to it and its
-     * place in procedures' affects (an emptied list invalidates the whole
-     * datasource, the safe default).
+     * Removes an entity; the server drops the grants on it, the
+     * relationships to it and its place in procedures' affects.
      */
     removeEntity(id: string) {
-      const before = this.entityIndex
       this.entities = this.entities.filter((e) => entityId(e) !== id)
-      retarget(this.$state, (ref) => before.idOf(ref), new Map([[id, null]]))
+      delete this.renamed[itemRef('entity', id)]
     },
 
     /**
-     * Adds and removes fields of an entity. Removed fields also leave the
-     * read and write lists of grants on it; relationships, the primary key,
-     * row scopes and the tenant policy that name them are left for the
-     * caller to show (see fieldReferences), since the server rejects them.
+     * Adds and removes fields of an entity; the server drops removed ones
+     * from the field lists of grants on it. Relationships, keys, row filters
+     * and the tenant policy that name them are the caller's to show first
+     * (see the fieldReferences query): the server rejects them.
      */
     syncFields(entity: string, added: FieldInput[], removed: string[]) {
       const e = this.entity(entity)
@@ -759,36 +627,20 @@ export const useWorkspace = defineStore('workspace', {
       const gone = new Set(removed)
       const fields = (e.fields ?? []).filter((f) => !gone.has(f.name))
       this.upsertEntity({ ...e, fields: [...fields, ...added.filter((f) => !fields.some((x) => x.name === f.name))] })
-      const index = this.entityIndex
-      const prune = (g: GrantInput) => (index.idOf(g.entity) !== entity ? g : {
-        ...g,
-        readFields: (g.readFields ?? []).filter((f) => !gone.has(f)),
-        writeFields: (g.writeFields ?? []).filter((f) => !gone.has(f)),
-      })
-      for (const r of this.roles) r.grants = (r.grants ?? []).map(prune)
-      for (const u of this.users) u.grants = (u.grants ?? []).map(prune)
     },
 
-    /**
-     * Takes a plan's outcome (see previewPlan) into the workspace, like an
-     * edit: the entities it adds are imported (references they make
-     * ambiguous are qualified), the entities it changes take its fields, and
-     * the roles and users it changes take its grants, which name entities by
-     * ID and are written in their shortest unambiguous form.
-     */
+    /** Adds or replaces a role; renaming it, the server renames it on its members. */
     upsertRole(r: RoleInput, previousName = r.name) {
       const i = this.roles.findIndex((x) => x.name === previousName)
       if (i >= 0) this.roles.splice(i, 1, r)
       else this.roles.push(r)
-      if (previousName !== r.name) {
-        for (const u of this.users) u.roles = (u.roles ?? []).map((x) => (x === previousName ? r.name : x))
-      }
+      this.rename('role', previousName, r.name)
     },
 
-    /** Removes a role and takes it away from every user. */
+    /** Removes a role; the server takes it away from every user. */
     removeRole(name: string) {
       this.roles = this.roles.filter((r) => r.name !== name)
-      for (const u of this.users) u.roles = (u.roles ?? []).filter((x) => x !== name)
+      delete this.renamed[itemRef('role', name)]
     },
 
     /** Sets which users hold a role. */

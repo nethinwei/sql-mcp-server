@@ -6,6 +6,17 @@ const config: CodegenConfig = {
   documents: ['src/**/*.{ts,vue}', '!src/gql/**'],
   ignoreNoDocuments: true,
   generates: {
+    // Every schema type, the input types included: they are the shapes of a
+    // workspace's items (EntityInput, RoleInput, UserInput, as
+    // x/admin/configapp/items.go has them), which no operation names.
+    'src/gql/schema.ts': {
+      plugins: ['typescript'],
+      config: {
+        useTypeImports: true,
+        enumsAsTypes: true,
+        scalars: { JSON: 'any', Time: 'string', ID: 'string' },
+      },
+    },
     'src/gql/': {
       preset: 'client',
       presetConfig: { fragmentMasking: false },

@@ -22,9 +22,14 @@ var (
 // table, column, database or routine privilege, or a read-only server.
 var refusals = map[uint16]bool{1142: true, 1143: true, 1044: true, 1370: true, 1290: true}
 
-// classify turns an integrity violation into a *store.ConstraintError and a
-// refusal into store.ErrPermissionDenied.
+// classify turns an integrity violation into a *store.ConstraintError, a
+// refusal into store.ErrPermissionDenied, and a connection the driver found
+// broken in the middle of a command (ErrInvalidConn; one broken before it
+// is driver.ErrBadConn) into store.ErrConnectionLost.
 func classify(err error) error {
+	if errors.Is(err, mysqldriver.ErrInvalidConn) {
+		return fmt.Errorf("%w: %w", store.ErrConnectionLost, err)
+	}
 	var myErr *mysqldriver.MySQLError
 	if !errors.As(err, &myErr) {
 		return err

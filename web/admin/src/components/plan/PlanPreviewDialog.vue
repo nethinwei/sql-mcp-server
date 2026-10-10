@@ -30,7 +30,7 @@ const message = useMessage()
 
 const current = ref<Plan | null>(null)
 const previewer = createPreviewer<Proposal>(
-  async (plan) => (await run(PreviewPlanQuery, { plan, draft: ws.computeDraft, review: !!props.review })).previewPlan,
+  async (plan) => (await workspace.read(PreviewPlanQuery, { plan, review: !!props.review })).previewPlan,
   () => ws.contextKey,
 )
 const state = previewer.state

@@ -15,7 +15,7 @@ type scanIn struct {
 	RequestKey string   `json:"requestKey,omitempty" jsonschema:"names the request: sent again, it gets the same batch"`
 }
 
-func registerScans(s *mcp.Server, app *configapp.Service) {
+func registerScans(s *mcp.Server, app Service) {
 	add(s, tool("scan_schemas", "Scan schemas of a datasource on the server, a few at a time, as a batch: "+
 		"the named ones, or every listed schema not scanned yet. Poll scan_status for progress.", false),
 		func(ctx context.Context, in scanIn) (any, error) {

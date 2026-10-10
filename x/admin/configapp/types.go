@@ -535,11 +535,14 @@ type WorkspaceEditInput struct {
 
 // WorkspaceItemInput writes one item: its value (null removes it) and the
 // value its writer read (null: absent). An item written meanwhile merges.
+// RenamedFrom is the key of the item of the same kind (an entity or a role)
+// it was renamed or moved from, which it replaces; references follow it.
 type WorkspaceItemInput struct {
-	Kind     string `json:"kind"`
-	Key      string `json:"key"`
-	Value    any    `json:"value,omitempty"`
-	Previous any    `json:"previous,omitempty"`
+	Kind        string  `json:"kind"`
+	Key         string  `json:"key"`
+	Value       any     `json:"value,omitempty"`
+	Previous    any     `json:"previous,omitempty"`
+	RenamedFrom *string `json:"renamedFrom,omitempty"`
 }
 
 // CommitInput commits the workspace at the version reviewed.

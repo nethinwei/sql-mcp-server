@@ -12,6 +12,7 @@ import (
 	"github.com/99designs/gqlgen/client"
 
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
+	"github.com/nethinwei/sql-mcp-server/x/configedit"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
 )
 
@@ -30,7 +31,6 @@ func planningHarness(t *testing.T) (*harness, *client.Client) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	h.resolver.App.Plans = store
-	h.resolver.App.WorkspaceEdit, h.resolver.App.WorkspaceSections = WorkspaceEdit, WorkspaceSections
 	c := h.client(auth.PermAll)
 	var listed map[string]any
 	mustPost(t, c, `{ schemaList(datasource: "shop") { defaultSchema } }`, &listed)
@@ -58,7 +58,7 @@ type catalogResponse struct {
 	}
 }
 
-const catalogQuery = `query($f: CatalogFilter!, $d: DraftInput) { catalog(input: {filter: $f, draft: $d}) { total
+const catalogQuery = `query($f: CatalogFilter!) { catalog(input: {filter: $f}) { total
 	counts { all new workspace published drift }
 	tables { ref status entity missing hasKey referencedBy foreignKeys } coverage { datasource scanned listed } } }`
 
@@ -96,14 +96,15 @@ func TestCatalogAcrossStatuses(t *testing.T) {
 	if rel := detail.CatalogTable.Candidate.Relationships; len(rel) != 1 || rel[0].Target != "shop.customers" {
 		t.Fatalf("detail = %+v", detail)
 	}
-	// A draft that imports the table shows it as not yet published.
+	// A workspace that imports the table shows it as not yet published.
+	var edited struct{ EditWorkspace workspaceState }
+	mustPost(t, c, editMutation, &edited, client.Var("in", map[string]any{"items": []any{map[string]any{
+		"kind": "entity", "key": "shop.public.orders", "value": map[string]any{
+			"name": "orders", "datasource": "shop", "schema": "public", "fields": []any{map[string]any{"name": "id"}},
+		},
+	}}}))
 	var drafted catalogResponse
-	mustPost(t, c, catalogQuery, &drafted, client.Var("f", map[string]any{"status": []string{"WORKSPACE"}}),
-		client.Var("d", map[string]any{"base": "1", "entities": []any{
-			map[string]any{"name": "customers", "datasource": "shop", "fields": []any{map[string]any{"name": "id"}}},
-			map[string]any{"name": "orders", "datasource": "shop", "schema": "public",
-				"fields": []any{map[string]any{"name": "id"}}},
-		}}))
+	mustPost(t, c, catalogQuery, &drafted, client.Var("f", map[string]any{"status": []string{"WORKSPACE"}}))
 	if drafted.Catalog.Total != 1 || drafted.Catalog.Tables[0].Ref != "shop.public.orders" {
 		t.Fatalf("workspace = %+v", drafted.Catalog)
 	}
@@ -251,11 +252,9 @@ func TestApplyPlanFromTheConsole(t *testing.T) {
 // Drafts are listed with what each builds on, up a chain of drafts (and
 // discarded drafts).
 func TestDraftsWithTheirBase(t *testing.T) {
-	_, c := planningHarness(t)
-	var first, second struct{ CreateDraft struct{ ID string } }
-	mustPost(t, c, `mutation { createDraft(draft: {base: "1"}, comment: "a") { id } }`, &first)
-	mustPost(t, c, `mutation($b: ID!) { createDraft(draft: {base: $b}, comment: "b") { id } }`, &second,
-		client.Var("b", first.CreateDraft.ID))
+	h, c := planningHarness(t)
+	first := h.draftOn(t, "1", configedit.Edit{})
+	second := h.draftOn(t, first, configedit.Edit{})
 	var drafts struct {
 		Drafts []struct {
 			Revision struct{ ID string }
@@ -263,7 +262,7 @@ func TestDraftsWithTheirBase(t *testing.T) {
 		}
 	}
 	mustPost(t, c, `{ drafts { revision { id } basedOn } }`, &drafts)
-	if len(drafts.Drafts) != 2 || drafts.Drafts[0].Revision.ID != second.CreateDraft.ID ||
+	if len(drafts.Drafts) != 2 || drafts.Drafts[0].Revision.ID != second ||
 		drafts.Drafts[0].BasedOn != "1" || drafts.Drafts[1].BasedOn != "1" {
 		t.Fatalf("drafts = %+v", drafts)
 	}
@@ -271,7 +270,7 @@ func TestDraftsWithTheirBase(t *testing.T) {
 	// on what it built on.
 	var discarded map[string]any
 	mustPost(t, c, `mutation($id: ID!) { discardDraft(id: $id) { id } }`, &discarded,
-		client.Var("id", first.CreateDraft.ID))
+		client.Var("id", first))
 	mustPost(t, c, `{ drafts { revision { id } basedOn } }`, &drafts)
 	if len(drafts.Drafts) != 1 || drafts.Drafts[0].BasedOn != "1" {
 		t.Fatalf("drafts after discarding the first = %+v", drafts)

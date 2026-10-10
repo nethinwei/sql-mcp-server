@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/core/workspace"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
@@ -31,7 +30,7 @@ func (r *Service) workspaces() (workspaceops.Service, error) {
 		return workspaceops.Service{}, err
 	}
 	return workspaceops.Service{Store: store, Codec: codec{r}, Schema: Schema, Revisions: r.Store,
-		History: r.Ops()}, nil
+		History: r.Ops(), Reconcile: reconcile}, nil
 }
 
 func toWorkspace(st workspaceops.State) (*Workspace, error) {
@@ -119,7 +118,14 @@ func (r *Service) EditWorkspace(ctx context.Context, in WorkspaceEditInput) (*Wo
 		if err := checkKey(ref, value); err != nil {
 			return nil, err
 		}
-		writes = append(writes, workspaceops.Write{Ref: ref, Value: value, Previous: previous})
+		write := workspaceops.Write{Ref: ref, Value: value, Previous: previous}
+		if it.RenamedFrom != nil {
+			if ref.Kind != ItemEntity && ref.Kind != ItemRole {
+				return nil, errors.New("only an entity or a role is renamed (renamedFrom)")
+			}
+			write.From = &workspace.Ref{Kind: ref.Kind, Key: *it.RenamedFrom}
+		}
+		writes = append(writes, write)
 	}
 	return r.workspaceOp(ctx, auth.PermWrite, func(ops workspaceops.Service, user string) (workspaceops.State, error) {
 		return ops.WriteItems(ctx, user, user, "edit", writes, nil)
@@ -155,7 +161,7 @@ func checkKey(ref workspace.Ref, value any) error {
 	}
 	if key, err := itemKey(ref.Kind, raw); err != nil || key != ref.Key {
 		return errors.New("the " + ref.Kind + " written is not " + strconv.Quote(ref.Key) +
-			" (renaming removes one item and writes another)")
+			" (a rename writes the new item with renamedFrom)")
 	}
 	return nil
 }
@@ -270,21 +276,19 @@ func (r *Service) workspaceDraft(ctx context.Context, username string) (*Draft, 
 		return nil, st, err
 	}
 	edit, err := codec{r}.edit(st.Workspace.Items)
+	if err == nil {
+		removeSettings(st.Base, &edit) // as committing it does (codec.Build)
+	}
 	return &Draft{Base: strconv.FormatInt(st.Workspace.Base, 10), Edit: edit}, st, err
 }
 
 // PreviewInWorkspace previews a plan against the caller's workspace, as an
 // agent working for them does.
 func (r *Service) PreviewInWorkspace(ctx context.Context, p configplan.Plan, review bool) (*Preview, error) {
-	who, err := auth.Require(ctx, auth.PermWrite)
-	if err != nil {
+	if _, err := auth.Require(ctx, auth.PermWrite); err != nil {
 		return nil, err
 	}
-	draft, _, err := r.workspaceDraft(ctx, who.Username)
-	if err != nil {
-		return nil, err
-	}
-	return r.PreviewPlan(ctx, p, draft, review)
+	return r.PreviewPlan(ctx, p, Against{Workspace: true}, review)
 }
 
 // applicable checks that in.PlanID names a preview of the plan the caller
@@ -391,21 +395,18 @@ func (r *Service) ApplyPlan(ctx context.Context, in ApplyRequest) (*AppliedPlan,
 	return out, nil
 }
 
-// changes are the items a plan's outcome (cfg, payload) changes from what
-// it was evaluated against (pc), with their values after, and the effect:
+// changes are the items a plan's outcome (payload) changes from what it was
+// evaluated against (pc), with their values after, and the effect:
 // the values it changes (item, path, value after), canonical, to compare
 // evaluations: a change made meanwhile to another value of the same item
 // leaves it as it was.
-func (r *Service) changes(pc planContext, cfg *config.Config, payload []byte) (workspace.Snapshot, string, error) {
+func (r *Service) changes(pc planContext, payload []byte) (workspace.Snapshot, string, error) {
 	c := codec{r}
-	if c.ready() != nil {
-		return nil, "", nil
-	}
-	before, err := c.itemsOf(pc.base, pc.payload)
+	before, err := c.itemsOf(pc.payload)
 	if err != nil {
 		return nil, "", err
 	}
-	after, err := c.itemsOf(cfg, payload)
+	after, err := c.itemsOf(payload)
 	if err != nil {
 		return nil, "", err
 	}

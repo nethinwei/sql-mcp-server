@@ -97,7 +97,6 @@ func New(cfg Config) *Handler {
 	}
 	app := &configapp.Service{
 		Store: cfg.Store, Introspect: cfg.Introspect, Capabilities: cfg.Capabilities, Scans: h.scans, Plans: cfg.Plans,
-		WorkspaceEdit: graph.WorkspaceEdit, WorkspaceSections: graph.WorkspaceSections,
 	}
 	app.WatchScanBatches()
 	resolver := &graph.Resolver{App: app, Accounts: accounts.Service{Store: cfg.Accounts}, Status: cfg.Status}

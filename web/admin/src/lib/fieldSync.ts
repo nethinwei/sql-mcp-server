@@ -1,4 +1,4 @@
-import type { EntityInput } from '@/gql/graphql'
+import type { EntityInput } from '@/gql/schema'
 import type { Table } from './schemaScans'
 
 // What syncing an entity's fields with its table would do: the columns

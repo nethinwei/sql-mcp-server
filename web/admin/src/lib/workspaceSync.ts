@@ -2,9 +2,10 @@ import { h, onScopeDispose, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { NButton, useMessage, useNotification } from 'naive-ui'
+import type { TypedDocumentNode } from '@urql/vue'
 import { run } from '@/api/client'
 import {
-  CheckpointWorkspaceMutation, CommitWorkspaceMutation, EditWorkspaceMutation, MergeDraftMutation,
+  CheckpointWorkspaceMutation, CommitWorkspaceMutation, EditWorkspaceMutation, FieldReferencesQuery, MergeDraftMutation,
   ResetWorkspaceMutation, ResolveConflictMutation, UpdateWorkspaceMutation, WorkspaceQuery, WorkspaceStateQuery,
 } from '@/api/ops'
 import { can, session } from '@/api/session'
@@ -44,6 +45,18 @@ export const workspace = {
   refresh: () => active?.pull() ?? Promise.resolve(true),
   /** Writes what was edited here. */
   flush: () => active?.push() ?? Promise.resolve(),
+  /**
+   * Runs a query on the workspace kept on the server (catalog, plans,
+   * validation, simulation): what was edited here is written first, so the
+   * answer covers it.
+   */
+  read: async <Data, Vars extends object>(doc: TypedDocumentNode<Data, Vars>, variables: Vars) => {
+    await active?.push()
+    return run(doc, variables)
+  },
+  /** Where the workspace names the fields of an entity (by its ID). */
+  fieldReferences: async (entity: string) =>
+    (await workspace.read(FieldReferencesQuery, { entity })).fieldReferences,
   /** Whether edits made here are not on the server yet (waiting, being sent, or failed to send). */
   unsaved: () => active?.unsent() ?? false,
   /**
@@ -130,7 +143,7 @@ function createSync() {
   const owner = session.username
   let stopped = false
   const live = () => !stopped && ws.owner === owner && session.username === owner
-  const unsent = () => ws.copy !== null && ws.pendingItems().length > 0
+  const unsent = () => ws.copy !== null && ws.unsavedItems().length > 0
 
   /** Takes in the workspace as the server answered it, telling of what an agent wrote. */
   async function takeIn(w: WorkspacePartsFragment) {
@@ -162,7 +175,7 @@ function createSync() {
     return serially(async () => {
       if (!live() || !unsent()) return
       saveState.value = 'saving'
-      const items = ws.pendingItems()
+      const items = ws.unsavedItems()
       try {
         const { editWorkspace } = await run(EditWorkspaceMutation, { input: { items } }, true)
         if (!live()) return

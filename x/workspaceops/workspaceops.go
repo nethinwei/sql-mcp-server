@@ -38,6 +38,13 @@ type History interface {
 	Discard(ctx context.Context, id int64, author string) (revision.Revision, error)
 }
 
+// Reconciler keeps a configuration's items consistent with each other as a
+// write changes them (before to after): the references to an entity renamed
+// or removed, for one. renames maps an item written to the item it was
+// renamed or moved from. It returns after with what that changes.
+type Reconciler func(before, after workspace.Snapshot, renames map[workspace.Ref]workspace.Ref) (
+	workspace.Snapshot, error)
+
 // Service performs workspace operations. It holds no per-request state.
 type Service struct {
 	Store  workspace.Store
@@ -46,6 +53,8 @@ type Service struct {
 	// Revisions is the history; History writes it.
 	Revisions revision.Store
 	History   History
+	// Reconcile, when set, runs on every write, in the same version.
+	Reconcile Reconciler
 }
 
 // Errors returned by the operations.
@@ -157,10 +166,12 @@ func (s Service) apply(ctx context.Context, username, by string, fn change) (Sta
 }
 
 // Write is an item written: its value (Missing removes it) and the value
-// its writer read (Missing: absent).
+// its writer read (Missing: absent). From, when set, is the item it was
+// renamed or moved from, which it replaces (see Reconciler).
 type Write struct {
 	Ref             workspace.Ref
 	Value, Previous any
+	From            *workspace.Ref
 }
 
 // WriteItems writes items of username's workspace. An item written meanwhile
@@ -171,12 +182,21 @@ type Write struct {
 func (s Service) WriteItems(ctx context.Context, username, by, op string, writes []Write, note *workspace.Note) (
 	State, error,
 ) {
+	writes = renamesLast(writes)
 	return s.apply(ctx, username, by, func(w *workspace.Workspace, base workspace.Snapshot) (
 		workspace.Snapshot, workspace.LogEntry, error,
 	) {
 		var found []workspace.Conflict
 		refs := make([]workspace.Ref, 0, len(writes))
+		before, renames := w.Items, map[workspace.Ref]workspace.Ref{}
 		for _, wr := range writes {
+			if wr.From != nil && *wr.From != wr.Ref {
+				renames[wr.Ref] = *wr.From
+				if !workspace.IsMissing(w.Items.Get(*wr.From)) {
+					w.Items = w.Items.With(*wr.From, workspace.Missing)
+					refs = append(refs, *wr.From)
+				}
+			}
 			current := w.Items.Get(wr.Ref)
 			value := wr.Value
 			if !s.Schema.Same(current, wr.Previous) {
@@ -188,6 +208,10 @@ func (s Service) WriteItems(ctx context.Context, username, by, op string, writes
 			w.Items = w.Items.With(wr.Ref, value)
 			refs = append(refs, wr.Ref)
 		}
+		var err error
+		if w.Items, refs, err = s.reconcile(before, w.Items, renames, refs); err != nil {
+			return nil, workspace.LogEntry{}, err
+		}
 		w.Conflicts = s.Schema.Carry(w.Conflicts, found, w.Items, base, nil)
 		entry := workspace.LogEntry{Op: op, Items: refs}
 		if note != nil && note.Text != "" {
@@ -198,6 +222,42 @@ func (s Service) WriteItems(ctx context.Context, username, by, op string, writes
 		}
 		return nil, entry, nil
 	})
+}
+
+// renamesLast puts the renames after the other writes: the removal of the
+// item a rename replaces, written with the value its writer read, then
+// merges first, so a change made to that item meanwhile is a conflict
+// instead of going with it.
+func renamesLast(writes []Write) []Write {
+	rank := func(w Write) int {
+		if w.From != nil && *w.From != w.Ref {
+			return 1
+		}
+		return 0
+	}
+	out := slices.Clone(writes)
+	slices.SortStableFunc(out, func(a, b Write) int { return rank(a) - rank(b) })
+	return out
+}
+
+// reconcile runs Reconcile on a write (before to after), adding the items it
+// changes to those written (refs).
+func (s Service) reconcile(before, after workspace.Snapshot, renames map[workspace.Ref]workspace.Ref,
+	refs []workspace.Ref,
+) (workspace.Snapshot, []workspace.Ref, error) {
+	if s.Reconcile == nil {
+		return after, refs, nil
+	}
+	reconciled, err := s.Reconcile(before, after, renames)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, ref := range s.Schema.Changes(after, reconciled) {
+		if !slices.Contains(refs, ref) {
+			refs = append(refs, ref)
+		}
+	}
+	return reconciled, refs, nil
 }
 
 // pinned are conflicts holding the other side's value.

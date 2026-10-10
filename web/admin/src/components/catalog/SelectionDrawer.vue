@@ -2,9 +2,8 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NButton, NDrawer, NDrawerContent, NEmpty, NInput, NList, NListItem, NPagination, NTag, NText } from 'naive-ui'
-import { run } from '@/api/client'
 import { CatalogRefsQuery } from '@/api/ops'
-import { useWorkspace } from '@/stores/workspace'
+import { workspace } from '@/lib/workspaceSync'
 import { download, selectedCount, toCSV, type Selection } from '@/lib/selection'
 
 // The selection in full, to review before acting on it: the tables picked
@@ -14,7 +13,6 @@ const props = defineProps<{ selection: Selection; describe: string }>()
 const emit = defineEmits<{ update: [s: Selection] }>()
 const show = defineModel<boolean>('show', { required: true })
 const { t } = useI18n()
-const ws = useWorkspace()
 
 const search = ref('')
 const page = ref(1)
@@ -41,7 +39,7 @@ async function exportAll() {
   if (s.mode === 'filter') {
     exporting.value = true
     try {
-      refs = (await run(CatalogRefsQuery, { filter: s.filter, draft: ws.computeDraft })).catalogRefs
+      refs = (await workspace.read(CatalogRefsQuery, { filter: s.filter })).catalogRefs
         .filter((r) => !s.excluded.has(r))
     } finally {
       exporting.value = false

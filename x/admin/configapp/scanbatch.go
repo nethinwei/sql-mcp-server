@@ -463,7 +463,7 @@ func (r *Service) runnerFor(ctx context.Context, datasource string) (scanRunner,
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := r.SelectConfig(ctx, nil, nil)
+	cfg, err := r.SelectConfig(ctx, Against{})
 	if err != nil {
 		return nil, err
 	}

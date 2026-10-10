@@ -137,6 +137,10 @@ type Context struct {
 	Writes       *WriteTracker
 	TxBeginners  map[string]store.TxBeginner
 	Transaction  string
+	// ResultMemory bounds the results the process holds at once.
+	ResultMemory *ResultMemory
+	// results meters the call's rows (see meterCall).
+	results *resultMeter
 	// followsWrite is set by routeEntity while reads follow the session's
 	// recent write (see followsWrite).
 	followsWrite bool
@@ -188,6 +192,16 @@ type CostGated interface {
 	CostGated()
 }
 
+// endsTransaction marks the tools that end an explicit transaction. They
+// release the connection it holds, so RunTool runs them past the budget and
+// the engine (rate limit, breaker, adaptive limit, IO slots), which would
+// otherwise keep it held until the transaction expires; their own timeouts
+// still bound them.
+type endsTransaction interface {
+	Tool
+	endsTransaction()
+}
+
 // RunTool executes a tool with the cross-cutting wiring that must apply to
 // every call regardless of transport: lifecycle hooks, bounded concurrency +
 // backpressure + circuit breaking + (for read-only tools) singleflight via the
@@ -210,12 +224,19 @@ func RunTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Re
 	ctx = tc.Hooks.FireBeforeTool(ctx, name, input)
 	var lease budget.Lease
 	err := refErr
-	if err == nil {
+	_, ends := t.(endsTransaction)
+	if err == nil && !ends {
 		lease, ctx, tc, err = acquireToolBudget(ctx, info.Action, tc)
 	}
 	var res Result
+	tc, endMetering := meterCall(tc, info.ReadOnly)
+	defer endMetering() // after the audit: the result is held until the call ends
 	if err == nil {
-		res, err = invokeTool(ctx, t, input, tc)
+		if ends {
+			res, err = invokeDirect(ctx, t, input, tc)
+		} else {
+			res, err = invokeTool(ctx, t, input, tc)
+		}
 		res, err = finalizeToolResult(res, err, info.ReadOnly, tc, lease, start)
 	}
 	if err != nil {
@@ -262,7 +283,7 @@ func invokeTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) 
 	if tc.Engine == nil {
 		return runTraced(ctx, t, input, tc)
 	}
-	key, err := engineSubmitKey(t, input, tc)
+	key, err := engineSubmitKey(ctx, t, input, tc)
 	if err != nil {
 		return Result{}, err
 	}
@@ -275,7 +296,24 @@ func invokeTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) 
 	return Result{}, err
 }
 
-func engineSubmitKey(t Tool, input json.RawMessage, tc Context) (string, error) {
+// invokeDirect runs a tool ending a transaction: under the engine's rate
+// limit and panic recovery, past its breaker, its limits and its slots (see
+// engine.Engine.Run), so a transaction ends however its database is held
+// back.
+func invokeDirect(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Result, error) {
+	if tc.Engine == nil {
+		return runTraced(ctx, t, input, tc)
+	}
+	val, err := tc.Engine.Run(ctx, func(ctx context.Context) (any, error) {
+		return runTraced(ctx, t, input, tc)
+	})
+	if r, ok := val.(Result); ok {
+		return r, err
+	}
+	return Result{}, err
+}
+
+func engineSubmitKey(ctx context.Context, t Tool, input json.RawMessage, tc Context) (string, error) {
 	if !t.Info().ReadOnly {
 		return "", nil
 	}
@@ -291,12 +329,15 @@ func engineSubmitKey(t Tool, input json.RawMessage, tc Context) (string, error) 
 	if tc.Transactions == nil {
 		return "", ErrTransactionNotFound
 	}
-	return "", tc.Transactions.Validate(transaction, tc.Session, tc.Role, tc.Subject)
+	return "", tc.Transactions.Validate(ctx, transaction, tc.Session, tc.Role, tc.Subject)
 }
 
 // finalizeToolResult accounts usage against the lease. Exceeding a limit after
 // execution fails a read, but not a write: the write has already taken effect,
-// and reporting it as failed would invite a duplicate retry.
+// and reporting it as failed would invite a duplicate retry. The rows read
+// from the database were measured as they were read (see resultMeter), and a
+// result shared by singleflight carries the measure of the call that read
+// it; other content (a write's outcome, a description) is measured here.
 func finalizeToolResult(
 	res Result,
 	err error,
@@ -305,11 +346,13 @@ func finalizeToolResult(
 	lease budget.Lease,
 	start time.Time,
 ) (Result, error) {
-	if encoded, encodeErr := json.Marshal(res.Content); encodeErr == nil {
-		res.ReturnedBytes = int64(len(encoded))
-		if readOnly && tc.MaxReturnedBytes > 0 && res.ReturnedBytes > tc.MaxReturnedBytes && err == nil {
-			err = fmt.Errorf("%w: result size %d bytes exceeds limit %d",
-				budget.ErrExceeded, res.ReturnedBytes, tc.MaxReturnedBytes)
+	if res.ReturnedBytes == 0 {
+		if encoded, encodeErr := json.Marshal(res.Content); encodeErr == nil {
+			res.ReturnedBytes = int64(len(encoded))
+			if readOnly && tc.MaxReturnedBytes > 0 && res.ReturnedBytes > tc.MaxReturnedBytes && err == nil {
+				err = fmt.Errorf("%w: result size %d bytes exceeds limit %d",
+					budget.ErrExceeded, res.ReturnedBytes, tc.MaxReturnedBytes)
+			}
 		}
 	}
 	if lease == nil {
@@ -570,15 +613,13 @@ func (g *grantTrace) add(ids []string) {
 func runTraced(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Result, error) {
 	trace := &grantTrace{}
 	res, err := t.Run(context.WithValue(ctx, grantTraceKey{}, trace), input, tc)
+	if _, bytes := tc.results.counted(); bytes > 0 {
+		res.ReturnedBytes = bytes
+	}
 	trace.mu.Lock()
 	res.Grants = trace.ids
 	trace.mu.Unlock()
 	return res, err
-}
-
-func checkGate(ctx context.Context, tc Context, compiled codegen.Compiled) (codegen.Compiled, error) {
-	checked, _, err := checkGateDetailed(ctx, tc, compiled)
-	return checked, err
 }
 
 func checkGateDetailed(

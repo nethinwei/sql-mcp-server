@@ -19,29 +19,30 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 )
 
-// Edit replaces sections of a configuration. A nil section keeps the base.
+// Edit replaces sections of a configuration with what they say (Specs: an
+// unset value stays unset, and takes its default when the configuration
+// loads). A nil section keeps the base.
 type Edit struct {
-	Entities []config.EntityConfig
+	Entities []config.EntitySpec
 	Roles    []Role
 	Users    []User
 	// Settings replaces top-level sections other than datasources,
-	// entities, roles and users, as decoded JSON/YAML values.
+	// entities, roles and users, as decoded JSON/YAML values; a nil value
+	// removes the section (its defaults apply).
 	Settings map[string]any
 }
 
 // Role is a named role definition.
 type Role struct {
 	Name string
-	config.RoleDefinition
+	config.RoleDefinitionSpec
 }
 
-// User is a named user. KeepToken keeps the base user's tokenHash, so a
-// client never needs to hold token hashes to edit a user; an explicitly empty
-// TokenHash without KeepToken revokes the token.
+// User is a named user, its token included: one without a token hash has
+// none.
 type User struct {
 	Name string
-	config.UserConfig
-	KeepToken bool
+	config.UserSpec
 }
 
 // sections an Edit replaces through typed fields, never through Settings.
@@ -51,8 +52,7 @@ var structured = []string{"database", "databases", "datasources", "entities", "r
 // The result is validated as a whole, so an edit may add a user and a budget
 // for it at once.
 func Apply(base []byte, edit Edit) (*config.Config, []byte, error) {
-	baseCfg, err := configyaml.Decode(base)
-	if err != nil {
+	if _, err := configyaml.Decode(base); err != nil {
 		return nil, nil, fmt.Errorf("base: %w", err)
 	}
 	doc := map[string]any{}
@@ -62,18 +62,22 @@ func Apply(base []byte, edit Edit) (*config.Config, []byte, error) {
 	if err := applySettings(doc, edit.Settings); err != nil {
 		return nil, nil, err
 	}
-	if err := applySections(doc, edit, baseCfg); err != nil {
+	if err := applySections(doc, edit); err != nil {
 		return nil, nil, err
 	}
 	data, err := yaml.Marshal(doc)
 	if err != nil {
 		return nil, nil, err
 	}
-	cfg, err := configyaml.Decode(data)
+	spec, err := configyaml.DecodeSpec(data)
 	if err != nil {
 		return nil, nil, err
 	}
-	payload, err := revisionops.Normalize(cfg)
+	payload, err := revisionops.Normalize(spec)
+	if err != nil {
+		return nil, nil, err
+	}
+	cfg, err := config.Resolve(spec)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -91,44 +95,38 @@ func applySettings(doc, settings map[string]any) error {
 	return nil
 }
 
-// applySections writes the typed sections into doc. Defaults are applied to
-// them first so that unset values keep their meaning once encoded (an
-// entity's unset mcp.dmlTools stays on).
-func applySections(doc map[string]any, edit Edit, base *config.Config) error {
-	sections := config.Config{Entities: edit.Entities}
+// applySections writes the typed sections into doc, as they say: an unset
+// value is left out, so it keeps its default (an entity's unset
+// mcp.dmlTools stays on).
+func applySections(doc map[string]any, edit Edit) error {
+	sections := map[string]any{}
+	if edit.Entities != nil {
+		sections["entities"] = edit.Entities
+	}
 	if edit.Roles != nil {
-		sections.Roles = map[string]config.RoleDefinition{}
+		roles := map[string]config.RoleDefinitionSpec{}
 		for _, r := range edit.Roles {
 			key := strings.ToLower(strings.TrimSpace(r.Name))
-			if _, dup := sections.Roles[key]; dup {
+			if _, dup := roles[key]; dup {
 				return fmt.Errorf("role %q listed twice", r.Name)
 			}
-			sections.Roles[key] = r.RoleDefinition
+			roles[key] = r.RoleDefinitionSpec
 		}
+		sections["roles"] = roles
 	}
 	if edit.Users != nil {
-		sections.Users = map[string]config.UserConfig{}
+		users := map[string]config.UserSpec{}
 		for _, u := range edit.Users {
 			key := strings.ToLower(strings.TrimSpace(u.Name))
-			if _, dup := sections.Users[key]; dup {
+			if _, dup := users[key]; dup {
 				return fmt.Errorf("user %q listed twice", u.Name)
 			}
-			if u.KeepToken {
-				u.TokenHash = base.Users[key].TokenHash
-			}
-			sections.Users[key] = u.UserConfig
+			users[key] = u.UserSpec
 		}
+		sections["users"] = users
 	}
-	sections.ApplyDefaults()
-	for key, set := range map[string]bool{
-		"entities": edit.Entities != nil, "roles": edit.Roles != nil, "users": edit.Users != nil,
-	} {
-		if !set {
-			continue
-		}
-		val, err := plain(map[string]any{
-			"entities": sections.Entities, "roles": sections.Roles, "users": sections.Users,
-		}[key])
+	for key, section := range sections {
+		val, err := plain(section)
 		if err != nil {
 			return err
 		}

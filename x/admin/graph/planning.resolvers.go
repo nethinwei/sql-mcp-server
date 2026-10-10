@@ -114,29 +114,17 @@ func (r *mutationResolver) RetryScanBatch(ctx context.Context, id string) (*conf
 
 // Catalog is the resolver for the catalog field.
 func (r *queryResolver) Catalog(ctx context.Context, input CatalogInput) (*configapp.CatalogPage, error) {
-	d, err := toDraft(input.Draft)
-	if err != nil {
-		return nil, err
-	}
-	return r.App.Catalog(ctx, *input.Filter, d, derefInt(input.Offset, 0), derefInt(input.Limit, 50))
+	return r.App.Catalog(ctx, *input.Filter, workspace, derefInt(input.Offset, 0), derefInt(input.Limit, 50))
 }
 
 // CatalogRefs is the resolver for the catalogRefs field.
-func (r *queryResolver) CatalogRefs(ctx context.Context, filter configapp.CatalogFilter, draft *DraftInput) ([]string, error) {
-	d, err := toDraft(draft)
-	if err != nil {
-		return nil, err
-	}
-	return r.App.CatalogRefs(ctx, filter, d)
+func (r *queryResolver) CatalogRefs(ctx context.Context, filter configapp.CatalogFilter) ([]string, error) {
+	return r.App.CatalogRefs(ctx, filter, workspace)
 }
 
 // CatalogTable is the resolver for the catalogTable field.
-func (r *queryResolver) CatalogTable(ctx context.Context, ref string, draft *DraftInput) (*ImportTable, error) {
-	d, err := toDraft(draft)
-	if err != nil {
-		return nil, err
-	}
-	c, err := r.App.CatalogTable(ctx, ref, d)
+func (r *queryResolver) CatalogTable(ctx context.Context, ref string) (*ImportTable, error) {
+	c, err := r.App.CatalogTable(ctx, ref, workspace)
 	if err != nil || c == nil {
 		return nil, err
 	}
@@ -145,25 +133,17 @@ func (r *queryResolver) CatalogTable(ctx context.Context, ref string, draft *Dra
 }
 
 // CatalogLinks is the resolver for the catalogLinks field.
-func (r *queryResolver) CatalogLinks(ctx context.Context, ref string, draft *DraftInput) (*configapp.CatalogLinks, error) {
-	d, err := toDraft(draft)
-	if err != nil {
-		return nil, err
-	}
-	return r.App.CatalogLinks(ctx, ref, d)
+func (r *queryResolver) CatalogLinks(ctx context.Context, ref string) (*configapp.CatalogLinks, error) {
+	return r.App.CatalogLinks(ctx, ref, workspace)
 }
 
 // PlanScope is the resolver for the planScope field.
-func (r *queryResolver) PlanScope(ctx context.Context, scope any, draft *DraftInput) (*configapp.ScopeStats, error) {
+func (r *queryResolver) PlanScope(ctx context.Context, scope any) (*configapp.ScopeStats, error) {
 	s, err := decodeScope(scope)
 	if err != nil {
 		return nil, err
 	}
-	d, err := toDraft(draft)
-	if err != nil {
-		return nil, err
-	}
-	return r.App.PlanScope(ctx, s, d)
+	return r.App.PlanScope(ctx, s, workspace)
 }
 
 // PreviewPlan is the resolver for the previewPlan field.
@@ -172,11 +152,7 @@ func (r *queryResolver) PreviewPlan(ctx context.Context, input PlanPreviewInput)
 	if err != nil {
 		return nil, err
 	}
-	d, err := toDraft(input.Draft)
-	if err != nil {
-		return nil, err
-	}
-	preview, err := r.App.PreviewPlan(ctx, p, d, derefBool(input.Review))
+	preview, err := r.App.PreviewPlan(ctx, p, workspace, derefBool(input.Review))
 	if err != nil {
 		return nil, err
 	}
@@ -194,12 +170,8 @@ func (r *queryResolver) PlanTemplateVersions(ctx context.Context, name string) (
 }
 
 // Pending is the resolver for the pending field.
-func (r *queryResolver) Pending(ctx context.Context, draft *DraftInput) (*configapp.PendingWork, error) {
-	d, err := toDraft(draft)
-	if err != nil {
-		return nil, err
-	}
-	return r.App.Pending(ctx, d)
+func (r *queryResolver) Pending(ctx context.Context) (*configapp.PendingWork, error) {
+	return r.App.Pending(ctx, workspace)
 }
 
 // PendingLog is the resolver for the pendingLog field.
@@ -215,6 +187,11 @@ func (r *queryResolver) Workspace(ctx context.Context) (*configapp.Workspace, er
 // WorkspaceLog is the resolver for the workspaceLog field.
 func (r *queryResolver) WorkspaceLog(ctx context.Context, limit *int) ([]configapp.WorkspaceLogEntry, error) {
 	return r.App.WorkspaceLog(ctx, limit)
+}
+
+// FieldReferences is the resolver for the fieldReferences field.
+func (r *queryResolver) FieldReferences(ctx context.Context, entity string) ([]configapp.FieldReference, error) {
+	return r.App.FieldReferences(ctx, entity)
 }
 
 // Drafts is the resolver for the drafts field.

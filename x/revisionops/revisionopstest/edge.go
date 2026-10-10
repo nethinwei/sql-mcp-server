@@ -66,7 +66,7 @@ func payload(t *testing.T, names ...string) []byte {
 		cfg.Entities = append(cfg.Entities, config.EntityConfig{Name: name, Fields: []config.FieldConfig{{Name: "id"}}})
 	}
 	cfg.ApplyDefaults()
-	out, err := revisionops.Normalize(cfg)
+	out, err := revisionops.Normalize(config.SpecOf(cfg))
 	if err != nil {
 		t.Fatal(err)
 	}

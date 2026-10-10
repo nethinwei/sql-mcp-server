@@ -12,8 +12,8 @@ type RuntimeState struct {
 	// Applied is the store revision being served; 0 when unknown.
 	Applied  int64
 	Watching bool
-	// Pending is a published revision not applied; nil when none.
-	Pending *bootstrap.StaleState
+	// Unapplied is a published revision not applied; nil when none.
+	Unapplied *bootstrap.StaleState
 	// Execution is a snapshot of the execution bus; nil when unknown.
 	Execution *bus.Stats
 }

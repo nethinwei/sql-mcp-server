@@ -58,12 +58,12 @@ func (r *Service) pendingStates(ctx context.Context) (map[string]*PendingState, 
 // never scanned. A principal limited to some datasources sees what is
 // about them only: their tables and the templates whose scope names only
 // them.
-func (r *Service) Pending(ctx context.Context, draft *Draft) (*PendingWork, error) {
+func (r *Service) Pending(ctx context.Context, against Against) (*PendingWork, error) {
 	who, err := auth.Require(ctx, auth.PermWrite)
 	if err != nil {
 		return nil, err
 	}
-	pc, err := r.planContext(ctx, draft)
+	pc, err := r.planContextOf(ctx, against)
 	if err != nil {
 		return nil, err
 	}

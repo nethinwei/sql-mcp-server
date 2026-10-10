@@ -2,19 +2,17 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NButton, NPopover, NSpin, NText } from 'naive-ui'
-import { run } from '@/api/client'
 import { CatalogLinksQuery } from '@/api/ops'
+import { workspace } from '@/lib/workspaceSync'
 import type { CatalogLinksQuery as Links } from '@/gql/graphql'
-import { useWorkspace } from '@/stores/workspace'
 import { createResource } from '@/lib/asyncResource'
 
 // The foreign keys of a table, both ways, counted as the list shows them and
 // listed, from the same scanned catalog, when asked for.
 const props = defineProps<{ tableRef: string; outgoing: number; incoming: number }>()
 const { t } = useI18n()
-const ws = useWorkspace()
 const resource = createResource(async (ref: string) =>
-  (await run(CatalogLinksQuery, { ref, draft: ws.computeDraft })).catalogLinks)
+  (await workspace.read(CatalogLinksQuery, { ref })).catalogLinks)
 const links = computed<Links['catalogLinks'] | null>(() => resource.state.data)
 
 function load(open: boolean) {

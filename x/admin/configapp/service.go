@@ -65,12 +65,6 @@ type Service struct {
 	// Capabilities reports the serving snapshot's capabilities; nil reports
 	// none.
 	Capabilities func() bootstrap.EntityCapabilities
-	// WorkspaceEdit reads the sections of a workspace (the console's JSON)
-	// as an edit of its base, and WorkspaceSections writes a configuration
-	// (with its payload) as such sections; the admin API provides both, with
-	// the types the console edits.
-	WorkspaceEdit     func(sections []byte) (configedit.Edit, error)
-	WorkspaceSections func(cfg *config.Config, payload []byte) ([]byte, error)
 	// previews keeps recent plan previews.
 	previews previews
 }
@@ -149,13 +143,12 @@ func (r *Service) BuildDraft(ctx context.Context, d Draft) (Built, error) {
 	return Built{Base: base, Config: cfg, Payload: payload}, nil
 }
 
-// SelectConfig selects a configuration: a draft, a revision, or, when both
-// are nil, the published revision.
-func (r *Service) SelectConfig(ctx context.Context, draft *Draft, id *string) (*config.Config, error) {
-	if draft != nil && id != nil {
-		return nil, errors.New("pass either draft or revision, not both")
-	}
-	if draft != nil {
+// SelectConfig is the configuration against is.
+func (r *Service) SelectConfig(ctx context.Context, against Against) (*config.Config, error) {
+	id := against.Revision
+	if draft, err := r.draftOf(ctx, Against{Workspace: against.Workspace && id == nil}); err != nil {
+		return nil, err
+	} else if draft != nil {
 		d, err := r.BuildDraft(ctx, *draft)
 		if err != nil {
 			return nil, err
@@ -246,11 +239,26 @@ func (r *Service) Drafts(ctx context.Context) ([]PendingDraft, error) {
 
 // Validate builds a draft and reports whether it validates, what of it
 // needs a restart and what the serving connections cannot do.
-func (r *Service) Validate(ctx context.Context, d Draft) (*Validation, error) {
+func (r *Service) Validate(ctx context.Context, against Against) (*Validation, error) {
 	if _, err := auth.RequireUnlimited(ctx, auth.PermRead); err != nil {
 		return nil, err
 	}
-	built, err := r.BuildDraft(ctx, d)
+	d, err := r.draftOf(ctx, against)
+	if errors.Is(err, ErrWorkspaceContent) {
+		msg := err.Error()
+		return &Validation{Error: &msg, RestartRequired: []string{}, Warnings: []string{}}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if d == nil {
+		published, err := r.Store.Published(ctx)
+		if err != nil {
+			return nil, err
+		}
+		d = &Draft{Base: strconv.FormatInt(published.ID, 10)}
+	}
+	built, err := r.BuildDraft(ctx, *d)
 	if err != nil {
 		msg := err.Error()
 		return &Validation{Error: &msg, RestartRequired: []string{}, Warnings: []string{}}, nil

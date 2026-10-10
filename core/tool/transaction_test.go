@@ -23,6 +23,9 @@ func (t *failingCommitTx) Commit() error {
 	return t.err
 }
 
+// bg is the context of a call that is not cancelled.
+var bg = context.Background()
+
 func TestTransactionBindingCapacityAndCloseRollback(t *testing.T) {
 	tx := &store.FakeTx{}
 	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
@@ -34,19 +37,30 @@ func TestTransactionBindingCapacityAndCloseRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.DB(token, "session-a", "reader", subject, "primary", nil); !errors.Is(err, ErrTransactionScope) {
+	if _, err := manager.DB(bg, token, "session-a", "reader", subject, "primary", nil); !errors.Is(
+		err,
+		ErrTransactionScope,
+	) {
 		t.Fatalf("role mismatch error = %v", err)
 	}
-	if _, err := manager.DB(token, "session-a", "writer", map[string]any{"tenant_id": "b"}, "primary", nil); !errors.Is(
+	if _, err := manager.DB(
+		bg, token, "session-a", "writer", map[string]any{"tenant_id": "b"}, "primary", nil,
+	); !errors.Is(
 		err,
 		ErrTransactionScope,
 	) {
 		t.Fatalf("subject mismatch error = %v", err)
 	}
-	if _, err := manager.DB(token, "session-a", "writer", subject, "other", nil); !errors.Is(err, ErrTransactionScope) {
+	if _, err := manager.DB(bg, token, "session-a", "writer", subject, "other", nil); !errors.Is(
+		err,
+		ErrTransactionScope,
+	) {
 		t.Fatalf("datasource mismatch error = %v", err)
 	}
-	if _, err := manager.DB(token, "session-b", "writer", subject, "primary", nil); !errors.Is(err, ErrTransactionScope) {
+	if _, err := manager.DB(bg, token, "session-b", "writer", subject, "primary", nil); !errors.Is(
+		err,
+		ErrTransactionScope,
+	) {
 		t.Fatalf("session mismatch error = %v", err)
 	}
 	if _, err := manager.Begin(context.Background(), db, "session-a", "writer", subject, "primary", nil); !errors.Is(
@@ -86,13 +100,59 @@ func TestTransactionCommitAndTTL(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(20 * time.Millisecond)
-	if _, err := manager.DB(token, "", "writer", nil, "default", nil); !errors.Is(err, ErrTransactionNotFound) {
+	if _, err := manager.DB(bg, token, "", "writer", nil, "default", nil); !errors.Is(
+		err,
+		ErrTransactionNotFound,
+	) {
 		t.Fatalf("expired transaction error = %v", err)
 	}
 	if !expired.RolledBack {
 		t.Fatal("expired transaction was not rolled back")
 	}
 	manager.Close()
+}
+
+// slowRollbackTx signals rolling when its rollback starts, which then waits
+// for release.
+type slowRollbackTx struct {
+	store.FakeTx
+	rolling, release chan struct{}
+}
+
+func (t *slowRollbackTx) Rollback() error {
+	close(t.rolling)
+	<-t.release
+	return t.FakeTx.Rollback()
+}
+
+// A slow rollback of an expired transaction holds up no other transaction.
+func TestTransactionExpiryRollsBackOutsideTheManagerLock(t *testing.T) {
+	slow := &slowRollbackTx{rolling: make(chan struct{}), release: make(chan struct{})}
+	defer close(slow.release)
+	txs := []store.Tx{slow, &store.FakeTx{}}
+	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+		tx := txs[0]
+		txs = txs[1:]
+		return tx, nil
+	}}
+	manager := NewTransactionManager(10*time.Millisecond, 0)
+	if _, err := manager.Begin(context.Background(), db, "", "writer", nil, "default", nil); err != nil {
+		t.Fatal(err)
+	}
+	<-slow.rolling
+	began := make(chan error, 1)
+	go func() {
+		_, err := manager.Begin(context.Background(), db, "", "writer", nil, "default", nil)
+		began <- err
+	}()
+	select {
+	case err := <-began:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Begin waited for another transaction's rollback")
+	}
 }
 
 func TestTransactionLifetimeOutlivesBeginRequest(t *testing.T) {
@@ -114,7 +174,7 @@ func TestTransactionLifetimeOutlivesBeginRequest(t *testing.T) {
 		t.Fatal("transaction lifetime was tied to completed begin request")
 	case <-time.After(10 * time.Millisecond):
 	}
-	if _, err := manager.DB(token, "session", "writer", nil, "default", nil); err != nil {
+	if _, err := manager.DB(bg, token, "session", "writer", nil, "default", nil); err != nil {
 		t.Fatal(err)
 	}
 	manager.Close()
@@ -204,7 +264,10 @@ func TestTransactionDisconnectRollsBackSession(t *testing.T) {
 	if !tx.RolledBack {
 		t.Fatal("session disconnect did not rollback transaction")
 	}
-	if _, err := manager.DB(token, "session-a", "writer", nil, "default", nil); !errors.Is(err, ErrTransactionNotFound) {
+	if _, err := manager.DB(bg, token, "session-a", "writer", nil, "default", nil); !errors.Is(
+		err,
+		ErrTransactionNotFound,
+	) {
 		t.Fatalf("disconnected transaction error = %v", err)
 	}
 	manager.Close()
@@ -243,7 +306,7 @@ func TestTransactionCacheInvalidatesOnlyAfterCommit(t *testing.T) {
 	key := cache.Key{Database: users.Physical, Relation: users.Relation, SQL: "select"}
 	_ = cc.Set(context.Background(), key, []map[string]any{{"id": 1}}, 0)
 	token, _ := manager.Begin(context.Background(), db, "", "writer", nil, "default", nil)
-	if err := manager.MarkDirty(token, "", "writer", nil, "default", nil, users); err != nil {
+	if err := manager.MarkDirty(bg, token, "", "writer", nil, "default", nil, users); err != nil {
 		t.Fatal(err)
 	}
 	tc := Context{Role: "writer", Transactions: manager, Cache: cc}
@@ -255,7 +318,7 @@ func TestTransactionCacheInvalidatesOnlyAfterCommit(t *testing.T) {
 		t.Fatal("rollback polluted global cache")
 	}
 	token, _ = manager.Begin(context.Background(), db, "", "writer", nil, "default", nil)
-	_ = manager.MarkDirty(token, "", "writer", nil, "default", nil, users)
+	_ = manager.MarkDirty(bg, token, "", "writer", nil, "default", nil, users)
 	input, _ = json.Marshal(map[string]string{"transaction": token})
 	if _, err := (CommitTransactionTool{}).Run(context.Background(), input, tc); err != nil {
 		t.Fatal(err)
@@ -329,7 +392,7 @@ func TestBeginTransactionBindsResolvedDefaultDatasource(t *testing.T) {
 		t.Fatalf("datasource = %v, want main", got)
 	}
 	token := res.Content[0]["transaction"].(string)
-	if _, err := manager.DB(token, "", "reader", nil, "main", nil); err != nil {
+	if _, err := manager.DB(bg, token, "", "reader", nil, "main", nil); err != nil {
 		t.Fatalf("transaction not bound to resolved datasource: %v", err)
 	}
 }
@@ -372,7 +435,7 @@ func TestTransactionRejectsStatementsAfterItsConnectionIsReconfigured(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.DB(token, "s", "writer", nil, "main", []store.TxBeginner{before}); err != nil {
+	if _, err := manager.DB(bg, token, "s", "writer", nil, "main", []store.TxBeginner{before}); err != nil {
 		t.Fatalf("on the connection it began on: %v", err)
 	}
 	// A reload pointed main at another database.
@@ -381,11 +444,13 @@ func TestTransactionRejectsStatementsAfterItsConnectionIsReconfigured(t *testing
 	reg, _ := entity.NewRegistry([]entity.Entity{users})
 	tc := Context{Role: "writer", Session: "s", Transactions: manager, Cache: cc, Registry: reg,
 		TxBeginners: map[string]store.TxBeginner{"main": after}, Writes: NewWriteTracker()}
-	if _, err := manager.DB(token, "s", "writer", nil, "main", txConnections(tc, "main")); !errors.Is(
-		err, ErrTransactionStale) {
+	if _, err := manager.DB(bg, token, "s", "writer", nil, "main", txConnections(tc, "main")); !errors.Is(
+		err,
+		ErrTransactionStale,
+	) {
 		t.Fatalf("statement after the reload: %v, want ErrTransactionStale", err)
 	}
-	if err := afterWrite(tc, users, token); !errors.Is(err, ErrTransactionStale) {
+	if err := afterWrite(bg, tc, users, token); !errors.Is(err, ErrTransactionStale) {
 		t.Fatalf("marking a write after the reload: %v, want ErrTransactionStale", err)
 	}
 	input, _ := json.Marshal(map[string]string{"transaction": token})
@@ -409,7 +474,7 @@ func TestCommitFollowsWritesLikeAutocommit(t *testing.T) {
 	writes := NewWriteTracker()
 	tc := Context{Role: "writer", Session: "s", Transactions: manager, Registry: reg, Writes: writes}
 	token, _ := manager.Begin(context.Background(), db, "s", "writer", nil, "rw", nil)
-	if err := afterWrite(tc, customers, token); err != nil {
+	if err := afterWrite(bg, tc, customers, token); err != nil {
 		t.Fatal(err)
 	}
 	if writes.Recent("s", "ro", time.Minute) {
@@ -423,5 +488,56 @@ func TestCommitFollowsWritesLikeAutocommit(t *testing.T) {
 		if !writes.Recent("s", datasource, time.Minute) {
 			t.Errorf("reads through %s do not follow the committed write", datasource)
 		}
+	}
+}
+
+// Open transactions leave queries a share of each connection: one
+// connection takes at most its limit, another is not held back by it, and a
+// transaction ending frees its place.
+func TestTransactionConnectionLimit(t *testing.T) {
+	begins := func() *store.FakeDB {
+		return &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+			return &store.FakeTx{}, nil
+		}}
+	}
+	a, b := begins(), begins()
+	manager := NewTransactionManager(time.Minute, 0)
+	defer manager.Close()
+	manager.SetConnectionLimit(1)
+	first, err := manager.Begin(context.Background(), a, "", "writer", nil, "default", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Begin(context.Background(), a, "", "other", nil, "default", nil); !errors.Is(
+		err, ErrTransactionCapacity) {
+		t.Fatalf("a second transaction on a full connection: %v", err)
+	}
+	if _, err := manager.Begin(context.Background(), b, "", "writer", nil, "default", nil); err != nil {
+		t.Fatalf("another connection was held back: %v", err)
+	}
+	if _, err := manager.Commit(context.Background(), first, "", "writer", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Begin(context.Background(), a, "", "other", nil, "default", nil); err != nil {
+		t.Fatalf("an ended transaction kept its place: %v", err)
+	}
+}
+
+// A token whose transaction is still ending (its rollback waiting on a
+// database that may be gone) is waited for only as long as the caller does.
+func TestTransactionLookupEndsWithTheCaller(t *testing.T) {
+	slow := &slowRollbackTx{rolling: make(chan struct{}), release: make(chan struct{})}
+	defer close(slow.release)
+	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) { return slow, nil }}
+	manager := NewTransactionManager(10*time.Millisecond, 0)
+	token, err := manager.Begin(context.Background(), db, "", "writer", nil, "default", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-slow.rolling
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := manager.DB(ctx, token, "", "writer", nil, "default", nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a lookup waited past its caller for the rollback: %v", err)
 	}
 }
