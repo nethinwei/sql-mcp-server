@@ -182,6 +182,45 @@ func TestBindSessionIdentityNormalizesAndEnforcesIdentity(t *testing.T) {
 	}
 }
 
+// The session is bound as soon as the initialize response's headers go out:
+// a request on the session that arrives while the initialize handler still
+// runs (the client sends notifications/initialized as soon as it has the
+// session ID) is the same identity's and must not be refused.
+func TestBindSessionIdentityBindsBeforeHandlerReturns(t *testing.T) {
+	store := newSessionIdentityStore()
+	headersOut, release := make(chan struct{}), make(chan struct{})
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(sessionIDHeader) != "" {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		w.Header().Set(sessionIDHeader, "session-1")
+		w.WriteHeader(http.StatusOK)
+		http.NewResponseController(w).Flush() //nolint:errcheck // a recorder flushes
+		close(headersOut)
+		<-release
+	})
+	handler := withRequestSubject(bindSessionIdentity(store, next))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		create := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+		create.Header.Set("X-MCP-Role", "reader")
+		handler.ServeHTTP(httptest.NewRecorder(), create)
+	}()
+	<-headersOut
+	follow := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	follow.Header.Set(sessionIDHeader, "session-1")
+	follow.Header.Set("X-MCP-Role", "reader")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, follow)
+	close(release)
+	<-done
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("request during initialize code = %d, want 202", rec.Code)
+	}
+}
+
 func TestBindSessionIdentityConcurrentAccess(t *testing.T) {
 	store := newSessionIdentityStore()
 	identity := sessionIdentity{role: "reader", subject: `{"tenant":1}`}

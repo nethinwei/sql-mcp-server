@@ -40,6 +40,11 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   常量查询与 `INSERT … VALUES` 可通过估算，受治理面的语句不受影响。
 - 审计与预算对 `execute_sql` 的 `returnedRows` 以实际行数计（0 行不再记作 1）。
 
+### Fixed
+
+- HTTP 传输的 MCP 会话身份在 initialize 响应头写出时绑定，不再等处理函数返回：客户端拿到
+  会话 ID 后立即发送的 `notifications/initialized` 此前可能先于绑定到达而得到 403。
+
 ## 0.1.13 - 2026-10-11
 
 升级步骤汇总见 [`docs/releases/v0.1.13.md`](docs/releases/v0.1.13.md#迁移)。
