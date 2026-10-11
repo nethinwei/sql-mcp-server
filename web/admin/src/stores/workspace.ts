@@ -17,6 +17,8 @@ export interface Datasource {
   connections: { name: string; dsn: string; role: string; pooler?: string | null }[]
   routing: { read: string; write: string; execute: string }
   readAfterWrite?: string | null
+  /** Set when the datasource admits execute_sql (the SQL escape hatch). */
+  sqlEscape?: { connection: string } | null
 }
 
 /** What the workspace edits, as the server keeps it (see x/admin/configapp). */
@@ -588,7 +590,7 @@ export const useWorkspace = defineStore('workspace', {
       }
       if (actions.length) {
         for (const name of roles) {
-          const role = this.role(name) ?? { name, grants: [] }
+          const role = this.role(name) ?? { name, grants: [], permissions: [] }
           const grants = [
             ...(role.grants ?? []), ...entities.map((e) => ({ entity: after.shortName(entityId(e)), actions: [...actions] })),
           ]

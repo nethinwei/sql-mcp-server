@@ -16,6 +16,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
+	"github.com/nethinwei/sql-mcp-server/internal/escapetest"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
 )
@@ -438,4 +439,11 @@ func assertCommentsAndForeignKeys(t *testing.T, entities []entity.Entity) {
 		len(fk.RefColumns) != 1 || fk.RefColumns[0] != "id" {
 		t.Fatalf("foreign key = %+v", fk)
 	}
+}
+
+// The escape hatch on MySQL: see internal/escapetest.
+func TestMySQLExecuteSQL(t *testing.T) {
+	prov, cleanup := setupMySQL(t)
+	defer cleanup()
+	escapetest.Run(t, "mysql", prov, "users", "escape_probe")
 }

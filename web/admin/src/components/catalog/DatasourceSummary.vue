@@ -53,6 +53,7 @@ const entities = (ds: string) => ws.entities.filter((e) => (e.datasource ?? 'def
                 {{ t('datasources.readAfterWrite', { d: d.readAfterWrite }) }}</template>
             </n-text>
           </template>
+          <n-text v-if="d.sqlEscape" depth="3" class="line">{{ t('datasources.sqlEscape', { c: d.sqlEscape.connection }) }}</n-text>
         </template>
       </n-card>
     </n-gi>

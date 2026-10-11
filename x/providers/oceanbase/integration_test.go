@@ -19,6 +19,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
+	"github.com/nethinwei/sql-mcp-server/internal/escapetest"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/providers/oceanbase"
 )
@@ -477,4 +478,11 @@ func assertCommentsAndForeignKeys(t *testing.T, entities []entity.Entity) {
 		len(fk.RefColumns) != 1 || fk.RefColumns[0] != "id" {
 		t.Fatalf("foreign key = %+v", fk)
 	}
+}
+
+// The escape hatch on OceanBase: see internal/escapetest.
+func TestOBExecuteSQL(t *testing.T) {
+	prov, cleanup := setupOB(t)
+	defer cleanup()
+	escapetest.Run(t, "oceanbase", prov, "test.users", "test.escape_probe")
 }

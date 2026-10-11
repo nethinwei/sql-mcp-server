@@ -12,6 +12,7 @@ import SecretOnce from '@/components/SecretOnce.vue'
 import VisibilityTable from '@/components/VisibilityTable.vue'
 import { simulationRoute } from '@/lib/simulation'
 import { useWorkspace } from '@/stores/workspace'
+import { escapeDatasources, executableDatasources, sqlExecute, userPermissions } from '@/lib/systemPermissions'
 import { run } from '@/api/client'
 import { GenerateUserTokenMutation } from '@/api/ops'
 import McpConnect from '@/components/McpConnect.vue'
@@ -84,6 +85,11 @@ function parseValue(v: string): unknown {
 function setGrants(grants: GrantInput[]) {
   if (user.value) user.value.grants = grants
 }
+
+// System permissions: execute_sql on each datasource admitting it; what the
+// user may use comes from its own permissions and its roles'.
+const escapeOptions = computed(() => escapeDatasources(ws.datasources).map((d) => ({ label: sqlExecute(d), value: sqlExecute(d) })))
+const executable = computed(() => (user.value ? executableDatasources(userPermissions(user.value, ws.roles), ws.datasources) : []))
 
 function remove() {
   dialog.warning({
@@ -178,6 +184,16 @@ onMounted(() => { if (route.query.token && editable.value && tokenState.value ==
         :subject-keys="Object.keys((user.subject as object) ?? {})" :readonly="!editable" @update:model-value="setGrants" />
     </n-card>
 
+    <n-card size="small" :title="t('systemPermissions.title')">
+      <template #header-extra><n-text depth="3" class="hint">{{ t('systemPermissions.userHint') }}</n-text></template>
+      <n-select :value="user.permissions ?? []" multiple filterable :disabled="!editable || !escapeOptions.length"
+        :options="escapeOptions" :placeholder="escapeOptions.length ? t('systemPermissions.placeholder') : t('systemPermissions.none')"
+        @update:value="(v: string[]) => { if (user) user.permissions = v }" />
+      <n-text depth="3" class="hint executable">
+        {{ executable.length ? t('systemPermissions.executable', { list: executable.join(', ') }) : t('systemPermissions.notExecutable') }}
+      </n-text>
+    </n-card>
+
     <n-card size="small" :title="t('visibility.userTitle')">
       <visibility-table :who="user.name" :revision="null" :entities="ws.entities" :context="ws.contextKey" live compact
         @pick="(e, a, f) => simulatePick(name, e, a, f)" />
@@ -195,4 +211,5 @@ onMounted(() => { if (route.query.token && editable.value && tokenState.value ==
 .attr-value { width: 240px; }
 .add-attr { align-self: flex-start; }
 .from-roles { margin-bottom: 10px; }
+.executable { display: block; margin-top: 8px; }
 </style>

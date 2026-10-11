@@ -28,7 +28,7 @@ const cards = computed(() => ws.roles.map((r) => ({
 
 function create() {
   if (error.value) return
-  ws.upsertRole({ name: name.value, description: description.value, grants: [] })
+  ws.upsertRole({ name: name.value, description: description.value, grants: [], permissions: [] })
   creating.value = false
   void router.push({ name: 'role', params: { name: name.value } })
 }

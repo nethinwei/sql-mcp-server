@@ -48,7 +48,7 @@ const columns = computed<DataTableColumns<UserInput>>(() => [
 
 function create() {
   if (error.value) return
-  ws.upsertUser({ name: name.value, roles: roles.value, grants: [] })
+  ws.upsertUser({ name: name.value, roles: roles.value, grants: [], permissions: [] })
   creating.value = false
   void router.push({ name: 'user', params: { name: name.value }, query: { token: '1' } })
 }

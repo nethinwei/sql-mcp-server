@@ -123,6 +123,7 @@ type ComplexityRoot struct {
 		Name           func(childComplexity int) int
 		ReadAfterWrite func(childComplexity int) int
 		Routing        func(childComplexity int) int
+		SQLEscape      func(childComplexity int) int
 	}
 
 	DatasourceConnection struct {
@@ -136,6 +137,10 @@ type ComplexityRoot struct {
 		Execute func(childComplexity int) int
 		Read    func(childComplexity int) int
 		Write   func(childComplexity int) int
+	}
+
+	DatasourceSqlEscape struct {
+		Connection func(childComplexity int) int
 	}
 
 	DraftRevision struct {
@@ -466,6 +471,7 @@ type ComplexityRoot struct {
 		Description func(childComplexity int) int
 		Grants      func(childComplexity int) int
 		Name        func(childComplexity int) int
+		Permissions func(childComplexity int) int
 	}
 
 	ScanBatch struct {
@@ -585,6 +591,7 @@ type ComplexityRoot struct {
 		Disabled    func(childComplexity int) int
 		Grants      func(childComplexity int) int
 		Name        func(childComplexity int) int
+		Permissions func(childComplexity int) int
 		Roles       func(childComplexity int) int
 		Subject     func(childComplexity int) int
 		TokenHash   func(childComplexity int) int
@@ -1067,6 +1074,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Datasource.Routing(childComplexity), true
+	case "Datasource.sqlEscape":
+		if e.ComplexityRoot.Datasource.SQLEscape == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Datasource.SQLEscape(childComplexity), true
 
 	case "DatasourceConnection.dsn":
 		if e.ComplexityRoot.DatasourceConnection.Dsn == nil {
@@ -1111,6 +1124,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.DatasourceRouting.Write(childComplexity), true
+
+	case "DatasourceSqlEscape.connection":
+		if e.ComplexityRoot.DatasourceSqlEscape.Connection == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DatasourceSqlEscape.Connection(childComplexity), true
 
 	case "DraftRevision.basedOn":
 		if e.ComplexityRoot.DraftRevision.BasedOn == nil {
@@ -2773,6 +2793,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Role.Name(childComplexity), true
+	case "Role.permissions":
+		if e.ComplexityRoot.Role.Permissions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Role.Permissions(childComplexity), true
 
 	case "ScanBatch.canceled":
 		if e.ComplexityRoot.ScanBatch.Canceled == nil {
@@ -3198,6 +3224,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.User.Name(childComplexity), true
+	case "User.permissions":
+		if e.ComplexityRoot.User.Permissions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.User.Permissions(childComplexity), true
 	case "User.roles":
 		if e.ComplexityRoot.User.Roles == nil {
 			break
@@ -3749,6 +3781,8 @@ func (ec *executionContext) childFields_Datasource(ctx context.Context, field gr
 		return ec.fieldContext_Datasource_routing(ctx, field)
 	case "readAfterWrite":
 		return ec.fieldContext_Datasource_readAfterWrite(ctx, field)
+	case "sqlEscape":
+		return ec.fieldContext_Datasource_sqlEscape(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Datasource", field.Name)
 }
@@ -3777,6 +3811,14 @@ func (ec *executionContext) childFields_DatasourceRouting(ctx context.Context, f
 		return ec.fieldContext_DatasourceRouting_execute(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type DatasourceRouting", field.Name)
+}
+
+func (ec *executionContext) childFields_DatasourceSqlEscape(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "connection":
+		return ec.fieldContext_DatasourceSqlEscape_connection(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type DatasourceSqlEscape", field.Name)
 }
 
 func (ec *executionContext) childFields_DraftRevision(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -4309,6 +4351,8 @@ func (ec *executionContext) childFields_Role(ctx context.Context, field graphql.
 		return ec.fieldContext_Role_description(ctx, field)
 	case "grants":
 		return ec.fieldContext_Role_grants(ctx, field)
+	case "permissions":
+		return ec.fieldContext_Role_permissions(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Role", field.Name)
 }
@@ -4547,6 +4591,8 @@ func (ec *executionContext) childFields_User(ctx context.Context, field graphql.
 		return ec.fieldContext_User_roles(ctx, field)
 	case "grants":
 		return ec.fieldContext_User_grants(ctx, field)
+	case "permissions":
+		return ec.fieldContext_User_permissions(ctx, field)
 	case "subject":
 		return ec.fieldContext_User_subject(ctx, field)
 	case "disabled":
@@ -6871,6 +6917,38 @@ func (ec *executionContext) fieldContext_Datasource_readAfterWrite(_ context.Con
 	return graphql.NewScalarFieldContext("Datasource", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _Datasource_sqlEscape(ctx context.Context, field graphql.CollectedField, obj *Datasource) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Datasource_sqlEscape(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.SQLEscape, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *DatasourceSQLEscape) graphql.Marshaler {
+			return ec.marshalODatasourceSqlEscape2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐDatasourceSQLEscape(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Datasource_sqlEscape(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Datasource",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_DatasourceSqlEscape(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _DatasourceConnection_name(ctx context.Context, field graphql.CollectedField, obj *DatasourceConnection) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -7030,6 +7108,29 @@ func (ec *executionContext) _DatasourceRouting_execute(ctx context.Context, fiel
 }
 func (ec *executionContext) fieldContext_DatasourceRouting_execute(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("DatasourceRouting", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _DatasourceSqlEscape_connection(ctx context.Context, field graphql.CollectedField, obj *DatasourceSQLEscape) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_DatasourceSqlEscape_connection(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Connection, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_DatasourceSqlEscape_connection(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("DatasourceSqlEscape", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _DraftRevision_revision(ctx context.Context, field graphql.CollectedField, obj *DraftRevision) (ret graphql.Marshaler) {
@@ -13828,6 +13929,29 @@ func (ec *executionContext) fieldContext_Role_grants(_ context.Context, field gr
 	return fc, nil
 }
 
+func (ec *executionContext) _Role_permissions(ctx context.Context, field graphql.CollectedField, obj *configapp.RoleItem) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Role_permissions(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Permissions, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Role_permissions(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Role", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _ScanBatch_id(ctx context.Context, field graphql.CollectedField, obj *configapp.ScanBatch) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -15471,6 +15595,29 @@ func (ec *executionContext) fieldContext_User_grants(_ context.Context, field gr
 		},
 	}
 	return fc, nil
+}
+
+func (ec *executionContext) _User_permissions(ctx context.Context, field graphql.CollectedField, obj *configapp.UserItem) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_User_permissions(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Permissions, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_User_permissions(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("User", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _User_subject(ctx context.Context, field graphql.CollectedField, obj *configapp.UserItem) (ret graphql.Marshaler) {
@@ -18422,7 +18569,7 @@ func (ec *executionContext) unmarshalInputRoleInput(ctx context.Context, obj any
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"name", "description", "grants"}
+	fieldsInOrder := [...]string{"name", "description", "grants", "permissions"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -18450,6 +18597,13 @@ func (ec *executionContext) unmarshalInputRoleInput(ctx context.Context, obj any
 				return it, err
 			}
 			it.Grants = data
+		case "permissions":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("permissions"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Permissions = data
 		}
 	}
 	return it, nil
@@ -18704,7 +18858,7 @@ func (ec *executionContext) unmarshalInputUserInput(ctx context.Context, obj any
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"name", "description", "roles", "grants", "subject", "disabled", "tokenHash"}
+	fieldsInOrder := [...]string{"name", "description", "roles", "grants", "permissions", "subject", "disabled", "tokenHash"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -18739,6 +18893,13 @@ func (ec *executionContext) unmarshalInputUserInput(ctx context.Context, obj any
 				return it, err
 			}
 			it.Grants = data
+		case "permissions":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("permissions"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Permissions = data
 		case "subject":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("subject"))
 			data, err := ec.unmarshalOJSON2interface(ctx, v)
@@ -19512,6 +19673,11 @@ func (ec *executionContext) _Datasource(ctx context.Context, sel ast.SelectionSe
 			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
+		case "sqlEscape":
+			out.Values[i] = ec._Datasource_sqlEscape(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -19610,6 +19776,44 @@ func (ec *executionContext) _DatasourceRouting(ctx context.Context, sel ast.Sele
 			}
 		case "execute":
 			out.Values[i] = ec._DatasourceRouting_execute(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var datasourceSqlEscapeImplementors = []string{"DatasourceSqlEscape"}
+
+func (ec *executionContext) _DatasourceSqlEscape(ctx context.Context, sel ast.SelectionSet, obj *DatasourceSQLEscape) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, datasourceSqlEscapeImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("DatasourceSqlEscape")
+		case "connection":
+			out.Values[i] = ec._DatasourceSqlEscape_connection(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -22562,6 +22766,11 @@ func (ec *executionContext) _Role(ctx context.Context, sel ast.SelectionSet, obj
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "permissions":
+			out.Values[i] = ec._Role_permissions(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -23460,6 +23669,11 @@ func (ec *executionContext) _User(ctx context.Context, sel ast.SelectionSet, obj
 			}
 		case "grants":
 			out.Values[i] = ec._User_grants(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "permissions":
+			out.Values[i] = ec._User_permissions(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -24639,11 +24853,11 @@ func (ec *executionContext) marshalNDraftRevision2ᚕgithubᚗcomᚋnethinweiᚋ
 	return ret
 }
 
-func (ec *executionContext) marshalNEntity2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItem(ctx context.Context, sel ast.SelectionSet, v Entity) graphql.Marshaler {
+func (ec *executionContext) marshalNEntity2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItem(ctx context.Context, sel ast.SelectionSet, v configapp.EntityItem) graphql.Marshaler {
 	return ec._Entity(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNEntity2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItemᚄ(ctx context.Context, sel ast.SelectionSet, v []Entity) graphql.Marshaler {
+func (ec *executionContext) marshalNEntity2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItemᚄ(ctx context.Context, sel ast.SelectionSet, v []configapp.EntityItem) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
@@ -25322,11 +25536,11 @@ func (ec *executionContext) marshalNRevisionState2githubᚗcomᚋnethinweiᚋsql
 	return v
 }
 
-func (ec *executionContext) marshalNRole2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItem(ctx context.Context, sel ast.SelectionSet, v Role) graphql.Marshaler {
+func (ec *executionContext) marshalNRole2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItem(ctx context.Context, sel ast.SelectionSet, v configapp.RoleItem) graphql.Marshaler {
 	return ec._Role(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNRole2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItemᚄ(ctx context.Context, sel ast.SelectionSet, v []Role) graphql.Marshaler {
+func (ec *executionContext) marshalNRole2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItemᚄ(ctx context.Context, sel ast.SelectionSet, v []configapp.RoleItem) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
@@ -25733,11 +25947,11 @@ func (ec *executionContext) marshalNUnscannedSchemas2ᚕgithubᚗcomᚋnethinwei
 	return ret
 }
 
-func (ec *executionContext) marshalNUser2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItem(ctx context.Context, sel ast.SelectionSet, v User) graphql.Marshaler {
+func (ec *executionContext) marshalNUser2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItem(ctx context.Context, sel ast.SelectionSet, v configapp.UserItem) graphql.Marshaler {
 	return ec._User(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNUser2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItemᚄ(ctx context.Context, sel ast.SelectionSet, v []User) graphql.Marshaler {
+func (ec *executionContext) marshalNUser2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItemᚄ(ctx context.Context, sel ast.SelectionSet, v []configapp.UserItem) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
@@ -26060,6 +26274,13 @@ func (ec *executionContext) marshalOBoolean2ᚖbool(ctx context.Context, sel ast
 	_ = ctx
 	res := graphql.MarshalBoolean(*v)
 	return res
+}
+
+func (ec *executionContext) marshalODatasourceSqlEscape2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐDatasourceSQLEscape(ctx context.Context, sel ast.SelectionSet, v *DatasourceSQLEscape) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._DatasourceSqlEscape(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOEntityMCP2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityMCPItem(ctx context.Context, sel ast.SelectionSet, v *configapp.EntityMCPItem) graphql.Marshaler {

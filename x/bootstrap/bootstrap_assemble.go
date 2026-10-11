@@ -48,6 +48,7 @@ type assembly struct {
 	checked     checkedAssembly
 	feedback    cost.FeedbackStore
 	sources     map[string]tool.DataSource
+	escapes     map[string]tool.EscapeRoute
 	txBeginners map[string]store.TxBeginner
 	prepared    map[string]*store.PreparedDB
 	engine      *engine.Engine
@@ -99,6 +100,7 @@ func (a *assembly) acquire() (err error) {
 	if err != nil {
 		return err
 	}
+	a.escapes = buildEscapes(cfg, a.connections, a.prepared, a.gs)
 	if a.engine, err = newAssembleEngine(cfg, a.shared); err != nil {
 		return err
 	}
@@ -126,6 +128,7 @@ func (a *assembly) app() *App {
 		Connections:   a.connections,
 		Prepared:      a.prepared,
 		Sources:       a.sources,
+		Escapes:       a.escapes,
 		defaultSource: defaultName,
 		Registry:      checked.registry,
 		Authorizer:    rbac.NewGrantAuthorizer(checked.registry, checked.policy),
@@ -446,6 +449,46 @@ func buildDataSources(
 	return sources, txBeginners, prepared, nil
 }
 
+// buildEscapes routes the SQL escape hatch of each datasource declaring one
+// to the connection its sqlEscape names (reached as its other work is: under
+// the connection's health and through its prepared statement cache), with
+// EXPLAIN on that same connection so the estimate sees what that account
+// sees, and the datasource's cost thresholds. No datasource admits the
+// hatch while tools.executeSql is off: the switch is one of its conditions.
+func buildEscapes(
+	cfg *config.Config, connections Connections, prepared map[string]*store.PreparedDB, gs guards,
+) map[string]tool.EscapeRoute {
+	escapes := map[string]tool.EscapeRoute{}
+	if !cfg.Tools.ExecuteSQL {
+		return escapes
+	}
+	for name, byName := range connections {
+		database := cfg.Databases[name]
+		connection := database.SQLEscape.Connection
+		p, ok := byName[connection]
+		if connection == "" || !ok {
+			continue
+		}
+		key := name + "/" + connection
+		db, found := prepared[key]
+		if !found { // a connection no action routes to: closed with the others
+			db = store.WithPreparedCache(p, 0)
+			prepared[key] = db
+		}
+		wrap, _ := gs.guard(name, connection, p)
+		explainer, _, _ := planners(p, gs.health(name, connection))
+		threshold := cfg.Cost.Threshold()
+		threshold.Datasource, threshold.DialectName = name, p.Dialect().Name()
+		if !cfg.Cost.EnabledOrDefault() {
+			explainer = nil
+		}
+		escapes[name] = tool.EscapeRoute{
+			Connection: connection, DB: wrap(db), Dialect: p.Dialect(), Explainer: explainer, Threshold: threshold,
+		}
+	}
+	return escapes
+}
+
 func dataSourceForProvider(
 	cfg *config.Config,
 	name string,
@@ -530,7 +573,7 @@ func newAssembleAuditor(cfg *config.Config, b *bus.Bus) (audit.Auditor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("assemble audit sink: %w", err)
 	}
-	return audit.NewAsyncAuditorOn(b, sink.Record, sink.Close, cfg.Audit.QueueSize), nil
+	return audit.NewAsyncAuditorOn(b, sink.Record, sink.Close, cfg.Audit.QueueSize).Durably(sink), nil
 }
 
 func newAssembleCache(cfg *config.Config, shared *Shared) cache.Cache[[]map[string]any] {
@@ -580,6 +623,7 @@ func applyAssembledAppConfig(app *App, cfg *config.Config) {
 		TransactionBeginTimeout:    cfg.Transactions.BeginTimeout,
 		TransactionCommitTimeout:   cfg.Transactions.CommitTimeout,
 		TransactionRollbackTimeout: cfg.Transactions.RollbackTimeout,
+		SQLEscapeEstimateRequired:  cfg.Cost.SQLEscape.EstimateRequired(),
 	}
 }
 

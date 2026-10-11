@@ -53,6 +53,9 @@ type App struct {
 	Connections Connections
 	Prepared    map[string]*store.PreparedDB
 	Sources     map[string]tool.DataSource
+	// Escapes are the datasources admitting the SQL escape hatch, routed to
+	// the connection each names.
+	Escapes map[string]tool.EscapeRoute
 	// defaultSource names the default datasource in Sources.
 	defaultSource string
 	Registry      *entity.Registry
@@ -134,7 +137,7 @@ func (a *App) Services() *tool.Services {
 		Registry: a.Registry, Authorizer: a.Authorizer, Masker: a.Masker, Cache: a.Cache, Engine: a.Engine,
 		Auditor: a.Auditor, Hooks: a.Hooks, Limits: a.Limits, Feedback: a.Feedback, Sources: a.Sources,
 		Transactions: a.Transactions, Writes: a.Writes, ResultMemory: a.ResultMemory, TxBeginners: a.TxBeginners,
-		Generation: a.generation, WriteTargets: a.WriteTargets,
+		Generation: a.generation, WriteTargets: a.WriteTargets, Escapes: a.Escapes,
 	}
 	if a.Budget != nil { // a nil *MemoryManager must stay a nil interface
 		s.Budget = a.Budget

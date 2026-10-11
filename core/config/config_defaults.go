@@ -94,6 +94,9 @@ func (c *Config) applyCostDefaults() {
 	if !c.Cost.present["queryTimeout"] && c.Cost.QueryTimeout == 0 {
 		c.Cost.QueryTimeout = 30 * time.Second
 	}
+	if c.Cost.SQLEscape.Estimate == "" {
+		c.Cost.SQLEscape.Estimate = SQLEscapeEstimateRequired
+	}
 }
 
 func (c *Config) applyCostSafetyDefaults() {

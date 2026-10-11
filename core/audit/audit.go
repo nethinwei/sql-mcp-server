@@ -45,6 +45,16 @@ type Event struct {
 	Error        string        `json:"error,omitempty"`
 	Duration     time.Duration `json:"-"`
 	ReturnedRows int64         `json:"returnedRows"`
+	// The SQL escape hatch (execute_sql) records two events per call, Phase
+	// "begin" before the statement runs and "end" after, both carrying the
+	// datasource, its connection and the statement as it is (never
+	// redacted: the hatch has no entity to mask by); "end" adds the rows a
+	// write affected. Other tools leave these unset.
+	Phase        string `json:"phase,omitempty"`
+	Datasource   string `json:"datasource,omitempty"`
+	Connection   string `json:"connection,omitempty"`
+	SQL          string `json:"sql,omitempty"`
+	RowsAffected int64  `json:"rowsAffected,omitempty"`
 }
 
 // MarshalJSON emits Duration as integer milliseconds ("durationMs") so the
@@ -62,6 +72,17 @@ type Auditor interface {
 	Record(ctx context.Context, e Event) error
 }
 
+// Durable records an event before returning, and fails when the event was
+// not written: what the SQL escape hatch (execute_sql) needs, as it refuses
+// to run SQL it could not record (fail closed). FileSink is one, and an
+// AsyncAuditor is one when given its sink (Durably).
+type Durable interface {
+	RecordSync(ctx context.Context, e Event) error
+}
+
+// ErrNotDurable is RecordSync on an AsyncAuditor without a durable sink.
+var ErrNotDurable = errors.New("audit: no durable sink")
+
 // NoopAuditor discards everything.
 type NoopAuditor struct{}
 
@@ -76,10 +97,31 @@ type Sink func(Event) error
 type AsyncAuditor struct {
 	queue     chan Event
 	sink      Sink
+	durable   Durable
 	closeSink func() error
 	done      chan struct{}
 	dropped   atomic.Int64
 	closed    atomic.Bool
+}
+
+// Durably makes a record synchronously through d (its sink, typically) on
+// RecordSync; without it RecordSync fails with ErrNotDurable.
+func (a *AsyncAuditor) Durably(d Durable) *AsyncAuditor {
+	a.durable = d
+	return a
+}
+
+// RecordSync implements Durable through the durable sink: the event is
+// written, and synced, before it returns, past the queue (events queued
+// earlier may reach the sink after it; readers order events by time).
+func (a *AsyncAuditor) RecordSync(ctx context.Context, e Event) error {
+	if a.closed.Load() {
+		return ErrSinkClosed
+	}
+	if a.durable == nil {
+		return ErrNotDurable
+	}
+	return a.durable.RecordSync(ctx, e)
 }
 
 // NewAsyncAuditorWithClose starts a flusher goroutine and closes the sink (when

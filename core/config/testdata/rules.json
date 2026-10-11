@@ -65,6 +65,12 @@
     "path": ["server", "transport"]
   },
   {
+    "name": "sqlEscape estimate outside its enumeration",
+    "config": {"database": {"driver": "postgres", "dsn": "x"}, "cost": {"sqlEscape": {"estimate": "sometimes"}}},
+    "error": "cost.sqlEscape.estimate is \"sometimes\"",
+    "path": ["cost", "sqlEscape", "estimate"]
+  },
+  {
     "name": "a mask rule the masker has",
     "config": {"database": {"driver": "postgres", "dsn": "x"},
       "entities": [{"name": "orders", "fields": [{"name": "email", "mask": "email"}]}]}

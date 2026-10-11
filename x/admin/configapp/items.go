@@ -85,11 +85,13 @@ type GrantItem struct {
 	Rows             any      `json:"rows,omitempty"`
 }
 
-// RoleItem is a role.
+// RoleItem is a role. Permissions are its system permissions
+// (sql:execute@<datasource>).
 type RoleItem struct {
 	Name        string      `json:"name"`
 	Description *string     `json:"description,omitempty"`
 	Grants      []GrantItem `json:"grants"                merge:"key=entity"`
+	Permissions []string    `json:"permissions"`
 }
 
 // UserItem is a user, its token included: one without a token hash has none.
@@ -98,6 +100,7 @@ type UserItem struct {
 	Description *string     `json:"description,omitempty"`
 	Roles       []string    `json:"roles"`
 	Grants      []GrantItem `json:"grants"                merge:"key=entity"`
+	Permissions []string    `json:"permissions"`
 	Subject     any         `json:"subject,omitempty"`
 	Disabled    *bool       `json:"disabled,omitempty"    merge:"unset"`
 	TokenHash   *string     `json:"tokenHash,omitempty"`
@@ -134,13 +137,15 @@ func SectionsOf(spec *config.Spec) (Sections, error) {
 		def := spec.Roles[name]
 		s.Roles = append(s.Roles, RoleItem{
 			Name: name, Description: nonEmpty(def.Description), Grants: grantItems(def.Grants),
+			Permissions: listOf([]string(def.Permissions)),
 		})
 	}
 	for _, name := range kit.SortedKeys(spec.Users) {
 		u := spec.Users[name]
 		item := UserItem{
 			Name: name, Description: nonEmpty(u.Description), Roles: listOf([]string(u.Roles)),
-			Grants: grantItems(u.Grants), Disabled: u.Disabled, TokenHash: nonEmpty(u.TokenHash),
+			Grants: grantItems(u.Grants), Permissions: listOf([]string(u.Permissions)), Disabled: u.Disabled,
+			TokenHash: nonEmpty(u.TokenHash),
 		}
 		if len(u.Subject) > 0 {
 			item.Subject = u.Subject
@@ -304,7 +309,7 @@ func (s Sections) Edit() (configedit.Edit, error) {
 				return configedit.Edit{}, fmt.Errorf("role %q: %w", r.Name, err)
 			}
 			edit.Roles = append(edit.Roles, configedit.Role{Name: r.Name, RoleDefinitionSpec: config.RoleDefinitionSpec{
-				Description: nonEmpty(r.Description), Grants: grants,
+				Description: nonEmpty(r.Description), Grants: grants, Permissions: listSpec(r.Permissions),
 			}})
 		}
 	}
@@ -425,7 +430,7 @@ func (u UserItem) spec() (configedit.User, error) {
 	}
 	out := configedit.User{Name: u.Name, UserSpec: config.UserSpec{
 		Description: nonEmpty(u.Description), TokenHash: nonEmpty(u.TokenHash), Roles: listSpec(u.Roles),
-		Grants: grants, Disabled: onlyTrue(u.Disabled),
+		Grants: grants, Permissions: listSpec(u.Permissions), Disabled: onlyTrue(u.Disabled),
 	}}
 	if u.Subject != nil {
 		subject, ok := NormalizeJSON(u.Subject).(map[string]any)

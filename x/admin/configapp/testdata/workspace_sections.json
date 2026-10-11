@@ -164,7 +164,10 @@
           ]
         }
       ],
-      "name": "analyst"
+      "name": "analyst",
+      "permissions": [
+        "sql:execute@shop"
+      ]
     }
   ],
   "settings": {
@@ -212,6 +215,9 @@
         }
       ],
       "name": "alice",
+      "permissions": [
+        "sql:execute@shop"
+      ],
       "roles": [
         "analyst"
       ],

@@ -22,6 +22,9 @@ Agent (MCP client)
   └─ 参数化 SQL codegen → Provider（PostgreSQL / MySQL / OceanBase）
   ▼
 审计 JSON Lines（best-effort，输入脱敏，含 decision ID）＋ OTel span
+
+可信操作者（持 sql:execute@<数据源> 的用户，默认不存在）
+  └─ execute_sql ── 同一执行器原样执行，硬上限不可关闭，审计写入失败即拒绝
 ```
 
 边界要点：所有入口 fail closed（非 loopback 必须认证；身份 header 仅在显式
@@ -33,12 +36,13 @@ Agent (MCP client)
 
 | 声明 | 证据 | 位置 |
 | --- | --- | --- |
-| 威胁模型与剩余风险 | TM-001~008 证据账本 | [threat-model.md](threat-model.md) |
+| 威胁模型与剩余风险 | TM-001~013 证据账本 | [threat-model.md](threat-model.md) |
 | threat ID → 测试映射 | 机器可检查映射清单（CI 单测校验） | `internal/threatcheck/coverage.json` |
 | 授权/mask/成本/事务 e2e | in-memory 与真实 HTTP 双传输 e2e（真实 PostgreSQL） | `x/mcpserver/e2e_test.go`、`x/mcpserver/e2e_http_test.go`（`make test-e2e`） |
 | 三库 integration | PostgreSQL/MySQL/OceanBase 固定版本容器 | `x/providers/*/integration_test.go`（`make test-integration`） |
 | 对抗与 fuzz | critical/high corpus + CI 有界 fuzz smoke（每 target 20s，非长期持续 fuzz） | [testing.md](testing.md)、`make test-fuzz-smoke` |
 | 机器契约稳定性 | tool schema/错误码/Denial golden | `core/tool/testdata/contract.json`、[tool-contract.md](tool-contract.md) |
+| SQL 逃生通道边界 | 三条件矩阵、硬上限、审计故障注入、按用户列表、结构锁定（TM-013） | `core/tool/tool_execute_sql_test.go`、`x/mcpserver/execute_sql_test.go`、[design/sql-escape-hatch.md](design/sql-escape-hatch.md) |
 | 六场景产品证明 | quickstart 文档 + 自动 smoke（release 链） | [quickstart.md](quickstart.md)、`internal/quickstartsmoke` |
 | 客户端接入 | 四客户端核对结论与边界声明 | [clients.md](clients.md) |
 | 签名/checksum/SBOM | keyless Cosign、SHA-256、归档与镜像 SBOM 及验证命令 | [operations.md](operations.md) |

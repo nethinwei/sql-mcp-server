@@ -51,6 +51,13 @@ YAML presence 解码位于 `x/configyaml`，不会把 `yaml.v3` 引入核心。
 - **I28** 从 store 加载的 revision 必须先通过 content hash 校验与 store 模式密钥
   规则，任一失败都保留当前快照；任一时刻至多一个 published revision，状态转换
   以乐观并发串行化。
+- **I29** 可信 SQL 逃生通道 `execute_sql` 只在 `tools.executeSql`、调用用户持有
+  `sql:execute@<数据源>`、数据源声明 `sqlEscape` 三者同时成立时可见与可执行；其
+  语句仍只由执行器（`pipeline.go`）调用数据库，timeout、结果行数 / 字节上限、预算与
+  限流不可关闭；审计记录（执行前后各一条）写入失败即不执行或不返回结果；受治理面
+  （IR、Metric、语义层、扩展点）没有任何路径到达它。I3、I4–I8、I15、I16、I19、I24
+  只对受治理面成立：逃生通道不参数化调用方的 SQL、不做字段与行治理、不脱敏、
+  估算失败按配置拒绝或跳过。
 
 MCP 工具是否在 tools/list 中还取决于全局 `tools` 开关；custom procedure tool
 由 `mcp.customTool` 独立注册，不受通用 `executeEntity` 开关控制。

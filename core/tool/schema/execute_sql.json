@@ -1,0 +1,28 @@
+{
+    "type": "object",
+    "properties": {
+        "datasource": {
+            "type": "string",
+            "description": "Datasource the statement runs on; required even when only one is configured"
+        },
+        "sql": {
+            "type": "string",
+            "minLength": 1,
+            "description": "One statement, run as it is and auto-committed: not parsed, rewritten or masked"
+        },
+        "args": {
+            "type": "array",
+            "description": "Positional parameters, in the dialect's placeholder style ($1 for PostgreSQL, ? for MySQL and OceanBase)"
+        },
+        "mode": {
+            "type": "string",
+            "enum": ["query", "exec"],
+            "default": "query",
+            "description": "query returns columns and rows; exec returns rowsAffected (DML, DDL, SET)"
+        }
+    },
+    "required": [
+        "datasource",
+        "sql"
+    ]
+}

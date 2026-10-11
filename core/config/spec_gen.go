@@ -387,6 +387,7 @@ type DatabaseSpec struct {
 	Connections    Map[string, ConnectionSpec] `yaml:"connections,omitempty" json:"connections,omitempty"`
 	Routing        *RoutingSpec                `yaml:"routing,omitempty" json:"routing,omitempty"`
 	ReadAfterWrite *time.Duration              `yaml:"readAfterWrite,omitempty" json:"readAfterWrite,omitempty"`
+	SQLEscape      *SQLEscapeSpec              `yaml:"sqlEscape,omitempty" json:"sqlEscape,omitempty"`
 }
 
 func (s DatabaseSpec) config() DatabaseConfig {
@@ -409,6 +410,9 @@ func (s DatabaseSpec) config() DatabaseConfig {
 	if s.ReadAfterWrite != nil {
 		out.ReadAfterWrite = *s.ReadAfterWrite
 	}
+	if s.SQLEscape != nil {
+		out.SQLEscape = s.SQLEscape.config()
+	}
 	return out
 }
 
@@ -429,6 +433,9 @@ func (s *DatabaseSpec) canonical() {
 	if s.ReadAfterWrite != nil && *s.ReadAfterWrite == *new(time.Duration) {
 		s.ReadAfterWrite = nil
 	}
+	if s.SQLEscape != nil {
+		s.SQLEscape.canonical()
+	}
 }
 
 func (c DatabaseConfig) spec() DatabaseSpec {
@@ -445,6 +452,9 @@ func (c DatabaseConfig) spec() DatabaseSpec {
 		out.Routing = &v
 	}
 	out.ReadAfterWrite = set(c.ReadAfterWrite)
+	if v := c.SQLEscape.spec(); !isZero(v) {
+		out.SQLEscape = &v
+	}
 	return out
 }
 
@@ -524,6 +534,28 @@ func (c RoutingConfig) spec() RoutingSpec {
 	out.Read = set(c.Read)
 	out.Write = set(c.Write)
 	out.Execute = set(c.Execute)
+	return out
+}
+
+// SQLEscapeSpec is a SQLEscapeConfig as written: a nil field was not.
+type SQLEscapeSpec struct {
+	Connection *string `yaml:"connection,omitempty" json:"connection,omitempty"`
+}
+
+func (s SQLEscapeSpec) config() SQLEscapeConfig {
+	var out SQLEscapeConfig
+	if s.Connection != nil {
+		out.Connection = *s.Connection
+	}
+	return out
+}
+
+func (s *SQLEscapeSpec) canonical() {
+}
+
+func (c SQLEscapeConfig) spec() SQLEscapeSpec {
+	var out SQLEscapeSpec
+	out.Connection = set(c.Connection)
 	return out
 }
 
@@ -1105,6 +1137,7 @@ type ToolFlagsSpec struct {
 	DeleteRecord        *bool `yaml:"deleteRecord,omitempty" json:"deleteRecord,omitempty"`
 	ExecuteEntity       *bool `yaml:"executeEntity,omitempty" json:"executeEntity,omitempty"`
 	AggregateRecords    *bool `yaml:"aggregateRecords,omitempty" json:"aggregateRecords,omitempty"`
+	ExecuteSQL          *bool `yaml:"executeSql,omitempty" json:"executeSql,omitempty"`
 	BeginTransaction    *bool `yaml:"beginTransaction,omitempty" json:"beginTransaction,omitempty"`
 	CommitTransaction   *bool `yaml:"commitTransaction,omitempty" json:"commitTransaction,omitempty"`
 	RollbackTransaction *bool `yaml:"rollbackTransaction,omitempty" json:"rollbackTransaction,omitempty"`
@@ -1133,6 +1166,9 @@ func (s ToolFlagsSpec) config() ToolFlags {
 	}
 	if s.AggregateRecords != nil {
 		out.AggregateRecords = *s.AggregateRecords
+	}
+	if s.ExecuteSQL != nil {
+		out.ExecuteSQL = *s.ExecuteSQL
 	}
 	if s.BeginTransaction != nil {
 		out.BeginTransaction = *s.BeginTransaction
@@ -1172,6 +1208,9 @@ func (c ToolFlags) spec() ToolFlagsSpec {
 	if c.present || c.AggregateRecords != *new(bool) {
 		out.AggregateRecords = ptr(c.AggregateRecords)
 	}
+	if c.present || c.ExecuteSQL != *new(bool) {
+		out.ExecuteSQL = ptr(c.ExecuteSQL)
+	}
 	if c.present || c.BeginTransaction != *new(bool) {
 		out.BeginTransaction = ptr(c.BeginTransaction)
 	}
@@ -1186,27 +1225,28 @@ func (c ToolFlags) spec() ToolFlagsSpec {
 
 // CostSpec is a CostConfig as written: a nil field was not.
 type CostSpec struct {
-	Enabled             *bool          `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-	SoftScore           *int           `yaml:"softScore,omitempty" json:"softScore,omitempty"`
-	HardScore           *int           `yaml:"hardScore,omitempty" json:"hardScore,omitempty"`
-	MaxRows             *int64         `yaml:"maxRows,omitempty" json:"maxRows,omitempty"`
-	MaxBytes            *int64         `yaml:"maxBytes,omitempty" json:"maxBytes,omitempty"`
-	MaxINListSize       *int           `yaml:"maxINListSize,omitempty" json:"maxINListSize,omitempty"`
-	MaxFilterConditions *int           `yaml:"maxFilterConditions,omitempty" json:"maxFilterConditions,omitempty"`
-	MaxGroupByFields    *int           `yaml:"maxGroupByFields,omitempty" json:"maxGroupByFields,omitempty"`
-	MaxAggregates       *int           `yaml:"maxAggregates,omitempty" json:"maxAggregates,omitempty"`
-	MaxExpand           *int           `yaml:"maxExpand,omitempty" json:"maxExpand,omitempty"`
-	MaxProcedureRows    *int64         `yaml:"maxProcedureRows,omitempty" json:"maxProcedureRows,omitempty"`
-	RejectFullScan      *bool          `yaml:"rejectFullScan,omitempty" json:"rejectFullScan,omitempty"`
-	FullScanMaxRows     *int64         `yaml:"fullScanMaxRows,omitempty" json:"fullScanMaxRows,omitempty"`
-	WhitelistPKPoint    *bool          `yaml:"whitelistPKPoint,omitempty" json:"whitelistPKPoint,omitempty"`
-	RequirePKForWrite   *bool          `yaml:"requirePKForWrite,omitempty" json:"requirePKForWrite,omitempty"`
-	RequireKnownScan    *bool          `yaml:"requireKnownScan,omitempty" json:"requireKnownScan,omitempty"`
-	RequireFreshStats   *bool          `yaml:"requireFreshStats,omitempty" json:"requireFreshStats,omitempty"`
-	QueryTimeout        *time.Duration `yaml:"queryTimeout,omitempty" json:"queryTimeout,omitempty"`
-	AllowTemplates      List[string]   `yaml:"allowTemplates,omitempty" json:"allowTemplates,omitempty"`
-	RejectTemplates     List[string]   `yaml:"rejectTemplates,omitempty" json:"rejectTemplates,omitempty"`
-	AQE                 *AQESpec       `yaml:"aqe,omitempty" json:"aqe,omitempty"`
+	Enabled             *bool              `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	SoftScore           *int               `yaml:"softScore,omitempty" json:"softScore,omitempty"`
+	HardScore           *int               `yaml:"hardScore,omitempty" json:"hardScore,omitempty"`
+	MaxRows             *int64             `yaml:"maxRows,omitempty" json:"maxRows,omitempty"`
+	MaxBytes            *int64             `yaml:"maxBytes,omitempty" json:"maxBytes,omitempty"`
+	MaxINListSize       *int               `yaml:"maxINListSize,omitempty" json:"maxINListSize,omitempty"`
+	MaxFilterConditions *int               `yaml:"maxFilterConditions,omitempty" json:"maxFilterConditions,omitempty"`
+	MaxGroupByFields    *int               `yaml:"maxGroupByFields,omitempty" json:"maxGroupByFields,omitempty"`
+	MaxAggregates       *int               `yaml:"maxAggregates,omitempty" json:"maxAggregates,omitempty"`
+	MaxExpand           *int               `yaml:"maxExpand,omitempty" json:"maxExpand,omitempty"`
+	MaxProcedureRows    *int64             `yaml:"maxProcedureRows,omitempty" json:"maxProcedureRows,omitempty"`
+	RejectFullScan      *bool              `yaml:"rejectFullScan,omitempty" json:"rejectFullScan,omitempty"`
+	FullScanMaxRows     *int64             `yaml:"fullScanMaxRows,omitempty" json:"fullScanMaxRows,omitempty"`
+	WhitelistPKPoint    *bool              `yaml:"whitelistPKPoint,omitempty" json:"whitelistPKPoint,omitempty"`
+	RequirePKForWrite   *bool              `yaml:"requirePKForWrite,omitempty" json:"requirePKForWrite,omitempty"`
+	RequireKnownScan    *bool              `yaml:"requireKnownScan,omitempty" json:"requireKnownScan,omitempty"`
+	RequireFreshStats   *bool              `yaml:"requireFreshStats,omitempty" json:"requireFreshStats,omitempty"`
+	QueryTimeout        *time.Duration     `yaml:"queryTimeout,omitempty" json:"queryTimeout,omitempty"`
+	AllowTemplates      List[string]       `yaml:"allowTemplates,omitempty" json:"allowTemplates,omitempty"`
+	RejectTemplates     List[string]       `yaml:"rejectTemplates,omitempty" json:"rejectTemplates,omitempty"`
+	AQE                 *AQESpec           `yaml:"aqe,omitempty" json:"aqe,omitempty"`
+	SQLEscape           *SQLEscapeCostSpec `yaml:"sqlEscape,omitempty" json:"sqlEscape,omitempty"`
 }
 
 func (s CostSpec) config() CostConfig {
@@ -1334,12 +1374,21 @@ func (s CostSpec) config() CostConfig {
 	if s.AQE != nil {
 		out.present["aqe"] = true
 	}
+	if s.SQLEscape != nil {
+		out.SQLEscape = s.SQLEscape.config()
+	}
+	if s.SQLEscape != nil {
+		out.present["sqlEscape"] = true
+	}
 	return out
 }
 
 func (s *CostSpec) canonical() {
 	if s.AQE != nil {
 		s.AQE.canonical()
+	}
+	if s.SQLEscape != nil {
+		s.SQLEscape.canonical()
 	}
 }
 
@@ -1403,6 +1452,9 @@ func (c CostConfig) spec() CostSpec {
 	out.RejectTemplates = List[string](c.RejectTemplates)
 	if v := c.AQE.spec(); !isZero(v) {
 		out.AQE = &v
+	}
+	if v := c.SQLEscape.spec(); !isZero(v) {
+		out.SQLEscape = &v
 	}
 	return out
 }
@@ -1502,6 +1554,28 @@ func (c AQEConfig) spec() AQESpec {
 	if c.present["maxFingerprints"] || c.MaxFingerprints != *new(int) {
 		out.MaxFingerprints = ptr(c.MaxFingerprints)
 	}
+	return out
+}
+
+// SQLEscapeCostSpec is a SQLEscapeCostConfig as written: a nil field was not.
+type SQLEscapeCostSpec struct {
+	Estimate *string `yaml:"estimate,omitempty" json:"estimate,omitempty"`
+}
+
+func (s SQLEscapeCostSpec) config() SQLEscapeCostConfig {
+	var out SQLEscapeCostConfig
+	if s.Estimate != nil {
+		out.Estimate = *s.Estimate
+	}
+	return out
+}
+
+func (s *SQLEscapeCostSpec) canonical() {
+}
+
+func (c SQLEscapeCostConfig) spec() SQLEscapeCostSpec {
+	var out SQLEscapeCostSpec
+	out.Estimate = set(c.Estimate)
 	return out
 }
 

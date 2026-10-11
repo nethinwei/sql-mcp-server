@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"sync"
@@ -36,6 +37,17 @@ func (s *FileSink) Record(event Event) error {
 	encoded = append(encoded, '\n')
 	_, err = s.file.Write(encoded)
 	return err
+}
+
+// RecordSync implements Durable: the event is appended and synced to disk
+// before it returns, so an escape hatch statement never runs unrecorded.
+func (s *FileSink) RecordSync(_ context.Context, event Event) error {
+	if err := s.Record(event); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.file.Sync()
 }
 
 // Close flushes and closes the file.

@@ -252,6 +252,11 @@
           "x-description-zh-CN": "aggregate_records：分组统计。",
           "type": "boolean"
         },
+        "executeSql": {
+          "description": "execute_sql: the trusted SQL escape hatch, off by default. A user also needs sql:execute@\u003cdatasource\u003e and the datasource its sqlEscape; unauthorized users do not see it in tools/list. Requires audit.enabled.",
+          "x-description-zh-CN": "execute_sql：可信 SQL 逃生通道，默认关闭。开启后还须用户持有 sql:execute@\u003cdatasource\u003e 且数据源声明 sqlEscape；未授权用户在 tools/list 中看不到它。开启要求 audit.enabled。",
+          "type": "boolean"
+        },
         "beginTransaction": {
           "description": "Begin a transaction.",
           "x-description-zh-CN": "开启事务。",
@@ -476,6 +481,24 @@
               "type": "integer",
               "default": 4096,
               "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "sqlEscape": {
+          "description": "The estimate policy of execute_sql. Timeout, row and byte caps, concurrency and budgets are hard limits that cannot be switched off; this only decides the EXPLAIN estimate.",
+          "x-description-zh-CN": "execute_sql 的估算策略。超时、行数与字节上限、并发与预算是不可关闭的硬上限，这里只决定 EXPLAIN 估算。",
+          "type": "object",
+          "properties": {
+            "estimate": {
+              "description": "required (the default): every statement is EXPLAINed first and refused when it cannot be estimated (DDL, SET, SHOW) or exceeds the thresholds; skip: no estimate, the hard limits alone.",
+              "x-description-zh-CN": "required（默认）：每条语句先 EXPLAIN，无法估算（DDL、SET、SHOW 等）或超出阈值即拒绝；skip：不估算，只保留硬上限。",
+              "type": "string",
+              "default": "required",
+              "enum": [
+                "required",
+                "skip"
+              ]
             }
           },
           "additionalProperties": false
@@ -931,6 +954,23 @@
           "x-format": "duration",
           "x-minimum": "0",
           "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
+        },
+        "sqlEscape": {
+          "description": "Declares that the datasource admits the trusted SQL escape hatch (execute_sql); omitted, no permission runs SQL on it.",
+          "x-description-zh-CN": "声明后该数据源允许可信 SQL 逃生通道（execute_sql）；省略即不允许，任何权限都不能对它执行任意 SQL。",
+          "type": "object",
+          "required": [
+            "connection"
+          ],
+          "properties": {
+            "connection": {
+              "description": "Connection the escape hatch runs on; its account's database privileges bound the hatch, as the SQL is run as it is (no parsing, rewriting or masking). A dedicated account is recommended.",
+              "x-description-zh-CN": "逃生通道使用的连接名；该账号的数据库权限就是逃生通道的上限，服务不解析、不改写、不脱敏 SQL。建议使用独立账号。",
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -1259,8 +1299,8 @@
           }
         },
         "permissions": {
-          "description": "System permissions (such as sql:execute@\u003cdatasource\u003e), reserved; any value fails validation in this version.",
-          "x-description-zh-CN": "系统权限（如 sql:execute@\u003cdatasource\u003e），为后续版本预留；本版声明任何值都会校验失败。",
+          "description": "System permissions. sql:execute@\u003cdatasource\u003e admits the role's users to execute_sql on that datasource (which must exist and declare sqlEscape); other system permissions are reserved and fail validation in this version.",
+          "x-description-zh-CN": "系统权限。sql:execute@\u003cdatasource\u003e 让角色的用户在该数据源（须已配置且声明 sqlEscape）使用 execute_sql；其他系统权限为后续版本预留，本版声明即校验失败。",
           "type": "array",
           "items": {
             "type": "string"
@@ -1372,8 +1412,8 @@
           }
         },
         "permissions": {
-          "description": "System permissions, reserved; any value fails validation in this version.",
-          "x-description-zh-CN": "系统权限，为后续版本预留；本版声明任何值都会校验失败。",
+          "description": "System permissions for this user only, united with the roles' permissions; same values as a role's permissions.",
+          "x-description-zh-CN": "只给这个用户的系统权限，与角色的 permissions 取并集；取值同角色的 permissions。",
           "type": "array",
           "items": {
             "type": "string"

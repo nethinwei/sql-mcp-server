@@ -57,7 +57,8 @@ X-MCP-Subject: {"tenant_id":7}
 ```
 
 该调用会被字段 ACL 拒绝。`tools/list` 中也不会出现默认关闭的
-`delete_record`。
+`delete_record`，以及默认关闭、且只对显式授权用户可见的 `execute_sql`（quickstart
+不开启它）。
 
 场景 4 —— mask 字段可返回但不可过滤：
 

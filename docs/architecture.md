@@ -48,6 +48,12 @@ delete 和 procedure call。关系展开不是通用 SQL join：它只支持同�
 - 触发 hook，并以 best-effort 方式记录审计；
 - 汇总返回行数、耗时和近似 session cost。
 
+可信 SQL 逃生通道 `execute_sql` 走同一个 `RunTool` 入口（预算、engine、hook）但不经过
+实体工具的任何一步：执行器内的 `authorizeSQL` 检查数据源是否声明 `sqlEscape` 与用户是否
+持有 `sql:execute@<数据源>`，`estimateSQL` 在逃生通道连接上 EXPLAIN 并按闸门阈值打分，
+语句以 `raw` 形式交给执行器原样执行（不脱敏、到行上限即截断、错误带原文），执行前后各写一条
+同步审计事件，写不进去就不执行或不返回结果。它不进读缓存，执行后整库失效读缓存。
+
 实体工具随后执行字段用途校验、RBAC/RLS、方言路由和三阶段成本检查：
 不可关闭的 Safety、可选 Estimate、不可关闭的 Enforcement。读缓存 key
 包含物理关系（数据源与解析后的表）、SQL、参数、角色和 subject；写操作按物理关系

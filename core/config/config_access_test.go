@@ -85,14 +85,31 @@ var accessRejectCases = []struct {
 		u.Roles = []string{"analyst", "Analyst"}
 		c.Users["Alice"] = u
 	}, "twice"},
-	{"system permission on role", func(c *Config) {
-		c.Roles["ops"] = RoleDefinition{Permissions: []string{"sql:execute@default"}}
+	{"unsupported system permission on role", func(c *Config) {
+		c.Roles["ops"] = RoleDefinition{Permissions: []string{"admin:read"}}
 	}, "not supported"},
-	{"system permission on user", func(c *Config) {
+	{"unsupported system permission on user", func(c *Config) {
 		u := c.Users["Alice"]
 		u.Permissions = []string{"admin:read"}
 		c.Users["Alice"] = u
 	}, "not supported"},
+	{"sql:execute on an unknown datasource", func(c *Config) {
+		c.Roles["ops"] = RoleDefinition{Permissions: []string{"sql:execute@ghost"}}
+	}, "unknown datasource"},
+	{"sql:execute without a datasource", func(c *Config) {
+		c.Roles["ops"] = RoleDefinition{Permissions: []string{"sql:execute@"}}
+	}, "not supported"},
+	{"duplicate system permission", func(c *Config) {
+		u := c.Users["Alice"]
+		u.Permissions = []string{"sql:execute@default", " sql:execute@default"}
+		c.Users["Alice"] = u
+	}, "twice"},
+	{"execute_sql without audit", func(c *Config) {
+		c.Tools = ToolFlags{ExecuteSQL: true, present: true}
+	}, "requires audit.enabled"},
+	{"sqlEscape on an unknown connection", func(c *Config) {
+		c.Database.SQLEscape = SQLEscapeConfig{Connection: "ops"}
+	}, "unknown connection"},
 	{"malformed token hash", func(c *Config) {
 		u := c.Users["Alice"]
 		u.TokenHash = "md5:abc"
@@ -192,5 +209,65 @@ func TestValidateRejectsReservedStoreTables(t *testing.T) {
 		Entities: []EntityConfig{{Name: "smcp_view", Source: "orders"}}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("only the physical source is reserved: %v", err)
+	}
+}
+
+// sql:execute@<datasource> is the one system permission this version
+// accepts, on roles and users alike, whether or not the datasource admits the
+// escape hatch (that is the datasource's own condition).
+func TestValidateAcceptsSQLExecutePermissions(t *testing.T) {
+	t.Parallel()
+	cfg := accessConfig()
+	cfg.Roles["ops"] = RoleDefinition{Permissions: []string{" sql:execute@default "}}
+	alice := cfg.Users["Alice"]
+	alice.Permissions = []string{"sql:execute@default"}
+	cfg.Users["Alice"] = alice
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if got := cfg.Roles["ops"].Permissions; len(got) != 1 || got[0] != "sql:execute@default" {
+		t.Fatalf("permissions not trimmed: %q", got)
+	}
+	if ds, ok := ParseSQLExecute("sql:execute@crm"); !ok || ds != "crm" {
+		t.Fatalf("ParseSQLExecute = %q, %v", ds, ok)
+	}
+	if _, ok := ParseSQLExecute("admin:read"); ok {
+		t.Fatal("admin:read parsed as sql:execute")
+	}
+}
+
+// The escape hatch is validated with its audit: enabling execute_sql needs
+// an audit sink, and a datasource's sqlEscape names one of its connections.
+func TestValidateSQLEscape(t *testing.T) {
+	t.Parallel()
+	cfg := accessConfig()
+	cfg.Tools = ToolFlags{ExecuteSQL: true, present: true}
+	cfg.Audit = AuditConfig{Enabled: true, Path: "audit.jsonl"}
+	cfg.Database.SQLEscape = SQLEscapeConfig{Connection: DefaultConnection}
+	cfg.ApplyDefaults()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if !cfg.Databases["default"].SQLEscape.Enabled() {
+		t.Fatal("sqlEscape lost in the default datasource")
+	}
+	if cfg.Cost.SQLEscape.Estimate != SQLEscapeEstimateRequired || !cfg.Cost.SQLEscape.EstimateRequired() {
+		t.Fatalf("estimate default = %q", cfg.Cost.SQLEscape.Estimate)
+	}
+	cfg.Cost.SQLEscape.Estimate = "sometimes"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "sqlEscape.estimate") {
+		t.Fatalf("estimate enum not checked: %v", err)
+	}
+	cfg.Cost.SQLEscape.Estimate = SQLEscapeEstimateSkip
+	if err := cfg.Validate(); err != nil || cfg.Cost.SQLEscape.EstimateRequired() {
+		t.Fatalf("skip: %v", err)
+	}
+	old, next := accessConfig(), accessConfig()
+	old.ApplyDefaults()
+	next.Databases = map[string]DatabaseConfig{"default": {Driver: "postgres", DSN: "x",
+		SQLEscape: SQLEscapeConfig{Connection: DefaultConnection}}}
+	next.ApplyDefaults()
+	if got := RestartFieldChanges(old, next); len(got) != 0 {
+		t.Fatalf("sqlEscape.connection hot-reloads like the other connection settings: %v", got)
 	}
 }

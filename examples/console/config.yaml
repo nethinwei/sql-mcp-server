@@ -35,6 +35,9 @@ databases:
       writer:
         dsn: "postgres://shop_rw:${PG_WRITER_PASSWORD}@${PG_HOST}/shop?sslmode=disable"
     routing: {read: reader, write: writer, execute: writer}
+    # Uncomment to admit the trusted SQL escape hatch (execute_sql) on a
+    # dedicated account; see tools.executeSql and the dba role below.
+    # sqlEscape: {connection: ops}
     readAfterWrite: 5s
   warehouse:
     driver: mysql
@@ -68,6 +71,7 @@ tools:
   beginTransaction: true
   commitTransaction: true
   rollbackTransaction: true
+  # executeSql: true   # the trusted SQL escape hatch; requires audit.enabled
 
 cost:
   enabled: true
@@ -463,6 +467,9 @@ entities:
       - {name: created_at}
 
 roles:
+  # dba:
+  #   description: 排障与运维：对 shop 使用 execute_sql（走 sqlEscape 声明的连接）
+  #   permissions: ["sql:execute@shop"]
   analyst:
     description: 平台经营分析：跨租户的交易与经营指标，不含个人信息与成本价
     grants:

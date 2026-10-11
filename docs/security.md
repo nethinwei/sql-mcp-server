@@ -75,8 +75,9 @@ session 关闭时绑定会同步清理。该绑定防止可信代理后的调用
 
 ## SQL 与写保护
 
-工具不接受原始 SQL。值使用 placeholder 参数化；表、字段和 procedure 标识符
-来自配置实体并由方言引用。
+受治理面的工具不接受原始 SQL。值使用 placeholder 参数化；表、字段和 procedure 标识符
+来自配置实体并由方言引用。唯一的例外是独立的[可信 SQL 逃生通道](#可信-sql-逃生通道)，
+它不进入 IR，默认不存在。
 
 update/delete 必须有用户 filter 或行级 filter。`requirePKForWrite` 默认开启时，
 不是按身份键等值定位单行的写由 `WriteGuard` 拒绝；allow fingerprint 不绕过该
@@ -148,9 +149,50 @@ SQL 构成，执行器统一脱敏、计量、分类错误并跟进写入；写�
 expand 读取不进入结果缓存，以免父子任一实体写入后留下陈旧组合。显式事务
 完全绕过全局读缓存；事务写仅在成功 commit 后按物理关系失效缓存，rollback 不失效。
 一个物理表最多对应一个实体，因此同一张表不会有两套策略或两份互不失效的缓存。
-审计使用有界异步队列，满时丢弃并计数；它是 best-effort，不是不可抵赖日志。
+审计使用有界异步队列，满时丢弃并计数；它是 best-effort，不是不可抵赖日志
+（逃生通道 `execute_sql` 例外：见下一节）。
 输入按实体 mask 字段脱敏、transaction token 哈希并限制大小；文件以 `0600`
 创建并使用长驻 writer。运营者仍应保护并轮转日志。
+
+## 可信 SQL 逃生通道
+
+`execute_sql` 是给可信操作者（DBA、排障、临时分析）的独立入口：一条语句原样执行、
+自动提交，服务**不解析、不改写、不 sanitize、不脱敏**。它不扩大受治理面的表达能力：
+IR、Metric、语义层与扩展点都到不了它；数据库仍只由同一个执行器调用。
+
+工具存在并可用必须**同时**满足三个条件，缺一即不注册或 `UNAUTHORIZED`：
+
+1. `tools.executeSql: true`（默认 false）；
+2. 调用方是已配置用户且持有 `sql:execute@<数据源>`（角色的 `permissions` ∪ 用户直授；
+   共享 token、`X-MCP-Role` 等角色身份永远没有；stdio 用 `server.user`）；
+3. 目标数据源声明了 `sqlEscape.connection`。
+
+`tools/list` 按用户过滤：没有任何数据源权限的用户看不到该工具；列表不是安全边界，
+每次调用都在工具内重新判定。拒绝文案与其他 `UNAUTHORIZED` 一样泛化，哪一项缺失只写审计。
+
+边界由连接账号决定：语句在 `sqlEscape.connection` 指定的连接上执行，该账号的数据库
+权限就是上限；建议使用独立账号。结果不套用实体级 mask / fieldACL（没有实体语义），
+数据库错误原文与 SQLSTATE 会回显给调用方（契约中唯一的例外），因此代持用户令牌的
+Agent 会看到它们。
+
+硬上限与受治理面相同且不可关闭：`cost.queryTimeout`、`cost.maxRows` 与预算的
+`maxReturnedRows`（到上限即截断并标 `truncated: true`，不报错）、`cost.maxBytes` 与预算的
+`maxReturnedBytes`、并发 / rate limit、session 预算。`cost.enabled: false` 只关闭估算。
+估算默认必需（`cost.sqlEscape.estimate: required`）：每条语句先在逃生通道连接上
+EXPLAIN，按与闸门相同的阈值打分（软拒绝同样拒绝），EXPLAIN 不接受的语句（DDL、`SET`、
+`SHOW`、语法错误）一律拒绝；`skip` 关闭估算，只保留硬上限。MySQL / OceanBase 连接默认
+附加的 `sql_safe_updates=1` 对逃生通道同样生效：无键的 UPDATE / DELETE 会被数据库拒绝，
+需要时在该连接的 DSN 中显式设置。
+
+审计是 fail closed 的：开启 `tools.executeSql` 要求 `audit.enabled`；每次调用写两条
+同步事件（`phase: begin` 在执行前，含完整 SQL 文本与参数；`phase: end` 在执行后，
+含耗时、返回或影响行数）。`begin` 写入失败则不执行；`end` 写入失败则结果不返回，
+返回 `AUDIT_UNAVAILABLE`（`exec` 的效果此时已发生，按 `OUTCOME_UNKNOWN` 的口径处理）。
+SQL 文本不脱敏地进入审计文件。
+
+无论 `query` 还是 `exec`，执行后该数据源的读缓存整体失效并记录会话写入（语句可能
+写入，服务不知道改了什么）。每次调用一条语句；驱动层是否接受多语句不作承诺，审计
+记录的是整段文本。`execute_sql` 不接受事务令牌，也不进入读缓存与 singleflight。
 
 ## Secret
 

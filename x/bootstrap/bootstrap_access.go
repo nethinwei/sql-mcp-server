@@ -35,8 +35,9 @@ func OfflineAuthorizer(cfg *config.Config) (rbac.Authorizer, error) {
 // Entity-level role configuration is read by the authorizer from the registry.
 func accessPolicy(cfg *config.Config) (rbac.Policy, error) {
 	policy := rbac.Policy{
-		Roles:      make(map[string]map[string][]rbac.Grant, len(cfg.Roles)),
-		Principals: make(map[string]rbac.Principal, len(cfg.Users)),
+		Roles:           make(map[string]map[string][]rbac.Grant, len(cfg.Roles)),
+		RolePermissions: make(map[string][]string, len(cfg.Roles)),
+		Principals:      make(map[string]rbac.Principal, len(cfg.Users)),
 	}
 	refs := config.NewEntityRefs(cfg.Entities)
 	for name, def := range cfg.Roles {
@@ -45,6 +46,9 @@ func accessPolicy(cfg *config.Config) (rbac.Policy, error) {
 			return rbac.Policy{}, fmt.Errorf("role %q: %w", name, err)
 		}
 		policy.Roles[name] = grants
+		if len(def.Permissions) > 0 {
+			policy.RolePermissions[name] = append([]string(nil), def.Permissions...)
+		}
 	}
 	for name, user := range cfg.Users {
 		if user.Disabled {
@@ -56,6 +60,7 @@ func accessPolicy(cfg *config.Config) (rbac.Policy, error) {
 		}
 		policy.Principals[UserPrincipal(name)] = rbac.Principal{
 			Roles: append([]string(nil), user.Roles...), Grants: grants,
+			Permissions: append([]string(nil), user.Permissions...),
 		}
 	}
 	return policy, nil

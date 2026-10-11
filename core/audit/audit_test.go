@@ -177,3 +177,33 @@ func TestEventJSONUserFields(t *testing.T) {
 		t.Fatalf("got  %s\nwant %s", got, want)
 	}
 }
+
+// A file sink records durably: the event is on disk when RecordSync
+// returns; an async auditor records durably through its sink once given it,
+// and refuses to otherwise.
+func TestRecordSync(t *testing.T) {
+	path := t.TempDir() + "/audit.jsonl"
+	sink, err := OpenFileSink(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := NewAsyncAuditorWithClose(sink.Record, sink.Close, 8)
+	if err := a.RecordSync(context.Background(), Event{Tool: "execute_sql"}); err != ErrNotDurable {
+		t.Fatalf("without a durable sink: %v", err)
+	}
+	a.Durably(sink)
+	if err := a.RecordSync(context.Background(), Event{Tool: "execute_sql", Phase: "begin", SQL: "select 1"}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"phase":"begin","sql":"select 1"`) {
+		t.Fatalf("not on disk before RecordSync returned: %s", data)
+	}
+	a.Close()
+	if err := a.RecordSync(context.Background(), Event{}); err != ErrSinkClosed {
+		t.Fatalf("after close: %v", err)
+	}
+}

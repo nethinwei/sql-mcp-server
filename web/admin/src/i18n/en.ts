@@ -93,6 +93,7 @@ const en: typeof zh = {
     entityCount: '{count} entity | {count} entities',
     routing: 'read → {read}, write → {write}, execute → {execute}',
     readAfterWrite: 'reads follow writes for {d}',
+    sqlEscape: 'SQL escape hatch (execute_sql) on connection {c}',
     cliOnly: 'Datasources and connection strings can only be changed with the CLI, so credentials never pass through the console. Imported tables carry no permissions by default; you can grant them to roles as you add them.', scan: 'Scan',
     rescan: 'Rescan', searchTables: 'Search tables or descriptions',
     refreshSchemas: 'Refresh databases',
@@ -337,7 +338,14 @@ const en: typeof zh = {
     grantsFromRoles: 'No direct grants; all access comes from roles: {roles}', noRoles: '(no roles)',
     deleteTitle: 'Delete user {name}?', deleteBody: 'The token stops working once this is published.',
   },
+  systemPermissions: {
+    title: 'System permissions', hint: 'sql:execute@<datasource> lets the users of this role run execute_sql (the trusted SQL escape hatch) on that datasource. Only datasources declaring sqlEscape can be picked.',
+    userHint: 'System permissions for this user only; prefer granting through roles.',
+    placeholder: 'Datasources execute_sql may run on', none: 'No datasource declares sqlEscape; nothing to grant',
+    executable: 'This user may use execute_sql on: {list}', notExecutable: 'This user cannot use execute_sql',
+  },
   simulate: {
+    executeSql: 'execute_sql usable on: {list}', noExecuteSql: 'execute_sql not usable',
     notInConfig: '{source} has no {list}; the selection was cleared',
     sourceWorkspace: 'Workspace: based on #{id}, with unpublished changes', sourceWorkspaceClean: 'Workspace: matches #{id}', sourcePublished: 'Published revision #{id}',
     rerun: 'Run again', stale: 'The conditions changed; below is the previous result. Run again.', askedFor: 'Simulated:',

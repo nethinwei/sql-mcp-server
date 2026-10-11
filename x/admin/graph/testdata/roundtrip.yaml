@@ -5,6 +5,7 @@ databases:
   shop:
     driver: postgres
     dsn: ${SHOP_DSN}
+    sqlEscape: {connection: default}
 entities:
   - name: customers
     source: customer_master
@@ -57,6 +58,7 @@ roles:
         actions: [read, aggregate]
         fields: {read: [id], write: [customer_id]}
         rows: {or: [{field: customer_id, op: gt, value: 10}, {field: id, op: is_null}]}
+    permissions: ["sql:execute@shop"]
 users:
   alice:
     description: BI agent
@@ -66,6 +68,7 @@ users:
     grants:
       - entity: refresh
         actions: [execute]
+    permissions: ["sql:execute@shop"]
     disabled: true
 cost:
   maxRows: 500

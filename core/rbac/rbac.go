@@ -3,6 +3,7 @@ package rbac
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/core/entity"
@@ -82,19 +83,52 @@ func (g Grant) allows(action entity.Action) bool {
 	return false
 }
 
-// Principal is a configured user: its roles and direct grants by entity.
+// Principal is a configured user: its roles, direct grants by entity and
+// direct system permissions.
 type Principal struct {
-	Roles  []string
-	Grants map[string][]Grant
+	Roles       []string
+	Grants      map[string][]Grant
+	Permissions []string
 }
 
 // Policy is the compiled top-level authorization model. Roles maps a role to
-// its grants by entity; Principals maps a principal key (for example
-// "user:alice") to a configured user. A principal key without an entry is a
-// role name, which keeps entity-level roles/fieldACL/rowPolicies working.
+// its grants by entity and RolePermissions to its system permissions;
+// Principals maps a principal key (for example "user:alice") to a configured
+// user. A principal key without an entry is a role name, which keeps
+// entity-level roles/fieldACL/rowPolicies working.
 type Policy struct {
-	Roles      map[string]map[string][]Grant
-	Principals map[string]Principal
+	Roles           map[string]map[string][]Grant
+	RolePermissions map[string][]string
+	Principals      map[string]Principal
+}
+
+// HasPermission reports whether principal holds the system permission (such
+// as "sql:execute@crm"): granted to it directly or to one of its roles. Only
+// a configured user holds any; a bare role principal never does.
+func (p Policy) HasPermission(principal, permission string) bool {
+	user, ok := p.Principals[NormalizeRole(principal)]
+	if !ok {
+		return false
+	}
+	if slices.Contains(user.Permissions, permission) {
+		return true
+	}
+	for _, role := range user.Roles {
+		if slices.Contains(p.RolePermissions[role], permission) {
+			return true
+		}
+	}
+	return false
+}
+
+// PermissionChecker answers system permissions; GrantAuthorizer is one.
+type PermissionChecker interface {
+	HasPermission(principal, permission string) bool
+}
+
+// HasPermission implements PermissionChecker on the authorizer's policy.
+func (a *GrantAuthorizer) HasPermission(principal, permission string) bool {
+	return a.policy.HasPermission(principal, permission)
 }
 
 // GrantAuthorizer authorizes against an immutable entity.Registry and Policy.

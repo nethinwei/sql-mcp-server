@@ -9,6 +9,29 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+### Added
+
+- 可信 SQL 逃生通道 `execute_sql`（管理面 2，设计见 `docs/design/sql-escape-hatch.md`）：
+  `tools.executeSql`（默认关闭，开启要求 `audit.enabled`）注册工具；用户须持有系统权限
+  `sql:execute@<数据源>`（`roles[].permissions` 与 `users[].permissions` 取并集，本版唯一
+  支持的系统权限），数据源须声明 `sqlEscape: {connection: <连接名>}`，三者缺一即
+  `UNAUTHORIZED`；`tools/list` 按用户过滤。语句在声明的连接上原样执行（不解析、不改写、
+  不脱敏），`query` 模式返回 `columns`/`rows`/`rowCount`/`truncated`，`exec` 模式返回
+  `rowsAffected`；timeout、行数 / 字节上限、预算、限流复用受治理面且不可关闭；估算策略
+  `cost.sqlEscape.estimate`（`required` 默认：EXPLAIN 失败即拒绝；`skip`）。审计 fail closed：
+  执行前后各一条同步事件（`phase`、`datasource`、`connection`、`sql`、`rowsAffected`，
+  `action: sql`），写入失败则不执行或不返回结果（新拒绝码 `AUDIT_UNAVAILABLE`）。
+  `DATABASE_ERROR` / `DATASOURCE_FORBIDDEN` 对本工具回显驱动原文与 `constraints.sqlstate`
+  （契约例外）。新增不变量 I29 与威胁 TM-013。
+- 审计：`audit.Durable`（同步写入）接口，`FileSink.RecordSync`、`AsyncAuditor.Durably`。
+- 管理面：GraphQL `Role.permissions`、`User.permissions`（输入同名）、`Datasource.sqlEscape`；
+  工作区项 `RoleItem`/`UserItem` 新增 `permissions`（已保存的工作区会读作“已修改”）；
+  控制台角色 / 用户页的“系统权限”区块、模拟页与数据源摘要的逃生通道提示。
+
+### Changed
+
+- `tools/list` 的结果因调用身份而异（只影响 `execute_sql` 的可见性）。
+
 ## 0.1.13 - 2026-10-11
 
 升级步骤汇总见 [`docs/releases/v0.1.13.md`](docs/releases/v0.1.13.md#迁移)。

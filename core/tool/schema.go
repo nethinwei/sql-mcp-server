@@ -35,3 +35,6 @@ var schemaBeginTransaction json.RawMessage
 
 //go:embed schema/transaction_token.json
 var transactionTokenSchema json.RawMessage
+
+//go:embed schema/execute_sql.json
+var schemaExecuteSQL json.RawMessage

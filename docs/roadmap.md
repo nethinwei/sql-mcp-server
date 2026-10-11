@@ -47,7 +47,8 @@
 
 ## Committed
 
-`v0.1.14` — [管理面 2 · Trusted SQL Escape Hatch](#管理面-2--trusted-sql-escape-hatch)。
+`v0.1.14` — [管理面 2 · Trusted SQL Escape Hatch](#管理面-2--trusted-sql-escape-hatch)，
+实施方案与评审决议见[设计文档](design/sql-escape-hatch.md)，退出门禁已全部满足，待发布。
 问题证据、非目标与退出门禁见该节；2026-09-30 路线图复审将管理面阶段提前到
 `Next` 之前。
 
@@ -223,11 +224,13 @@ delegation chain 仍属 L7）；不支持显式 deny 规则；stdio 保持进程
 
 **退出门禁**：
 
-- [ ] 开关、用户权限、数据源许可任一缺失时，工具不出现在该用户的
-  `tools/list` 且调用被拒绝，有矩阵测试；
-- [ ] timeout、结果 cap 与预算在本入口上有测试锁定，且配置无法关闭；
-- [ ] 审计 sink 不可用时拒绝执行，有故障注入测试；
-- [ ] [核心不变量](invariants.md)与[威胁模型](threat-model.md)登记本入口的
+- [x] 开关、用户权限、数据源许可任一缺失时，工具不出现在该用户的
+  `tools/list` 且调用被拒绝，有矩阵测试（`TestExecuteSQLMatrix`、
+  `TestExecuteSQLListedAndCalledPerUser`）；
+- [x] timeout、结果 cap 与预算在本入口上有测试锁定，且配置无法关闭
+  （`TestExecuteSQLLimitsSurviveCostDisabled`）；
+- [x] 审计 sink 不可用时拒绝执行，有故障注入测试（`TestExecuteSQLRefusesWhenAuditFails`）；
+- [x] [核心不变量](invariants.md)（I29）与[威胁模型](threat-model.md)（TM-013）登记本入口的
   例外范围（I3、I24 等只对受治理面成立）与新 threat ID；README、
   [安全模型](security.md)的产品边界表述同步更新。
 
@@ -268,7 +271,9 @@ delegation chain 仍属 L7）；不支持显式 deny 规则；stdio 保持进程
 
 ### 管理面 4 — Admin API, Login and Schema Import
 
-预期 `v0.1.14`，前置：管理面 1、管理面 3。
+核心路径（本地账号登录、GraphQL 管理 API、schema 导入、simulate）已随 `v0.1.11` 交付，
+前置：管理面 1、管理面 3。OIDC / 通用 OAuth2 登录未交付、待排期（见各版本发布说明的
+已知限制）。
 
 **问题证据**：见本阶段进入条件第三项。服务已经掌握 schema，缺的是把它变成
 受治理配置的管理接口。

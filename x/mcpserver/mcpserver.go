@@ -66,6 +66,7 @@ func newServerWithTools(acquire appAcquire) (*mcp.Server, *listedTools) {
 	tools := &listedTools{acquire: acquire, defs: map[string]string{}}
 	tools.sync(s, app)
 	release()
+	s.AddReceivingMiddleware(listEscapeHatchPerUser(acquire))
 	registerSchemaResource(s, acquire)
 	registerPrompts(s)
 	return s, tools

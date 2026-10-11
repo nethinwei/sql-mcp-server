@@ -10,6 +10,7 @@ import VisibilityTable from '@/components/VisibilityTable.vue'
 import { simulationRoute } from '@/lib/simulation'
 import { useWorkspace } from '@/stores/workspace'
 import { nameError } from '@/lib/names'
+import { escapeDatasources, sqlExecute } from '@/lib/systemPermissions'
 import { can } from '@/api/session'
 import type { Action } from '@/gql/graphql'
 import type { GrantInput } from '@/gql/schema'
@@ -35,6 +36,8 @@ const previewOptions = computed(() => [
   ...members.value.map((m) => ({ label: m, value: m })),
 ])
 const subjectKeys = computed(() => [...new Set(ws.users.flatMap((u) => Object.keys((u.subject as object) ?? {})))])
+// System permissions: execute_sql on each datasource admitting it (the others cannot be granted).
+const escapeOptions = computed(() => escapeDatasources(ws.datasources).map((d) => ({ label: sqlExecute(d), value: sqlExecute(d) })))
 
 const renaming = ref(false)
 const newName = ref('')
@@ -100,6 +103,13 @@ function remove() {
       <template #header-extra><n-text depth="3" class="hint">{{ t('roles.permissionsHint') }}</n-text></template>
       <grant-matrix :model-value="role.grants ?? []" :entities="ws.entities" :subject-keys="subjectKeys"
         :readonly="!editable" @update:model-value="setGrants" />
+    </n-card>
+
+    <n-card size="small" :title="t('systemPermissions.title')">
+      <template #header-extra><n-text depth="3" class="hint">{{ t('systemPermissions.hint') }}</n-text></template>
+      <n-select :value="role.permissions ?? []" multiple filterable :disabled="!editable || !escapeOptions.length"
+        :options="escapeOptions" :placeholder="escapeOptions.length ? t('systemPermissions.placeholder') : t('systemPermissions.none')"
+        @update:value="(v: string[]) => { if (role) role.permissions = v }" />
     </n-card>
 
     <n-card size="small" :title="t('visibility.title')">

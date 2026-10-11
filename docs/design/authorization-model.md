@@ -37,7 +37,8 @@
 - 按角色解除 mask（mask 保持字段级全局）；
 - 人员登录（OIDC/OAuth2/本地密码，随管理面 4）；MCP 客户端 OAuth 2.1
   与 delegation chain（L7）；
-- 系统权限的实际效果（`sql:execute`、`admin:*` 分别随管理面 2、4 生效）；
+- 系统权限的实际效果（`sql:execute` 随管理面 2 生效，见
+  [SQL 逃生通道](sql-escape-hatch.md)；`admin:*` 随管理面 4）；
 - create 时校验写入值满足租户约束（现有 row policy 也不作用于 create，
   保持现状，另行立项）。
 

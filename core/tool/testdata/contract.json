@@ -203,6 +203,37 @@
       ],
       "type": "object"
     },
+    "execute_sql": {
+      "properties": {
+        "args": {
+          "description": "Positional parameters, in the dialect's placeholder style ($1 for PostgreSQL, ? for MySQL and OceanBase)",
+          "type": "array"
+        },
+        "datasource": {
+          "description": "Datasource the statement runs on; required even when only one is configured",
+          "type": "string"
+        },
+        "mode": {
+          "default": "query",
+          "description": "query returns columns and rows; exec returns rowsAffected (DML, DDL, SET)",
+          "enum": [
+            "query",
+            "exec"
+          ],
+          "type": "string"
+        },
+        "sql": {
+          "description": "One statement, run as it is and auto-committed: not parsed, rewritten or masked",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "datasource",
+        "sql"
+      ],
+      "type": "object"
+    },
     "read_records": {
       "dependentRequired": {
         "offset": [
@@ -356,6 +387,7 @@
   "errorCodes": {
     "AMBIGUOUS_ENTITY": true,
     "AMBIGUOUS_FIELD_SCOPE": true,
+    "AUDIT_UNAVAILABLE": false,
     "BUDGET_EXCEEDED": true,
     "CONSTRAINT_VIOLATION": true,
     "COST_EXCEEDED": true,

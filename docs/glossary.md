@@ -55,4 +55,7 @@
 - **draft**：只指草稿 revision。工作区不是草稿；“草稿合并”指把一个草稿 revision 合并进
   工作区。
 - **role**：只指配置里的角色。泛指“被授权的身份”时用 principal。
+- **逃生通道（escape hatch）**：只指 `execute_sql`——可信用户在声明了 `sqlEscape` 的
+  数据源上原样执行 SQL 的独立入口；它不属于受治理面，“受治理面不接受任意 SQL”的
+  表述不因它而改变。
 - **database**：配置键 `databases` 是数据源；指服务器上的库时说物理数据库。

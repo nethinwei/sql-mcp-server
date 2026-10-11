@@ -18,6 +18,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
+	"github.com/nethinwei/sql-mcp-server/internal/escapetest"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	pgprov "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
@@ -494,4 +495,11 @@ func TestPostgresListsUserSchemas(t *testing.T) {
 		slices.Contains(schemas, "pg_catalog") || slices.Contains(schemas, "information_schema") {
 		t.Fatalf("schemas = %v", schemas)
 	}
+}
+
+// The escape hatch on PostgreSQL: see internal/escapetest.
+func TestPGExecuteSQL(t *testing.T) {
+	prov, cleanup := setupPG(t)
+	defer cleanup()
+	escapetest.Run(t, "postgres", prov, "users", "escape_probe")
 }

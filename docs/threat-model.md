@@ -330,6 +330,46 @@ Provider 适用范围使用以下口径：
   对应并留痕；方案正确性仍依赖管理员审阅预览与草稿差异。
 - **Provider**：共享层（与数据库方言无关）。
 
+### TM-013 — SQL 逃生通道越权、越限与审计失效
+
+- **等级/状态**：critical / 三条件矩阵、硬上限、审计故障注入与端到端列表过滤已由单元与
+  端到端测试验证。
+- **攻击**：没有 `sql:execute@<数据源>` 的用户、共享 token 或可信代理注入的角色身份调用
+  `execute_sql`；对未声明 `sqlEscape` 的数据源调用；通过 `tools/list` 之外的路径（直接
+  `tools/call`）绕过列表过滤；热重载吊销权限后继续使用；用 `cost.enabled: false` 或
+  `estimate: skip` 关闭超时与行数上限；让审计 sink 不可用（磁盘满、路径不可写）以执行
+  不留痕的语句；用逃生通道读到受治理面本应脱敏的字段；用受治理面的 IR 或扩展点间接
+  触达逃生通道；在 `query` 模式下写入以躲过缓存失效。
+- **控制**：工具只在 `tools.executeSql` 开启时注册；装配时只有开关开启且声明了 `sqlEscape`
+  的数据源进入 `Escapes`，调用在执行器内（`authorizeSQL`）重新检查数据源与
+  `rbac.Policy.HasPermission`（只有 `user:<name>` 主体可能持有权限）；`tools/list` 中间件
+  按调用身份过滤，但不是安全边界；吊销权限的新快照即时生效。语句由 `newRawStatement`
+  构成并只经执行器调用数据库（`TestOnlyTheExecutorCallsTheDatabase`、
+  `TestOnlyExecuteSQLUsesRawStatements`）；timeout、`maxRows`、`maxBytes`、预算、
+  engine 限流与熔断复用 `RunTool` 链路，配置无法关闭；估算默认必需，EXPLAIN 失败即拒绝。
+  审计 `fail_closed`：`tools.executeSql` 要求 `audit.enabled`（校验），执行前同步写
+  `begin` 事件（失败不执行），执行后同步写 `end` 事件（失败不返回结果，
+  `AUDIT_UNAVAILABLE`）。结果不脱敏是文档声明的边界，而不是绕过：调用方持有的是该连接
+  账号的全部权限。任何模式执行后整库失效读缓存并记录会话写入。
+- **现有证据**：`core/tool/tool_execute_sql_test.go`（`TestExecuteSQLMatrix`、
+  `TestExecuteSQLLimitsSurviveCostDisabled`、`TestExecuteSQLRefusesWhenAuditFails`、
+  `TestExecuteSQLEstimate`、`TestExecuteSQLExecAndInvalidation`、
+  `TestExecuteSQLEchoesDatabaseErrors`、`TestExecuteSQLRejectsInvalidInput`、
+  `TestOnlyExecuteSQLUsesRawStatements`）；`x/mcpserver/execute_sql_test.go`
+  （`TestExecuteSQLListedAndCalledPerUser`、`TestExecuteSQLStdioDefaultIdentity`、
+  `TestReloadRevokesExecuteSQL`）；`x/bootstrap/bootstrap_test.go`
+  的 `TestAssembleRoutesEscapeHatch`；`core/config` 的 `TestValidateSQLEscape` 与
+  `TestValidateAccessRejectsInvalidConfig`；`core/rbac` 的 `TestPolicyHasPermission`；
+  `core/audit` 的 `TestRecordSync`。
+- **持续验证**：单元测试默认运行；三库 integration（`TestPGExecuteSQL`、
+  `TestMySQLExecuteSQL`、`TestOBExecuteSQL`，`internal/escapetest`）随
+  `make test-integration` 运行。
+- **剩余风险**：权限上限等于连接账号的数据库权限，与 routing 共用账号时等于受治理面写账号；
+  数据库错误原文（可能含对象名与数据值）回显给调用方并进入 Agent 上下文；服务不解析
+  SQL，驱动层接受的多语句无法禁止；`end` 事件写入失败时 `exec` 的效果已发生；审计文件
+  未加密、未签名。
+- **Provider**：共享层（与数据库方言无关）；EXPLAIN 的可用性与返回形状按方言不同。
+
 ## 证据维护规则
 
 - 本账本每个 threat ID 到回归测试的映射由

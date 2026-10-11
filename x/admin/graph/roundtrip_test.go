@@ -24,7 +24,7 @@ const roundTripFixture = "testdata/roundtrip.yaml"
 
 // reservedFields are configuration fields the fixture cannot set because
 // validation rejects any value in this version.
-var reservedFields = map[string]bool{"RoleDefinition.Permissions": true, "UserConfig.Permissions": true}
+var reservedFields = map[string]bool{}
 
 // Every editable configuration field is set somewhere in the fixture, so the
 // round trip below exercises it.
