@@ -1,19 +1,22 @@
-package store
+package store_test
 
 import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 )
 
 func TestIterYieldsAllRows(t *testing.T) {
-	rows := NewFakeRows(
+	rows := storetest.NewFakeRows(
 		[]string{"id", "name"},
 		[]any{int64(1), "alice"},
 		[]any{int64(2), "bob"},
 	)
-	var got []Row
-	for row, err := range Iter(rows) {
+	var got []store.Row
+	for row, err := range store.Iter(rows) {
 		if err != nil {
 			t.Fatalf("unexpected err: %v", err)
 		}
@@ -31,9 +34,9 @@ func TestIterYieldsAllRows(t *testing.T) {
 }
 
 func TestIterClosesOnEarlyBreak(t *testing.T) {
-	rows := NewFakeRows([]string{"id"},
+	rows := storetest.NewFakeRows([]string{"id"},
 		[]any{int64(1)}, []any{int64(2)}, []any{int64(3)})
-	for range Iter(rows) {
+	for range store.Iter(rows) {
 		break
 	}
 	if !rows.Closed() {
@@ -42,10 +45,10 @@ func TestIterClosesOnEarlyBreak(t *testing.T) {
 }
 
 func TestIterPropagatesErr(t *testing.T) {
-	rows := NewFakeRows([]string{"id"}, []any{int64(1)}, []any{int64(2)})
+	rows := storetest.NewFakeRows([]string{"id"}, []any{int64(1)}, []any{int64(2)})
 	rows.SetErr(errors.New("boom"))
 	var sawErr bool
-	for _, err := range Iter(rows) {
+	for _, err := range store.Iter(rows) {
 		if err != nil {
 			sawErr = true
 			break
@@ -60,16 +63,16 @@ func TestIterPropagatesErr(t *testing.T) {
 }
 
 func TestFakeRowsScanRequiresNext(t *testing.T) {
-	rows := NewFakeRows([]string{"id"}, []any{int64(1)})
+	rows := storetest.NewFakeRows([]string{"id"}, []any{int64(1)})
 	var v any
-	if err := rows.Scan(&v); err != ErrScanBeforeNext {
-		t.Fatalf("got %v, want ErrScanBeforeNext", err)
+	if err := rows.Scan(&v); err != storetest.ErrScanBeforeNext {
+		t.Fatalf("got %v, want storetest.ErrScanBeforeNext", err)
 	}
 }
 
 func TestFakeRowsScanValues(t *testing.T) {
 	t.Parallel()
-	r := NewFakeRows([]string{"id", "name"}, []any{int64(1), "alice"})
+	r := storetest.NewFakeRows([]string{"id", "name"}, []any{int64(1), "alice"})
 	if !r.Next() {
 		t.Fatal("Next false")
 	}
@@ -88,7 +91,7 @@ func TestFakeRowsScanValues(t *testing.T) {
 
 func TestFakeTx(t *testing.T) {
 	t.Parallel()
-	tx := &FakeTx{}
+	tx := &storetest.FakeTx{}
 	if err := tx.Commit(); err != nil || !tx.Committed {
 		t.Fatal("commit failed")
 	}
@@ -96,8 +99,8 @@ func TestFakeTx(t *testing.T) {
 
 func TestFakeDBBeginTx(t *testing.T) {
 	t.Parallel()
-	db := &FakeDB{BeginFn: func(_ context.Context, _ *TxOptions) (Tx, error) {
-		return &FakeTx{}, nil
+	db := &storetest.FakeDB{BeginFn: func(_ context.Context, _ *store.TxOptions) (store.Tx, error) {
+		return &storetest.FakeTx{}, nil
 	}}
 	tx, err := db.BeginTx(context.Background(), nil)
 	if err != nil || tx == nil {
@@ -107,12 +110,12 @@ func TestFakeDBBeginTx(t *testing.T) {
 
 func TestFakeDBLogsCalls(t *testing.T) {
 	t.Parallel()
-	db := &FakeDB{
-		QueryFn: func(_ context.Context, _ string, _ ...any) (Rows, error) {
-			return NewFakeRows([]string{"id"}, []any{int64(1)}), nil
+	db := &storetest.FakeDB{
+		QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
+			return storetest.NewFakeRows([]string{"id"}, []any{int64(1)}), nil
 		},
-		ExecFn: func(_ context.Context, _ string, _ ...any) (Result, error) {
-			return Result{RowsAffected: 5}, nil
+		ExecFn: func(_ context.Context, _ string, _ ...any) (store.Result, error) {
+			return store.Result{RowsAffected: 5}, nil
 		},
 	}
 	rows, err := db.QueryContext(context.Background(), "SELECT 1", int64(42))
@@ -132,5 +135,14 @@ func TestFakeDBLogsCalls(t *testing.T) {
 	}
 	if len(db.Execs) != 1 {
 		t.Fatalf("exec not logged: %v", db.Execs)
+	}
+}
+
+func TestPreparedDBFallsBackForPlainDB(t *testing.T) {
+	db := &storetest.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
+		return store.Result{RowsAffected: 1}, nil
+	}}
+	if _, err := store.WithPreparedCache(db, 2).ExecContext(context.Background(), "update t set x=1"); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -1,6 +1,7 @@
-// Command schemagen generates core/config/schema.json and the field
-// reference in docs/configuration.md from the configuration structs (their
-// `schema` tags and ApplyDefaults) and the help text in core/config/fields.yaml.
+// Command schemagen generates core/config/schema.json, the field reference
+// in docs/configuration.md and the Specs (core/config/spec_gen.go) from the
+// configuration structs (their `schema` tags and ApplyDefaults) and the help
+// text in core/config/fields.yaml.
 // Run it with `go generate ./core/config`; tests fail when the outputs are
 // stale.
 package main
@@ -35,23 +36,30 @@ func main() {
 	}
 }
 
-// outputs returns the generated schema and the documentation with its
-// generated section replaced.
-func outputs(root string) (schema, doc []byte, err error) {
+// outputs returns the generated files by path: the schema, the
+// documentation with its generated section replaced, and the Specs.
+func outputs(root string) (map[string][]byte, error) {
 	fields, err := os.ReadFile(filepath.Join(root, fieldsPath))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	schema, reference, err := Generate(fields)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	current, err := os.ReadFile(filepath.Join(root, docPath))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	doc, err = replaceSection(string(current), reference)
-	return schema, doc, err
+	doc, err := replaceSection(string(current), reference)
+	if err != nil {
+		return nil, err
+	}
+	spec, err := GenerateSpec()
+	if err != nil {
+		return nil, err
+	}
+	return map[string][]byte{schemaPath: schema, docPath: doc, specPath: spec}, nil
 }
 
 func replaceSection(doc, body string) ([]byte, error) {
@@ -64,12 +72,14 @@ func replaceSection(doc, body string) ([]byte, error) {
 }
 
 func write(root string) error {
-	schema, doc, err := outputs(root)
+	files, err := outputs(root)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(root, schemaPath), schema, 0o644); err != nil {
-		return err
+	for path, data := range files {
+		if err := os.WriteFile(filepath.Join(root, path), data, 0o644); err != nil {
+			return err
+		}
 	}
-	return os.WriteFile(filepath.Join(root, docPath), doc, 0o644)
+	return nil
 }

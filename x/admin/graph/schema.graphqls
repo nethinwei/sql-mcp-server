@@ -14,6 +14,8 @@ enum RevisionState {
   PUBLISHED
   SUPERSEDED
   ROLLED_BACK
+  "A draft an administrator decided not to publish."
+  DISCARDED
 }
 
 enum Action {
@@ -66,8 +68,8 @@ type Query {
   order of `tables`; an entry is null when its table is not found.
   """
   tableComments(tables: [TableRef!]!): [TableComments]!
-  "Validate a draft without saving it."
-  validate(draft: DraftInput!): Validation!
+  "Validate a configuration: a revision, or (default) the signed-in administrator's workspace."
+  validate(revision: ID): Validation!
   """
   What the routed datasource connections may do per entity action, as the
   databases reported after the serving snapshot was assembled (assessed in the
@@ -75,9 +77,9 @@ type Query {
   statements.
   """
   capabilities: [EntityCapability!]!
-  "Unified diff from revision `from` to revision `to` or an unsaved draft (default: published)."
-  diff(from: ID!, to: ID, draft: DraftInput): String!
-  "Evaluate one authorization offline against a draft or a revision (default: published)."
+  "Unified diff from revision `from` to revision `to` (default: the signed-in administrator's workspace)."
+  diff(from: ID!, to: ID): String!
+  "Evaluate one authorization offline against a revision (default: the signed-in administrator's workspace)."
   simulate(input: SimulationInput!): Simulation!
   "Every entity and applicable action for one principal, default projection."
   visibility(input: VisibilityInput!): [EntityVisibility!]!
@@ -94,11 +96,11 @@ type Mutation {
   startSchemaScan(datasource: String!, schemas: [String!]): ScanJob!
   "Stop a pending or running scan."
   cancelSchemaScan(id: ID!): ScanJob
-  "Save a draft revision."
-  createDraft(draft: DraftInput!, comment: String): Revision!
   publish(input: PublishInput!): Revision!
   "Roll back to `to`, or to the newest earlier published content."
   rollback(input: RollbackInput!): Revision!
+  "Discards a draft: it stays in the history and is never published."
+  discardDraft(id: ID!): Revision!
   "A new random user token; only the hash belongs in a draft."
   generateUserToken: UserToken!
   createAdminAccount(input: AdminAccountInput!): AdminAccount!
@@ -125,6 +127,11 @@ type Revision {
   createdAt: Time!
   publishedAt: Time
   config: Configuration!
+  """
+  The configuration as a workspace holds it: entities, roles, users and
+  settings, in the shape of EntityInput, RoleInput and UserInput.
+  """
+  sections: JSON!
   "The normalized YAML payload."
   yaml: String!
 }
@@ -166,9 +173,11 @@ type DatasourceRouting {
   execute: String!
 }
 
+"""
+An entity as the configuration says it: an unset value is null (its default
+applies) and lists are written empty. Its shape is EntityInput's.
+"""
 type Entity {
-  "The canonical identity, datasource.schema.name (datasource.name without a schema)."
-  id: String!
   "Unique within the datasource and schema."
   name: String!
   "The table, view or procedure; null means the entity name."
@@ -187,12 +196,13 @@ type Entity {
   tenantPolicy: JSON
   "Entity-level roles, fieldACL and rowPolicies, kept for compatibility."
   legacyAccess: JSON
-  mcp: EntityMCP!
+  "null when none is set: the DML tools stay on."
+  mcp: EntityMCP
   params: [String!]!
   "Entities a procedure writes; empty invalidates its datasource's cached reads."
   affects: [String!]!
   "Admit deletes and key updates that foreign keys cascade to other tables without checking permissions there."
-  allowCascade: Boolean!
+  allowCascade: Boolean
 }
 
 type Field {
@@ -200,7 +210,7 @@ type Field {
   alias: String
   description: String
   mask: String
-  exclude: Boolean!
+  exclude: Boolean
 }
 
 type Relationship {
@@ -210,25 +220,24 @@ type Relationship {
   joinOn: JSON!
 }
 
+"An entity's MCP flags as set; an unset dmlTools defaults on."
 type EntityMCP {
-  dmlTools: Boolean!
-  customTool: Boolean!
-  trustedProcedure: Boolean!
+  dmlTools: Boolean
+  customTool: Boolean
+  trustedProcedure: Boolean
 }
 
 type Role {
   name: String!
   description: String
   grants: [Grant!]!
-  "Users that have this role."
-  members: [String!]!
 }
 
 type Grant {
   entity: String!
   actions: [Action!]!
-  "False grants every visible field; true limits to readFields/writeFields."
-  fieldsRestricted: Boolean!
+  "False or null grants every visible field; true limits to readFields/writeFields."
+  fieldsRestricted: Boolean
   readFields: [String!]!
   writeFields: [String!]!
   rows: JSON
@@ -240,8 +249,9 @@ type User {
   roles: [String!]!
   grants: [Grant!]!
   subject: JSON
-  disabled: Boolean!
-  hasToken: Boolean!
+  disabled: Boolean
+  "The sha256 hash of the user's bearer token (never the token); null when none."
+  tokenHash: String
 }
 
 type SchemaList {
@@ -416,16 +426,48 @@ type ServerStatus {
   "Whether the process applies newly published revisions (--watch)."
   watching: Boolean!
   "A published revision this process has not applied."
-  pending: PendingRevision
+  unapplied: UnappliedRevision
+  "What the process runs on its execution bus; null when unknown."
+  execution: ExecutionStatus
 }
-type PendingRevision {
+type ExecutionStatus {
+  "IO slots every lane draws on."
+  io: SlotStatus!
+  "The part of the IO slots the lanes other than serve hold together."
+  aux: SlotStatus!
+  lanes: [LaneStatus!]!
+  "Background tasks running, by name."
+  tasks: [TaskStatus!]!
+}
+type SlotStatus {
+  size: Int!
+  used: Int!
+  waiting: Int!
+}
+type LaneStatus {
+  "serve, admin, scan or background."
+  name: String!
+  maxConcurrent: Int!
+  maxQueue: Int!
+  inflight: Int!
+  queued: Int!
+  "Work turned away since the process started."
+  rejected: Int!
+  "Work run since the process started."
+  completed: Int!
+}
+type TaskStatus {
+  name: String!
+  running: Int!
+}
+type UnappliedRevision {
   id: ID!
   "True when only a restart applies it; otherwise building it failed."
   restartRequired: Boolean!
   error: String!
 }
 input VisibilityInput {
-  draft: DraftInput
+  "Default: the signed-in administrator's workspace."
   revision: ID
   "A configured user name, or role:<name> to evaluate a role."
   user: String!
@@ -454,18 +496,6 @@ type Simulation {
 type UserToken {
   token: String!
   tokenHash: String!
-}
-
-input DraftInput {
-  base: ID!
-  "Replaces the entities section when provided."
-  entities: [EntityInput!]
-  "Replaces the roles section when provided."
-  roles: [RoleInput!]
-  "Replaces the users section when provided; a missing tokenHash keeps the base user's hash."
-  users: [UserInput!]
-  "Replaces the given top-level sections; datasources, entities, roles and users are not allowed here."
-  settings: JSON
 }
 
 input EntityInput {
@@ -534,9 +564,7 @@ input UserInput {
 }
 
 input SimulationInput {
-  "Simulate against this unsaved draft..."
-  draft: DraftInput
-  "...or this revision; default: the published revision."
+  "Default: the signed-in administrator's workspace."
   revision: ID
   "A configured user name, or role:<name> to evaluate a role."
   user: String!

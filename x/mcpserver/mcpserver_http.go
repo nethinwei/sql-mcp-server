@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 )
 
 func applyHTTPDefaults(cfg *HTTPConfig) {
@@ -109,7 +111,10 @@ func buildHTTPMux(mcpHandler, metrics http.Handler, cfg HTTPConfig) *http.ServeM
 	mux.Handle("/readyz/snapshot", staleMarker(cfg.SnapshotStale, readinessHandler(cfg.SnapshotReady)))
 	mux.Handle("/readyz/db", readinessHandler(cfg.DatabaseReady))
 	if cfg.Admin != nil {
-		mux.Handle("/admin/", limitBody(cfg.MaxBodyBytes, cfg.Admin))
+		admin := limitBody(cfg.MaxBodyBytes, cfg.Admin)
+		mux.Handle("/admin/", admin)
+		// /admin itself too: the console redirects it under its gateway prefix.
+		mux.Handle("/admin", admin)
 	}
 	if metrics != nil {
 		mux.Handle("/metrics", metrics)
@@ -180,13 +185,20 @@ func loadTLS(cfg HTTPConfig) (*tls.Config, error) {
 	return out, nil
 }
 
-func serveHTTPWithShutdown(ctx context.Context, srv *http.Server, tlsEnabled bool) error {
-	go func() {
-		<-ctx.Done()
+func serveHTTPWithShutdown(ctx context.Context, b *bus.Bus, srv *http.Server, tlsEnabled bool) error {
+	served := make(chan struct{})
+	defer close(served)
+	b.Go("http shutdown", func(busCtx context.Context) {
+		select {
+		case <-ctx.Done():
+		case <-busCtx.Done():
+		case <-served:
+			return
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
-	}()
+	})
 	var err error
 	if tlsEnabled {
 		err = srv.ListenAndServeTLS("", "") // certificates from srv.TLSConfig
@@ -215,7 +227,7 @@ func newHTTPServing(s *mcp.Server, cfg HTTPConfig) (*httpServing, error) {
 	}
 	applyHTTPDefaults(&cfg)
 	h := &httpServing{cfg: cfg, session: sessionHandler(s, cfg)}
-	prepared, err := PrepareHTTPAuth(cfg.Addr, cfg.auth())
+	prepared, err := PrepareHTTPAuth(cfg.Addr, cfg.HTTPAuth)
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +244,7 @@ func newHTTPServing(s *mcp.Server, cfg HTTPConfig) (*httpServing, error) {
 // TLS or not stays as the listener started.
 func (h *httpServing) apply(prepared PreparedAuth) error {
 	cfg := h.cfg
-	cfg.setAuth(prepared.auth)
+	cfg.HTTPAuth = prepared.auth
 	if cfg.tlsEnabled() != h.cfg.tlsEnabled() {
 		return errors.New("mcpserver: serving TLS or not changes only with a restart")
 	}
@@ -300,5 +312,5 @@ func ServeHTTP(ctx context.Context, s *mcp.Server, cfg HTTPConfig) error {
 			GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) { return h.tls.Load(), nil },
 		}
 	}
-	return serveHTTPWithShutdown(ctx, srv, h.cfg.tlsEnabled())
+	return serveHTTPWithShutdown(ctx, h.cfg.Bus, srv, h.cfg.tlsEnabled())
 }

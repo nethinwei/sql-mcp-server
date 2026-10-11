@@ -14,6 +14,7 @@ type MemoryStore struct {
 	mu     sync.Mutex
 	revs   map[int64]Revision
 	nextID int64
+	seq    int64 // see Sequence
 	now    func() time.Time
 }
 
@@ -40,6 +41,7 @@ func (m *MemoryStore) Create(_ context.Context, d Draft) (Revision, error) {
 	}
 	m.revs[r.ID] = r
 	m.nextID++
+	m.seq++
 	return cloneRevision(r), nil
 }
 
@@ -120,6 +122,25 @@ func (m *MemoryStore) Publish(_ context.Context, id, expectedCurrent int64, _ Me
 	target.State = StatePublished
 	target.PublishedAt = m.timestamp()
 	m.revs[id] = target
+	m.seq++
+	return cloneRevision(target), nil
+}
+
+// Discard implements Store.
+func (m *MemoryStore) Discard(_ context.Context, id int64) (Revision, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	target, ok := m.revs[id]
+	if !ok {
+		return Revision{}, fmt.Errorf("%w: revision %d", ErrNotFound, id)
+	}
+	if target.State != StateDraft {
+		return Revision{}, fmt.Errorf("%w: revision %d is %s, only drafts can be discarded",
+			ErrInvalidState, id, target.State)
+	}
+	target.State = StateDiscarded
+	m.revs[id] = target
+	m.seq++
 	return cloneRevision(target), nil
 }
 
@@ -152,6 +173,7 @@ func (m *MemoryStore) Rollback(_ context.Context, expectedCurrent, target int64,
 	}
 	m.revs[r.ID] = r
 	m.nextID++
+	m.seq++
 	return cloneRevision(r), nil
 }
 
@@ -171,7 +193,15 @@ func (m *MemoryStore) ImportHistory(_ context.Context, revs []Revision) error {
 			m.nextID = r.ID + 1
 		}
 	}
+	m.seq++
 	return nil
+}
+
+// Sequence implements Store.
+func (m *MemoryStore) Sequence(context.Context) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.seq, nil
 }
 
 // Close implements Store.

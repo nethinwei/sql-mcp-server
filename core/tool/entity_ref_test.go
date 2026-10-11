@@ -41,7 +41,7 @@ func TestEntityReferencesResolveAmongUsableEntities(t *testing.T) {
 	describe := func(role, ref string) ([]map[string]any, error) {
 		input, _ := json.Marshal(map[string]string{"entity": ref})
 		res, err := RunTool(context.Background(), DescribeTool{}, input,
-			Context{Role: role, Registry: reg, Authorizer: authz})
+			Context{Services: &Services{Registry: reg, Authorizer: authz}, Role: role})
 		return res.Content, err
 	}
 
@@ -49,7 +49,8 @@ func TestEntityReferencesResolveAmongUsableEntities(t *testing.T) {
 	// candidates name each one unambiguously.
 	_, err := describe("both", "tenants")
 	var ambiguous *AmbiguousEntityError
-	if !errors.As(err, &ambiguous) || !slices.Equal(ambiguous.Candidates, []string{"crm.tenants", "logistics.tenants"}) {
+	if !errors.As(err, &ambiguous) ||
+		!slices.Equal(ambiguous.Candidates, []string{"crm.tenants", "logistics.tenants"}) {
 		t.Fatalf("ambiguous reference: %v", err)
 	}
 	if d, ok := DenialFor(err, "d"); !ok || d.Code != CodeAmbiguousEntity {
@@ -75,7 +76,7 @@ func TestEntityReferencesResolveAmongUsableEntities(t *testing.T) {
 func TestOnlyEntityToolsHaveTheirEntityResolved(t *testing.T) {
 	t.Parallel()
 	reg, authz := namespacedTenants(t)
-	tc := Context{Role: "ops", Registry: reg, Authorizer: authz}
+	tc := Context{Services: &Services{Registry: reg, Authorizer: authz}, Role: "ops"}
 	input := json.RawMessage(`{"entity":"tenants"}`)
 	got, err := canonicalEntity(context.Background(), ReadTool{}, input, tc)
 	if err != nil || !strings.Contains(string(got), `"warehouse.logistics.tenants"`) {

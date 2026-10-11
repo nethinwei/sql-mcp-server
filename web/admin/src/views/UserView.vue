@@ -14,8 +14,10 @@ import { simulationRoute } from '@/lib/simulation'
 import { useWorkspace } from '@/stores/workspace'
 import { run } from '@/api/client'
 import { GenerateUserTokenMutation } from '@/api/ops'
+import McpConnect from '@/components/McpConnect.vue'
 import { can } from '@/api/session'
-import type { Action, GrantInput } from '@/gql/graphql'
+import type { Action } from '@/gql/graphql'
+import type { GrantInput } from '@/gql/schema'
 
 const props = defineProps<{ name: string }>()
 const { t } = useI18n()
@@ -34,9 +36,10 @@ const newToken = ref('')
 const tokenState = computed(() => {
   const u = user.value
   if (!u) return 'none'
-  if (u.tokenHash === '') return 'revoked'
-  if (u.tokenHash) return 'new'
-  return ws.baseTokens[u.name] ? 'kept' : 'none'
+  const base = ws.baseTokens[u.name] ?? ''
+  const now = u.tokenHash ?? ''
+  if (now === base) return base ? 'kept' : 'none'
+  return now ? 'new' : 'revoked'
 })
 const tokenTag = computed(() => ({
   kept: { type: 'success' as const, label: t('users.tokenKept') },
@@ -143,6 +146,7 @@ onMounted(() => { if (route.query.token && editable.value && tokenState.value ==
           </n-button>
         </n-space>
         <secret-once v-if="newToken" :secret="newToken" :note="t('users.tokenOnce')" />
+        <mcp-connect v-if="newToken" :token="newToken" />
       </n-space>
     </n-card>
 
@@ -175,7 +179,7 @@ onMounted(() => { if (route.query.token && editable.value && tokenState.value ==
     </n-card>
 
     <n-card size="small" :title="t('visibility.userTitle')">
-      <visibility-table :who="user.name" :draft="ws.draft" live compact
+      <visibility-table :who="user.name" :revision="null" :entities="ws.entities" :context="ws.contextKey" live compact
         @pick="(e, a, f) => simulatePick(name, e, a, f)" />
     </n-card>
   </n-space>

@@ -1,155 +1,152 @@
 // Package configedit applies edits to a stored configuration: it replaces
-// whole sections of a base payload with typed values and runs the result
-// through the same chain as `store import` (strict decoding, defaults,
-// validation, the store secret rule and the deterministic encoding). Callers
-// such as the admin API map their DTOs to an Edit; the merge and the
-// field-preservation rules live here.
+// whole sections of a base configuration with typed values and runs the
+// result through the same chain as `store import` (defaults, validation, the
+// store secret rule and the deterministic encoding). Callers such as the
+// admin API map their DTOs to an Edit; the merge and the field-preservation
+// rules live here.
 package configedit
 
 import (
-	"errors"
 	"fmt"
+	"reflect"
 	"slices"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/x/configyaml"
 	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 )
 
-// Edit replaces sections of a configuration. A nil section keeps the base.
+// Edit replaces sections of a configuration with what they say (Specs: an
+// unset value stays unset, and takes its default when the configuration
+// loads). A nil section keeps the base.
 type Edit struct {
-	Entities []config.EntityConfig
+	Entities []config.EntitySpec
 	Roles    []Role
 	Users    []User
 	// Settings replaces top-level sections other than datasources,
-	// entities, roles and users, as decoded JSON/YAML values.
+	// entities, roles and users, as decoded JSON/YAML values; a nil value
+	// removes the section (its defaults apply).
 	Settings map[string]any
 }
 
 // Role is a named role definition.
 type Role struct {
 	Name string
-	config.RoleDefinition
+	config.RoleDefinitionSpec
 }
 
-// User is a named user. KeepToken keeps the base user's tokenHash, so a
-// client never needs to hold token hashes to edit a user; an explicitly empty
-// TokenHash without KeepToken revokes the token.
+// User is a named user, its token included: one without a token hash has
+// none.
 type User struct {
 	Name string
-	config.UserConfig
-	KeepToken bool
+	config.UserSpec
 }
 
 // sections an Edit replaces through typed fields, never through Settings.
 var structured = []string{"database", "databases", "datasources", "entities", "roles", "users"}
 
-// Apply returns the configuration base with edit applied, and its payload.
-// The result is validated as a whole, so an edit may add a user and a budget
-// for it at once.
+// Apply is ApplySpec on a stored payload, which must load.
 func Apply(base []byte, edit Edit) (*config.Config, []byte, error) {
-	baseCfg, err := configyaml.Decode(base)
+	spec, err := configyaml.DecodeSpec(base)
 	if err != nil {
 		return nil, nil, fmt.Errorf("base: %w", err)
 	}
-	doc := map[string]any{}
-	if err := yaml.Unmarshal(base, &doc); err != nil {
+	if _, err := config.Resolve(spec); err != nil {
 		return nil, nil, fmt.Errorf("base: %w", err)
 	}
-	if err := applySettings(doc, edit.Settings); err != nil {
-		return nil, nil, err
-	}
-	if err := applySections(doc, edit, baseCfg); err != nil {
-		return nil, nil, err
-	}
-	data, err := yaml.Marshal(doc)
-	if err != nil {
-		return nil, nil, err
-	}
-	cfg, err := configyaml.Decode(data)
-	if err != nil {
-		return nil, nil, err
-	}
-	payload, err := revisionops.Normalize(cfg)
-	if err != nil {
-		return nil, nil, err
-	}
-	return cfg, payload, nil
+	_, cfg, payload, err := ApplySpec(spec, edit)
+	return cfg, payload, err
 }
 
-func applySettings(doc, settings map[string]any) error {
+// ApplySpec returns the configuration base with edit applied: what it says,
+// what it resolves to, and its payload. The result is validated as a whole,
+// so an edit may add a user and a budget for it at once. base is left as it
+// is.
+func ApplySpec(base *config.Spec, edit Edit) (*config.Spec, *config.Config, []byte, error) {
+	spec := *base
+	if err := applySettings(&spec, edit.Settings); err != nil {
+		return nil, nil, nil, err
+	}
+	if err := applySections(&spec, edit); err != nil {
+		return nil, nil, nil, err
+	}
+	payload, err := revisionops.Normalize(&spec)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	cfg, err := config.Resolve(&spec)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return &spec, cfg, payload, nil
+}
+
+// applySettings replaces each top-level section settings names: its value
+// is decoded as that section of a configuration (strictly: an unknown key
+// fails), and nil removes it.
+func applySettings(spec *config.Spec, settings map[string]any) error {
+	if len(settings) == 0 {
+		return nil
+	}
+	doc := make(map[string]any, len(settings))
 	for key, val := range settings {
 		if slices.Contains(structured, key) {
 			return fmt.Errorf("settings cannot change %q; datasources are managed by the CLI and "+
 				"entities, roles and users have their own edit fields", key)
 		}
-		doc[key] = val
+		if val != nil {
+			doc[key] = val
+		}
+	}
+	data, err := yaml.Marshal(doc)
+	if err != nil {
+		return err
+	}
+	decoded, err := configyaml.DecodeSpec(data)
+	if err != nil {
+		return err
+	}
+	out, from := reflect.ValueOf(spec).Elem(), reflect.ValueOf(decoded).Elem()
+	t := out.Type()
+	for i := range t.NumField() {
+		if _, named := settings[config.YAMLName(t.Field(i))]; named {
+			out.Field(i).Set(from.Field(i))
+		}
 	}
 	return nil
 }
 
-// applySections writes the typed sections into doc. Defaults are applied to
-// them first so that unset values keep their meaning once encoded (an
-// entity's unset mcp.dmlTools stays on).
-func applySections(doc map[string]any, edit Edit, base *config.Config) error {
-	sections := config.Config{Entities: edit.Entities}
+// applySections writes the typed sections into spec, as they say: an unset
+// value is left out, so it keeps its default (an entity's unset
+// mcp.dmlTools stays on).
+func applySections(spec *config.Spec, edit Edit) error {
+	if edit.Entities != nil {
+		spec.Entities = slices.Clone(edit.Entities)
+	}
 	if edit.Roles != nil {
-		sections.Roles = map[string]config.RoleDefinition{}
+		roles := config.Map[string, config.RoleDefinitionSpec]{}
 		for _, r := range edit.Roles {
-			key := strings.ToLower(strings.TrimSpace(r.Name))
-			if _, dup := sections.Roles[key]; dup {
+			key := rbac.NormalizeRole(r.Name)
+			if _, dup := roles[key]; dup {
 				return fmt.Errorf("role %q listed twice", r.Name)
 			}
-			sections.Roles[key] = r.RoleDefinition
+			roles[key] = r.RoleDefinitionSpec
 		}
+		spec.Roles = roles
 	}
 	if edit.Users != nil {
-		sections.Users = map[string]config.UserConfig{}
+		users := config.Map[string, config.UserSpec]{}
 		for _, u := range edit.Users {
-			key := strings.ToLower(strings.TrimSpace(u.Name))
-			if _, dup := sections.Users[key]; dup {
+			key := rbac.NormalizeRole(u.Name)
+			if _, dup := users[key]; dup {
 				return fmt.Errorf("user %q listed twice", u.Name)
 			}
-			if u.KeepToken {
-				u.TokenHash = base.Users[key].TokenHash
-			}
-			sections.Users[key] = u.UserConfig
+			users[key] = u.UserSpec
 		}
-	}
-	sections.ApplyDefaults()
-	for key, set := range map[string]bool{
-		"entities": edit.Entities != nil, "roles": edit.Roles != nil, "users": edit.Users != nil,
-	} {
-		if !set {
-			continue
-		}
-		val, err := plain(map[string]any{
-			"entities": sections.Entities, "roles": sections.Roles, "users": sections.Users,
-		}[key])
-		if err != nil {
-			return err
-		}
-		doc[key] = val
+		spec.Users = users
 	}
 	return nil
-}
-
-// plain converts typed values into generic YAML values, honoring their
-// yaml tags (omitempty included).
-func plain(v any) (any, error) {
-	data, err := yaml.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	var out any
-	if err := yaml.Unmarshal(data, &out); err != nil {
-		return nil, err
-	}
-	if out == nil {
-		return nil, errors.New("configedit: empty section")
-	}
-	return out, nil
 }

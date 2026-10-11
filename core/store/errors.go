@@ -32,3 +32,9 @@ func (e *ConstraintError) Unwrap() error { return e.Err }
 // connection's account: a missing privilege, or a write on a read-only
 // server or transaction. Providers wrap driver errors with it.
 var ErrPermissionDenied = errors.New("store: permission denied")
+
+// ErrConnectionLost marks a statement whose connection broke while it ran:
+// the database may or may not have carried it out. Providers wrap driver
+// errors with it. A broken connection a driver reports before sending the
+// statement (driver.ErrBadConn) is not one.
+var ErrConnectionLost = errors.New("store: connection lost during the statement")

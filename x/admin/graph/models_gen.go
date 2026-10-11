@@ -8,11 +8,13 @@ import (
 	"io"
 	"strconv"
 	"time"
+
+	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 )
 
 type ActionVisibility struct {
-	Action Action      `json:"action"`
-	Result *Simulation `json:"result"`
+	Action string                `json:"action"`
+	Result *configapp.Simulation `json:"result"`
 }
 
 type AdminAccount struct {
@@ -35,18 +37,26 @@ type AdminAccountUpdate struct {
 	Disabled    *bool    `json:"disabled,omitempty"`
 }
 
+// A plan previewed (planId) to write into the signed-in administrator's workspace.
+type ApplyPlanInput struct {
+	Plan   any    `json:"plan"`
+	PlanID string `json:"planId"`
+	// Previewed as a review.
+	Review *bool `json:"review,omitempty"`
+	// The IDs of the exceptions to confirm, every one of them, as the administrator confirmed them.
+	Confirmed []string `json:"confirmed,omitempty"`
+}
+
+type CatalogInput struct {
+	Filter *configapp.CatalogFilter `json:"filter"`
+	Offset *int                     `json:"offset,omitempty"`
+	// At most 500.
+	Limit *int `json:"limit,omitempty"`
+}
+
 type ColumnComment struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
-}
-
-type Configuration struct {
-	Datasources []Datasource `json:"datasources"`
-	Entities    []Entity     `json:"entities"`
-	Roles       []Role       `json:"roles"`
-	Users       []User       `json:"users"`
-	// Every other top-level section (server, tools, cost, budget, cache, ...) as YAML-shaped JSON.
-	Settings any `json:"settings"`
 }
 
 type Datasource struct {
@@ -77,50 +87,15 @@ type DatasourceRouting struct {
 	Execute string `json:"execute"`
 }
 
-type DraftInput struct {
-	Base string `json:"base"`
-	// Replaces the entities section when provided.
-	Entities []EntityInput `json:"entities,omitempty"`
-	// Replaces the roles section when provided.
-	Roles []RoleInput `json:"roles,omitempty"`
-	// Replaces the users section when provided; a missing tokenHash keeps the base user's hash.
-	Users []UserInput `json:"users,omitempty"`
-	// Replaces the given top-level sections; datasources, entities, roles and users are not allowed here.
-	Settings any `json:"settings,omitempty"`
-}
-
-type Entity struct {
-	// The canonical identity, datasource.schema.name (datasource.name without a schema).
-	ID string `json:"id"`
-	// Unique within the datasource and schema.
-	Name string `json:"name"`
-	// The table, view or procedure; null means the entity name.
-	Source *string `json:"source,omitempty"`
-	// null means the datasource named default.
-	Datasource *string `json:"datasource,omitempty"`
-	Schema     *string `json:"schema,omitempty"`
-	// table, view or procedure; null means table.
-	Kind        *string  `json:"kind,omitempty"`
-	Description *string  `json:"description,omitempty"`
-	PrimaryKey  []string `json:"primaryKey"`
-	// Unique keys, each a field list, that identify one row like the primary key.
-	UniqueKeys    [][]string     `json:"uniqueKeys"`
-	Fields        []Field        `json:"fields"`
-	Relationships []Relationship `json:"relationships"`
-	TenantPolicy  any            `json:"tenantPolicy,omitempty"`
-	// Entity-level roles, fieldACL and rowPolicies, kept for compatibility.
-	LegacyAccess any        `json:"legacyAccess,omitempty"`
-	Mcp          *EntityMcp `json:"mcp"`
-	Params       []string   `json:"params"`
-	// Entities a procedure writes; empty invalidates its datasource's cached reads.
-	Affects []string `json:"affects"`
-	// Admit deletes and key updates that foreign keys cascade to other tables without checking permissions there.
-	AllowCascade bool `json:"allowCascade"`
+type DraftRevision struct {
+	Revision *Revision `json:"revision"`
+	// The first revision up its parents that is not a draft.
+	BasedOn *string `json:"basedOn,omitempty"`
 }
 
 type EntityCapability struct {
 	Entity    string    `json:"entity"`
-	Action    Action    `json:"action"`
+	Action    string    `json:"action"`
 	Privilege Privilege `json:"privilege"`
 	// The connection the action routes to.
 	Connection string `json:"connection"`
@@ -148,12 +123,6 @@ type EntityInput struct {
 	AllowCascade  *bool               `json:"allowCascade,omitempty"`
 }
 
-type EntityMcp struct {
-	DmlTools         bool `json:"dmlTools"`
-	CustomTool       bool `json:"customTool"`
-	TrustedProcedure bool `json:"trustedProcedure"`
-}
-
 type EntityMCPInput struct {
 	DmlTools         *bool `json:"dmlTools,omitempty"`
 	CustomTool       *bool `json:"customTool,omitempty"`
@@ -166,12 +135,14 @@ type EntityVisibility struct {
 	Actions []ActionVisibility `json:"actions"`
 }
 
-type Field struct {
-	Name        string  `json:"name"`
-	Alias       *string `json:"alias,omitempty"`
-	Description *string `json:"description,omitempty"`
-	Mask        *string `json:"mask,omitempty"`
-	Exclude     bool    `json:"exclude"`
+type ExecutionStatus struct {
+	// IO slots every lane draws on.
+	Io *SlotStatus `json:"io"`
+	// The part of the IO slots the lanes other than serve hold together.
+	Aux   *SlotStatus  `json:"aux"`
+	Lanes []LaneStatus `json:"lanes"`
+	// Background tasks running, by name.
+	Tasks []TaskStatus `json:"tasks"`
 }
 
 type FieldInput struct {
@@ -182,19 +153,9 @@ type FieldInput struct {
 	Exclude     *bool   `json:"exclude,omitempty"`
 }
 
-type Grant struct {
-	Entity  string   `json:"entity"`
-	Actions []Action `json:"actions"`
-	// False grants every visible field; true limits to readFields/writeFields.
-	FieldsRestricted bool     `json:"fieldsRestricted"`
-	ReadFields       []string `json:"readFields"`
-	WriteFields      []string `json:"writeFields"`
-	Rows             any      `json:"rows,omitempty"`
-}
-
 type GrantInput struct {
 	Entity           string   `json:"entity"`
-	Actions          []Action `json:"actions"`
+	Actions          []string `json:"actions"`
 	FieldsRestricted *bool    `json:"fieldsRestricted,omitempty"`
 	ReadFields       []string `json:"readFields,omitempty"`
 	WriteFields      []string `json:"writeFields,omitempty"`
@@ -260,17 +221,46 @@ type ImportTable struct {
 	// Triggers or rules: a write may change other tables.
 	SideEffects bool `json:"sideEffects"`
 	// A zero-permission entity proposal; add it to a draft to configure it.
-	Candidate *Entity `json:"candidate"`
+	Candidate *configapp.EntityItem `json:"candidate"`
+}
+
+type LaneStatus struct {
+	// serve, admin, scan or background.
+	Name          string `json:"name"`
+	MaxConcurrent int    `json:"maxConcurrent"`
+	MaxQueue      int    `json:"maxQueue"`
+	Inflight      int    `json:"inflight"`
+	Queued        int    `json:"queued"`
+	// Work turned away since the process started.
+	Rejected int `json:"rejected"`
+	// Work run since the process started.
+	Completed int `json:"completed"`
 }
 
 type Mutation struct {
 }
 
-type PendingRevision struct {
-	ID string `json:"id"`
-	// True when only a restart applies it; otherwise building it failed.
-	RestartRequired bool   `json:"restartRequired"`
-	Error           string `json:"error"`
+type PlanPreview struct {
+	// Identifies the plan with what it was evaluated against (base revision,
+	// workspace and scans); an agent applies a plan only while it still evaluates to it.
+	PlanID string                `json:"planId"`
+	Report *configapp.PlanReport `json:"report"`
+	// Entities added or changed, whole.
+	Entities []configapp.EntityItem `json:"entities"`
+	// IDs of the entities added.
+	Added []string `json:"added"`
+	// Roles and users added or changed, whole.
+	Roles []configapp.RoleItem `json:"roles"`
+	Users []configapp.UserItem `json:"users"`
+	// The draft with the plan applied, as validate checks it.
+	Validation *configapp.Validation `json:"validation"`
+}
+
+type PlanPreviewInput struct {
+	Plan any `json:"plan"`
+	// Report every new table a grant covers (exception review, to confirm), as
+	// reviewing a recurring template's proposal needs.
+	Review *bool `json:"review,omitempty"`
 }
 
 type PublishInput struct {
@@ -285,26 +275,11 @@ type PublishInput struct {
 type Query struct {
 }
 
-type Relationship struct {
-	Name        string `json:"name"`
-	Target      string `json:"target"`
-	Cardinality string `json:"cardinality"`
-	JoinOn      any    `json:"joinOn"`
-}
-
 type RelationshipInput struct {
 	Name        string `json:"name"`
 	Target      string `json:"target"`
 	Cardinality string `json:"cardinality"`
 	JoinOn      any    `json:"joinOn"`
-}
-
-type Role struct {
-	Name        string  `json:"name"`
-	Description *string `json:"description,omitempty"`
-	Grants      []Grant `json:"grants"`
-	// Users that have this role.
-	Members []string `json:"members"`
 }
 
 type RoleInput struct {
@@ -320,14 +295,6 @@ type RollbackInput struct {
 	Comment         *string `json:"comment,omitempty"`
 }
 
-type ScanJob struct {
-	ID         string    `json:"id"`
-	Datasource string    `json:"datasource"`
-	State      ScanState `json:"state"`
-	// Why the scan failed or stopped.
-	Error *string `json:"error,omitempty"`
-}
-
 type SchemaImport struct {
 	Datasource string `json:"datasource"`
 	// The schema where entities without a schema read (unqualified names
@@ -339,34 +306,15 @@ type SchemaImport struct {
 	Source string `json:"source"`
 }
 
-type SchemaInfo struct {
-	Name string `json:"name"`
-	// When its tables were last scanned; null when never.
-	ScannedAt *time.Time `json:"scannedAt,omitempty"`
-	// How many tables the last scan found; null when never scanned.
-	Tables *int `json:"tables,omitempty"`
-}
-
-type SchemaList struct {
-	Datasource string `json:"datasource"`
-	// Every user schema; when the database cannot list them, one named "" for its
-	// default schema, which a scan without schemas reads.
-	Schemas []SchemaInfo `json:"schemas"`
-	// Where unqualified names resolve; null when unknown.
-	DefaultSchema *string   `json:"defaultSchema,omitempty"`
-	ListedAt      time.Time `json:"listedAt"`
-	// Identifies the database the datasource reads (its driver and read
-	// connection); results of another source are stale.
-	Source string `json:"source"`
-}
-
 type ServerStatus struct {
 	// Revision this process serves; null when it does not track the store.
 	AppliedRevision *string `json:"appliedRevision,omitempty"`
 	// Whether the process applies newly published revisions (--watch).
 	Watching bool `json:"watching"`
 	// A published revision this process has not applied.
-	Pending *PendingRevision `json:"pending,omitempty"`
+	Unapplied *UnappliedRevision `json:"unapplied,omitempty"`
+	// What the process runs on its execution bus; null when unknown.
+	Execution *ExecutionStatus `json:"execution,omitempty"`
 }
 
 type SetAdminPasswordInput struct {
@@ -374,30 +322,23 @@ type SetAdminPasswordInput struct {
 	Password string `json:"password"`
 }
 
-type Simulation struct {
-	Allowed bool     `json:"allowed"`
-	Reason  string   `json:"reason"`
-	Fields  []string `json:"fields"`
-	// Effective row filter in rowPolicies JSON form; null means every row.
-	RowFilter any      `json:"rowFilter,omitempty"`
-	Grants    []string `json:"grants"`
-	// Set when no single grant covers the requested fields.
-	FieldScopes [][]string `json:"fieldScopes,omitempty"`
-}
-
 type SimulationInput struct {
-	// Simulate against this unsaved draft...
-	Draft *DraftInput `json:"draft,omitempty"`
-	// ...or this revision; default: the published revision.
+	// Default: the signed-in administrator's workspace.
 	Revision *string `json:"revision,omitempty"`
 	// A configured user name, or role:<name> to evaluate a role.
 	User   string `json:"user"`
 	Entity string `json:"entity"`
-	Action Action `json:"action"`
+	Action string `json:"action"`
 	// Requested fields; empty means the default projection.
 	Fields []string `json:"fields,omitempty"`
 	// Extra subject attributes; configured user attributes win.
 	Subject any `json:"subject,omitempty"`
+}
+
+type SlotStatus struct {
+	Size    int `json:"size"`
+	Used    int `json:"used"`
+	Waiting int `json:"waiting"`
 }
 
 type TableComments struct {
@@ -412,14 +353,16 @@ type TableRef struct {
 	Table string `json:"table"`
 }
 
-type User struct {
-	Name        string   `json:"name"`
-	Description *string  `json:"description,omitempty"`
-	Roles       []string `json:"roles"`
-	Grants      []Grant  `json:"grants"`
-	Subject     any      `json:"subject,omitempty"`
-	Disabled    bool     `json:"disabled"`
-	HasToken    bool     `json:"hasToken"`
+type TaskStatus struct {
+	Name    string `json:"name"`
+	Running int    `json:"running"`
+}
+
+type UnappliedRevision struct {
+	ID string `json:"id"`
+	// True when only a restart applies it; otherwise building it failed.
+	RestartRequired bool   `json:"restartRequired"`
+	Error           string `json:"error"`
 }
 
 type UserInput struct {
@@ -437,85 +380,12 @@ type UserToken struct {
 	TokenHash string `json:"tokenHash"`
 }
 
-type Validation struct {
-	Ok          bool    `json:"ok"`
-	Error       *string `json:"error,omitempty"`
-	ContentHash *string `json:"contentHash,omitempty"`
-	// Changes against the published revision that need a restart.
-	RestartRequired []string `json:"restartRequired"`
-	// Grants the routed datasource connections cannot run (they do not block publishing).
-	Warnings []string `json:"warnings"`
-}
-
 type VisibilityInput struct {
-	Draft    *DraftInput `json:"draft,omitempty"`
-	Revision *string     `json:"revision,omitempty"`
+	// Default: the signed-in administrator's workspace.
+	Revision *string `json:"revision,omitempty"`
 	// A configured user name, or role:<name> to evaluate a role.
 	User    string `json:"user"`
 	Subject any    `json:"subject,omitempty"`
-}
-
-type Action string
-
-const (
-	ActionRead      Action = "READ"
-	ActionCreate    Action = "CREATE"
-	ActionUpdate    Action = "UPDATE"
-	ActionDelete    Action = "DELETE"
-	ActionExecute   Action = "EXECUTE"
-	ActionAggregate Action = "AGGREGATE"
-)
-
-var AllAction = []Action{
-	ActionRead,
-	ActionCreate,
-	ActionUpdate,
-	ActionDelete,
-	ActionExecute,
-	ActionAggregate,
-}
-
-func (e Action) IsValid() bool {
-	switch e {
-	case ActionRead, ActionCreate, ActionUpdate, ActionDelete, ActionExecute, ActionAggregate:
-		return true
-	}
-	return false
-}
-
-func (e Action) String() string {
-	return string(e)
-}
-
-func (e *Action) UnmarshalGQL(v any) error {
-	str, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("enums must be strings")
-	}
-
-	*e = Action(str)
-	if !e.IsValid() {
-		return fmt.Errorf("%s is not a valid Action", str)
-	}
-	return nil
-}
-
-func (e Action) MarshalGQL(w io.Writer) {
-	_, _ = fmt.Fprint(w, strconv.Quote(e.String()))
-}
-
-func (e *Action) UnmarshalJSON(b []byte) error {
-	s, err := strconv.Unquote(string(b))
-	if err != nil {
-		return err
-	}
-	return e.UnmarshalGQL(s)
-}
-
-func (e Action) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	e.MarshalGQL(&buf)
-	return buf.Bytes(), nil
 }
 
 type ImportStatus string
@@ -639,6 +509,8 @@ const (
 	RevisionStatePublished  RevisionState = "PUBLISHED"
 	RevisionStateSuperseded RevisionState = "SUPERSEDED"
 	RevisionStateRolledBack RevisionState = "ROLLED_BACK"
+	// A draft an administrator decided not to publish.
+	RevisionStateDiscarded RevisionState = "DISCARDED"
 )
 
 var AllRevisionState = []RevisionState{
@@ -646,11 +518,12 @@ var AllRevisionState = []RevisionState{
 	RevisionStatePublished,
 	RevisionStateSuperseded,
 	RevisionStateRolledBack,
+	RevisionStateDiscarded,
 }
 
 func (e RevisionState) IsValid() bool {
 	switch e {
-	case RevisionStateDraft, RevisionStatePublished, RevisionStateSuperseded, RevisionStateRolledBack:
+	case RevisionStateDraft, RevisionStatePublished, RevisionStateSuperseded, RevisionStateRolledBack, RevisionStateDiscarded:
 		return true
 	}
 	return false
@@ -686,67 +559,6 @@ func (e *RevisionState) UnmarshalJSON(b []byte) error {
 }
 
 func (e RevisionState) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	e.MarshalGQL(&buf)
-	return buf.Bytes(), nil
-}
-
-type ScanState string
-
-const (
-	ScanStatePending  ScanState = "PENDING"
-	ScanStateRunning  ScanState = "RUNNING"
-	ScanStateDone     ScanState = "DONE"
-	ScanStateFailed   ScanState = "FAILED"
-	ScanStateCanceled ScanState = "CANCELED"
-)
-
-var AllScanState = []ScanState{
-	ScanStatePending,
-	ScanStateRunning,
-	ScanStateDone,
-	ScanStateFailed,
-	ScanStateCanceled,
-}
-
-func (e ScanState) IsValid() bool {
-	switch e {
-	case ScanStatePending, ScanStateRunning, ScanStateDone, ScanStateFailed, ScanStateCanceled:
-		return true
-	}
-	return false
-}
-
-func (e ScanState) String() string {
-	return string(e)
-}
-
-func (e *ScanState) UnmarshalGQL(v any) error {
-	str, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("enums must be strings")
-	}
-
-	*e = ScanState(str)
-	if !e.IsValid() {
-		return fmt.Errorf("%s is not a valid ScanState", str)
-	}
-	return nil
-}
-
-func (e ScanState) MarshalGQL(w io.Writer) {
-	_, _ = fmt.Fprint(w, strconv.Quote(e.String()))
-}
-
-func (e *ScanState) UnmarshalJSON(b []byte) error {
-	s, err := strconv.Unquote(string(b))
-	if err != nil {
-		return err
-	}
-	return e.UnmarshalGQL(s)
-}
-
-func (e ScanState) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

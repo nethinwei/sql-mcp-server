@@ -51,7 +51,13 @@ type Plan struct {
 	HasSort         bool
 	HasTempTable    bool
 	StatsFresh      bool
-	Raw             json.RawMessage
+	// TableRows is how many rows the largest table a full scan reads holds:
+	// what the scan reads, not what it outputs after filtering. TableSized
+	// reports that a provider measured it for every full scan; without it a
+	// full scan is never taken for a small table's.
+	TableRows  int64
+	TableSized bool
+	Raw        json.RawMessage
 }
 
 // Score is the 0-100 normalized plan quality (higher is safer), with the risk
@@ -133,13 +139,17 @@ type AnalyzeConfig struct {
 
 // Threshold configures the gate. SoftScore/HardScore are 0-100 cutoffs.
 type Threshold struct {
-	Datasource                string
-	DialectName               string
-	SoftScore                 int
-	HardScore                 int
-	MaxRows                   int64
-	MaxBytes                  int64
-	RejectFullScan            bool
+	Datasource     string
+	DialectName    string
+	SoftScore      int
+	HardScore      int
+	MaxRows        int64
+	MaxBytes       int64
+	RejectFullScan bool
+	// FullScanMaxRows: a full scan of tables of no more than this many rows
+	// (Plan.TableRows, when sized) is a small table's, scored and admitted as
+	// a sequential scan.
+	FullScanMaxRows           int64
 	WhitelistPKPoint          bool
 	RequirePKForWrite         bool // reject UPDATE/DELETE that is not a PK point write
 	RequireAggregatePredicate bool
@@ -161,6 +171,19 @@ type Decision struct {
 	Score     *Score
 	Hints     []string
 	Rewritten *codegen.Compiled
+}
+
+// Estimate is the plan and score the decision carries, zero when it has none.
+func (d Decision) Estimate() (Plan, Score) {
+	var plan Plan
+	var score Score
+	if d.Plan != nil {
+		plan = *d.Plan
+	}
+	if d.Score != nil {
+		score = *d.Score
+	}
+	return plan, score
 }
 
 // Layer is one stage of the gate.
@@ -360,17 +383,6 @@ func Hints(p Plan, th Threshold) []string {
 	}
 	h = append(h, "rewrite the query and retry")
 	return h
-}
-
-// FakeExplainer is a hand-written Explainer for tests.
-type FakeExplainer struct {
-	Plan Plan
-	Err  error
-}
-
-// Explain returns the configured Plan/Err.
-func (f FakeExplainer) Explain(_ context.Context, _ string, _ []any) (Plan, error) {
-	return f.Plan, f.Err
 }
 
 func ptrScore(s Score) *Score { return &s }

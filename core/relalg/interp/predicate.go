@@ -44,16 +44,6 @@ func evalPredicate(rel relation, row []any, p relalg.Predicate) (tri, error) {
 			return triUnknown, err
 		}
 		return triNot(v), nil
-	case relalg.IsNull:
-		i, err := rel.colIndex(pp.Field)
-		if err != nil {
-			return triUnknown, err
-		}
-		isNull := row[i] == nil
-		if isNull != pp.Not {
-			return triTrue, nil
-		}
-		return triFalse, nil
 	default:
 		return triUnknown, fmt.Errorf("%w: predicate %T", ErrUnsupported, p)
 	}

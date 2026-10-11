@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
 import { run } from '@/api/client'
 import { StatusQuery } from '@/api/ops'
-import { useWorkspace, type Change } from '@/stores/workspace'
+import { workspace } from '@/lib/workspaceSync'
+import { useWorkspace } from '@/stores/workspace'
 import type { StatusQuery as StatusResult } from '@/gql/graphql'
 
 // What the server reports: the published revision and the revision the
@@ -11,9 +12,7 @@ export const useStatus = defineStore('status', {
     server: null as StatusResult['serverStatus'] | null,
     published: null as StatusResult['published'] | null,
     loaded: false,
-    /** Items a rebase kept in the local version although the new base changed them. */
-    conflicts: [] as Change[],
-    rebasedOnto: null as string | null,
+    settling: false,
   }),
   getters: {
     publishedId: (s) => s.published?.id ?? null,
@@ -30,20 +29,38 @@ export const useStatus = defineStore('status', {
       }
     },
 
-    /** Re-applies the unsaved changes onto the published revision. */
+    /**
+     * Refreshes, once a second for up to 15 seconds, until the serving process
+     * applies the published revision (it reloads a moment after a publish) or
+     * reports why it does not; a status read right at the publish would show
+     * the revision it served before.
+     */
+    async settle() {
+      if (this.settling) return
+      this.settling = true
+      try {
+        for (let i = 0; i < 15; i++) {
+          const s = this.server
+          if (!s?.watching || !this.publishedId || s.appliedRevision === this.publishedId || s.unapplied) return
+          await new Promise((r) => setTimeout(r, 1000))
+          await this.refresh()
+        }
+      } finally {
+        this.settling = false
+      }
+    },
+
+    /**
+     * Re-applies the unsaved changes onto the published revision; conflicts
+     * are left in the workspace to resolve.
+     */
     async rebaseWorkspace(): Promise<number> {
       const ws = useWorkspace()
       const id = this.publishedId
       if (!id) return 0
       const count = ws.changes.length
-      this.conflicts = await ws.rebase(id)
-      this.rebasedOnto = id
+      await workspace.update(id)
       return count
-    },
-
-    dismissConflicts() {
-      this.conflicts = []
-      this.rebasedOnto = null
     },
   },
 })

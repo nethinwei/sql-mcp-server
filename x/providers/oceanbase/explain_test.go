@@ -1,6 +1,8 @@
 package oceanbase
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/nethinwei/sql-mcp-server/core/cost"
@@ -79,5 +81,36 @@ func TestParseOBExplainKeepsJoinEstimate(t *testing.T) {
 	p, _ := parseOBExplain([]byte(joined))
 	if p.EstimatedRows != 1000000 || p.ScanType != cost.ScanIndex {
 		t.Fatalf("joined = %+v", p)
+	}
+}
+
+// The size of a full scan's table comes from EXPLAIN EXTENDED's optimization
+// info, matched to the scan by its table: an entry of another table (one read
+// through an index) never stands in for a full scan's missing one.
+func TestOBTableRows(t *testing.T) {
+	t.Parallel()
+	plan := `|ID|OPERATOR          |NAME |EST.ROWS|EST.TIME(us)|
+|0 |HASH JOIN         |     |1       |5           |
+|1 ||-TABLE RANGE SCAN|y(kb)|1       |3           |
+|2 |+-TABLE FULL SCAN |x    |1       |3           |
+Optimization Info:
+-------------------------------------
+`
+	entry := func(name string, rows int) string {
+		return fmt.Sprintf("  %s:\n      table_rows:%d\n      output_rows:1\n", name, rows)
+	}
+	if rows, ok := obTableRows(plan + entry("y", 20) + entry("x", 2000000) + "  Plan Type:\n      LOCAL\n"); !ok ||
+		rows != 2000000 {
+		t.Fatalf("rows = %d, %v", rows, ok)
+	}
+	if _, ok := obTableRows(plan + entry("y", 20) + entry("z", 20)); ok {
+		t.Fatal("sized with the full scan's table missing from the optimization info")
+	}
+	join := strings.Replace(plan, "|1 ||-TABLE RANGE SCAN|y(kb)", "|1 ||-TABLE FULL SCAN |y(kb)", 1)
+	if rows, ok := obTableRows(join + entry("y", 20) + entry("x", 30)); !ok || rows != 30 {
+		t.Fatalf("two full scans: %d, %v", rows, ok)
+	}
+	if _, ok := obTableRows("|0 |TABLE FULL SCAN|t|"); ok {
+		t.Fatal("sized without optimization info")
 	}
 }

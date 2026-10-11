@@ -76,7 +76,11 @@ func checkTree(root string) ([]issue, error) {
 			return walkErr
 		}
 		if entry.IsDir() {
-			if path != root && (entry.Name() == ".git" || entry.Name() == "vendor") {
+			// As the go tool: directories it ignores (".", "_" prefixed, vendor)
+			// and the console's dependencies hold no source of this module.
+			name := entry.Name()
+			if path != root && (strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") ||
+				name == "vendor" || name == "node_modules") {
 				return filepath.SkipDir
 			}
 			return nil

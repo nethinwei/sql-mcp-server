@@ -324,7 +324,7 @@ func TestCompileAndOrNotIsNull(t *testing.T) {
 		Predicate: relalg.And{Preds: []relalg.Predicate{
 			relalg.Or{Preds: []relalg.Predicate{
 				relalg.Condition{Field: "id", Op: relalg.OpGt, Value: 0},
-				relalg.Not{P: relalg.IsNull{Field: "x"}},
+				relalg.Not{P: relalg.Condition{Field: "x", Op: relalg.OpIsNull}},
 			}},
 			relalg.Condition{Field: "id", Op: relalg.OpIsNotNull, Value: nil},
 		}},

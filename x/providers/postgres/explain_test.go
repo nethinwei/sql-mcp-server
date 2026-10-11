@@ -3,16 +3,18 @@ package postgres
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 )
 
 type analyzeTx struct {
-	store.FakeTx
+	storetest.FakeTx
 	query func(context.Context, string, ...any) (store.Rows, error)
 }
 
@@ -161,9 +163,9 @@ func TestExplainAnalyzeUsesReadOnlyTransactionAndRollsBack(t *testing.T) {
 			t.Fatalf("query = %q", query)
 		}
 		raw := `[{"Plan":{"Node Type":"Result","Actual Rows":1,"Actual Loops":1},"Execution Time":0.5}]`
-		return store.NewFakeRows([]string{"QUERY PLAN"}, []any{raw}), nil
+		return storetest.NewFakeRows([]string{"QUERY PLAN"}, []any{raw}), nil
 	}}
-	beginner := &store.FakeDB{BeginFn: func(_ context.Context, opts *store.TxOptions) (store.Tx, error) {
+	beginner := &storetest.FakeDB{BeginFn: func(_ context.Context, opts *store.TxOptions) (store.Tx, error) {
 		if opts == nil || !opts.ReadOnly {
 			t.Fatalf("transaction options = %+v, want read-only", opts)
 		}
@@ -184,7 +186,7 @@ func TestExplainAnalyzeReadOnlyViolationIsSamplingErrorAndRollsBack(t *testing.T
 	tx := &analyzeTx{query: func(context.Context, string, ...any) (store.Rows, error) {
 		return nil, want
 	}}
-	beginner := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+	beginner := &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
 		return tx, nil
 	}}
 	p := &Provider{analyzeTx: beginner}
@@ -193,5 +195,22 @@ func TestExplainAnalyzeReadOnlyViolationIsSamplingErrorAndRollsBack(t *testing.T
 	})
 	if !errors.Is(err, want) || !tx.RolledBack {
 		t.Fatalf("error=%v rolledBack=%v", err, tx.RolledBack)
+	}
+}
+
+// The tables a plan's sequential scans read are listed to size them; a scan
+// naming no table cannot be sized.
+func TestFullScanRelations(t *testing.T) {
+	t.Parallel()
+	join := pgPlanNode{NodeType: "Hash Join", Plans: []pgPlanNode{
+		{NodeType: "Seq Scan", RelationName: "orders"},
+		{NodeType: "Hash", Plans: []pgPlanNode{{NodeType: "Seq Scan", RelationName: "regions"}}},
+		{NodeType: "Index Scan", RelationName: "users"},
+	}}
+	if got, ok := fullScanRelations(join, nil); !ok || !slices.Equal(got, []string{"orders", "regions"}) {
+		t.Fatalf("relations = %v, %v", got, ok)
+	}
+	if _, ok := fullScanRelations(pgPlanNode{NodeType: "Seq Scan"}, nil); ok {
+		t.Fatal("a scan naming no table is sized")
 	}
 }

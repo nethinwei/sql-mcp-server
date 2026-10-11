@@ -1,0 +1,161 @@
+package tool
+
+import (
+	"encoding/json"
+	"fmt"
+	"sync"
+
+	"github.com/nethinwei/sql-mcp-server/core/budget"
+)
+
+// ResultMemory bounds the bytes of the results the process holds at once,
+// across calls: each call's rows hold their share from when they are read
+// until the call ends. It belongs to the process and outlives
+// configurations. A nil ResultMemory bounds nothing.
+type ResultMemory struct {
+	mu       sync.Mutex
+	used     int64
+	capacity int64 // 0: no bound
+}
+
+// NewResultMemory returns a bound of capacity bytes (0: none).
+func NewResultMemory(capacity int64) *ResultMemory {
+	return &ResultMemory{capacity: capacity}
+}
+
+// SetCapacity changes the bound for the reservations that follow.
+func (r *ResultMemory) SetCapacity(capacity int64) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.capacity = capacity
+}
+
+// InUse returns the bytes held.
+func (r *ResultMemory) InUse() int64 {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.used
+}
+
+// reserve holds n bytes; past the capacity it refuses them, unless force.
+func (r *ResultMemory) reserve(n int64, force bool) bool {
+	if r == nil {
+		return true
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !force && r.capacity > 0 && r.used+n > r.capacity {
+		return false
+	}
+	r.used += n
+	return true
+}
+
+func (r *ResultMemory) release(n int64) {
+	if r == nil || n == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.used -= n
+}
+
+// resultMeter counts what one call returns as its rows are read (see
+// statement.query) and stops the call at the first row past its limits: the
+// rows of its budget and, for a read, the bytes of cost.maxBytes and of its
+// budget. Their bytes are held in the process's ResultMemory until the call
+// ends. The size of a row is its JSON encoding, which the result is encoded
+// to; a row the driver already read whole is the most a call reads past its
+// limit.
+type resultMeter struct {
+	mu                sync.Mutex
+	rows, bytes, held int64
+	maxRows, maxBytes int64
+	memory            *ResultMemory
+	// write: a write's rows are read after it took effect, so the memory
+	// holds them without refusing them (failing the call would invite a
+	// duplicate retry, see finalizeToolResult).
+	write bool
+	// closed: the call ended. An execution it shared (singleflight) may
+	// still read rows for the calls waiting on it; they are no longer held
+	// for this call, which released what it held.
+	closed bool
+}
+
+// meterCall gives tc's call a meter unless it has one, and returns the
+// function ending the call's metering (nothing when it had one).
+func meterCall(tc Context, readOnly bool) (Context, func()) {
+	if tc.results != nil {
+		return tc, func() {}
+	}
+	m := &resultMeter{maxRows: tc.BudgetLimits.MaxReturnedRows, memory: tc.ResultMemory, write: !readOnly}
+	if readOnly {
+		m.maxBytes = minLimit(tc.MaxReturnedBytes, tc.BudgetLimits.MaxReturnedBytes)
+	}
+	tc.results = m
+	return tc, m.close
+}
+
+// minLimit is the stricter of two limits, where 0 is no limit.
+func minLimit(a, b int64) int64 {
+	if a <= 0 || (b > 0 && b < a) {
+		return b
+	}
+	return a
+}
+
+// add counts row against the call's limits.
+func (m *resultMeter) add(row map[string]any) error {
+	if m == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(row)
+	if err != nil {
+		return fmt.Errorf("encode a result row: %w", err)
+	}
+	n := int64(len(encoded)) + 1 // and its separator
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rows++
+	if m.maxRows > 0 && m.rows > m.maxRows {
+		return budget.ErrExceeded
+	}
+	m.bytes += n
+	if m.maxBytes > 0 && m.bytes > m.maxBytes {
+		return fmt.Errorf("%w: the result exceeds %d bytes", budget.ErrExceeded, m.maxBytes)
+	}
+	if m.closed {
+		return nil
+	}
+	if !m.memory.reserve(n, m.write) {
+		return fmt.Errorf("%w: the server holds too many results in memory; narrow the request or retry later",
+			budget.ErrExceeded)
+	}
+	m.held += n
+	return nil
+}
+
+// counted returns the rows and bytes counted.
+func (m *resultMeter) counted() (rows, bytes int64) {
+	if m == nil {
+		return 0, 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.rows, m.bytes
+}
+
+// close releases the call's results from the process's memory.
+func (m *resultMeter) close() {
+	m.mu.Lock()
+	held := m.held
+	m.held, m.closed = 0, true
+	m.mu.Unlock()
+	m.memory.release(held)
+}

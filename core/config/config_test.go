@@ -49,17 +49,15 @@ func TestApplyDefaultsPreservesJSONAndProgrammaticMCPFalse(t *testing.T) {
 	var fromJSON Config
 	jsonInput := `{"database":{"driver":"postgres","dsn":"x"},` +
 		`"entities":[{"name":"hidden","mcp":{"dmlTools":false}}]}`
-	if err := json.Unmarshal([]byte(jsonInput), &fromJSON); err != nil {
-		t.Fatal(err)
-	}
+	fromJSON = specJSON(t, jsonInput)
 	fromJSON.ApplyDefaults()
 	if fromJSON.Entities[0].MCP.DMLTools {
 		t.Fatal("JSON explicit dmlTools false must be preserved")
 	}
-	programmatic := Config{
-		Database: DatabaseConfig{Driver: "postgres", DSN: "x"},
-		Entities: []EntityConfig{{Name: "hidden", MCP: MCPFlagsWithDMLTools(false)}},
-	}
+	programmatic := Spec{
+		Database: &DatabaseSpec{Driver: ptr("postgres"), DSN: ptr("x")},
+		Entities: List[EntitySpec]{{Name: ptr("hidden"), MCP: &MCPFlagsSpec{DMLTools: ptr(false)}}},
+	}.config()
 	programmatic.ApplyDefaults()
 	if programmatic.Entities[0].MCP.DMLTools {
 		t.Fatal("programmatic explicit dmlTools false must be preserved")
@@ -68,10 +66,7 @@ func TestApplyDefaultsPreservesJSONAndProgrammaticMCPFalse(t *testing.T) {
 
 func TestApplyDefaultsPreservesAllFalseToolsNode(t *testing.T) {
 	t.Parallel()
-	var cfg Config
-	if err := json.Unmarshal([]byte(`{"tools":{}}`), &cfg); err != nil {
-		t.Fatal(err)
-	}
+	cfg := specJSON(t, `{"tools":{}}`)
 	cfg.ApplyDefaults()
 	if cfg.Tools != (ToolFlags{present: true}) {
 		t.Fatalf("explicit all-false tools changed: %+v", cfg.Tools)
@@ -94,17 +89,13 @@ func TestApplyDefaultsCostThresholds(t *testing.T) {
 
 func TestApplyDefaultsCostFieldsIndependently(t *testing.T) {
 	t.Parallel()
-	cfg := Config{Cost: CostConfig{SoftScore: 70}}
-	cfg.ApplyPresence(Presence{Cost: map[string]bool{"softScore": true}})
+	cfg := Spec{Cost: &CostSpec{SoftScore: ptr(70)}}.config()
 	cfg.ApplyDefaults()
 	if cfg.Cost.SoftScore != 70 || cfg.Cost.HardScore != 40 || cfg.Cost.MaxRows != 10000 ||
 		cfg.Cost.QueryTimeout != 30*time.Second || !cfg.Cost.WhitelistPKPoint {
 		t.Fatalf("partial cost defaults were lost: %+v", cfg.Cost)
 	}
-	var explicit Config
-	if err := json.Unmarshal([]byte(`{"cost":{"hardScore":0,"whitelistPKPoint":false}}`), &explicit); err != nil {
-		t.Fatal(err)
-	}
+	explicit := specJSON(t, `{"cost":{"hardScore":0,"whitelistPKPoint":false}}`)
 	explicit.ApplyDefaults()
 	if explicit.Cost.HardScore != 0 || explicit.Cost.WhitelistPKPoint {
 		t.Fatalf("explicit zero/false cost fields changed: %+v", explicit.Cost)
@@ -417,12 +408,8 @@ func TestValidateRelationshipShape(t *testing.T) {
 }
 
 func TestAQEJSONTracksExplicitReadOnlyFalse(t *testing.T) {
-	var cfg Config
-	jsonInput := `{"database":{"driver":"postgres","dsn":"x"},"cost":{"aqe":` +
-		`{"explainAnalyze":true,"readOnly":false,"sampleRate":1,"timeout":1000000000}}}`
-	if err := json.Unmarshal([]byte(jsonInput), &cfg); err != nil {
-		t.Fatal(err)
-	}
+	cfg := specJSON(t, `{"database":{"driver":"postgres","dsn":"x"},"cost":{"aqe":`+
+		`{"explainAnalyze":true,"readOnly":false,"sampleRate":1,"timeout":1000000000}}}`)
 	cfg.ApplyDefaults()
 	if cfg.Cost.AQE.ReadOnly {
 		t.Fatal("explicit JSON readOnly false was overwritten")
@@ -454,4 +441,15 @@ func TestApplyDefaultsMigratesLegacyDatabase(t *testing.T) {
 	if cfg.Databases["default"].Driver != "postgres" {
 		t.Fatalf("databases = %+v", cfg.Databases)
 	}
+}
+
+// specJSON is the configuration JSON says, before defaults: a value written
+// differs from one left out.
+func specJSON(t *testing.T, data string) Config {
+	t.Helper()
+	var spec Spec
+	if err := json.Unmarshal([]byte(data), &spec); err != nil {
+		t.Fatal(err)
+	}
+	return spec.config()
 }

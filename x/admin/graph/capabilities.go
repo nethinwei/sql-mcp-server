@@ -2,8 +2,11 @@ package graph
 
 import (
 	"sort"
+	"strings"
 
+	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 )
 
@@ -14,24 +17,24 @@ var graphPrivileges = map[introspect.Privilege]Privilege{
 
 // capabilities returns the serving snapshot's capabilities, or nil.
 func (r *Resolver) capabilities() bootstrap.EntityCapabilities {
-	if r.Capabilities == nil {
+	if r.App.Capabilities == nil {
 		return nil
 	}
-	return r.Capabilities()
+	return r.App.Capabilities()
 }
 
 // toCapabilities flattens capabilities by entity and action, in a stable order.
 func toCapabilities(caps bootstrap.EntityCapabilities) []EntityCapability {
 	out := []EntityCapability{}
-	for action, a := range graphActions {
+	for _, a := range entity.Actions {
 		for name, actions := range caps {
 			c, ok := actions[a]
 			if !ok {
 				continue
 			}
 			out = append(out, EntityCapability{
-				Entity: name, Action: action, Privilege: graphPrivileges[c.Privilege],
-				Connection: c.Connection, Columns: c.Columns, Reason: optional(c.Reason),
+				Entity: name, Action: strings.ToUpper(a.String()), Privilege: graphPrivileges[c.Privilege],
+				Connection: c.Connection, Columns: c.Columns, Reason: kit.Optional(c.Reason),
 			})
 		}
 	}

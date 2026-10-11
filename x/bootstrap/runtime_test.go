@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/budget"
-	"github.com/nethinwei/sql-mcp-server/core/tool"
+	"github.com/nethinwei/sql-mcp-server/core/config"
 )
 
 // A reload serves the new App at once: a request in flight on the old one
@@ -60,77 +60,45 @@ func TestRuntimeReloadFailureKeepsOldApp(t *testing.T) {
 	_ = runtime.Close()
 }
 
-func TestRuntimeReloadPreservesTransactionManager(t *testing.T) {
-	manager := tool.NewTransactionManager(time.Minute, 2)
-	oldApp := &App{Provider: &fakeProvider{}, Transactions: manager}
-	runtime := NewRuntimeWithBuilder(oldApp, func(string) (*App, error) {
-		return &App{
-			Provider:     &fakeProvider{},
-			Transactions: tool.NewTransactionManager(time.Minute, 2),
-		}, nil
-	})
-	if err := runtime.Reload("ignored"); err != nil {
+// The process's call state outlives its configurations: a reload serves the
+// same transactions, session budgets and followed writes, under the new
+// configuration's limits.
+func TestReloadKeepsTheProcessState(t *testing.T) { //nolint:paralleltest // counts a shared driver's opens
+	shared := NewShared()
+	first := sharedConfig("a")
+	first.Budget.Roles = map[string]config.BudgetLimits{"reader": {MaxSessionCost: 10}}
+	old, err := shared.Assemble(first)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.Current().Transactions != manager {
-		t.Fatal("reload replaced transaction manager")
-	}
-	if err := runtime.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestRuntimeReloadUpdatesTransactionLimits(t *testing.T) {
-	oldManager := tool.NewTransactionManager(time.Minute, 2)
-	runtime := NewRuntimeWithBuilder(
-		&App{Provider: &fakeProvider{}, Transactions: oldManager},
-		func(string) (*App, error) {
-			return &App{
-				Provider: &fakeProvider{}, Transactions: tool.NewTransactionManager(2*time.Minute, 3),
-			}, nil
-		},
-	)
-	defer runtime.Close()
-	if err := runtime.Reload("ignored"); err != nil {
-		t.Fatal(err)
-	}
-	ttl, maxOpen := runtime.Current().Transactions.Configuration()
-	if runtime.Current().Transactions != oldManager || ttl != 2*time.Minute || maxOpen != 3 {
-		t.Fatalf("manager kept = %v, limits = %s/%d", runtime.Current().Transactions == oldManager, ttl, maxOpen)
-	}
-}
-
-func TestRuntimeReloadUpdatesBudgetLimitsAndPreservesState(t *testing.T) {
-	oldBudget := budget.New(map[string]budget.Limits{"reader": {MaxSessionCost: 10}}, nil)
-	lease, err := oldBudget.Acquire(context.Background(), budget.Scope{Role: "reader", Session: "s"})
+	lease, err := old.Budget.Acquire(context.Background(), budget.Scope{Role: "reader", Session: "s"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := lease.Complete(budget.Usage{Cost: 6}); err != nil {
 		t.Fatal(err)
 	}
-	runtime := NewRuntimeWithBuilder(
-		&App{Provider: &fakeProvider{}, Budget: oldBudget},
-		func(string) (*App, error) {
-			return &App{
-				Provider: &fakeProvider{},
-				Budget:   budget.New(map[string]budget.Limits{"reader": {MaxSessionCost: 5}}, nil),
-			}, nil
-		},
-	)
+	second := sharedConfig("a")
+	second.Budget.Roles = map[string]config.BudgetLimits{"reader": {MaxSessionCost: 5}}
+	second.Transactions.TTL, second.Transactions.MaxOpen, second.Transactions.MaxOpenPerConnection =
+		2*time.Minute, 3, 2
+	runtime := NewRuntimeWithBuilder(old, func(string) (*App, error) { return shared.Assemble(second) })
+	defer runtime.Close()
 	if err := runtime.Reload("ignored"); err != nil {
 		t.Fatal(err)
 	}
-	if runtime.Current().Budget != oldBudget {
-		t.Fatal("budget state manager was replaced")
+	next := runtime.Current()
+	if next.Transactions != old.Transactions || next.Budget != old.Budget || next.Writes != old.Writes ||
+		next.ResultMemory != old.ResultMemory {
+		t.Fatal("a reload replaced the process's call state")
 	}
-	if _, err := oldBudget.Acquire(context.Background(), budget.Scope{Role: "reader", Session: "s"}); !errors.Is(
-		err,
-		budget.ErrExceeded,
-	) {
-		t.Fatalf("updated budget ignored preserved state: %v", err)
+	if ttl, maxOpen := next.Transactions.Configuration(); ttl != 2*time.Minute || maxOpen != 3 {
+		t.Fatalf("transaction limits = %s/%d", ttl, maxOpen)
 	}
-	_ = runtime.Close()
+	if _, err := next.Budget.Acquire(context.Background(), budget.Scope{Role: "reader", Session: "s"}); !errors.Is(
+		err, budget.ErrExceeded) {
+		t.Fatalf("the new budget limit ignored the session's cost so far: %v", err)
+	}
 }
 
 func TestRuntimeWatchReloadsChangedFile(t *testing.T) {

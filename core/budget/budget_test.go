@@ -39,6 +39,28 @@ func TestMemoryManagerTenantOverrideAndTimeout(t *testing.T) {
 	}
 }
 
+// A tenant budget tightens the role's, field by field: a limit the tenant
+// leaves unset keeps the role's, and the smaller of two set limits applies.
+func TestMemoryManagerTenantLimitsTightenRoleLimits(t *testing.T) {
+	m := New(
+		map[string]Limits{"reader": {MaxConcurrent: 1, MaxReturnedRows: 10}},
+		map[string]Limits{"acme": {MaxExecution: time.Minute, MaxReturnedRows: 100, MaxReturnedBytes: 5}},
+	)
+	scope := Scope{Role: "reader", Tenant: "acme", Session: "s"}
+	lease, err := m.Acquire(context.Background(), scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Complete(Usage{})
+	want := Limits{MaxConcurrent: 1, MaxExecution: time.Minute, MaxReturnedRows: 10, MaxReturnedBytes: 5}
+	if got := lease.Limits(); got != want {
+		t.Fatalf("limits = %+v, want %+v", got, want)
+	}
+	if _, err := m.Acquire(context.Background(), scope); !errors.Is(err, ErrExceeded) {
+		t.Fatalf("the role's concurrency limit was lifted by a tenant budget: %v", err)
+	}
+}
+
 func TestMemoryManagerSeparatesAndClosesSessions(t *testing.T) {
 	m := New(map[string]Limits{"reader": {MaxSessionCost: 2}}, nil)
 	first, err := m.Acquire(context.Background(), Scope{Role: "reader", Session: "a"})
@@ -80,6 +102,25 @@ func TestMemoryManagerStateTTLAndCapacity(t *testing.T) {
 		t.Fatalf("expired idle state was not pruned: %v", err)
 	}
 	_ = two.Complete(Usage{})
+}
+
+// A caller opening sessions without end cannot lock others out: a full state
+// table makes room by dropping the least recently used idle state, before its
+// TTL.
+func TestMemoryManagerFullTableEvictsIdleStates(t *testing.T) {
+	m := NewWithBounds(nil, nil, time.Hour, 2)
+	for _, session := range []string{"flood-1", "flood-2", "flood-3"} {
+		lease, err := m.Acquire(context.Background(), Scope{Role: "flood", Session: session})
+		if err != nil {
+			t.Fatalf("%s: %v", session, err)
+		}
+		_ = lease.Complete(Usage{})
+	}
+	other, err := m.Acquire(context.Background(), Scope{Role: "other", Session: "s"})
+	if err != nil {
+		t.Fatalf("a full table of idle states refused another caller: %v", err)
+	}
+	_ = other.Complete(Usage{})
 }
 
 func TestMemoryManagerUpdateLimitsPreservesSessionState(t *testing.T) {
@@ -191,4 +232,30 @@ func TestMemoryManagerChecksEstimatedScannedRows(t *testing.T) {
 	if err := lease.Complete(Usage{EstimatedScannedRows: 11, ReturnedRows: 1}); !errors.Is(err, ErrExceeded) {
 		t.Fatalf("completed estimate error = %v", err)
 	}
+}
+
+// A tenant's maxConcurrent bounds its sessions' calls together: opening
+// another session does not get round it, and other tenants are not affected.
+func TestTenantConcurrencySpansSessions(t *testing.T) {
+	t.Parallel()
+	m := New(nil, map[string]Limits{"acme": {MaxConcurrent: 1}})
+	ctx := context.Background()
+	held, err := m.Acquire(ctx, Scope{Role: "reader", Tenant: "acme", Session: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Acquire(ctx, Scope{Role: "writer", Tenant: "acme", Session: "b"}); !errors.Is(err, ErrExceeded) {
+		t.Fatalf("another session of the tenant = %v", err)
+	}
+	other, err := m.Acquire(ctx, Scope{Role: "reader", Tenant: "globex", Session: "c"})
+	if err != nil {
+		t.Fatalf("another tenant = %v", err)
+	}
+	_ = other.Complete(Usage{})
+	_ = held.Complete(Usage{})
+	again, err := m.Acquire(ctx, Scope{Role: "writer", Tenant: "acme", Session: "b"})
+	if err != nil {
+		t.Fatalf("after the call ended = %v", err)
+	}
+	_ = again.Complete(Usage{})
 }

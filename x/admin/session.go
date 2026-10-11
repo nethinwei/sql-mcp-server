@@ -109,6 +109,16 @@ func (s *sessions) lookup(id string) (session, bool) {
 	return *sess, true
 }
 
+// alive reports that a session exists and has not expired, without counting
+// as activity: a long-lived event stream must not keep a session from idling
+// out.
+func (s *sessions) alive(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, ok := s.byID[id]
+	return ok && !s.expired(sess, s.now())
+}
+
 func (s *sessions) delete(id string) {
 	s.mu.Lock()
 	delete(s.byID, id)

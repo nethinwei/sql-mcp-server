@@ -26,9 +26,9 @@ func (AggregateTool) Info() Info {
 func (AggregateTool) Enabled(f config.ToolFlags) bool { return f.AggregateRecords }
 func (AggregateTool) CostGated()                      {}
 func (AggregateTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
-	var in aggregateInput
-	if err := decodeInput(input, &in); err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+	in, err := decodeTool[aggregateInput](input, nil)
+	if err != nil {
+		return Result{}, err
 	}
 	if tc.MaxGroupByFields > 0 && len(in.GroupBy) > tc.MaxGroupByFields {
 		return Result{}, fmt.Errorf("%w: too many group-by fields", ErrInvalidInput)

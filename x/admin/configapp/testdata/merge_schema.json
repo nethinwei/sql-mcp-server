@@ -1,0 +1,23 @@
+{
+  "lists": {
+    "fields[]": "name",
+    "grants[]": "entity",
+    "relationships[]": "name"
+  },
+  "unset": [
+    "allowCascade",
+    "datasource",
+    "description",
+    "disabled",
+    "fields[].alias",
+    "fields[].description",
+    "fields[].exclude",
+    "fields[].mask",
+    "kind",
+    "mcp.customTool",
+    "mcp.trustedProcedure",
+    "schema",
+    "source",
+    "tokenHash"
+  ]
+}

@@ -3,8 +3,11 @@ package bootstrap
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,10 +20,10 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/audit"
 	"github.com/nethinwei/sql-mcp-server/core/budget"
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/cache"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
-	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/engine"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/hook"
@@ -41,6 +44,8 @@ type Provider = coreprovider.Provider
 
 // App is the assembled application, ready to serve.
 type App struct {
+	// Provider is the read connection of the default datasource (the one a
+	// request names none of).
 	Provider Provider
 	// Providers holds each datasource's read connection, which also serves
 	// introspection and EXPLAIN; Connections holds every connection.
@@ -48,16 +53,16 @@ type App struct {
 	Connections Connections
 	Prepared    map[string]*store.PreparedDB
 	Sources     map[string]tool.DataSource
-	Dialect     dialect.Dialect
-	Registry    *entity.Registry
-	Authorizer  rbac.Authorizer
-	Masker      mask.Masker
-	Gate        cost.Gate
-	Engine      *engine.Engine
-	Tools       *tool.Registry
-	ToolFlags   config.ToolFlags
-	DefaultRole string
-	DefaultUser string
+	// defaultSource names the default datasource in Sources.
+	defaultSource string
+	Registry      *entity.Registry
+	Authorizer    rbac.Authorizer
+	Masker        mask.Masker
+	Engine        *engine.Engine
+	Tools         *tool.Registry
+	ToolFlags     config.ToolFlags
+	DefaultRole   string
+	DefaultUser   string
 	// Users maps an enabled user name to its identity; UserTokens maps a
 	// tokenHash to the user name. Both follow the snapshot on reload.
 	Users        map[string]UserIdentity
@@ -67,10 +72,10 @@ type App struct {
 	Hooks        *hook.Hooks
 	Cache        cache.Cache[[]map[string]any]
 	Feedback     cost.FeedbackStore
-	Analyze      cost.AnalyzePolicy
 	Budget       *budget.MemoryManager
 	Transactions *tool.TransactionManager
 	Writes       *tool.WriteTracker
+	ResultMemory *tool.ResultMemory
 	TxBeginners  map[string]store.TxBeginner
 	// WriteTargets are what a write through each entity invalidates.
 	WriteTargets *tool.WriteTargets
@@ -102,37 +107,39 @@ func (a *App) publishShared() {
 	}
 }
 
+// Bus returns the execution bus the App runs on; nil for an App assembled
+// without shared services, whose work then runs unbounded by a bus.
+func (a *App) Bus() *bus.Bus {
+	if a.shared == nil {
+		return nil
+	}
+	return a.shared.bus
+}
+
 // Config returns the configuration the App was assembled from.
 func (a *App) Config() *config.Config { return a.config }
 
 // ToolContext builds a per-request tool.Context for the given role.
 func (a *App) ToolContext(role string) tool.Context {
-	tc := tool.Context{
-		Role:         role,
-		DB:           a.Provider,
-		Dialect:      a.Dialect,
-		Registry:     a.Registry,
-		Authorizer:   a.Authorizer,
-		Masker:       a.Masker,
-		Gate:         a.Gate,
-		Cache:        a.Cache,
-		Engine:       a.Engine,
-		Auditor:      a.Auditor,
-		Hooks:        a.Hooks,
-		Limits:       a.Limits,
-		Feedback:     a.Feedback,
-		Analyze:      a.Analyze,
-		Sources:      a.Sources,
-		Transactions: a.Transactions,
-		Writes:       a.Writes,
-		TxBeginners:  a.TxBeginners,
-		Generation:   a.generation,
-		WriteTargets: a.WriteTargets,
+	src := a.Sources[a.defaultSource]
+	return tool.Context{
+		Services: a.Services(), Role: role,
+		DB: a.Provider, Dialect: src.Dialect, Gate: src.Gate, Analyze: src.Analyze,
+	}
+}
+
+// Services are the App's, as every call runs on them.
+func (a *App) Services() *tool.Services {
+	s := &tool.Services{
+		Registry: a.Registry, Authorizer: a.Authorizer, Masker: a.Masker, Cache: a.Cache, Engine: a.Engine,
+		Auditor: a.Auditor, Hooks: a.Hooks, Limits: a.Limits, Feedback: a.Feedback, Sources: a.Sources,
+		Transactions: a.Transactions, Writes: a.Writes, ResultMemory: a.ResultMemory, TxBeginners: a.TxBeginners,
+		Generation: a.generation, WriteTargets: a.WriteTargets,
 	}
 	if a.Budget != nil { // a nil *MemoryManager must stay a nil interface
-		tc.Budget = a.Budget
+		s.Budget = a.Budget
 	}
-	return tc
+	return s
 }
 
 // ToolContextForSubject builds a per-request tool.Context for a role plus
@@ -165,7 +172,7 @@ func (a *App) CloseContext(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
-	if a.Transactions != nil {
+	if a.Transactions != nil && a.shared == nil { // shared ones outlive the App
 		a.Transactions.Close()
 	}
 	if a.Auditor != nil {
@@ -273,11 +280,14 @@ func Load(path string) (*config.Config, error) {
 	return LoadBytes(data)
 }
 
-// ValidateFile parses, defaults, validates, and resolves secrets without
-// opening database connections.
+// ValidateFile parses, defaults, validates, runs the offline assembly checks
+// (CheckOffline) and resolves secrets without opening database connections.
 func ValidateFile(path string, resolver SecretResolver) error {
 	cfg, err := Load(path)
 	if err != nil {
+		return err
+	}
+	if err := CheckOffline(cfg); err != nil {
 		return err
 	}
 	if resolver == nil {
@@ -395,22 +405,18 @@ func AssembleWithProviders(cfg *config.Config, providers map[string]Provider) (*
 	return AssembleWithConnections(cfg, connections)
 }
 
+// recordProviderFailure reports whether err tells of the database's health
+// and so feeds the adaptive limit and the breaker. It counts only what the
+// database or the connection to it reported (fail closed: an error of any
+// other kind, such as a new business error, never opens the breaker); a
+// cancelled or timed-out call is the caller's doing.
 func recordProviderFailure(err error) bool {
-	switch {
-	case err == nil:
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded),
-		errors.Is(err, budget.ErrExceeded), errors.Is(err, cost.ErrCostExceeded),
-		errors.Is(err, tool.ErrUnauthorized), errors.Is(err, tool.ErrEntityNotFound),
-		errors.Is(err, tool.ErrInvalidInput), errors.Is(err, tool.ErrDMLToolsDisabled),
-		errors.Is(err, tool.ErrUnsafeWrite), errors.Is(err, tool.ErrConstraintViolation),
-		errors.Is(err, tool.ErrDatasourceForbidden),
-		errors.Is(err, tool.ErrTransactionNotFound), errors.Is(err, tool.ErrTransactionScope),
-		errors.Is(err, tool.ErrTransactionCapacity), errors.Is(err, tool.ErrTransactionStale):
-		return false
-	default:
-		return true
 	}
+	var netErr net.Error
+	return errors.Is(err, tool.ErrDatabase) || errors.Is(err, driver.ErrBadConn) ||
+		errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &netErr)
 }
 
 // Connections are opened providers by datasource and connection name.
@@ -479,25 +485,6 @@ func reconcileEntities(
 		return nil, fmt.Errorf("schema drift (configured but missing in DB): %v", drift.Missing)
 	}
 	return identifyRelations(reconciled, physical, &cat), nil
-}
-
-// toThreshold maps config.CostConfig to cost.Threshold.
-func toThreshold(c config.CostConfig) cost.Threshold {
-	return cost.Threshold{
-		SoftScore:                 c.SoftScore,
-		HardScore:                 c.HardScore,
-		MaxRows:                   c.MaxRows,
-		MaxBytes:                  c.MaxBytes,
-		RejectFullScan:            c.RejectFullScan,
-		WhitelistPKPoint:          c.WhitelistPKPoint,
-		RequirePKForWrite:         c.RequirePKForWriteOrDefault(),
-		RequireAggregatePredicate: true,
-		ExplainFailClosed:         c.EnabledOrDefault(),
-		RequireKnownScan:          c.RequireKnownScan,
-		RequireFreshStats:         c.RequireFreshStats,
-		AllowTemplates:            c.AllowTemplates,
-		RejectTemplates:           c.RejectTemplates,
-	}
 }
 
 var secretRe = regexp.MustCompile(`\$\{([^}]+)\}`)
@@ -599,24 +586,23 @@ func validateMaskRules(m *mask.RuleMasker, entities []entity.Entity) error {
 }
 
 func newBudgetManager(c config.BudgetConfig, principals map[string]config.BudgetLimits) *budget.MemoryManager {
+	return budget.New(budgetLimits(c, principals))
+}
+
+// budgetLimits are the role (and user principal) and tenant limits c sets.
+func budgetLimits(c config.BudgetConfig, principals map[string]config.BudgetLimits) (
+	map[string]budget.Limits, map[string]budget.Limits,
+) {
 	roles := make(map[string]budget.Limits, len(c.Roles)+len(principals))
 	for name, limits := range c.Roles {
-		roles[name] = toBudgetLimits(limits)
+		roles[name] = budget.Limits(limits)
 	}
 	for principal, limits := range principals {
-		roles[principal] = toBudgetLimits(limits)
+		roles[principal] = budget.Limits(limits)
 	}
 	tenants := make(map[string]budget.Limits, len(c.Tenants))
 	for name, limits := range c.Tenants {
-		tenants[name] = toBudgetLimits(limits)
+		tenants[name] = budget.Limits(limits)
 	}
-	return budget.New(roles, tenants)
-}
-
-func toBudgetLimits(c config.BudgetLimits) budget.Limits {
-	return budget.Limits{
-		MaxConcurrent: c.MaxConcurrent, MaxExecution: c.MaxExecution,
-		MaxEstimatedScannedRows: c.MaxEstimatedScannedRows, MaxReturnedRows: c.MaxReturnedRows,
-		MaxReturnedBytes: c.MaxReturnedBytes, MaxSessionCost: c.MaxSessionCost,
-	}
+	return roles, tenants
 }

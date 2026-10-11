@@ -1,0 +1,571 @@
+# Planning: the scanned catalog across datasources, plans evaluated over it,
+# saved plan templates, pending work, and tokens for the configuration MCP
+# endpoint. Plans are JSON in the form x/configplan.Plan decodes (see
+# docs/design/planning.md); the same JSON is what templates store and the
+# MCP tools take.
+
+enum TableStatus {
+  "No entity reads the table."
+  NEW
+  "An entity of the workspace reads it, not yet published."
+  WORKSPACE
+  "A published entity reads it."
+  PUBLISHED
+}
+
+input CatalogFilter {
+  "Datasources to search; empty: all."
+  datasources: [String!]
+  "Glob patterns (* and ?) on schema names."
+  schemas: [String!]
+  "Glob patterns on table names."
+  tables: [String!]
+  "A part of the table name or its comment."
+  search: String
+  status: [TableStatus!]
+  "Only configured tables whose columns and fields differ."
+  drift: Boolean
+}
+
+input CatalogInput {
+  filter: CatalogFilter!
+  offset: Int = 0
+  "At most 500."
+  limit: Int = 50
+}
+
+input PlanTemplateInput {
+  "1 to 64 characters."
+  name: String!
+  plan: JSON!
+  "Report its new matches as pending."
+  recurring: Boolean!
+  """
+  The version edited; null creates a template, failing when the name is
+  taken. Another administrator's save meanwhile fails with CONFLICT.
+  """
+  expectedVersion: Int
+}
+
+input ScanBatchInput {
+  datasource: String!
+  schemas: [String!]!
+  "Names the request: sent again with the same key, it gets the batch it started."
+  requestKey: String
+}
+
+input PlanPreviewInput {
+  plan: JSON!
+  """
+  Report every new table a grant covers (exception review, to confirm), as
+  reviewing a recurring template's proposal needs.
+  """
+  review: Boolean = false
+}
+
+"A plan previewed (planId) to write into the signed-in administrator's workspace."
+input ApplyPlanInput {
+  plan: JSON!
+  planId: String!
+  "Previewed as a review."
+  review: Boolean = false
+  "The IDs of the exceptions to confirm, every one of them, as the administrator confirmed them."
+  confirmed: [String!]
+}
+
+"Items of the workspace written; an item written meanwhile merges three ways."
+input WorkspaceEditInput {
+  items: [WorkspaceItemInput!]!
+}
+
+input WorkspaceItemInput {
+  "entity, role, user or settings."
+  kind: String!
+  "An entity's ID, a role's or a user's name, or settings."
+  key: String!
+  "The item as the console edits it; null removes it."
+  value: JSON
+  "The item as its writer read it; null: it was absent."
+  previous: JSON
+  """
+  For an entity or a role renamed or moved: the key it had. The item it
+  replaces is removed, and references to it follow (see docs/design/editing.md).
+  """
+  renamedFrom: String
+}
+
+"The workspace at the version reviewed, to publish as a new revision."
+input CommitInput {
+  version: Int!
+  "The revision the reviewer saw published."
+  expectedPublished: ID!
+  comment: String
+  restartRequired: Boolean = false
+}
+
+input PendingStateInput {
+  "The item's key, as PendingWork gives it."
+  key: String!
+  "open, snoozed or ignored."
+  status: String!
+  owner: String
+  reason: String
+  "When a snoozed item opens again."
+  until: Time
+}
+
+input McpTokenInput {
+  "Names the client, unique among the administrator's tokens."
+  name: String!
+  "Days until it expires; null or 0 never."
+  expiresInDays: Int
+  "Limits it to these datasources; null: every one."
+  datasources: [String!]
+}
+
+extend type Query {
+  """
+  Scanned tables of every datasource matching filter, a page at a time,
+  compared with the signed-in administrator's workspace (as are catalogRefs,
+  catalogTable, catalogLinks, planScope, previewPlan and pending).
+  """
+  catalog(input: CatalogInput!): CatalogPage!
+  "The refs of every table matching filter, to select them all."
+  catalogRefs(filter: CatalogFilter!): [String!]!
+  "One scanned table in full, with the entity proposed for it; null when not scanned."
+  catalogTable(ref: String!): ImportTable
+  "The foreign keys of a scanned table, and those of other scanned tables referencing it."
+  catalogLinks(ref: String!): CatalogLinks!
+  """
+  How many tables a plan scope (the scope part of a plan) selects, a few of
+  them, and how many each of its conditions selects alone.
+  """
+  planScope(scope: JSON!): ScopeStats!
+  """
+  Evaluate a plan against the signed-in administrator's workspace without
+  saving anything.
+  """
+  previewPlan(input: PlanPreviewInput!): PlanPreview!
+  planTemplates: [PlanTemplate!]!
+  "Every version of a template, newest first."
+  planTemplateVersions(name: String!): [PlanTemplate!]!
+  """
+  What waits for an administrator: recurring templates with new matches or
+  rules they cannot apply, tables whose fields differ, tables not imported
+  and schemas never scanned, each with how it is being handled.
+  """
+  pending: PendingWork!
+  "How the state of a pending item changed, newest first."
+  pendingLog(key: String!): [PendingState!]!
+  "The signed-in administrator's workspace; null when nothing is published."
+  workspace: Workspace
+  "The writes of the signed-in administrator's workspace, newest first."
+  workspaceLog(limit: Int): [WorkspaceLogEntry!]!
+  """
+  Where the signed-in administrator's workspace names the fields of an entity
+  (by its ID): roles and users first, a row filter before a field list.
+  """
+  fieldReferences(entity: ID!): [FieldReference!]!
+  "Every draft, newest first, with the revision it builds on."
+  drafts: [DraftRevision!]!
+  "The signed-in administrator's tokens for the configuration MCP endpoint."
+  mcpTokens: [McpToken!]!
+  "Recent schema scan batches of a datasource, running ones first."
+  scanBatches(datasource: String!): [ScanBatch!]!
+}
+
+extend type Mutation {
+  """
+  Writes items of the signed-in administrator's workspace. An item written
+  meanwhile (another console, an agent) merges three ways; a value both
+  changed differently becomes a conflict, keeping this write's value.
+  """
+  editWorkspace(input: WorkspaceEditInput!): Workspace!
+  """
+  Writes a previewed plan into the signed-in administrator's workspace, the
+  items it changes, as an agent's plan_apply does; CONFLICT when it is not
+  the plan previewed or would now change something else.
+  """
+  applyPlan(input: ApplyPlanInput!): AppliedPlan!
+  "Moves the workspace onto revision to, re-applying what was changed in it."
+  updateWorkspace(to: ID!): Workspace!
+  "Makes the workspace revision to as it is, dropping what was changed in it."
+  resetWorkspace(to: ID!): Workspace!
+  "Takes a draft into the workspace, onto the published revision."
+  mergeDraft(id: ID!): Workspace!
+  "Resolves a conflict: theirs takes the other side's value, else the workspace's stays."
+  resolveConflict(id: String!, theirs: Boolean!): Workspace!
+  "Saves the workspace as a draft to share, in place of the one it saved before."
+  checkpointWorkspace(comment: String): Revision!
+  """
+  Publishes the workspace at the version reviewed as a new revision;
+  CONFLICT when the workspace or the published revision changed since.
+  """
+  commitWorkspace(input: CommitInput!): Revision!
+  "Create a template (expectedVersion null) or save a new version of one."
+  savePlanTemplate(input: PlanTemplateInput!): PlanTemplate!
+  deletePlanTemplate(name: String!): Boolean!
+  "Mark how a pending item is being handled; the change is logged."
+  setPendingState(input: PendingStateInput!): PendingState!
+  """
+  A new named token for the configuration MCP endpoint, for one client; it
+  acts with the administrator's permissions and is shown only once.
+  """
+  createMcpToken(input: McpTokenInput!): McpTokenSecret!
+  revokeMcpToken(id: ID!): Boolean!
+  """
+  Scan schemas of a datasource on the server, a few at a time; the batch
+  goes on when the console is closed. Poll scanBatches for progress.
+  """
+  startScanBatch(input: ScanBatchInput!): ScanBatch!
+  cancelScanBatch(id: ID!): ScanBatch
+  "Scan again the schemas of a batch that failed or were canceled, as a new batch."
+  retryScanBatch(id: ID!): ScanBatch!
+}
+
+type CatalogPage {
+  "Tables matching the filter."
+  total: Int!
+  tables: [CatalogRow!]!
+  "Tables by status, matching every condition but the status."
+  counts: CatalogCounts!
+  coverage: [CatalogCoverage!]!
+}
+
+type CatalogCounts {
+  all: Int!
+  new: Int!
+  workspace: Int!
+  published: Int!
+  drift: Int!
+}
+
+"What has been scanned of a datasource."
+type CatalogCoverage {
+  datasource: String!
+  "Schemas scanned."
+  scanned: Int!
+  "Schemas listed; null when never listed."
+  listed: Int
+  "Listed schemas never scanned."
+  unscanned: [String!]!
+  "When the oldest scanned schema was scanned; null when none."
+  oldestScan: Time
+}
+
+type CatalogLinks {
+  outgoing: [TableLink!]!
+  incoming: [TableLink!]!
+}
+
+"A foreign key between two scanned tables."
+type TableLink {
+  "The other table."
+  ref: String!
+  name: String!
+  "Columns of the referencing table, and the referenced ones."
+  columns: [String!]!
+  refColumns: [String!]!
+  "The entity reading the other table, if any."
+  entity: String
+}
+
+type ScopeStats {
+  total: Int!
+  "The first matching tables."
+  samples: [CatalogRow!]!
+  "Every condition of the scope with how many tables it selects alone."
+  conditions: [ScopeCondition!]!
+}
+
+type ScopeCondition {
+  "datasources, schemas, tables, search, status, drift or refs."
+  name: String!
+  "The condition as written."
+  value: String!
+  matched: Int!
+}
+
+type ScanBatch {
+  id: ID!
+  datasource: String!
+  "running, done or canceled."
+  state: String!
+  total: Int!
+  done: Int!
+  failed: Int!
+  canceled: Int!
+  "Schemas waiting or scanning."
+  pending: Int!
+  items: [ScanBatchItem!]!
+  startedBy: String!
+  startedAt: Time!
+  finishedAt: Time
+}
+
+type ScanBatchItem {
+  schema: String!
+  "pending, running, done, failed or canceled."
+  state: String!
+  error: String
+}
+
+type CatalogRow {
+  "datasource.schema.table: the ID an entity named like the table would have."
+  ref: String!
+  datasource: String!
+  schema: String!
+  table: String!
+  description: String!
+  view: Boolean!
+  columns: Int!
+  "Foreign keys of the table, and of other scanned tables referencing it."
+  foreignKeys: Int!
+  referencedBy: Int!
+  "Whether a key identifies a row."
+  hasKey: Boolean!
+  sideEffects: Boolean!
+  status: TableStatus!
+  "The entity that reads the table."
+  entity: String
+  "Columns without a field, and fields without a column."
+  added: [String!]!
+  missing: [String!]!
+  "When the table's schema was scanned."
+  scannedAt: Time
+}
+
+type PlanPreview {
+  """
+  Identifies the plan with what it was evaluated against (base revision,
+  workspace and scans); an agent applies a plan only while it still evaluates to it.
+  """
+  planId: String!
+  report: PlanReport!
+  "Entities added or changed, whole."
+  entities: [Entity!]!
+  "IDs of the entities added."
+  added: [String!]!
+  "Roles and users added or changed, whole."
+  roles: [Role!]!
+  users: [User!]!
+  "The draft with the plan applied, as validate checks it."
+  validation: Validation!
+}
+
+type PlanReport {
+  matched: Int!
+  excluded: Int!
+  objects: [PlanObjects!]!
+  changes: [PlanChange!]!
+  exceptions: [PlanException!]!
+  unscanned: [UnscannedSchemas!]!
+  "When the tables in scope were scanned, oldest and newest."
+  scannedFrom: Time
+  scannedTo: Time
+}
+
+type PlanObjects {
+  datasource: String!
+  schema: String!
+  tables: Int!
+  imported: Int!
+  changed: Int!
+}
+
+type PlanChange {
+  "import, createRole, grant, exclude, mask, syncAdd or syncRemove."
+  kind: String!
+  principal: String
+  actions: [String!]!
+  mask: String
+  "Fields a field change touches."
+  fields: Int!
+  entities: [String!]!
+}
+
+type PlanException {
+  """
+  Identifies the exception within its plan: a draft is saved with each
+  exception to confirm confirmed by its ID.
+  """
+  id: String!
+  """
+  renamed, noKey, sideEffects, relationshipDropped, qualified, unknownUser,
+  noFields, referenced, denied or review.
+  """
+  kind: String!
+  """
+  block (the proposal cannot be taken), confirm (taking it needs the
+  exception acknowledged) or info.
+  """
+  level: String!
+  "Not only informative: level is block or confirm."
+  warning: Boolean!
+  "The table, when excluding it is a way out."
+  ref: String
+  entity: String
+  detail: String
+}
+
+type UnscannedSchemas {
+  datasource: String!
+  schemas: [String!]!
+}
+
+type PlanTemplate {
+  name: String!
+  plan: JSON!
+  "Its new matches are pending after each scan."
+  recurring: Boolean!
+  "Bumped by every save."
+  version: Int!
+  "Who saved this version."
+  author: String!
+  updatedAt: Time!
+}
+
+type PendingWork {
+  "Recurring templates whose plan would change the configuration or has rules it cannot apply."
+  plans: [PendingPlan!]!
+  "Tables whose fields differ from their columns."
+  driftTables: [PendingTable!]!
+  drift: Int!
+  newTables: Int!
+  unscannedSchemas: Int!
+  "Datasources whose schemas were never listed: what they hold is unknown."
+  unlistedDatasources: [String!]!
+}
+
+type PendingPlan {
+  "Changes when the report does: a new situation opens again."
+  key: String!
+  template: PlanTemplate!
+  report: PlanReport!
+  state: PendingState
+}
+
+type PendingTable {
+  "Changes when the differences do."
+  key: String!
+  ref: String!
+  entity: String!
+  added: [String!]!
+  missing: [String!]!
+  state: PendingState
+}
+
+type PendingState {
+  key: String!
+  "open, snoozed or ignored; a snooze that ended reads open."
+  status: String!
+  owner: String
+  reason: String
+  until: Time
+  updatedBy: String!
+  updatedAt: Time!
+}
+
+type McpToken {
+  id: ID!
+  name: String!
+  createdAt: Time!
+  "null: never expires."
+  expiresAt: Time
+  lastUsedAt: Time
+  "The datasources it reaches; null: every one."
+  datasources: [String!]
+  "Refused: created read only, which is no longer offered; generate a new one."
+  retired: Boolean!
+}
+
+type McpTokenSecret {
+  "Shown only once."
+  token: String!
+  info: McpToken!
+}
+
+"""
+An administrator's workspace: the one copy of their unpublished work that
+they, in any console, and their agents write.
+"""
+type Workspace {
+  "The revision it builds on."
+  base: ID!
+  version: Int!
+  "The console's sections (entities, roles, users, settings)."
+  sections: JSON!
+  "The conflicts to resolve before committing."
+  conflicts: [WorkspaceConflict!]!
+  "Where changes came from: plans agents applied, drafts taken in."
+  notes: [WorkspaceNote!]!
+  "Drafts taken in or saved from it, not to offer it for review."
+  taken: [ID!]!
+  "The draft saved from it while nothing changed since; null otherwise."
+  checkpoint: ID
+  updatedAt: Time
+  "The administrator, or agent:<token name>."
+  updatedBy: String!
+}
+
+"A value the workspace and another side changed differently."
+type WorkspaceConflict {
+  id: String!
+  kind: String!
+  key: String!
+  "Where in the item, e.g. fields[email].mask; empty: the whole item."
+  path: String!
+  mine: JSON
+  mineGone: Boolean!
+  theirs: JSON
+  theirsGone: Boolean!
+  "published (a newer revision), draft (one taken in) or workspace (a write made meanwhile)."
+  source: String!
+  fromId: String
+  fromBy: String
+}
+
+type WorkspaceNote {
+  "agent or draft."
+  source: String!
+  by: String!
+  text: String!
+}
+
+type WorkspaceRef {
+  kind: String!
+  key: String!
+}
+
+type WorkspaceLogEntry {
+  version: Int!
+  at: Time!
+  by: String!
+  "edit, apply, update, reset, merge, resolve, checkpoint or commit."
+  op: String!
+  items: [WorkspaceRef!]!
+  note: String
+}
+
+type AppliedPlan {
+  "The items written."
+  items: [WorkspaceRef!]!
+}
+
+type DraftRevision {
+  revision: Revision!
+  "The first revision up its parents that is not a draft."
+  basedOn: ID
+}
+
+"""
+A place naming a field: a role or user (via fields: a grant lists it, which
+removing the field takes care of; rows: a grant filters by it, to fix first),
+or an entity's relationship, primaryKey, uniqueKey or tenantPolicy (name: its ID).
+"""
+type FieldReference {
+  field: String!
+  kind: String!
+  name: String!
+  via: String
+}

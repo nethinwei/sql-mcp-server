@@ -10,9 +10,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 
-	"github.com/nethinwei/sql-mcp-server/core/cost"
-	"github.com/nethinwei/sql-mcp-server/core/dialect"
-	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/provider"
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
@@ -30,11 +27,8 @@ func init() {
 
 // Provider adapts a PostgreSQL database to the core interfaces.
 type Provider struct {
-	*sqladapter.Pool
-	dialect      dialect.Dialect
-	explainer    cost.Explainer
-	introspector introspect.Introspector
-	analyzeTx    store.TxBeginner
+	sqladapter.Base
+	analyzeTx store.TxBeginner
 }
 
 // New opens a PostgreSQL database and pings it. The DSN uses the pgx driver
@@ -74,12 +68,8 @@ func Open(dsn string, opts providerregistry.Options) (*Provider, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("%w: %v", ErrPing, err)
 	}
-	p := &Provider{
-		Pool:         sqladapter.New(db, nil, classify),
-		dialect:      Dialect{},
-		explainer:    pgExplainer{db: db},
-		introspector: pgIntrospector{db: db},
-	}
+	p := &Provider{Base: sqladapter.NewBase(sqladapter.New(db, nil, classify), Dialect{}, pgExplainer{db: db},
+		pgIntrospector{db: db})}
 	p.analyzeTx = p
 	return p, nil
 }
@@ -87,12 +77,3 @@ func Open(dsn string, opts providerregistry.Options) (*Provider, error) {
 // bootstrap sizes and pings the pool through DB(); keep it reachable (an
 // embedded field named DB would shadow it).
 var _ interface{ DB() *sql.DB } = (*Provider)(nil)
-
-// Dialect returns the PostgreSQL dialect.
-func (p *Provider) Dialect() dialect.Dialect { return p.dialect }
-
-// Explainer returns the EXPLAIN-based plan estimator.
-func (p *Provider) Explainer() cost.Explainer { return p.explainer }
-
-// Introspector returns the schema introspector.
-func (p *Provider) Introspector() introspect.Introspector { return p.introspector }

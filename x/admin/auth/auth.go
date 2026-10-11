@@ -78,6 +78,40 @@ func ValidatePassword(password string) error {
 type Principal struct {
 	Username    string
 	Permissions []string
+	// Datasources limits the principal to these datasources (a token's
+	// scope); nil does not limit it.
+	Datasources []string
+}
+
+// ErrOutOfScope: the principal is limited to other datasources.
+var ErrOutOfScope = errors.New("admin: outside the token's datasources")
+
+// Limited reports whether the principal is limited to some datasources.
+func (p Principal) Limited() bool { return p.Datasources != nil }
+
+// Allows reports whether the principal may act on datasource.
+func (p Principal) Allows(datasource string) bool {
+	return !p.Limited() || slices.Contains(p.Datasources, datasource)
+}
+
+// RequireDatasource returns the principal when it holds perm and may act on
+// datasource.
+func RequireDatasource(ctx context.Context, perm, datasource string) (Principal, error) {
+	p, err := Require(ctx, perm)
+	if err == nil && !p.Allows(datasource) {
+		return Principal{}, fmt.Errorf("%w: %q", ErrOutOfScope, datasource)
+	}
+	return p, err
+}
+
+// RequireUnlimited returns the principal when it holds perm and is not
+// limited to some datasources: what it reads spans every datasource.
+func RequireUnlimited(ctx context.Context, perm string) (Principal, error) {
+	p, err := Require(ctx, perm)
+	if err == nil && p.Limited() {
+		return Principal{}, fmt.Errorf("%w: this reads every datasource", ErrOutOfScope)
+	}
+	return p, err
 }
 
 // Has reports whether the principal holds perm (directly or via admin:*).

@@ -119,6 +119,10 @@ func TestOBProviderQueryExecExplainIntrospect(t *testing.T) {
 	if plan.ScanType == cost.ScanUnknown {
 		t.Fatalf("expected a known scan type, got ScanUnknown (raw=%s)", string(plan.Raw))
 	}
+	filtered, err := prov.Explainer().Explain(ctx, "SELECT * FROM test.users WHERE tenant_id = ?", []any{7})
+	if err != nil || filtered.ScanType != cost.ScanFull || !filtered.TableSized || filtered.TableRows > 1000 {
+		t.Fatalf("filtered full scan of a small table = %+v, %v", filtered, err)
+	}
 
 	assertOBIntrospectUsers(t, ctx, prov)
 	assertOBIndexParts(t, ctx, prov)

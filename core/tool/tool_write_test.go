@@ -12,6 +12,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/hook"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
 )
 
@@ -19,10 +20,15 @@ func TestCreateTool(t *testing.T) {
 	t.Parallel()
 	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
 	auth := rbac.NewRoleAuthorizer(reg)
-	db := &store.FakeDB{ExecFn: func(_ context.Context, _ string, _ ...any) (store.Result, error) {
+	db := &storetest.FakeDB{ExecFn: func(_ context.Context, _ string, _ ...any) (store.Result, error) {
 		return store.Result{RowsAffected: 1, LastInsertID: 42}, nil
 	}}
-	tc := Context{Role: "writer", DB: db, Dialect: testdialect.MySQL{}, Registry: reg, Authorizer: auth}
+	tc := Context{
+		Services: &Services{Registry: reg, Authorizer: auth},
+		Role:     "writer",
+		DB:       db,
+		Dialect:  testdialect.MySQL{},
+	}
 	in, _ := json.Marshal(createInput{Entity: "users", Values: map[string]any{"email": "bob@x.com"}})
 	res, err := CreateTool{}.Run(context.Background(), in, tc)
 	if err != nil {
@@ -48,12 +54,14 @@ func TestExecErrorsAreWrapped(t *testing.T) {
 		MCP:        entity.MCPFlags{DMLTools: true},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
-	db := &store.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
+	db := &storetest.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
 		return store.Result{}, cause
 	}}
 	tc := Context{
-		Role: "writer", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
-		Authorizer: rbac.NewRoleAuthorizer(reg),
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+		Role:     "writer",
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
 	}
 	_, err := (UpdateTool{}).Run(context.Background(), json.RawMessage(
 		`{"entity":"users","filter":[{"field":"id","op":"eq","value":1}],"set":{"id":2}}`,
@@ -69,7 +77,7 @@ func TestUpdateToolUnsafeWrite(t *testing.T) {
 	e.Role[entity.ActionUpdate] = []string{"writer"}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	auth := rbac.NewRoleAuthorizer(reg)
-	tc := Context{Role: "writer", Dialect: testdialect.Postgres{}, Registry: reg, Authorizer: auth}
+	tc := Context{Services: &Services{Registry: reg, Authorizer: auth}, Role: "writer", Dialect: testdialect.Postgres{}}
 	// no filter -> unsafe
 	in, _ := json.Marshal(updateInput{Entity: "users", Set: map[string]any{"email": "x@x.com"}})
 	_, err := UpdateTool{}.Run(context.Background(), in, tc)
@@ -89,10 +97,15 @@ func TestCreateToolReturning(t *testing.T) {
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	auth := rbac.NewRoleAuthorizer(reg)
-	db := &store.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
-		return store.NewFakeRows([]string{"id"}, []any{int64(7)}), nil
+	db := &storetest.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
+		return storetest.NewFakeRows([]string{"id"}, []any{int64(7)}), nil
 	}}
-	tc := Context{Role: "writer", DB: db, Dialect: testdialect.Postgres{}, Registry: reg, Authorizer: auth}
+	tc := Context{
+		Services: &Services{Registry: reg, Authorizer: auth},
+		Role:     "writer",
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
+	}
 	in, _ := json.Marshal(createInput{Entity: "users", Values: map[string]any{"email": "a@x.com"}})
 	res, err := CreateTool{}.Run(context.Background(), in, tc)
 	if err != nil {
@@ -115,15 +128,15 @@ func TestCreateToolUsesTheRoutedDatasource(t *testing.T) {
 		MCP:        entity.MCPFlags{DMLTools: true},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
-	shop := &store.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
-		return store.NewFakeRows([]string{"id"}, []any{int64(9)}), nil
+	shop := &storetest.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
+		return storetest.NewFakeRows([]string{"id"}, []any{int64(9)}), nil
 	}}
 	tc := Context{
-		Role: "writer", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
-		Sources: map[string]DataSource{
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Sources: map[string]DataSource{
 			"shop":      {DB: shop, Dialect: testdialect.Postgres{}},
-			"analytics": {DB: &store.FakeDB{}, Dialect: testdialect.Postgres{}},
-		},
+			"analytics": {DB: &storetest.FakeDB{}, Dialect: testdialect.Postgres{}},
+		}},
+		Role: "writer",
 	}
 	in, _ := json.Marshal(createInput{Entity: "refunds", Values: map[string]any{"amount": "10.00"}})
 	res, err := CreateTool{}.Run(context.Background(), in, tc)
@@ -146,10 +159,15 @@ func TestDeleteTool(t *testing.T) {
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	auth := rbac.NewRoleAuthorizer(reg)
-	db := &store.FakeDB{ExecFn: func(_ context.Context, _ string, _ ...any) (store.Result, error) {
+	db := &storetest.FakeDB{ExecFn: func(_ context.Context, _ string, _ ...any) (store.Result, error) {
 		return store.Result{RowsAffected: 1}, nil
 	}}
-	tc := Context{Role: "admin", DB: db, Dialect: testdialect.Postgres{}, Registry: reg, Authorizer: auth}
+	tc := Context{
+		Services: &Services{Registry: reg, Authorizer: auth},
+		Role:     "admin",
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
+	}
 	in, _ := json.Marshal(deleteInput{Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: 1}}})
 	res, err := DeleteTool{}.Run(context.Background(), in, tc)
 	if err != nil {
@@ -164,10 +182,9 @@ func TestCreateToolUnauthorized(t *testing.T) {
 	t.Parallel()
 	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
 	tc := Context{
-		Role:       "nobody",
-		Dialect:    testdialect.Postgres{},
-		Registry:   reg,
-		Authorizer: rbac.NewRoleAuthorizer(reg),
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+		Role:     "nobody",
+		Dialect:  testdialect.Postgres{},
 	}
 	in, _ := json.Marshal(createInput{Entity: "users", Values: map[string]any{"email": "x"}})
 	_, err := CreateTool{}.Run(context.Background(), in, tc)
@@ -187,12 +204,18 @@ func TestUpdateToolWriteGuardRejectsNonPK(t *testing.T) {
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	auth := rbac.NewRoleAuthorizer(reg)
-	db := &store.FakeDB{ExecFn: func(_ context.Context, _ string, _ ...any) (store.Result, error) {
+	db := &storetest.FakeDB{ExecFn: func(_ context.Context, _ string, _ ...any) (store.Result, error) {
 		t.Fatal("non-PK write must not execute past the gate")
 		return store.Result{}, nil
 	}}
 	gate := cost.NewGate(cost.StaticRule{PKWhitelist: true}, cost.WriteGuard{})
-	tc := Context{Role: "writer", DB: db, Dialect: testdialect.Postgres{}, Registry: reg, Authorizer: auth, Gate: gate}
+	tc := Context{
+		Services: &Services{Registry: reg, Authorizer: auth},
+		Role:     "writer",
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
+		Gate:     gate,
+	}
 	in, _ := json.Marshal(updateInput{
 		Entity: "users",
 		Filter: []condJSON{{Field: "status", Op: "eq", Value: "active"}},
@@ -209,16 +232,21 @@ func TestCreateAuthorizesWithoutCostGate(t *testing.T) {
 	e := testUsersEntity()
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	events := []string{}
-	db := &store.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
+	db := &storetest.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
 		return store.Result{RowsAffected: 1}, nil
 	}}
 	tc := Context{
-		Role: "writer", DB: db, Dialect: testdialect.MySQL{}, Registry: reg,
-		Authorizer: recordingAuthorizer{events: &events, dec: rbac.Decision{Allowed: true}},
-		Gate:       recordingGate{events: &events},
-		Hooks: &hook.Hooks{OnAuthorize: func(context.Context, rbac.Request, rbac.Decision) {
-			events = append(events, "authorize-hook")
-		}},
+		Services: &Services{
+			Registry:   reg,
+			Authorizer: recordingAuthorizer{events: &events, dec: rbac.Decision{Allowed: true}},
+			Hooks: &hook.Hooks{OnAuthorize: func(context.Context, rbac.Request, rbac.Decision) {
+				events = append(events, "authorize-hook")
+			}},
+		},
+		Role:    "writer",
+		DB:      db,
+		Dialect: testdialect.MySQL{},
+		Gate:    recordingGate{events: &events},
 	}
 	in, _ := json.Marshal(createInput{Entity: "users", Values: map[string]any{"email": "a@x.com"}})
 	if _, err := (CreateTool{}).Run(context.Background(), in, tc); err != nil {
@@ -249,8 +277,9 @@ func TestToolFieldACLByUsage(t *testing.T) {
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	tc := Context{
-		Role: "editor", Dialect: testdialect.Postgres{}, Registry: reg,
-		Authorizer: rbac.NewRoleAuthorizer(reg),
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+		Role:     "editor",
+		Dialect:  testdialect.Postgres{},
 	}
 	cases := []struct {
 		name  string
@@ -286,7 +315,7 @@ func TestWritesRejectGeneratedColumns(t *testing.T) {
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	executed := false
-	db := &store.FakeDB{
+	db := &storetest.FakeDB{
 		QueryFn: func(context.Context, string, ...any) (store.Rows, error) { executed = true; return nil, nil },
 		ExecFn: func(context.Context, string, ...any) (store.Result, error) {
 			executed = true
@@ -294,7 +323,10 @@ func TestWritesRejectGeneratedColumns(t *testing.T) {
 		},
 	}
 	tc := Context{
-		Role: "w", DB: db, Dialect: testdialect.Postgres{}, Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+		Role:     "w",
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
 	}
 	for tool, input := range map[Tool]string{
 		CreateTool{}: `{"entity":"orders","values":{"total":1,"total_cents":100}}`,
@@ -320,10 +352,15 @@ func TestInsertWithoutReturningReportsTheRowKey(t *testing.T) {
 		Role: entity.RoleAccess{entity.ActionCreate: {"w"}},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
-	db := &store.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
+	db := &storetest.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
 		return store.Result{LastInsertID: 42, RowsAffected: 1}, nil
 	}}
-	tc := Context{Role: "w", DB: db, Dialect: testdialect.MySQL{}, Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}
+	tc := Context{
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+		Role:     "w",
+		DB:       db,
+		Dialect:  testdialect.MySQL{},
+	}
 	input := json.RawMessage(`{"entity":"lines","values":{"tenant_id":7,"sku":"a"}}`)
 	res, err := CreateTool{}.Run(context.Background(), input, tc)
 	if err != nil {

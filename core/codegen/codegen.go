@@ -3,6 +3,7 @@ package codegen
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
@@ -108,7 +109,7 @@ func (r Renderer) Compile(e relalg.Expr, opts ...CompileOption) (Compiled, error
 		keys = [][]string{cfg.pkCols}
 	}
 	for _, key := range keys {
-		if isKeyPoint(predicateOf(e), key) {
+		if isKeyPoint(PredicateOf(e), key) {
 			c.IsKeyPoint = true
 			break
 		}
@@ -123,29 +124,12 @@ func kindOf(e relalg.Expr) Kind {
 	case relalg.Call:
 		return KindCall
 	}
-	if containsAggregate(e) {
-		return KindAggregate
+	for ok := true; ok; e, ok = relalg.Input(e) {
+		if _, aggregate := e.(relalg.Aggregate); aggregate {
+			return KindAggregate
+		}
 	}
 	return KindRead
-}
-
-func containsAggregate(e relalg.Expr) bool {
-	switch n := e.(type) {
-	case relalg.Aggregate:
-		return true
-	case relalg.Select:
-		return containsAggregate(n.Input)
-	case relalg.Project:
-		return containsAggregate(n.Input)
-	case relalg.Sort:
-		return containsAggregate(n.Input)
-	case relalg.Limit:
-		return containsAggregate(n.Input)
-	case relalg.Distinct:
-		return containsAggregate(n.Input)
-	default:
-		return false
-	}
 }
 
 // builder accumulates SQL text and bound args while tracking a placeholder
@@ -219,39 +203,28 @@ func toValues(v any) ([]any, error) {
 	}
 }
 
-// predicateOf extracts the combined WHERE predicate from a read expr by
-// collecting every Select predicate along the chain into an And.
-func predicateOf(e relalg.Expr) relalg.Predicate {
+// PredicateOf is the WHERE predicate of an expression: every Select
+// predicate along a read chain, innermost first, as one And, or the
+// predicate of an update or delete; nil when it has none.
+func PredicateOf(e relalg.Expr) relalg.Predicate {
 	var preds []relalg.Predicate
-	var walk func(relalg.Expr)
-	walk = func(node relalg.Expr) {
-		switch n := node.(type) {
+	for ok := true; ok; e, ok = relalg.Input(e) {
+		switch n := e.(type) {
 		case relalg.Select:
-			walk(n.Input)
 			preds = append(preds, n.Predicate)
-		case relalg.Project:
-			walk(n.Input)
-		case relalg.Sort:
-			walk(n.Input)
-		case relalg.Limit:
-			walk(n.Input)
-		case relalg.Distinct:
-			walk(n.Input)
-		case relalg.Aggregate:
-			walk(n.Input)
 		case relalg.Update:
 			preds = append(preds, n.Predicate)
 		case relalg.Delete:
 			preds = append(preds, n.Predicate)
 		}
 	}
-	walk(e)
-	if len(preds) == 0 {
+	switch len(preds) {
+	case 0:
 		return nil
-	}
-	if len(preds) == 1 {
+	case 1:
 		return preds[0]
 	}
+	slices.Reverse(preds)
 	return relalg.And{Preds: preds}
 }
 
@@ -282,8 +255,8 @@ func isKeyPoint(p relalg.Predicate, pkCols []string) bool {
 }
 
 // flattenAnd returns the leaf Conditions of an And-chain and whether the
-// predicate is a pure conjunction of Conditions. A predicate containing Or,
-// Not, or IsNull is not pure and can never be a primary-key point lookup, so
+// predicate is a pure conjunction of Conditions. A predicate containing Or
+// or Not is not pure and can never be a primary-key point lookup, so
 // the caller must treat !pure as "not a PK point" rather than silently
 // dropping those branches (which would let `id=5 OR <expensive>` masquerade
 // as a point read and bypass the cost gate).

@@ -63,7 +63,10 @@ MCP 工具是否在 tools/list 中还取决于全局 `tools` 开关；custom pro
   App/session 关闭回滚。
 - **I11** context 取消应传递到 `database/sql` 调用并释放工具执行。
 - **I12** 异步审计队列不得阻塞主调用；队列满时允许丢弃并计数。
-- **I13** engine/预算达到配置并发上限时拒绝新工作，不创建无界 goroutine。
+- **I13** engine/预算达到配置并发上限时拒绝新工作，不创建无界 goroutine。所有
+  触达数据库的执行都在执行总线的某个通道上准入并共享 `rateLimit.ioPool`，非工具
+  调用通道合计至多占一半；生产代码的 goroutine 与定时器只经 `core/bus` 启动，由
+  `internal/buscheck` 强制。
 
 这些条目由包级单元测试、`go test -race` 和部分 MCP goleak e2e 覆盖；它们不
 构成对数据库 driver 或外部审计 sink 的形式化证明。

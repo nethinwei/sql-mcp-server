@@ -2,17 +2,20 @@ package graph
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"reflect"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/99designs/gqlgen/client"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
+	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 	"github.com/nethinwei/sql-mcp-server/x/configyaml"
 	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 )
@@ -90,82 +93,88 @@ func setFields(values ...any) map[string]bool {
 	return seen
 }
 
-const readConfig = `query($id: ID!) { revision(id: $id) { yaml config {
-  entities { name source datasource schema kind description primaryKey uniqueKeys params affects allowCascade
-    tenantPolicy legacyAccess
-    mcp { dmlTools customTool trustedProcedure }
-    fields { name alias description mask exclude }
-    relationships { name target cardinality joinOn } }
-  roles { name description grants { entity actions fieldsRestricted readFields writeFields rows } }
-  users { name description roles subject disabled
-    grants { entity actions fieldsRestricted readFields writeFields rows } }
-  settings } } }`
-
-// Reading a revision and saving it back unchanged, as the console does, must
-// reproduce the payload: no field is lost or rewritten on the way through the
-// read model, the draft input and configedit.
-func TestDraftRoundTripKeepsEveryField(t *testing.T) {
-	t.Setenv("SHOP_DSN", "postgres://localhost/shop")
-	data, err := os.ReadFile(roundTripFixture)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := configyaml.Decode(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload, err := revisionops.Normalize(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h := newHarness(t)
+// Reading a revision's sections and writing every item back into the
+// workspace, as the console does, then saving the workspace, must reproduce
+// the payload: no field is lost or rewritten on the way through the items,
+// the admin API's JSON and configedit.
+func TestWorkspaceRoundTripKeepsEveryField(t *testing.T) {
+	payload := roundTripPayload(t)
+	h, c := planningHarness(t)
 	ctx := context.Background()
-	base, err := h.store.Create(ctx, revision.Draft{Payload: payload})
+	rev, err := h.store.Create(ctx, revision.Draft{ParentID: 1, Payload: payload})
+	if err == nil {
+		_, err = h.store.Publish(ctx, rev.ID, 1, revision.Meta{})
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := h.client(auth.PermAll)
 	var read struct {
-		Revision struct {
-			YAML   string `json:"yaml"`
-			Config struct {
-				Entities []map[string]any `json:"entities"`
-				Roles    []map[string]any `json:"roles"`
-				Users    []map[string]any `json:"users"`
-				Settings map[string]any   `json:"settings"`
-			} `json:"config"`
-		} `json:"revision"`
+		Revision struct{ Sections configapp.Sections }
 	}
-	id := revisionID(base.ID)
-	mustPost(t, c, readConfig, &read, client.Var("id", id))
-	draft := map[string]any{
-		"base": id, "entities": read.Revision.Config.Entities, "roles": read.Revision.Config.Roles,
-		"users": read.Revision.Config.Users, "settings": read.Revision.Config.Settings,
+	mustPost(t, c, `query($id: ID!) { revision(id: $id) { sections } }`, &read, client.Var("id", revisionID(rev.ID)))
+	sections := read.Revision.Sections
+	var items []map[string]any
+	write := func(kind, key string, value any) {
+		items = append(items, map[string]any{"kind": kind, "key": key, "value": value, "previous": value})
 	}
-	var created struct{ CreateDraft struct{ ID string } }
-	mustPost(t, c, `mutation($d: DraftInput!) { createDraft(draft: $d) { id } }`, &created, client.Var("d", draft))
-	var again struct{ Revision struct{ YAML string } }
-	mustPost(t, c, `query($id: ID!) { revision(id: $id) { yaml } }`, &again, client.Var("id", created.CreateDraft.ID))
-	if again.Revision.YAML != read.Revision.YAML {
-		diff, _ := revisionops.RawDiff("base", []byte(read.Revision.YAML), "saved", []byte(again.Revision.YAML))
-		t.Fatalf("saving the read model back changed the configuration:\n%s", diff)
+	for _, e := range sections.Entities {
+		write("entity", entity.ID(kit.Deref(e.Datasource), kit.Deref(e.Schema), e.Name), e)
+	}
+	for _, r := range sections.Roles {
+		write("role", r.Name, r)
+	}
+	for _, u := range sections.Users {
+		write("user", u.Name, u)
+	}
+	write("settings", "settings", sections.Settings)
+	if saved := h.checkpoint(t, c, items...); saved != string(payload) {
+		diff, _ := revisionops.RawDiff("published", payload, "saved", []byte(saved))
+		t.Fatalf("writing the sections back changed the configuration:\n%s", diff)
 	}
 }
 
 func revisionID(id int64) string { return strconv.FormatInt(id, 10) }
 
-// A tenant policy that is not an object is rejected rather than dropped,
-// which would silently remove the tenant constraint.
-func TestEntityConfigRejectsNonObjectTenantPolicy(t *testing.T) {
-	t.Parallel()
-	for _, policy := range []any{"tenant_id", []any{"tenant_id"}} {
-		_, err := entityConfig(EntityInput{Name: "orders", TenantPolicy: policy})
-		if err == nil || !strings.Contains(err.Error(), "tenantPolicy must be an object") {
-			t.Errorf("tenantPolicy %#v: err = %v", policy, err)
-		}
+// A revision's sections are the configuration in the shape a workspace holds
+// it (configapp's fixture), which the console takes as its baseline.
+func TestRevisionSectionsAreTheWorkspaceShape(t *testing.T) {
+	t.Setenv("SHOP_DSN", "postgres://localhost/shop")
+	payload := roundTripPayload(t)
+	h := newHarness(t)
+	base, err := h.store.Create(context.Background(), revision.Draft{Payload: payload})
+	if err != nil {
+		t.Fatal(err)
 	}
-	e, err := entityConfig(EntityInput{Name: "orders", TenantPolicy: map[string]any{"column": "tenant_id"}})
-	if err != nil || e.TenantPolicy["column"] != "tenant_id" {
-		t.Fatalf("object tenantPolicy = %v, %v", e.TenantPolicy, err)
+	var read struct{ Revision struct{ Sections any } }
+	mustPost(t, h.client(auth.PermAll), `query($id: ID!) { revision(id: $id) { sections } }`, &read,
+		client.Var("id", revisionID(base.ID)))
+	fixture, err := os.ReadFile("../configapp/testdata/workspace_sections.json")
+	if err != nil {
+		t.Fatal(err)
 	}
+	var want any
+	if err := json.Unmarshal(fixture, &want); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(read.Revision.Sections, want) {
+		t.Fatalf("revision sections differ from the workspace shape:\n%v", read.Revision.Sections)
+	}
+}
+
+// roundTripPayload is the round trip configuration as stored: what it says.
+func roundTripPayload(t *testing.T) []byte {
+	t.Helper()
+	data, err := os.ReadFile(roundTripFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := configyaml.DecodeSpec(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := revisionops.Normalize(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
 }

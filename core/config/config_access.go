@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"strings"
 )
 
@@ -52,10 +53,10 @@ func (c *Config) normalizeAccess() error {
 	if err := c.normalizeUsers(); err != nil {
 		return err
 	}
-	c.Server.User = canonicalRole(c.Server.User)
+	c.Server.User = rbac.NormalizeRole(c.Server.User)
 	budgetUsers := make(map[string]BudgetLimits, len(c.Budget.Users))
 	for name, limits := range c.Budget.Users {
-		key := canonicalRole(name)
+		key := rbac.NormalizeRole(name)
 		if _, exists := budgetUsers[key]; exists {
 			return fmt.Errorf("config: budget has colliding user %q after normalization", key)
 		}
@@ -112,7 +113,7 @@ func (c *Config) normalizeUsers() error {
 }
 
 func canonicalAccessName(kind, name string) (string, error) {
-	key := canonicalRole(name)
+	key := rbac.NormalizeRole(name)
 	if key == "" {
 		return "", fmt.Errorf("config: empty %s name", kind)
 	}
@@ -128,7 +129,7 @@ func (c *Config) validateAccess() error {
 	entities := NewEntityRefs(c.Entities)
 	for _, e := range c.Entities {
 		if e.TenantPolicy != nil {
-			if err := validateRowPolicy(e.TenantPolicy); err != nil {
+			if _, err := ParseFilter(e.TenantPolicy); err != nil {
 				return fmt.Errorf("config: entity %q tenant policy: %w", e.Name, err)
 			}
 		}
@@ -259,7 +260,7 @@ func validateGrants(kind, owner string, grants []GrantConfig, entities EntityRef
 			}
 		}
 		if grant.Rows != nil {
-			if err := validateRowPolicy(grant.Rows); err != nil {
+			if _, err := ParseFilter(grant.Rows); err != nil {
 				return fmt.Errorf("%s on entity %q rows: %w", where, grant.Entity, err)
 			}
 		}

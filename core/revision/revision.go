@@ -22,12 +22,19 @@ const (
 	StatePublished  State = "published"
 	StateSuperseded State = "superseded"
 	StateRolledBack State = "rolled-back"
+	// StateDiscarded is a draft an administrator decided not to publish.
+	StateDiscarded State = "discarded"
 )
+
+// Unpublished reports whether a revision in state s was never published: a
+// draft, or one discarded. What a draft builds on is its nearest ancestor
+// that was published.
+func (s State) Unpublished() bool { return s == StateDraft || s == StateDiscarded }
 
 // Valid reports whether s is a known state.
 func (s State) Valid() bool {
 	switch s {
-	case StateDraft, StatePublished, StateSuperseded, StateRolledBack:
+	case StateDraft, StatePublished, StateSuperseded, StateRolledBack, StateDiscarded:
 		return true
 	}
 	return false
@@ -104,10 +111,44 @@ type Store interface {
 	// revision copying target's payload. Target 0 selects the newest
 	// superseded revision whose content differs from the published one.
 	Rollback(ctx context.Context, expectedCurrent, target int64, m Meta) (Revision, error)
+	// Discard marks draft id discarded: it stays in the history and is never
+	// published. A revision that is not a draft fails with ErrInvalidState.
+	Discard(ctx context.Context, id int64) (Revision, error)
 	// ImportHistory copies revisions verbatim into an empty store, keeping
 	// IDs, states, authors and timestamps. It is used by migrate --history.
 	ImportHistory(ctx context.Context, revs []Revision) error
+	// Sequence grows with every write (a revision created, published,
+	// rolled back or discarded, history imported), as every process sharing
+	// the store sees it: a reader learns that revisions changed, a discard
+	// of an old draft included, by comparing two readings. It may also grow
+	// without a change to revisions.
+	Sequence(ctx context.Context) (int64, error)
 	Close() error
+}
+
+// Getter reads one revision, as Store does.
+type Getter interface {
+	Get(ctx context.Context, id int64) (Revision, error)
+}
+
+// BasedOn is the published revision rev builds on: rev itself when it was
+// published, else the nearest ancestor that was (a draft may build on another
+// draft, discarded or not); 0 when none was.
+func BasedOn(ctx context.Context, store Getter, rev Revision) (int64, error) {
+	seen := map[int64]bool{}
+	for rev.State.Unpublished() {
+		id := rev.ParentID
+		if id == 0 || seen[id] {
+			return 0, nil
+		}
+		seen[id] = true
+		parent, err := store.Get(ctx, id)
+		if err != nil {
+			return 0, err
+		}
+		rev = parent
+	}
+	return rev.ID, nil
 }
 
 // HashPrefix prefixes every content hash.

@@ -13,22 +13,14 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/providers/sqladapter"
 )
 
-// A scan reads each kind of metadata of a set of schemas in one query, the
-// way mysqldump reads a database: the number of round trips does not grow with
-// the number of tables, and information_schema is only read for the scanned
-// schemas.
+// A scan reads each kind of metadata of a set of schemas in one query (see
+// sqladapter.Scanned), and information_schema only for the scanned schemas.
 
-// tableKey names a table across the schemas of one scan.
-type tableKey struct{ schema, table string }
+type tableKey = sqladapter.TableKey
 
 // scanned is the metadata of the scanned schemas, by table.
 type scanned struct {
-	attrs    map[tableKey][]entity.Attribute
-	keys     map[tableKey][]entity.Key
-	indexes  map[tableKey][]entity.Index
-	fks      map[tableKey][]entity.ForeignKey
-	cascades map[tableKey][]entity.Cascade
-	triggers map[tableKey]bool
+	*sqladapter.Scanned
 	// hidden names, by table, the indexes information_schema reports on
 	// hidden columns (see shownIndexes).
 	hidden map[tableKey]map[string]bool
@@ -73,32 +65,26 @@ func (i Introspector) Discover(ctx context.Context, sources []string) ([]entity.
 	}
 	entities := make([]entity.Entity, 0, len(tables))
 	for _, t := range tables {
-		k := tableKey{t.schema, t.name}
 		kind := entity.KindTable
 		if t.view {
 			kind = entity.KindView
 		}
-		entities = append(entities, entity.Entity{
-			Name: t.name, Source: t.name, Schema: t.schema, Description: t.comment,
-			Kind: kind, Derived: t.view, Attributes: s.attrs[k], Keys: s.keys[k], ForeignKeys: s.fks[k],
-			Indexes: s.indexes[k], Cascades: s.cascades[k], SideEffects: s.triggers[k],
-		})
+		e := entity.Entity{
+			Name: t.name, Source: t.name, Schema: t.schema, Description: t.comment, Kind: kind, Derived: t.view,
+		}
+		s.Fill(tableKey{Schema: t.schema, Table: t.name}, &e)
+		entities = append(entities, e)
 	}
 	return entities, nil
 }
 
-func (i Introspector) scan(ctx context.Context, schemas []string) (scanned, error) {
-	s := scanned{
-		attrs: map[tableKey][]entity.Attribute{}, keys: map[tableKey][]entity.Key{},
-		indexes: map[tableKey][]entity.Index{}, fks: map[tableKey][]entity.ForeignKey{},
-		cascades: map[tableKey][]entity.Cascade{}, triggers: map[tableKey]bool{},
-		hidden: map[tableKey]map[string]bool{},
-	}
+func (i Introspector) scan(ctx context.Context, schemas []string) (*scanned, error) {
+	s := &scanned{Scanned: sqladapter.NewScanned(), hidden: map[tableKey]map[string]bool{}}
 	for _, load := range []func(context.Context, *scanned, []string) error{
 		i.columns, i.indexes, i.shownIndexes, i.foreignKeys, i.writeEffects, i.triggers,
 	} {
-		if err := load(ctx, &s, schemas); err != nil {
-			return s, err
+		if err := load(ctx, s, schemas); err != nil {
+			return nil, err
 		}
 	}
 	return s, nil
@@ -122,7 +108,7 @@ func (i Introspector) tables(ctx context.Context, schemas []string) ([]mysqlTabl
 			if err := rows.Scan(&t.schema, &t.name, &t.comment, &t.view); err != nil {
 				return err
 			}
-			if !contains(schemas, t.schema) || config.IsStoreTable(t.name) {
+			if !slices.Contains(schemas, t.schema) || config.IsStoreTable(t.name) {
 				return nil
 			}
 			if t.view && t.comment == "VIEW" { // MySQL reports a view's comment as "VIEW"
@@ -146,18 +132,7 @@ const columnsSQL = `SELECT table_schema, table_name, column_name, data_type, is_
 	 WHERE table_schema IN ({schemas}) ORDER BY table_schema, table_name, ordinal_position`
 
 func (i Introspector) columns(ctx context.Context, s *scanned, schemas []string) error {
-	return i.each(ctx, columnsSQL, schemas, func(rows *sql.Rows) error {
-		var k tableKey
-		var name, dataType, nullable, comment string
-		var domain entity.Domain
-		if err := rows.Scan(&k.schema, &k.table, &name, &dataType, &nullable, &comment,
-			&domain.Default, &domain.Generated, &domain.AutoIncrement); err != nil {
-			return err
-		}
-		domain.Type, domain.Nullable = dataType, strings.EqualFold(nullable, "YES")
-		s.attrs[k] = append(s.attrs[k], entity.Attribute{Name: name, Description: comment, Domain: domain})
-		return nil
-	})
+	return i.each(ctx, columnsSQL, schemas, s.ScanColumn)
 }
 
 // indexes reads every index. The primary key and the unique indexes (MySQL
@@ -183,30 +158,30 @@ func (i Introspector) indexes(ctx context.Context, s *scanned, schemas []string)
 			var column, expr string
 			var prefix sql.NullInt64
 			var nullable bool
-			if err := rows.Scan(&k.schema, &k.table, &ix.Name, &ix.Method, &ix.Unique, &column, &expr, &prefix,
+			if err := rows.Scan(&k.Schema, &k.Table, &ix.Name, &ix.Method, &ix.Unique, &column, &expr, &prefix,
 				&nullable); err != nil {
 				return err
 			}
 			// OceanBase reports an expression, and the words of a full-text
 			// or the cells of a spatial index, as hidden columns of its own:
 			// a part naming no column of the table is not a column.
-			if !slices.ContainsFunc(s.attrs[k], func(a entity.Attribute) bool { return a.Name == column }) {
+			if !slices.ContainsFunc(s.Attrs[k], func(a entity.Attribute) bool { return a.Name == column }) {
 				column = ""
 			}
-			indexes := s.indexes[k]
+			indexes := s.Indexes[k]
 			if n := len(indexes); n == 0 || indexes[n-1].Name != ix.Name {
 				ix.Primary = ix.Name == "PRIMARY"
 				indexes = append(indexes, ix)
 				if ix.Unique {
-					s.keys[k] = append(s.keys[k], entity.Key{Name: ix.Name, Primary: ix.Primary})
+					s.Keys[k] = append(s.Keys[k], entity.Key{Name: ix.Name, Primary: ix.Primary})
 				}
 			}
 			part := indexPart(column, expr, prefix, ix.Method)
 			last := &indexes[len(indexes)-1]
 			s.addPart(k, last, part)
-			s.indexes[k] = indexes
+			s.Indexes[k] = indexes
 			if last.Unique {
-				addKeyPart(&s.keys[k][len(s.keys[k])-1], column, prefix.Valid, nullable)
+				addKeyPart(&s.Keys[k][len(s.Keys[k])-1], column, prefix.Valid, nullable)
 			}
 			return nil
 		})
@@ -237,9 +212,9 @@ func (i Introspector) shownIndexes(ctx context.Context, s *scanned, _ []string) 
 		if err != nil {
 			return err
 		}
-		for n, ix := range s.indexes[k] {
+		for n, ix := range s.Indexes[k] {
 			if got, ok := shown[ix.Name]; ok && names[ix.Name] {
-				s.indexes[k][n].Parts, s.indexes[k][n].Method = got.Parts, got.Method
+				s.Indexes[k][n].Parts, s.Indexes[k][n].Method = got.Parts, got.Method
 			}
 		}
 	}
@@ -250,7 +225,7 @@ func (i Introspector) shownIndexes(ctx context.Context, s *scanned, _ []string) 
 // server and version, so they are read by name.
 func (i Introspector) showIndex(ctx context.Context, k tableKey) (map[string]entity.Index, error) {
 	quote := func(name string) string { return "`" + strings.ReplaceAll(name, "`", "``") + "`" }
-	rows, err := i.db.QueryContext(ctx, "SHOW INDEX FROM "+quote(k.schema)+"."+quote(k.table))
+	rows, err := i.db.QueryContext(ctx, "SHOW INDEX FROM "+quote(k.Schema)+"."+quote(k.Table))
 	if err != nil {
 		return nil, err
 	}
@@ -346,26 +321,7 @@ func (i Introspector) foreignKeys(ctx context.Context, s *scanned, schemas []str
 		  AND r.table_name = k.table_name
 		 WHERE k.table_schema IN ({schemas}) AND k.referenced_table_name IS NOT NULL
 		 ORDER BY k.table_schema, k.table_name, k.constraint_name, k.ordinal_position`,
-		schemas, func(rows *sql.Rows) error {
-			var k tableKey
-			var name, col, refSchema, refTable, refCol, onDelete, onUpdate string
-			if err := rows.Scan(&k.schema, &k.table, &name, &col, &refSchema, &refTable, &refCol,
-				&onDelete, &onUpdate); err != nil {
-				return err
-			}
-			fks := s.fks[k]
-			if n := len(fks); n == 0 || fks[n-1].Name != name {
-				fks = append(fks, entity.ForeignKey{
-					Name: name, RefSchema: refSchema, RefRelation: refTable,
-					OnDelete: mysqlAction[onDelete], OnUpdate: mysqlAction[onUpdate],
-				})
-			}
-			last := &fks[len(fks)-1]
-			last.Columns = append(last.Columns, col)
-			last.RefColumns = append(last.RefColumns, refCol)
-			s.fks[k] = fks
-			return nil
-		})
+		schemas, func(rows *sql.Rows) error { return s.ScanForeignKeyColumn(rows, mysqlAction) })
 }
 
 // writeEffects reads, for each referenced table, the cascading foreign keys of
@@ -388,16 +344,16 @@ func (i Introspector) writeEffects(ctx context.Context, s *scanned, schemas []st
 			var k tableKey
 			var name, onDelete, onUpdate, column, foreign string
 			var c entity.Cascade
-			if err := rows.Scan(&k.schema, &k.table, &name, &c.Schema, &c.Table, &onDelete, &onUpdate,
+			if err := rows.Scan(&k.Schema, &k.Table, &name, &c.Schema, &c.Table, &onDelete, &onUpdate,
 				&column, &foreign); err != nil {
 				return err
 			}
 			if id := c.Schema + "." + c.Table + "." + name; id != last[k] {
 				last[k] = id
 				c.OnDelete, c.OnUpdate = mysqlAction[onDelete], mysqlAction[onUpdate]
-				s.cascades[k] = append(s.cascades[k], c)
+				s.Cascades[k] = append(s.Cascades[k], c)
 			}
-			cur := &s.cascades[k][len(s.cascades[k])-1]
+			cur := &s.Cascades[k][len(s.Cascades[k])-1]
 			cur.Columns, cur.ForeignColumns = append(cur.Columns, column), append(cur.ForeignColumns, foreign)
 			return nil
 		})
@@ -408,12 +364,5 @@ func (i Introspector) triggers(ctx context.Context, s *scanned, schemas []string
 	return i.each(ctx,
 		`SELECT DISTINCT event_object_schema, event_object_table FROM information_schema.triggers
 		 WHERE event_object_schema IN ({schemas})`,
-		schemas, func(rows *sql.Rows) error {
-			var k tableKey
-			if err := rows.Scan(&k.schema, &k.table); err != nil {
-				return err
-			}
-			s.triggers[k] = true
-			return nil
-		})
+		schemas, s.ScanSideEffect)
 }

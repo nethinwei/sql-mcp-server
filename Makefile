@@ -8,6 +8,9 @@ GORELEASER ?= goreleaser
 ACTIONLINT ?= actionlint
 GOLANGCI_LINT ?= golangci-lint
 GOLANGCI_LINT_VERSION ?= 2.12.2
+# golangci-lint type-checks against the running toolchain's standard library;
+# pin it to go.mod's toolchain so a newer local Go does not break lint.
+LINT_GOTOOLCHAIN ?= $(shell sed -n 's/^toolchain //p' go.mod)
 MCP_PUBLISHER ?= mcp-publisher
 PYTHON ?= python3
 SYFT ?= syft
@@ -34,7 +37,7 @@ fmt:
 # types (gitignored, needed by the tests), tests, type-checks and builds into
 # x/admin/ui/dist/app for go:embed.
 web:
-	cd web/admin && pnpm install --frozen-lockfile && pnpm codegen && pnpm test && pnpm build
+	cd web/admin && pnpm install --frozen-lockfile && pnpm codegen && pnpm lint && pnpm test && pnpm build
 
 # Fail unless the built console is in place for go:embed (release builds).
 web-check:
@@ -167,7 +170,7 @@ lint:
 	@version="$$($(GOLANGCI_LINT) version)"; echo "$$version"; \
 		case "$$version" in *"version $(GOLANGCI_LINT_VERSION) "*) ;; \
 		*) echo "golangci-lint $(GOLANGCI_LINT_VERSION) is required" >&2; exit 1 ;; esac
-	$(GOLANGCI_LINT) run ./...
+	GOTOOLCHAIN=$(LINT_GOTOOLCHAIN) $(GOLANGCI_LINT) run ./...
 
 coverage:
 	$(GO) test -coverprofile=coverage.txt -covermode=atomic $(CORE_PACKAGES)

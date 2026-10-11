@@ -89,6 +89,7 @@ func assertPGExplainPlans(t *testing.T, ctx context.Context, prov *pgprov.Provid
 	if plan.ScanType != cost.ScanFull {
 		t.Fatalf("ScanType = %v, want ScanFull for unfiltered scan", plan.ScanType)
 	}
+	assertPGTableRows(t, ctx, prov)
 	analyzed, err := prov.ExplainAnalyze(ctx, codegen.Compiled{
 		SQL: "SELECT * FROM users", ReadOnly: true,
 	})
@@ -104,6 +105,28 @@ func assertPGExplainPlans(t *testing.T, ctx context.Context, prov *pgprov.Provid
 	}
 	if plan2.ScanType != cost.ScanIndex && plan2.ScanType != cost.ScanPoint {
 		t.Fatalf("ScanType = %v, want index/point for PK lookup", plan2.ScanType)
+	}
+}
+
+// A filtered full scan is sized by its table, not by the rows it outputs.
+func assertPGTableRows(t *testing.T, ctx context.Context, prov *pgprov.Provider) {
+	t.Helper()
+	for _, stmt := range []string{
+		"CREATE TABLE smcp_big AS SELECT g AS id, g % 7 AS a FROM generate_series(1, 50000) g", "ANALYZE smcp_big",
+	} {
+		if _, err := prov.ExecContext(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func() { _, _ = prov.ExecContext(ctx, "DROP TABLE smcp_big") }()
+	small, err := prov.Explainer().Explain(ctx, "SELECT * FROM users WHERE tenant_id = $1", []any{7})
+	if err != nil || small.ScanType != cost.ScanFull || !small.TableSized || small.TableRows > 1000 {
+		t.Fatalf("small table plan = %+v, %v", small, err)
+	}
+	big, err := prov.Explainer().Explain(ctx, "SELECT * FROM smcp_big WHERE id + 0 = $1", []any{5})
+	if err != nil || big.ScanType != cost.ScanFull || big.EstimatedRows > 1000 || !big.TableSized ||
+		big.TableRows < 50000 {
+		t.Fatalf("large table plan = %+v, %v", big, err)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
 	"github.com/nethinwei/sql-mcp-server/version"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
@@ -149,11 +150,11 @@ func TestCustomProcedureThroughMCP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db := &store.FakeDB{QueryFn: func(_ context.Context, _ string, args ...any) (store.Rows, error) {
+	db := &storetest.FakeDB{QueryFn: func(_ context.Context, _ string, args ...any) (store.Rows, error) {
 		if len(args) != 1 || args[0] != "acme" {
 			t.Fatalf("procedure args = %v", args)
 		}
-		return store.NewFakeRows([]string{"ok"}, []any{true}), nil
+		return storetest.NewFakeRows([]string{"ok"}, []any{true}), nil
 	}}
 	app := &bootstrap.App{
 		Sources: map[string]tool.DataSource{

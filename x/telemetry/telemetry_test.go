@@ -29,8 +29,8 @@ func TestMetricsHooksRecordCallsAndDurations(t *testing.T) {
 	m.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
 	body := rec.Body.String()
 	for _, want := range []string{
-		`sql_mcp_tool_calls_total{tool="read_records",outcome="OK"} 1`,
-		`sql_mcp_tool_calls_total{tool="read_records",outcome="UNAUTHORIZED"} 1`,
+		`sql_mcp_tool_calls_total{outcome="OK",tool="read_records"} 1`,
+		`sql_mcp_tool_calls_total{outcome="UNAUTHORIZED",tool="read_records"} 1`,
 		`sql_mcp_tool_duration_seconds_count{tool="read_records"} 2`,
 		"sql_mcp_audit_dropped_total 0",
 	} {

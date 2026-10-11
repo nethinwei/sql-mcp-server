@@ -16,6 +16,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
+	"github.com/nethinwei/sql-mcp-server/x/configyaml"
 	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 )
 
@@ -109,13 +110,17 @@ func runStoreInit(ctx context.Context, args []string, stdout io.Writer) error {
 }
 
 // storePayload loads, validates and normalizes a configuration file into a
-// store payload under the store-mode secret rule.
+// store payload under the store-mode secret rule: what the file says, its
+// defaults left to apply when it loads.
 func storePayload(path string) ([]byte, error) {
-	cfg, err := bootstrap.Load(path)
+	if _, err := bootstrap.Load(path); err != nil {
+		return nil, err
+	}
+	spec, _, err := configyaml.LoadSpec(path)
 	if err != nil {
 		return nil, err
 	}
-	return revisionops.Normalize(cfg)
+	return revisionops.Normalize(spec)
 }
 
 func runStoreImport(ctx context.Context, args []string, stdout io.Writer) error {
@@ -289,6 +294,11 @@ func runStorePublish(ctx context.Context, args []string, stdout io.Writer) error
 	rev, err := revisionOps(store).Publish(ctx, revisionops.PublishRequest{
 		ID: target.ID, RestartRequired: *restart, Author: f.authorName(),
 	})
+	var conflict *revisionops.ConflictError
+	if errors.As(err, &conflict) {
+		return fmt.Errorf("%w; re-apply the changes to revision %d (store show) and import them as a new draft",
+			err, conflict.Published)
+	}
 	if err != nil {
 		return err
 	}

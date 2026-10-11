@@ -1,120 +1,40 @@
 package graph
 
 import (
-	"cmp"
 	"context"
-	"maps"
 	"slices"
-	"sort"
-	"strconv"
 
-	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
+	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
+	"github.com/nethinwei/sql-mcp-server/x/configplan"
 )
 
-// tableKey identifies a table within a datasource: tables of different
-// schemas may share a name.
-func tableKey(schema, table string) string {
-	return schema + "." + table
-}
-
-// configuredTables maps each catalog table (by tableKey) to the configured
-// entity of datasource that reads it, resolved by the catalog like the runtime
-// does.
-func configuredTables(datasource string, cat introspect.Catalog, cfg *config.Config) map[string]config.EntityConfig {
-	out := map[string]config.EntityConfig{}
-	for _, e := range cfg.Entities {
-		if e.DatasourceName() != datasource || e.Kind == "procedure" {
-			continue
-		}
-		if d, ok := cat.Lookup(e.Schema, e.PhysicalSource()); ok {
-			out[tableKey(d.Schema, d.Source)] = e
-		}
+// toSchemaImport shows the scanned tables of a datasource with the entity
+// proposed for each.
+func toSchemaImport(in *configapp.Imports) *SchemaImport {
+	out := &SchemaImport{Datasource: in.Datasource, DefaultSchema: kit.Optional(in.DefaultSchema), Source: in.Source,
+		Tables: make([]ImportTable, 0, len(in.Tables))}
+	for _, c := range in.Tables {
+		out.Tables = append(out.Tables, importTable(c))
 	}
 	return out
 }
 
-// buildSchemaImport compares the scanned tables with the configured entities
-// of datasource and proposes a zero-permission candidate entity per table.
-func buildSchemaImport(datasource string, cat introspect.Catalog, cfg *config.Config) *SchemaImport {
-	configured := configuredTables(datasource, cat, cfg)
-	taken := map[string]bool{}
-	for _, e := range cfg.Entities {
-		if e.DatasourceName() == datasource {
-			taken[tableKey(cmp.Or(e.Schema, cat.Default), e.Name)] = true
-		}
+// importTable shows a scanned table with the entity proposed for it.
+func importTable(c configplan.Candidate) ImportTable {
+	d := c.Table
+	candidate := configapp.EntityItemOf(c.Entity)
+	table := ImportTable{
+		Schema: d.Schema, Table: d.Source, Description: d.Description, Status: ImportStatusNew,
+		Columns: importColumns(d), Keys: importKeys(d), Indexes: importIndexes(d),
+		ForeignKeys: importForeignKeys(d), SideEffects: d.SideEffects, Candidate: &candidate,
 	}
-	candidates := candidateNames(datasource, cat.Tables, configured, taken)
-	// A foreign key may reference a table of a schema not scanned: it is
-	// related when an entity is configured on it.
-	for _, e := range cfg.Entities {
-		key := tableKey(cmp.Or(e.Schema, cat.Default), e.PhysicalSource())
-		if _, ok := candidates[key]; !ok && e.DatasourceName() == datasource && e.Kind != "procedure" {
-			candidates[key] = candidateName{name: e.Name, id: e.ID()}
-		}
+	if c.Configured != nil {
+		table.Status, table.ConfiguredAs = ImportStatusConfigured, kit.Optional(c.Configured.Name)
 	}
-	out := &SchemaImport{
-		Datasource: datasource, DefaultSchema: optional(cat.Default), Tables: make([]ImportTable, 0, len(cat.Tables)),
-	}
-	for _, d := range cat.Tables {
-		table := ImportTable{
-			Schema: d.Schema, Table: d.Source, Description: d.Description, Status: ImportStatusNew,
-			Columns: importColumns(d), Keys: importKeys(d), Indexes: importIndexes(d),
-			ForeignKeys: importForeignKeys(d),
-			SideEffects: d.SideEffects,
-		}
-		if e, ok := configured[tableKey(d.Schema, d.Source)]; ok {
-			name := e.Name
-			table.Status, table.ConfiguredAs = ImportStatusConfigured, &name
-		}
-		candidate := candidateEntity(datasource, d, candidates)
-		table.Candidate = &candidate
-		out.Tables = append(out.Tables, table)
-	}
-	addReverseRelationships(out.Tables)
-	sort.Slice(out.Tables, func(i, j int) bool {
-		a, b := out.Tables[i], out.Tables[j]
-		return a.Schema < b.Schema || a.Schema == b.Schema && a.Table < b.Table
-	})
-	return out
-}
-
-// candidateName is the entity a candidate for a table would be, by name and
-// ID.
-type candidateName struct{ name, id string }
-
-// candidateNames maps each table (by tableKey) to the entity a candidate
-// would be: the configured one when the table is configured, otherwise one
-// named like the table, numbered when another entity of the datasource and
-// schema (taken, by tableKey) already uses the name. Entities of other
-// namespaces may use it too: references tell them apart.
-func candidateNames(
-	datasource string,
-	discovered []entity.Entity,
-	configured map[string]config.EntityConfig,
-	taken map[string]bool,
-) map[string]candidateName {
-	out := make(map[string]candidateName, len(discovered))
-	used := maps.Clone(taken)
-	for _, d := range discovered {
-		if e, ok := configured[tableKey(d.Schema, d.Source)]; ok {
-			out[tableKey(d.Schema, d.Source)] = candidateName{name: e.Name, id: e.ID()}
-		}
-	}
-	for _, d := range discovered {
-		key := tableKey(d.Schema, d.Source)
-		if _, ok := out[key]; ok {
-			continue
-		}
-		name := d.Source
-		for n := 2; used[tableKey(d.Schema, name)]; n++ {
-			name = d.Source + "_" + strconv.Itoa(n)
-		}
-		used[tableKey(d.Schema, name)] = true
-		out[key] = candidateName{name: name, id: entity.ID(datasource, d.Schema, name)}
-	}
-	return out
+	return table
 }
 
 func importColumns(d entity.Entity) []ImportColumn {
@@ -132,7 +52,10 @@ func importColumns(d entity.Entity) []ImportColumn {
 func importKeys(d entity.Entity) []ImportKey {
 	out := make([]ImportKey, 0, len(d.Keys))
 	for _, k := range d.Keys {
-		out = append(out, ImportKey{Name: k.Name, Columns: k.Columns, Primary: k.Primary, Reason: optional(k.Reason)})
+		out = append(
+			out,
+			ImportKey{Name: k.Name, Columns: k.Columns, Primary: k.Primary, Reason: kit.Optional(k.Reason)},
+		)
 	}
 	return out
 }
@@ -141,8 +64,8 @@ func importIndexes(d entity.Entity) []ImportIndex {
 	out := make([]ImportIndex, 0, len(d.Indexes))
 	for _, ix := range d.Indexes {
 		out = append(out, ImportIndex{
-			Name: ix.Name, Method: ix.Method, Parts: orEmpty(ix.Parts), Unique: ix.Unique, Primary: ix.Primary,
-			Where: optional(ix.Where),
+			Name: ix.Name, Method: ix.Method, Parts: kit.OrEmpty(ix.Parts), Unique: ix.Unique, Primary: ix.Primary,
+			Where: kit.Optional(ix.Where),
 		})
 	}
 	return out
@@ -153,148 +76,10 @@ func importForeignKeys(d entity.Entity) []ImportForeignKey {
 	for _, fk := range d.ForeignKeys {
 		out = append(out, ImportForeignKey{
 			Name: fk.Name, Columns: fk.Columns, RefSchema: fk.RefSchema, RefTable: fk.RefRelation,
-			RefColumns: fk.RefColumns, OnDelete: optional(fk.OnDelete), OnUpdate: optional(fk.OnUpdate),
+			RefColumns: fk.RefColumns, OnDelete: kit.Optional(fk.OnDelete), OnUpdate: kit.Optional(fk.OnUpdate),
 		})
 	}
 	return out
-}
-
-// identityUniqueKeys lists the unique keys of d that identify a row.
-func identityUniqueKeys(d entity.Entity) [][]string {
-	out := [][]string{}
-	for _, k := range d.Keys {
-		if !k.Primary && k.Reason == "" {
-			out = append(out, k.Columns)
-		}
-	}
-	return out
-}
-
-// candidateEntity proposes an entity with every column, the primary key and a
-// belongs-to relationship per single-column foreign key. Table and column
-// comments are not copied: at runtime they are the default descriptions, so
-// later comment changes still apply and only a written description overrides.
-// It carries no roles, grants or row policies: nobody can access it until an
-// administrator grants access explicitly.
-func candidateEntity(datasource string, d entity.Entity, names map[string]candidateName) Entity {
-	self := names[tableKey(d.Schema, d.Source)]
-	out := Entity{
-		ID: self.id, Name: self.name, Source: optional(d.Source), Datasource: optional(datasource),
-		Schema:     optional(d.Schema),
-		PrimaryKey: orEmpty(d.PrimaryKey()), UniqueKeys: identityUniqueKeys(d), Params: []string{}, Affects: []string{},
-		Fields: make([]Field, 0, len(d.Attributes)), Relationships: []Relationship{},
-		Mcp: &EntityMcp{DmlTools: true},
-	}
-	if d.Kind == entity.KindView {
-		out.Kind = optional("view")
-	}
-	for _, a := range d.Attributes {
-		out.Fields = append(out.Fields, Field{Name: a.Name})
-	}
-	for _, fk := range d.ForeignKeys {
-		refSchema := fk.RefSchema
-		if refSchema == "" {
-			refSchema = d.Schema
-		}
-		target, ok := names[tableKey(refSchema, fk.RefRelation)]
-		if !ok {
-			continue
-		}
-		joinOn := make(map[string]any, len(fk.Columns))
-		for i, column := range fk.Columns {
-			joinOn[column] = fk.RefColumns[i]
-		}
-		out.Relationships = append(out.Relationships, Relationship{
-			Name: uniqueRelationshipName(out.Relationships, target.name), Target: target.id, Cardinality: "belongs-to",
-			JoinOn: joinOn,
-		})
-	}
-	return out
-}
-
-// addReverseRelationships adds a has-many relationship on each parent for
-// every belongs-to relationship pointing at it.
-func addReverseRelationships(tables []ImportTable) {
-	byID := make(map[string]*Entity, len(tables))
-	for i := range tables {
-		byID[tables[i].Candidate.ID] = tables[i].Candidate
-	}
-	for i := range tables {
-		child := tables[i].Candidate
-		for _, rel := range child.Relationships {
-			if rel.Cardinality != "belongs-to" {
-				continue
-			}
-			parent, ok := byID[rel.Target]
-			if !ok {
-				continue
-			}
-			joinOn := map[string]any{}
-			for local, remote := range rel.JoinOn.(map[string]any) {
-				joinOn[remote.(string)] = local
-			}
-			parent.Relationships = append(parent.Relationships, Relationship{
-				Name: uniqueRelationshipName(parent.Relationships, child.Name), Target: child.ID,
-				Cardinality: "has-many", JoinOn: joinOn,
-			})
-		}
-	}
-}
-
-func uniqueRelationshipName(existing []Relationship, base string) string {
-	name := base
-	for n := 2; ; n++ {
-		taken := false
-		for _, r := range existing {
-			if r.Name == name {
-				taken = true
-				break
-			}
-		}
-		if !taken {
-			return name
-		}
-		name = base + "_" + strconv.Itoa(n)
-	}
-}
-
-// importCatalog scans schemas, or every schema of the database when none are
-// named (only the default one when the introspector cannot list them), and
-// returns the schemas it scanned (none for the default one).
-func importCatalog(
-	ctx context.Context, in introspect.Introspector, schemas []string,
-) (introspect.Catalog, []string, error) {
-	if lister, ok := in.(introspect.SchemaLister); ok && len(schemas) == 0 {
-		all, _, err := lister.Schemas(ctx)
-		if err != nil {
-			return introspect.Catalog{}, nil, err
-		}
-		schemas = all
-	}
-	cat, err := loadCatalog(ctx, in, schemas, len(schemas) == 0)
-	return cat, schemas, err
-}
-
-// loadCatalog loads a catalog that matches names the way the database
-// compares them, as assembly does.
-func loadCatalog(
-	ctx context.Context,
-	in introspect.Introspector,
-	schemas []string,
-	withDefault bool,
-) (introspect.Catalog, error) {
-	cat, err := introspect.LoadCatalog(ctx, in, schemas, withDefault)
-	if err != nil {
-		return cat, err
-	}
-	if namer, ok := in.(introspect.PhysicalNamer); ok {
-		physical, err := namer.Physical(ctx)
-		if err != nil {
-			return cat, err
-		}
-		cat.FoldCase = physical.FoldCase
-	}
-	return cat, nil
 }
 
 // referencedCatalog scans the schemas refs name, and the default schema when
@@ -303,13 +88,13 @@ func referencedCatalog(ctx context.Context, in introspect.Introspector, refs []T
 	var schemas []string
 	unqualified := false
 	for _, ref := range refs {
-		if schema := deref(ref.Schema); schema == "" {
+		if schema := kit.Deref(ref.Schema); schema == "" {
 			unqualified = true
 		} else if !slices.Contains(schemas, schema) {
 			schemas = append(schemas, schema)
 		}
 	}
-	return loadCatalog(ctx, in, schemas, unqualified)
+	return configapp.LoadCatalog(ctx, in, schemas, unqualified)
 }
 
 // lookupTableComments resolves each table's comments with one catalog per
@@ -332,7 +117,7 @@ func lookupTableComments(
 	}
 	out := make([]*TableComments, len(tables))
 	for i, ref := range tables {
-		if d, ok := catalogs[ref.Datasource].Lookup(deref(ref.Schema), ref.Table); ok {
+		if d, ok := catalogs[ref.Datasource].Lookup(kit.Deref(ref.Schema), ref.Table); ok {
 			out[i] = tableComments(d)
 		}
 	}

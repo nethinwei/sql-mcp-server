@@ -2,8 +2,12 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -233,5 +237,58 @@ func TestCheckPublishableRecoversFromUnloadablePublished(t *testing.T) {
 	}
 	if err := CheckPublishable(current, target, true); err != nil {
 		t.Fatalf("restart-required publish over an unloadable revision: %v", err)
+	}
+}
+
+// CheckOffline refuses what assembling refuses without a database, even in a
+// configuration built in code that never went through validation.
+func TestCheckOfflineRefusesWhatAssemblyRefuses(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{Driver: "postgres", DSN: "x"},
+		Entities: []config.EntityConfig{{Name: "users", Fields: []config.FieldConfig{{Name: "id", Mask: "nope"}}}},
+	}
+	cfg.ApplyDefaults()
+	if err := CheckOffline(cfg); err == nil || !strings.Contains(err.Error(), `unknown mask rule "nope"`) {
+		t.Fatalf("CheckOffline = %v", err)
+	}
+}
+
+// Whatever validates also passes the offline assembly checks: validation must
+// not accept a configuration that publishes but then cannot load.
+func TestValidConfigurationsPassCheckOffline(t *testing.T) {
+	t.Parallel()
+	var cases []struct {
+		Name   string          `json:"name"`
+		Config json.RawMessage `json:"config"`
+		Error  string          `json:"error"`
+	}
+	data, err := os.ReadFile("../../core/config/testdata/rules.json")
+	if err == nil {
+		err = json.Unmarshal(data, &cases)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := map[string][]byte{}
+	for _, c := range cases {
+		if c.Error == "" {
+			inputs[c.Name] = c.Config
+		}
+	}
+	paths, _ := filepath.Glob("../../examples/*/config.yaml")
+	for _, p := range append(paths, "../../examples/config.example.yaml") {
+		if inputs[p], err = os.ReadFile(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, input := range inputs {
+		cfg, err := LoadBytes(input)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if err := CheckOffline(cfg); err != nil {
+			t.Errorf("%s validates but cannot be assembled: %v", name, err)
+		}
 	}
 }

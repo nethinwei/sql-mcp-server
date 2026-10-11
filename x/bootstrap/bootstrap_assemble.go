@@ -3,12 +3,15 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"maps"
+	"runtime/debug"
 	"slices"
 	"sync"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/audit"
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/cache"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
@@ -27,58 +30,144 @@ import (
 // checked before any resource is acquired. Each datasource's read connection
 // serves introspection and EXPLAIN.
 func AssembleWithConnections(cfg *config.Config, connections Connections) (*App, error) {
-	return assembleWith(cfg, connections, nil)
+	return assembleOn(cfg, connections, nil, nil)
 }
 
-// assembleWith wires an App on connections, on shared services when shared
-// is not nil and on services of its own otherwise.
-func assembleWith(cfg *config.Config, connections Connections, shared *Shared) (*App, error) {
-	providers, err := readConnections(cfg, connections)
-	if err != nil {
+// assembly is an App being assembled: what assembleOn is given, then what
+// each of its steps built, in order.
+type assembly struct {
+	cfg         *config.Config
+	connections Connections
+	// shared are the services of the process the App runs on, nil for
+	// services of its own; gs are its shared connections, which its work
+	// reaches the connections through (nil reaches them as they are).
+	shared *Shared
+	gs     guards
+	// providers are the read connections, by datasource.
+	providers   map[string]Provider
+	checked     checkedAssembly
+	feedback    cost.FeedbackStore
+	sources     map[string]tool.DataSource
+	txBeginners map[string]store.TxBeginner
+	prepared    map[string]*store.PreparedDB
+	engine      *engine.Engine
+	auditor     audit.Auditor
+	cache       cache.Cache[[]map[string]any]
+}
+
+// assembleOn wires an App on connections, on shared services when shared is
+// not nil and on services of its own otherwise, reaching the connections
+// through gs.
+func assembleOn(cfg *config.Config, connections Connections, shared *Shared, gs guards) (*App, error) {
+	a := &assembly{cfg: cfg, connections: connections, shared: shared, gs: gs}
+	if err := a.check(); err != nil {
 		return nil, err
 	}
-	if err := checkDefaultSchemas(cfg, connections); err != nil {
+	if err := a.acquire(); err != nil {
+		a.release()
 		return nil, err
 	}
-	checked, err := checkAssembly(cfg, providers)
-	if err != nil {
-		return nil, err
+	return a.app(), nil
+}
+
+// check derives what assembly needs from the configuration and the live
+// schema, before any resource is acquired.
+func (a *assembly) check() (err error) {
+	if a.providers, err = readConnections(a.cfg, a.connections); err != nil {
+		return err
 	}
-	if shared == nil { // shared connections are sized as the App is published (see Shared.apply)
-		for _, p := range (&App{Connections: connections}).allProviders() {
+	b := sharedBus(a.shared)
+	if err := checkDefaultSchemas(b, a.cfg, a.connections); err != nil {
+		return err
+	}
+	a.checked, err = checkAssembly(b, a.cfg, a.providers)
+	return err
+}
+
+// acquire builds the parts that hold resources: the data sources (prepared
+// statement caches), the engine and the auditor. release lets go of what it
+// built so far.
+func (a *assembly) acquire() (err error) {
+	cfg := a.cfg
+	if a.shared == nil { // shared connections are sized as the App is published (see Shared.apply)
+		for _, p := range (&App{Connections: a.connections}).allProviders() {
 			configurePool(p, cfg.RateLimit.IOPool, cfg.RateLimit.ConnMaxIdleTime, cfg.RateLimit.ConnMaxLifetime)
 		}
 	}
-	feedback := newFeedbackStore(cfg)
-	sources, txBeginners, prepared, err := buildDataSources(cfg, connections, providers, feedback)
+	a.feedback = newFeedbackStore(cfg)
+	a.sources, a.txBeginners, a.prepared, err = buildDataSources(cfg, a.connections, a.providers, a.feedback, a.gs)
 	if err != nil {
-		closePrepared(prepared)
-		return nil, err
+		return err
 	}
-	eng, err := newAssembleEngine(cfg, shared)
-	if err != nil {
-		closePrepared(prepared)
-		return nil, err
+	if a.engine, err = newAssembleEngine(cfg, a.shared); err != nil {
+		return err
 	}
-	aud, err := newAssembleAuditor(cfg)
-	if err != nil {
-		eng.Close()
-		closePrepared(prepared)
-		return nil, err
+	if a.auditor, err = newAssembleAuditor(cfg, sharedBus(a.shared)); err != nil {
+		return err
 	}
-	defaultName, defaultSource := defaultDatasource(providers, sources)
-	app := newAssembledApp(
-		cfg, providers, prepared, sources, txBeginners, checked.registry,
-		rbac.NewGrantAuthorizer(checked.registry, checked.policy), aud, newAssembleCache(cfg, shared), checked.masker,
-		feedback, defaultSource, defaultName, eng, checked.tools,
-	)
-	app.Connections, app.config = connections, cfg
-	app.WriteTargets = tool.BuildWriteTargets(checked.registry)
-	if shared != nil {
-		app.shared, app.generation = shared, shared.generation.Add(1)
+	a.cache = newAssembleCache(cfg, a.shared)
+	return nil
+}
+
+func (a *assembly) release() {
+	if a.engine != nil {
+		a.engine.Close()
 	}
-	app.assessInBackground(cfg, connections, checked.registry.Entities())
-	return app, nil
+	closePrepared(a.prepared)
+}
+
+// app is the App of what was assembled.
+func (a *assembly) app() *App {
+	cfg, checked := a.cfg, a.checked
+	defaultName := defaultDatasource(a.providers)
+	app := &App{
+		Provider:      a.providers[defaultName],
+		Providers:     a.providers,
+		Connections:   a.connections,
+		Prepared:      a.prepared,
+		Sources:       a.sources,
+		defaultSource: defaultName,
+		Registry:      checked.registry,
+		Authorizer:    rbac.NewGrantAuthorizer(checked.registry, checked.policy),
+		Masker:        checked.masker,
+		Feedback:      a.feedback,
+		Engine:        a.engine,
+		Tools:         checked.tools,
+		Auditor:       a.auditor,
+		Cache:         a.cache,
+		Budget:        newBudgetManager(cfg.Budget, userBudgets(cfg)),
+		Transactions:  tool.NewTransactionManager(cfg.Transactions.TTL, cfg.Transactions.MaxOpen),
+		Writes:        tool.NewWriteTracker(),
+		ResultMemory:  tool.NewResultMemory(cfg.RateLimit.MaxResultMemory),
+		TxBeginners:   a.txBeginners,
+		WriteTargets:  tool.BuildWriteTargets(checked.registry),
+		config:        cfg,
+	}
+	applyAssembledAppConfig(app, cfg)
+	app.attachProcess(cfg, a.shared)
+	app.assessInBackground(cfg, a.connections, checked.registry.Entities())
+	return app
+}
+
+// attachProcess gives the App the process's call state when it runs on
+// shared services: that state is the process's, not the configuration's
+// (see Shared). An App on its own keeps its own.
+func (a *App) attachProcess(cfg *config.Config, shared *Shared) {
+	if shared == nil {
+		a.Transactions.SetConnectionLimit(cfg.Transactions.MaxOpenPerConnection)
+		return
+	}
+	a.shared, a.generation = shared, shared.generation.Add(1)
+	a.Transactions, a.Budget, a.Writes, a.ResultMemory = shared.transactions, shared.budget, shared.writes,
+		shared.results
+}
+
+// sharedBus is the bus of shared services; nil without them.
+func sharedBus(shared *Shared) *bus.Bus {
+	if shared == nil {
+		return nil
+	}
+	return shared.bus
 }
 
 // readConnections returns each datasource's read connection.
@@ -98,9 +187,15 @@ func readConnections(cfg *config.Config, connections Connections) (map[string]Pr
 // checkDefaultSchemas requires the connections of a datasource to resolve
 // unqualified names to the same schema (accounts may have different
 // search_paths or default databases); otherwise its entities must name one.
-func checkDefaultSchemas(cfg *config.Config, connections Connections) error {
+func checkDefaultSchemas(b *bus.Bus, cfg *config.Config, connections Connections) error {
 	ctx, cancel := context.WithTimeout(context.Background(), introspectTimeout)
 	defer cancel()
+	return b.Lane(bus.Background).RunWaiting(ctx, func(ctx context.Context) error {
+		return compareDefaultSchemas(ctx, cfg, connections)
+	})
+}
+
+func compareDefaultSchemas(ctx context.Context, cfg *config.Config, connections Connections) error {
 	for datasource, byName := range connections {
 		if !unqualifiedEntities(cfg, datasource) {
 			continue
@@ -140,34 +235,63 @@ type checkedAssembly struct {
 	tools    *tool.Registry
 }
 
-func checkAssembly(cfg *config.Config, providers map[string]Provider) (checkedAssembly, error) {
+func checkAssembly(b *bus.Bus, cfg *config.Config, providers map[string]Provider) (checkedAssembly, error) {
 	if err := prepareAssembleProviders(cfg, providers); err != nil {
 		return checkedAssembly{}, err
 	}
-	entities, err := configToEntities(cfg.Entities)
+	off, err := offlineAssembly(cfg)
 	if err != nil {
 		return checkedAssembly{}, err
 	}
-	policy, err := accessPolicy(cfg)
+	entities, err := validateAssembleEntities(b, off.entities, providers)
 	if err != nil {
-		return checkedAssembly{}, fmt.Errorf("assemble: %w", err)
-	}
-	msk, err := newAssembleMasker(cfg, entities)
-	if err != nil {
-		return checkedAssembly{}, err
-	}
-	tools, err := tool.NewRegistry(tool.DefaultTools())
-	if err != nil {
-		return checkedAssembly{}, err
-	}
-	if entities, err = validateAssembleEntities(entities, providers); err != nil {
 		return checkedAssembly{}, err
 	}
 	reg, err := entity.NewRegistry(entities)
 	if err != nil {
 		return checkedAssembly{}, err
 	}
-	return checkedAssembly{registry: reg, policy: policy, masker: msk, tools: tools}, nil
+	return checkedAssembly{registry: reg, policy: off.policy, masker: off.masker, tools: off.tools}, nil
+}
+
+// offlineChecked is what assembling a configuration builds before it reads
+// any database.
+type offlineChecked struct {
+	entities []entity.Entity
+	policy   rbac.Policy
+	masker   mask.Masker
+	tools    *tool.Registry
+}
+
+// offlineAssembly runs the steps of assembling cfg that need no database.
+func offlineAssembly(cfg *config.Config) (offlineChecked, error) {
+	entities, err := configToEntities(cfg.Entities)
+	if err != nil {
+		return offlineChecked{}, err
+	}
+	policy, err := accessPolicy(cfg)
+	if err != nil {
+		return offlineChecked{}, fmt.Errorf("assemble: %w", err)
+	}
+	msk, err := newAssembleMasker(cfg, entities)
+	if err != nil {
+		return offlineChecked{}, err
+	}
+	tools, err := tool.NewRegistry(tool.DefaultTools())
+	if err != nil {
+		return offlineChecked{}, err
+	}
+	return offlineChecked{entities: entities, policy: policy, masker: msk, tools: tools}, nil
+}
+
+// CheckOffline reports whether cfg passes the steps of assembling it that
+// need no database (entities, grants, the masker), so a configuration the
+// runtime would refuse to load is refused before it is stored or published
+// even where validation misses a rule of those steps. What the databases
+// hold (tables, columns, default schemas) is checked only when assembling.
+func CheckOffline(cfg *config.Config) error {
+	_, err := offlineAssembly(cfg)
+	return err
 }
 
 func closePrepared(prepared map[string]*store.PreparedDB) {
@@ -189,11 +313,13 @@ func prepareAssembleProviders(cfg *config.Config, providers map[string]Provider)
 
 // validateAssembleEntities checks entities against their datasources and
 // returns them with database comments as the default descriptions.
-func validateAssembleEntities(entities []entity.Entity, providers map[string]Provider) ([]entity.Entity, error) {
+func validateAssembleEntities(
+	b *bus.Bus, entities []entity.Entity, providers map[string]Provider,
+) ([]entity.Entity, error) {
 	if err := validateEntityDatasources(entities, providers); err != nil {
 		return nil, err
 	}
-	entities, err := reconcileAll(providers, entities)
+	entities, err := reconcileAll(b, providers, entities)
 	if err != nil {
 		return nil, err
 	}
@@ -214,8 +340,10 @@ func validateEntityDatasources(entities []entity.Entity, providers map[string]Pr
 const introspectTimeout = time.Minute
 
 // reconcileAll reconciles each datasource's entities with its schema, the
-// datasources in parallel; it reports the first failure by datasource name.
-func reconcileAll(providers map[string]Provider, entities []entity.Entity) ([]entity.Entity, error) {
+// datasources in parallel on b's Background lane, waiting for it however busy
+// it is (a startup or reload must not fail as busy); it reports the first
+// failure by datasource name.
+func reconcileAll(b *bus.Bus, providers map[string]Provider, entities []entity.Entity) ([]entity.Entity, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), introspectTimeout)
 	defer cancel()
 	out := slices.Clone(entities)
@@ -232,8 +360,12 @@ func reconcileAll(providers map[string]Provider, entities []entity.Entity) ([]en
 		for n, i := range at {
 			scoped[n] = entities[i]
 		}
-		wg.Go(func() {
-			reconciled, err := reconcileEntities(ctx, name, prov, scoped)
+		b.Fork(&wg, "reconcile "+name, func(context.Context) {
+			var reconciled []entity.Entity
+			err := b.Lane(bus.Background).RunWaiting(ctx, func(ctx context.Context) (err error) {
+				reconciled, err = reconcileSafely(ctx, name, prov, scoped)
+				return err
+			})
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -274,6 +406,7 @@ func buildDataSources(
 	connections Connections,
 	readers map[string]Provider,
 	feedback cost.FeedbackStore,
+	gs guards,
 ) (map[string]tool.DataSource, map[string]store.TxBeginner, map[string]*store.PreparedDB, error) {
 	sources := make(map[string]tool.DataSource, len(connections))
 	txBeginners := make(map[string]store.TxBeginner, len(connections))
@@ -293,14 +426,22 @@ func buildDataSources(
 			return prepared[key]
 		}
 		route := database.Route()
-		source, err := dataSourceForProvider(cfg, name, readers[name], cached(route.Read), feedback, len(connections) == 1)
+		// Each connection's work runs under its own health (see Shared).
+		on := func(connection string) store.DB {
+			wrap, _ := gs.guard(name, connection, byName[connection])
+			return wrap(cached(connection))
+		}
+		source, err := dataSourceForProvider(
+			cfg, name, readers[name], gs.health(name, route.Read), cached(route.Read), feedback, len(connections) == 1,
+		)
 		if err != nil {
 			return nil, nil, prepared, err
 		}
-		source.Write, source.Execute = cached(route.Write), cached(route.Execute)
-		source.ReadTx, source.ReadAfterWrite = readers[name], database.ReadAfterWrite
+		source.DB, source.Write, source.Execute = on(route.Read), on(route.Write), on(route.Execute)
+		_, source.ReadTx = gs.guard(name, route.Read, readers[name])
+		source.ReadAfterWrite = database.ReadAfterWrite
 		sources[name] = source
-		txBeginners[name] = byName[route.Write]
+		_, txBeginners[name] = gs.guard(name, route.Write, byName[route.Write])
 	}
 	return sources, txBeginners, prepared, nil
 }
@@ -309,11 +450,12 @@ func dataSourceForProvider(
 	cfg *config.Config,
 	name string,
 	prov Provider,
+	h *health,
 	db *store.PreparedDB,
 	feedback cost.FeedbackStore,
 	legacyExactSQL bool,
 ) (tool.DataSource, error) {
-	explainer := prov.Explainer()
+	explainer, sampler, supportsAnalyze := planners(prov, h)
 	if cfg.Cost.EnabledOrDefault() && prov.Dialect().Capabilities().ExplainCost && explainer == nil {
 		return tool.DataSource{}, fmt.Errorf(
 			"datasource %q (%s) has no EXPLAIN implementation",
@@ -321,7 +463,6 @@ func dataSourceForProvider(
 			prov.Dialect().Name(),
 		)
 	}
-	sampler, supportsAnalyze := prov.(cost.AnalyzeSampler)
 	if cfg.Cost.AQE.ExplainAnalyze && !supportsAnalyze {
 		return tool.DataSource{}, fmt.Errorf(
 			"datasource %q (%s) does not support EXPLAIN ANALYZE sampling",
@@ -338,7 +479,7 @@ func dataSourceForProvider(
 			Timeout:    cfg.Cost.AQE.Timeout,
 		},
 	}
-	threshold := toThreshold(cfg.Cost)
+	threshold := cfg.Cost.Threshold()
 	threshold.Datasource = name
 	threshold.DialectName = prov.Dialect().Name()
 	threshold.LegacyExactSQL = legacyExactSQL
@@ -349,11 +490,28 @@ func dataSourceForProvider(
 	return tool.DataSource{DB: db, Dialect: prov.Dialect(), Gate: gate, Analyze: analyze}, nil
 }
 
+// planners are prov's EXPLAIN and EXPLAIN ANALYZE, under the health of the
+// connection when it has one: they reach the database as its queries do.
+func planners(prov Provider, h *health) (cost.Explainer, cost.AnalyzeSampler, bool) {
+	explainer := prov.Explainer()
+	sampler, supportsAnalyze := prov.(cost.AnalyzeSampler)
+	if h == nil {
+		return explainer, sampler, supportsAnalyze
+	}
+	if explainer != nil {
+		explainer = guardedExplainer{Explainer: explainer, health: h}
+	}
+	if supportsAnalyze {
+		sampler = guardedSampler{AnalyzeSampler: sampler, health: h}
+	}
+	return explainer, sampler, supportsAnalyze
+}
+
 func newAssembleEngine(cfg *config.Config, shared *Shared) (*engine.Engine, error) {
 	if shared != nil {
 		return shared.engine(cfg)
 	}
-	limiter, rps, breaker := rateLimiters(cfg)
+	limiter, rps, breaker := rateLimiters(cfg.RateLimit)
 	return engine.New(
 		engine.WithIOPool(cfg.RateLimit.IOPool),
 		engine.WithMaxInflight(cfg.RateLimit.MaxInflight),
@@ -364,7 +522,7 @@ func newAssembleEngine(cfg *config.Config, shared *Shared) (*engine.Engine, erro
 	)
 }
 
-func newAssembleAuditor(cfg *config.Config) (audit.Auditor, error) {
+func newAssembleAuditor(cfg *config.Config, b *bus.Bus) (audit.Auditor, error) {
 	if !cfg.Audit.Enabled || cfg.Audit.Path == "" {
 		return audit.NoopAuditor{}, nil
 	}
@@ -372,7 +530,7 @@ func newAssembleAuditor(cfg *config.Config) (audit.Auditor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("assemble audit sink: %w", err)
 	}
-	return audit.NewAsyncAuditorWithClose(sink.Record, sink.Close, cfg.Audit.QueueSize), nil
+	return audit.NewAsyncAuditorOn(b, sink.Record, sink.Close, cfg.Audit.QueueSize), nil
 }
 
 func newAssembleCache(cfg *config.Config, shared *Shared) cache.Cache[[]map[string]any] {
@@ -396,56 +554,16 @@ func newAssembleMasker(cfg *config.Config, entities []entity.Entity) (mask.Maske
 	return rm, nil
 }
 
-func defaultDatasource(providers map[string]Provider, sources map[string]tool.DataSource) (string, tool.DataSource) {
+// defaultDatasource is the datasource a request names none of: "default",
+// or the only one.
+func defaultDatasource(providers map[string]Provider) string {
 	defaultName := "default"
 	if _, ok := providers[defaultName]; !ok && len(providers) == 1 {
 		for name := range providers {
 			defaultName = name
 		}
 	}
-	return defaultName, sources[defaultName]
-}
-
-func newAssembledApp(
-	cfg *config.Config,
-	providers map[string]Provider,
-	prepared map[string]*store.PreparedDB,
-	sources map[string]tool.DataSource,
-	txBeginners map[string]store.TxBeginner,
-	reg *entity.Registry,
-	authz rbac.Authorizer,
-	aud audit.Auditor,
-	cc cache.Cache[[]map[string]any],
-	msk mask.Masker,
-	feedback cost.FeedbackStore,
-	defaultSource tool.DataSource,
-	defaultName string,
-	eng *engine.Engine,
-	tools *tool.Registry,
-) *App {
-	app := &App{
-		Provider:     providers[defaultName],
-		Providers:    providers,
-		Prepared:     prepared,
-		Sources:      sources,
-		Dialect:      defaultSource.Dialect,
-		Registry:     reg,
-		Authorizer:   authz,
-		Masker:       msk,
-		Feedback:     feedback,
-		Analyze:      defaultSource.Analyze,
-		Gate:         defaultSource.Gate,
-		Engine:       eng,
-		Tools:        tools,
-		Auditor:      aud,
-		Cache:        cc,
-		Budget:       newBudgetManager(cfg.Budget, userBudgets(cfg)),
-		Transactions: tool.NewTransactionManager(cfg.Transactions.TTL, cfg.Transactions.MaxOpen),
-		Writes:       tool.NewWriteTracker(),
-		TxBeginners:  txBeginners,
-	}
-	applyAssembledAppConfig(app, cfg)
-	return app
+	return defaultName
 }
 
 func applyAssembledAppConfig(app *App, cfg *config.Config) {
@@ -463,4 +581,18 @@ func applyAssembledAppConfig(app *App, cfg *config.Config) {
 		TransactionCommitTimeout:   cfg.Transactions.CommitTimeout,
 		TransactionRollbackTimeout: cfg.Transactions.RollbackTimeout,
 	}
+}
+
+// reconcileSafely reconciles on its own goroutine, so a panic fails assembly
+// (and a reload keeps the old configuration) instead of stopping the process.
+func reconcileSafely(
+	ctx context.Context, name string, prov Provider, entities []entity.Entity,
+) (out []entity.Entity, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("reconciliation panicked", "datasource", name, "panic", r, "stack", string(debug.Stack()))
+			err = fmt.Errorf("internal error: %v", r)
+		}
+	}()
+	return reconcileEntities(ctx, name, prov, entities)
 }

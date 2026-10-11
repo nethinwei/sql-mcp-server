@@ -8,13 +8,15 @@ import {
 } from 'naive-ui'
 import DiffView from '@/components/DiffView.vue'
 import ChangeSummary from '@/components/ChangeSummary.vue'
+import ConflictList from '@/components/ConflictList.vue'
 import { summarize, type Config } from '@/lib/changeSummary'
-import { useWorkspace } from '@/stores/workspace'
+import { currentLifetime, owned, useWorkspace, WorkspaceSwitched } from '@/stores/workspace'
+import { useWorkspaceAction, workspace } from '@/lib/workspaceSync'
 import { ApiError, run } from '@/api/client'
 import { useStatus } from '@/stores/status'
 import { useSettingsEdits } from '@/stores/settingsEdits'
-import { CreateDraftMutation, DiffQuery, PublishMutation, ValidateQuery } from '@/api/ops'
-import type { DraftInput } from '@/gql/graphql'
+import { DiffQuery, ValidateQuery, WorkspaceLogQuery } from '@/api/ops'
+import { draftsChanged } from '@/lib/draftFeed'
 import { can } from '@/api/session'
 
 const { t } = useI18n()
@@ -24,6 +26,7 @@ const settingsEdits = useSettingsEdits()
 const router = useRouter()
 const dialog = useDialog()
 const message = useMessage()
+const action = useWorkspaceAction()
 const checking = ref(false)
 const saving = ref(false)
 const error = ref<string | null>(null)
@@ -31,6 +34,41 @@ const restart = ref<string[]>([])
 const warnings = ref<string[]>([])
 const diff = ref('')
 const comment = ref('')
+
+// The comment starts as what the agents and drafts behind the changes said
+// (see Note), and follows them until edited here.
+const notesText = computed(() => ws.notes
+  .map((n) => t(n.source === 'agent' ? 'review.noteAgent' : 'review.noteDraft', { text: n.text.trim(), by: n.by }))
+  .join(t('review.noteSep')))
+let prefilled = ''
+watch(notesText, (text) => {
+  if (comment.value === prefilled) comment.value = text
+  prefilled = text
+}, { immediate: true })
+
+// Who last wrote each changed item, from the workspace log: an
+// administrator, an agent, or a draft taken in.
+const writers = ref(new Map<string, string>())
+let writersSeq = 0
+watch(() => ws.version, async () => {
+  const mine = ++writersSeq
+  try {
+    const { workspaceLog } = await run(WorkspaceLogQuery, { limit: 200 })
+    if (mine !== writersSeq) return
+    const out = new Map<string, string>()
+    for (const e of workspaceLog) {
+      const by = e.op === 'merge' ? t('review.byDraft', { id: (e.note ?? '').replace(/^#/, '') })
+        : e.by.startsWith('agent:') ? t('review.byAgent', { agent: e.by.slice('agent:'.length) }) : e.by
+      for (const it of e.items) if (!out.has(`${it.kind}/${it.key}`)) out.set(`${it.kind}/${it.key}`, by)
+    }
+    writers.value = out
+  } catch {
+    // the log only annotates the changes
+  }
+}, { immediate: true })
+function writer(c: { kind: string; name: string }) {
+  return writers.value.get(`${c.kind}/${c.name}`) ?? ''
+}
 
 const restartList = () => restart.value.join(t('common.listSep'))
 const summary = computed(() => summarize(JSON.parse(ws.baseline) as Config, ws.$state))
@@ -48,8 +86,9 @@ async function check() {
   const mine = ++seq
   checking.value = true
   try {
-    const v = (await run(ValidateQuery, { draft: snap.draft })).validate
-    const d = v.ok ? (await run(DiffQuery, { from: ws.baseId, draft: snap.draft })).diff : ''
+    // Both read the workspace on the server, what was edited here written first.
+    const v = (await workspace.read(ValidateQuery, {})).validate
+    const d = v.ok ? (await workspace.read(DiffQuery, { from: ws.baseId })).diff : ''
     if (mine !== seq) return
     error.value = v.ok ? null : v.error ?? t('review.validateFailed')
     restart.value = v.restartRequired
@@ -57,7 +96,11 @@ async function check() {
     diff.value = d
     checkedContent.value = snap.content
   } catch (e) {
-    if (mine === seq) error.value = e instanceof Error ? e.message : String(e)
+    if (mine !== seq) return
+    // A failed check is the result for this content: shown with a recheck
+    // button instead of waiting for a recheck no edit will trigger.
+    error.value = e instanceof Error ? e.message : String(e)
+    checkedContent.value = snap.content
   } finally {
     if (mine === seq) checking.value = false
   }
@@ -66,16 +109,11 @@ async function check() {
 let recheck: ReturnType<typeof setTimeout> | undefined
 watch(() => ws.content, () => {
   clearTimeout(recheck)
-  if (ws.dirty) recheck = setTimeout(() => void check(), 400)
+  if (ws.dirty) recheck = setTimeout(() => void check(), 800)
 })
 onBeforeUnmount(() => clearTimeout(recheck))
 
-async function saveDraft(draft: DraftInput) {
-  const { createDraft } = await run(CreateDraftMutation, { draft, comment: comment.value || null }, true)
-  return createDraft
-}
-
-/** Offers to rebase when someone published since the workspace was based. */
+/** Offers to update when someone published since the workspace was based. */
 function conflict(id: string) {
   dialog.warning({
     title: t('stale.publishConflictTitle', { id }),
@@ -83,75 +121,66 @@ function conflict(id: string) {
     positiveText: t('stale.rebase', { id }),
     negativeText: t('common.cancel'),
     onPositiveClick: async () => {
-      const count = await status.rebaseWorkspace()
+      const count = await action(() => status.rebaseWorkspace())
+      if (count === undefined) return
       message.success(t('stale.rebased', { id, count }, count))
       await check()
     },
   })
 }
 
+const blocked = computed(() => Boolean(error.value) || ws.openConflicts.length > 0)
+
 /**
- * Publishing and syncing the workspace afterwards are separate outcomes: once
- * the server published, a failed sync keeps the published id and the
- * submitted snapshot so it can be retried, and publishing is not offered
- * again (the workspace is still based on the older revision).
+ * Saves the workspace as a draft, or publishes it, on the server: what is
+ * edited here is written first and checked as the server keeps it; the
+ * server publishes the workspace at that version, so a write made since
+ * (another console, an agent) is checked first.
  */
-const syncFailed = ref<{ id: string; sections: string; restart: boolean; error: string } | null>(null)
-
-async function sync(id: string, sections: string, restartNeeded: boolean) {
-  try {
-    // Edits made since the click (including undoing part of it) are measured
-    // from the snapshot when the published configuration arrives, and kept.
-    await ws.rebase(id, sections)
-    syncFailed.value = null
-    message.success(t(restartNeeded ? 'review.publishedRestart' : 'review.published', { id }))
-    void router.push({ name: 'revisions', query: { id } })
-  } catch (e) {
-    syncFailed.value = { id, sections, restart: restartNeeded, error: e instanceof Error ? e.message : String(e) }
-  }
-}
-
 async function save(publish: boolean) {
+  if (ws.openConflicts.length) return
+  // Every request of this save is the signed-in administrator's: once
+  // another signs in, none is made and no answer is taken (WorkspaceSwitched).
+  const at = currentLifetime()
   saving.value = true
   try {
+    await owned(() => workspace.flush(), at)
     // Validation must describe what is submitted.
-    if (checkStale.value) await check()
-    if (error.value || checkStale.value) return
-    // What is saved is the workspace at this point; edits made while the
-    // requests run stay unsaved (and survive publishing, re-applied on top).
-    const snap = ws.snapshot()
-    const reuse = ws.savedDraftId
-    const restartNeeded = restart.value.length > 0
-    if (publish) {
-      await status.refresh()
-      if (status.publishedId && status.publishedId !== ws.basePublished) return conflict(status.publishedId)
-    }
-    // A draft already holding this content is published as is.
-    const id = reuse ?? (await saveDraft(snap.draft)).id
+    if (checkStale.value) await owned(check, at)
+    if (error.value || checkStale.value || ws.openConflicts.length) return
     if (!publish) {
-      ws.markDraftSaved(id, snap.content)
+      const id = await owned(() => workspace.checkpoint(comment.value || null), at)
+      draftsChanged.value++
       message.success(t('review.savedDraft', { id }))
       return
     }
-    await run(PublishMutation, {
-      input: { id, restartRequired: restartNeeded, expectedPublished: ws.basePublished },
-    }, true)
+    const expectedPublished = ws.basePublished
+    if (!expectedPublished) return
+    const restartNeeded = restart.value.length > 0
+    const id = await owned(() => workspace.commit({
+      version: ws.version, expectedPublished, comment: comment.value || null,
+      restartRequired: restartNeeded,
+    }), at)
     void status.refresh()
-    await sync(id, snap.sections, restartNeeded)
+    draftsChanged.value++
+    message.success(t(restartNeeded ? 'review.publishedRestart' : 'review.published', { id }))
+    void router.push({ name: 'revisions', query: { id } })
   } catch (e) {
-    if (e instanceof ApiError && e.code === 'CONFLICT') return conflict(String(e.extensions.published))
+    if (e instanceof WorkspaceSwitched) return
+    if (e instanceof ApiError) {
+      if (e.code === 'CONFLICT' && e.extensions.published) return conflict(String(e.extensions.published))
+      if (e.code === 'BEHIND') {
+        await status.refresh()
+        if (status.publishedId) return conflict(status.publishedId)
+      }
+      if (e.code === 'CONFLICT' || e.code === 'CONFLICTS') {
+        // Written meanwhile: what it is now is read again and checked.
+        await workspace.refresh()
+        message.warning(t('review.changedMeanwhile'))
+        return
+      }
+    }
     message.error(e instanceof Error ? e.message : String(e))
-  } finally {
-    saving.value = false
-  }
-}
-
-async function resync() {
-  const f = syncFailed.value
-  if (!f) return
-  saving.value = true
-  try {
-    await sync(f.id, f.sections, f.restart)
   } finally {
     saving.value = false
   }
@@ -172,14 +201,14 @@ onMounted(check)
 </script>
 
 <template>
-  <n-alert v-if="settingsEdits.pending.length" type="warning" class="settings-pending"
+  <n-alert v-if="settingsEdits.unsaved.length" type="warning" class="settings-pending"
     :title="t('review.settingsPendingTitle')">
-    {{ t('review.settingsPendingBody', { list: settingsEdits.pending.join(', ') }) }}
+    {{ t('review.settingsPendingBody', { list: settingsEdits.unsaved.join(', ') }) }}
     <div class="alert-actions">
       <n-button size="small" @click="router.push({ name: 'settings' })">{{ t('review.toSettings') }}</n-button>
     </div>
   </n-alert>
-  <n-empty v-if="!ws.dirty" :description="t('review.nothing')">
+  <n-empty v-if="!ws.dirty && !ws.openConflicts.length" :description="t('review.nothing')">
     <template #extra><n-button @click="router.push({ name: 'overview' })">{{ t('review.backToOverview') }}</n-button></template>
   </n-empty>
   <n-spin v-else :show="checking">
@@ -189,10 +218,12 @@ onMounted(check)
           <n-tag v-for="c in ws.changes" :key="c.kind + c.name" size="small" :bordered="false"
             :closable="can('admin:write')" @close="ws.revert(c)"
             :type="c.type === 'added' ? 'success' : c.type === 'removed' ? 'error' : 'warning'">
-            {{ t(`changes.type.${c.type}`) }} · {{ t(`changes.kind.${c.kind}`) }} · {{ c.kind === 'settings' ? t('changes.settingsName') : c.kind === 'entity' ? ws.entityIndex.shortName(c.name) : c.name }}
+            {{ t(`changes.type.${c.type}`) }} · {{ t(`changes.kind.${c.kind}`) }} · {{ c.kind === 'settings' ? t('changes.settingsName') : c.kind === 'entity' ? ws.entityIndex.shortName(c.name) : c.name }}<template v-if="writer(c)"> · {{ writer(c) }}</template>
           </n-tag>
         </n-space>
       </n-card>
+
+      <conflict-list v-if="ws.openConflicts.length" />
 
       <n-alert v-if="checkStale" type="info" :show-icon="false">{{ t('review.rechecking') }}</n-alert>
       <n-alert v-else-if="error" type="error" :title="t('review.invalid')">
@@ -224,16 +255,6 @@ onMounted(check)
         </n-collapse>
       </n-card>
 
-      <n-alert v-if="syncFailed" type="warning" :title="t('review.syncFailedTitle', { id: syncFailed.id })">
-        {{ t('review.syncFailedBody', { error: syncFailed.error }) }}
-        <div class="alert-actions">
-          <n-button size="small" type="warning" :loading="saving" @click="resync">{{ t('review.resync') }}</n-button>
-          <n-button size="small" @click="router.push({ name: 'revisions', query: { id: syncFailed.id } })">
-            {{ t('review.viewPublished', { id: syncFailed.id }) }}
-          </n-button>
-        </div>
-      </n-alert>
-
       <n-alert v-if="ws.savedDraftId" type="info" :title="t('review.savedDraftTitle', { id: ws.savedDraftId })">
         {{ t('review.savedDraftBody') }}
         <div class="alert-actions">
@@ -245,15 +266,16 @@ onMounted(check)
 
       <n-card size="small">
         <n-space vertical>
-          <n-input v-model:value="comment" :placeholder="t('review.comment')"
+          <n-input v-model:value="comment" type="textarea" :autosize="{ minRows: 1, maxRows: 4 }"
+            :placeholder="t('review.comment')"
             :disabled="Boolean(error) || Boolean(ws.savedDraftId)" />
           <n-space justify="end">
             <n-text v-if="!can('admin:publish')" depth="3" style="font-size: 12px">{{ t('review.noPublish') }}</n-text>
-            <n-button :disabled="Boolean(error) || Boolean(ws.savedDraftId) || Boolean(syncFailed)" :loading="saving"
+            <n-button :disabled="blocked || Boolean(ws.savedDraftId)" :loading="saving"
               @click="save(false)">
               {{ ws.savedDraftId ? t('review.draftSaved', { id: ws.savedDraftId }) : t('review.saveDraft') }}
             </n-button>
-            <n-button v-if="can('admin:publish')" type="primary" :disabled="Boolean(error) || Boolean(syncFailed)"
+            <n-button v-if="can('admin:publish')" type="primary" :disabled="blocked"
               :loading="saving" @click="publish">
               {{ ws.savedDraftId ? t('review.publishDraft', { id: ws.savedDraftId }) : t('review.saveAndPublish') }}
             </n-button>

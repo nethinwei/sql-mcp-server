@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -47,7 +48,57 @@ func (e pgExplainer) Explain(ctx context.Context, query string, args []any) (cos
 	if relation := relationForScan(root, p.ScanType); relation != "" {
 		p.StatsFresh = e.statsFresh(ctx, relation)
 	}
+	if p.ScanType == cost.ScanFull {
+		if relations, ok := fullScanRelations(root, nil); ok {
+			p.TableRows, p.TableSized = e.tableRows(ctx, relations)
+		}
+	}
 	return p, nil
+}
+
+// fullScanRelations lists the tables the plan's sequential scans read; false
+// when a scan names none.
+func fullScanRelations(n pgPlanNode, out []string) ([]string, bool) {
+	if pgScanType(n.NodeType) == cost.ScanFull {
+		if n.RelationName == "" {
+			return nil, false
+		}
+		out = append(out, n.RelationName)
+	}
+	for _, child := range n.Plans {
+		var ok bool
+		if out, ok = fullScanRelations(child, out); !ok {
+			return nil, false
+		}
+	}
+	return out, true
+}
+
+// tableRowsSQL estimates the rows of the largest table of the given names (of
+// any schema: a name in several counts as its largest) as the planner does:
+// the analyzed rows per page times the pages the table has now, so a table
+// that grew since it was analyzed counts as grown. A table never analyzed
+// counts as full pages of the smallest rows (a 28-byte tuple and line
+// pointer). The count of names found tells a name that is not a table.
+const tableRowsSQL = `SELECT count(DISTINCT relname), coalesce(max(CASE
+  WHEN relpages > 0 AND reltuples >= 0 THEN reltuples / relpages * pages
+  ELSE pages * (block / 28) END), 0)::bigint
+FROM (SELECT c.relname, c.relpages, c.reltuples,
+  ceil(pg_relation_size(c.oid) / current_setting('block_size')::float8) AS pages,
+  current_setting('block_size')::float8 AS block
+  FROM pg_class c WHERE c.relname = ANY($1) AND c.relkind IN ('r', 'm')) t`
+
+// tableRows reports how many rows the largest of the relations holds; false
+// when that cannot be told.
+func (e pgExplainer) tableRows(ctx context.Context, relations []string) (int64, bool) {
+	slices.Sort(relations)
+	relations = slices.Compact(relations)
+	var found, rows int64
+	if err := e.db.QueryRowContext(ctx, tableRowsSQL, relations).Scan(&found, &rows); err != nil ||
+		found != int64(len(relations)) {
+		return 0, false
+	}
+	return rows, true
 }
 
 // statsFresh reports whether the relation has been analyzed at least once.
@@ -188,7 +239,7 @@ func parsePGExplain(b []byte) (cost.Plan, pgPlanNode, error) {
 // the largest row estimate rather than classifying only a wrapper root node.
 func walkPlan(n pgPlanNode, p *cost.Plan) {
 	if scan := pgScanType(n.NodeType); scan != cost.ScanUnknown &&
-		(p.ScanType == cost.ScanUnknown || scanRisk(scan) > scanRisk(p.ScanType)) {
+		(p.ScanType == cost.ScanUnknown || cost.Worse(scan, p.ScanType)) {
 		p.ScanType = scan
 	}
 	if n.PlanRows > p.EstimatedRows {
@@ -205,21 +256,6 @@ func walkPlan(n pgPlanNode, p *cost.Plan) {
 	}
 	for _, sub := range n.Plans {
 		walkPlan(sub, p)
-	}
-}
-
-func scanRisk(scan cost.ScanType) int {
-	switch scan {
-	case cost.ScanFull:
-		return 4
-	case cost.ScanSeq:
-		return 3
-	case cost.ScanIndex:
-		return 2
-	case cost.ScanPoint:
-		return 1
-	default:
-		return 0
 	}
 }
 

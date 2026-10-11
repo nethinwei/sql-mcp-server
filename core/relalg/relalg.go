@@ -40,6 +40,15 @@ type ProjectItem struct {
 	Alias string
 }
 
+// ProjectFields is the projection of fields, each as it is named.
+func ProjectFields(fields []string) []ProjectItem {
+	items := make([]ProjectItem, len(fields))
+	for i, f := range fields {
+		items[i] = ProjectItem{Field: f}
+	}
+	return items
+}
+
 // AggFunc is a whitelisted aggregate function name. Like Op, a user-supplied
 // value never reaches SQL as a raw function string, preventing injection.
 type AggFunc string
@@ -171,6 +180,26 @@ type Call struct {
 	Args      []any
 }
 
+// Input is the input of a unary node (σ, π, γ, τ, limit, δ); false for a
+// scan, a literal relation or a write, which have none.
+func Input(e Expr) (Expr, bool) {
+	switch n := e.(type) {
+	case Select:
+		return n.Input, true
+	case Project:
+		return n.Input, true
+	case Aggregate:
+		return n.Input, true
+	case Sort:
+		return n.Input, true
+	case Limit:
+		return n.Input, true
+	case Distinct:
+		return n.Input, true
+	}
+	return nil, false
+}
+
 // Marker methods seal the Expr interface.
 func (Scan) rel()      {}
 func (Select) rel()    {}
@@ -205,15 +234,8 @@ type Or struct{ Preds []Predicate }
 // Not negates a predicate.
 type Not struct{ P Predicate }
 
-// IsNull tests null/non-null of a field.
-type IsNull struct {
-	Field string
-	Not   bool
-}
-
 // Marker methods seal the Predicate interface.
 func (Condition) pred() {}
 func (And) pred()       {}
 func (Or) pred()        {}
 func (Not) pred()       {}
-func (IsNull) pred()    {}

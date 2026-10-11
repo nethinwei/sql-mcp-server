@@ -3,110 +3,76 @@ package configyaml
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"os"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"gopkg.in/yaml.v3"
 )
 
-// Decode decodes, defaults, and validates a YAML configuration.
+// Decode decodes a YAML configuration and resolves it: what it says, with
+// its defaults filled in, validated.
 func Decode(data []byte) (*config.Config, error) {
-	var document yaml.Node
-	if err := yaml.Unmarshal(data, &document); err != nil {
+	spec, err := DecodeSpec(data)
+	if err != nil {
 		return nil, err
 	}
+	return config.Resolve(spec)
+}
 
-	var cfg config.Config
-	root := documentRoot(&document)
-	if root != nil {
-		// Unknown keys fail instead of being ignored, so a misspelt setting
-		// cannot silently keep its default.
-		decoder := yaml.NewDecoder(bytes.NewReader(data))
-		decoder.KnownFields(true)
-		if err := decoder.Decode(&cfg); err != nil {
-			return nil, err
-		}
-		cfg.ApplyPresence(collectPresence(root, len(cfg.Entities)))
-	}
-	cfg.ApplyDefaults()
-	if err := cfg.Validate(); err != nil {
+// DecodeSpec decodes YAML into what it says, strictly (an unknown key fails)
+// and canonically (see config.Spec.Canonical), without defaults or
+// validation (see config.Resolve).
+func DecodeSpec(data []byte) (*config.Spec, error) {
+	var spec config.Spec
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&spec); err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
 	}
-	return &cfg, nil
+	spec.Canonical()
+	return &spec, nil
+}
+
+// EncodeSpec returns the deterministic encoding of spec, what it sets only:
+// the export encoding, and the payload of configuration store revisions.
+func EncodeSpec(spec *config.Spec) ([]byte, error) {
+	var buf bytes.Buffer
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(spec); err != nil {
+		return nil, err
+	}
+	if err := encoder.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // Load reads and decodes a YAML configuration file.
 func Load(path string) (*config.Config, error) {
+	_, cfg, err := LoadSpec(path)
+	return cfg, err
+}
+
+// LoadSpec reads a YAML configuration file: what it says, and resolved.
+func LoadSpec(path string) (*config.Spec, *config.Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return Decode(data)
+	spec, err := DecodeSpec(data)
+	if err != nil {
+		return nil, nil, err
+	}
+	cfg, err := config.Resolve(spec)
+	return spec, cfg, err
 }
 
-func documentRoot(document *yaml.Node) *yaml.Node {
-	if document.Kind == yaml.DocumentNode && len(document.Content) > 0 {
-		return document.Content[0]
-	}
-	if document.Kind != 0 {
-		return document
-	}
-	return nil
-}
-
-func collectPresence(root *yaml.Node, entityCount int) config.Presence {
-	presence := config.Presence{
-		EntityDMLTools: make([]bool, entityCount),
-	}
-
-	_, presence.Tools = mappingValue(root, "tools")
-	if costNode, ok := mappingValue(root, "cost"); ok {
-		presence.Cost = mappingFields(costNode)
-		if aqeNode, ok := mappingValue(costNode, "aqe"); ok {
-			presence.CostAQE = mappingFields(aqeNode)
-		}
-	}
-
-	if entitiesNode, ok := mappingValue(root, "entities"); ok && entitiesNode.Kind == yaml.SequenceNode {
-		for i, entityNode := range entitiesNode.Content {
-			if i >= len(presence.EntityDMLTools) {
-				break
-			}
-			mcpNode, ok := mappingValue(entityNode, "mcp")
-			if !ok {
-				continue
-			}
-			_, presence.EntityDMLTools[i] = mappingValue(mcpNode, "dmlTools")
-		}
-	}
-	return presence
-}
-
-func mappingFields(node *yaml.Node) map[string]bool {
-	if node.Kind != yaml.MappingNode {
-		return nil
-	}
-	fields := make(map[string]bool, len(node.Content)/2)
-	for i := 0; i+1 < len(node.Content); i += 2 {
-		fields[node.Content[i].Value] = true
-	}
-	return fields
-}
-
-func mappingValue(node *yaml.Node, key string) (*yaml.Node, bool) {
-	if node.Kind != yaml.MappingNode {
-		return nil, false
-	}
-	for i := 0; i+1 < len(node.Content); i += 2 {
-		if node.Content[i].Value == key {
-			return node.Content[i+1], true
-		}
-	}
-	return nil, false
-}
-
-// Encode returns the deterministic export encoding of cfg. It is the payload
-// format of configuration store revisions.
+// Encode returns the encoding of a configuration in effect, every value
+// written out: what `export` shows, and the form of payloads stored before
+// Specs (they read back as Specs that set every value; see EncodeSpec).
 func Encode(cfg *config.Config) ([]byte, error) {
 	var buf bytes.Buffer
 	encoder := yaml.NewEncoder(&buf)

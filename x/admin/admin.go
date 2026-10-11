@@ -1,5 +1,6 @@
 // Package admin serves the admin API under /admin: sign-in with local
-// accounts, cookie sessions with CSRF tokens, and the GraphQL endpoint.
+// accounts, cookie sessions with CSRF tokens, the GraphQL endpoint, and the
+// configuration MCP endpoint at /admin/mcp for administrators' tokens.
 package admin
 
 import (
@@ -22,13 +23,17 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
+	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
+	"github.com/nethinwei/sql-mcp-server/x/admin/configmcp"
 	"github.com/nethinwei/sql-mcp-server/x/admin/graph"
 	"github.com/nethinwei/sql-mcp-server/x/admin/scanjobs"
 	"github.com/nethinwei/sql-mcp-server/x/admin/ui"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
+	"github.com/nethinwei/sql-mcp-server/x/catalog"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
 )
 
@@ -46,13 +51,24 @@ const (
 
 // Config wires the admin API.
 type Config struct {
-	Store      revision.Store
-	Accounts   accounts.Store
-	Introspect graph.Introspection
+	Store    revision.Store
+	Accounts accounts.Store
+	// Catalog keeps what schema scans found; in memory when nil.
+	Catalog catalog.Store
+	// Plans keeps plan templates and MCP tokens; nil refuses them.
+	Plans      configapp.PlanStore
+	Introspect configapp.Introspection
+	// Bus runs the scans and the console's event feed; optional (unbounded
+	// without one).
+	Bus *bus.Bus
 	// Status reports the serving process to the console; optional.
 	Status func() graph.RuntimeState
 	// Capabilities reports what the serving connections may do; optional.
 	Capabilities func() bootstrap.EntityCapabilities
+	// PathPrefix is the path a gateway serves the service under and strips
+	// from requests (server.pathPrefix); pages, the cookie and redirects
+	// carry it.
+	PathPrefix string
 	// SecureCookie marks the session cookie Secure; set it when serving TLS.
 	SecureCookie bool
 	// Playground mounts GraphiQL at /admin/playground and enables GraphQL
@@ -63,24 +79,28 @@ type Config struct {
 
 // Handler serves /admin/*.
 type Handler struct {
-	cfg      Config
-	sessions *sessions
-	logins   *loginGate
-	graphql  http.Handler
-	mux      *http.ServeMux
-	scans    *graph.Scans
+	cfg       Config
+	sessions  *sessions
+	logins    *loginGate
+	graphql   http.Handler
+	mux       *http.ServeMux
+	scans     *configapp.Scans
+	published *publishedFeed
 }
 
 // New builds the admin handler.
 func New(cfg Config) *Handler {
 	h := &Handler{
 		cfg: cfg, sessions: newSessions(cfg.Now), logins: newLoginGate(maxConcurrentLogins),
-		scans: graph.NewScans(scanjobs.Options{}),
+		scans:     configapp.NewScans(scanjobs.Options{Bus: cfg.Bus}, cfg.Catalog),
+		published: newPublishedFeed(cfg.Bus, cfg.Store, eventPollInterval),
 	}
-	srv := handler.New(graph.NewExecutableSchema(graph.Config{Resolvers: &graph.Resolver{
-		Store: cfg.Store, Accounts: accounts.Service{Store: cfg.Accounts}, Introspect: cfg.Introspect, Status: cfg.Status,
-		Capabilities: cfg.Capabilities, Scans: h.scans,
-	}}))
+	app := &configapp.Service{
+		Store: cfg.Store, Introspect: cfg.Introspect, Capabilities: cfg.Capabilities, Scans: h.scans, Plans: cfg.Plans,
+	}
+	app.WatchScanBatches()
+	resolver := &graph.Resolver{App: app, Accounts: accounts.Service{Store: cfg.Accounts}, Status: cfg.Status}
+	srv := handler.New(graph.NewExecutableSchema(graph.Config{Resolvers: resolver}))
 	srv.AddTransport(transport.POST{})
 	srv.Use(extension.FixedComplexityLimit(maxQueryComplexity))
 	srv.Use(depthLimit(maxQueryDepth))
@@ -91,9 +111,13 @@ func New(cfg Config) *Handler {
 	h.mux = http.NewServeMux()
 	h.mux.HandleFunc("POST /admin/login", h.login)
 	h.mux.HandleFunc("GET /admin/session", h.currentSession)
-	h.mux.Handle("GET /admin/", ui.Handler("/admin/"))
+	h.mux.Handle("GET /admin/", ui.Handler("/admin/", h.path("/admin/")))
+	h.mux.HandleFunc("GET /admin", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, h.path("/admin/"), http.StatusFound)
+	})
 	h.mux.HandleFunc("POST /admin/logout", h.logout)
-	h.mux.Handle("POST /admin/graphql", h.authenticated(true, h.graphql))
+	h.mux.Handle("POST /admin/graphql", compressed(h.authenticated(true, h.graphql)))
+	h.mux.HandleFunc("GET /admin/events", h.events)
 	h.mux.HandleFunc("GET /admin/graphql", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Allow", http.MethodPost)
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "GraphQL accepts POST only"})
@@ -101,8 +125,19 @@ func New(cfg Config) *Handler {
 	if cfg.Playground {
 		h.mux.HandleFunc("GET /admin/playground", h.playground)
 	}
+	if cfg.Plans != nil {
+		opts := configmcp.Options{Now: cfg.Now}
+		mcpHandler := configmcp.New(app, cfg.Plans, cfg.Accounts, opts)
+		for _, method := range []string{http.MethodPost, http.MethodGet, http.MethodDelete} {
+			h.mux.Handle(method+" /admin/mcp", mcpHandler)
+		}
+	}
 	return h
 }
+
+// path is where browsers reach p, a path of this service, through the
+// gateway prefix.
+func (h *Handler) path(p string) string { return h.cfg.PathPrefix + p }
 
 // Close stops the background schema scans.
 func (h *Handler) Close() {
@@ -161,7 +196,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Value: id, Path: "/admin", HttpOnly: true, Secure: h.cfg.SecureCookie,
+		Name: cookieName, Value: id, Path: h.path("/admin"), HttpOnly: true, Secure: h.cfg.SecureCookie,
 		SameSite: http.SameSiteStrictMode, MaxAge: int(sessionAbsoluteTimeout.Seconds()),
 	})
 	slog.Info("admin signed in", "username", account.Username)
@@ -190,7 +225,7 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Path: "/admin", HttpOnly: true, Secure: h.cfg.SecureCookie,
+		Name: cookieName, Path: h.path("/admin"), HttpOnly: true, Secure: h.cfg.SecureCookie,
 		SameSite: http.SameSiteStrictMode, MaxAge: -1,
 	})
 	w.WriteHeader(http.StatusNoContent)
@@ -247,7 +282,9 @@ func (h *Handler) playground(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, loginPage)
 		return
 	}
-	playground.Handler("sql-mcp-server admin", "/admin/graphql",
+	// gqlgen appends the endpoint to the host, so it is the absolute path,
+	// under the gateway prefix.
+	playground.Handler("sql-mcp-server admin", h.path("/admin/graphql"),
 		playground.WithGraphiqlFetcherHeaders(map[string]string{csrfHeader: sess.csrf}),
 		playground.WithGraphiqlEnablePluginExplorer(true),
 	).ServeHTTP(w, r)
@@ -265,7 +302,7 @@ margin:.4rem 0;padding:.5rem;font:inherit}#err{color:#b00}</style></head>
 document.getElementById('f').onsubmit = async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
-  const res = await fetch('/admin/login', {method: 'POST', headers: {'Content-Type': 'application/json'},
+  const res = await fetch('login', {method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({username: f.get('username'), password: f.get('password')})});
   if (res.ok) { location.reload(); return; }
   document.getElementById('err').textContent = (await res.json()).error;

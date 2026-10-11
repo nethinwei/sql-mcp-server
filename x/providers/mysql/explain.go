@@ -52,8 +52,11 @@ func ParseExplain(b []byte) (cost.Plan, error) {
 		total, _ := info["query_cost"].(string)
 		plan.TotalCost, _ = strconv.ParseFloat(strings.TrimSpace(total), 64)
 	}
-	tables := 0
+	tables, readsNothing, fullScans, sized := 0, false, 0, 0
 	eachJSONObject(root.QueryBlock, func(node map[string]any) {
+		if message, ok := node["message"].(string); ok && noTableRead(message) {
+			readsNothing = true
+		}
 		if sort, _ := node["using_filesort"].(bool); sort {
 			plan.HasSort = true
 		}
@@ -68,13 +71,48 @@ func ParseExplain(b []byte) (cost.Plan, error) {
 			plan.ScanType = scan
 		}
 		tables++
+		if mysqlScanType(access) == cost.ScanFull {
+			fullScans++
+			sized += sizeFullScan(node, &plan)
+		}
 		for _, key := range []string{"rows_examined_per_scan", "rows_produced_per_join"} {
 			if rows, ok := node[key].(float64); ok && int64(rows) > plan.EstimatedRows {
 				plan.EstimatedRows = int64(rows)
 			}
 		}
 	})
+	plan.TableSized = fullScans > 0 && sized == fullScans
+	if tables == 0 && readsNothing {
+		// The optimizer settled the query without reading a table.
+		plan.ScanType, plan.EstimatedRows = cost.ScanPoint, 0
+	}
 	return plan, nil
+}
+
+// sizeFullScan records the size of the table a full scan examines whole
+// (rows_examined_per_scan, whatever the filter outputs); 1 when it is known.
+func sizeFullScan(node map[string]any, plan *cost.Plan) int {
+	rows, ok := node["rows_examined_per_scan"].(float64)
+	if !ok {
+		return 0
+	}
+	plan.TableRows = max(plan.TableRows, int64(rows))
+	return 1
+}
+
+// noTableRead reports an EXPLAIN message saying the optimizer answers the
+// query without reading table rows: a condition no row can meet, a constant
+// table without the row, or MIN/MAX/COUNT read from an index or metadata.
+func noTableRead(message string) bool {
+	for _, m := range []string{
+		"Impossible WHERE", "Impossible HAVING", "no matching row in const table", "No matching min/max row",
+		"Select tables optimized away", "Zero limit", "No tables used", "Impossible ON condition",
+	} {
+		if strings.HasPrefix(message, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // eachJSONObject calls fn for v and every object nested in it.

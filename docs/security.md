@@ -128,12 +128,20 @@ PostgreSQL 估算。v0.1 可显式开启 PostgreSQL 只读 `EXPLAIN ANALYZE` 采
 
 ## 预算、缓存与审计
 
-角色/租户预算按 MCP session 隔离，状态受 TTL/容量约束并在 session 关闭时清理；
-租户配置优先于角色配置。并发和 session cost 在调用前原子预留，完成后按返回
+角色/用户预算按 MCP session 隔离，状态受 TTL/容量约束并在 session 关闭时清理；
+租户的 `maxConcurrent` 按租户聚合（开新会话无法绕过），其余租户限额逐字段收紧
+角色限额（分层见 [configuration.md](configuration.md#budget-与执行控制)）。并发和 session cost 在调用前原子预留，完成后按返回
 行数、返回字节和毫秒耗时对账；执行时限通过 context 生效。
 `maxEstimatedScannedRows` 只限制成本闸门估算，不能宣称数据库扫描硬限制。
-`maxReturnedRows` 在结果迭代期间中止并计入 expand 子行；session cost 重启后
-清零。
+`maxReturnedRows`、`cost.maxBytes` 与预算的 `maxReturnedBytes` 都在结果迭代期间
+逐行计量（行的 JSON 编码长度，含 expand 子行），越限的第一行即中止，其余行不再读取；
+进程同时持有的结果字节由 `rateLimit.maxResultMemory` 约束（调用结束释放）。驱动
+读出的单行是越限前最多多读的部分。session cost 重启后清零。
+
+所有数据库语句经同一执行器（`core/tool/pipeline.go`，见
+[design/pipeline.md](design/pipeline.md)）：语句只能由授权结果与经过成本闸门的
+SQL 构成，执行器统一脱敏、计量、分类错误并跟进写入；写入或提交期间连接中断、
+超时返回 `OUTCOME_UNKNOWN`（不可重试），并按已写入使读缓存失效。
 
 缓存和 singleflight key 包含角色及完整 subject，避免跨身份共享结果。显式事务
 在进入 engine 前先验证 token 的 session/角色/subject，并禁用 singleflight。

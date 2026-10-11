@@ -20,7 +20,6 @@ export type Schema = {
   propertyNames?: { pattern?: string }
   items?: Schema
   enum?: unknown[]
-  examples?: unknown[]
   minimum?: number
   maximum?: number
   minItems?: number
@@ -259,8 +258,8 @@ export function contextAt(text: string, pos: number): Context {
   const f = top()
   // Each enclosing frame contributes the child being written inside it.
   const container: Path = stack.slice(0, -1).map((fr) => (fr.kind === 'obj' ? fr.key ?? '' : fr.index))
-  let from = pos
-  let prefix = ''
+  let from: number
+  let prefix: string
   if (open) {
     from = open.from
     prefix = text.slice(open.from + 1, pos)

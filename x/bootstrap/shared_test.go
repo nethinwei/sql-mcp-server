@@ -8,9 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/engine"
 	coreprovider "github.com/nethinwei/sql-mcp-server/core/provider"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 	"github.com/nethinwei/sql-mcp-server/x/providers/postgres"
@@ -35,7 +38,7 @@ func init() {
 	providerregistry.Register(sharedTestDriver, func(string, providerregistry.Options) (coreprovider.Provider, error) {
 		sharedOpened.Add(1)
 		return countingProvider{benchProvider{
-			fakeProvider: &fakeProvider{dialect: postgres.Dialect{}, FakeDB: store.FakeDB{
+			fakeProvider: &fakeProvider{dialect: postgres.Dialect{}, FakeDB: storetest.FakeDB{
 				ExecFn: func(context.Context, string, ...any) (store.Result, error) {
 					return store.Result{RowsAffected: 1}, nil
 				},
@@ -139,7 +142,7 @@ func TestGenerationsShareTheIOPool(t *testing.T) { //nolint:paralleltest // uses
 	next := published(t, shared, cfg) // the reload keeps the IO pool at 1
 	hold, held := make(chan struct{}), make(chan struct{})
 	go func() {
-		_, _ = old.Engine.Submit(context.Background(), "", func(context.Context) (any, error) {
+		_, _ = engine.Submit(context.Background(), old.Engine, "", func(context.Context) (any, error) {
 			close(held)
 			<-hold
 			return nil, nil
@@ -149,7 +152,7 @@ func TestGenerationsShareTheIOPool(t *testing.T) { //nolint:paralleltest // uses
 	defer close(hold)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	_, err := next.Engine.Submit(ctx, "", func(context.Context) (any, error) { return nil, nil })
+	_, err := engine.Submit(ctx, next.Engine, "", func(context.Context) (any, error) { return nil, nil })
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("the new configuration ran past the shared IO pool: %v", err)
 	}
@@ -209,7 +212,7 @@ func TestFailedReloadKeepsSharedSettings(t *testing.T) { //nolint:paralleltest /
 	}
 	hold, held := make(chan struct{}), make(chan struct{})
 	go func() {
-		_, _ = startup.Engine.Submit(context.Background(), "", func(context.Context) (any, error) {
+		_, _ = engine.Submit(context.Background(), startup.Engine, "", func(context.Context) (any, error) {
 			close(held)
 			<-hold
 			return nil, nil
@@ -219,7 +222,86 @@ func TestFailedReloadKeepsSharedSettings(t *testing.T) { //nolint:paralleltest /
 	defer close(hold)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if _, err := startup.Engine.Submit(ctx, "", func(context.Context) (any, error) { return nil, nil }); err == nil {
+	nothing := func(context.Context) (any, error) { return nil, nil }
+	if _, err := engine.Submit(ctx, startup.Engine, "", nothing); err == nil {
 		t.Fatal("a failed reload must not raise the serving IO pool")
+	}
+}
+
+// The configurations of a process share the Serve lane: while the old one
+// holds the only in-flight slot, the new one is overloaded.
+func TestGenerationsShareTheServeLane(t *testing.T) { //nolint:paralleltest // uses the shared test driver
+	shared := NewShared()
+	cfg := sharedConfig("serve")
+	cfg.RateLimit.MaxInflight = 1
+	old := published(t, shared, cfg)
+	next := published(t, shared, cfg)
+	hold, held := make(chan struct{}), make(chan struct{})
+	go func() {
+		_, _ = engine.Submit(context.Background(), old.Engine, "", func(context.Context) (any, error) {
+			close(held)
+			<-hold
+			return nil, nil
+		})
+	}()
+	<-held
+	defer close(hold)
+	_, err := engine.Submit(context.Background(), next.Engine, "", func(context.Context) (any, error) { return nil, nil })
+	if !errors.Is(err, engine.ErrOverloaded) {
+		t.Fatalf("the new configuration ran past the shared in-flight bound: %v", err)
+	}
+}
+
+// Publishing a configuration sets the lane limits of the bus.
+func TestPublishSetsLaneLimits(t *testing.T) { //nolint:paralleltest // uses the shared test driver
+	shared := NewShared()
+	cfg := sharedConfig("lanes")
+	cfg.RateLimit.IOPool = 6
+	cfg.Execution.Scan = config.LaneConfig{MaxConcurrent: 3, MaxQueue: 5}
+	app := published(t, shared, cfg)
+	if app.Bus() != shared.Bus() {
+		t.Fatal("the App runs on another bus")
+	}
+	st := shared.Bus().Stats()
+	if st.IO.Size != 6 || st.Aux.Size != 3 {
+		t.Fatalf("io %+v, aux %+v", st.IO, st.Aux)
+	}
+	for _, lane := range st.Lanes {
+		if lane.Name == bus.Scan && (lane.MaxConcurrent != 3 || lane.MaxQueue != 5) {
+			t.Fatalf("scan lane %+v", lane)
+		}
+		if lane.Name == bus.Admin && lane.MaxConcurrent != 4 {
+			t.Fatalf("admin lane keeps its default: %+v", lane)
+		}
+	}
+}
+
+// Assembly waits for the Background lane however busy it is: a full queue
+// must not fail a startup or reload.
+func TestReconcileWaitsForTheBackgroundLane(t *testing.T) {
+	t.Parallel()
+	b := bus.New(4, map[bus.LaneName]bus.Limits{bus.Background: {MaxConcurrent: 1, MaxQueue: 1}})
+	defer func() { _ = b.Close(context.Background()) }()
+	lane := b.Lane(bus.Background)
+	_, release, err := lane.Acquire(context.Background()) // capability work holds the lane
+	if err != nil {
+		t.Fatal(err)
+	}
+	providers := map[string]Provider{}
+	for _, name := range []string{"a", "b", "c"} {
+		providers[name] = &fakeProvider{dialect: postgres.Dialect{}}
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := reconcileAll(b, providers, nil)
+		done <- err
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for lane.Stats().Queued == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	release()
+	if err := <-done; err != nil {
+		t.Fatalf("reconcile failed on a busy lane: %v", err)
 	}
 }

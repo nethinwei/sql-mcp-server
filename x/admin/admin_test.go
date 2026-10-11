@@ -3,8 +3,10 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"github.com/nethinwei/sql-mcp-server/x/configstore"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -252,5 +254,68 @@ func TestPlaygroundIsOffByDefault(t *testing.T) {
 	if rec := f.do(http.MethodGet, "/admin/roles/analyst", "", nil, nil); rec.Code != http.StatusOK ||
 		!strings.Contains(rec.Header().Get("Content-Security-Policy"), "default-src 'self'") {
 		t.Fatalf("console routes must serve the app with a CSP: %d %v", rec.Code, rec.Header())
+	}
+}
+
+// Behind a gateway path prefix, the cookie and redirects carry it.
+func TestPathPrefixInCookieAndRedirects(t *testing.T) {
+	f := newFixture(t)
+	f.h = New(Config{Store: f.h.cfg.Store, Accounts: f.accounts, Now: f.h.cfg.Now, PathPrefix: "/sql-mcp-server"})
+	_, cookie, _ := f.login(t, "correct horse battery")
+	if cookie == nil || cookie.Path != "/sql-mcp-server/admin" {
+		t.Fatalf("session cookie = %+v", cookie)
+	}
+	rec := f.do(http.MethodGet, "/admin", "", nil, nil)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/sql-mcp-server/admin/" {
+		t.Fatalf("redirect = %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	plain := newFixture(t)
+	if rec := plain.do(http.MethodGet, "/admin", "", nil, nil); rec.Header().Get("Location") != "/admin/" {
+		t.Fatalf("without a prefix: %q", rec.Header().Get("Location"))
+	}
+}
+
+// Under a gateway prefix, the playground's sign-in page posts relative to
+// itself and its queries go to the prefixed GraphQL path.
+func TestPlaygroundPathsUnderAGatewayPrefix(t *testing.T) {
+	f := newFixture(t)
+	f.h = New(Config{Store: f.h.cfg.Store, Accounts: f.accounts, Now: f.h.cfg.Now, Playground: true,
+		PathPrefix: "/sql-mcp-server"})
+	signIn := f.do(http.MethodGet, "/admin/playground", "", nil, nil).Body.String()
+	if !strings.Contains(signIn, "fetch('login'") || strings.Contains(signIn, "/admin/login") {
+		t.Fatalf("sign-in page calls an absolute path: %s", signIn)
+	}
+	_, cookie, _ := f.login(t, "correct horse battery")
+	// The endpoint is appended to location.host: it must be the absolute
+	// path under the prefix.
+	page := f.do(http.MethodGet, "/admin/playground", "", nil, cookie).Body.String()
+	if !strings.Contains(page, `const url = location.protocol + '//' + location.host + "/sql-mcp-server/admin/graphql";`) {
+		i := strings.Index(page, "location.host")
+		t.Fatalf("playground endpoint: %s", page[i:min(len(page), i+80)])
+	}
+}
+
+// The configuration MCP endpoint takes administrators' tokens, never the
+// console's session cookie, and is served only with a store for tokens.
+func TestConfigMCPEndpointNeedsAToken(t *testing.T) {
+	f := newFixture(t)
+	if rec := f.do(http.MethodPost, "/admin/mcp", "{}", nil, nil); rec.Code == http.StatusUnauthorized {
+		t.Fatal("without a token store the endpoint must not be served")
+	}
+	spec := configstore.Spec{Driver: "sqlite", DSN: filepath.Join(t.TempDir(), "store.db")}
+	if err := configstore.Init(context.Background(), spec, nil); err != nil {
+		t.Fatal(err)
+	}
+	store, err := configstore.Open(context.Background(), spec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	f.h = New(Config{Store: f.h.cfg.Store, Accounts: f.accounts, Plans: store, Now: f.h.cfg.Now})
+	_, cookie, csrf := f.login(t, "correct horse battery")
+	rec := f.do(http.MethodPost, "/admin/mcp", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`,
+		map[string]string{csrfHeader: csrf}, cookie)
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Header().Get("WWW-Authenticate"), "Bearer") {
+		t.Fatalf("a session cookie reached the endpoint: %d", rec.Code)
 	}
 }

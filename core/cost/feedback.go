@@ -13,7 +13,6 @@ type Feedback struct {
 	Template      string
 	EstimatedRows int64
 	ActualRows    int64
-	Rows          int64 // deprecated alias for ActualRows
 	Duration      time.Duration
 }
 
@@ -90,9 +89,6 @@ func NewAdaptiveMemoryStoreWithBounds(
 // Record implements FeedbackStore.
 func (s *MemoryStore) Record(f Feedback) {
 	s.mu.Lock()
-	if f.ActualRows == 0 && f.Rows != 0 {
-		f.ActualRows = f.Rows
-	}
 	previous, exists := s.m[f.Template]
 	if !exists {
 		if len(s.m) >= s.maxKeys {
@@ -123,15 +119,6 @@ func (s *MemoryStore) Record(f Feedback) {
 		invalidator.InvalidatePlan(f.Template)
 	}
 }
-
-// AverageRows is retained for source compatibility; new code should use Stats.
-func (s *MemoryStore) AverageRows(template string) (int64, bool) {
-	stats, ok := s.Stats(template)
-	return stats.AverageRows, ok
-}
-
-// AverageRows is retained for source compatibility.
-func (NoopFeedbackStore) AverageRows(string) (int64, bool) { return 0, false }
 
 // Stats implements FeedbackStore.
 func (s *MemoryStore) Stats(template string) (Statistics, bool) {

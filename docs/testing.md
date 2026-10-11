@@ -17,7 +17,8 @@ govulncheck ./...
 ```
 
 `make fmt` 运行 `internal/fmtcheck`（gofmt + golines，并检查文件/函数/行宽
-上限）。仓库 `.vscode/settings.json` 为 gopls 配置 `integration,e2e` build
+上限）。`internal/buscheck` 是 `go test ./...` 的一部分，生产代码绕过执行总线
+启动 goroutine 或定时器时失败。仓库 `.vscode/settings.json` 为 gopls 配置 `integration,e2e` build
 tag，便于 IDE 分析带标签的测试文件。
 
 本次变更的最低验证也可使用 `go test ./...`；提交前按 CI 使用 `-race`。
@@ -28,6 +29,13 @@ tag，便于 IDE 分析带标签的测试文件。
 race tests、核心 coverage 门槛和
 govulncheck，不需要 Docker。`make ci-full` 在此基础上增加三库 integration 和
 PostgreSQL MCP e2e，需要 Docker。
+
+控制台：`make web` 依次运行 `pnpm codegen`、`pnpm lint`（ESLint：`eslint-plugin-vue` +
+`typescript-eslint`，配置 `web/admin/eslint.config.js`，不检查排版）、`pnpm test`
+（vitest，jsdom）与 `pnpm build`（含 `vue-tsc`）。`src/i18n/keys.test.ts` 检查源码中每个
+字面量消息键都存在（en 与 zh-CN 的键由类型保持一致）；组件测试用 `@vue/test-utils`
+挂载（如 `src/components/RuntimeBadge.test.ts`），依赖较多的布局逻辑抽成可单测的模块
+（`src/lib/liveUpdates.ts`、`src/lib/unloadGuard.ts`）。
 
 发布构建由 GoReleaser 注入 tag 版本。安装 GoReleaser v2.17.0 与 Syft v1.46.0
 后可在本地检查：
@@ -69,6 +77,52 @@ quickstart 和 attestation 验证脚本由本地 Make target 与 GitHub Actions 
 - ModelScope smoke：读取根目录 `mcp_config.json`，启动真实 PostgreSQL 和 stdio
   子进程，验证展示配置及 allow/deny 路径。
 - 并发测试：CI 默认使用 race detector；MCP e2e 包含 goleak 检查。
+- 多管理员发布的边界与压力：`x/revisionops/revisionopstest` 在内存库、SQLite（单元
+  测试）和 PostgreSQL/MySQL/OceanBase（配置库集成测试）上运行同一套用例——多人并发
+  “读取 → 修改 → 发布，冲突则变基重试”不丢任何修改且历史线性、基于同一版本的草稿
+  并发发布只有一个成功、发布与回滚交错、草稿链、回滚后的旧草稿、缺失父版本等；
+  `x/admin/events_test.go` 压测发布推送（大量订阅与退订抖动、慢订阅者、会话结束）。
+- 版本管理（`docs/design/versioning.md`）：`core/workspace` 的合并性质测试
+  （`merge_props_test.go`）用带种子的随机编辑逐叶子校验合并规则（单方修改保留、
+  双方不同即冲突且不漏报、两侧交换对称、采用对方后取值一致），
+  `conflicts_model_test.go` 随机生成“编辑 / 发布 / update / 解决”序列；失败信息给出
+  可复现的种子。`core/workspace/workspacetest` 是工作区存储的一致性套件（内存、
+  SQLite 单元测试，PostgreSQL/MySQL/OceanBase 配置库集成测试）；`x/workspaceops`
+  测试并发写合并、update、合并草稿、提交的原子性与写入记录，交错模型测试
+  （`interleave_test.go`）在提交与存草稿的构建期间插入随机操作（含带 `renamedFrom`
+  的改名写入）并检查草稿记录、检查点与提交内容的不变量，以及改名的派生改动与写入同版本。
+- 编辑语义（`docs/design/editing.md`）：`x/configrefs` 用与控制台共用的
+  `core/config/testdata/entity_refs.json` 检查最短名，表驱动检查引用改写规则；
+  `x/admin/configapp` 的 `reconcile_test.go` 按原控制台级联用例逐条检查派生改动（删除、
+  改名、移动、角色改名与删除、导入造成的歧义、字段删除），并用 3000 个种子的性质测试
+  检查“已有引用变更后仍指向原实体（或随之删除）”；`x/admin/graph` 的
+  `TestEditWorkspaceRenamesAnEntity` 与 `TestWorkspaceRoundTripKeepsEveryField` 经 GraphQL
+  端到端检查改名与项的往返。
+- 批量配置：`x/configplan` 的表驱动测试与随机性质测试（随机目录、配置与方案：
+  结果总能通过配置校验，同一方案执行第二次没有修改，每个应授予而未授予的授权都
+  有例外；改坏合并或规则顺序时测试失败）；`x/catalog/catalogtest` 与配置库的
+  模板/令牌测试在 SQLite 与 PostgreSQL/MySQL/OceanBase 上运行；
+  `x/admin/configmcp` 用真实 MCP 客户端端到端测试配置 MCP（没有发布工具、只读
+  管理员不能应用方案、过期与停用账号的令牌失效、预览针对工作区、不是预览过的方案
+  拒绝应用、方案直接写进工作区且只写改动的项）；`x/admin/graph` 测试按项写入的哈希
+  冲突、整体写入的版本冲突与控制台的 `applyPlan`，`x/admin/configapp` 的
+  `TestSectionsShapeAndRoundTrip` 锁定工作区项的形状与往返，`x/admin/graph` 的
+  `TestRevisionSectionsAreTheWorkspaceShape` 检查控制台读取的 `Revision.sections` 与之一致；控制台按项写入与读回（只有本地改的保留、双方都改的取服务端的、写入途中的
+  修改不丢）在 `src/stores/workspace.sync.test.ts`，草稿依次并入与冲突在
+  `src/stores/workspace.reviewDraft.test.ts`。控制台的操作链路有单元测试：乱序返回时只采用最新的方案预览
+  （`src/lib/planPreview.test.ts`）、“选择全部匹配”的筛选快照与排除
+  （`src/lib/selection.test.ts`，含匹配数变化后的确认）、模板载入不改变导入语义、
+  扫描批次的跟随与刷新（`src/lib/schemaScans.test.ts`）、工作区计算上下文（载入
+  草稿也作为基准）、异步读取的状态与单表同步在找不到表时不提出删除
+  （`src/lib/asyncResource.test.ts`）。扫描批次的接管、取消、失败
+  重试、幂等键与配额在 `x/admin/configapp/scans_test.go`，批次存储（条件迁移、旧运行
+  写不进、并发创建不越过上限）在四种配置库上跑一致性套件；令牌范围与例外确认绑定在
+  `x/admin/configmcp`。按需生成的候选实体与全量生成、目录索引过滤与 `Rows` 逐项一致
+  由 `x/configplan` 的随机测试保证；缓存的并发去重与预算淘汰在
+  `x/admin/configapp/lru_test.go`。规模基准（500 个库、5 万张表）：
+  `go test ./x/configplan ./x/admin/configapp -run '^$' -bench 'Large|CatalogPage'`，
+  其中 `BenchmarkCatalogPageParallel` 模拟多个管理员并发翻页：ns/op 是吞吐，
+  `p50-ms`/`p95-ms` 是逐请求计时的延迟，一半请求的筛选从未出现过、不命中缓存。
 
 ## 安全 corpus 与 fuzz
 

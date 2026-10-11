@@ -14,7 +14,8 @@ import { EntityIndex, entityId } from '@/lib/entityRefs'
 import { capabilityOf, denied, indexCapabilities, type CapabilityIndex } from '@/lib/capabilities'
 import { run } from '@/api/client'
 import { CapabilitiesQuery } from '@/api/ops'
-import type { Action, EntityInput, GrantInput } from '@/gql/graphql'
+import type { Action } from '@/gql/graphql'
+import type { EntityInput, GrantInput } from '@/gql/schema'
 
 // Edits a list of grants as an entity × action matrix. An entity usually has
 // one grant; extra grants (different field or row scopes) appear as sub-rows.
@@ -30,7 +31,8 @@ const { t } = useI18n()
 const actions: Action[] = ['READ', 'AGGREGATE', 'CREATE', 'UPDATE', 'DELETE', 'EXECUTE']
 
 const search = ref('')
-const onlyGranted = ref(false)
+// Only granted entities by default; a role or user without grants lists them all.
+const onlyGranted = ref(props.modelValue.length > 0)
 
 interface Row {
   entity: EntityInput

@@ -38,13 +38,24 @@ func (e *ConflictError) Error() string {
 
 func (e *ConflictError) Unwrap() error { return revision.ErrConflict }
 
-// Normalize applies the store rules to a loaded configuration and returns
-// its payload in the deterministic encoding.
-func Normalize(cfg *config.Config) ([]byte, error) {
+// Normalize applies the store rules and the offline assembly checks
+// (bootstrap.CheckOffline) to what a configuration says and returns its
+// payload, in the deterministic encoding of what it says, canonical (defaults
+// are not written: they apply when it loads): a configuration the runtime would
+// refuse to load is never stored.
+func Normalize(spec *config.Spec) ([]byte, error) {
+	spec.Canonical()
+	cfg, err := config.Resolve(spec)
+	if err != nil {
+		return nil, err
+	}
 	if err := bootstrap.ValidateStorePayload(cfg); err != nil {
 		return nil, err
 	}
-	return configyaml.Encode(cfg)
+	if err := bootstrap.CheckOffline(cfg); err != nil {
+		return nil, err
+	}
+	return configyaml.EncodeSpec(spec)
 }
 
 func (s Service) audit(op string, rev revision.Revision, author string) {
@@ -122,10 +133,27 @@ func (s Service) Publish(ctx context.Context, req PublishRequest) (revision.Revi
 	if req.ExpectedPublished != nil && *req.ExpectedPublished != current.ID {
 		return revision.Revision{}, &ConflictError{Expected: *req.ExpectedPublished, Published: current.ID}
 	}
+	// Publishing replaces the whole configuration, so a draft must build on
+	// what is published: one built on an earlier revision would undo every
+	// change published since (a non-fast-forward push). It is rebased first.
+	basedOn, err := revision.BasedOn(ctx, s.Store, target)
+	if err != nil {
+		return revision.Revision{}, err
+	}
+	if current.ID != 0 && basedOn != current.ID {
+		return revision.Revision{}, &ConflictError{Expected: basedOn, Published: current.ID}
+	}
 	if err := bootstrap.CheckPublishable(current, target, req.RestartRequired); err != nil {
 		return revision.Revision{}, err
 	}
 	rev, err := s.Store.Publish(ctx, target.ID, current.ID, revision.Meta{Author: req.Author})
+	if errors.Is(err, revision.ErrConflict) {
+		// Another publish committed between the check above and the store's
+		// lock: report it like a stale ExpectedPublished.
+		if latest, lerr := s.published(ctx); lerr == nil {
+			return revision.Revision{}, &ConflictError{Expected: current.ID, Published: latest.ID}
+		}
+	}
 	if err != nil {
 		return revision.Revision{}, err
 	}
@@ -179,10 +207,22 @@ func (s Service) Rollback(ctx context.Context, req RollbackRequest) (RollbackRes
 	return RollbackResult{Published: rev, From: current.ID, Target: target.ID}, nil
 }
 
+// Discard discards a draft, recording who did.
+func (s Service) Discard(ctx context.Context, id int64, author string) (revision.Revision, error) {
+	rev, err := s.Store.Discard(ctx, id)
+	if err != nil {
+		return revision.Revision{}, err
+	}
+	s.audit("discard", rev, author)
+	return rev, nil
+}
+
 // Diff returns a unified diff of two payloads in the current encoding, so
-// revisions stored by an older encoder differ only where their content does.
+// revisions stored by an older encoder differ only where their content does,
+// with their secrets redacted: a changed DSN password or token shows as
+// changed, never its value (the console and agents read this diff).
 func Diff(fromName string, from []byte, toName string, to []byte) (string, error) {
-	return RawDiff(fromName, Reencode(from), toName, Reencode(to))
+	return RawDiff(fromName, redacted(from, nil), toName, redacted(to, from))
 }
 
 // RawDiff compares stored bytes as they are.
@@ -196,11 +236,14 @@ func RawDiff(fromName string, from []byte, toName string, to []byte) (string, er
 // Reencode returns payload in the current encoding, or unchanged when it no
 // longer decodes.
 func Reencode(payload []byte) []byte {
-	cfg, err := configyaml.Decode(payload)
+	spec, err := configyaml.DecodeSpec(payload)
 	if err != nil {
 		return payload
 	}
-	out, err := configyaml.Encode(cfg)
+	if _, err := config.Resolve(spec); err != nil {
+		return payload
+	}
+	out, err := configyaml.EncodeSpec(spec)
 	if err != nil {
 		return payload
 	}

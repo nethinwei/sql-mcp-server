@@ -23,8 +23,10 @@ import (
 const TablePrefix = config.StoreTablePrefix
 
 // SchemaVersion is the store table layout this build understands. Version 2
-// added administrator accounts.
-const SchemaVersion = 2
+// added administrator accounts, version 3 the scanned catalog, plan templates
+// and administrator tokens, version 4 token scopes and scan batch items as
+// rows, version 5 administrators' workspaces.
+const SchemaVersion = 5
 
 // Errors returned when opening a store.
 var (
@@ -86,6 +88,11 @@ func (s *SQLStore) migrate(ctx context.Context, version int64) error {
 					return err
 				}
 			}
+			if move, ok := dataMigrations[v]; ok {
+				if err := move(ctx, s, tx); err != nil {
+					return err
+				}
+			}
 			_, err := s.exec(ctx, tx, "UPDATE smcp_store_meta SET meta_value = ? WHERE meta_key = ?",
 				v, metaSchemaVersion)
 			return err
@@ -122,7 +129,8 @@ func Init(ctx context.Context, spec Spec, resolve Resolver) error {
 			}
 		}
 	}
-	for _, row := range [][2]any{{metaSchemaVersion, SchemaVersion}, {metaNextID, 1}, {metaPublishLock, 0}} {
+	for _, row := range [][2]any{{metaSchemaVersion, SchemaVersion}, {metaNextID, 1}, {metaPublishLock, 0},
+		{metaRevisionSeq, 0}} {
 		if _, err := s.exec(ctx, s.db, "INSERT INTO smcp_store_meta (meta_key, meta_value) VALUES (?, ?)",
 			row[0], row[1]); err != nil {
 			return fmt.Errorf("configstore: initialize metadata: %w", err)
@@ -156,6 +164,9 @@ const (
 	metaSchemaVersion = "schema_version"
 	metaNextID        = "next_id"
 	metaPublishLock   = "publish_lock"
+	// metaRevisionSeq counts the revision writes other than creating one
+	// (publish, rollback, discard, import); see SQLStore.Sequence.
+	metaRevisionSeq = "revision_seq"
 )
 
 func (s *SQLStore) checkSchema(ctx context.Context) (int64, error) {

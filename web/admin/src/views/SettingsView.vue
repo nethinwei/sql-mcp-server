@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
-import { onBeforeRouteLeave } from 'vue-router'
+import { computed, ref, watch } from 'vue'
+import { onBeforeRouteLeave, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { NAlert, NButton, NCard, NCollapse, NCollapseItem, NSpace, NTag, NText, useDialog } from 'naive-ui'
 import JsonEditor from '@/components/JsonEditor.vue'
@@ -22,7 +22,10 @@ const edits = useSettingsEdits()
 const dialog = useDialog()
 const editable = computed(() => can('admin:write'))
 
-const sections = computed(() => [...new Set([...Object.keys(ws.settings), ...edits.pending])].sort())
+const sections = computed(() => [...new Set([...Object.keys(ws.settings), ...edits.unsaved])].sort())
+// A link may open one section, e.g. ?section=server.
+const route = useRoute()
+const expanded = ref<string[]>(typeof route.query.section === 'string' ? [route.query.section] : [])
 watch(() => ws.settings, () => edits.sync(), { immediate: true, deep: true })
 
 const { schema } = useConfigSchema()
@@ -42,11 +45,11 @@ const changed = (key: string) =>
 
 // Text that is not valid JSON is not in the workspace yet: say so on leaving.
 onBeforeRouteLeave(() => {
-  if (!edits.pending.length) return true
+  if (!edits.unsaved.length) return true
   return new Promise<boolean>((resolve) => {
     dialog.warning({
-      title: t('settings.leaveTitle', { count: edits.pending.length }),
-      content: t('settings.leaveBody', { list: edits.pending.join(', ') }),
+      title: t('settings.leaveTitle', { count: edits.unsaved.length }),
+      content: t('settings.leaveBody', { list: edits.unsaved.join(', ') }),
       positiveText: t('settings.stay'),
       negativeText: t('settings.leaveAnyway'),
       onPositiveClick: () => resolve(false),
@@ -61,11 +64,11 @@ onBeforeRouteLeave(() => {
 <template>
   <n-space vertical :size="16">
     <n-alert type="default" :show-icon="false">{{ t('settings.intro') }}</n-alert>
-    <n-alert v-if="edits.pending.length" type="warning" :show-icon="false">
-      {{ t('settings.pending', { list: edits.pending.join(', ') }) }}
+    <n-alert v-if="edits.unsaved.length" type="warning" :show-icon="false">
+      {{ t('settings.pending', { list: edits.unsaved.join(', ') }) }}
     </n-alert>
     <n-card size="small">
-      <n-collapse>
+      <n-collapse v-model:expanded-names="expanded">
         <n-collapse-item v-for="key in sections" :key="key" :name="key">
           <template #header>
             <n-space align="center" :size="8">

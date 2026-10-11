@@ -67,12 +67,17 @@ type state struct {
 }
 
 // MemoryManager is a process-local manager with role and tenant overrides.
-// Tenant limits take precedence over role limits.
+// Budgets are layered: a session's state is its principal's (Role) in one
+// tenant; a tenant's maxConcurrent bounds the calls of all its sessions
+// together, and its other limits tighten its sessions' field by field (see
+// limits).
 type MemoryManager struct {
-	mu        sync.Mutex
-	roles     map[string]Limits
-	tenants   map[string]Limits
-	sessions  map[Scope]*state
+	mu       sync.Mutex
+	roles    map[string]Limits
+	tenants  map[string]Limits
+	sessions map[Scope]*state
+	// inflight counts the calls running per tenant, across its sessions.
+	inflight  map[string]int
 	ttl       time.Duration
 	maxStates int
 }
@@ -91,7 +96,7 @@ func NewWithBounds(roles, tenants map[string]Limits, ttl time.Duration, maxState
 		maxStates = 4096
 	}
 	return &MemoryManager{
-		roles: cloneLimits(roles), tenants: cloneLimits(tenants), sessions: map[Scope]*state{},
+		roles: cloneLimits(roles), tenants: cloneLimits(tenants), sessions: map[Scope]*state{}, inflight: map[string]int{},
 		ttl: ttl, maxStates: maxStates,
 	}
 }
@@ -120,11 +125,32 @@ func (m *MemoryManager) ConfiguredLimits() (map[string]Limits, map[string]Limits
 	return cloneLimits(m.roles), cloneLimits(m.tenants)
 }
 
+// limits are the role's limits tightened by the tenant's: per field, the
+// smaller of the set (non-zero) values, so a tenant budget never lifts a role
+// limit it leaves unset. The tenant's maxConcurrent is not among them: it
+// bounds the tenant's calls together (see tenantConcurrency).
 func (m *MemoryManager) limits(scope Scope) Limits {
-	if v, ok := m.tenants[scope.Tenant]; ok && scope.Tenant != "" {
-		return v
+	l := m.roles[scope.Role]
+	t, ok := m.tenants[scope.Tenant]
+	if !ok || scope.Tenant == "" {
+		return l
 	}
-	return m.roles[scope.Role]
+	return Limits{
+		MaxConcurrent:           l.MaxConcurrent,
+		MaxExecution:            stricter(l.MaxExecution, t.MaxExecution),
+		MaxEstimatedScannedRows: stricter(l.MaxEstimatedScannedRows, t.MaxEstimatedScannedRows),
+		MaxReturnedRows:         stricter(l.MaxReturnedRows, t.MaxReturnedRows),
+		MaxReturnedBytes:        stricter(l.MaxReturnedBytes, t.MaxReturnedBytes),
+		MaxSessionCost:          stricter(l.MaxSessionCost, t.MaxSessionCost),
+	}
+}
+
+// stricter is the smaller of two limits where zero means unlimited.
+func stricter[T int | int64 | time.Duration](a, b T) T {
+	if a == 0 || (b != 0 && b < a) {
+		return b
+	}
+	return a
 }
 
 // Acquire acquires a lease without a reservation.
@@ -153,11 +179,27 @@ func (m *MemoryManager) AcquireWithReservation(
 		m.mu.Unlock()
 		return nil, err
 	}
+	if max := m.tenantConcurrency(scope.Tenant); max > 0 && m.inflight[scope.Tenant] >= max {
+		m.mu.Unlock()
+		return nil, ErrExceeded
+	}
+	if scope.Tenant != "" {
+		m.inflight[scope.Tenant]++
+	}
 	st.inflight++
 	st.reserved += reservation.Cost
 	st.touched = now
 	m.mu.Unlock()
 	return m.newLease(ctx, scope, limits, reservation.Cost), nil
+}
+
+// tenantConcurrency is the bound on the calls of tenant's sessions
+// together (0: none).
+func (m *MemoryManager) tenantConcurrency(tenant string) int {
+	if tenant == "" {
+		return 0
+	}
+	return m.tenants[tenant].MaxConcurrent
 }
 
 func normalizeReservation(reservation Reservation) Reservation {
@@ -277,6 +319,11 @@ func (l *lease) Complete(usage Usage) error {
 		l.manager.mu.Lock()
 		st := l.manager.sessions[l.scope]
 		st.inflight--
+		if tenant := l.scope.Tenant; tenant != "" {
+			if l.manager.inflight[tenant]--; l.manager.inflight[tenant] <= 0 {
+				delete(l.manager.inflight, tenant)
+			}
+		}
 		st.reserved -= l.reservedCost
 		if usage.Cost > 0 {
 			st.cost += usage.Cost

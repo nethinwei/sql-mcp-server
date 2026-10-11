@@ -86,8 +86,8 @@ func TestMySQLProviderQueryExecExplainIntrospect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.ScanType != cost.ScanFull {
-		t.Fatalf("ScanType = %v, want ScanFull for unfiltered scan", plan.ScanType)
+	if plan.ScanType != cost.ScanFull || !plan.TableSized || plan.TableRows > 1000 {
+		t.Fatalf("plan = %+v, want a sized full scan of a small table", plan)
 	}
 
 	assertMySQLIntrospectUsers(t, ctx, prov)

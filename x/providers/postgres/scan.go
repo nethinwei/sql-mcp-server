@@ -5,29 +5,19 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/x/providers/sqladapter"
 )
 
-// A scan reads each kind of metadata of a set of schemas in one query, the
-// way mysqldump reads a database: the number of round trips does not grow with
-// the number of relations.
+// A scan reads each kind of metadata of a set of schemas in one query (see
+// sqladapter.Scanned).
 
-// tableKey names a relation across the schemas of one scan.
-type tableKey struct{ schema, table string }
-
-// scanned is the metadata of the scanned schemas, by relation.
-type scanned struct {
-	attrs       map[tableKey][]entity.Attribute
-	keys        map[tableKey][]entity.Key
-	indexes     map[tableKey][]entity.Index
-	fks         map[tableKey][]entity.ForeignKey
-	cascades    map[tableKey][]entity.Cascade
-	sideEffects map[tableKey]bool
-}
+type (
+	tableKey = sqladapter.TableKey
+	scanned  = sqladapter.Scanned
+)
 
 // each runs query with names as $1, then args, and calls scan for every row.
 func (i pgIntrospector) each(
@@ -57,36 +47,23 @@ func (i pgIntrospector) Discover(ctx context.Context, sources []string) ([]entit
 	}
 	entities := make([]entity.Entity, 0, len(tables))
 	for _, t := range tables {
-		k := tableKey{t.schema, t.name}
-		entities = append(entities, entity.Entity{
-			Name:        t.name,
-			Source:      t.name,
-			Schema:      t.schema,
-			Description: t.comment,
-			Kind:        pgKind(t.kind),
-			Derived:     t.kind == "v" || t.kind == "m" || t.kind == "f",
-			Attributes:  s.attrs[k],
-			Keys:        s.keys[k],
-			Indexes:     s.indexes[k],
-			ForeignKeys: s.fks[k],
-			Cascades:    s.cascades[k],
-			SideEffects: s.sideEffects[k],
-		})
+		e := entity.Entity{
+			Name: t.name, Source: t.name, Schema: t.schema, Description: t.comment, Kind: pgKind(t.kind),
+			Derived: t.kind == "v" || t.kind == "m" || t.kind == "f",
+		}
+		s.Fill(tableKey{Schema: t.schema, Table: t.name}, &e)
+		entities = append(entities, e)
 	}
 	return entities, nil
 }
 
-func (i pgIntrospector) scan(ctx context.Context, schemas []string) (scanned, error) {
-	s := scanned{
-		attrs: map[tableKey][]entity.Attribute{}, keys: map[tableKey][]entity.Key{},
-		indexes: map[tableKey][]entity.Index{}, fks: map[tableKey][]entity.ForeignKey{},
-		cascades: map[tableKey][]entity.Cascade{}, sideEffects: map[tableKey]bool{},
-	}
+func (i pgIntrospector) scan(ctx context.Context, schemas []string) (*scanned, error) {
+	s := sqladapter.NewScanned()
 	for _, load := range []func(context.Context, *scanned, []string) error{
 		i.columns(columnsSQL), i.columns(matviewColumnsSQL), i.indexes, i.foreignKeys, i.cascades, i.writeEffects,
 	} {
-		if err := load(ctx, &s, schemas); err != nil {
-			return s, err
+		if err := load(ctx, s, schemas); err != nil {
+			return nil, err
 		}
 	}
 	return s, nil
@@ -149,18 +126,7 @@ const (
 
 func (i pgIntrospector) columns(query string) func(context.Context, *scanned, []string) error {
 	return func(ctx context.Context, s *scanned, schemas []string) error {
-		return i.each(ctx, query, schemas, func(rows *sql.Rows) error {
-			var k tableKey
-			var name, dataType, nullable, comment string
-			var domain entity.Domain
-			if err := rows.Scan(&k.schema, &k.table, &name, &dataType, &nullable, &comment,
-				&domain.Default, &domain.Generated, &domain.AutoIncrement); err != nil {
-				return err
-			}
-			domain.Type, domain.Nullable = dataType, strings.EqualFold(nullable, "YES")
-			s.attrs[k] = append(s.attrs[k], entity.Attribute{Name: name, Description: comment, Domain: domain})
-			return nil
-		})
+		return i.each(ctx, query, schemas, s.ScanColumn)
 	}
 }
 
@@ -195,14 +161,14 @@ func (i pgIntrospector) indexes(ctx context.Context, s *scanned, schemas []strin
 		var ix entity.Index
 		var deferrable, expression, nullsNotDistinct, notNull bool
 		var columns, parts string
-		if err := rows.Scan(&t.schema, &t.table, &ix.Name, &ix.Method, &ix.Unique, &ix.Primary, &deferrable,
+		if err := rows.Scan(&t.Schema, &t.Table, &ix.Name, &ix.Method, &ix.Unique, &ix.Primary, &deferrable,
 			&ix.Where, &expression, &nullsNotDistinct, &notNull, &columns, &parts); err != nil {
 			return err
 		}
 		if err := json.Unmarshal([]byte(parts), &ix.Parts); err != nil {
 			return err
 		}
-		s.indexes[t] = append(s.indexes[t], ix)
+		s.Indexes[t] = append(s.Indexes[t], ix)
 		if !ix.Unique {
 			return nil
 		}
@@ -211,7 +177,7 @@ func (i pgIntrospector) indexes(ctx context.Context, s *scanned, schemas []strin
 		if err := json.Unmarshal([]byte(columns), &k.Columns); err != nil {
 			return err
 		}
-		s.keys[t] = append(s.keys[t], k)
+		s.Keys[t] = append(s.Keys[t], k)
 		return nil
 	})
 }
@@ -231,26 +197,7 @@ func (i pgIntrospector) foreignKeys(ctx context.Context, s *scanned, schemas []s
 		 JOIN pg_attribute ra ON ra.attrelid = con.confrelid AND ra.attnum = k.refcol
 		 WHERE con.contype = 'f' AND n.nspname = ANY($1)
 		 ORDER BY n.nspname, cl.relname, con.conname, k.ord`,
-		schemas, func(rows *sql.Rows) error {
-			var t tableKey
-			var name, col, refSchema, refTable, refCol, onDelete, onUpdate string
-			if err := rows.Scan(&t.schema, &t.table, &name, &col, &refSchema, &refTable, &refCol,
-				&onDelete, &onUpdate); err != nil {
-				return err
-			}
-			fks := s.fks[t]
-			if n := len(fks); n == 0 || fks[n-1].Name != name {
-				fks = append(fks, entity.ForeignKey{
-					Name: name, RefSchema: refSchema, RefRelation: refTable,
-					OnDelete: pgAction[onDelete], OnUpdate: pgAction[onUpdate],
-				})
-			}
-			last := &fks[len(fks)-1]
-			last.Columns = append(last.Columns, col)
-			last.RefColumns = append(last.RefColumns, refCol)
-			s.fks[t] = fks
-			return nil
-		})
+		schemas, func(rows *sql.Rows) error { return s.ScanForeignKeyColumn(rows, pgAction) })
 }
 
 // cascadesSQL lists, by referenced relation, the foreign keys of other
@@ -276,7 +223,7 @@ func (i pgIntrospector) cascades(ctx context.Context, s *scanned, schemas []stri
 		var t tableKey
 		var c entity.Cascade
 		var onDelete, onUpdate, columns, foreign string
-		if err := rows.Scan(&t.schema, &t.table, &c.Schema, &c.Table, &onDelete, &onUpdate,
+		if err := rows.Scan(&t.Schema, &t.Table, &c.Schema, &c.Table, &onDelete, &onUpdate,
 			&columns, &foreign); err != nil {
 			return err
 		}
@@ -285,7 +232,7 @@ func (i pgIntrospector) cascades(ctx context.Context, s *scanned, schemas []stri
 			return err
 		}
 		c.OnDelete, c.OnUpdate = pgAction[onDelete], pgAction[onUpdate]
-		s.cascades[t] = append(s.cascades[t], c)
+		s.Cascades[t] = append(s.Cascades[t], c)
 		return nil
 	})
 }
@@ -298,12 +245,5 @@ func (i pgIntrospector) writeEffects(ctx context.Context, s *scanned, schemas []
 		 JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
 		 WHERE NOT t.tgisinternal AND n.nspname = ANY($1)
 		 UNION SELECT schemaname, tablename FROM pg_rules WHERE schemaname = ANY($1)`,
-		schemas, func(rows *sql.Rows) error {
-			var t tableKey
-			if err := rows.Scan(&t.schema, &t.table); err != nil {
-				return err
-			}
-			s.sideEffects[t] = true
-			return nil
-		})
+		schemas, s.ScanSideEffect)
 }

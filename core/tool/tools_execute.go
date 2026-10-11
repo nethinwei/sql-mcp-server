@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
@@ -26,12 +27,9 @@ func (ExecuteTool) Info() Info {
 func (ExecuteTool) Enabled(f config.ToolFlags) bool { return f.ExecuteEntity }
 func (ExecuteTool) CostGated()                      {}
 func (ExecuteTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
-	var in executeInput
-	if err := decodeInput(input, &in); err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
-	}
-	if err := normalizeMapValues(in.Args); err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+	in, err := decodeTool(input, func(in *executeInput) error { return normalizeMapValues(in.Args) })
+	if err != nil {
+		return Result{}, err
 	}
 	return runExecute(ctx, tc, in, true)
 }
@@ -48,6 +46,19 @@ type ProcedureTool struct {
 // procedure tools from built-ins; the hash prevents normalization collisions
 // and tells same-named procedures of different namespaces apart.
 func ProcedureToolName(e entity.Entity) string {
+	if name, ok := procedureToolNames.Load(e.Name); ok {
+		return name.(string)
+	}
+	name := procedureToolName(e)
+	procedureToolNames.Store(e.Name, name)
+	return name
+}
+
+// procedureToolNames keeps each procedure's tool name, which depends on its
+// Name alone: every call and every audit line of a procedure asks for it.
+var procedureToolNames sync.Map
+
+func procedureToolName(e entity.Entity) string {
 	local := e.Local
 	if local == "" {
 		local = e.Name
@@ -117,12 +128,9 @@ func (ProcedureTool) CostGated()                    {}
 
 // Run implements Tool.
 func (t ProcedureTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
-	var args map[string]any
-	if err := decodeInput(input, &args); err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
-	}
-	if err := normalizeMapValues(args); err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+	args, err := decodeTool(input, func(args *map[string]any) error { return normalizeMapValues(*args) })
+	if err != nil {
+		return Result{}, err
 	}
 	return runExecute(ctx, tc, executeInput{Entity: t.Entity.Name, Args: args}, false)
 }

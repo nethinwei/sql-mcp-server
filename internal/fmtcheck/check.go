@@ -7,6 +7,7 @@ import (
 	"go/format"
 	"go/parser"
 	"go/token"
+	"regexp"
 	"strings"
 )
 
@@ -40,10 +41,15 @@ func checkFileLines(path string, source []byte) []issue {
 	}}
 }
 
+// resolverSignature is a resolver's signature in a gqlgen resolver file:
+// gqlgen writes it, with the bound types' package names, on every generation.
+var resolverSignature = regexp.MustCompile(`^func \(r \*\w+Resolver\) \w+\(`)
+
 func checkLineLengths(path string, source []byte) []issue {
 	var issues []issue
+	resolvers := strings.HasSuffix(path, ".resolvers.go")
 	for lineNo, line := range splitLines(source) {
-		if len(line) > maxLineColumns {
+		if len(line) > maxLineColumns && (!resolvers || !resolverSignature.MatchString(line)) {
 			issues = append(issues, issue{
 				path: path,
 				detail: fmt.Sprintf(

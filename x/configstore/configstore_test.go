@@ -9,6 +9,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/core/revision/revisiontest"
+	"github.com/nethinwei/sql-mcp-server/x/revisionops/revisionopstest"
 )
 
 func sqliteSpec(t *testing.T) Spec {
@@ -235,4 +236,18 @@ func assertMutateAdminsSerializes(t *testing.T, store *SQLStore) {
 	if err != nil || len(all) != writers {
 		t.Fatalf("accounts = %d, %v; every writer must see the previous ones", len(all), err)
 	}
+}
+
+func TestSQLiteRevisionOpsEdge(t *testing.T) {
+	revisionopstest.Run(t, func(t *testing.T) revision.Store {
+		spec := sqliteSpec(t)
+		if err := Init(context.Background(), spec, nil); err != nil {
+			t.Fatal(err)
+		}
+		store, err := Open(context.Background(), spec, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return store
+	}, revisionopstest.Options{})
 }

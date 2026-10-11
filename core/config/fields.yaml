@@ -23,6 +23,12 @@ server.transport:
 server.addr:
   zh-CN: HTTP 监听地址；CLI --addr 优先，两处都未设置时为 :8080。非 loopback 地址必须配置 token 或 mTLS。
   en: HTTP listen address; the CLI --addr flag wins, and :8080 applies when neither is set. Non-loopback addresses need a token or mTLS.
+server.pathPrefix:
+  zh-CN: 网关把服务挂在此路径前缀下并从请求中剥掉它（如 /sql-mcp-server）；控制台的页面、Cookie 与重定向都带上它，网关无需改写响应。修改需重启。
+  en: The path a gateway serves this service under and strips from requests (for example /sql-mcp-server); the console's pages, cookie and redirects carry it, so the gateway need not rewrite responses. Changing it needs a restart.
+server.publicURL:
+  zh-CN: 客户端访问 MCP 端点的完整外部地址（经网关或反向代理时填写，如 https://gw.example.com/sql-mcp/mcp）；控制台据此生成客户端接入配置，未设置时用控制台所在域名加 /mcp。
+  en: The MCP endpoint as clients reach it, through any gateway or reverse proxy (for example https://gw.example.com/sql-mcp/mcp); the console builds client configuration with it, and uses the console's own origin plus /mcp when it is unset.
 server.role:
   zh-CN: 没有用户身份的请求使用的默认角色；CLI --role 覆盖。
   en: Default role for requests without a user identity; the CLI --role flag overrides it.
@@ -146,8 +152,8 @@ defs.entity.fields.description:
   zh-CN: 给 Agent 看的字段说明；留空时使用数据库中的列注释（启动或重载时读取）。
   en: Field description shown to agents; the column comment in the database (read at startup and reload) when empty.
 defs.entity.fields.mask:
-  zh-CN: 脱敏规则：内置规则或扩展程序注册的规则，未知规则会拒绝启动。脱敏字段只能出现在读取结果中，不能用于过滤、游标、分组、聚合或写谓词。
-  en: Masking rule, built in or registered by an extension; unknown rules fail startup. Masked fields only appear in read results, never in filters, cursors, grouping, aggregates or write predicates.
+  zh-CN: 脱敏规则，只能是内置规则之一，其他值校验失败。脱敏字段只能出现在读取结果中，不能用于过滤、游标、分组、聚合或写谓词。
+  en: Masking rule, one of the built-in rules; any other value fails validation. Masked fields only appear in read results, never in filters, cursors, grouping, aggregates or write predicates.
 defs.entity.fields.exclude:
   zh-CN: 隐藏该字段，Agent 不可见。
   en: Hide the field from agents.
@@ -362,8 +368,11 @@ cost.maxProcedureRows:
   zh-CN: 存储过程结果行数上限。
   en: Row cap for procedure results.
 cost.rejectFullScan:
-  zh-CN: 拒绝全表扫描。
-  en: Reject full table scans.
+  zh-CN: 拒绝全表扫描（表本身不超过 fullScanMaxRows 行的小表除外）。
+  en: Reject full table scans (except of small tables, see fullScanMaxRows).
+cost.fullScanMaxRows:
+  zh-CN: 被全表扫描的表本身不超过此行数时（配置表、维表），按普通顺序扫描评分、不被 rejectFullScan 拒绝。按表的规模判断而不是计划的输出行数（PostgreSQL 取 pg_class 统计、MySQL 取 rows_examined_per_scan、OceanBase 取 EXPLAIN EXTENDED 的 table_rows），任何一张全表扫描的表得不到行数时都不豁免；0 表示全表扫描一律按全表扫描处理。
+  en: A full scan of tables of no more than this many rows (lookup and dimension tables) scores as an ordinary sequential scan and is not rejected by rejectFullScan. The size is the table's, not the plan's output (PostgreSQL pg_class statistics, MySQL rows_examined_per_scan, OceanBase EXPLAIN EXTENDED table_rows); without it nothing is exempted. 0 treats every full scan as one.
 cost.whitelistPKPoint:
   zh-CN: 主键点查询跳过估算（仍受结果上限约束）。
   en: Primary-key point reads skip estimation (result caps still apply).
@@ -421,8 +430,11 @@ budget.roles:
   zh-CN: 按角色的预算：角色名 → 限额。
   en: 'Budgets by role: name → limits.'
 budget.tenants:
-  zh-CN: 按租户的预算，命中时覆盖而非合并角色限额。租户取自 subject 的 tenant / tenant_id / tenantID。
-  en: Budgets by tenant; replace role limits when matched. The tenant comes from subject tenant / tenant_id / tenantID.
+  zh-CN: 按租户的预算。maxConcurrent 约束该租户所有会话、所有主体的调用合计；其余各项逐字段收紧角色或用户的限额（取两者中已设置的较小值，租户未设置的项沿用角色的）。租户取自 subject 的 tenant / tenant_id / tenantID。
+  en: >-
+    Budgets by tenant. maxConcurrent bounds the calls of all the tenant's sessions and principals together; the
+    other limits tighten the role or user limits field by field (the smaller of the set values applies, and a limit
+    the tenant leaves unset keeps the role's). The tenant comes from subject tenant / tenant_id / tenantID.
 budget.users:
   zh-CN: 按用户的预算，优先于角色；未配置时逐项取其各角色中最宽松的值（任一角色未配置即视为不限）。
   en: Budgets by user; win over roles. Without one, each limit is the most permissive of the user's roles (a role without a budget means unlimited).
@@ -488,17 +500,24 @@ rateLimit.ioPool:
   zh-CN: IO 工作池大小；普通执行使用它。
   en: IO worker pool size, used by ordinary execution.
 rateLimit.minConcurrency:
-  zh-CN: 自适应并发的下限。
-  en: Lower bound of adaptive concurrency.
+  zh-CN: 自适应并发的下限（每个数据库连接各自调整）。
+  en: Lower bound of adaptive concurrency (adjusted per database connection).
 rateLimit.rttThreshold:
   zh-CN: 延迟超过该值时降低并发；0s 不触发。
   en: Reduce concurrency when latency exceeds this; 0s disables it.
 rateLimit.breakerThreshold:
-  zh-CN: 连续失败多少次后熔断。
-  en: Consecutive failures that open the breaker.
+  zh-CN: 连续失败多少次后熔断；每个数据库连接各自熔断，调用方取消或数据库因数据、权限拒绝的语句不计入。
+  en: >-
+    Consecutive failures that open the breaker; each database connection has its own, and calls the caller
+    cancelled or statements the database refused for their data or privileges do not count.
 rateLimit.breakerCooldown:
-  zh-CN: 熔断后多久重试。
-  en: Time before retrying after the breaker opens.
+  zh-CN: 熔断后多久重试；冷却后只放行一个探测调用，成功才恢复。
+  en: Time before retrying after the breaker opens; one probe call is then let through, and only its success closes it.
+rateLimit.maxResultMemory:
+  zh-CN: 进程同时在内存中持有的查询结果字节数上限（各调用合计，按读出的行计，调用结束释放），超出时调用以预算超限失败；默认 256 MiB。
+  en: >-
+    Bytes of query results the process holds in memory at once (all calls together, counted as rows are read and
+    released when a call ends); a call past it fails as over budget. Default 256 MiB.
 rateLimit.connMaxIdleTime:
   zh-CN: 数据库连接最长空闲时间。
   en: Maximum idle time of a database connection.
@@ -538,6 +557,9 @@ transactions.ttl:
 transactions.maxOpen:
   zh-CN: 每个角色/subject 同时打开的事务上限。
   en: Open transactions per role/subject.
+transactions.maxOpenPerConnection:
+  zh-CN: 同一个数据库连接上同时打开的事务上限，所有角色合计；未设置时取 rateLimit.ioPool 的一半（至少 1），给普通查询留出连接池的另一半。
+  en: "Open transactions holding one database connection, all roles together; unset: half of rateLimit.ioPool (at least 1), leaving queries the other half of the pool."
 transactions.beginTimeout:
   zh-CN: 开启事务超时。
   en: Begin timeout.
@@ -547,3 +569,35 @@ transactions.commitTimeout:
 transactions.rollbackTimeout:
   zh-CN: 回滚超时。
   en: Rollback timeout.
+
+execution:
+  title: {zh-CN: '执行总线', en: 'Execution bus'}
+  zh-CN: 工具调用以外的数据库执行的通道上限；所有通道共享 rateLimit.ioPool，这些通道合计最多占用其一半。
+  en: Lanes of database work other than tool calls; all lanes share rateLimit.ioPool and these together hold at most half of it.
+execution.admin:
+  zh-CN: 管理员请求内的读取（模式列表、表注释、导入）。
+  en: Reads answering an administrator's request (schema lists, table comments, imports).
+execution.admin.maxConcurrent:
+  zh-CN: 同时执行的上限。
+  en: Work running at once.
+execution.admin.maxQueue:
+  zh-CN: 排队等待的上限；超过时立即返回繁忙。
+  en: Work waiting; beyond it requests fail as busy at once.
+execution.scan:
+  zh-CN: 模式扫描与扫描批次。
+  en: Schema scans and scan batches.
+execution.scan.maxConcurrent:
+  zh-CN: 同时执行的扫描上限。
+  en: Scans running at once.
+execution.scan.maxQueue:
+  zh-CN: 排队等待的扫描上限。
+  en: Scans waiting.
+execution.background:
+  zh-CN: 无人等待的后台工作，如能力评估与装配期自省。
+  en: Work nobody waits for, such as capability assessment and introspection while assembling.
+execution.background.maxConcurrent:
+  zh-CN: 同时执行的上限。
+  en: Work running at once.
+execution.background.maxQueue:
+  zh-CN: 排队等待的上限。
+  en: Work waiting.

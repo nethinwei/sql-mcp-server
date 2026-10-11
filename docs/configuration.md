@@ -97,8 +97,35 @@ PostgreSQL sampler 始终使用独立 read-only transaction 并 rollback，调�
 
 ## Budget 与执行控制
 
-预算在 session 关闭时清理；行数与 cost 限制的执行时点见
-[security.md](security.md)。`rateLimit.ioPool` 限制并发执行的工具调用数。
+资源限制分层，自外向内逐层收紧，任一层越限即拒绝：
+
+| 层 | 限制 | 计数范围 |
+|---|---|---|
+| 进程 | `rateLimit.maxInflight`、`rps`、`ioPool`、`maxResultMemory`、`transactions.maxOpen` | 进程内所有调用（跨配置重载） |
+| 数据库连接 | 熔断与自适应并发（`rateLimit.breaker*`、`minConcurrency`、`rttThreshold`）、`transactions.maxOpenPerConnection` | 每个连接各自 |
+| 租户 | `budget.tenants.<t>.maxConcurrent` | 该租户所有会话、所有主体的调用合计 |
+| 会话 | `budget.users` / `budget.roles` 的各项，经租户的其余各项逐字段收紧 | 一个主体在一个租户下的一个 MCP 会话 |
+| 调用 | `cost.*`（闸门与 `maxBytes`）、预算的 `maxExecution`、`maxReturnedRows`、`maxReturnedBytes`、`maxEstimatedScannedRows` | 单次工具调用，结果逐行计量 |
+
+会话层的主体限额：用户配置了 `budget.users` 时用它，否则逐项取其各角色中最宽松的值。
+租户层只有 `maxConcurrent` 按租户聚合；其余各项逐字段收紧会话或调用层的限制。
+`maxSessionCost` 是一个会话的累计成本，不跨会话累加。预算状态在进程内存中，有界，
+会话关闭时清理，空闲 30 分钟后回收，重启后清零；多实例部署各自计数（见下文“部署
+模式”）。行数与 cost 限制的执行时点见 [security.md](security.md)。
+
+## 部署模式
+
+当前支持单实例，或多个实例并按 `Mcp-Session-Id` 做会话粘滞（负载均衡把同一 MCP 会话
+始终发往同一实例）：MCP 会话、显式事务、会话预算与读跟随写都只存在于处理该会话的实例。
+多实例时：
+
+- 各实例的读缓存独立失效，另一实例的写入最多在 `cache.ttl` 之后可见；需要即时可见时
+  关闭缓存或缩短 `ttl`；
+- 预算、事务上限、结果内存与熔断按实例计数，整体上限约为单实例配置乘以实例数；
+- 配置库模式（`serve --store … --watch`）下各实例各自轮询已发布 revision，切换时间
+  相差最多一个轮询间隔。
+
+跨实例的会话与事务迁移、共享预算、缓存失效广播不在当前范围内。
 
 ## 事务
 
@@ -129,6 +156,8 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | --- | --- | --- | --- | --- |
 | `transport` | 字符串 | `"stdio"` | 可选 `stdio`、`http`；修改需重启 | 传输方式；CLI --transport 优先。 |
 | `addr` | 字符串 |  | 修改需重启 | HTTP 监听地址；CLI --addr 优先，两处都未设置时为 :8080。非 loopback 地址必须配置 token 或 mTLS。 |
+| `pathPrefix` | 字符串 |  | 格式 `^(/[A-Za-z0-9._~-]+)+$`；修改需重启 | 网关把服务挂在此路径前缀下并从请求中剥掉它（如 /sql-mcp-server）；控制台的页面、Cookie 与重定向都带上它，网关无需改写响应。修改需重启。 |
+| `publicURL` | 字符串 |  | 格式 `^https?://[^\s/?#]+(/[^\s?#]*)?$` | 客户端访问 MCP 端点的完整外部地址（经网关或反向代理时填写，如 https://gw.example.com/sql-mcp/mcp）；控制台据此生成客户端接入配置，未设置时用控制台所在域名加 /mcp。 |
 | `role` | 字符串 |  |  | 没有用户身份的请求使用的默认角色；CLI --role 覆盖。 |
 | `auth.token` | 字符串 |  |  | 共享 bearer token，按字面读取（不做 ${ENV} 替换）。配置用户后各用户使用自己的 token。 |
 | `auth.trustProxyHeaders` | 布尔 |  |  | 信任代理传入的身份头（X-MCP-User / X-MCP-Role / X-MCP-Subject）；需要 mTLS 或 trustedProxyCIDRs 建立信任边界。 |
@@ -216,7 +245,8 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `maxAggregates` | 整数 | `16` | ≥ 1 | 最多聚合表达式数。 |
 | `maxExpand` | 整数 | `8` | ≥ 1 | 最多展开的关系数。 |
 | `maxProcedureRows` | 整数 | `1000` | ≥ 1 | 存储过程结果行数上限。 |
-| `rejectFullScan` | 布尔 | `true` |  | 拒绝全表扫描。 |
+| `rejectFullScan` | 布尔 | `true` |  | 拒绝全表扫描（表本身不超过 fullScanMaxRows 行的小表除外）。 |
+| `fullScanMaxRows` | 整数 | `1000` | ≥ 0 | 被全表扫描的表本身不超过此行数时（配置表、维表），按普通顺序扫描评分、不被 rejectFullScan 拒绝。按表的规模判断而不是计划的输出行数（PostgreSQL 取 pg_class 统计、MySQL 取 rows_examined_per_scan、OceanBase 取 EXPLAIN EXTENDED 的 table_rows），任何一张全表扫描的表得不到行数时都不豁免；0 表示全表扫描一律按全表扫描处理。 |
 | `whitelistPKPoint` | 布尔 | `true` |  | 主键点查询跳过估算（仍受结果上限约束）。 |
 | `requirePKForWrite` | 布尔 | `true` |  | 写操作必须带主键条件；不随 cost.enabled 关闭。 |
 | `requireKnownScan` | 布尔 | `true` |  | 无法判断扫描方式时拒绝；MySQL/OceanBase 的 EXPLAIN 失败即拒绝。 |
@@ -241,7 +271,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
 | `roles` | 映射（名称 → `budgetLimits`） |  |  | 按角色的预算：角色名 → 限额。 |
-| `tenants` | 映射（名称 → `budgetLimits`） |  |  | 按租户的预算，命中时覆盖而非合并角色限额。租户取自 subject 的 tenant / tenant_id / tenantID。 |
+| `tenants` | 映射（名称 → `budgetLimits`） |  |  | 按租户的预算。maxConcurrent 约束该租户所有会话、所有主体的调用合计；其余各项逐字段收紧角色或用户的限额（取两者中已设置的较小值，租户未设置的项沿用角色的）。租户取自 subject 的 tenant / tenant_id / tenantID。 |
 | `users` | 映射（名称 → `budgetLimits`） |  |  | 按用户的预算，优先于角色；未配置时逐项取其各角色中最宽松的值（任一角色未配置即视为不限）。 |
 
 ### `cache`：缓存
@@ -267,12 +297,13 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `rps` | 数字 |  | ≥ 0 | 每秒请求数上限（令牌桶）；0 表示只做并发限制。 |
 | `maxInflight` | 整数 | `256` | ≥ 0 | 同时进行的请求上限。 |
 | `ioPool` | 整数 | `16` | ≥ 0 | IO 工作池大小；普通执行使用它。 |
-| `minConcurrency` | 整数 | `1` | ≥ 0 | 自适应并发的下限。 |
+| `minConcurrency` | 整数 | `1` | ≥ 0 | 自适应并发的下限（每个数据库连接各自调整）。 |
 | `rttThreshold` | 时长 |  | ≥ 0 | 延迟超过该值时降低并发；0s 不触发。 |
-| `breakerThreshold` | 整数 | `5` | ≥ 0 | 连续失败多少次后熔断。 |
-| `breakerCooldown` | 时长 | `"5s"` | ≥ 0 | 熔断后多久重试。 |
+| `breakerThreshold` | 整数 | `5` | ≥ 0 | 连续失败多少次后熔断；每个数据库连接各自熔断，调用方取消或数据库因数据、权限拒绝的语句不计入。 |
+| `breakerCooldown` | 时长 | `"5s"` | ≥ 0 | 熔断后多久重试；冷却后只放行一个探测调用，成功才恢复。 |
 | `connMaxIdleTime` | 时长 | `"5m"` | ≥ 0 | 数据库连接最长空闲时间。 |
 | `connMaxLifetime` | 时长 | `"30m"` | ≥ 0 | 数据库连接最长存活时间。 |
+| `maxResultMemory` | 整数 | `268435456` | ≥ 0 | 进程同时在内存中持有的查询结果字节数上限（各调用合计，按读出的行计，调用结束释放），超出时调用以预算超限失败；默认 256 MiB。 |
 
 ### `mask`：脱敏
 
@@ -300,9 +331,26 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | --- | --- | --- | --- | --- |
 | `ttl` | 时长 | `"5m"` | ≥ 0 | 事务最长存活时间。 |
 | `maxOpen` | 整数 | `128` | ≥ 0 | 每个角色/subject 同时打开的事务上限。 |
+| `maxOpenPerConnection` | 整数 | `8` | ≥ 0 | 同一个数据库连接上同时打开的事务上限，所有角色合计；未设置时取 rateLimit.ioPool 的一半（至少 1），给普通查询留出连接池的另一半。 |
 | `beginTimeout` | 时长 | `"5s"` | ≥ 0 | 开启事务超时。 |
 | `commitTimeout` | 时长 | `"30s"` | ≥ 0 | 提交超时。 |
 | `rollbackTimeout` | 时长 | `"30s"` | ≥ 0 | 回滚超时。 |
+
+### `execution`：执行总线
+
+工具调用以外的数据库执行的通道上限；所有通道共享 rateLimit.ioPool，这些通道合计最多占用其一半。
+
+| 字段 | 类型 | 默认值 | 约束 | 说明 |
+| --- | --- | --- | --- | --- |
+| `admin.maxConcurrent` | 整数 | `4` | ≥ 0 | 同时执行的上限。 |
+| `admin.maxQueue` | 整数 | `16` | ≥ 0 | 排队等待的上限；超过时立即返回繁忙。 |
+| `admin` | 对象 |  |  | 管理员请求内的读取（模式列表、表注释、导入）。 |
+| `scan.maxConcurrent` | 整数 | `2` | ≥ 0 | 同时执行的扫描上限。 |
+| `scan.maxQueue` | 整数 | `8` | ≥ 0 | 排队等待的扫描上限。 |
+| `scan` | 对象 |  |  | 模式扫描与扫描批次。 |
+| `background.maxConcurrent` | 整数 | `2` | ≥ 0 | 同时执行的上限。 |
+| `background.maxQueue` | 整数 | `64` | ≥ 0 | 排队等待的上限。 |
+| `background` | 对象 |  |  | 无人等待的后台工作，如能力评估与装配期自省。 |
 
 ### 定义 `database`
 
@@ -339,7 +387,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `fields.name` | 字符串 |  | 必填；非空 | 数据库列名。 |
 | `fields.alias` | 字符串 |  |  | 对 Agent 暴露的名称；省略时用列名。 |
 | `fields.description` | 字符串 |  |  | 给 Agent 看的字段说明；留空时使用数据库中的列注释（启动或重载时读取）。 |
-| `fields.mask` | 字符串 |  | 内置 `email`、`idcard`、`phone`、`secret` | 脱敏规则：内置规则或扩展程序注册的规则，未知规则会拒绝启动。脱敏字段只能出现在读取结果中，不能用于过滤、游标、分组、聚合或写谓词。 |
+| `fields.mask` | 字符串 |  | 可选 `email`、`idcard`、`phone`、`secret` | 脱敏规则，只能是内置规则之一，其他值校验失败。脱敏字段只能出现在读取结果中，不能用于过滤、游标、分组、聚合或写谓词。 |
 | `fields.exclude` | 布尔 |  |  | 隐藏该字段，Agent 不可见。 |
 | `fields` | 对象列表 |  |  | 暴露的字段。 |
 | `roles.read` | 字符串列表 |  |  | 可读取的角色。 |
@@ -435,3 +483,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 
 同一有效配置重复导出字节级一致，导出结果可直接通过 `validate` 并再次导出得到
 相同字节。输出的兼容规则见 [tool-contract.md](tool-contract.md)。
+
+`export` 展示的是**生效配置**；配置库中的 revision 存的是配置**写了什么**
+（`config.Spec`，未写的值不出现，加载时取默认值，见
+[设计：意图与生效值](design/spec.md)），所以导入的 payload 一般比 export 短。

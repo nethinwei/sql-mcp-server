@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
 )
 
@@ -29,6 +30,7 @@ type config struct {
 	rps           *ratelimit.TokenBucket
 	breaker       *ratelimit.Breaker
 	quota         *Quota
+	lane          *bus.Lane
 	recordFailure func(error) bool
 }
 
@@ -51,6 +53,11 @@ func WithBreaker(b *ratelimit.Breaker) Option { return func(c *config) { c.break
 // IO pool, limiter, rate limiter and breaker options.
 func WithQuota(q *Quota) Option { return func(c *config) { c.quota = q } }
 
+// WithLane admits submissions on lane, such as the Serve lane of the
+// process's bus, instead of an in-flight bound of the engine's own; it
+// replaces the max in-flight option.
+func WithLane(l *bus.Lane) Option { return func(c *config) { c.lane = l } }
+
 // WithFailureClassifier decides whether a non-nil execution error represents
 // provider/system health and should affect AIMD and the circuit breaker.
 func WithFailureClassifier(classify func(error) bool) Option {
@@ -60,7 +67,7 @@ func WithFailureClassifier(classify func(error) bool) Option {
 // Engine bounds concurrency and deduplicates concurrent identical requests.
 type Engine struct {
 	quota         *Quota
-	inflight      chan struct{}
+	lane          *bus.Lane
 	sf            singleflight
 	recordFailure func(error) bool
 	stateMu       sync.Mutex
@@ -85,44 +92,63 @@ func New(opts ...Option) (*Engine, error) {
 		quota = NewQuota(cfg.io)
 		quota.Update(cfg.io, cfg.limiter, cfg.rps, cfg.breaker)
 	}
+	lane := cfg.lane
+	if lane == nil {
+		lane = bus.NewLane(bus.Serve, bus.Limits{MaxConcurrent: cfg.inflight})
+	}
 	return &Engine{
 		quota:         quota,
-		inflight:      make(chan struct{}, cfg.inflight),
+		lane:          lane,
 		recordFailure: cfg.recordFailure,
 	}, nil
 }
 
-// Submit schedules fn under backpressure and returns fn's result value and
-// error. It returns ErrOverloaded if the in-flight queue is full, ErrCircuitOpen
-// if the breaker is open, ErrRateLimited if concurrency exceeds the adaptive
-// limit. Concurrent calls with the same non-empty key share a single execution
-// (singleflight) and all receive the leader's result. An empty key opts out of
-// de-duplication (writes/unique ops). Panics in fn are recovered as errors.
-func (e *Engine) Submit(ctx context.Context, key string, fn func(context.Context) (any, error)) (any, error) {
-	e.stateMu.Lock()
-	if e.closed {
-		e.stateMu.Unlock()
+// Submit schedules fn on e under backpressure and returns fn's result value
+// and error. It returns ErrOverloaded if the in-flight queue is full,
+// ErrCircuitOpen if the breaker is open, ErrRateLimited if concurrency
+// exceeds the adaptive limit. Concurrent calls with the same non-empty key
+// share a single execution (singleflight) and all receive the leader's
+// result. An empty key opts out of de-duplication (writes/unique ops).
+// Panics in fn are recovered as errors.
+func Submit[T any](ctx context.Context, e *Engine, key string, fn func(context.Context) (T, error)) (T, error) {
+	return typed[T](e.submit(ctx, key, erased(fn)))
+}
+
+// Run runs fn on e under the rate limit, its panics recovered, but outside
+// the lane, the breaker, the adaptive limit and the IO slots: for a call
+// ending a transaction, which must reach its database however it is held
+// back, and holds its connection already.
+func Run[T any](ctx context.Context, e *Engine, fn func(context.Context) (T, error)) (T, error) {
+	return typed[T](e.run(ctx, erased(fn)))
+}
+
+// erased is fn returning its value as any, for the engine's untyped core
+// (singleflight shares one value among callers).
+func erased[T any](fn func(context.Context) (T, error)) func(context.Context) (any, error) {
+	return func(ctx context.Context) (any, error) { return fn(ctx) }
+}
+
+// typed is v as a T; the zero T when v is not one (a failed call returns
+// nil).
+func typed[T any](v any, err error) (T, error) {
+	t, _ := v.(T)
+	return t, err
+}
+
+func (e *Engine) submit(ctx context.Context, key string, fn func(context.Context) (any, error)) (any, error) {
+	done, err := e.admit()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	leave, err := e.lane.TryEnter()
+	if err != nil {
+		if errors.Is(err, bus.ErrOverloaded) {
+			return nil, ErrOverloaded
+		}
 		return nil, ErrClosed
 	}
-	e.active.Add(1)
-	e.stateMu.Unlock()
-	defer e.active.Done()
-	if rps := e.quota.rps.Load(); rps != nil {
-		if err := rps.Allow(); err != nil {
-			return nil, err
-		}
-	}
-	if breaker := e.quota.breaker.Load(); breaker != nil {
-		if err := breaker.Allow(); err != nil {
-			return nil, err
-		}
-	}
-	select {
-	case e.inflight <- struct{}{}:
-	default:
-		return nil, ErrOverloaded
-	}
-	defer func() { <-e.inflight }()
+	defer leave()
 	if key == "" {
 		return e.execute(ctx, fn)
 	}
@@ -131,28 +157,68 @@ func (e *Engine) Submit(ctx context.Context, key string, fn func(context.Context
 	})
 }
 
-func (e *Engine) execute(ctx context.Context, fn func(context.Context) (any, error)) (any, error) {
+func (e *Engine) run(ctx context.Context, fn func(context.Context) (any, error)) (any, error) {
+	done, err := e.admit()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	return e.runSafe(ctx, fn)
+}
+
+// admit counts a call as active while the engine serves, under the rate
+// limit; done ends it.
+func (e *Engine) admit() (done func(), err error) {
+	e.stateMu.Lock()
+	if e.closed {
+		e.stateMu.Unlock()
+		return nil, ErrClosed
+	}
+	e.active.Add(1)
+	e.stateMu.Unlock()
+	if rps := e.quota.rps.Load(); rps != nil {
+		if err := rps.Allow(); err != nil {
+			e.active.Done()
+			return nil, err
+		}
+	}
+	return e.active.Done, nil
+}
+
+// execute runs fn under the breaker, the adaptive limit and an IO slot; the
+// breaker is asked here, by the one execution, so every request it lets
+// through ends with Record or Release.
+func (e *Engine) execute(ctx context.Context, fn func(context.Context) (any, error)) (val any, err error) {
 	limiter, breaker := e.quota.limiter.Load(), e.quota.breaker.Load()
+	record := false
+	if breaker != nil {
+		probe, allowErr := breaker.Allow()
+		if allowErr != nil {
+			return nil, allowErr
+		}
+		defer func() {
+			if record {
+				breaker.Record(err == nil)
+			} else {
+				breaker.Release(probe)
+			}
+		}()
+	}
 	if limiter != nil {
 		if err := limiter.Acquire(); err != nil {
 			return nil, err
 		}
 		defer limiter.Release()
 	}
-	if err := e.quota.io.acquire(ctx); err != nil {
+	if err := e.quota.io.Acquire(ctx); err != nil {
 		return nil, err
 	}
-	defer e.quota.io.release()
+	defer e.quota.io.Release()
 	start := time.Now()
-	val, err := e.runSafe(ctx, fn)
-	record := err == nil || e.recordFailure == nil || e.recordFailure(err)
-	if record {
-		if limiter != nil {
-			limiter.OnResult(err, time.Since(start))
-		}
-		if breaker != nil {
-			breaker.Record(err == nil)
-		}
+	val, err = e.runSafe(ctx, fn)
+	record = err == nil || e.recordFailure == nil || e.recordFailure(err)
+	if record && limiter != nil {
+		limiter.OnResult(err, time.Since(start))
 	}
 	return val, err
 }

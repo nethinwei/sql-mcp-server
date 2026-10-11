@@ -7,8 +7,9 @@ import {
   NSpace, NTabPane, NTabs, NTag, NText, useMessage,
 } from 'naive-ui'
 import VisibilityTable from '@/components/VisibilityTable.vue'
-import { canonical, useWorkspace } from '@/stores/workspace'
+import { useWorkspace } from '@/stores/workspace'
 import { run } from '@/api/client'
+import { workspace } from '@/lib/workspaceSync'
 import { SimulateQuery } from '@/api/ops'
 import { describeFilter, type Filter } from '@/lib/filter'
 import { parseSimulationQuery } from '@/lib/simulation'
@@ -82,7 +83,7 @@ watch(entity, () => {
  */
 const conditions = computed(() => JSON.stringify({
   who: who.value, source: source.value,
-  config: config.value?.draft ? canonical(config.value.draft) : config.value?.revision,
+  config: config.value?.key,
   entity: entity.value, action: action.value, fields: [...fields.value].sort(),
 }))
 interface Outcome {
@@ -107,9 +108,12 @@ async function check() {
   try {
     const input = {
       user: asked.who, entity: asked.entity, action: asked.action, fields: asked.fields.length ? asked.fields : null,
-      draft: config.value?.draft ?? null,
+      revision: config.value.against,
     }
-    const sim = (await run(SimulateQuery, { input })).simulate
+    // The workspace is read on the server, what was edited here written first.
+    const sim = (config.value.against === null
+      ? await workspace.read(SimulateQuery, { input })
+      : await run(SimulateQuery, { input })).simulate
     if (key === conditions.value) result.value = { sim, key, ...asked }
   } catch (e) {
     message.error(e instanceof Error ? e.message : String(e))
@@ -158,7 +162,7 @@ onMounted(() => {
     <n-tabs v-model:value="tab" type="line" animated>
       <n-tab-pane name="overview" :tab="t('simulate.overview')">
         <n-alert v-if="configError" type="error" :show-icon="false">{{ configError }}</n-alert>
-        <visibility-table v-else-if="config" :who="who" :draft="config.draft" :entities="config.entities" @pick="pick" />
+        <visibility-table v-else-if="config" :who="who" :revision="config.against" :entities="config.entities" :context="config.key" @pick="pick" />
       </n-tab-pane>
       <n-tab-pane name="single" :tab="t('simulate.single')">
         <n-space vertical>

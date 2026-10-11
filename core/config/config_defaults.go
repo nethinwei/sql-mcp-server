@@ -1,7 +1,7 @@
 package config
 
 import (
-	"strings"
+	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"time"
 )
 
@@ -20,10 +20,11 @@ func (c *Config) ApplyDefaults() {
 	c.applyAuditDefaults()
 	c.applyCacheDefaults()
 	c.applyTransactionDefaults()
+	c.applyExecutionDefaults()
 }
 
 func (c *Config) applyServerDefaults() {
-	c.Server.Role = canonicalRole(c.Server.Role)
+	c.Server.Role = rbac.NormalizeRole(c.Server.Role)
 	if len(c.Server.Secrets.AllowedRoots) == 0 {
 		c.Server.Secrets.AllowedRoots = DefaultSecretRoots()
 	}
@@ -110,6 +111,9 @@ func (c *Config) applyCostSafetyDefaults() {
 	if !c.Cost.present["whitelistPKPoint"] {
 		c.Cost.WhitelistPKPoint = true
 	}
+	if !c.Cost.present["fullScanMaxRows"] && c.Cost.FullScanMaxRows == 0 {
+		c.Cost.FullScanMaxRows = 1000
+	}
 	if !c.Cost.present["rejectFullScan"] {
 		c.Cost.RejectFullScan = true
 	}
@@ -158,6 +162,9 @@ func (c *Config) applyRateLimitDefaults() {
 	if c.RateLimit.BreakerThreshold == 0 {
 		c.RateLimit.BreakerThreshold = 5
 	}
+	if c.RateLimit.MaxResultMemory == 0 {
+		c.RateLimit.MaxResultMemory = 256 << 20
+	}
 	if c.RateLimit.BreakerCooldown == 0 {
 		c.RateLimit.BreakerCooldown = 5 * time.Second
 	}
@@ -197,6 +204,11 @@ func (c *Config) applyTransactionDefaults() {
 	if c.Transactions.MaxOpen == 0 {
 		c.Transactions.MaxOpen = 128
 	}
+	if c.Transactions.MaxOpenPerConnection == 0 {
+		// Half of each connection pool (sized rateLimit.ioPool) is left to
+		// queries.
+		c.Transactions.MaxOpenPerConnection = max(1, c.RateLimit.IOPool/2)
+	}
 	if c.Transactions.BeginTimeout == 0 {
 		c.Transactions.BeginTimeout = 5 * time.Second
 	}
@@ -208,14 +220,25 @@ func (c *Config) applyTransactionDefaults() {
 	}
 }
 
-func canonicalRole(role string) string {
-	return strings.ToLower(strings.TrimSpace(role))
+func (c *Config) applyExecutionDefaults() {
+	laneDefaults(&c.Execution.Admin, 4, 16)
+	laneDefaults(&c.Execution.Scan, 2, 8)
+	laneDefaults(&c.Execution.Background, 2, 64)
+}
+
+func laneDefaults(l *LaneConfig, maxConcurrent, maxQueue int) {
+	if l.MaxConcurrent == 0 {
+		l.MaxConcurrent = maxConcurrent
+	}
+	if l.MaxQueue == 0 {
+		l.MaxQueue = maxQueue
+	}
 }
 
 func canonicalRoleList(values []string) []string {
 	out := make([]string, len(values))
 	for i, value := range values {
-		out[i] = canonicalRole(value)
+		out[i] = rbac.NormalizeRole(value)
 	}
 	return out
 }

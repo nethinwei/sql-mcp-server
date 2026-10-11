@@ -1,11 +1,15 @@
 import { Client, cacheExchange, fetchExchange, mapExchange } from '@urql/vue'
-import { session, signedOut } from './session'
+import { leave, resyncSession, session } from './session'
+import { adminURL } from './base'
 import { router } from '@/router'
+import { t } from '@/i18n'
 
 // GraphQL client: same-origin cookie session plus the CSRF header. A 401
-// (expired or revoked session) returns the console to the sign-in page.
+// (expired or revoked session) returns the console to the sign-in page; a 403
+// (the CSRF token of a session another sign-in in this browser replaced) is
+// handled by run (see resyncSession).
 export const client = new Client({
-  url: '/admin/graphql',
+  url: adminURL('graphql'),
   // The server only accepts POST (GET is refused as a CSRF safeguard).
   preferGetMethod: false,
   requestPolicy: 'cache-and-network',
@@ -17,10 +21,10 @@ export const client = new Client({
     mapExchange({
       onError(error) {
         const status = (error.response as Response | undefined)?.status
-        if (status === 401) {
-          signedOut()
-          void router.push({ name: 'login', query: { next: router.currentRoute.value.fullPath } })
-        }
+        if (status === 401) signIn()
+        // Polling queries pick up the replacing session's token for the next
+        // poll (run retries its own request).
+        if (status === 403) void resyncSession().then((same) => { if (!same) signIn() })
       },
     }),
     cacheExchange,
@@ -35,15 +39,41 @@ export class ApiError extends Error {
   }
 }
 
-/** Runs a query or mutation once and throws ApiError on GraphQL errors. */
+/**
+ * A request that got no answer from the API: unreachable (the service is
+ * restarting, or the network or a proxy dropped the connection), or a proxy's
+ * error page in place of a response. The page itself is not shown.
+ */
+function networkError(response: Response | undefined): ApiError {
+  const status = response?.status
+  if (!status) return new ApiError(t('network.unreachable'), 'NETWORK')
+  return new ApiError(t(status === 504 ? 'network.timeout' : 'network.gateway', { status }), 'NETWORK', { status })
+}
+
+// The session ended: the sign-in page is loaded anew (see leave).
+const signIn = () => leave(router.currentRoute.value.fullPath)
+
+/**
+ * Runs a query or mutation and throws ApiError on GraphQL errors. A request
+ * refused for its CSRF token never reached the API, so it is sent again once
+ * with the current token when the browser is still signed in as the same
+ * administrator; otherwise the console returns to the sign-in page.
+ */
 export async function run<Data, Vars extends object>(
   doc: import('@urql/vue').TypedDocumentNode<Data, Vars>,
   variables: Vars,
   mutation = false,
+  retried = false,
 ): Promise<Data> {
   const result = mutation
     ? await client.mutation(doc, variables).toPromise()
     : await client.query(doc, variables, { requestPolicy: 'network-only' }).toPromise()
+  if ((result.error?.response as Response | undefined)?.status === 403 && !retried) {
+    if (await resyncSession()) return run(doc, variables, mutation, true)
+    signIn()
+    throw new ApiError(t('login.sessionReplaced'))
+  }
+  if (result.error?.networkError) throw networkError(result.error.response as Response | undefined)
   if (result.error) {
     const first = result.error.graphQLErrors[0]
     const extensions = (first?.extensions ?? {}) as Record<string, unknown>

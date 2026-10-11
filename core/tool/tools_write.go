@@ -3,9 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 
-	"github.com/nethinwei/sql-mcp-server/core/codegen"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 )
@@ -23,12 +21,9 @@ func (CreateTool) Info() Info {
 }
 func (CreateTool) Enabled(f config.ToolFlags) bool { return f.CreateRecord }
 func (CreateTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
-	var in createInput
-	if err := decodeInput(input, &in); err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
-	}
-	if err := normalizeMapValues(in.Values); err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+	in, err := decodeTool(input, func(in *createInput) error { return normalizeMapValues(in.Values) })
+	if err != nil {
+		return Result{}, err
 	}
 	return runInsert(ctx, tc, in)
 }
@@ -47,16 +42,11 @@ func (UpdateTool) Info() Info {
 func (UpdateTool) Enabled(f config.ToolFlags) bool { return f.UpdateRecord }
 func (UpdateTool) CostGated()                      {}
 func (UpdateTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
-	var in updateInput
-	if err := decodeInput(input, &in); err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+	in, err := decodeTool(input, func(in *updateInput) error { return normalizeMapValues(in.Set) })
+	if err != nil {
+		return Result{}, err
 	}
-	if err := normalizeMapValues(in.Set); err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
-	}
-	return runFilteredWrite(ctx, tc, in.Transaction, func(ctx context.Context, tc Context) (
-		writePlan, codegen.Compiled, error,
-	) {
+	return runFilteredWrite(ctx, tc, in.Transaction, func(ctx context.Context, tc Context) (statement, error) {
 		return prepareUpdate(ctx, tc, in)
 	})
 }
@@ -75,13 +65,11 @@ func (DeleteTool) Info() Info {
 func (DeleteTool) Enabled(f config.ToolFlags) bool { return f.DeleteRecord }
 func (DeleteTool) CostGated()                      {}
 func (DeleteTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
-	var in deleteInput
-	if err := decodeInput(input, &in); err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+	in, err := decodeTool[deleteInput](input, nil)
+	if err != nil {
+		return Result{}, err
 	}
-	return runFilteredWrite(ctx, tc, in.Transaction, func(ctx context.Context, tc Context) (
-		writePlan, codegen.Compiled, error,
-	) {
+	return runFilteredWrite(ctx, tc, in.Transaction, func(ctx context.Context, tc Context) (statement, error) {
 		return prepareDelete(ctx, tc, in)
 	})
 }

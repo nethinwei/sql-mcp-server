@@ -27,6 +27,21 @@ linters:
           allow:
             - $gostd
             - github.com/nethinwei/sql-mcp-server/core
+        # Versioning knows items and revisions, not configurations: what a
+        # configuration is comes through its Codec.
+        versioning-generic:
+          files:
+            - "**/x/workspaceops/*.go"
+            - "!$test"
+          deny:
+            - pkg: github.com/nethinwei/sql-mcp-server/core/config
+              desc: workspaceops is configuration-agnostic; use a Codec
+            - pkg: github.com/nethinwei/sql-mcp-server/x/configedit
+              desc: workspaceops is configuration-agnostic; use a Codec
+            - pkg: github.com/nethinwei/sql-mcp-server/x/configplan
+              desc: workspaceops is configuration-agnostic
+            - pkg: github.com/nethinwei/sql-mcp-server/x/admin
+              desc: workspaceops serves the admin plane, never the reverse
     revive:
       rules:
         # Interface contracts are documented at the interface; requiring every

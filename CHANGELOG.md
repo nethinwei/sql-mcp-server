@@ -9,6 +9,215 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+## 0.1.13 - 2026-10-11
+
+升级步骤汇总见 [`docs/releases/v0.1.13.md`](docs/releases/v0.1.13.md#迁移)。
+
+### Added
+
+- 执行总线 `core/bus`：所有触达数据库的执行按通道（工具调用 `serve`、管理读取
+  `admin`、扫描 `scan`、后台 `background`）准入并共享 `rateLimit.ioPool`，非工具调用
+  通道合计至多占一半；新增 `execution.{admin,scan,background}.{maxConcurrent,maxQueue}`
+  配置（热重载生效）；管理面自省不再无界开连接；热重载期间新旧快照共享
+  `maxInflight`；所有后台 goroutine 与定时器经总线登记、恢复 panic 并在关闭时排空，
+  `internal/buscheck` 强制；OTel 指标 `smcp.bus.*`、GraphQL
+  `serverStatus.execution` 与控制台概览页“执行资源”卡片。
+
+- 批量配置（设计见 `docs/design/planning.md`）：
+  - 扫描结果保存在配置库（schema 版本 3，启动时自动迁移），重启和多副本共享；扫描
+    在服务端按批次进行，批次保存在配置库（关闭控制台、重启或切换副本都会继续，所有者
+    停止心跳后由其他进程接管；每次运行有独立的所有者标识，每个库的进度按所有者条件
+    写入，被接管的旧运行恢复后也不能覆盖新所有者；每个数据源最多 4 个未完成批次（计数与
+    创建在配置库同一事务内，并发请求和多副本都不能越过）、每批最多 5000 个库；可停止、只重试失败项）；表目录在服务端跨库检索、分页并缓存，按库名通配、关键字、状态（未导入
+    / 工作区未发布 / 已发布）与字段差异筛选；
+  - 方案引擎 `x/configplan`：按范围与规则（导入、授权（可限定字段与行范围）、字段
+    隐藏/脱敏、同步字段）生成方案，报告涉及对象、所依据的扫描、合并后的变化、分为
+    阻断 / 需确认 / 提示三级的例外与生效方式；控制台导入、“按规则配置”、模板与配置
+    MCP 共用；
+  - 方案模板带版本与修改记录，保存时检测他人的修改；“重复执行”的模板在“待处理”页
+    等待审核，不会自动修改工作区；待处理事项可指定负责人、稍后处理或注明原因忽略，
+    有处理记录；
+  - 配置 MCP `/admin/mcp`：每个客户端一个管理员令牌（命名、有效期、最近使用时间、
+    单独吊销）；检索目录、扫描库、针对管理员的工作区预览方案（摘要 + 分页明细）、按
+    预览标识把方案直接写进工作区（`plan_apply`）；不提供发布工具。
+  - 配置服务 `x/admin/configapp`：目录、扫描批次、方案、模板、待处理、令牌、版本
+    差异与权限模拟的业务规则和鉴权都在服务内，GraphQL 与配置 MCP 只做适配（MCP 不再
+    经过 GraphQL resolver；结果类型由 gqlgen 直接绑定服务的类型）。
+  - 配置库 schema 版本 4（启动时自动从版本 3 升级，原有令牌视为不受限，扫描批次的
+    逐库进度从 payload 迁移成行）与版本 5（管理员工作区）。
+  - 配置 MCP 令牌可限定部分数据源（`smcp_admin_tokens.scope`；条件命中数与
+    预览快照也只在令牌的数据源内可读）；预览结果按
+    `planId` 保留为快照，`plan_details` 只带 `planId` 从快照分页读取；
+    `plan_apply` 必须用 `confirmed` 逐一列出管理员确认过的需确认例外 ID（例外新增
+    `id`），一起预览的多个方案可依次应用到同一工作区；移除 MCP 的 `validate` 工具。
+  - 目录共享索引：每张表的状态与差异按扫描、草稿与已发布版本只算一次，筛选只在索引
+    上过滤并保存行位置；缓存同键并发未命中只算一次，按内存预算淘汰。翻页每页分配从
+    约 10 MB 降到 0.6 MB，并发翻页 p95 从约 64 ms 降到 32 ms。
+  - 扫描批次改为批次与库分表（`smcp_scan_batch_items`）：每个库按“所有者 + 当前
+    状态”条件迁移，批次结束在同一事务内取消剩余的库；失败的库退避后自动重试（最多
+    扫描 3 次）；写状态时配置库出错会重试（已提交但应答丢失的写入读回确认），仍失败则停止本次
+    运行、保留批次待接管（接管时放回 pending 失败同样放弃接管），不会把未完成的库
+    当作取消；请求可带 `requestKey`，同一请求再次发送得到原来的批次。
+  - 预览与应用在服务入口统一规范化方案后再计算 `planId`（例如 `READ` 与 `read`），
+    同一方案预览后原样应用不再被判为“已变化”。
+  - 配置版本管理成为独立模块（`docs/design/versioning.md`）：`core/workspace`（项、
+    三方合并、冲突、存储接口与一致性套件）与 `x/workspaceops`（版本操作服务，不依赖
+    配置类型，depguard 强制）。工作区每人一份，保存在服务端（`smcp_workspaces` 与写入
+    记录 `smcp_workspace_log`，schema 版本 5），管理员在任何一个控制台、他的 Agent 都
+    直接写这一份，发布相当于提交。按项写入时带上读到的值，期间别处写过则服务端三方
+    合并：不同位置都保留，同一处改得不同成为冲突，不丢任何一方。update、reset、合并
+    草稿、解决冲突、保存草稿（检查点）与提交都是服务端操作（`updateWorkspace`、
+    `resetWorkspace`、`mergeDraft`、`resolveConflict`、`checkpointWorkspace`、
+    `commitWorkspace`、`workspaceLog`），提交绑定工作区版本与预期的已发布版本。
+    Agent 的 `plan_apply` 与方案页的“加入工作区”（`applyPlan`）是同一段服务端逻辑，
+    写入绑定预览时的实际影响（逐字段）。服务端写出的项与控制台从版本构造的完全一致
+    （共用测试数据锁定）。用户的令牌哈希是项的一部分（读模型 `User` 新增 `tokenHash`，
+    只有 hash），合并草稿、update 与并发写都会带上令牌的生成、轮换与撤销，两边改成
+    不同的值成为冲突。控制台不再做合并与冲突计算（删除 `lib/merge.ts`），浏览器
+    不保存工作区，换账户即丢弃内存状态并停止旧的同步。
+  - `revision.Store.Sequence`：配置库的 revision 变更序号（创建、发布、回滚、丢弃
+    都会增长；SQL 存储为下一个 ID 加 `smcp_store_meta.revision_seq`，schema 版本 5
+    写入，工作区、令牌等其他写入不影响它），`/admin/events` 据此推送 `revisions`，
+    丢弃较早的草稿也会通知其他控制台。
+  - 升级前控制台不分管理员保存在浏览器里的工作区不再自动归属或删除：有未发布修改
+    时提示，由管理员确认“是我的”后恢复到服务端的工作区（仅在自己的工作区没有未发布
+    修改时），或丢弃。`/admin/events` 增加 `event: workspace`（工作区被写入）与
+    `event: revisions`（草稿列表变化）。
+  - 页头“待审草稿”：列出所有尚未处理的草稿（`drafts` 查询，基准版本由服务端沿父链
+    求得），可“在工作区审核”（同样转成未发布修改，
+    落后的草稿自动合并到最新发布）或丢弃；版本状态新增 `discarded`（`discardDraft`）。
+    版本历史中草稿的差异改为相对其自身基准；发布落后草稿不再报原始冲突错误，而是
+    引导在工作区审核。发布后运行状态持续刷新，直到服务完成加载。
+  - 版本差异（控制台与配置 MCP 的 `diff` 共用）在生成前对两侧配置结构化脱敏：DSN
+    密码与 HTTP token 一律替换为 `***`，上下文行里也不出现；变化了的标为
+    `(changed)`；已无法解码的版本不显示内容。CLI `store diff --raw` 仍比较原文。
+- 控制台导入页重做：数据源连接详情默认折叠、库扫描批次（进度、停止、重试）、跨页
+  选择与“选择全部匹配的 N 项”（保存筛选快照与排除项）、可分页搜索导出的已选清单、
+  导入前的方案预览（可排除表、改名、钻取差异）、加入后的下一步入口；同步字段时被行
+  范围等引用的字段不能删除，并可直接跳到引用位置；“全部扫描”重新扫描列出的所有库，
+  “同步所有字段”对筛选范围内字段有差异的表生成一个同步方案预览。扫描不按时间标记
+  “过期”：表结构是否变化与扫描时间无关，以重新扫描的结果为准。
+
+### Fixed
+
+- 未知的字段脱敏规则（如 `mask: x`）以前能通过校验并发布，但热加载失败，重启时服务
+  无法启动；现在配置校验只接受内置规则（`email`、`idcard`、`phone`、`secret`），
+  预览、校验、保存草稿、导入与发布都会拒绝。另外，存储与发布前还会执行运行时组装中
+  不依赖数据库的检查（`bootstrap.CheckOffline`：实体、授权、脱敏器），`validate`
+  命令同样执行，运行时会拒绝加载的配置不能写入配置库或发布。
+- 控制台在载入草稿后，目录状态、范围统计和方案预览按已发布版本计算（只在有未保存
+  修改时才带上工作区），方案加入工作区时可能覆盖草稿里的字段设置；现在始终基于
+  工作区当前的基准版本。单表同步在找不到表时会把所有字段当作已删除并默认勾选移除；
+  现在只在读到表结构后计算差异，找不到表时提示，重新打开时清空上次的勾选。
+- 控制台登录页在密码框按回车会提交两次，第二次读不到原页面地址，登录后落到概览页
+  而不是原来要去的页面。
+- 很多库中有同名表时（分库），按库名查找表会复制所有同名表，5 万张表的检索内存
+  分配从约 2.6 GB 降到约 40 MB。
+- MySQL/OceanBase 成本闸门误拒小查询：
+  - 小表（配置表、维表）的全表扫描评分一律为 20，在默认 `rejectFullScan` 与
+    `hardScore: 40` 下被硬拒绝。新增 `cost.fullScanMaxRows`（默认 1000）：被全表
+    扫描的表本身不超过这么多行时按普通顺序扫描评分并放行，更大的表仍被拒绝；设为 0
+    恢复此前行为。表的行数取自表的规模而不是计划的输出行数（大表按未建索引的条件
+    筛出一行仍要读完整张表）：PostgreSQL 按 `pg_class` 的统计换算当前页数（从未
+    ANALYZE 的表按每页最多行数估上限），MySQL 取全表扫描的 `rows_examined_per_scan`，
+    OceanBase 按表（别名）取 `EXPLAIN EXTENDED` 的 `table_rows`；任何一张全表扫描
+    的表得不到行数时都不豁免。
+  - MySQL 在执行前就判定不读表的计划（唯一键未命中 `no matching row in const
+    table`、`Impossible WHERE`、`Select tables optimized away` 等）只有提示没有
+    表节点，被当作“未知扫描”拒绝；现在按点查（0 行）处理。
+- 后台协程（导入页的扫描任务、发布后的权限探测、各数据源并行对账、发布推送）
+  中的 panic 此前会使整个进程退出（MCP 与控制台一起中断，网关返回 5xx）；现在记录
+  堆栈并使该任务失败，对账失败时重载保留原配置。
+- 控制台不再把网关的错误页原文（HTML）显示为错误信息，改为区分“没有连上服务”、
+  “网关返回 HTTP 状态码”和“网关超时”；`docs/console.md` 补充放在网关后的要求
+  （会话粘滞、超时、推送连接）。
+- 控制台：同一浏览器中另一个标签页登录（会话 Cookie 被替换）后，原标签页的请求
+  被拒绝（403），检查并发布页一直停在“正在重新检查”。现在重新读取会话：仍是同一
+  管理员时换用新的 CSRF token 并重试，已换成其他管理员或已退出时回到登录页，不会
+  以其他管理员的身份操作；检查失败时显示错误与“重新检查”。
+- 两个管理员几乎同时发布时，后提交的一方被配置库拒绝但没有 `CONFLICT` 错误码，
+  控制台不提示基于新版本变基；现在返回 `CONFLICT` 与最新的已发布版本。
+- 预算：租户限额与角色限额逐字段取更严的值（此前整体替换，租户未设的项会解除角色
+  限制）。
+- 事务：过期回收不再在全局锁内等待数据库回滚；提交与回滚不再受熔断、自适应并发与
+  IO 槽阻挡（仍受每秒请求数限制，panic 同样被恢复）；等待一个正在结束的事务以调用方
+  的超时为限；关闭进程有统一期限（15 秒）。
+- 熔断只计数据库与连接错误（白名单），调用方取消、约束违反与权限拒绝不再触发熔断。
+
+### Changed
+
+- 新增 `server.pathPrefix`：网关把服务挂在路径前缀下时，控制台页面的 `<base>`、
+  会话 Cookie 路径与重定向由服务带上前缀，网关只需剥掉前缀，不再需要改写响应体、
+  Cookie 与 `Location`。控制台的脚本与 API 地址改为相对页面 `<base>`；CSP 的
+  `base-uri` 由 `'none'` 改为 `'self'`。
+- 控制台的校验、差异、草稿请求只提交改动过的配置节（未改动的由服务端取自 base，
+  删除的设置节以 null 提交），请求体从整份配置降为改动部分；自动重新检查的防抖
+  放宽到 800ms。`/admin/graphql` 的响应在客户端支持时 gzip 压缩（页面与脚本不压缩，
+  网关仍可改写其中的路径）。
+- 用户页生成 token 后给出各客户端的接入配置（Claude Code 命令、Cursor 与 VS Code 的
+  `mcp.json`、通用 JSON、curl 连通性测试），每段可一键复制。新增配置
+  `server.publicURL`：客户端经网关或反向代理访问 MCP 端点的完整地址，接入配置以它
+  为准，未设置时退回控制台所在地址并提示。
+- 权限矩阵默认只看已授权的实体（没有任何授权时显示全部）。
+- 发布只允许快进：草稿必须基于当前已发布版本，否则返回 `CONFLICT`（CLI `store
+  publish`、未带 `expectedPublished` 的 API 调用同样生效），基于旧版本的草稿不能再
+  整体覆盖期间别人的发布。**Breaking**：此前可直接发布的旧草稿需基于新版本重建。
+- 新增 `GET /admin/events`（server-sent events）推送新发布，控制台立即提示变基，
+  不再等待 10 秒轮询。
+- 控制台变基改为细粒度三方合并（字段、关系按名称，授权按实体，同一实体的多条授权
+  作为一组），双方改了同一处时
+  记为冲突，必须逐项选择保留哪一方，全部解决前不能保存或发布（此前默认保留本地
+  值，可直接发布覆盖对方）。
+- 编辑领域收归服务端（`docs/design/editing.md`）：工作区项的类型与编解码只在
+  `x/admin/configapp`；改名、删除引起的引用维护由服务端 `Reconcile` 完成，控制台只写
+  `renamedFrom`；目录、方案预览、校验、diff、模拟默认读调用者的工作区。
+- 配置分为意图（`config.Spec`）与生效值（`docs/design/spec.md`）：配置库只存写过的
+  值，旧 payload 逐字节兼容；工作区合并规则按路径由项类型标签声明，控制台共用。
+- 进程级状态（连接及其熔断/自适应并发、事务、预算、写跟踪、缓存、结果内存）归
+  `bootstrap.Shared`，重载不再搬运状态（`docs/design/lifetimes.md`）。熔断与自适应并发
+  按数据库连接隔离，半开只放行一个探测，一批同时超时只减半一次；新增
+  `transactions.maxOpenPerConnection`（默认 `ioPool/2`）。
+- 已发布 revision 能加载但装配失败（如 schema 漂移）时，它删除、禁用或改动的用户
+  立即暂停并关闭会话，不再等待整个版本应用（TM-007/TM-010）。
+- 数据面固定管线（`docs/design/pipeline.md`）：数据库只由执行器调用，语句须由授权
+  结果与过闸 SQL 构成（结构测试强制）；结果逐行计量，越过 `cost.maxBytes`/预算的第一行
+  即中止；新增 `rateLimit.maxResultMemory`（默认 256 MiB）约束进程同时持有的结果。
+- 新增错误码 `OUTCOME_UNKNOWN`（不可重试）：写入或提交期间连接中断或超时；相关
+  缓存按已写入失效。事务令牌结束后 10 分钟内，同一调用方再用会得到
+  `TRANSACTION_NOT_FOUND` 附 `constraints.outcome`（`committed`/`rolledBack`/`expired`/
+  `unknown`）。
+- 控制台：ESLint 进入 `make web`；消息键存在性测试；实时更新在 SSE 连接期间把
+  轮询从 10 秒降到 60 秒。新增术语表 `docs/glossary.md`，部署模式与预算分层写入
+  `docs/configuration.md`。
+- 代码整理（行为不变）：扫描批次的跨进程租约、心跳、接管与重试抽成 `x/leasing`
+  （交错模型测试锁定其不变量）；`core/store/storetest`、`core/cost/costtest` 承载测试
+  替身，生产包不再编译它们；`x/providers/sqladapter` 的 `Base` 与 `Scanned` 为三个
+  provider 共用连接骨架与扫描累积；配置库行扫描、占位符与加锁事务收敛为泛型助手；
+  装配入口收敛为一个 `assembly`；`internal/kit` 收拢指针/切片小工具；`config.Spec`
+  成为管理面唯一的内存表示，工作区写入按索引单遍应用，合并按子树记忆规范形式。
+- `/metrics` 改由 OpenTelemetry 指标经 Prometheus exporter 提供，指标名、标签与
+  直方图分桶不变（标签按名称排序输出）。
+
+### Breaking
+
+- 租户 `budget.tenants.<t>.maxConcurrent` 改为按租户聚合（所有会话、所有主体合计），
+  此前按会话计数，开新会话即可绕过。
+- 新增 `transactions.maxOpenPerConnection`，默认 `max(1, rateLimit.ioPool/2)`：同一连接上
+  同时打开的显式事务此前不限（只受 `transactions.maxOpen` 约束），升级后超出的 `begin`
+  返回 `TRANSACTION_CAPACITY`；需要原行为时设为 `rateLimit.ioPool`（事务可占满连接池）。
+- GraphQL：`ServerStatus.pending: PendingRevision` 改名为
+  `unapplied: UnappliedRevision`；移除 `DraftInput` 与 `createDraft`（改用工作区与
+  `checkpointWorkspace`），查询的 `draft` 参数改为 `revision`（默认调用者的工作区）。
+- GraphQL 配置读模型（`Configuration.entities/roles/users`、方案预览与导入候选的
+  `Entity`）改为与工作区项同一形状：如实返回配置写了什么，未设置即 null（`mcp`、
+  `allowCascade`、`Field.exclude`、`Grant.fieldsRestricted`、`User.disabled` 变为可空），
+  移除可推导的 `Entity.id`、`Role.members`、`User.hasToken`（无令牌即 `tokenHash` 为 null）；
+  `ScanState`、`TableStatus`、`Action` 枚举在 Go 侧为字符串。
+- Go API：`relalg.IsNull` 谓词移除，改用 `Condition{Op: OpIsNull/OpIsNotNull}`；
+  `engine.Submit`/`engine.Run` 改为泛型包级函数；`mcpserver.HTTPConfig` 的鉴权字段
+  移入嵌入的 `HTTPAuth`；`store.Fake*`、`cost.Fake*` 移至 `storetest`/`costtest`；
+  `tool.OutcomeUnknownError` 类型移除（`errors.Is(err, ErrOutcomeUnknown)` 不变）。
+
 ## 0.1.12 - 2026-10-09
 
 升级步骤汇总见 [`docs/releases/v0.1.12.md`](docs/releases/v0.1.12.md#迁移)。

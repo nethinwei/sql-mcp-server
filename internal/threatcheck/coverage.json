@@ -31,6 +31,8 @@
   "TM-003": {
     "severity": "critical",
     "tests": [
+      {"file": "core/tool/pipeline_test.go", "name": "TestStatementWithoutGrantIsRefused"},
+      {"file": "core/tool/pipeline_test.go", "name": "TestOnlyTheExecutorCallsTheDatabase"},
       {"file": "core/rbac/rbac_test.go", "name": "TestAuthorizeResolvesSubjectPlaceholder"},
       {"file": "core/tool/adversarial_test.go", "name": "TestAdversarialRowPolicyIsAlwaysConjoined"},
       {"file": "x/providers/postgres/integration_test.go", "name": "TestRLSRowFilterAndMasking"},
@@ -93,8 +95,8 @@
       {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadPublishesWithoutWaitingForLeases"},
       {"file": "x/bootstrap/bootstrap_access_test.go", "name": "TestReloadReportsRevokedPrincipals"},
       {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadFailureKeepsOldApp"},
-      {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadUpdatesTransactionLimits"},
-      {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadUpdatesBudgetLimitsAndPreservesState"},
+      {"file": "x/bootstrap/runtime_test.go", "name": "TestReloadKeepsTheProcessState"},
+      {"file": "x/bootstrap/hold_test.go", "name": "TestRevocationAppliesWhileTheRevisionFails"},
       {"file": "x/bootstrap/runtime_test.go", "name": "TestRuntimeReloadRefusedWhileEarlierSnapshotsDrain"},
       {"file": "x/bootstrap/bootstrap_access_test.go", "name": "TestRevocationSparesSessionsOpenedAfterIt"},
       {"file": "x/bootstrap/shared_test.go", "name": "TestWriteOnOldGenerationInvalidatesNewOne"},
@@ -110,6 +112,8 @@
   "TM-008": {
     "severity": "high",
     "tests": [
+      {"file": "core/tool/pipeline_test.go", "name": "TestResultMemoryBoundsTheProcess"},
+      {"file": "core/tool/pipeline_test.go", "name": "TestReadStopsAtTheByteLimitAsRowsArrive"},
       {"file": "x/mcpserver/http_test.go", "name": "TestLimitBodyBoundary"},
       {"file": "core/tool/tool_runtool_test.go", "name": "TestRunToolEnforcesReturnedByteLimit"},
       {"file": "core/tool/adversarial_test.go", "name": "FuzzToolPayloadDecodeNormalizeFieldGate"}
@@ -121,6 +125,7 @@
   "TM-009": {
     "severity": "critical",
     "tests": [
+      {"file": "core/budget/budget_test.go", "name": "TestTenantConcurrencySpansSessions"},
       {"file": "core/rbac/grant_test.go", "name": "TestGrantAuthorizerRejectsCrossGrantFieldRowCombination"},
       {"file": "core/rbac/grant_test.go", "name": "TestGrantAuthorizerUnrestrictedGrantWidensRowsNotTenant"},
       {"file": "core/rbac/grant_test.go", "name": "TestGrantAuthorizerCoverageInvariant"},
@@ -161,6 +166,38 @@
     ],
     "gaps": [
       "有 store 写权限的账号可改写配置；payload 未加密、未签名"
+    ]
+  },
+  "TM-012": {
+    "severity": "high",
+    "tests": [
+      {"file": "x/admin/configmcp/configmcp_test.go", "name": "TestAgentAppliesPlansToTheWorkspace"},
+      {"file": "x/admin/configmcp/configmcp_test.go", "name": "TestTokensAndPermissions"},
+      {"file": "x/admin/admin_test.go", "name": "TestConfigMCPEndpointNeedsAToken"},
+      {"file": "x/admin/graph/planning_test.go", "name": "TestPlanningPermissions"},
+      {"file": "x/admin/graph/planning_test.go", "name": "TestTemplatesPendingAndTokens"},
+      {"file": "x/configplan/property_test.go", "name": "TestPlansHoldTheirProperties"},
+      {"file": "x/configplan/configplan_test.go", "name": "TestGrantExceptions"},
+      {"file": "x/configplan/configplan_test.go", "name": "TestExceptionLevels"},
+      {"file": "x/admin/graph/planning_test.go", "name": "TestScanBatches"},
+      {"file": "x/admin/graph/planning_test.go", "name": "TestPreviewForReview"},
+      {"file": "x/revisionops/revisionops_test.go", "name": "TestDiffRedactsSecrets"},
+      {"file": "x/leasing/leasing_test.go", "name": "TestLateWriteOfALostRun"},
+      {"file": "x/admin/configapp/scans_test.go", "name": "TestScanBatchQuotas"},
+      {"file": "x/leasing/leasing_test.go", "name": "TestStoreFailures"},
+      {"file": "x/leasing/leasing_test.go", "name": "TestLostAnswers"},
+      {"file": "x/leasing/leasing_test.go", "name": "TestTakeoverWaitsForTheStore"},
+      {"file": "x/leasing/interleave_test.go", "name": "TestInterleavings"},
+      {"file": "x/admin/configmcp/configmcp_test.go", "name": "TestScopedTokens"},
+      {"file": "x/admin/configmcp/configmcp_test.go", "name": "TestScopedTokensReadNothingBeyond"},
+      {"file": "x/admin/configmcp/configmcp_test.go", "name": "TestConfirmationsAreBoundToExceptions"},
+      {"file": "x/admin/auth/auth_test.go", "name": "TestDatasourceScope"},
+      {"file": "x/workspaceops/workspaceops_test.go", "name": "TestConcurrentWritesMerge"},
+      {"file": "x/workspaceops/workspaceops_test.go", "name": "TestCommit"},
+      {"file": "core/workspace/merge_props_test.go", "name": "TestMergeProperties"}
+    ],
+    "gaps": [
+      "令牌只按数据源收窄，不能按操作或单个工具收窄；/admin/mcp 无单独限速"
     ]
   }
 }

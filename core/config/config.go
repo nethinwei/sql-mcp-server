@@ -1,9 +1,10 @@
 package config
 
 import (
-	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/nethinwei/sql-mcp-server/core/cost"
 )
 
 // Sentinel validation errors.
@@ -35,38 +36,7 @@ type Config struct {
 	Mask         MaskConfig                `yaml:"mask"            json:"mask"`
 	Audit        AuditConfig               `yaml:"audit"           json:"audit"`
 	Transactions TransactionConfig         `yaml:"transactions"    json:"transactions"`
-}
-
-// Presence records fields whose explicit presence affects defaulting. Loaders
-// for any encoding can populate it after decoding and call ApplyPresence.
-type Presence struct {
-	Tools          bool
-	Cost           map[string]bool
-	CostAQE        map[string]bool
-	EntityDMLTools []bool
-}
-
-// ApplyPresence applies encoding-specific field presence to a decoded Config.
-func (c *Config) ApplyPresence(p Presence) {
-	c.Tools.present = p.Tools
-	c.Cost.present = copyPresence(p.Cost)
-	c.Cost.AQE.present = copyPresence(p.CostAQE)
-	for i := range c.Entities {
-		if i < len(p.EntityDMLTools) {
-			c.Entities[i].MCP.dmlToolsSet = p.EntityDMLTools[i]
-		}
-	}
-}
-
-func copyPresence(src map[string]bool) map[string]bool {
-	if src == nil {
-		return nil
-	}
-	dst := make(map[string]bool, len(src))
-	for key, present := range src {
-		dst[key] = present
-	}
-	return dst
+	Execution    ExecutionConfig           `yaml:"execution"       json:"execution"`
 }
 
 // ServerConfig holds transport and role settings.
@@ -74,6 +44,13 @@ type ServerConfig struct {
 	Transport string `yaml:"transport" json:"transport" schema:"enum=@transport,restart"`
 	// Addr is the HTTP listen address.
 	Addr string `yaml:"addr" json:"addr" schema:"restart"`
+	// PathPrefix is the path a gateway serves this service under and strips
+	// from requests, such as /sql-mcp-server; the console's pages, cookie and
+	// redirects carry it, so the gateway need not rewrite responses.
+	PathPrefix string `yaml:"pathPrefix,omitempty" json:"pathPrefix,omitempty" schema:"pattern=@pathPrefix,restart"`
+	// PublicURL is the MCP endpoint as clients reach it, through any proxy;
+	// the console builds client configuration with it.
+	PublicURL string `yaml:"publicURL,omitempty" json:"publicURL,omitempty" schema:"pattern=@httpURL"`
 	// Role is the runtime role; the --role flag overrides it.
 	Role string `yaml:"role" json:"role"`
 	// Auth configures HTTP transport authentication.
@@ -150,7 +127,8 @@ type RoutingConfig struct {
 const DefaultConnection = "default"
 
 // ConnectionsOrDSN returns the database's connections: the DSN shorthand as
-// one primary connection named DefaultConnection, or Connections.
+// one primary connection named DefaultConnection, or Connections. A
+// configuration built in code may hold either until ApplyDefaults.
 func (d DatabaseConfig) ConnectionsOrDSN() Connections {
 	if len(d.Connections) > 0 {
 		return d.Connections
@@ -228,7 +206,7 @@ func (e EntityConfig) DatasourceName() string {
 // RoleDefinition is a named set of grants declared at the top level. Entity
 // level roles/fieldACL/rowPolicies remain valid and merge into the same role.
 type RoleDefinition struct {
-	Description string        `yaml:"description,omitempty" json:"description,omitempty"`
+	Description string        `yaml:"description,omitempty"   json:"description,omitempty"`
 	Grants      []GrantConfig `yaml:"grants,omitempty"      json:"grants,omitempty"`
 	// Permissions holds system permissions such as "sql:execute@<datasource>".
 	// None is supported yet; any value fails validation.
@@ -248,7 +226,7 @@ type GrantConfig struct {
 // UserConfig is one authenticated caller. TokenHash is "sha256:<hex>" of the
 // bearer token; the plaintext token never appears in configuration.
 type UserConfig struct {
-	Description string         `yaml:"description,omitempty" json:"description,omitempty"`
+	Description string         `yaml:"description,omitempty"   json:"description,omitempty"`
 	TokenHash   string         `yaml:"tokenHash,omitempty"   json:"tokenHash,omitempty" schema:"pattern=@tokenHash"`
 	Roles       []string       `yaml:"roles,omitempty"       json:"roles,omitempty" schema:"pattern=@accessName"`
 	Subject     map[string]any `yaml:"subject,omitempty"     json:"subject,omitempty"`
@@ -267,10 +245,10 @@ type RelationshipConfig struct {
 
 // FieldConfig configures one column.
 type FieldConfig struct {
-	Name        string `yaml:"name"                  json:"name" schema:"required,minLength=1"`
+	Name        string `yaml:"name"        json:"name" schema:"required,minLength=1"`
 	Alias       string `yaml:"alias,omitempty"       json:"alias,omitempty"`
-	Description string `yaml:"description,omitempty" json:"description,omitempty"`
-	Mask        string `yaml:"mask,omitempty"        json:"mask,omitempty" schema:"examples=@maskRule"`
+	Description string `yaml:"description,omitempty"   json:"description,omitempty"`
+	Mask        string `yaml:"mask,omitempty"        json:"mask,omitempty" schema:"enum=@maskRule"`
 	Exclude     bool   `yaml:"exclude,omitempty"     json:"exclude,omitempty"`
 }
 
@@ -287,12 +265,13 @@ type RoleConfig struct {
 // FieldACLConfig restricts one role to named readable and writable fields.
 // Omitting a role leaves existing entity-level authorization behavior intact.
 type FieldACLConfig struct {
-	Read  []string `yaml:"read,omitempty"  json:"read,omitempty"`
+	Read  []string `yaml:"read,omitempty"      json:"read,omitempty"`
 	Write []string `yaml:"write,omitempty" json:"write,omitempty"`
 }
 
-// MCPFlags controls entity participation in MCP. Zero value means "not set";
-// ApplyDefaults sets DMLTools=true for unset entities.
+// MCPFlags controls entity participation in MCP. DMLTools defaults on: a
+// Spec that does not set it resolves with dmlToolsSet false, and
+// ApplyDefaults turns it on.
 type MCPFlags struct {
 	DMLTools         bool `yaml:"dmlTools"                   json:"dmlTools"`
 	CustomTool       bool `yaml:"customTool,omitempty"       json:"customTool,omitempty"`
@@ -300,30 +279,8 @@ type MCPFlags struct {
 	dmlToolsSet      bool
 }
 
-// MCPFlagsWithDMLTools constructs MCP flags with an explicit dmlTools value.
-// Use it for programmatic configuration when false must differ from omission.
-func MCPFlagsWithDMLTools(enabled bool) MCPFlags {
-	return MCPFlags{DMLTools: enabled, dmlToolsSet: true}
-}
-
-// UnmarshalJSON preserves an explicit false dmlTools value.
-func (f *MCPFlags) UnmarshalJSON(data []byte) error {
-	type plain MCPFlags
-	var decoded plain
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	*f = MCPFlags(decoded)
-	_, f.dmlToolsSet = raw["dmlTools"]
-	return nil
-}
-
-// ToolFlags toggles each DML tool. Decoding tracks whether the tools node was
-// present so an explicit all-false object differs from omission.
+// ToolFlags toggles each DML tool. present records that the tools section was
+// written (see Spec), so an explicit all-false object differs from omission.
 type ToolFlags struct {
 	DescribeEntities    bool `yaml:"describeEntities"    json:"describeEntities"`
 	ReadRecords         bool `yaml:"readRecords"         json:"readRecords"`
@@ -338,25 +295,31 @@ type ToolFlags struct {
 	present             bool
 }
 
-// UnmarshalJSON records that the tools object was present.
-func (f *ToolFlags) UnmarshalJSON(data []byte) error {
-	type plain ToolFlags
-	var decoded plain
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-	*f = ToolFlags(decoded)
-	f.present = true
-	return nil
-}
-
 // TransactionConfig bounds explicit transaction lifetime and cardinality.
 type TransactionConfig struct {
-	TTL             time.Duration `yaml:"ttl"             json:"ttl" schema:"min=0"`
-	MaxOpen         int           `yaml:"maxOpen"         json:"maxOpen" schema:"min=0"`
-	BeginTimeout    time.Duration `yaml:"beginTimeout"    json:"beginTimeout" schema:"min=0"`
-	CommitTimeout   time.Duration `yaml:"commitTimeout"   json:"commitTimeout" schema:"min=0"`
-	RollbackTimeout time.Duration `yaml:"rollbackTimeout" json:"rollbackTimeout" schema:"min=0"`
+	TTL     time.Duration `yaml:"ttl"             json:"ttl" schema:"min=0"`
+	MaxOpen int           `yaml:"maxOpen"         json:"maxOpen" schema:"min=0"`
+	// MaxOpenPerConnection bounds the transactions holding one database
+	// connection at once, so they leave queries a share of its pool.
+	MaxOpenPerConnection int           `yaml:"maxOpenPerConnection" json:"maxOpenPerConnection" schema:"min=0"`
+	BeginTimeout         time.Duration `yaml:"beginTimeout"    json:"beginTimeout" schema:"min=0"`
+	CommitTimeout        time.Duration `yaml:"commitTimeout"   json:"commitTimeout" schema:"min=0"`
+	RollbackTimeout      time.Duration `yaml:"rollbackTimeout" json:"rollbackTimeout" schema:"min=0"`
+}
+
+// ExecutionConfig bounds the lanes of the execution bus other than tool
+// calls, which rateLimit bounds. All lanes share rateLimit.ioPool; these
+// lanes together hold at most half of it.
+type ExecutionConfig struct {
+	Admin      LaneConfig `yaml:"admin"      json:"admin"`
+	Scan       LaneConfig `yaml:"scan"       json:"scan"`
+	Background LaneConfig `yaml:"background" json:"background"`
+}
+
+// LaneConfig bounds one lane: work running at once and work waiting.
+type LaneConfig struct {
+	MaxConcurrent int `yaml:"maxConcurrent" json:"maxConcurrent" schema:"min=0"`
+	MaxQueue      int `yaml:"maxQueue"      json:"maxQueue" schema:"min=0"`
 }
 
 // CostConfig configures the defense-in-depth cost gate. SoftScore/HardScore are
@@ -374,6 +337,7 @@ type CostConfig struct {
 	MaxExpand           int           `yaml:"maxExpand"                   json:"maxExpand" schema:"min=1"`
 	MaxProcedureRows    int64         `yaml:"maxProcedureRows"            json:"maxProcedureRows" schema:"min=1"`
 	RejectFullScan      bool          `yaml:"rejectFullScan"              json:"rejectFullScan"`
+	FullScanMaxRows     int64         `yaml:"fullScanMaxRows"             json:"fullScanMaxRows" schema:"min=0"`
 	WhitelistPKPoint    bool          `yaml:"whitelistPKPoint"            json:"whitelistPKPoint"`
 	RequirePKForWrite   *bool         `yaml:"requirePKForWrite,omitempty" json:"requirePKForWrite,omitempty"`
 	RequireKnownScan    bool          `yaml:"requireKnownScan"            json:"requireKnownScan"`
@@ -383,25 +347,6 @@ type CostConfig struct {
 	RejectTemplates     []string      `yaml:"rejectTemplates"             json:"rejectTemplates"`
 	AQE                 AQEConfig     `yaml:"aqe"                         json:"aqe"`
 	present             map[string]bool
-}
-
-// UnmarshalJSON tracks each cost field independently.
-func (c *CostConfig) UnmarshalJSON(data []byte) error {
-	type plain CostConfig
-	var decoded plain
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	*c = CostConfig(decoded)
-	c.present = make(map[string]bool, len(raw))
-	for key := range raw {
-		c.present[key] = true
-	}
-	return nil
 }
 
 // AQEConfig controls bounded estimate feedback and optional read-only
@@ -418,25 +363,6 @@ type AQEConfig struct {
 	present           map[string]bool
 }
 
-// UnmarshalJSON tracks optional safety fields.
-func (c *AQEConfig) UnmarshalJSON(data []byte) error {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	type plain AQEConfig
-	var decoded plain
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-	*c = AQEConfig(decoded)
-	c.present = make(map[string]bool, len(raw))
-	for key := range raw {
-		c.present[key] = true
-	}
-	return nil
-}
-
 // BudgetConfig contains role and tenant scoped resource limits.
 type BudgetConfig struct {
 	Roles   map[string]BudgetLimits `yaml:"roles"   json:"roles"`
@@ -446,7 +372,7 @@ type BudgetConfig struct {
 
 // BudgetLimits is unlimited when all fields are zero.
 type BudgetLimits struct {
-	MaxConcurrent           int           `yaml:"maxConcurrent"            json:"maxConcurrent" schema:"min=0"`
+	MaxConcurrent           int           `yaml:"maxConcurrent" json:"maxConcurrent" schema:"min=0"`
 	MaxExecution            time.Duration `yaml:"maxExecution"             json:"maxExecution" schema:"min=0"`
 	MaxEstimatedScannedRows int64         `yaml:"maxEstimatedScannedRows"  json:"maxEstimatedScannedRows" schema:"min=0"`
 	MaxReturnedRows         int64         `yaml:"maxReturnedRows"          json:"maxReturnedRows" schema:"min=0"`
@@ -461,6 +387,27 @@ func (c CostConfig) EnabledOrDefault() bool {
 		return *c.Enabled
 	}
 	return true
+}
+
+// Threshold is the cost gate's threshold the configuration sets, before the
+// datasource and dialect it applies to are named.
+func (c CostConfig) Threshold() cost.Threshold {
+	return cost.Threshold{
+		SoftScore:                 c.SoftScore,
+		HardScore:                 c.HardScore,
+		MaxRows:                   c.MaxRows,
+		MaxBytes:                  c.MaxBytes,
+		RejectFullScan:            c.RejectFullScan,
+		FullScanMaxRows:           c.FullScanMaxRows,
+		WhitelistPKPoint:          c.WhitelistPKPoint,
+		RequirePKForWrite:         c.RequirePKForWriteOrDefault(),
+		RequireAggregatePredicate: true,
+		ExplainFailClosed:         c.EnabledOrDefault(),
+		RequireKnownScan:          c.RequireKnownScan,
+		RequireFreshStats:         c.RequireFreshStats,
+		AllowTemplates:            c.AllowTemplates,
+		RejectTemplates:           c.RejectTemplates,
+	}
 }
 
 // RequirePKForWriteOrDefault reports whether writes must be primary-key scoped.
@@ -485,7 +432,7 @@ type CacheConfig struct {
 
 // RateLimitConfig configures the engine's concurrency and rate limits.
 type RateLimitConfig struct {
-	Enabled          *bool         `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Enabled          *bool         `yaml:"enabled,omitempty"           json:"enabled,omitempty"`
 	RPS              float64       `yaml:"rps"               json:"rps" schema:"min=0"`
 	MaxInflight      int           `yaml:"maxInflight"       json:"maxInflight" schema:"min=0"`
 	IOPool           int           `yaml:"ioPool"            json:"ioPool" schema:"min=0"`
@@ -495,6 +442,7 @@ type RateLimitConfig struct {
 	BreakerCooldown  time.Duration `yaml:"breakerCooldown"   json:"breakerCooldown" schema:"min=0"`
 	ConnMaxIdleTime  time.Duration `yaml:"connMaxIdleTime"   json:"connMaxIdleTime" schema:"min=0"`
 	ConnMaxLifetime  time.Duration `yaml:"connMaxLifetime"   json:"connMaxLifetime" schema:"min=0"`
+	MaxResultMemory  int64         `yaml:"maxResultMemory"   json:"maxResultMemory" schema:"min=0"`
 }
 
 // EnabledOrDefault reports whether rate limiting is on; nil means default true.
@@ -507,7 +455,7 @@ func (c RateLimitConfig) EnabledOrDefault() bool {
 
 // MaskConfig controls field masking. Enabled defaults to true when unset.
 type MaskConfig struct {
-	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Enabled *bool `yaml:"enabled,omitempty"           json:"enabled,omitempty"`
 }
 
 // EnabledOrDefault reports whether masking is on; nil means default true.
@@ -520,7 +468,7 @@ func (c MaskConfig) EnabledOrDefault() bool {
 
 // AuditConfig configures the audit sink.
 type AuditConfig struct {
-	Enabled   bool   `yaml:"enabled"   json:"enabled"`
+	Enabled   bool   `yaml:"enabled"         json:"enabled"`
 	Path      string `yaml:"path"      json:"path"`
 	QueueSize int    `yaml:"queueSize" json:"queueSize" schema:"min=0"`
 }

@@ -13,9 +13,11 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"gopkg.in/yaml.v3"
 
 	"github.com/nethinwei/sql-mcp-server/core/audit"
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/hook"
@@ -97,44 +99,78 @@ func runServe(ctx context.Context, args []string) error {
 	}
 	defer src.close()
 	cfg := src.startup
+	execution, ctx, closeExecution := serveBus(ctx, cfg)
+	defer closeExecution()
 	overrides := serveOverrides{role: *role, user: *user}
 	if err := overrides.apply(cfg); err != nil {
 		return err
 	}
 	resolveServeEndpoint(fs, cfg, transport, addr)
-	metrics, hooks, otelShutdown, err := setupServeTelemetry(ctx)
+	metrics, hooks, otelShutdown, err := setupServeTelemetry(ctx, execution)
 	if err != nil {
 		return err
 	}
 	defer otelShutdown()
 	auths := &preparedAuths{http: *transport == "http", addr: *addr} // what each reload prepares
-	build, runtime, err := newServeRuntime(cfg, overrides, hooks, auths)
+	build, runtime, err := newServeRuntime(execution, cfg, overrides, hooks, auths)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = runtime.Close() }()
+	defer closeRuntime(runtime)
 	metrics.SetAuditDropped(auditDroppedReader(runtime))
-	if *watch {
-		go src.watch(ctx, runtime, build, *watchInterval, explicit["watch-interval"])
-	}
-	adminHandler, err := adminFlags.handler(src, runtime, cfg, *transport, *watch)
+	src.watchOn(ctx, execution, *watch, runtime, build, *watchInterval, explicit["watch-interval"])
+	adminHandler, err := adminFlags.handler(src, runtime, execution, cfg, *transport, *watch)
 	if err != nil {
 		return err
 	}
 	return serveTransport(ctx, runtime, cfg, *transport, *addr, metrics, adminHandler, auths)
 }
 
+// serveBus returns the process's execution bus, whose limits are set as each
+// configuration is published, with a context that ends when serving does
+// (stopping the watchers) and the function that ends it and closes the bus.
+func serveBus(ctx context.Context, cfg *config.Config) (*bus.Bus, context.Context, func()) {
+	execution := bus.New(cfg.RateLimit.IOPool, nil)
+	ctx, stop := context.WithCancel(ctx)
+	return execution, ctx, func() {
+		stop()
+		closeBus(execution)
+	}
+}
+
+// closeBus waits for the background tasks of the process, logging the ones
+// that did not stop in time.
+func closeBus(b *bus.Bus) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := b.Close(ctx); err != nil {
+		slog.Warn("background tasks did not stop in time", "tasks", fmt.Sprint(b.Stats().Tasks))
+	}
+}
+
+// closeRuntime drains the requests in flight and closes the runtime's
+// configurations, giving up past the deadline (a database call or audit sink
+// that hangs must not hold up the exit), as closeBus does.
+func closeRuntime(r *bootstrap.Runtime) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := r.CloseContext(ctx); err != nil {
+		slog.Warn("closing the configuration did not finish in time", "error", err.Error())
+	}
+}
+
 // newServeRuntime assembles the startup App and returns the reload builder
 // with the runtime; both assemble on the services every configuration of the
-// process shares (the cache, IO quota and connections). File reloads go
-// through build too.
+// process shares (the cache, the execution bus b and its IO quota, and
+// connections). File reloads go through build too.
 func newServeRuntime(
+	b *bus.Bus,
 	cfg *config.Config,
 	overrides serveOverrides,
 	hooks *hook.Hooks,
 	auths *preparedAuths,
 ) (func(*config.Config) (*bootstrap.App, error), *bootstrap.Runtime, error) {
-	shared := bootstrap.NewShared()
+	shared := bootstrap.NewSharedOn(b)
 	build := serveBuilder(cfg, overrides, hooks, shared, auths)
 	app, err := shared.Assemble(cfg)
 	if err != nil {
@@ -152,15 +188,22 @@ func newServeRuntime(
 
 // setupServeTelemetry wires the serve-only observability stack: JSON logs on
 // stderr (stdout stays reserved for stdio transports), the metrics collector,
-// OTel span export, and the joined lifecycle hooks shared by every snapshot.
-func setupServeTelemetry(ctx context.Context) (*telemetry.Metrics, *hook.Hooks, func(), error) {
+// OTel span and metric export (including the execution bus), and the joined
+// lifecycle hooks shared by every snapshot.
+func setupServeTelemetry(ctx context.Context, execution *bus.Bus) (*telemetry.Metrics, *hook.Hooks, func(), error) {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
 	otelShutdown, err := otelhooks.Setup(ctx)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("otel setup: %w", err)
 	}
+	stopBusMetrics, err := otelhooks.RegisterBusMetrics(otel.GetMeterProvider(), execution)
+	if err != nil {
+		_ = otelShutdown(ctx)
+		return nil, nil, nil, fmt.Errorf("otel bus metrics: %w", err)
+	}
 	shutdown := func() {
+		_ = stopBusMetrics()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = otelShutdown(shutdownCtx)
@@ -280,9 +323,7 @@ func serveTransport(
 		}
 		auth := httpAuth(cfg, runtime)
 		return mcpserver.ServeHTTP(ctx, srv, mcpserver.HTTPConfig{
-			Addr: addr, Token: auth.Token, TrustProxyHeaders: auth.TrustProxyHeaders,
-			TrustedProxyCIDRs: auth.TrustedProxyCIDRs, TLSCert: auth.TLSCert, TLSKey: auth.TLSKey,
-			ClientCA: auth.ClientCA, Users: auth.Users, OnSessionClosed: runtime.RollbackSession,
+			Bus: runtime.Current().Bus(), Addr: addr, HTTPAuth: auth, OnSessionClosed: runtime.RollbackSession,
 			SnapshotReady: runtime.SnapshotReady, DatabaseReady: runtime.DatabasesReady,
 			Metrics: metrics, RevokedPrincipals: runtime.OnRevokedPrincipals,
 			Admin: adminHandler, AuthChanges: auths.follow(runtime),
@@ -479,8 +520,9 @@ func runExport(args []string, stdout io.Writer) error {
 	return err
 }
 
-// exportYAML is the deterministic export encoding, also used as the payload
-// of configuration store revisions.
+// exportYAML is the deterministic export encoding of the configuration in
+// effect (store revisions keep what a configuration says instead; see
+// configyaml.EncodeSpec).
 func exportYAML(cfg *config.Config) ([]byte, error) {
 	return configyaml.Encode(cfg)
 }

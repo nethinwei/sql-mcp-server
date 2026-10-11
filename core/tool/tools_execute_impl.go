@@ -4,36 +4,29 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/nethinwei/sql-mcp-server/core/budget"
-	"github.com/nethinwei/sql-mcp-server/core/codegen"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
-	"github.com/nethinwei/sql-mcp-server/core/store"
 )
 
 func runExecute(ctx context.Context, tc Context, in executeInput, requireDMLTools bool) (Result, error) {
-	ctx, cancel := withTimeout(ctx, tc, 0)
-	defer cancel()
-	tc.Transaction = in.Transaction
-	res, tc, dec, err := prepareExecute(ctx, tc, in, requireDMLTools)
+	ctx, tc, end := beginCall(ctx, tc, false, in.Transaction)
+	defer end()
+	res, tc, g, err := prepareExecute(ctx, tc, in, requireDMLTools)
 	if err != nil {
 		return Result{}, err
 	}
-	compiled, err := compileExecute(ctx, tc, res, in)
+	sql, err := compileExecute(ctx, tc, res, in)
 	if err != nil {
 		return Result{}, err
 	}
-	out, err := collectProcedureRows(ctx, tc, res, dec, compiled)
-	// The procedure may have written even when its result is unusable, so the
-	// cache is invalidated either way (after the rows are closed).
-	if writeErr := afterWrite(tc, res.Entity, in.Transaction); err == nil {
-		err = writeErr
-	}
+	st := newStatement(tc, res, g, sql)
+	st.write, st.fields, st.rowCap = true, allowedProcedureFields(res, g.Decision), tc.MaxProcedureRows
+	got, err := st.query(ctx)
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{Content: out, ReturnedRows: int64(len(out))}, nil
+	return Result{Content: got.rows, ReturnedRows: int64(len(got.rows))}, nil
 }
 
 func prepareExecute(
@@ -41,91 +34,47 @@ func prepareExecute(
 	tc Context,
 	in executeInput,
 	requireDMLTools bool,
-) (entity.Resolved, Context, rbac.Decision, error) {
+) (entity.Resolved, Context, grant, error) {
 	res, ok := tc.Registry.Resolve(in.Entity)
 	if !ok {
-		return entity.Resolved{}, tc, rbac.Decision{}, ErrEntityNotFound
+		return entity.Resolved{}, tc, grant{}, ErrEntityNotFound
 	}
 	if requireDMLTools && !res.Entity.MCP.DMLTools {
-		return entity.Resolved{}, tc, rbac.Decision{}, ErrDMLToolsDisabled
+		return entity.Resolved{}, tc, grant{}, ErrDMLToolsDisabled
 	}
 	if res.Entity.Kind != entity.KindProcedure {
-		return entity.Resolved{}, tc, rbac.Decision{}, fmt.Errorf(
+		return entity.Resolved{}, tc, grant{}, fmt.Errorf(
 			"%w: %q is not a procedure",
 			ErrInvalidInput,
 			in.Entity,
 		)
 	}
 	if !res.Entity.MCP.TrustedProcedure {
-		return entity.Resolved{}, tc, rbac.Decision{}, ErrUnauthorized
+		return entity.Resolved{}, tc, grant{}, ErrUnauthorized
 	}
-	routed, err := routeEntity(tc, res.Entity, entity.ActionExecute)
+	routed, err := routeEntity(ctx, tc, res.Entity, entity.ActionExecute)
 	if err != nil {
-		return entity.Resolved{}, tc, rbac.Decision{}, err
+		return entity.Resolved{}, tc, grant{}, err
 	}
-	dec, err := authorize(ctx, routed, rbac.Request{
+	g, err := authorizeRequest(ctx, routed, rbac.Request{
 		Role: routed.Role, Subject: routed.Subject, Entity: in.Entity, Action: entity.ActionExecute,
 	})
 	if err != nil {
-		return entity.Resolved{}, routed, rbac.Decision{}, err
+		return entity.Resolved{}, routed, grant{}, err
 	}
-	if !dec.Allowed {
-		return entity.Resolved{}, routed, rbac.Decision{}, denyUnauthorized(dec)
-	}
-	return res, routed, dec, nil
+	return res, routed, g, nil
 }
 
-func compileExecute(ctx context.Context, tc Context, res entity.Resolved, in executeInput) (codegen.Compiled, error) {
+func compileExecute(ctx context.Context, tc Context, res entity.Resolved, in executeInput) (gated, error) {
 	args, err := orderedProcArgs(res.Entity.Params, in.Args)
 	if err != nil {
-		return codegen.Compiled{}, err
+		return gated{}, err
 	}
-	expr := relalg.Call{
-		Procedure: relalg.RelationRef{Name: res.Entity.Source, Schema: res.Entity.Schema},
-		Args:      args,
-	}
-	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(
-		expr,
-		codegen.WithMaxINCardinality(effectiveMaxIN(tc)),
-	)
+	compiled, err := compile(tc, res.Entity, relalg.Call{Procedure: res.Entity.Ref(), Args: args})
 	if err != nil {
-		return codegen.Compiled{}, err
+		return gated{}, err
 	}
-	return checkGate(ctx, tc, compiled)
-}
-
-func collectProcedureRows(
-	ctx context.Context,
-	tc Context,
-	res entity.Resolved,
-	dec rbac.Decision,
-	compiled codegen.Compiled,
-) ([]map[string]any, error) {
-	rows, err := tc.DB.QueryContext(ctx, compiled.SQL, compiled.Args...)
-	if err != nil {
-		return nil, writeError(res, err)
-	}
-	defer func() { _ = rows.Close() }()
-	allowedFields := allowedProcedureFields(res, dec)
-	out := make([]map[string]any, 0)
-	for row, err := range store.Iter(rows) {
-		if err != nil {
-			return nil, writeError(res, err)
-		}
-		filterProcedureRow(row, allowedFields)
-		if tc.Masker != nil {
-			maskRow(tc.Masker, res.Attributes, row)
-		}
-		nextRows := int64(len(out) + 1)
-		if tc.MaxProcedureRows > 0 && nextRows > tc.MaxProcedureRows {
-			return nil, budget.ErrExceeded
-		}
-		if tc.BudgetLimits.MaxReturnedRows > 0 && nextRows > tc.BudgetLimits.MaxReturnedRows {
-			return nil, budget.ErrExceeded
-		}
-		out = append(out, row)
-	}
-	return out, nil
+	return gateSQL(ctx, tc, compiled)
 }
 
 func allowedProcedureFields(res entity.Resolved, dec rbac.Decision) map[string]bool {
@@ -139,12 +88,4 @@ func allowedProcedureFields(res entity.Resolved, dec rbac.Decision) map[string]b
 		}
 	}
 	return allowedFields
-}
-
-func filterProcedureRow(row map[string]any, allowedFields map[string]bool) {
-	for field := range row {
-		if !allowedFields[field] {
-			delete(row, field)
-		}
-	}
 }

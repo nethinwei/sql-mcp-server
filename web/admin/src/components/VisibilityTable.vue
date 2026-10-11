@@ -7,10 +7,11 @@ import {
 import { CheckmarkCircle, CloseCircle, HelpCircle } from '@vicons/ionicons5'
 import { run } from '@/api/client'
 import { VisibilityQuery } from '@/api/ops'
-import { canonical } from '@/stores/workspace'
+import { workspace } from '@/lib/workspaceSync'
 import { describeFilter, type Filter } from '@/lib/filter'
 import { EntityIndex } from '@/lib/entityRefs'
-import type { Action, DraftInput, EntityInput, VisibilityQuery as VisibilityResult } from '@/gql/graphql'
+import type { Action, VisibilityQuery as VisibilityResult } from '@/gql/graphql'
+import type { EntityInput } from '@/gql/schema'
 
 type Simulation = VisibilityResult['visibility'][number]['actions'][number]['result']
 interface Row { entity: string; cells: Partial<Record<Action, Simulation>>; read: Simulation | null }
@@ -20,12 +21,15 @@ interface Row { entity: string; cells: Partial<Record<Action, Simulation>>; read
 // allowed, needs fields (the fields are split across grants, so a call must
 // select fields within one scope) or denied; the first two count as
 // reachable. Clicking a field scope emits `pick` to simulate that call. With
-// `live`, it recomputes shortly after the draft changes.
+// `live`, it recomputes shortly after what is simulated changes (context).
 const props = defineProps<{
   who: string | null
-  draft: DraftInput | null
-  // The entities simulated, to name them; the draft's when unset.
-  entities?: EntityInput[]
+  // The revision simulated; null: the workspace.
+  revision: string | null
+  // The entities simulated, to name them.
+  entities: EntityInput[]
+  // Changes whenever what is simulated does.
+  context: string
   live?: boolean
   compact?: boolean
 }>()
@@ -35,7 +39,7 @@ const themeVars = useThemeVars()
 const actions: Action[] = ['READ', 'AGGREGATE', 'CREATE', 'UPDATE', 'DELETE', 'EXECUTE']
 
 // Rows are entity IDs, shown by their shortest reference.
-const entityIndex = computed(() => new EntityIndex(props.entities ?? props.draft?.entities ?? []))
+const entityIndex = computed(() => new EntityIndex(props.entities))
 const rows = ref<Row[]>([])
 const loading = ref(false)
 const error = ref('')
@@ -50,7 +54,10 @@ async function refresh() {
   const mine = ++seq
   loading.value = true
   try {
-    const data = await run(VisibilityQuery, { input: { user: props.who, draft: props.draft } })
+    const input = { user: props.who, revision: props.revision }
+    const data = props.revision === null
+      ? await workspace.read(VisibilityQuery, { input })
+      : await run(VisibilityQuery, { input })
     if (mine !== seq) return
     rows.value = data.visibility.map((v) => {
       const cells = Object.fromEntries(v.actions.map((a) => [a.action, a.result])) as Row['cells']
@@ -66,7 +73,7 @@ async function refresh() {
 
 let timer: ReturnType<typeof setTimeout> | undefined
 watch(() => props.who, () => void refresh(), { immediate: true })
-watch(() => canonical(props.draft), () => {
+watch(() => props.context, () => {
   clearTimeout(timer)
   timer = setTimeout(() => void refresh(), props.live ? 400 : 0)
 })

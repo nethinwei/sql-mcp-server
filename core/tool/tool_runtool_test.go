@@ -13,8 +13,10 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/hook"
 	"github.com/nethinwei/sql-mcp-server/core/mask"
+	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
 )
 
@@ -22,8 +24,8 @@ func TestRunToolWiresHooksAndAudit(t *testing.T) {
 	t.Parallel()
 	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
 	auth := rbac.NewRoleAuthorizer(reg)
-	db := &store.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
-		return store.NewFakeRows([]string{"id", "email"}, []any{int64(1), "a@x.com"}), nil
+	db := &storetest.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
+		return storetest.NewFakeRows([]string{"id", "email"}, []any{int64(1), "a@x.com"}), nil
 	}}
 	var before, after bool
 	hooks := &hook.Hooks{
@@ -32,8 +34,10 @@ func TestRunToolWiresHooksAndAudit(t *testing.T) {
 	}
 	aud := &recorderAuditor{}
 	tc := Context{
-		Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
-		Authorizer: auth, Masker: mask.NewRuleMasker(), Hooks: hooks, Auditor: aud,
+		Services: &Services{Registry: reg, Authorizer: auth, Masker: mask.NewRuleMasker(), Hooks: hooks, Auditor: aud},
+		Role:     "reader",
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
 	}
 	in, _ := json.Marshal(readInput{Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: int64(1)}}})
 	res, err := RunTool(context.Background(), ReadTool{}, in, tc)
@@ -54,8 +58,8 @@ func TestRunToolWiresHooksAndAudit(t *testing.T) {
 func TestRunToolStampsDecisionID(t *testing.T) {
 	t.Parallel()
 	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
-	db := &store.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
-		return store.NewFakeRows([]string{"id", "email"}, []any{int64(1), "a@x.com"}), nil
+	db := &storetest.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
+		return storetest.NewFakeRows([]string{"id", "email"}, []any{int64(1), "a@x.com"}), nil
 	}}
 	var ctxID string
 	hooks := &hook.Hooks{
@@ -66,8 +70,10 @@ func TestRunToolStampsDecisionID(t *testing.T) {
 	}
 	aud := &recorderAuditor{}
 	tc := Context{
-		Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
-		Authorizer: rbac.NewRoleAuthorizer(reg), Hooks: hooks, Auditor: aud,
+		Services:   &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Hooks: hooks, Auditor: aud},
+		Role:       "reader",
+		DB:         db,
+		Dialect:    testdialect.Postgres{},
 		DecisionID: "fixed-decision-id",
 	}
 	in, _ := json.Marshal(readInput{Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: int64(1)}}})
@@ -98,8 +104,13 @@ func TestRunToolAuditRecordsEntityActionAndCode(t *testing.T) {
 	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
 	aud := &recorderAuditor{}
 	tc := Context{
-		Role: "intruder", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
-		Auditor: aud, Masker: mask.NewRuleMasker(),
+		Services: &Services{
+			Registry:   reg,
+			Authorizer: rbac.NewRoleAuthorizer(reg),
+			Auditor:    aud,
+			Masker:     mask.NewRuleMasker(),
+		},
+		Role: "intruder",
 	}
 	in, _ := json.Marshal(readInput{Entity: "users"})
 	if _, err := RunTool(context.Background(), ReadTool{}, in, tc); !errors.Is(err, ErrUnauthorized) {
@@ -119,13 +130,20 @@ func TestRunToolAuditRecordsEntityActionAndCode(t *testing.T) {
 func TestRunToolAuditRecordsSuccessEntityAction(t *testing.T) {
 	t.Parallel()
 	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
-	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
-		return store.NewFakeRows([]string{"id"}, []any{int64(1)}), nil
+	db := &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return storetest.NewFakeRows([]string{"id"}, []any{int64(1)}), nil
 	}}
 	aud := &recorderAuditor{}
 	tc := Context{
-		Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
-		Authorizer: rbac.NewRoleAuthorizer(reg), Auditor: aud, Masker: mask.NewRuleMasker(),
+		Services: &Services{
+			Registry:   reg,
+			Authorizer: rbac.NewRoleAuthorizer(reg),
+			Auditor:    aud,
+			Masker:     mask.NewRuleMasker(),
+		},
+		Role:    "reader",
+		DB:      db,
+		Dialect: testdialect.Postgres{},
 	}
 	in, _ := json.Marshal(readInput{Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: int64(1)}}})
 	if _, err := RunTool(context.Background(), ReadTool{}, in, tc); err != nil {
@@ -163,8 +181,14 @@ func TestRunToolBudgetAcquireDenialFiresHooks(t *testing.T) {
 	}
 	aud := &recorderAuditor{}
 	tc := Context{
-		Role: "reader", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
-		Hooks: hooks, Auditor: aud, Budget: denyingBudget{},
+		Services: &Services{
+			Registry:   reg,
+			Authorizer: rbac.NewRoleAuthorizer(reg),
+			Hooks:      hooks,
+			Auditor:    aud,
+			Budget:     denyingBudget{},
+		},
+		Role: "reader",
 	}
 	input, _ := json.Marshal(readInput{Entity: "users"})
 	_, err := RunTool(context.Background(), ReadTool{}, input, tc)
@@ -184,8 +208,8 @@ func TestRunToolBudgetAcquireDenialFiresHooks(t *testing.T) {
 
 func TestRunToolEnforcesBudgetAndAuditsRejection(t *testing.T) {
 	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
-	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
-		return store.NewFakeRows(
+	db := &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return storetest.NewFakeRows(
 			[]string{"id", "email"},
 			[]any{int64(1), "a@x.com"},
 			[]any{int64(2), "b@x.com"},
@@ -193,11 +217,17 @@ func TestRunToolEnforcesBudgetAndAuditsRejection(t *testing.T) {
 	}}
 	auditor := &recorderAuditor{}
 	tc := Context{
-		Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
-		Authorizer: rbac.NewRoleAuthorizer(reg), Auditor: auditor,
-		Budget: budget.New(map[string]budget.Limits{
-			"reader": {MaxReturnedRows: 1},
-		}, nil),
+		Services: &Services{
+			Registry:   reg,
+			Authorizer: rbac.NewRoleAuthorizer(reg),
+			Auditor:    auditor,
+			Budget: budget.New(map[string]budget.Limits{
+				"reader": {MaxReturnedRows: 1},
+			}, nil),
+		},
+		Role:    "reader",
+		DB:      db,
+		Dialect: testdialect.Postgres{},
 	}
 	input, _ := json.Marshal(readInput{Entity: "users"})
 	_, err := RunTool(context.Background(), ReadTool{}, input, tc)
@@ -217,14 +247,19 @@ func TestRunToolEngineBackpressure(t *testing.T) {
 	block := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
-		_, _ = eng.Submit(context.Background(), "", func(_ context.Context) (any, error) { <-block; return nil, nil })
+		_, _ = engine.Submit(context.Background(), eng, "", func(_ context.Context) (any, error) { <-block; return nil, nil })
 		close(done)
 	}()
 	time.Sleep(20 * time.Millisecond)
-	db := &store.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
-		return store.NewFakeRows([]string{"id"}, []any{int64(1)}), nil
+	db := &storetest.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
+		return storetest.NewFakeRows([]string{"id"}, []any{int64(1)}), nil
 	}}
-	tc := Context{Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Registry: reg, Authorizer: auth, Engine: eng}
+	tc := Context{
+		Services: &Services{Registry: reg, Authorizer: auth, Engine: eng},
+		Role:     "reader",
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
+	}
 	in, _ := json.Marshal(readInput{Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: int64(1)}}})
 	_, err := RunTool(context.Background(), ReadTool{}, in, tc)
 	if !errors.Is(err, engine.ErrOverloaded) {
@@ -237,11 +272,17 @@ func TestRunToolEngineBackpressure(t *testing.T) {
 func TestRunToolValidatesTransactionBeforeSingleflight(t *testing.T) {
 	manager := NewTransactionManager(time.Minute, 2)
 	defer manager.Close()
-	tx := &store.FakeTx{}
-	beginner := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+	tx := &storetest.FakeTx{}
+	beginner := &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
 		return tx, nil
 	}}
-	token, err := manager.Begin(context.Background(), beginner, "session-a", "reader", nil, "default", nil)
+	token, err := manager.Begin(
+		context.Background(),
+		beginner,
+		Caller{Session: "session-a", Role: "reader"},
+		"default",
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,15 +293,21 @@ func TestRunToolValidatesTransactionBeforeSingleflight(t *testing.T) {
 	input := json.RawMessage(`{"transaction":"` + token + `"}`)
 	validDone := make(chan error, 1)
 	go func() {
-		_, err := RunTool(context.Background(), probe, input, Context{
-			Role: "reader", Session: "session-a", Transactions: manager, Engine: eng,
-		})
+		_, err := RunTool(
+			context.Background(),
+			probe,
+			input,
+			Context{Services: &Services{Transactions: manager, Engine: eng}, Role: "reader", Session: "session-a"},
+		)
 		validDone <- err
 	}()
 	<-started
-	_, err = RunTool(context.Background(), probe, input, Context{
-		Role: "reader", Session: "session-b", Transactions: manager, Engine: eng,
-	})
+	_, err = RunTool(
+		context.Background(),
+		probe,
+		input,
+		Context{Services: &Services{Transactions: manager, Engine: eng}, Role: "reader", Session: "session-b"},
+	)
 	if !errors.Is(err, ErrTransactionScope) {
 		t.Fatalf("cross-session transaction error = %v, want scope mismatch", err)
 	}
@@ -273,14 +320,25 @@ func TestRunToolValidatesTransactionBeforeSingleflight(t *testing.T) {
 func TestRunToolEnforcesReturnedByteLimit(t *testing.T) {
 	entityConfig := testUsersEntity()
 	registry, _ := entity.NewRegistry([]entity.Entity{entityConfig})
-	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
-		return store.NewFakeRows([]string{"id", "email"}, []any{int64(1), strings.Repeat("x", 64)}), nil
+	db := &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return storetest.NewFakeRows([]string{"id", "email"}, []any{int64(1), strings.Repeat("x", 64)}), nil
 	}}
 	input := json.RawMessage(`{"entity":"users","fields":["id","email"]}`)
-	_, err := RunTool(context.Background(), ReadTool{}, input, Context{
-		Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Registry: registry,
-		Authorizer: rbac.NewRoleAuthorizer(registry), Limits: Limits{MaxReturnedBytes: 16},
-	})
+	_, err := RunTool(
+		context.Background(),
+		ReadTool{},
+		input,
+		Context{
+			Services: &Services{
+				Registry:   registry,
+				Authorizer: rbac.NewRoleAuthorizer(registry),
+				Limits:     Limits{MaxReturnedBytes: 16},
+			},
+			Role:    "reader",
+			DB:      db,
+			Dialect: testdialect.Postgres{},
+		},
+	)
 	if !errors.Is(err, budget.ErrExceeded) {
 		t.Fatalf("error = %v, want budget exceeded", err)
 	}
@@ -293,17 +351,106 @@ func TestRunToolPostExecutionLimitsDoNotFailWrites(t *testing.T) {
 	t.Parallel()
 	registry, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
 	writes := 0
-	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+	db := &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
 		writes++
-		return store.NewFakeRows([]string{"id"}, []any{int64(7)}), nil
+		return storetest.NewFakeRows([]string{"id"}, []any{int64(7)}), nil
 	}}
 	input := json.RawMessage(`{"entity":"users","values":{"email":"a@x.com"}}`)
-	res, err := RunTool(context.Background(), CreateTool{}, input, Context{
-		Role: "writer", DB: db, Dialect: testdialect.Postgres{}, Registry: registry,
-		Authorizer: rbac.NewRoleAuthorizer(registry), Limits: Limits{MaxReturnedBytes: 1},
-		Budget: budget.New(map[string]budget.Limits{"writer": {MaxReturnedBytes: 1}}, nil),
-	})
+	res, err := RunTool(
+		context.Background(),
+		CreateTool{},
+		input,
+		Context{
+			Services: &Services{
+				Registry:   registry,
+				Authorizer: rbac.NewRoleAuthorizer(registry),
+				Limits:     Limits{MaxReturnedBytes: 1},
+				Budget:     budget.New(map[string]budget.Limits{"writer": {MaxReturnedBytes: 1}}, nil),
+			},
+			Role:    "writer",
+			DB:      db,
+			Dialect: testdialect.Postgres{},
+		},
+	)
 	if err != nil || writes != 1 || len(res.Content) != 1 {
 		t.Fatalf("writes = %d, result = %+v, error = %v", writes, res, err)
+	}
+}
+
+// Ending a transaction releases its connection: commit and rollback pass when
+// the breaker is open and the session's budget is spent, which would refuse a
+// statement.
+func TestRunToolEndsTransactionsPastBreakerAndBudget(t *testing.T) {
+	breaker := ratelimit.NewBreaker(1, time.Hour)
+	breaker.Record(false)
+	eng, _ := engine.New(engine.WithIOPool(1), engine.WithBreaker(breaker))
+	spent := budget.New(map[string]budget.Limits{"writer": {MaxSessionCost: 1}}, nil)
+	lease, err := spent.Acquire(context.Background(), budget.Scope{Role: "writer", Session: "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = lease.Complete(budget.Usage{Cost: 1})
+	manager := NewTransactionManager(time.Minute, 0)
+	defer manager.Close()
+	db := &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+		return &storetest.FakeTx{}, nil
+	}}
+	tc := Context{Services: &Services{Engine: eng, Budget: spent, Transactions: manager}, Role: "writer", Session: "s"}
+	for _, end := range []Tool{CommitTransactionTool{}, RollbackTransactionTool{}} {
+		token, err := manager.Begin(
+			context.Background(),
+			db,
+			Caller{Session: "s", Role: "writer"},
+			"default",
+			nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input := json.RawMessage(`{"transaction":"` + token + `"}`)
+		if _, err := RunTool(context.Background(), end, input, tc); err != nil {
+			t.Fatalf("%s: %v", end.Info().Name, err)
+		}
+	}
+	if _, err := RunTool(context.Background(), BeginTransactionTool{}, json.RawMessage(`{}`), tc); err == nil {
+		t.Fatal("begin passed an open breaker and a spent budget")
+	}
+}
+
+// panickingEnd ends a transaction by panicking.
+type panickingEnd struct{ RollbackTransactionTool }
+
+func (panickingEnd) Run(context.Context, json.RawMessage, Context) (Result, error) { panic("end") }
+
+// A tool ending a transaction runs past the breaker and the slots, not past
+// every bound: the engine's rate limit still applies, and its panics are
+// recovered as any tool's are.
+func TestRunToolEndsTransactionsUnderTheRateLimit(t *testing.T) {
+	eng, _ := engine.New(engine.WithIOPool(1), engine.WithRPSLimiter(ratelimit.NewTokenBucket(1)))
+	manager := NewTransactionManager(time.Minute, 0)
+	defer manager.Close()
+	db := &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+		return &storetest.FakeTx{}, nil
+	}}
+	tc := Context{Services: &Services{Engine: eng, Transactions: manager}, Role: "writer", Session: "s"}
+	token, err := manager.Begin(
+		context.Background(),
+		db,
+		Caller{Session: "s", Role: "writer"},
+		"default",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := json.RawMessage(`{"transaction":"` + token + `"}`)
+	if _, err := RunTool(context.Background(), panickingEnd{}, input, tc); err == nil {
+		t.Fatal("a panic ending a transaction was not recovered")
+	}
+	if _, err := RunTool(context.Background(), RollbackTransactionTool{}, input, tc); !errors.Is(
+		err,
+		ratelimit.ErrRateLimited,
+	) {
+		t.Fatalf("a second end within the second passed the rate limit: %v", err)
 	}
 }

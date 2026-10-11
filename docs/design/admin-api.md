@@ -49,6 +49,9 @@
   响应体返回 `csrfToken`；`POST /admin/logout` 注销；
 - 所有 `/admin/graphql` 请求都必须带有效会话，并在 `X-CSRF-Token` 头中携带该
   会话的 CSRF token；
+- 控制台里会话结束（退出、401、另一个标签页换了账号）时整页重新加载登录页，登录
+  成功后也整页加载：上一个账号未完成的操作随页面结束，不会以下一个账号发出；退出
+  前先保存本页尚未写回的编辑；
 - 会话保存在进程内存，默认 8 小时空闲过期；账号被禁用或删除后，该账号的会话
   在下一次请求时失效；
 - 登录失败按用户名计数，连续 5 次失败锁定 1 分钟；失败响应不区分"用户不存在"
@@ -69,8 +72,8 @@ type Query {
   schemaList(datasource: String!, refresh: Boolean): SchemaList!   # 库（schema）列表与各库最近扫描
   schemaTables(datasource: String!, schemas: [String!]): SchemaImport!  # 已扫描库的表（省略 schemas 为全部）
   schemaScan(id: ID!): ScanJob                                          # 扫描任务状态
-  validate(draft: DraftInput!): Validation!
-  diff(from: ID!, to: ID, draft: DraftInput): String!
+  validate(revision: ID): Validation!          # 省略：调用者的工作区
+  diff(from: ID!, to: ID): String!             # to 省略：调用者的工作区
   simulate(input: SimulationInput!): Simulation!
   visibility(input: VisibilityInput!): [EntityVisibility!]!  # 一次返回全部实体 × 适用动作
   adminAccounts: [AdminAccount!]!
@@ -82,11 +85,13 @@ type Revision {
   config: Configuration!  yaml: String!
 }
 
+# entities/roles/users 与工作区项（Revision.sections、EntityInput 等）同一形状：
+# 如实返回配置写了什么，未设置即 null（其默认值生效），列表总是写出。
 type Configuration {
   datasources: [Datasource!]!   # driver 与脱敏后的 DSN
   entities: [Entity!]!          # 字段、主键、关系、旧式角色、租户约束
   roles: [Role!]!               # 授权项
-  users: [User!]!               # 角色、直授、subject；只暴露 hasToken
+  users: [User!]!               # 角色、直授、subject；tokenHash（只有 hash，明文从不保存；null 即无令牌）
   settings: JSON!               # 其余部分（server、cost、budget 等）
 }
 ```
@@ -95,7 +100,6 @@ type Configuration {
 
 ```graphql
 type Mutation {
-  createDraft(draft: DraftInput!, comment: String): Revision!
   publish(input: PublishInput!): Revision!   # id、restartRequired、expectedPublished
   rollback(input: RollbackInput!): Revision!
   generateUserToken: UserToken!          # 返回一次性明文 token 与 tokenHash
@@ -104,29 +108,47 @@ type Mutation {
   setAdminPassword(input: SetAdminPasswordInput!): AdminAccount!
 }
 
-input DraftInput {
-  base: ID!                 # 基于哪个 revision
-  entities: [EntityInput!]  # 提供则整块替换该部分
-  roles: [RoleInput!]
-  users: [UserInput!]       # tokenHash 省略时沿用 base 中同名用户的 hash
-  settings: JSON            # 提供则按顶层键覆盖其余部分
-}
 ```
 
-- 未提供的部分沿用 base；合并后的配置走与 `store import` 相同的链路（解码、
-  默认值、校验、store 模式密钥规则、规范化），因此 API 与 CLI 产出的 payload
-  完全一致；
+- 编辑写入调用者的工作区（`editWorkspace`，见 [版本管理](versioning.md) 与
+  [编辑语义](editing.md)），草稿由 `checkpointWorkspace` 保存；`EntityInput`、
+  `RoleInput`、`UserInput` 是工作区项的形状。由项构建配置走与 `store import`
+  相同的链路（解码、默认值、校验、store 模式密钥规则、规范化），因此 API 与 CLI
+  产出的 payload 完全一致；（原 `createDraft(draft: DraftInput!)` 与客户端上传整份
+  本地副本的 `DraftInput` 已删除，见 editing.md。）
 - 数据源与 DSN 本版不可通过 API 修改（避免经后台写入凭据），改由 CLI；
-- validate、diff、simulate 都接受未保存的 `DraftInput`，前端可在提交前预览；
+- validate、diff、simulate、visibility 默认针对调用者的工作区（控制台先写出本地
+  修改），也可指定 revision；配置 MCP 的查询读已发布配置；
 - simulate 不访问数据库：用配置离线构建实体注册表与授权策略，返回是否允许、
   可见字段、行范围（以与 `rowPolicies` 相同的 JSON 形式）、覆盖授权项与
   `AMBIGUOUS_FIELD_SCOPE` 的可选字段集；
-- 并发发布用乐观并发控制：`publish` 携带调用方工作所基于的已发布 revision
-  （`expectedPublished`），期间有他人发布则返回 `extensions.code = CONFLICT`。
-  控制台记住载入工作区时的已发布版本，轮询发现新发布后：工作区无修改且跟随
-  发布版本时自动同步；有修改时提示“基于最新版本重新应用”，按条目的顶层属性
-  做三方合并，只有双方改了同一属性且取值不同才算冲突（保留本地值，可逐项撤销
-  改用新版本）；
+- 发布只允许“快进”：草稿必须基于当前已发布 revision（沿父链找到的第一个发布过的
+  祖先，被丢弃的草稿同样跳过），否则返回 `extensions.code = CONFLICT` 与最新的 `published`，CLI、API、
+  控制台一律如此——基于旧版本的草稿会整体覆盖期间别人的发布。`expectedPublished`
+  另外校验调用方看到的已发布版本；检查与配置库发布之间被他人抢先同样报
+  `CONFLICT`。
+- `GET /admin/events`（server-sent events，需登录会话）在连接时与每次发布时推送
+  已发布 revision（`event: published`，`{"id","author"}`），包括其他进程经同一
+  配置库的发布；连接之后版本有变化（另一个管理员保存或丢弃了草稿；按配置库的
+  变更序号判断，丢弃较早的草稿也算）时推送 `event: revisions`（`{"sequence"}`），控制台据此刷新草稿列表（`drafts`，每份带服务端
+  沿父链求得的基准版本）；登录管理员的工作区被写入（另一个控制台、Agent 的
+  `plan_apply`）时推送 `event: workspace`（`{"version"}`）。工作区每人一份，在服务端，
+  所有版本操作都是服务端操作：`workspace`、`workspaceLog` 读取；`editWorkspace` 按项
+  写入，每项带写入者读到的值，期间别处写过则三方合并（同一处改得不同成为冲突，不丢
+  任何一方）；`applyPlan` 把预览过的方案写进工作区（与配置 MCP 的 `plan_apply` 同一段
+  逻辑，绑定实际影响）；`updateWorkspace`、`resetWorkspace`、`mergeDraft`、
+  `resolveConflict`、`checkpointWorkspace`（`admin:write`）、`commitWorkspace`
+  （`admin:publish`；期间有写入为 `CONFLICT`，有未解决冲突为 `CONFLICTS`，基准落后为
+  `BEHIND`，发布被抢先为带 `published` 的 `CONFLICT`）。设计与不变量见
+  `docs/design/versioning.md`。`discardDraft(id)` 把草稿标为
+  `DISCARDED`（`admin:write`），留在历史中且不能再发布。服务端每秒读取一次已发布
+  revision、最新 revision 与该管理员工作区的版本号，只在有控制台连接时读取；10 秒
+  轮询保留为兜底。
+- 三方合并在服务端（`core/workspace`）：对象按键、命名列表按元素（字段与关系按名称，
+  授权按实体；同一实体的多条授权作为一组整体合并）。空值与未设置的可选文本视为
+  相同。只有一方改动的值自动合并；双方改了同一处且取值不同即为冲突，工作区保留
+  自己的值并列出冲突，逐项“保留我的 / 采用对方”（`resolveConflict`），全部解决前
+  不能提交；相对已发布的冲突在之后的发布等于我的值时自动关闭；
 - `serverStatus` 报告进程实际运行的 revision 与未应用的发布（需重启或加载失败），
   控制台顶栏据此显示运行状态；
 - visibility 用同一个离线授权器批量评估某个主体对全部实体、适用动作的默认投影结果，供
@@ -151,14 +173,15 @@ input DraftInput {
   `schemaScan(id)` 轮询到完成后读取 `schemaTables`，`cancelSchemaScan` 取消；任务在有界 worker 池（2 个
   worker、排队上限 8，超出拒绝）中执行，单个任务限时 5 分钟，使用独立的单连接，
   不占用数据面连接池、不持有快照租约，因此扫描再慢也不阻塞请求与热重载；
-- 每个库最近一次扫描的结果和库列表保存在进程内，直到该库被重新扫描（库列表由
-  `refresh` 刷新，并丢弃已不存在的库），离开或刷新控制台不会重新扫描；读取时与
-  当前已发布配置比较，状态不会过期。保存的内容属于数据源的读连接（驱动与
-  DSN）：保留名称但改连到别的数据库后，旧结果被丢弃；只清理读取配置之前保存的
-  旧库结果，改连前开始、之后才完成的请求或扫描不会清掉新库的结果。扫描按入队时
-  的已发布配置建连（不依赖运行时是否已热重载），因此结果与其标记的库一致。
-  `SchemaList` 与 `SchemaImport` 带 `source`（该身份的摘要，不含 DSN），控制台
-  据此丢弃旧库的结果。进程重启后清空；
+- 每个库最近一次扫描的结果和库列表保存在配置库（`x/catalog`，schema 版本 3），
+  直到该库被重新扫描（库列表由 `refresh` 刷新，并丢弃已不存在的库）；进程内按扫描
+  时间缓存解码结果，重启或换副本后结果仍在。读取时与当前配置比较，状态不会过期。
+  保存的内容属于数据源的读连接（驱动与 DSN）：保留名称但改连到别的数据库后，旧
+  结果被丢弃；只清理读取配置之前保存的旧库结果，改连前开始、之后才完成的请求或
+  扫描不会清掉新库的结果。扫描按入队时的已发布配置建连（不依赖运行时是否已热
+  重载），因此结果与其标记的库一致。`SchemaList` 与 `SchemaImport` 带 `source`
+  （该身份的摘要，不含 DSN），控制台据此丢弃旧库的结果。跨数据源的检索、分页与
+  批量方案见 `docs/design/planning.md`；
 - 候选实体的命名与关系在该数据源所有已扫描的库上一起计算：不同库的同名表各得
   其名，外键指向其他已扫描库的表或已配置实体时同样生成关系。因此控制台不按库
   分别缓存，而是在一次请求里读取库列表和全部已扫描库的表（同步），只采用最新
@@ -177,13 +200,14 @@ input DraftInput {
   引用，并限定因此产生歧义的已有引用）、注释映射为 description、
   主键、全部列；单列外键生成候选关系（子表 `belongs-to` 父表，父表 `has-many`
   子表）；**不含任何角色、授权或行策略**，即导入后对任何主体都不可访问；
-- 导入本身不写入 store：前端把选中的候选实体放进 `DraftInput.entities` 后
-  `createDraft`，授权必须另外显式配置。
+- 导入写入调用者的工作区（候选实体作为实体项写入），授权必须另外显式配置。
 
 ## 实现落点
 
 - `x/configyaml`：新增 `Encode`（确定性 export），CLI 与 API 共用；
-- `x/configstore`：schema 版本 2、管理员账号表与迁移；
+- `x/configstore`：schema 版本 2、管理员账号表与迁移；版本 3 增加扫描目录、方案
+  模板与配置 MCP 令牌，版本 4 增加令牌范围与扫描批次的逐库记录，版本 5 增加管理员工作区（见
+  `docs/design/planning.md`）；
 - `x/providers/{postgres,mysql}`：注释与外键 introspection；
 - `x/admin`：会话、登录、权限、HTTP 挂载；`x/admin/graph`：gqlgen schema 与
   resolver；草稿合并、schema 导入映射、离线 simulate；

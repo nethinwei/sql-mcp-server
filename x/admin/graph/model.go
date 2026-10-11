@@ -27,6 +27,7 @@ var revisionStates = map[revision.State]RevisionState{
 	revision.StatePublished:  RevisionStatePublished,
 	revision.StateSuperseded: RevisionStateSuperseded,
 	revision.StateRolledBack: RevisionStateRolledBack,
+	revision.StateDiscarded:  RevisionStateDiscarded,
 }
 
 func toRevision(r revision.Revision) *Revision {

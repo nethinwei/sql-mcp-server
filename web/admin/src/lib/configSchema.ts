@@ -25,7 +25,7 @@ export function useConfigSchema() {
   /** Allowed values, or suggestions where any value is accepted. */
   const options = (path: Path): string[] => {
     const s = schema.value ? at(schema.value, schema.value, path) : undefined
-    return ((s?.enum ?? s?.examples ?? []) as unknown[]).map(String)
+    return ((s?.enum ?? []) as unknown[]).map(String)
   }
   return { schema, options }
 }

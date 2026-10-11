@@ -68,13 +68,13 @@ make build
 
 ### 开发与维护
 
-- [架构](docs/architecture.md)与[不变量](docs/invariants.md)；
+- [架构](docs/architecture.md)、[不变量](docs/invariants.md)与[术语表](docs/glossary.md)；
 - [测试与 CI](docs/testing.md)：测试命令、CI、fuzz 和发布前门禁；
 - [贡献指南](CONTRIBUTING.md)。
 
 ### 版本与规划
 
-- 当前 GA：`v0.1.12`（[发布说明](docs/releases/v0.1.12.md)）；
+- 当前 GA：`v0.1.13`（[发布说明](docs/releases/v0.1.13.md)）；
 - 全版本摘要：[CHANGELOG](CHANGELOG.md)；历史能力与迁移：
   [发布说明索引](docs/releases/README.md)；
 - 未发布产品规划：[Roadmap](docs/roadmap.md)；

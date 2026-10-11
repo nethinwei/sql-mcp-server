@@ -93,7 +93,9 @@ Provider 适用范围使用以下口径：
 - **持续验证**：`core/tool/adversarial_test.go` 断言用户 tenant filter 与 policy
   始终 AND 合并；三库 integration 对宽松用户 filter 的尝试仍要求 policy 生效。
 - **剩余风险**：它不是数据库原生 RLS；任何直连数据库、受信 procedure 内部 SQL
-  或未来绕过统一 engine 的入口都不受此保证。配置错误的 policy 仍由管理员承担。
+  的入口都不受此保证。`core/tool` 内绕过授权的入口由结构测试阻止：数据库只由执行器
+  调用，语句只能由授权结果与过闸 SQL 构成（`core/tool/pipeline_test.go` 的
+  `TestOnlyTheExecutorCallsTheDatabase`、`TestStatementWithoutGrantIsRefused`）。配置错误的 policy 仍由管理员承担。
 - **Provider**：共享 policy/IR 逻辑适用于三库，基础路径已有三库 integration；
   procedure 内部行为不在 provider 证明范围。
 
@@ -178,12 +180,17 @@ Provider 适用范围使用以下口径：
   释放后关闭”、失败保旧、事务与预算限制更新、待回收上限测试；
   `core/tool/transaction_test.go` 的“连接被重载改掉后事务拒绝语句”测试；
   `x/bootstrap/bootstrap_access_test.go` 的吊销通知与“重新启用后新会话不受旧
-  撤销影响”测试；`x/bootstrap/shared_test.go` 的跨代缓存失效、共享 IO 配额与
+  撤销影响”测试；`x/bootstrap/hold_test.go` 的“禁用用户与 schema 漂移同在一个
+  revision，用户在下一次轮询即被拒绝”测试；`x/bootstrap/shared_test.go` 的跨代缓存失效、共享 IO 配额与
   连接复用测试；CI 默认运行 race detector。
 - **持续验证**：以上测试在默认单元测试中运行；CI race 检查并不枚举所有调度交错。
 - **剩余风险**：现有测试不是所有调度的形式化证明；新旧快照重叠期间各自的 engine
-  在途队列与预编译语句并存（IO 配额、连接池与缓存已共享）；熔断器为进程级而非按
-  物理数据库；多进程/多实例配置发布不在当前一致性模型内。
+  在途队列与预编译语句并存（IO 配额、连接池、缓存、事务、预算与写跟踪已归进程，
+  见 `docs/design/lifetimes.md`）；熔断与自适应并发按数据库连接隔离；撤销在新
+  revision 能加载而装配失败时先行生效（用户暂停），但只覆盖用户自身定义的变化，
+  角色定义收窄与无身份的默认主体（stdio、`server.user`）仍随完整重载生效；多进程/多实例配置发布不在当前一致性模型内：MCP 会话、显式事务与
+  读缓存失效都只作用于本进程，多副本部署须按 `Mcp-Session-Id` 粘滞，跨副本的
+  读缓存最长落后一个 `cache.ttl`（见 `docs/console.md`）。
 - **Provider**：runtime 控制为共享层；provider 资源 drain 依赖各 driver 行为，
   尚无三库专门的 reload integration。
 
@@ -197,12 +204,15 @@ Provider 适用范围使用以下口径：
   事务、返回行数/字节与执行时间均有容量或 deadline。
 - **现有证据**：`x/mcpserver/http_test.go` 的 oversized body 拒绝、
   `core/tool/tool_runtool_test.go` 的返回字节上限，以及 config/tool/engine/cache
-  的容量和 cardinality 单元测试。
+  的容量和 cardinality 单元测试；结果在迭代时逐行计量，越限的第一行即中止、其余行
+  不再读取，进程同时持有的结果字节受 `rateLimit.maxResultMemory` 约束
+  （`core/tool/pipeline_test.go` 的 `TestReadStopsAtTheByteLimitAsRowsArrive`、
+  `TestResultMemoryBoundsTheProcess`）。
 - **持续验证**：`x/mcpserver/http_test.go` 覆盖 body/subject 边界；
   `core/tool/adversarial_test.go` 和其 fuzz target 覆盖畸形、尾随、未知和受限字段
   payload，并断言拒绝时不进入数据库执行。
 - **剩余风险**：stdio 不受 HTTP body/header 限制；JSON 解析在结构校验前仍会消耗
-  资源；分布式限流和 durable audit 不在当前范围，应用限制不能替代上游连接限制。
+  资源；`database/sql` 会把单行完整读入，超大单行在计量前已读出（读到即停）；分布式限流和 durable audit 不在当前范围，应用限制不能替代上游连接限制。
 - **Provider**：transport/IR/engine 控制属于共享层；数据库 timeout 参数随 provider
   不同，连接级 timeout 的数据库触发路径尚未分别做 integration。
 
@@ -219,7 +229,9 @@ Provider 适用范围使用以下口径：
 - **现有证据**：`core/rbac/grant_test.go` 的跨授权项组合拒绝、租户硬边界、
   直授/顶层/实体级授权合并测试与覆盖不变量随机化测试；
   `x/mcpserver/e2e_users_test.go` 在真实 HTTP + PostgreSQL 上验证多角色用户
-  看不到其他角色行上的字段。
+  看不到其他角色行上的字段；`core/budget/budget_test.go` 的
+  `TestTenantConcurrencySpansSessions`：租户的 `maxConcurrent` 按租户聚合，
+  开新会话或换主体都无法绕过。
 - **持续验证**：覆盖不变量随机化测试在默认单元测试中运行；e2e 随
   `make test-e2e` 运行。
 - **剩余风险**：未实现逐行逐列的精确并集，部分合法组合需要 Agent 显式指定字段；
@@ -270,6 +282,53 @@ Provider 适用范围使用以下口径：
   元数据对 store 读者可见；没有 payload 签名。
 - **Provider**：store 覆盖 SQLite、PostgreSQL、MySQL、OceanBase；introspection
   过滤覆盖 PostgreSQL、MySQL/OceanBase。
+
+### TM-012 — 配置 MCP 令牌与批量方案越权
+
+- **等级/状态**：high / 鉴权、无发布工具与方案性质已由单元与端到端测试验证。
+- **攻击**：拿到管理员的配置 MCP 令牌后直接发布配置，或以令牌访问控制台 API；用
+  控制台会话 Cookie（含跨站请求）调用 `/admin/mcp`；令牌过期、吊销或管理员停用后
+  继续使用；Agent 预览一个方案后在基准变化时保存出不同的结果；Agent 生成的方案或
+  重复执行的模板把新表悄悄并入已有授权、漏报未能应用的规则；Agent 不经管理员确认
+  就保存带需确认例外的方案；交给某个 Agent 的令牌越出它该管的数据源；通过 `diff`
+  读取连接凭证；持续提交扫描批次积压后台工作；被接管的扫描运行恢复后覆盖新所有者。
+- **控制**：`/admin/mcp` 只接受 `Authorization: Bearer` 令牌，配置库只存 SHA-256
+  哈希；令牌按客户端命名、可设有效期，每次请求重新读取账号与令牌（过期、吊销、停用
+  即失效），记录最近使用时间，每次工具调用记录管理员与客户端；以该管理员当前权限
+  调用与控制台相同的配置服务（`x/admin/configapp`，鉴权在服务内），令牌可限定
+  部分数据源（范围之外的目录、方案、扫描与跨数据源的读取都被拒绝）；没有发布
+  与回滚工具，Agent 只能写管理员的工作区（未发布，管理员在控制台立即看到，由人
+  发布）；会话 Cookie 不能访问该端点，令牌也不能访问控制台 API。应用要求该方案预览
+  时的 `planId`，并针对当前工作区重新计算：阻断例外、不能通过校验或出现未列出的需
+  确认例外都拒绝，要求逐一列出管理员确认过的需确认例外 ID；只写方案改动的项，且
+  绑定预览时的实际影响（逐字段的改动不同即拒绝）；与管理员同时写入的修改在服务端
+  三方合并，同一处改得不同成为冲突并阻止发布，任何一方都不丢失；每次写入记录操作者
+  （`agent:<令牌名>`）与改动的项（`smcp_workspace_log`）。方案只新增零权限实体与规则中显式的授权；例外分
+  阻断 / 需确认 / 提示三级，阻断例外不能保存或加入工作区；重复执行的模板只在“待
+  处理”中给出方案，待处理页以审核方式预览（`previewPlan` 的 `review: true`），新表
+  进入授权必须确认（`review` 例外）；每个应授予而未授予的授权都报告例外。版本
+  差异（MCP 与控制台共用）生成前对两侧配置结构化脱敏，DSN 密码与 HTTP token 不出现
+  在任何一行，变化只标 `(changed)`，无法解码的版本不显示内容。每个数据源最多 4 个
+  未完成扫描批次（计数与创建在同一事务）、每批最多 5000 个库，同一请求键不重复
+  创建；每个库的状态迁移与批次结束都在锁住批次行、确认仍是该次运行的所有者后写入。
+- **现有证据**：`x/admin/configmcp/configmcp_test.go`（无发布工具、预览针对工作区、
+  一起预览的方案依次写入、只写改动的项并保留管理员对同一项的其他修改、影响变化后
+  拒绝应用、只读管理员不能应用、无效、过期令牌、旧只读令牌与停用
+  账号被拒绝、记录使用时间）；`x/admin/admin_test.go` 的会话 Cookie 被拒测试；
+  `x/admin/graph/planning_test.go` 的权限矩阵、令牌创建与吊销、审核方式预览报告新表
+  （`TestPreviewForReview`）；`x/admin/configmcp` 的范围令牌（`TestScopedTokens`）
+  与确认绑定（`TestConfirmationsAreBoundToExceptions`）；`x/admin/auth` 的数据源
+  范围；`x/configplan` 的随机性质测试与例外分级测试；`x/revisionops` 的差异脱敏
+  （`TestDiffRedactsSecrets`）；`x/leasing` 的失去批次后延迟写入、存储故障与交错
+  模型（`TestInterleavings`），`x/admin/configapp/scans_test.go` 的配额，`catalogtest`
+  的 `MoveItems`、`CreateBatchQuota`；
+  `x/workspaceops` 的并发写合并、冲突阻止提交与提交期间写入（`TestConcurrentWritesMerge`、
+  `TestCommit`），`core/workspace` 的合并性质测试（`TestMergeProperties`）。
+- **持续验证**：单元测试默认运行。
+- **剩余风险**：令牌只能按数据源收窄，不能按操作或单个工具收窄（能改管理员的工作区，但发布始终由人完成）；`/admin/mcp` 没有
+  单独的速率限制；“管理员确认过”由 Agent 声明，服务端只能保证确认与具体例外一一
+  对应并留痕；方案正确性仍依赖管理员审阅预览与草稿差异。
+- **Provider**：共享层（与数据库方言无关）。
 
 ## 证据维护规则
 

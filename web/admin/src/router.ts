@@ -1,8 +1,9 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { restoreSession, session } from '@/api/session'
+import { adminBase } from '@/api/base'
 
 export const router = createRouter({
-  history: createWebHistory('/admin/'),
+  history: createWebHistory(adminBase),
   routes: [
     { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue'), meta: { public: true } },
     {
@@ -11,6 +12,9 @@ export const router = createRouter({
       children: [
         { path: '', name: 'overview', component: () => import('@/views/OverviewView.vue') },
         { path: 'datasources', name: 'datasources', component: () => import('@/views/DatasourcesView.vue') },
+        { path: 'plans', name: 'plans', component: () => import('@/views/PlanView.vue') },
+        { path: 'pending', name: 'pending', component: () => import('@/views/PendingView.vue') },
+        { path: 'agent', name: 'agent', component: () => import('@/views/AgentView.vue') },
         { path: 'entities', name: 'entities', component: () => import('@/views/EntitiesView.vue') },
         { path: 'entities/:id', name: 'entity', component: () => import('@/views/EntityView.vue'), props: true },
         { path: 'roles', name: 'roles', component: () => import('@/views/RolesView.vue') },

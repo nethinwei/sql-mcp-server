@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 )
 
 type transactionScopeTest struct {
@@ -38,22 +39,38 @@ func testAdversarialTransactionScopeAndTerminalReuse(t *testing.T, terminal stri
 	manager, _, db := adversarialTransactionManager()
 	defer manager.Close()
 	subject := map[string]any{"tenant_id": "a"}
-	token, err := manager.Begin(context.Background(), db, "session-a", "writer", subject, "primary", nil)
+	token, err := manager.Begin(
+		context.Background(),
+		db,
+		Caller{Session: "session-a", Role: "writer", Subject: subject},
+		"primary",
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, test := range adversarialTransactionScopeTests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := manager.DB(token, test.session, test.role, test.subject, test.datasource, nil)
+			_, err := manager.DB(
+				context.Background(),
+				token,
+				Caller{Session: test.session, Role: test.role, Subject: test.subject},
+				test.datasource,
+				nil,
+			)
 			if !errors.Is(err, test.want) {
 				t.Fatalf("error = %v, want %v", err, test.want)
 			}
 		})
 	}
 	if terminal == "commit" {
-		_, err = manager.Commit(context.Background(), token, "session-a", "writer", subject)
+		_, err = manager.Commit(
+			context.Background(),
+			token,
+			Caller{Session: "session-a", Role: "writer", Subject: subject},
+		)
 	} else {
-		err = manager.Rollback(context.Background(), token, "session-a", "writer", subject)
+		err = manager.Rollback(context.Background(), token, Caller{Session: "session-a", Role: "writer", Subject: subject})
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -64,11 +81,11 @@ func testAdversarialTransactionScopeAndTerminalReuse(t *testing.T, terminal stri
 func assertTerminalTransactionTokenRejected(
 	t *testing.T, manager *TransactionManager, token string, subject map[string]any,
 ) {
-	_, err := manager.DB(token, "session-a", "writer", subject, "primary", nil)
+	_, err := manager.DB(bg, token, Caller{Session: "session-a", Role: "writer", Subject: subject}, "primary", nil)
 	if !errors.Is(err, ErrTransactionNotFound) {
 		t.Fatalf("terminal token reuse error = %v", err)
 	}
-	_, err = manager.Commit(context.Background(), token, "session-a", "writer", subject)
+	_, err = manager.Commit(context.Background(), token, Caller{Session: "session-a", Role: "writer", Subject: subject})
 	if !errors.Is(err, ErrTransactionNotFound) {
 		t.Fatalf("second terminal operation error = %v", err)
 	}
@@ -87,7 +104,13 @@ func FuzzTransactionStateMachine(f *testing.F) {
 func fuzzTransactionStateMachine(t *testing.T, operations []byte) {
 	manager, tx, db := adversarialTransactionManager()
 	subject := map[string]any{"tenant_id": "a"}
-	token, err := manager.Begin(context.Background(), db, "session-a", "writer", subject, "primary", nil)
+	token, err := manager.Begin(
+		context.Background(),
+		db,
+		Caller{Session: "session-a", Role: "writer", Subject: subject},
+		"primary",
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,9 +122,9 @@ func fuzzTransactionStateMachine(t *testing.T, operations []byte) {
 	assertFuzzTransactionManagerClosed(t, manager, tx)
 }
 
-func adversarialTransactionManager() (*TransactionManager, *store.FakeTx, *store.FakeDB) {
-	tx := &store.FakeTx{}
-	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+func adversarialTransactionManager() (*TransactionManager, *storetest.FakeTx, *storetest.FakeDB) {
+	tx := &storetest.FakeTx{}
+	db := &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
 		return tx, nil
 	}}
 	return NewTransactionManager(time.Minute, 1), tx, db
@@ -113,19 +136,33 @@ func runFuzzTransactionOperation(
 	var err error
 	switch operation % 8 {
 	case 0, 7:
-		_, err = manager.DB(token, "session-a", "writer", subject, "primary", nil)
+		_, err = manager.DB(bg, token, Caller{Session: "session-a", Role: "writer", Subject: subject}, "primary", nil)
 	case 1:
-		_, err = manager.DB(token, "session-b", "writer", subject, "primary", nil)
+		_, err = manager.DB(bg, token, Caller{Session: "session-b", Role: "writer", Subject: subject}, "primary", nil)
 	case 2:
-		_, err = manager.DB(token, "session-a", "reader", subject, "primary", nil)
+		_, err = manager.DB(bg, token, Caller{Session: "session-a", Role: "reader", Subject: subject}, "primary", nil)
 	case 3:
-		_, err = manager.DB(token, "session-a", "writer", map[string]any{"tenant_id": "b"}, "primary", nil)
+		_, err = manager.DB(
+			context.Background(),
+			token,
+			Caller{Session: "session-a", Role: "writer", Subject: map[string]any{"tenant_id": "b"}},
+			"primary",
+			nil,
+		)
 	case 4:
-		_, err = manager.DB(token, "session-a", "writer", subject, "replica", nil)
+		_, err = manager.DB(bg, token, Caller{Session: "session-a", Role: "writer", Subject: subject}, "replica", nil)
 	case 5:
-		_, err = manager.Commit(context.Background(), token, "session-a", "writer", subject)
+		_, err = manager.Commit(
+			context.Background(),
+			token,
+			Caller{Session: "session-a", Role: "writer", Subject: subject},
+		)
 	case 6:
-		err = manager.Rollback(context.Background(), token, "session-a", "writer", subject)
+		err = manager.Rollback(
+			context.Background(),
+			token,
+			Caller{Session: "session-a", Role: "writer", Subject: subject},
+		)
 	}
 	return err, terminal || (operation%8 == 5 || operation%8 == 6) && err == nil
 }
@@ -148,7 +185,7 @@ func assertFuzzTransactionOperation(t *testing.T, operation byte, terminal bool,
 	}
 }
 
-func assertFuzzTransactionManagerClosed(t *testing.T, manager *TransactionManager, tx *store.FakeTx) {
+func assertFuzzTransactionManagerClosed(t *testing.T, manager *TransactionManager, tx *storetest.FakeTx) {
 	manager.Close()
 	manager.mu.Lock()
 	open := len(manager.handles)

@@ -3,6 +3,7 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"slices"
 
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 )
@@ -37,7 +38,7 @@ func (i Introspector) Schemas(ctx context.Context) ([]string, string, error) {
 		if err := rows.Scan(&name); err != nil {
 			return nil, "", err
 		}
-		if !contains(systemSchemas, name) {
+		if !slices.Contains(systemSchemas, name) {
 			out = append(out, name)
 		}
 	}
@@ -52,15 +53,6 @@ func (i Introspector) currentDatabase(ctx context.Context) (string, error) {
 	var current sql.NullString
 	err := i.db.QueryRowContext(ctx, `SELECT DATABASE()`).Scan(&current)
 	return current.String, err
-}
-
-func contains(ss []string, s string) bool {
-	for _, x := range ss {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }
 
 // Physical implements introspect.PhysicalNamer: the server UUID (unknown when

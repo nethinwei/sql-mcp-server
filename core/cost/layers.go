@@ -2,10 +2,12 @@ package cost
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
+	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
 )
 
@@ -61,9 +63,13 @@ func (e Estimate) Check(ctx context.Context, c codegen.Compiled) (Decision, erro
 	if c.Kind != "" && c.Kind != codegen.KindRead && c.Kind != codegen.KindAggregate {
 		return Decision{Allow: true}, nil
 	}
-	plan, err := e.explainPlan(ctx, c)
-	score := ScorePlan(plan)
 	th := e.Threshold
+	plan, err := e.explainPlan(ctx, c)
+	if unavailable(err) {
+		return Decision{}, err
+	}
+	plan = smallTable(plan, th)
+	score := ScorePlan(plan)
 	deny := func(soft bool) (Decision, error) {
 		return Decision{
 			Allow: false, Soft: soft,
@@ -73,6 +79,26 @@ func (e Estimate) Check(ctx context.Context, c codegen.Compiled) (Decision, erro
 		}, nil
 	}
 	return e.evaluatePlan(plan, err, score, th, deny)
+}
+
+// smallTable treats a full scan of tables of at most th.FullScanMaxRows rows
+// as a sequential scan: reading a lookup table whole is cheap, and rejecting
+// it would refuse queries on every small table. The size is the tables',
+// never the estimated output: a filter on a large table may output one row
+// after reading all of them.
+func smallTable(plan Plan, th Threshold) Plan {
+	if plan.ScanType == ScanFull && th.FullScanMaxRows > 0 && plan.TableSized &&
+		plan.TableRows <= th.FullScanMaxRows {
+		plan.ScanType = ScanSeq
+	}
+	return plan
+}
+
+// unavailable reports an EXPLAIN the connection refused rather than
+// answered (its breaker open, its concurrency limit reached): the gate has
+// no estimate to judge, and the statement would be refused the same way.
+func unavailable(err error) bool {
+	return errors.Is(err, ratelimit.ErrCircuitOpen) || errors.Is(err, ratelimit.ErrRateLimited)
 }
 
 func (e Estimate) explainPlan(ctx context.Context, c codegen.Compiled) (Plan, error) {
@@ -232,7 +258,7 @@ func (g AggregateGuard) Check(_ context.Context, c codegen.Compiled) (Decision, 
 	if !g.RequirePredicate || c.Kind != codegen.KindAggregate {
 		return Decision{Allow: true}, nil
 	}
-	p := compiledPredicate(c.Expr)
+	p := codegen.PredicateOf(c.Expr)
 	if p != nil && relalg.ValidatePredicate(p) == nil {
 		return Decision{Allow: true}, nil
 	}
@@ -250,26 +276,4 @@ func aggregatePredicateHint(c codegen.Compiled) string {
 	}
 	return "aggregate queries require a filter; add one, e.g. " +
 		`{"field":"<any allowed field>","op":"is_not_null"}`
-}
-
-func compiledPredicate(e relalg.Expr) relalg.Predicate {
-	switch n := e.(type) {
-	case relalg.Select:
-		if inner := compiledPredicate(n.Input); inner != nil {
-			return relalg.And{Preds: []relalg.Predicate{inner, n.Predicate}}
-		}
-		return n.Predicate
-	case relalg.Project:
-		return compiledPredicate(n.Input)
-	case relalg.Sort:
-		return compiledPredicate(n.Input)
-	case relalg.Limit:
-		return compiledPredicate(n.Input)
-	case relalg.Distinct:
-		return compiledPredicate(n.Input)
-	case relalg.Aggregate:
-		return compiledPredicate(n.Input)
-	default:
-		return nil
-	}
 }

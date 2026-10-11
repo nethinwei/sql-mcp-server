@@ -17,7 +17,7 @@ func TestAdversarialPredicateCorpus(t *testing.T) {
 		{"nil and operand", And{Preds: []Predicate{nil}}},
 		{"empty or", Or{}},
 		{"nil not operand", Not{}},
-		{"empty is-null field", IsNull{}},
+		{"empty is-null field", Condition{Op: OpIsNull}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

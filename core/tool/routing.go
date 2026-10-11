@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -42,7 +43,7 @@ func orDB(db, fallback store.DB) store.DB {
 
 // routeEntity points tc at the datasource of e and the connection action
 // uses; inside an explicit transaction every statement uses its connection.
-func routeEntity(tc Context, e entity.Entity, action entity.Action) (Context, error) {
+func routeEntity(ctx context.Context, tc Context, e entity.Entity, action entity.Action) (Context, error) {
 	name := e.DatasourceName()
 	tc.DataSource = name
 	if len(tc.Sources) == 0 {
@@ -59,7 +60,7 @@ func routeEntity(tc Context, e entity.Entity, action entity.Action) (Context, er
 		if tc.Transactions == nil {
 			return tc, ErrTransactionNotFound
 		}
-		db, err := tc.Transactions.DB(tc.Transaction, tc.Session, tc.Role, tc.Subject, name, txConnections(tc, name))
+		db, err := tc.Transactions.DB(ctx, tc.Transaction, callerOf(tc), name, txConnections(tc, name))
 		if err != nil {
 			return tc, err
 		}

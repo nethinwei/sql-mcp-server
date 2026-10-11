@@ -43,6 +43,7 @@ func (DescribeTool) Run(ctx context.Context, input json.RawMessage, tc Context) 
 		return describeEntity(ctx, tc, in.Entity)
 	}
 	entities := tc.Registry.Entities()
+	visible := UsableBy(ctx, tc.Authorizer, tc.Role, tc.Subject)
 	out := make([]map[string]any, 0, len(entities))
 	for _, e := range entities {
 		if !e.MCP.DMLTools {
@@ -56,7 +57,7 @@ func (DescribeTool) Run(ctx context.Context, input json.RawMessage, tc Context) 
 			continue
 		}
 		out = append(out, map[string]any{
-			"name": entityName(ctx, tc, e), "id": e.Name, "description": e.Description,
+			"name": entityName(tc, e, visible), "id": e.Name, "description": e.Description,
 			"datasource": e.DatasourceName(),
 		})
 	}
@@ -88,8 +89,9 @@ func describeEntity(ctx context.Context, tc Context, name string) (Result, error
 			"required": a.Domain.Required(), "readOnly": !a.Domain.Writable(),
 		})
 	}
+	visible := UsableBy(ctx, tc.Authorizer, tc.Role, tc.Subject)
 	return Result{Content: []map[string]any{{
-		"name": entityName(ctx, tc, res.Entity), "id": res.Entity.Name, "description": res.Entity.Description,
+		"name": entityName(tc, res.Entity, visible), "id": res.Entity.Name, "description": res.Entity.Description,
 		"datasource": res.Entity.DatasourceName(), "fields": fields,
 		"keys": VisibleKeys(res.Entity, fieldNames),
 	}}}, nil

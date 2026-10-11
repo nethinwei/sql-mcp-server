@@ -50,14 +50,17 @@
 | `id` | 单调递增，发布后不可复用 |
 | `parent_id` | 创建该 draft 时基于的 revision（可空） |
 | `content_hash` | `sha256:` + payload 字节的 SHA-256 |
-| `payload` | 规范化后的确定性 export YAML |
+| `payload` | 配置写了什么（`config.Spec`）的规范确定性 YAML，默认值不写出 |
 | `state` | `draft` / `published` / `superseded` / `rolled-back` |
 | `author`、`comment` | 操作者与说明（本版来自 CLI 参数或 OS 用户名） |
 | `created_at`、`published_at` | 时间戳（UTC） |
 
-- **规范化**：任何写入 store 的配置都先经 `configyaml.Decode`（解码、默认值、
-  完整校验），再用 export 序列化成 payload。因此 store 里只会有通过校验的
-  配置，同一语义的配置得到同一 `content_hash`。
+- **规范化**：任何写入 store 的配置都先解码为 `config.Spec`（严格、规范化：
+  `omitempty` 字段写出的零值与空集合视为未写），经 `config.Resolve`（默认值、完整
+  校验）与离线装配检查后，编码 Spec 作为 payload（`revisionops.Normalize`）。因此
+  store 里只会有通过校验的配置，写法相同的配置得到同一 `content_hash`；默认值不写进
+  payload，加载时生效（见 [意图与生效值](spec.md)）。此前存储的 payload 写出了全部
+  生效值，按 Spec 读出时每个值都“写过”，生效值不变，重新编码逐字节相同。
 - **append-only**：revision 内容写入后不再修改，只有 `state` 与
   `published_at` 会变化。
 - **唯一 published**：任一时刻最多一个 revision 处于 `published`。
@@ -116,9 +119,22 @@ smcp_revisions (
 )
 ```
 
+管理面另有不属于配置 revision 的表（发布不会改动它们）：`smcp_admin_accounts`
+（schema 版本 2）；`smcp_catalog_lists`、`smcp_catalog_schemas`（扫描目录）、
+`smcp_plan_templates` 与 `smcp_plan_template_versions`（方案模板及其版本）、
+`smcp_admin_tokens`（配置 MCP 令牌哈希）、`smcp_scan_batches`（扫描批次）、
+`smcp_pending_states` 与 `smcp_pending_log`（待处理事项的状态与记录）（schema
+版本 3）；令牌的范围列 `scope`、批次的 `request_key` 与每个库一行的
+`smcp_scan_batch_items`（schema 版本 4；迁移在同一事务内把版本 3 批次 payload 中
+的各库进度转成行，此后 payload 只写空数组）；管理员工作区 `smcp_workspaces`（基准版本、各项、冲突与说明等、版本号）与写入记录 `smcp_workspace_log`
+与 `smcp_store_meta.revision_seq`（schema 版本 5；revision 变更序号 =
+`next_id` + `revision_seq`，只有发布、回滚、丢弃与导入增长后者，其他写入只增长
+`publish_lock`）。见 `docs/design/planning.md` 与 `docs/design/versioning.md`。
+
 - **store 自身 schema 版本化**：`smcp_store_meta.schema_version` 记录表结构
   版本；打开 store 时版本未知或更新于程序 → fail closed；旧版本按内置迁移
-  升级，迁移在事务内执行。
+  逐版升级，每个版本的 DDL 与数据迁移在同一事务内执行（MySQL/OceanBase 的 DDL
+  会隐式提交：迁移中途失败时版本号不前进，但已执行的 DDL 留下，需人工检查后再升级）。
 - **首次使用**：`store init` 显式建表；服务启动时不会自动建表（避免误把
   store 建进业务库）。
 
@@ -166,8 +182,11 @@ sql-mcp-server serve --store 'postgres:${file:/run/secrets/store_dsn}'
 
 ### 发布前校验
 
-`store publish` 会对目标 revision 与当前 published revision 运行同一套热重载
-守卫：
+`store publish` 先确认目标 revision 能被运行时加载：通过 store 规则与配置校验，
+并执行运行时组装中不依赖数据库的检查（`bootstrap.CheckOffline`：实体、授权、
+脱敏器；写入配置库前的规范化 `revisionops.Normalize` 也执行），否则拒绝，避免
+发布后热加载失败、重启无法启动。表、列等依赖数据库的检查只在组装时进行。
+然后对目标 revision 与当前 published revision 运行同一套热重载守卫：
 
 - 只包含可热应用的变化 → 直接发布；
 - 包含需要重启的变化（如监听地址、TLS）→ 拒绝，除非加 `--restart-required`；

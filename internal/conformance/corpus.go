@@ -43,7 +43,7 @@ func fixedCases(schema string) []Case {
 		selCase("in-with-null-in-list", schema, cond("val", relalg.OpIn, []any{int64(10), nil})),
 		selCase("not-in-with-null-in-list", schema, cond("val", relalg.OpNotIn, []any{int64(10), nil})),
 		selCase("is-null", schema, cond("cat", relalg.OpIsNull, nil)),
-		selCase("is-not-null", schema, relalg.IsNull{Field: "cat", Not: true}),
+		selCase("is-not-null", schema, relalg.Condition{Field: "cat", Op: relalg.OpIsNotNull}),
 		selCase("or-with-unknown-branch", schema, relalg.Or{Preds: []relalg.Predicate{
 			cond("val", relalg.OpGt, int64(0)), cond("cat", relalg.OpEq, "b"),
 		}}),
@@ -64,7 +64,7 @@ func fixedCases(schema string) []Case {
 func shapeCases(schema string) []Case {
 	projectCat := relalg.Project{Input: scan(schema), Items: []relalg.ProjectItem{{Field: "cat"}}}
 	sorted := relalg.Sort{
-		Input:   relalg.Select{Input: scan(schema), Predicate: relalg.IsNull{Field: "val", Not: true}},
+		Input:   relalg.Select{Input: scan(schema), Predicate: relalg.Condition{Field: "val", Op: relalg.OpIsNotNull}},
 		OrderBy: []relalg.OrderTerm{{Field: "val", Dir: "desc"}, {Field: "id", Dir: "asc"}},
 	}
 	return []Case{
@@ -191,7 +191,7 @@ func genLeaf(rng *rand.Rand) relalg.Predicate {
 		return cond("val", compareOps[rng.Intn(len(compareOps))], vals[rng.Intn(len(vals))])
 	case 2:
 		if rng.Intn(3) == 0 {
-			return relalg.IsNull{Field: "cat", Not: rng.Intn(2) == 0}
+			return relalg.Condition{Field: "cat", Op: []relalg.Op{relalg.OpIsNull, relalg.OpIsNotNull}[rng.Intn(2)]}
 		}
 		cats := []any{"a", "b", "c"}
 		if rng.Intn(2) == 0 {

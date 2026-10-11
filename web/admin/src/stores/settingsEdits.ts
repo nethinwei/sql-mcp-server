@@ -4,7 +4,7 @@ import { useWorkspace } from '@/stores/workspace'
 // Text buffers of the settings page, one per top-level section. Settings are
 // edited like everything else: valid JSON goes into the workspace as it is
 // typed (and so into the change list, review and rebase merging); only text
-// that is not valid JSON stays here, pending, until it is fixed or reverted.
+// that is not valid JSON stays here, unsaved, until it is fixed or reverted.
 // The buffers live in a store so that leaving the page keeps such text.
 
 const pretty = (v: unknown) => JSON.stringify(v, null, 2)
@@ -18,7 +18,7 @@ export const useSettingsEdits = defineStore('settingsEdits', {
 
   getters: {
     /** Sections whose text is not valid JSON, so not in the workspace. */
-    pending(state): string[] {
+    unsaved(state): string[] {
       return Object.keys(state.errors)
     },
   },

@@ -1,4 +1,5 @@
-import type { Action, EntityInput, GrantInput, RoleInput, UserInput } from '@/gql/graphql'
+import type { Action } from '@/gql/graphql'
+import type { EntityInput, GrantInput, RoleInput, UserInput } from '@/gql/schema'
 import { EntityIndex, entityId } from './entityRefs'
 
 // A summary of how a change edits the authorization rules, shown before the

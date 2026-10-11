@@ -20,13 +20,13 @@ describe('settings edits', () => {
     edits.edit('cost', '{"maxRows": 20}')
     expect(ws.settings.cost).toEqual({ maxRows: 20 })
     expect(ws.changes).toEqual([{ kind: 'settings', name: 'settings', type: 'modified' }])
-    expect(edits.pending).toEqual([])
+    expect(edits.unsaved).toEqual([])
   })
 
   it('keeps invalid JSON pending and out of the workspace', () => {
     const { ws, edits } = setup()
     edits.edit('cache', '{oops')
-    expect(edits.pending).toEqual(['cache'])
+    expect(edits.unsaved).toEqual(['cache'])
     expect(ws.settings.cache).toEqual({ enabled: false })
     ws.setSettings({ cost: { maxRows: 30 }, cache: { enabled: true } })
     edits.sync()
@@ -42,7 +42,7 @@ describe('settings edits', () => {
     ws.setSettings({ cost: { maxRows: 99 }, cache: { enabled: false } })
     edits.sync()
     expect(JSON.parse(edits.texts.cost)).toEqual({ maxRows: 99 })
-    expect(edits.pending).toEqual([])
+    expect(edits.unsaved).toEqual([])
   })
 
   it('reverts a section to the base revision', () => {
@@ -52,7 +52,7 @@ describe('settings edits', () => {
     edits.revert('cost')
     edits.revert('cache')
     expect(ws.settings).toEqual({ cost: { maxRows: 10 }, cache: { enabled: false } })
-    expect(edits.pending).toEqual([])
+    expect(edits.unsaved).toEqual([])
     expect(ws.dirty).toBe(false)
   })
 })

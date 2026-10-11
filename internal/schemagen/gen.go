@@ -83,7 +83,7 @@ type node map[string]any
 
 var keyOrder = []string{
 	"$schema", "$ref", "title", "x-title-zh-CN", "description", "x-description-zh-CN", "type", "x-format",
-	"x-minimum", "x-maximum", "default", "enum", "examples", "pattern", "minLength", "minimum", "maximum", "minItems",
+	"x-minimum", "x-maximum", "default", "enum", "pattern", "minLength", "minimum", "maximum", "minItems",
 	"x-restart", "anyOf",
 	"required", "properties", "propertyNames", "additionalProperties", "items", "$defs",
 }
@@ -325,9 +325,6 @@ func (g *generator) value(t reflect.Type, rule config.Rule, key, section string,
 func scalarRules(n node, rule config.Rule) {
 	if rule.Enum != nil {
 		n["enum"] = rule.Enum
-	}
-	if rule.Examples != nil {
-		n["examples"] = rule.Examples
 	}
 	if rule.Pattern != "" {
 		n["pattern"] = rule.Pattern

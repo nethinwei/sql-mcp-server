@@ -11,7 +11,8 @@ import { simulationRoute } from '@/lib/simulation'
 import { useWorkspace } from '@/stores/workspace'
 import { nameError } from '@/lib/names'
 import { can } from '@/api/session'
-import type { Action, GrantInput } from '@/gql/graphql'
+import type { Action } from '@/gql/graphql'
+import type { GrantInput } from '@/gql/schema'
 
 const props = defineProps<{ name: string }>()
 const { t } = useI18n()
@@ -108,7 +109,7 @@ function remove() {
           <n-select v-model:value="previewAs" size="small" :options="previewOptions" class="preview-as" />
         </n-space>
       </template>
-      <visibility-table :who="previewAs" :draft="ws.draft" live compact
+      <visibility-table :who="previewAs" :revision="null" :entities="ws.entities" :context="ws.contextKey" live compact
         @pick="(e, a, f) => simulatePick(previewAs, e, a, f)" />
     </n-card>
 

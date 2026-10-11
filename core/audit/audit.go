@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
 )
 
@@ -84,6 +85,12 @@ type AsyncAuditor struct {
 // NewAsyncAuditorWithClose starts a flusher goroutine and closes the sink (when
 // closeSink is non-nil) after draining. Call Close to drain and stop.
 func NewAsyncAuditorWithClose(sink Sink, closeSink func() error, queueSize int) *AsyncAuditor {
+	return NewAsyncAuditorOn(nil, sink, closeSink, queueSize)
+}
+
+// NewAsyncAuditorOn is NewAsyncAuditorWithClose with the flusher a background
+// task of b. On a closed bus the auditor starts closed: it records nothing.
+func NewAsyncAuditorOn(b *bus.Bus, sink Sink, closeSink func() error, queueSize int) *AsyncAuditor {
 	if queueSize <= 0 {
 		queueSize = 1024
 	}
@@ -93,7 +100,13 @@ func NewAsyncAuditorWithClose(sink Sink, closeSink func() error, queueSize int) 
 		closeSink: closeSink,
 		done:      make(chan struct{}),
 	}
-	go a.flush()
+	if !b.Go("audit flush", func(context.Context) { a.flush() }) {
+		a.closed.Store(true)
+		if closeSink != nil {
+			_ = closeSink()
+		}
+		close(a.done)
+	}
 	return a
 }
 

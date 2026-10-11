@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
@@ -37,10 +38,12 @@ const assessTimeout = 2 * time.Minute
 func (a *App) assessInBackground(cfg *config.Config, connections Connections, entities []entity.Entity) {
 	ctx, cancel := context.WithTimeout(context.Background(), assessTimeout)
 	a.stopAssessing, a.assessed = cancel, make(chan struct{})
-	go func() {
+	b := a.Bus()
+	started := b.Go("capability assessment", func(context.Context) {
 		defer close(a.assessed)
 		defer cancel()
-		capabilities := assessCapabilities(ctx, cfg, connections, entities)
+		// A panic leaves the capabilities unknown; the bus logs it.
+		capabilities := assessCapabilities(ctx, b.Lane(bus.Background), cfg, connections, entities)
 		if ctx.Err() != nil {
 			return // closed, or timed out: the capabilities stay unknown
 		}
@@ -48,7 +51,11 @@ func (a *App) assessInBackground(cfg *config.Config, connections Connections, en
 		for _, warning := range CapabilityWarnings(cfg, capabilities) {
 			slog.Warn("grant exceeds the datasource connection's privileges", "detail", warning)
 		}
-	}()
+	})
+	if !started { // the bus is closed: the capabilities stay unknown
+		cancel()
+		close(a.assessed)
+	}
 }
 
 // Capabilities returns what the routed connections may do per entity action,
@@ -130,9 +137,10 @@ func routedConnection(route config.RoutingConfig, action entity.Action) string {
 }
 
 // assessCapabilities asks each routed connection what it may do for each
-// entity action, reading table privileges a schema at a time.
+// entity action, reading table privileges a schema at a time, each
+// connection's reads and each entity's on lane.
 func assessCapabilities(
-	ctx context.Context, cfg *config.Config, connections Connections, entities []entity.Entity,
+	ctx context.Context, lane *bus.Lane, cfg *config.Config, connections Connections, entities []entity.Entity,
 ) EntityCapabilities {
 	inspectors := map[string]*connectionInspector{}
 	inspector := func(e entity.Entity, action entity.Action) *connectionInspector {
@@ -168,14 +176,28 @@ func assessCapabilities(
 		}
 	}
 	for c, bySchema := range wanted {
-		c.load(ctx, bySchema)
+		_ = lane.Run(ctx, func(ctx context.Context) error {
+			c.load(ctx, bySchema)
+			return nil
+		})
 	}
+	return assessEntities(ctx, lane, entities, inspector)
+}
+
+// assessEntities assesses each entity's actions on lane, an entity at a time.
+func assessEntities(
+	ctx context.Context, lane *bus.Lane, entities []entity.Entity,
+	inspector func(entity.Entity, entity.Action) *connectionInspector,
+) EntityCapabilities {
 	out := make(EntityCapabilities, len(entities))
 	for _, e := range entities {
 		out[e.Name] = map[entity.Action]Capability{}
-		for _, action := range entity.ActionsFor(e.Kind) {
-			out[e.Name][action] = assessAction(ctx, inspector(e, action), e, action)
-		}
+		_ = lane.Run(ctx, func(ctx context.Context) error {
+			for _, action := range entity.ActionsFor(e.Kind) {
+				out[e.Name][action] = assessAction(ctx, inspector(e, action), e, action)
+			}
+			return nil
+		})
 	}
 	return out
 }
@@ -263,7 +285,7 @@ func grantedActions(cfg *config.Config) map[string][]entity.Action {
 	refs := config.NewEntityRefs(cfg.Entities)
 	out := map[string][]entity.Action{}
 	add := func(entityName, action string) {
-		if a, ok := configActions[action]; ok && !slices.Contains(out[entityName], a) {
+		if a, ok := entity.ParseAction(action); ok && !slices.Contains(out[entityName], a) {
 			out[entityName] = append(out[entityName], a)
 		}
 	}

@@ -101,7 +101,7 @@ export function schemaCompletions(source: () => SchemaSource, t: Translate) {
       return { from: quoted ? c.from + 1 : c.from, options, validFor: /^[\w.-]*$/ }
     }
     const s = at(root, root, [...path, ...c.container, ...(c.key === undefined ? [] : [c.key])])
-    const values = s?.enum ?? s?.examples ?? (s?.type === 'boolean' ? [true, false] : [])
+    const values = s?.enum ?? (s?.type === 'boolean' ? [true, false] : [])
     if (!values.length) return null
     const options = values.map((v): Completion => {
       const literal = JSON.stringify(v)

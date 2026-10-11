@@ -100,9 +100,9 @@ func TestStoreCommandsLifecycle(t *testing.T) {
 	if out := mustRun(t, "store", "rollback", "--store", spec); !strings.Contains(out, "content of "+id1) {
 		t.Fatalf("rollback output = %q", out)
 	}
-	exported := mustRun(t, "export", "--config", first)
-	if shown := mustRun(t, "store", "show", "--store", spec, "published"); shown != exported {
-		t.Fatalf("rollback must restore the first payload byte for byte:\n%s\nwant:\n%s", shown, exported)
+	stored := storedPayload(t, first)
+	if shown := mustRun(t, "store", "show", "--store", spec, "published"); shown != stored {
+		t.Fatalf("rollback must restore the first payload byte for byte:\n%s\nwant:\n%s", shown, stored)
 	}
 }
 
@@ -158,7 +158,7 @@ func TestMigrateRoundTripsFileAndStores(t *testing.T) {
 	}
 	back := filepath.Join(dir, "back.yaml")
 	mustRun(t, "migrate", "--from", other, "--to", "file:"+back)
-	want := mustRun(t, "export", "--config", filepath.Join(dir, "v2.yaml"))
+	want := storedPayload(t, filepath.Join(dir, "v2.yaml"))
 	got, _ := os.ReadFile(back)
 	if string(got) != want {
 		t.Fatalf("store -> file must reproduce the published payload:\n%s\nwant:\n%s", got, want)
@@ -234,4 +234,15 @@ func TestStoreDiffMatchesAdminAPI(t *testing.T) {
 	if raw := mustRun(t, "store", "diff", "--raw", "--store", spec, ref); !strings.Contains(raw, `-        alias: ""`) {
 		t.Fatalf("--raw must compare stored bytes:\n%s", raw)
 	}
+}
+
+// storedPayload is the payload importing the configuration file at path
+// stores: what it says.
+func storedPayload(t *testing.T, path string) string {
+	t.Helper()
+	payload, err := storePayload(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(payload)
 }

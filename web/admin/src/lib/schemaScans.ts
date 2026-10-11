@@ -1,35 +1,27 @@
 import { reactive } from 'vue'
-import type { DataTableRowKey } from 'naive-ui'
 import { run } from '@/api/client'
-import { CancelSchemaScanMutation, SchemaScanQuery, SchemaSyncQuery, StartSchemaScanMutation } from '@/api/ops'
-import type { ImportPartsFragment } from '@/gql/graphql'
-import { tableKey } from './importer'
+import {
+  CancelScanBatchMutation, RetryScanBatchMutation, ScanBatchesQuery, SchemaListQuery, StartScanBatchMutation,
+} from '@/api/ops'
+import type { ImportTablePartsFragment, ScanBatchPartsFragment } from '@/gql/graphql'
 
-// Importing goes database by database: the page lists a datasource's schemas
-// and scans one when it is opened. The server keeps each schema's last scan
-// until the next one, and works out candidate names and relationships over
-// every scanned schema of the datasource, so the page reads the list and the
-// tables of every scanned schema in one answer (a sync) and shows only the
-// latest one: a sync started after the last scan finished sees every scan.
-// The state lives here, outside the page, so leaving and coming back keeps
-// it. It belongs to the database the datasource reads (its source): when the
-// datasource is pointed elsewhere, the page drops it.
+// Scanning goes schema by schema, in batches the server runs a few at a time:
+// a batch goes on when the console is closed or reloaded, which reads the
+// batches again and follows them. The server keeps each schema's last scan in
+// its catalog, which the page searches a page at a time (see CatalogQuery);
+// `scans.version` changes whenever a schema is scanned, so a view of the
+// catalog reads it again. The schema list belongs to the database the
+// datasource reads (its source): when the datasource is pointed elsewhere,
+// the list is dropped.
 
-export type SchemaImport = ImportPartsFragment
-export type Table = SchemaImport['tables'][number]
+export type Table = ImportTablePartsFragment
+export type ScanBatch = ScanBatchPartsFragment
 
 export interface SchemaNode {
   /** '' when the datasource cannot list schemas: its default one. */
   name: string
   scannedAt: string | null
   tables: number | null
-  scanning: boolean
-  job: string | null
-  /** Why the last scan failed. */
-  error: string | null
-  checked: DataTableRowKey[]
-  /** Bumped per scan; an answer about an older one is dropped. */
-  seq: number
 }
 
 export interface DatasourceScans {
@@ -38,76 +30,39 @@ export interface DatasourceScans {
   listed: boolean
   defaultSchema: string | null
   schemas: SchemaNode[]
-  expanded: string[]
-  /** The tables of every scanned schema, from the latest sync. */
-  result: SchemaImport | null
   syncing: boolean
-  /** Why the latest sync failed: what is shown may be stale. */
+  /** Why the latest listing failed: what is shown may be stale. */
   error: string | null
-  /** Bumped per sync; only the latest one's answer is shown. */
+  /** Bumped per listing; only the latest one's answer is shown. */
   seq: number
+  /** Recent batches, running ones first. */
+  batches: ScanBatch[]
 }
 
-export const scans = reactive<Record<string, DatasourceScans>>({})
+export const scans = reactive<{ by: Record<string, DatasourceScans>; version: number }>({ by: {}, version: 0 })
 
 export function scansOf(ds: string): DatasourceScans {
-  scans[ds] ??= {
-    source: null, listed: false, defaultSchema: null, schemas: [], expanded: [], result: null, syncing: false,
-    error: null, seq: 0,
+  scans.by[ds] ??= {
+    source: null, listed: false, defaultSchema: null, schemas: [], syncing: false, error: null, seq: 0, batches: [],
   }
-  return scans[ds]
+  return scans.by[ds]
 }
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
-function node(name: string): SchemaNode {
-  return { name, scannedAt: null, tables: null, scanning: false, job: null, error: null, checked: [], seq: 0 }
-}
-
-/** The tables read, by schema; "" (the default schema of a datasource that cannot list them) has all. */
-export function tablesBySchema(result: SchemaImport | null): Map<string, Table[]> {
-  const out = new Map<string, Table[]>([['', result?.tables ?? []]])
-  for (const tb of result?.tables ?? []) {
-    const same = out.get(tb.schema)
-    if (same && tb.schema) same.push(tb)
-    else if (tb.schema) out.set(tb.schema, [tb])
-  }
-  return out
-}
-
-/**
- * Reads the schema list of ds (from the database with refresh) and the
- * tables of every scanned schema in one answer, keeping the checked tables.
- */
+/** Reads the schema list of ds (from the database with refresh). */
 export async function sync(ds: string, refresh = false) {
   const s = scansOf(ds)
   const mine = ++s.seq
   s.syncing = true
   s.error = null
   try {
-    const { schemaList, schemaTables } = await run(SchemaSyncQuery, { datasource: ds, refresh })
+    const { schemaList } = await run(SchemaListQuery, { datasource: ds, refresh })
     if (mine !== s.seq) return
-    if (schemaList.source !== s.source || schemaTables.source !== s.source) {
-      for (const n of s.schemas) n.seq++
-      Object.assign(s, { source: schemaList.source, schemas: [], expanded: [], result: null })
-      // The configuration changed while answering: the tables may be the
-      // other database's.
-      if (schemaTables.source !== schemaList.source) return void sync(ds)
-    }
-    const known = new Map(s.schemas.map((n) => [n.name, n]))
-    s.schemas = schemaList.schemas.map((x) => Object.assign(known.get(x.name) ?? node(x.name),
-      { scannedAt: x.scannedAt ?? null, tables: x.tables ?? null }))
+    if (schemaList.source !== s.source) Object.assign(s, { source: schemaList.source, schemas: [] })
+    s.schemas = schemaList.schemas.map((x) => ({ name: x.name, scannedAt: x.scannedAt ?? null, tables: x.tables ?? null }))
     s.defaultSchema = schemaList.defaultSchema ?? null
-    s.expanded = s.expanded.filter((name) => s.schemas.some((n) => n.name === name))
     s.listed = true
-    s.result = schemaTables
-    const keys = new Set(schemaTables.tables.map(tableKey))
-    for (const n of s.schemas) n.checked = n.checked.filter((k) => keys.has(String(k)))
-    // A schema left open whose scan the server no longer keeps (it restarted,
-    // or the datasource reads another database) is scanned again.
-    for (const n of s.schemas) {
-      if (s.expanded.includes(n.name) && !n.scannedAt && !n.scanning && !n.error) void scanSchema(ds, n)
-    }
   } catch (e) {
     if (mine === s.seq) s.error = message(e)
   } finally {
@@ -115,50 +70,66 @@ export async function sync(ds: string, refresh = false) {
   }
 }
 
+/** The latest state of a schema in the batches: running, failed, ... */
+export function batchState(s: DatasourceScans, schema: string): { state: string; error: string | null } | null {
+  for (const b of s.batches) {
+    const item = b.items.find((i) => i.schema === schema)
+    if (item) return { state: item.state, error: item.error ?? null }
+  }
+  return null
+}
+
+const running = (s: DatasourceScans) => s.batches.some((b) => b.state === 'running')
+const doneCount = (s: DatasourceScans) => s.batches.reduce((n, b) => n + b.done, 0)
+const polling = new Set<string>()
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-/** Scans a schema in the background on the server, then syncs. */
-export async function scanSchema(ds: string, n: SchemaNode) {
-  const mine = ++n.seq
-  n.scanning = true
-  n.error = null
+/**
+ * Reads the batches of ds, and follows them while one runs: each schema
+ * scanned refreshes the schema list and the catalog.
+ */
+export async function followBatches(ds: string, interval = 1000) {
+  const s = scansOf(ds)
+  if (polling.has(ds)) return
+  polling.add(ds)
   try {
-    const { startSchemaScan } = await run(StartSchemaScanMutation, { datasource: ds, schemas: n.name ? [n.name] : null }, true)
-    // Canceled while starting: the job has an id only now.
-    if (mine !== n.seq) return await cancelJob(startSchemaScan.id)
-    n.job = startSchemaScan.id
-    for (let delay = 200; mine === n.seq; delay = Math.min(delay * 2, 2000)) {
-      await sleep(delay)
-      if (mine !== n.seq) return
-      const { schemaScan: job } = await run(SchemaScanQuery, { id: startSchemaScan.id })
-      if (mine !== n.seq) return
-      if (!job || job.state === 'CANCELED') return
-      if (job.state === 'FAILED') throw new Error(job.error ?? '')
-      if (job.state === 'DONE') return await sync(ds)
+    for (let first = true; first || running(s); first = false) {
+      if (!first) await sleep(interval)
+      const before = doneCount(s)
+      s.batches = (await run(ScanBatchesQuery, { datasource: ds })).scanBatches
+      if (doneCount(s) !== before) {
+        await sync(ds)
+        scans.version++
+      }
     }
   } catch (e) {
-    if (mine === n.seq) n.error = message(e)
+    s.error = message(e)
   } finally {
-    if (mine === n.seq) {
-      n.scanning = false
-      n.job = null
-    }
+    polling.delete(ds)
   }
 }
 
-/** Stops a running scan, or one starting; the schema keeps what it showed before. */
-export async function cancelScan(n: SchemaNode) {
-  const id = n.job
-  n.seq++
-  n.scanning = false
-  n.job = null
-  if (id) await cancelJob(id)
+/** Scans schemas of ds on the server as a batch. */
+export async function startBatch(ds: string, schemas: string[]) {
+  // One key per request: a retried request (a refreshed CSRF token) gets the
+  // batch the first one started instead of starting another.
+  const requestKey = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('')
+  const { startScanBatch } = await run(StartScanBatchMutation, { input: { datasource: ds, schemas, requestKey } }, true)
+  const s = scansOf(ds)
+  s.batches = [startScanBatch, ...s.batches.filter((b) => b.id !== startScanBatch.id)]
+  void followBatches(ds)
 }
 
-async function cancelJob(id: string) {
-  try {
-    await run(CancelSchemaScanMutation, { id }, true)
-  } catch {
-    // The server ends the scan on its own at its timeout.
-  }
+/** Stops a batch: what is waiting is not scanned, what runs is canceled. */
+export async function cancelBatch(ds: string, id: string) {
+  await run(CancelScanBatchMutation, { id }, true)
+  await followBatches(ds)
+}
+
+/** Scans again what a batch failed to scan or did not get to. */
+export async function retryBatch(ds: string, id: string) {
+  const { retryScanBatch } = await run(RetryScanBatchMutation, { id }, true)
+  const s = scansOf(ds)
+  s.batches = [retryScanBatch, ...s.batches]
+  void followBatches(ds)
 }

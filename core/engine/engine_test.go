@@ -15,7 +15,7 @@ func TestSubmitExecutes(t *testing.T) {
 	t.Parallel()
 	e, _ := New(WithIOPool(2), WithMaxInflight(4))
 	ran := false
-	if _, err := e.Submit(context.Background(), "k", func(_ context.Context) (any, error) {
+	if _, err := Submit(context.Background(), e, "k", func(_ context.Context) (any, error) {
 		ran = true
 		return nil, nil
 	}); err != nil {
@@ -31,13 +31,13 @@ func TestSubmitOverloaded(t *testing.T) {
 	e, _ := New(WithIOPool(1), WithMaxInflight(1))
 	block := make(chan struct{})
 	go func() {
-		_, _ = e.Submit(context.Background(), "k1", func(_ context.Context) (any, error) {
+		_, _ = Submit(context.Background(), e, "k1", func(_ context.Context) (any, error) {
 			<-block
 			return nil, nil
 		})
 	}()
 	time.Sleep(20 * time.Millisecond)
-	_, err := e.Submit(context.Background(), "k2", func(_ context.Context) (any, error) { return nil, nil })
+	_, err := Submit(context.Background(), e, "k2", func(_ context.Context) (any, error) { return nil, nil })
 	if !errors.Is(err, ErrOverloaded) {
 		t.Fatalf("got %v, want ErrOverloaded", err)
 	}
@@ -55,7 +55,7 @@ func TestSubmitSingleflightDedup(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = e.Submit(context.Background(), key, func(_ context.Context) (any, error) {
+			_, _ = Submit(context.Background(), e, key, func(_ context.Context) (any, error) {
 				calls.Add(1)
 				time.Sleep(20 * time.Millisecond)
 				return nil, nil
@@ -71,7 +71,7 @@ func TestSubmitSingleflightDedup(t *testing.T) {
 func TestSubmitPanicRecovered(t *testing.T) {
 	t.Parallel()
 	e, _ := New(WithIOPool(1), WithMaxInflight(2))
-	_, err := e.Submit(context.Background(), "k", func(_ context.Context) (any, error) {
+	_, err := Submit(context.Background(), e, "k", func(_ context.Context) (any, error) {
 		panic("boom")
 	})
 	if err == nil || !contains(err.Error(), "panic recovered") {
@@ -83,10 +83,10 @@ func TestSubmitBreakerOpen(t *testing.T) {
 	t.Parallel()
 	b := ratelimit.NewBreaker(1, time.Second)
 	e, _ := New(WithIOPool(1), WithMaxInflight(2), WithBreaker(b))
-	_, _ = e.Submit(context.Background(), "k", func(_ context.Context) (any, error) {
+	_, _ = Submit(context.Background(), e, "k", func(_ context.Context) (any, error) {
 		return nil, errors.New("fail")
 	})
-	_, err := e.Submit(context.Background(), "k2", func(_ context.Context) (any, error) { return nil, nil })
+	_, err := Submit(context.Background(), e, "k2", func(_ context.Context) (any, error) { return nil, nil })
 	if !errors.Is(err, ratelimit.ErrCircuitOpen) {
 		t.Fatalf("got %v, want ErrCircuitOpen", err)
 	}
@@ -102,7 +102,7 @@ func TestSubmitIgnoredFailureDoesNotAffectBreakerOrAIMD(t *testing.T) {
 		WithFailureClassifier(func(err error) bool { return !errors.Is(err, businessErr) }),
 	)
 	before := limiter.Limit()
-	_, err := e.Submit(context.Background(), "", func(context.Context) (any, error) {
+	_, err := Submit(context.Background(), e, "", func(context.Context) (any, error) {
 		return nil, businessErr
 	})
 	if !errors.Is(err, businessErr) {
@@ -112,7 +112,7 @@ func TestSubmitIgnoredFailureDoesNotAffectBreakerOrAIMD(t *testing.T) {
 		t.Fatalf("business error changed health controls: breaker=%v limit=%d", breaker.IsOpen(), limiter.Limit())
 	}
 	systemErr := errors.New("provider failed")
-	_, _ = e.Submit(context.Background(), "", func(context.Context) (any, error) {
+	_, _ = Submit(context.Background(), e, "", func(context.Context) (any, error) {
 		return nil, systemErr
 	})
 	if !breaker.IsOpen() || limiter.Limit() >= before {
@@ -128,13 +128,13 @@ func TestSubmitCtxCancel(t *testing.T) {
 	// occupy the io slot so the next Submit blocks on iosem and observes ctx
 	block := make(chan struct{})
 	go func() {
-		_, _ = e.Submit(context.Background(), "occupier", func(_ context.Context) (any, error) {
+		_, _ = Submit(context.Background(), e, "occupier", func(_ context.Context) (any, error) {
 			<-block
 			return nil, nil
 		})
 	}()
 	time.Sleep(20 * time.Millisecond)
-	_, err := e.Submit(ctx, "k", func(_ context.Context) (any, error) { return nil, nil })
+	_, err := Submit(ctx, e, "k", func(_ context.Context) (any, error) { return nil, nil })
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v, want context.Canceled", err)
 	}
@@ -157,7 +157,7 @@ func TestSubmitEmptyKeyNoDedup(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = e.Submit(context.Background(), "", func(_ context.Context) (any, error) {
+			_, _ = Submit(context.Background(), e, "", func(_ context.Context) (any, error) {
 				calls.Add(1)
 				time.Sleep(10 * time.Millisecond)
 				return nil, nil
@@ -178,14 +178,14 @@ func TestSubmitAdaptiveLimitRejects(t *testing.T) {
 	started := make(chan struct{})
 	block := make(chan struct{})
 	go func() {
-		_, _ = e.Submit(context.Background(), "", func(_ context.Context) (any, error) {
+		_, _ = Submit(context.Background(), e, "", func(_ context.Context) (any, error) {
 			close(started)
 			<-block
 			return nil, nil
 		})
 	}()
 	<-started
-	_, err := e.Submit(context.Background(), "", func(_ context.Context) (any, error) { return nil, nil })
+	_, err := Submit(context.Background(), e, "", func(_ context.Context) (any, error) { return nil, nil })
 	if !errors.Is(err, ratelimit.ErrRateLimited) {
 		t.Fatalf("got %v, want ErrRateLimited", err)
 	}
@@ -195,12 +195,12 @@ func TestSubmitAdaptiveLimitRejects(t *testing.T) {
 func TestSubmitRPSLimitRejects(t *testing.T) {
 	t.Parallel()
 	e, _ := New(WithRPSLimiter(ratelimit.NewTokenBucket(1)))
-	if _, err := e.Submit(context.Background(), "", func(context.Context) (any, error) {
+	if _, err := Submit(context.Background(), e, "", func(context.Context) (any, error) {
 		return nil, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Submit(context.Background(), "", func(context.Context) (any, error) {
+	if _, err := Submit(context.Background(), e, "", func(context.Context) (any, error) {
 		return nil, nil
 	}); !errors.Is(err, ratelimit.ErrRateLimited) {
 		t.Fatalf("second submit error = %v", err)
@@ -218,7 +218,7 @@ func TestSubmitSingleflightSharesResult(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			<-start
-			v, _ := e.Submit(context.Background(), "shared", func(_ context.Context) (any, error) {
+			v, _ := Submit(context.Background(), e, "shared", func(_ context.Context) (any, error) {
 				time.Sleep(20 * time.Millisecond)
 				return 42, nil
 			})
@@ -240,7 +240,7 @@ func TestSingleflightWaiterContextCancellation(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	go func() {
-		_, _ = e.Submit(context.Background(), "shared", func(context.Context) (any, error) {
+		_, _ = Submit(context.Background(), e, "shared", func(context.Context) (any, error) {
 			close(started)
 			<-release
 			return 1, nil
@@ -249,7 +249,7 @@ func TestSingleflightWaiterContextCancellation(t *testing.T) {
 	<-started
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	_, err := e.Submit(ctx, "shared", func(context.Context) (any, error) {
+	_, err := Submit(ctx, e, "shared", func(context.Context) (any, error) {
 		t.Fatal("waiter must not execute")
 		return nil, nil
 	})
@@ -285,7 +285,7 @@ func TestSingleflightLeaderCancellationDoesNotCancelRemainingWaiter(t *testing.T
 	release := make(chan struct{})
 	leaderDone := make(chan error, 1)
 	go func() {
-		_, err := e.Submit(leaderCtx, "shared-cancel", func(ctx context.Context) (any, error) {
+		_, err := Submit(leaderCtx, e, "shared-cancel", func(ctx context.Context) (any, error) {
 			close(started)
 			select {
 			case <-release:
@@ -302,7 +302,7 @@ func TestSingleflightLeaderCancellationDoesNotCancelRemainingWaiter(t *testing.T
 		err   error
 	}, 1)
 	go func() {
-		value, err := e.Submit(context.Background(), "shared-cancel", func(context.Context) (any, error) {
+		value, err := Submit(context.Background(), e, "shared-cancel", func(context.Context) (any, error) {
 			t.Error("waiter must not execute")
 			return nil, nil
 		})
@@ -328,7 +328,7 @@ func TestSingleflightPropagatesLeaderDeadline(t *testing.T) {
 	e, _ := New(WithIOPool(1), WithMaxInflight(2))
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	_, err := e.Submit(ctx, "deadline", func(runCtx context.Context) (any, error) {
+	_, err := Submit(ctx, e, "deadline", func(runCtx context.Context) (any, error) {
 		deadline, ok := runCtx.Deadline()
 		if !ok {
 			t.Fatal("shared execution context has no deadline")
@@ -358,7 +358,7 @@ func TestSingleflightCancelsExecutionAfterAllWaitersCancel(t *testing.T) {
 	executionCanceled := make(chan error, 1)
 	results := make(chan error, 2)
 	go func() {
-		_, err := e.Submit(ctx1, "all-cancel", func(ctx context.Context) (any, error) {
+		_, err := Submit(ctx1, e, "all-cancel", func(ctx context.Context) (any, error) {
 			close(started)
 			<-ctx.Done()
 			executionCanceled <- ctx.Err()
@@ -368,7 +368,7 @@ func TestSingleflightCancelsExecutionAfterAllWaitersCancel(t *testing.T) {
 	}()
 	<-started
 	go func() {
-		_, err := e.Submit(ctx2, "all-cancel", func(context.Context) (any, error) {
+		_, err := Submit(ctx2, e, "all-cancel", func(context.Context) (any, error) {
 			t.Error("waiter must not execute")
 			return nil, nil
 		})
@@ -403,7 +403,7 @@ func TestDrainRejectsAndWaits(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	go func() {
-		_, _ = e.Submit(context.Background(), "", func(context.Context) (any, error) {
+		_, _ = Submit(context.Background(), e, "", func(context.Context) (any, error) {
 			close(started)
 			<-release
 			return nil, nil
@@ -416,7 +416,7 @@ func TestDrainRejectsAndWaits(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
-		_, err := e.Submit(ctx, "", func(context.Context) (any, error) { return nil, nil })
+		_, err := Submit(ctx, e, "", func(context.Context) (any, error) { return nil, nil })
 		cancel()
 		if errors.Is(err, ErrClosed) {
 			break
@@ -444,7 +444,7 @@ func TestDrainWaitsForSingleflightExecutionAfterAllWaitersCancel(t *testing.T) {
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	results := make(chan error, 2)
 	run := func(ctx context.Context) {
-		_, err := e.Submit(ctx, "detached", func(context.Context) (any, error) {
+		_, err := Submit(ctx, e, "detached", func(context.Context) (any, error) {
 			close(started)
 			<-release
 			return nil, nil
@@ -482,4 +482,20 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// Run holds to the rate limit and recovers panics, and passes the breaker.
+func TestRunPassesTheBreakerUnderTheRateLimit(t *testing.T) {
+	t.Parallel()
+	breaker := ratelimit.NewBreaker(1, time.Hour)
+	breaker.Record(false)
+	e, _ := New(WithIOPool(1), WithBreaker(breaker), WithRPSLimiter(ratelimit.NewTokenBucket(1)))
+	if _, err := Run(context.Background(), e, func(context.Context) (any, error) { panic("boom") }); err == nil {
+		t.Fatal("a panic was not recovered")
+	}
+	if _, err := Run(context.Background(), e, func(context.Context) (any, error) { return nil, nil }); !errors.Is(
+		err, ratelimit.ErrRateLimited,
+	) {
+		t.Fatalf("a second run within the second passed the rate limit: %v", err)
+	}
 }
