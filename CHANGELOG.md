@@ -185,6 +185,14 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 - 控制台：ESLint 进入 `make web`；消息键存在性测试；实时更新在 SSE 连接期间把
   轮询从 10 秒降到 60 秒。新增术语表 `docs/glossary.md`，部署模式与预算分层写入
   `docs/configuration.md`。
+- 代码整理（行为不变）：扫描批次的跨进程租约、心跳、接管与重试抽成 `x/leasing`
+  （交错模型测试锁定其不变量）；`core/store/storetest`、`core/cost/costtest` 承载测试
+  替身，生产包不再编译它们；`x/providers/sqladapter` 的 `Base` 与 `Scanned` 为三个
+  provider 共用连接骨架与扫描累积；配置库行扫描、占位符与加锁事务收敛为泛型助手；
+  装配入口收敛为一个 `assembly`；`internal/kit` 收拢指针/切片小工具；`config.Spec`
+  成为管理面唯一的内存表示，工作区写入按索引单遍应用，合并按子树记忆规范形式。
+- `/metrics` 改由 OpenTelemetry 指标经 Prometheus exporter 提供，指标名、标签与
+  直方图分桶不变（标签按名称排序输出）。
 
 ### Breaking
 
@@ -196,6 +204,15 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 - GraphQL：`ServerStatus.pending: PendingRevision` 改名为
   `unapplied: UnappliedRevision`；移除 `DraftInput` 与 `createDraft`（改用工作区与
   `checkpointWorkspace`），查询的 `draft` 参数改为 `revision`（默认调用者的工作区）。
+- GraphQL 配置读模型（`Configuration.entities/roles/users`、方案预览与导入候选的
+  `Entity`）改为与工作区项同一形状：如实返回配置写了什么，未设置即 null（`mcp`、
+  `allowCascade`、`Field.exclude`、`Grant.fieldsRestricted`、`User.disabled` 变为可空），
+  移除可推导的 `Entity.id`、`Role.members`、`User.hasToken`（无令牌即 `tokenHash` 为 null）；
+  `ScanState`、`TableStatus`、`Action` 枚举在 Go 侧为字符串。
+- Go API：`relalg.IsNull` 谓词移除，改用 `Condition{Op: OpIsNull/OpIsNotNull}`；
+  `engine.Submit`/`engine.Run` 改为泛型包级函数；`mcpserver.HTTPConfig` 的鉴权字段
+  移入嵌入的 `HTTPAuth`；`store.Fake*`、`cost.Fake*` 移至 `storetest`/`costtest`；
+  `tool.OutcomeUnknownError` 类型移除（`errors.Is(err, ErrOutcomeUnknown)` 不变）。
 
 ## 0.1.12 - 2026-10-09
 
