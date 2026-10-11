@@ -9,6 +9,10 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+## 0.1.13 - 2026-10-11
+
+升级步骤汇总见 [`docs/releases/v0.1.13.md`](docs/releases/v0.1.13.md#迁移)。
+
 ### Added
 
 - 执行总线 `core/bus`：所有触达数据库的执行按通道（工具调用 `serve`、管理读取
