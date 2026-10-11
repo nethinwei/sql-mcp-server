@@ -17,7 +17,7 @@ func TestEnginesShareQuotaSlots(t *testing.T) {
 	next, _ := New(WithQuota(quota))
 	hold, held := make(chan struct{}), make(chan struct{})
 	go func() {
-		_, _ = old.Submit(context.Background(), "", func(context.Context) (any, error) {
+		_, _ = Submit(context.Background(), old, "", func(context.Context) (any, error) {
 			close(held)
 			<-hold
 			return nil, nil
@@ -27,12 +27,12 @@ func TestEnginesShareQuotaSlots(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	nothing := func(context.Context) (any, error) { return nil, nil }
-	if _, err := next.Submit(ctx, "", nothing); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := Submit(ctx, next, "", nothing); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("second engine ran past the shared slot: %v", err)
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := next.Submit(context.Background(), "", nothing)
+		_, err := Submit(context.Background(), next, "", nothing)
 		done <- err
 	}()
 	quota.Update(2, nil, nil, nil)

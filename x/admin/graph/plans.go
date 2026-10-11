@@ -26,27 +26,31 @@ func decodeScope(v any) (configplan.Scope, error) {
 
 // toPlanPreview shows a preview with the entities, roles and users it
 // changes as the console edits them.
-func toPlanPreview(p *configapp.Preview) *PlanPreview {
+func toPlanPreview(p *configapp.Preview) (*PlanPreview, error) {
 	proposal := p.Proposal
 	out := &PlanPreview{
 		PlanID: p.PlanID, Report: p.Report, Entities: make([]Entity, 0, len(proposal.Entities)),
 		Added: kit.OrEmpty(proposal.Added), Validation: p.Validation,
 	}
 	for _, e := range proposal.Entities {
-		out.Entities = append(out.Entities, toEntity(e))
+		out.Entities = append(out.Entities, configapp.EntityItemOf(e))
+	}
+	sections, err := configapp.SectionsOfConfig(proposal.Config)
+	if err != nil {
+		return nil, err
 	}
 	canonical := canonicalGrants(p.Base, proposal.Config)
-	out.Roles = slices.DeleteFunc(toRoles(proposal.Config), func(role Role) bool {
+	out.Roles = slices.DeleteFunc(sections.Roles, func(role Role) bool {
 		_, ok := proposal.Roles[role.Name]
 		canonical(role.Grants)
 		return !ok
 	})
-	out.Users = slices.DeleteFunc(toUsers(proposal.Config), func(u User) bool {
+	out.Users = slices.DeleteFunc(sections.Users, func(u User) bool {
 		_, ok := proposal.Users[u.Name]
 		canonical(u.Grants)
 		return !ok
 	})
-	return out
+	return out, nil
 }
 
 // canonicalGrants names the entity of each grant by its ID, as base resolved

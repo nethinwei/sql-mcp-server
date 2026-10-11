@@ -90,7 +90,7 @@ func TestIsNullIsTwoValued(t *testing.T) {
 		Predicate: relalg.Condition{Field: "cat", Op: relalg.OpIsNull}})
 	wantIDs(t, res, 3, 6)
 	res = mustEval(t, relalg.Select{Input: scanT(),
-		Predicate: relalg.IsNull{Field: "cat", Not: true}})
+		Predicate: relalg.Condition{Field: "cat", Op: relalg.OpIsNotNull}})
 	wantIDs(t, res, 1, 2, 4, 5)
 }
 
@@ -151,7 +151,7 @@ func TestBagSemanticsAndDistinct(t *testing.T) {
 
 func TestSortLimitOffset(t *testing.T) {
 	sorted := relalg.Sort{
-		Input:   relalg.Select{Input: scanT(), Predicate: relalg.IsNull{Field: "val", Not: true}},
+		Input:   relalg.Select{Input: scanT(), Predicate: relalg.Condition{Field: "val", Op: relalg.OpIsNotNull}},
 		OrderBy: []relalg.OrderTerm{{Field: "val", Dir: "desc"}, {Field: "id", Dir: "asc"}},
 	}
 	res := mustEval(t, sorted)

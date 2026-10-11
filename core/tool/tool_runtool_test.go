@@ -247,7 +247,7 @@ func TestRunToolEngineBackpressure(t *testing.T) {
 	block := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
-		_, _ = eng.Submit(context.Background(), "", func(_ context.Context) (any, error) { <-block; return nil, nil })
+		_, _ = engine.Submit(context.Background(), eng, "", func(_ context.Context) (any, error) { <-block; return nil, nil })
 		close(done)
 	}()
 	time.Sleep(20 * time.Millisecond)

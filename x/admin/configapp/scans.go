@@ -320,7 +320,7 @@ func (r *Service) scanContext(ctx context.Context, datasource string) (*config.C
 }
 
 func toScanJob(j scanjobs.Job[struct{}]) *ScanJob {
-	out := &ScanJob{ID: j.ID, Datasource: j.Label, State: ScanState(j.State)}
+	out := &ScanJob{ID: j.ID, Datasource: j.Label, State: string(j.State)}
 	if j.Err != "" {
 		out.Error = &j.Err
 	}

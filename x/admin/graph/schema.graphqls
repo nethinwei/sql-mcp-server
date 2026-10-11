@@ -173,9 +173,11 @@ type DatasourceRouting {
   execute: String!
 }
 
+"""
+An entity as the configuration says it: an unset value is null (its default
+applies) and lists are written empty. Its shape is EntityInput's.
+"""
 type Entity {
-  "The canonical identity, datasource.schema.name (datasource.name without a schema)."
-  id: String!
   "Unique within the datasource and schema."
   name: String!
   "The table, view or procedure; null means the entity name."
@@ -194,12 +196,13 @@ type Entity {
   tenantPolicy: JSON
   "Entity-level roles, fieldACL and rowPolicies, kept for compatibility."
   legacyAccess: JSON
-  mcp: EntityMCP!
+  "null when none is set: the DML tools stay on."
+  mcp: EntityMCP
   params: [String!]!
   "Entities a procedure writes; empty invalidates its datasource's cached reads."
   affects: [String!]!
   "Admit deletes and key updates that foreign keys cascade to other tables without checking permissions there."
-  allowCascade: Boolean!
+  allowCascade: Boolean
 }
 
 type Field {
@@ -207,7 +210,7 @@ type Field {
   alias: String
   description: String
   mask: String
-  exclude: Boolean!
+  exclude: Boolean
 }
 
 type Relationship {
@@ -217,25 +220,24 @@ type Relationship {
   joinOn: JSON!
 }
 
+"An entity's MCP flags as set; an unset dmlTools defaults on."
 type EntityMCP {
-  dmlTools: Boolean!
-  customTool: Boolean!
-  trustedProcedure: Boolean!
+  dmlTools: Boolean
+  customTool: Boolean
+  trustedProcedure: Boolean
 }
 
 type Role {
   name: String!
   description: String
   grants: [Grant!]!
-  "Users that have this role."
-  members: [String!]!
 }
 
 type Grant {
   entity: String!
   actions: [Action!]!
-  "False grants every visible field; true limits to readFields/writeFields."
-  fieldsRestricted: Boolean!
+  "False or null grants every visible field; true limits to readFields/writeFields."
+  fieldsRestricted: Boolean
   readFields: [String!]!
   writeFields: [String!]!
   rows: JSON
@@ -247,8 +249,7 @@ type User {
   roles: [String!]!
   grants: [Grant!]!
   subject: JSON
-  disabled: Boolean!
-  hasToken: Boolean!
+  disabled: Boolean
   "The sha256 hash of the user's bearer token (never the token); null when none."
   tokenHash: String
 }

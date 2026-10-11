@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
@@ -288,7 +289,7 @@ func (r *queryResolver) Simulate(ctx context.Context, input SimulationInput) (*c
 		return nil, errors.New("subject must be an object")
 	}
 	return r.App.Simulate(ctx, configapp.SimulateRequest{Against: workspaceOr(input.Revision), User: input.User,
-		Entity: input.Entity, Action: graphActions[input.Action].String(), Fields: input.Fields, Subject: attrs})
+		Entity: input.Entity, Action: strings.ToLower(input.Action), Fields: input.Fields, Subject: attrs})
 }
 
 // Visibility is the resolver for the visibility field.
@@ -329,11 +330,11 @@ func (r *revisionResolver) Config(ctx context.Context, obj *Revision) (*Configur
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := bootstrap.LoadRevision(rev)
+	spec, cfg, err := bootstrap.LoadRevisionSpec(rev)
 	if err != nil {
 		return nil, err
 	}
-	return toConfiguration(cfg, rev.Payload)
+	return toConfiguration(spec, cfg)
 }
 
 // Sections is the resolver for the sections field.

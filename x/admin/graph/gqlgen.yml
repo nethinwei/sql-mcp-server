@@ -28,6 +28,20 @@ models:
   Time:
     model:
       - github.com/99designs/gqlgen/graphql.Time
+  # Enums the configuration service returns as plain strings (their values
+  # are validated against the schema by the GraphQL layer).
+  Action:
+    model:
+      - github.com/99designs/gqlgen/graphql.String
+  Field:
+    model:
+      - github.com/nethinwei/sql-mcp-server/x/admin/configapp.FieldItem
+  ScanState:
+    model:
+      - github.com/99designs/gqlgen/graphql.String
+  TableStatus:
+    model:
+      - github.com/99designs/gqlgen/graphql.String
   Revision:
     model:
       - github.com/nethinwei/sql-mcp-server/x/admin/graph.Revision

@@ -67,12 +67,6 @@ func FilterOf(p relalg.Predicate) FilterConfig {
 		return FilterConfig{"or": filterList(x.Preds)}
 	case relalg.Not:
 		return FilterConfig{"not": FilterOf(x.P)}
-	case relalg.IsNull:
-		op := relalg.OpIsNull
-		if x.Not {
-			op = relalg.OpIsNotNull
-		}
-		return FilterConfig{"op": string(op), "field": x.Field}
 	}
 	return nil
 }

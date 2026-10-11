@@ -51,9 +51,9 @@ func TestValidatePredicate(t *testing.T) {
 		}}, ErrInvalidOp},
 		{"or nested valid", Or{Preds: []Predicate{
 			Condition{Field: "a", Op: OpGt, Value: 0},
-			Not{P: IsNull{Field: "b"}},
+			Not{P: Condition{Field: "b", Op: OpIsNull}},
 		}}, nil},
-		{"isnull", IsNull{Field: "x"}, nil},
+		{"isnull", Condition{Field: "x", Op: OpIsNull}, nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -102,7 +102,7 @@ func TestNodeConstruction(t *testing.T) {
 				Input: Select{
 					Predicate: And{Preds: []Predicate{
 						Condition{Field: "id", Op: OpGt, Value: 0},
-						IsNull{Field: "deleted_at"},
+						Condition{Field: "deleted_at", Op: OpIsNull},
 					}},
 					Input: Scan{Relation: RelationRef{Name: "users"}},
 				},

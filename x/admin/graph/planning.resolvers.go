@@ -157,7 +157,7 @@ func (r *queryResolver) PreviewPlan(ctx context.Context, input PlanPreviewInput)
 	if err != nil {
 		return nil, err
 	}
-	return toPlanPreview(preview), nil
+	return toPlanPreview(preview)
 }
 
 // PlanTemplates is the resolver for the planTemplates field.

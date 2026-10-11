@@ -323,9 +323,7 @@ func serveTransport(
 		}
 		auth := httpAuth(cfg, runtime)
 		return mcpserver.ServeHTTP(ctx, srv, mcpserver.HTTPConfig{
-			Bus: runtime.Current().Bus(), Addr: addr, Token: auth.Token, TrustProxyHeaders: auth.TrustProxyHeaders,
-			TrustedProxyCIDRs: auth.TrustedProxyCIDRs, TLSCert: auth.TLSCert, TLSKey: auth.TLSKey,
-			ClientCA: auth.ClientCA, Users: auth.Users, OnSessionClosed: runtime.RollbackSession,
+			Bus: runtime.Current().Bus(), Addr: addr, HTTPAuth: auth, OnSessionClosed: runtime.RollbackSession,
 			SnapshotReady: runtime.SnapshotReady, DatabaseReady: runtime.DatabasesReady,
 			Metrics: metrics, RevokedPrincipals: runtime.OnRevokedPrincipals,
 			Admin: adminHandler, AuthChanges: auths.follow(runtime),

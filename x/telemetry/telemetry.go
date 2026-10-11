@@ -1,8 +1,8 @@
-// Package telemetry provides the minimal metrics set for tool calls: a call
-// counter labeled by tool and outcome, a per-tool duration histogram, and an
-// audit-drop counter, served in Prometheus text exposition format. It is
-// dependency-free by design; hosts that need a full metrics stack can mount
-// their own handler instead.
+// Package telemetry provides the metrics of tool calls: a call counter by
+// tool and outcome, a duration histogram by tool, and the audit events
+// dropped, as OpenTelemetry instruments on a meter provider of their own,
+// served in the Prometheus exposition format at /metrics. Hosts that need
+// the metrics elsewhere read them from the Exporter's registry.
 package telemetry
 
 import (
@@ -12,10 +12,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"sort"
-	"strings"
-	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel/attribute"
+	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
+	"go.opentelemetry.io/otel/metric"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
 	"github.com/nethinwei/sql-mcp-server/core/engine"
 	"github.com/nethinwei/sql-mcp-server/core/hook"
@@ -24,7 +28,7 @@ import (
 )
 
 // durationBuckets are the histogram upper bounds in seconds.
-var durationBuckets = [...]float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
+var durationBuckets = []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
 
 // Outcome values for infrastructure rejections that have no Denial code.
 const (
@@ -38,53 +42,72 @@ const (
 	outcomeInternal    = "INTERNAL"
 )
 
-type callKey struct {
-	tool    string
-	outcome string
-}
-
-type histogram struct {
-	counts [len(durationBuckets) + 1]uint64 // +1 for +Inf
-	sum    float64
-	total  uint64
-}
-
-func (h *histogram) observe(seconds float64) {
-	h.sum += seconds
-	h.total++
-	for i, bound := range durationBuckets {
-		if seconds <= bound {
-			h.counts[i]++
-			return
-		}
-	}
-	h.counts[len(durationBuckets)]++
-}
-
-// Metrics is a concurrency-safe collector plus http.Handler. The zero value
-// is not usable; construct with NewMetrics.
+// Metrics records tool calls and serves them. The zero value is not usable;
+// construct with NewMetrics.
 type Metrics struct {
-	mu           sync.Mutex
-	calls        map[callKey]uint64
-	durations    map[string]*histogram
+	provider     *sdkmetric.MeterProvider
+	registry     *prometheus.Registry
+	calls        metric.Int64Counter
+	durations    metric.Float64Histogram
 	auditDropped func() int64
 }
 
-// NewMetrics returns an empty collector.
+// NewMetrics returns an empty collector. It cannot fail with the instruments
+// it declares; an error would be a bug in this package.
 func NewMetrics() *Metrics {
-	return &Metrics{
-		calls:     map[callKey]uint64{},
-		durations: map[string]*histogram{},
+	m, err := newMetrics()
+	if err != nil {
+		panic("telemetry: " + err.Error())
 	}
+	return m
+}
+
+func newMetrics() (*Metrics, error) {
+	registry := prometheus.NewRegistry()
+	exporter, err := otelprom.New(
+		otelprom.WithRegisterer(registry), otelprom.WithoutScopeInfo(), otelprom.WithoutTargetInfo(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	m := &Metrics{provider: sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter)), registry: registry}
+	meter := m.provider.Meter("sql-mcp-server/telemetry")
+	m.calls, err = meter.Int64Counter("sql_mcp_tool_calls",
+		metric.WithDescription("Tool calls by tool and outcome (OK, denial code, or infrastructure rejection)."))
+	if err != nil {
+		return nil, err
+	}
+	if m.durations, err = meter.Float64Histogram("sql_mcp_tool_duration", metric.WithUnit("s"),
+		metric.WithDescription("Tool call duration."), metric.WithExplicitBucketBoundaries(durationBuckets...)); err != nil {
+		return nil, err
+	}
+	dropped, err := meter.Int64ObservableCounter("sql_mcp_audit_dropped",
+		metric.WithDescription("Audit events dropped due to a full queue."))
+	if err != nil {
+		return nil, err
+	}
+	_, err = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
+		var n int64
+		if m.auditDropped != nil {
+			n = m.auditDropped()
+		}
+		o.ObserveInt64(dropped, n)
+		return nil
+	}, dropped)
+	return m, err
 }
 
 // SetAuditDropped installs a live reader for the audit drop counter (e.g.
-// audit.AsyncAuditor.Dropped), sampled at scrape time.
-func (m *Metrics) SetAuditDropped(read func() int64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.auditDropped = read
-}
+// audit.AsyncAuditor.Dropped), sampled at scrape time. Set it before the
+// first scrape.
+func (m *Metrics) SetAuditDropped(read func() int64) { m.auditDropped = read }
+
+// Registry is the Prometheus registry the metrics are exported to, for a
+// host serving them alongside its own.
+func (m *Metrics) Registry() *prometheus.Registry { return m.registry }
+
+// Shutdown flushes and stops the meter provider.
+func (m *Metrics) Shutdown(ctx context.Context) error { return m.provider.Shutdown(ctx) }
 
 type startTimeCtxKey struct{}
 
@@ -100,21 +123,15 @@ func (m *Metrics) Hooks() *hook.Hooks {
 			if start, ok := ctx.Value(startTimeCtxKey{}).(time.Time); ok {
 				elapsed = time.Since(start)
 			}
-			m.record(name, Outcome(err), elapsed)
+			m.record(ctx, name, Outcome(err), elapsed)
 		},
 	}
 }
 
-func (m *Metrics) record(toolName, outcome string, elapsed time.Duration) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.calls[callKey{tool: toolName, outcome: outcome}]++
-	h := m.durations[toolName]
-	if h == nil {
-		h = &histogram{}
-		m.durations[toolName] = h
-	}
-	h.observe(elapsed.Seconds())
+func (m *Metrics) record(ctx context.Context, toolName, outcome string, elapsed time.Duration) {
+	byTool := attribute.String("tool", toolName)
+	m.calls.Add(ctx, 1, metric.WithAttributes(byTool, attribute.String("outcome", outcome)))
+	m.durations.Record(ctx, elapsed.Seconds(), metric.WithAttributes(byTool))
 }
 
 // Outcome classifies a tool error as a stable metric label: "" error is OK,
@@ -158,71 +175,15 @@ func LogHooks(logger *slog.Logger) *hook.Hooks {
 	}
 }
 
-// ServeHTTP writes the Prometheus text exposition format. Output is sorted
-// so scrapes are deterministic.
-func (m *Metrics) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	var b strings.Builder
-	m.writeCalls(&b)
-	m.writeDurations(&b)
-	m.writeAuditDropped(&b)
-	_, _ = w.Write([]byte(b.String()))
+// ServeHTTP writes the metrics in the Prometheus text exposition format.
+func (m *Metrics) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{
+		ErrorHandling: promhttp.ContinueOnError,
+		ErrorLog:      promLogger{},
+	}).ServeHTTP(w, r)
 }
 
-func (m *Metrics) writeCalls(b *strings.Builder) {
-	b.WriteString(
-		"# HELP sql_mcp_tool_calls_total Tool calls by tool and outcome (OK, denial code, or infrastructure rejection).\n",
-	)
-	b.WriteString("# TYPE sql_mcp_tool_calls_total counter\n")
-	keys := make([]callKey, 0, len(m.calls))
-	for k := range m.calls {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].tool != keys[j].tool {
-			return keys[i].tool < keys[j].tool
-		}
-		return keys[i].outcome < keys[j].outcome
-	})
-	for _, k := range keys {
-		fmt.Fprintf(b, "sql_mcp_tool_calls_total{tool=%q,outcome=%q} %d\n", k.tool, k.outcome, m.calls[k])
-	}
-}
+// promLogger logs the scrape errors promhttp reports through slog.
+type promLogger struct{}
 
-func (m *Metrics) writeDurations(b *strings.Builder) {
-	b.WriteString("# HELP sql_mcp_tool_duration_seconds Tool call duration.\n")
-	b.WriteString("# TYPE sql_mcp_tool_duration_seconds histogram\n")
-	tools := make([]string, 0, len(m.durations))
-	for name := range m.durations {
-		tools = append(tools, name)
-	}
-	sort.Strings(tools)
-	for _, name := range tools {
-		h := m.durations[name]
-		cumulative := uint64(0)
-		for i, bound := range durationBuckets {
-			cumulative += h.counts[i]
-			fmt.Fprintf(b, "sql_mcp_tool_duration_seconds_bucket{tool=%q,le=%q} %d\n",
-				name, formatBound(bound), cumulative)
-		}
-		fmt.Fprintf(b, "sql_mcp_tool_duration_seconds_bucket{tool=%q,le=\"+Inf\"} %d\n", name, h.total)
-		fmt.Fprintf(b, "sql_mcp_tool_duration_seconds_sum{tool=%q} %g\n", name, h.sum)
-		fmt.Fprintf(b, "sql_mcp_tool_duration_seconds_count{tool=%q} %d\n", name, h.total)
-	}
-}
-
-func (m *Metrics) writeAuditDropped(b *strings.Builder) {
-	b.WriteString("# HELP sql_mcp_audit_dropped_total Audit events dropped due to a full queue.\n")
-	b.WriteString("# TYPE sql_mcp_audit_dropped_total counter\n")
-	dropped := int64(0)
-	if m.auditDropped != nil {
-		dropped = m.auditDropped()
-	}
-	fmt.Fprintf(b, "sql_mcp_audit_dropped_total %d\n", dropped)
-}
-
-func formatBound(bound float64) string {
-	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%f", bound), "0"), ".")
-}
+func (promLogger) Println(v ...any) { slog.Warn(fmt.Sprint(v...)) }

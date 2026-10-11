@@ -76,7 +76,8 @@ MCP SDK、YAML、gqlgen 都在 `x/` 或 `cmd/`。新增数据库只改 `x/provid
   - 草稿合并：`x/configedit.Apply`（类型化分区写入 base，整体校验，tokenHash 保留规则）。
 - **管理 API**：`x/admin`（会话 Cookie + CSRF、登录并发闸门、改密吊销会话）+
   `x/admin/graph`（gqlgen，schema-first，`schema.graphqls`；读模型如实返回配置值，
-  未设置即 null）。
+  未设置即 null：`Entity/Role/User` 等就是 `configapp` 的工作区项类型，经 `app_types.go`
+  别名与 `gqlgen.yml` 绑定，不另写转换器）。
 - **批量配置**（`docs/design/planning.md`）：`x/catalog`（扫描目录 DTO、Store 与
   扫描批次，配置库 schema 3/4 持久化；批次的跨进程租约/心跳/接管/重试在 `x/leasing`，
   交错模型测试 `TestInterleavings` 锁定其不变量）→ `x/configplan`（纯计算：Plan → Proposal +

@@ -3,6 +3,7 @@ package workspace
 import (
 	"encoding/json"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 )
@@ -143,42 +144,88 @@ func (s Schema) normalize(v any, p string) any {
 	return v
 }
 
+// comparer compares values during one merge, diff or replay. It keeps the
+// canonical JSON of the objects and lists it serialized, by their identity
+// and pattern, so a subtree is serialized once however many of its ancestors
+// compare it (each level of a merge compares the values under it): a merge
+// costs the size of its inputs, not their size times their depth. The
+// inputs of one operation are not written to while it runs.
+type comparer struct {
+	s    Schema
+	memo map[memoKey]string
+}
+
+// memoKey identifies a map or a list value at a pattern: a map by its
+// pointer, a list by its first element's address and its length.
+type memoKey struct {
+	pattern string
+	ptr     uintptr
+	n       int
+}
+
+func (s Schema) comparer() *comparer { return &comparer{s: s, memo: map[memoKey]string{}} }
+
 // canonicalAt is the canonical JSON of v at pattern p.
-func (s Schema) canonicalAt(p string, v any) string {
-	n := s.normalize(v, p)
+func (c *comparer) canonicalAt(p string, v any) string {
+	key, memoized := memoKeyOf(p, v)
+	if memoized {
+		if out, ok := c.memo[key]; ok {
+			return out
+		}
+	}
+	n := c.s.normalize(v, p)
 	if IsMissing(n) {
 		n = nil
 	}
 	data, _ := json.Marshal(n)
+	if memoized {
+		c.memo[key] = string(data)
+	}
 	return string(data)
+}
+
+func memoKeyOf(p string, v any) (memoKey, bool) {
+	switch x := v.(type) {
+	case map[string]any:
+		if len(x) == 0 {
+			return memoKey{}, false
+		}
+		return memoKey{pattern: p, ptr: reflect.ValueOf(x).Pointer(), n: len(x)}, true
+	case []any:
+		if len(x) == 0 {
+			return memoKey{}, false
+		}
+		return memoKey{pattern: p, ptr: reflect.ValueOf(x).Pointer(), n: len(x)}, true
+	}
+	return memoKey{}, false
 }
 
 // Canonical is the canonical JSON of an item: keys sorted, unset values
 // dropped.
-func (s Schema) Canonical(v any) string { return s.canonicalAt("", v) }
+func (s Schema) Canonical(v any) string { return s.comparer().canonicalAt("", v) }
 
 // Same reports whether two items mean the same, regardless of key order or
 // unset values.
 func (s Schema) Same(a, b any) bool { return s.Canonical(a) == s.Canonical(b) }
 
 // sameAt compares two values at path.
-func (s Schema) sameAt(path Path, a, b any) bool {
+func (c *comparer) sameAt(path Path, a, b any) bool {
 	if n := len(path); n > 0 && (path[n-1].Element != "" || path[n-1].Field == "") {
-		return s.sameElements(path, a, b)
+		return c.sameElements(path, a, b)
 	}
 	p := path.Pattern()
-	return s.canonicalAt(p, a) == s.canonicalAt(p, b)
+	return c.canonicalAt(p, a) == c.canonicalAt(p, b)
 }
 
 // sameElements compares two values at path, an element of a keyed list,
 // either of which may be a group of the elements sharing its key.
-func (s Schema) sameElements(path Path, a, b any) bool {
+func (c *comparer) sameElements(path Path, a, b any) bool {
 	p := path.Pattern()
 	canonical := func(v any) string {
 		if group, ok := v.([]any); ok {
-			return s.canonicalAt(strings.TrimSuffix(p, "[]"), group)
+			return c.canonicalAt(strings.TrimSuffix(p, "[]"), group)
 		}
-		return s.canonicalAt(p, v)
+		return c.canonicalAt(p, v)
 	}
 	return canonical(a) == canonical(b)
 }
@@ -242,34 +289,38 @@ func get(m map[string]any, key string) any {
 	return Missing
 }
 
-// Merge merges base → local and base → next.
+// Merge merges base → local and base → next, the values at path.
 func (s Schema) Merge(base, local, next any, path Path) (any, []ValueConflict) {
-	if s.sameAt(path, local, base) {
+	return s.comparer().merge(base, local, next, path)
+}
+
+func (c *comparer) merge(base, local, next any, path Path) (any, []ValueConflict) {
+	if c.sameAt(path, local, base) {
 		return next, nil
 	}
-	if s.sameAt(path, next, base) || s.sameAt(path, next, local) {
+	if c.sameAt(path, next, base) || c.sameAt(path, next, local) {
 		return local, nil
 	}
 	bo, okB := object(base)
 	lo, okL := object(local)
 	no, okN := object(next)
 	if okB && okL && okN {
-		return s.mergeObjects(bo, lo, no, path)
+		return c.mergeObjects(bo, lo, no, path)
 	}
 	if IsMissing(base) {
 		base = []any{}
 	}
 	p := path.Pattern()
-	b, okB := s.keyed(base, p)
-	l, okL := s.keyed(local, p)
-	n, okN := s.keyed(next, p)
+	b, okB := c.s.keyed(base, p)
+	l, okL := c.s.keyed(local, p)
+	n, okN := c.s.keyed(next, p)
 	if okB && okL && okN {
-		return s.mergeLists(b, l, n, path)
+		return c.mergeLists(b, l, n, path)
 	}
 	return local, []ValueConflict{{Path: path, Mine: local, Theirs: next}}
 }
 
-func (s Schema) mergeObjects(base, local, next map[string]any, path Path) (any, []ValueConflict) {
+func (c *comparer) mergeObjects(base, local, next map[string]any, path Path) (any, []ValueConflict) {
 	value := map[string]any{}
 	var conflicts []ValueConflict
 	keys := map[string]bool{}
@@ -279,17 +330,17 @@ func (s Schema) mergeObjects(base, local, next map[string]any, path Path) (any, 
 		}
 	}
 	for k := range keys {
-		v, c := s.Merge(get(base, k), get(local, k), get(next, k), append(slices.Clone(path), Step{Field: k}))
+		v, cs := c.merge(get(base, k), get(local, k), get(next, k), append(slices.Clone(path), Step{Field: k}))
 		if !IsMissing(v) {
 			value[k] = v
 		}
-		conflicts = append(conflicts, c...)
+		conflicts = append(conflicts, cs...)
 	}
 	sortConflicts(conflicts)
 	return value, conflicts
 }
 
-func (s Schema) mergeLists(base, local, next keyedList, path Path) (any, []ValueConflict) {
+func (c *comparer) mergeLists(base, local, next keyedList, path Path) (any, []ValueConflict) {
 	// Local order, then what only next added.
 	order := slices.Clone(local.order)
 	for _, k := range next.order {
@@ -303,18 +354,18 @@ func (s Schema) mergeLists(base, local, next keyedList, path Path) (any, []Value
 		at := append(slices.Clone(path), Step{Element: key})
 		be, le, ne := base.get(key), local.get(key), next.get(key)
 		var v any
-		var c []ValueConflict
+		var cs []ValueConflict
 		if isGroup(be) || isGroup(le) || isGroup(ne) {
-			v, c = s.whole(be, le, ne, at)
+			v, cs = c.whole(be, le, ne, at)
 		} else {
-			v, c = s.Merge(be, le, ne, at)
+			v, cs = c.merge(be, le, ne, at)
 		}
 		if group, ok := v.([]any); ok {
 			value = append(value, group...)
 		} else if !IsMissing(v) {
 			value = append(value, v)
 		}
-		conflicts = append(conflicts, c...)
+		conflicts = append(conflicts, cs...)
 	}
 	return value, conflicts
 }
@@ -325,11 +376,11 @@ func isGroup(v any) bool {
 }
 
 // whole merges a value as a whole: either side's change, or a conflict.
-func (s Schema) whole(base, local, next any, path Path) (any, []ValueConflict) {
-	if s.sameElements(path, local, base) {
+func (c *comparer) whole(base, local, next any, path Path) (any, []ValueConflict) {
+	if c.sameElements(path, local, base) {
 		return next, nil
 	}
-	if s.sameElements(path, next, base) || s.sameElements(path, next, local) {
+	if c.sameElements(path, next, base) || c.sameElements(path, next, local) {
 		return local, nil
 	}
 	return local, []ValueConflict{{Path: path, Mine: local, Theirs: next}}
@@ -458,14 +509,15 @@ type Change struct {
 // elements sharing a key as a whole), in a stable order.
 func (s Schema) Diff(a, b any) []Change {
 	var out []Change
-	s.diff(a, b, nil, &out)
+	s.comparer().diff(a, b, nil, &out)
 	return out
 }
 
-func (s Schema) diff(a, b any, path Path, out *[]Change) {
-	if s.sameAt(path, a, b) {
+func (c *comparer) diff(a, b any, path Path, out *[]Change) {
+	if c.sameAt(path, a, b) {
 		return
 	}
+	s := c.s
 	ao, okA := object(a)
 	bo, okB := object(b)
 	if okA && okB {
@@ -476,7 +528,7 @@ func (s Schema) diff(a, b any, path Path, out *[]Change) {
 			}
 		}
 		for _, k := range slices.Sorted(maps.Keys(keys)) {
-			s.diff(get(ao, k), get(bo, k), append(slices.Clone(path), Step{Field: k}), out)
+			c.diff(get(ao, k), get(bo, k), append(slices.Clone(path), Step{Field: k}), out)
 		}
 		return
 	}
@@ -493,12 +545,12 @@ func (s Schema) diff(a, b any, path Path, out *[]Change) {
 			at := append(slices.Clone(path), Step{Element: k})
 			ae, be := ka.get(k), kb.get(k)
 			if isGroup(ae) || isGroup(be) {
-				if !s.sameElements(at, ae, be) {
+				if !c.sameElements(at, ae, be) {
 					*out = append(*out, Change{Path: at, Value: be})
 				}
 				continue
 			}
-			s.diff(ae, be, at, out)
+			c.diff(ae, be, at, out)
 		}
 		return
 	}

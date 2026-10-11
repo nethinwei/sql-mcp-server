@@ -227,7 +227,7 @@ func newHTTPServing(s *mcp.Server, cfg HTTPConfig) (*httpServing, error) {
 	}
 	applyHTTPDefaults(&cfg)
 	h := &httpServing{cfg: cfg, session: sessionHandler(s, cfg)}
-	prepared, err := PrepareHTTPAuth(cfg.Addr, cfg.auth())
+	prepared, err := PrepareHTTPAuth(cfg.Addr, cfg.HTTPAuth)
 	if err != nil {
 		return nil, err
 	}
@@ -244,7 +244,7 @@ func newHTTPServing(s *mcp.Server, cfg HTTPConfig) (*httpServing, error) {
 // TLS or not stays as the listener started.
 func (h *httpServing) apply(prepared PreparedAuth) error {
 	cfg := h.cfg
-	cfg.setAuth(prepared.auth)
+	cfg.HTTPAuth = prepared.auth
 	if cfg.tlsEnabled() != h.cfg.tlsEnabled() {
 		return errors.New("mcpserver: serving TLS or not changes only with a restart")
 	}

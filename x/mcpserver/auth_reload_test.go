@@ -90,7 +90,7 @@ func TestAuthChangesRotateTheToken(t *testing.T) {
 	t.Parallel()
 	var apply func(PreparedAuth) error
 	h, err := Handler(mcp.NewServer(&mcp.Implementation{Name: "t"}, nil), HTTPConfig{
-		Addr: "127.0.0.1:0", Token: "old", AuthChanges: func(fn func(PreparedAuth) error) { apply = fn },
+		Addr: "127.0.0.1:0", HTTPAuth: HTTPAuth{Token: "old"}, AuthChanges: func(fn func(PreparedAuth) error) { apply = fn },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +112,7 @@ func TestAuthChangesRotateTheCertificate(t *testing.T) {
 	t.Parallel()
 	firstCert, firstKey := writeCert(t, "first")
 	secondCert, secondKey := writeCert(t, "second")
-	cfg := HTTPConfig{Addr: "127.0.0.1:0", Token: "t", TLSCert: firstCert, TLSKey: firstKey}
+	cfg := HTTPConfig{Addr: "127.0.0.1:0", HTTPAuth: HTTPAuth{Token: "t", TLSCert: firstCert, TLSKey: firstKey}}
 	h, err := newHTTPServing(mcp.NewServer(&mcp.Implementation{Name: "t"}, nil), cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -190,7 +190,7 @@ func TestAuthChangesToMTLSRefuseOldConnections(t *testing.T) {
 	certPath, keyPath := writeCert(t, "server")
 	caPath, clientCert := newClientCA(t)
 	h, err := newHTTPServing(mcp.NewServer(&mcp.Implementation{Name: "t"}, nil), HTTPConfig{
-		Addr: "127.0.0.1:0", Token: "t", TLSCert: certPath, TLSKey: keyPath,
+		Addr: "127.0.0.1:0", HTTPAuth: HTTPAuth{Token: "t", TLSCert: certPath, TLSKey: keyPath},
 	})
 	if err != nil {
 		t.Fatal(err)

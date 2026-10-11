@@ -299,13 +299,9 @@ func invokeTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) 
 	if err != nil {
 		return Result{}, err
 	}
-	val, err := tc.Engine.Submit(ctx, key, func(ctx context.Context) (any, error) {
+	return engine.Submit(ctx, tc.Engine, key, func(ctx context.Context) (Result, error) {
 		return runTraced(ctx, t, input, tc)
 	})
-	if r, ok := val.(Result); ok {
-		return r, err
-	}
-	return Result{}, err
 }
 
 // invokeDirect runs a tool ending a transaction: under the engine's rate
@@ -316,13 +312,9 @@ func invokeDirect(ctx context.Context, t Tool, input json.RawMessage, tc Context
 	if tc.Engine == nil {
 		return runTraced(ctx, t, input, tc)
 	}
-	val, err := tc.Engine.Run(ctx, func(ctx context.Context) (any, error) {
+	return engine.Run(ctx, tc.Engine, func(ctx context.Context) (Result, error) {
 		return runTraced(ctx, t, input, tc)
 	})
-	if r, ok := val.(Result); ok {
-		return r, err
-	}
-	return Result{}, err
 }
 
 func engineSubmitKey(ctx context.Context, t Tool, input json.RawMessage, tc Context) (string, error) {

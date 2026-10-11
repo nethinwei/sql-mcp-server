@@ -85,11 +85,13 @@ type Revision {
   config: Configuration!  yaml: String!
 }
 
+# entities/roles/users 与工作区项（Revision.sections、EntityInput 等）同一形状：
+# 如实返回配置写了什么，未设置即 null（其默认值生效），列表总是写出。
 type Configuration {
   datasources: [Datasource!]!   # driver 与脱敏后的 DSN
   entities: [Entity!]!          # 字段、主键、关系、旧式角色、租户约束
   roles: [Role!]!               # 授权项
-  users: [User!]!               # 角色、直授、subject；hasToken 与 tokenHash（只有 hash，明文从不保存）
+  users: [User!]!               # 角色、直授、subject；tokenHash（只有 hash，明文从不保存；null 即无令牌）
   settings: JSON!               # 其余部分（server、cost、budget 等）
 }
 ```

@@ -471,15 +471,12 @@ func parseSubjectHeader(raw string) (map[string]any, error) {
 // and hardening. Zero-valued timeout/size fields receive safe defaults. Metrics
 // is an optional handler mounted at /metrics.
 type HTTPConfig struct {
+	// HTTPAuth is how callers are authenticated; a reload may replace it
+	// (see AuthChanges).
+	HTTPAuth
 	// Bus runs the server's background tasks; optional.
 	Bus               *bus.Bus
 	Addr              string
-	Token             string // shared-secret bearer token; empty disables token auth
-	TrustProxyHeaders bool   // trust X-MCP-Role/X-MCP-Subject identity headers
-	TrustedProxyCIDRs []string
-	TLSCert           string
-	TLSKey            string
-	ClientCA          string // PEM bundle; when set, require+verify a client cert (mTLS)
 	ReadHeaderTimeout time.Duration
 	ReadTimeout       time.Duration
 	WriteTimeout      time.Duration
@@ -489,10 +486,6 @@ type HTTPConfig struct {
 	Metrics           http.Handler
 	SessionTimeout    time.Duration
 	OnSessionClosed   func(string)
-	// Users resolves configured users; nil means no users are configured.
-	// With users, bearer tokens may identify individual users and trusted
-	// proxies may send X-MCP-User.
-	Users UserDirectory
 	// RevokedPrincipals registers a callback receiving users removed or
 	// disabled by a reload; their sessions are dropped and rolled back, and
 	// the callback returns those sessions.
@@ -520,25 +513,16 @@ type HTTPConfig struct {
 // reload may change while serving (see HTTPConfig.AuthChanges). The address,
 // and serving TLS or not, are fixed for the listener.
 type HTTPAuth struct {
-	Token             string
-	TrustProxyHeaders bool
+	Token             string // shared-secret bearer token; empty disables token auth
+	TrustProxyHeaders bool   // trust X-MCP-Role/X-MCP-Subject identity headers
 	TrustedProxyCIDRs []string
 	TLSCert           string
 	TLSKey            string
-	ClientCA          string
-	Users             UserDirectory
-}
-
-func (c HTTPConfig) auth() HTTPAuth {
-	return HTTPAuth{
-		Token: c.Token, TrustProxyHeaders: c.TrustProxyHeaders, TrustedProxyCIDRs: c.TrustedProxyCIDRs,
-		TLSCert: c.TLSCert, TLSKey: c.TLSKey, ClientCA: c.ClientCA, Users: c.Users,
-	}
-}
-
-func (c *HTTPConfig) setAuth(a HTTPAuth) {
-	c.Token, c.TrustProxyHeaders, c.TrustedProxyCIDRs = a.Token, a.TrustProxyHeaders, a.TrustedProxyCIDRs
-	c.TLSCert, c.TLSKey, c.ClientCA, c.Users = a.TLSCert, a.TLSKey, a.ClientCA, a.Users
+	ClientCA          string // PEM bundle; when set, require+verify a client cert (mTLS)
+	// Users resolves configured users; nil means no users are configured.
+	// With users, bearer tokens may identify individual users and trusted
+	// proxies may send X-MCP-User.
+	Users UserDirectory
 }
 
 // PreparedAuth is an authentication PrepareHTTPAuth checked and whose
@@ -553,8 +537,7 @@ type PreparedAuth struct {
 // certificates: a reload prepares the authentication it would switch to, and
 // fails when it cannot.
 func PrepareHTTPAuth(addr string, auth HTTPAuth) (PreparedAuth, error) {
-	c := HTTPConfig{Addr: addr}
-	c.setAuth(auth)
+	c := HTTPConfig{Addr: addr, HTTPAuth: auth}
 	if err := validateHTTPSecurity(c); err != nil {
 		return PreparedAuth{}, err
 	}

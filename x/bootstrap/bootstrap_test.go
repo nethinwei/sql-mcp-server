@@ -63,7 +63,7 @@ func TestAppCloseContextDrainsBeforeTransactionsAndProviders(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	go func() {
-		_, _ = eng.Submit(context.Background(), "", func(context.Context) (any, error) {
+		_, _ = engine.Submit(context.Background(), eng, "", func(context.Context) (any, error) {
 			close(started)
 			<-release
 			return nil, nil

@@ -100,7 +100,7 @@ func TestE2EHTTPUserMultiRoleCoverage(t *testing.T) {
 	}
 	defer app.Close()
 	handler, err := mcpserver.Handler(mcpserver.NewServer(app), mcpserver.HTTPConfig{
-		Addr: "127.0.0.1:0", Users: app,
+		Addr: "127.0.0.1:0", HTTPAuth: mcpserver.HTTPAuth{Users: app},
 	})
 	if err != nil {
 		t.Fatal(err)

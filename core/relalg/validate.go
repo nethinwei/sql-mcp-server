@@ -55,11 +55,6 @@ func ValidatePredicateWithMaxINCardinality(p Predicate, maxIN int) error {
 			return fmt.Errorf("%w: nil NOT operand", ErrInvalidPredicate)
 		}
 		return ValidatePredicateWithMaxINCardinality(pp.P, maxIN)
-	case IsNull:
-		if pp.Field == "" {
-			return fmt.Errorf("%w: empty field", ErrInvalidPredicate)
-		}
-		return nil
 	default:
 		return fmt.Errorf("%w: %T", ErrUnknownPredicate, p)
 	}

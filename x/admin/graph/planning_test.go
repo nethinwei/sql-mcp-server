@@ -118,7 +118,7 @@ func TestPreviewPlanAndWorkspace(t *testing.T) {
 	var preview struct {
 		PreviewPlan struct {
 			Added    []string
-			Entities []struct{ ID string }
+			Entities []struct{ Name string }
 			Roles    []struct {
 				Name   string
 				Grants []struct{ Entity string }
@@ -134,7 +134,7 @@ func TestPreviewPlanAndWorkspace(t *testing.T) {
 		}
 	}
 	mustPost(t, c, `query($p: JSON!) { previewPlan(input: {plan: $p}) {
-		added entities { id } roles { name grants { entity } }
+		added entities { name } roles { name grants { entity } }
 		report { matched changes { kind } } validation { ok error } } }`, &preview, client.Var("p", mustJSON(importPlan)))
 	p := preview.PreviewPlan
 	if !slices.Equal(p.Added, []string{"shop.public.orders"}) || len(p.Entities) != 1 || len(p.Roles) != 1 ||

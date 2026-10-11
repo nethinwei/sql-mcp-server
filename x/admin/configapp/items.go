@@ -174,6 +174,15 @@ func SectionsOfPayload(payload []byte) (Sections, error) {
 	return SectionsOf(spec)
 }
 
+// SectionsOfConfig are the sections of a configuration built in code (a
+// plan's outcome), as SectionsOf has them: a zero value is unset.
+func SectionsOfConfig(cfg *config.Config) (Sections, error) { return SectionsOf(config.SpecOf(cfg)) }
+
+// EntityItemOf is the item of an entity built in code (a candidate).
+func EntityItemOf(e config.EntityConfig) EntityItem {
+	return entityItem(config.SpecOf(&config.Config{Entities: []config.EntityConfig{e}}).Entities[0])
+}
+
 func entityItem(e config.EntitySpec) EntityItem {
 	out := EntityItem{
 		Name: kit.Deref(

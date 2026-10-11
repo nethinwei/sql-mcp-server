@@ -120,13 +120,19 @@ export function toEntityInput(e: EntityPartsFragment): EntityInput {
     tenantPolicy: e.tenantPolicy ?? undefined,
     legacyAccess: e.legacyAccess ?? undefined,
     // Field by field: the client adds __typename to what it reads.
-    mcp: { dmlTools: e.mcp.dmlTools, customTool: e.mcp.customTool, trustedProcedure: e.mcp.trustedProcedure },
+    mcp: e.mcp
+      ? {
+        dmlTools: e.mcp.dmlTools ?? undefined,
+        customTool: e.mcp.customTool ?? undefined,
+        trustedProcedure: e.mcp.trustedProcedure ?? undefined,
+      }
+      : undefined,
     fields: e.fields.map((f) => ({
       name: f.name,
       alias: f.alias ?? undefined,
       description: f.description ?? undefined,
       mask: f.mask ?? undefined,
-      exclude: f.exclude,
+      exclude: f.exclude ?? undefined,
     })),
     relationships: e.relationships.map((r) => ({
       name: r.name, target: r.target, cardinality: r.cardinality, joinOn: { ...r.joinOn },

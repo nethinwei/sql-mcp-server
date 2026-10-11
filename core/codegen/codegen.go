@@ -255,8 +255,8 @@ func isKeyPoint(p relalg.Predicate, pkCols []string) bool {
 }
 
 // flattenAnd returns the leaf Conditions of an And-chain and whether the
-// predicate is a pure conjunction of Conditions. A predicate containing Or,
-// Not, or IsNull is not pure and can never be a primary-key point lookup, so
+// predicate is a pure conjunction of Conditions. A predicate containing Or
+// or Not is not pure and can never be a primary-key point lookup, so
 // the caller must treat !pure as "not a PK point" rather than silently
 // dropping those branches (which would let `id=5 OR <expensive>` masquerade
 // as a point read and bypass the cost gate).

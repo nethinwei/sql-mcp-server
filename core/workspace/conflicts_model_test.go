@@ -228,7 +228,7 @@ func (m *model) resolve() {
 	if theirs {
 		want = c.TheirsValue
 	}
-	if !schema.sameAt(c.Path, schema.GetAt(m.local.Get(c.Ref), c.Path), want) {
+	if !schema.comparer().sameAt(c.Path, schema.GetAt(m.local.Get(c.Ref), c.Path), want) {
 		m.t.Fatalf("%s: the choice did not take effect", m.at())
 	}
 	m.trace = append(m.trace, fmt.Sprintf("resolve %s %s theirs=%v", c.Ref.Key, c.Path, theirs))
@@ -254,9 +254,9 @@ func (m *model) check() {
 	}
 	for _, c := range open {
 		// Mine is what the workspace holds, theirs what is published now; they differ.
-		if !schema.sameAt(c.Path, c.Mine, schema.GetAt(m.local.Get(c.Ref), c.Path)) ||
-			!schema.sameAt(c.Path, c.TheirsValue, schema.GetAt(m.base.Get(c.Ref), c.Path)) ||
-			schema.sameAt(c.Path, c.Mine, c.TheirsValue) {
+		if !schema.comparer().sameAt(c.Path, c.Mine, schema.GetAt(m.local.Get(c.Ref), c.Path)) ||
+			!schema.comparer().sameAt(c.Path, c.TheirsValue, schema.GetAt(m.base.Get(c.Ref), c.Path)) ||
+			schema.comparer().sameAt(c.Path, c.Mine, c.TheirsValue) {
 			m.t.Fatalf("%s\nconflict %+v", m.at(), c)
 		}
 		for _, o := range open {

@@ -2,16 +2,12 @@ package graph
 
 import (
 	"context"
+	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 )
-
-var graphActions = map[Action]entity.Action{
-	ActionRead: entity.ActionRead, ActionCreate: entity.ActionCreate, ActionUpdate: entity.ActionUpdate,
-	ActionDelete: entity.ActionDelete, ActionExecute: entity.ActionExecute, ActionAggregate: entity.ActionAggregate,
-}
 
 // visibility evaluates every entity and applicable action for one principal
 // with a single authorizer.
@@ -24,17 +20,20 @@ func visibility(
 	}
 	out := make([]EntityVisibility, 0, len(cfg.Entities))
 	for _, e := range cfg.Entities {
-		actions := []Action{ActionRead, ActionAggregate, ActionCreate, ActionUpdate, ActionDelete}
+		actions := []entity.Action{
+			entity.ActionRead, entity.ActionAggregate, entity.ActionCreate, entity.ActionUpdate, entity.ActionDelete,
+		}
 		if e.Kind == "procedure" {
-			actions = []Action{ActionExecute}
+			actions = []entity.Action{entity.ActionExecute}
 		}
 		ev := EntityVisibility{Entity: e.ID(), Actions: make([]ActionVisibility, 0, len(actions))}
 		for _, a := range actions {
-			result, err := sim.Evaluate(ctx, e.ID(), graphActions[a].String(), nil)
+			result, err := sim.Evaluate(ctx, e.ID(), a.String(), nil)
 			if err != nil {
 				return nil, err
 			}
-			ev.Actions = append(ev.Actions, ActionVisibility{Action: a, Result: result})
+			// The GraphQL Action enum spells the action in upper case.
+			ev.Actions = append(ev.Actions, ActionVisibility{Action: strings.ToUpper(a.String()), Result: result})
 		}
 		out = append(out, ev)
 	}

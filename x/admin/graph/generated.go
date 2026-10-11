@@ -149,7 +149,6 @@ type ComplexityRoot struct {
 		Datasource    func(childComplexity int) int
 		Description   func(childComplexity int) int
 		Fields        func(childComplexity int) int
-		ID            func(childComplexity int) int
 		Kind          func(childComplexity int) int
 		LegacyAccess  func(childComplexity int) int
 		Mcp           func(childComplexity int) int
@@ -466,7 +465,6 @@ type ComplexityRoot struct {
 	Role struct {
 		Description func(childComplexity int) int
 		Grants      func(childComplexity int) int
-		Members     func(childComplexity int) int
 		Name        func(childComplexity int) int
 	}
 
@@ -586,7 +584,6 @@ type ComplexityRoot struct {
 		Description func(childComplexity int) int
 		Disabled    func(childComplexity int) int
 		Grants      func(childComplexity int) int
-		HasToken    func(childComplexity int) int
 		Name        func(childComplexity int) int
 		Roles       func(childComplexity int) int
 		Subject     func(childComplexity int) int
@@ -1158,12 +1155,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Entity.Fields(childComplexity), true
-	case "Entity.id":
-		if e.ComplexityRoot.Entity.ID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Entity.ID(childComplexity), true
 	case "Entity.kind":
 		if e.ComplexityRoot.Entity.Kind == nil {
 			break
@@ -2776,12 +2767,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Role.Grants(childComplexity), true
-	case "Role.members":
-		if e.ComplexityRoot.Role.Members == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Role.Members(childComplexity), true
 	case "Role.name":
 		if e.ComplexityRoot.Role.Name == nil {
 			break
@@ -3207,12 +3192,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.User.Grants(childComplexity), true
-	case "User.hasToken":
-		if e.ComplexityRoot.User.HasToken == nil {
-			break
-		}
-
-		return e.ComplexityRoot.User.HasToken(childComplexity), true
 	case "User.name":
 		if e.ComplexityRoot.User.Name == nil {
 			break
@@ -3812,8 +3791,6 @@ func (ec *executionContext) childFields_DraftRevision(ctx context.Context, field
 
 func (ec *executionContext) childFields_Entity(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "id":
-		return ec.fieldContext_Entity_id(ctx, field)
 	case "name":
 		return ec.fieldContext_Entity_name(ctx, field)
 	case "source":
@@ -4332,8 +4309,6 @@ func (ec *executionContext) childFields_Role(ctx context.Context, field graphql.
 		return ec.fieldContext_Role_description(ctx, field)
 	case "grants":
 		return ec.fieldContext_Role_grants(ctx, field)
-	case "members":
-		return ec.fieldContext_Role_members(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Role", field.Name)
 }
@@ -4576,8 +4551,6 @@ func (ec *executionContext) childFields_User(ctx context.Context, field graphql.
 		return ec.fieldContext_User_subject(ctx, field)
 	case "disabled":
 		return ec.fieldContext_User_disabled(ctx, field)
-	case "hasToken":
-		return ec.fieldContext_User_hasToken(ctx, field)
 	case "tokenHash":
 		return ec.fieldContext_User_tokenHash(ctx, field)
 	}
@@ -5574,8 +5547,8 @@ func (ec *executionContext) _ActionVisibility_action(ctx context.Context, field 
 			return obj.Action, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v Action) graphql.Marshaler {
-			return ec.marshalNAction2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐAction(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNAction2string(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6442,8 +6415,8 @@ func (ec *executionContext) _CatalogRow_status(ctx context.Context, field graphq
 			return obj.Status, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v configapp.TableStatus) graphql.Marshaler {
-			return ec.marshalNTableStatus2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐTableStatus(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNTableStatus2string(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6636,7 +6609,7 @@ func (ec *executionContext) _Configuration_entities(ctx context.Context, field g
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []Entity) graphql.Marshaler {
-			return ec.marshalNEntity2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐEntityᚄ(ctx, selections, v)
+			return ec.marshalNEntity2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItemᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6668,7 +6641,7 @@ func (ec *executionContext) _Configuration_roles(ctx context.Context, field grap
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []Role) graphql.Marshaler {
-			return ec.marshalNRole2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐRoleᚄ(ctx, selections, v)
+			return ec.marshalNRole2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItemᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6700,7 +6673,7 @@ func (ec *executionContext) _Configuration_users(ctx context.Context, field grap
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []User) graphql.Marshaler {
-			return ec.marshalNUser2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐUserᚄ(ctx, selections, v)
+			return ec.marshalNUser2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItemᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -7114,30 +7087,7 @@ func (ec *executionContext) fieldContext_DraftRevision_basedOn(_ context.Context
 	return graphql.NewScalarFieldContext("DraftRevision", field, false, false, errors.New("field of type ID does not have child fields"))
 }
 
-func (ec *executionContext) _Entity_id(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Entity_id(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ID, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Entity_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Entity", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _Entity_name(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+func (ec *executionContext) _Entity_name(ctx context.Context, field graphql.CollectedField, obj *configapp.EntityItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7160,7 +7110,7 @@ func (ec *executionContext) fieldContext_Entity_name(_ context.Context, field gr
 	return graphql.NewScalarFieldContext("Entity", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Entity_source(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+func (ec *executionContext) _Entity_source(ctx context.Context, field graphql.CollectedField, obj *configapp.EntityItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7183,7 +7133,7 @@ func (ec *executionContext) fieldContext_Entity_source(_ context.Context, field 
 	return graphql.NewScalarFieldContext("Entity", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Entity_datasource(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+func (ec *executionContext) _Entity_datasource(ctx context.Context, field graphql.CollectedField, obj *configapp.EntityItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7206,7 +7156,7 @@ func (ec *executionContext) fieldContext_Entity_datasource(_ context.Context, fi
 	return graphql.NewScalarFieldContext("Entity", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Entity_schema(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+func (ec *executionContext) _Entity_schema(ctx context.Context, field graphql.CollectedField, obj *configapp.EntityItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7229,7 +7179,7 @@ func (ec *executionContext) fieldContext_Entity_schema(_ context.Context, field 
 	return graphql.NewScalarFieldContext("Entity", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Entity_kind(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+func (ec *executionContext) _Entity_kind(ctx context.Context, field graphql.CollectedField, obj *configapp.EntityItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7252,7 +7202,7 @@ func (ec *executionContext) fieldContext_Entity_kind(_ context.Context, field gr
 	return graphql.NewScalarFieldContext("Entity", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Entity_description(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+func (ec *executionContext) _Entity_description(ctx context.Context, field graphql.CollectedField, obj *configapp.EntityItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7275,7 +7225,7 @@ func (ec *executionContext) fieldContext_Entity_description(_ context.Context, f
 	return graphql.NewScalarFieldContext("Entity", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Entity_primaryKey(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+func (ec *executionContext) _Entity_primaryKey(ctx context.Context, field graphql.CollectedField, obj *configapp.EntityItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7298,7 +7248,7 @@ func (ec *executionContext) fieldContext_Entity_primaryKey(_ context.Context, fi
 	return graphql.NewScalarFieldContext("Entity", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Entity_uniqueKeys(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+func (ec *executionContext) _Entity_uniqueKeys(ctx context.Context, field graphql.CollectedField, obj *configapp.EntityItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7321,7 +7271,7 @@ func (ec *executionContext) fieldContext_Entity_uniqueKeys(_ context.Context, fi
 	return graphql.NewScalarFieldContext("Entity", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Entity_fields(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+func (ec *executionContext) _Entity_fields(ctx context.Context, field graphql.CollectedField, obj *configapp.EntityItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7333,8 +7283,8 @@ func (ec *executionContext) _Entity_fields(ctx context.Context, field graphql.Co
 			return obj.Fields, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []Field) graphql.Marshaler {
-			return ec.marshalNField2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐFieldᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v []configapp.FieldItem) graphql.Marshaler {
+			return ec.marshalNField2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐFieldItemᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -7353,7 +7303,7 @@ func (ec *executionContext) fieldContext_Entity_fields(_ context.Context, field 
 	return fc, nil
 }
 
-func (ec *executionContext) _Entity_relationships(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+func (ec *executionContext) _Entity_relationships(ctx context.Context, field graphql.CollectedField, obj *configapp.EntityItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7365,8 +7315,8 @@ func (ec *executionContext) _Entity_relationships(ctx context.Context, field gra
 			return obj.Relationships, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []Relationship) graphql.Marshaler {
-			return ec.marshalNRelationship2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐRelationshipᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v []configapp.RelationshipItem) graphql.Marshaler {
+			return ec.marshalNRelationship2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRelationshipItemᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -7385,7 +7335,7 @@ func (ec *executionContext) fieldContext_Entity_relationships(_ context.Context,
 	return fc, nil
 }
 
-func (ec *executionContext) _Entity_tenantPolicy(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+func (ec *executionContext) _Entity_tenantPolicy(ctx context.Context, field graphql.CollectedField, obj *configapp.EntityItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7408,7 +7358,7 @@ func (ec *executionContext) fieldContext_Entity_tenantPolicy(_ context.Context, 
 	return graphql.NewScalarFieldContext("Entity", field, false, false, errors.New("field of type JSON does not have child fields"))
 }
 
-func (ec *executionContext) _Entity_legacyAccess(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+func (ec *executionContext) _Entity_legacyAccess(ctx context.Context, field graphql.CollectedField, obj *configapp.EntityItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7431,7 +7381,7 @@ func (ec *executionContext) fieldContext_Entity_legacyAccess(_ context.Context, 
 	return graphql.NewScalarFieldContext("Entity", field, false, false, errors.New("field of type JSON does not have child fields"))
 }
 
-func (ec *executionContext) _Entity_mcp(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+func (ec *executionContext) _Entity_mcp(ctx context.Context, field graphql.CollectedField, obj *configapp.EntityItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7443,11 +7393,11 @@ func (ec *executionContext) _Entity_mcp(ctx context.Context, field graphql.Colle
 			return obj.Mcp, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *EntityMcp) graphql.Marshaler {
-			return ec.marshalNEntityMCP2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐEntityMcp(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *configapp.EntityMCPItem) graphql.Marshaler {
+			return ec.marshalOEntityMCP2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityMCPItem(ctx, selections, v)
 		},
 		true,
-		true,
+		false,
 	)
 }
 func (ec *executionContext) fieldContext_Entity_mcp(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -7463,7 +7413,7 @@ func (ec *executionContext) fieldContext_Entity_mcp(_ context.Context, field gra
 	return fc, nil
 }
 
-func (ec *executionContext) _Entity_params(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+func (ec *executionContext) _Entity_params(ctx context.Context, field graphql.CollectedField, obj *configapp.EntityItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7486,7 +7436,7 @@ func (ec *executionContext) fieldContext_Entity_params(_ context.Context, field 
 	return graphql.NewScalarFieldContext("Entity", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Entity_affects(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+func (ec *executionContext) _Entity_affects(ctx context.Context, field graphql.CollectedField, obj *configapp.EntityItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7509,7 +7459,7 @@ func (ec *executionContext) fieldContext_Entity_affects(_ context.Context, field
 	return graphql.NewScalarFieldContext("Entity", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Entity_allowCascade(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+func (ec *executionContext) _Entity_allowCascade(ctx context.Context, field graphql.CollectedField, obj *configapp.EntityItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7521,11 +7471,11 @@ func (ec *executionContext) _Entity_allowCascade(ctx context.Context, field grap
 			return obj.AllowCascade, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
-			return ec.marshalNBoolean2bool(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *bool) graphql.Marshaler {
+			return ec.marshalOBoolean2ᚖbool(ctx, selections, v)
 		},
 		true,
-		true,
+		false,
 	)
 }
 func (ec *executionContext) fieldContext_Entity_allowCascade(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -7567,8 +7517,8 @@ func (ec *executionContext) _EntityCapability_action(ctx context.Context, field 
 			return obj.Action, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v Action) graphql.Marshaler {
-			return ec.marshalNAction2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐAction(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNAction2string(ctx, selections, v)
 		},
 		true,
 		true,
@@ -7670,7 +7620,7 @@ func (ec *executionContext) fieldContext_EntityCapability_reason(_ context.Conte
 	return graphql.NewScalarFieldContext("EntityCapability", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _EntityMCP_dmlTools(ctx context.Context, field graphql.CollectedField, obj *EntityMcp) (ret graphql.Marshaler) {
+func (ec *executionContext) _EntityMCP_dmlTools(ctx context.Context, field graphql.CollectedField, obj *configapp.EntityMCPItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7682,18 +7632,18 @@ func (ec *executionContext) _EntityMCP_dmlTools(ctx context.Context, field graph
 			return obj.DmlTools, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
-			return ec.marshalNBoolean2bool(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *bool) graphql.Marshaler {
+			return ec.marshalOBoolean2ᚖbool(ctx, selections, v)
 		},
 		true,
-		true,
+		false,
 	)
 }
 func (ec *executionContext) fieldContext_EntityMCP_dmlTools(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("EntityMCP", field, false, false, errors.New("field of type Boolean does not have child fields"))
 }
 
-func (ec *executionContext) _EntityMCP_customTool(ctx context.Context, field graphql.CollectedField, obj *EntityMcp) (ret graphql.Marshaler) {
+func (ec *executionContext) _EntityMCP_customTool(ctx context.Context, field graphql.CollectedField, obj *configapp.EntityMCPItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7705,18 +7655,18 @@ func (ec *executionContext) _EntityMCP_customTool(ctx context.Context, field gra
 			return obj.CustomTool, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
-			return ec.marshalNBoolean2bool(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *bool) graphql.Marshaler {
+			return ec.marshalOBoolean2ᚖbool(ctx, selections, v)
 		},
 		true,
-		true,
+		false,
 	)
 }
 func (ec *executionContext) fieldContext_EntityMCP_customTool(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("EntityMCP", field, false, false, errors.New("field of type Boolean does not have child fields"))
 }
 
-func (ec *executionContext) _EntityMCP_trustedProcedure(ctx context.Context, field graphql.CollectedField, obj *EntityMcp) (ret graphql.Marshaler) {
+func (ec *executionContext) _EntityMCP_trustedProcedure(ctx context.Context, field graphql.CollectedField, obj *configapp.EntityMCPItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7728,11 +7678,11 @@ func (ec *executionContext) _EntityMCP_trustedProcedure(ctx context.Context, fie
 			return obj.TrustedProcedure, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
-			return ec.marshalNBoolean2bool(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *bool) graphql.Marshaler {
+			return ec.marshalOBoolean2ᚖbool(ctx, selections, v)
 		},
 		true,
-		true,
+		false,
 	)
 }
 func (ec *executionContext) fieldContext_EntityMCP_trustedProcedure(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -7922,7 +7872,7 @@ func (ec *executionContext) fieldContext_ExecutionStatus_tasks(_ context.Context
 	return fc, nil
 }
 
-func (ec *executionContext) _Field_name(ctx context.Context, field graphql.CollectedField, obj *Field) (ret graphql.Marshaler) {
+func (ec *executionContext) _Field_name(ctx context.Context, field graphql.CollectedField, obj *configapp.FieldItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7945,7 +7895,7 @@ func (ec *executionContext) fieldContext_Field_name(_ context.Context, field gra
 	return graphql.NewScalarFieldContext("Field", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Field_alias(ctx context.Context, field graphql.CollectedField, obj *Field) (ret graphql.Marshaler) {
+func (ec *executionContext) _Field_alias(ctx context.Context, field graphql.CollectedField, obj *configapp.FieldItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7968,7 +7918,7 @@ func (ec *executionContext) fieldContext_Field_alias(_ context.Context, field gr
 	return graphql.NewScalarFieldContext("Field", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Field_description(ctx context.Context, field graphql.CollectedField, obj *Field) (ret graphql.Marshaler) {
+func (ec *executionContext) _Field_description(ctx context.Context, field graphql.CollectedField, obj *configapp.FieldItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -7991,7 +7941,7 @@ func (ec *executionContext) fieldContext_Field_description(_ context.Context, fi
 	return graphql.NewScalarFieldContext("Field", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Field_mask(ctx context.Context, field graphql.CollectedField, obj *Field) (ret graphql.Marshaler) {
+func (ec *executionContext) _Field_mask(ctx context.Context, field graphql.CollectedField, obj *configapp.FieldItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -8014,7 +7964,7 @@ func (ec *executionContext) fieldContext_Field_mask(_ context.Context, field gra
 	return graphql.NewScalarFieldContext("Field", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Field_exclude(ctx context.Context, field graphql.CollectedField, obj *Field) (ret graphql.Marshaler) {
+func (ec *executionContext) _Field_exclude(ctx context.Context, field graphql.CollectedField, obj *configapp.FieldItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -8026,11 +7976,11 @@ func (ec *executionContext) _Field_exclude(ctx context.Context, field graphql.Co
 			return obj.Exclude, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
-			return ec.marshalNBoolean2bool(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *bool) graphql.Marshaler {
+			return ec.marshalOBoolean2ᚖbool(ctx, selections, v)
 		},
 		true,
-		true,
+		false,
 	)
 }
 func (ec *executionContext) fieldContext_Field_exclude(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -8129,7 +8079,7 @@ func (ec *executionContext) fieldContext_FieldReference_via(_ context.Context, f
 	return graphql.NewScalarFieldContext("FieldReference", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Grant_entity(ctx context.Context, field graphql.CollectedField, obj *Grant) (ret graphql.Marshaler) {
+func (ec *executionContext) _Grant_entity(ctx context.Context, field graphql.CollectedField, obj *configapp.GrantItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -8152,7 +8102,7 @@ func (ec *executionContext) fieldContext_Grant_entity(_ context.Context, field g
 	return graphql.NewScalarFieldContext("Grant", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Grant_actions(ctx context.Context, field graphql.CollectedField, obj *Grant) (ret graphql.Marshaler) {
+func (ec *executionContext) _Grant_actions(ctx context.Context, field graphql.CollectedField, obj *configapp.GrantItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -8164,8 +8114,8 @@ func (ec *executionContext) _Grant_actions(ctx context.Context, field graphql.Co
 			return obj.Actions, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []Action) graphql.Marshaler {
-			return ec.marshalNAction2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐActionᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNAction2ᚕstringᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -8175,7 +8125,7 @@ func (ec *executionContext) fieldContext_Grant_actions(_ context.Context, field 
 	return graphql.NewScalarFieldContext("Grant", field, false, false, errors.New("field of type Action does not have child fields"))
 }
 
-func (ec *executionContext) _Grant_fieldsRestricted(ctx context.Context, field graphql.CollectedField, obj *Grant) (ret graphql.Marshaler) {
+func (ec *executionContext) _Grant_fieldsRestricted(ctx context.Context, field graphql.CollectedField, obj *configapp.GrantItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -8187,18 +8137,18 @@ func (ec *executionContext) _Grant_fieldsRestricted(ctx context.Context, field g
 			return obj.FieldsRestricted, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
-			return ec.marshalNBoolean2bool(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *bool) graphql.Marshaler {
+			return ec.marshalOBoolean2ᚖbool(ctx, selections, v)
 		},
 		true,
-		true,
+		false,
 	)
 }
 func (ec *executionContext) fieldContext_Grant_fieldsRestricted(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Grant", field, false, false, errors.New("field of type Boolean does not have child fields"))
 }
 
-func (ec *executionContext) _Grant_readFields(ctx context.Context, field graphql.CollectedField, obj *Grant) (ret graphql.Marshaler) {
+func (ec *executionContext) _Grant_readFields(ctx context.Context, field graphql.CollectedField, obj *configapp.GrantItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -8221,7 +8171,7 @@ func (ec *executionContext) fieldContext_Grant_readFields(_ context.Context, fie
 	return graphql.NewScalarFieldContext("Grant", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Grant_writeFields(ctx context.Context, field graphql.CollectedField, obj *Grant) (ret graphql.Marshaler) {
+func (ec *executionContext) _Grant_writeFields(ctx context.Context, field graphql.CollectedField, obj *configapp.GrantItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -8244,7 +8194,7 @@ func (ec *executionContext) fieldContext_Grant_writeFields(_ context.Context, fi
 	return graphql.NewScalarFieldContext("Grant", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Grant_rows(ctx context.Context, field graphql.CollectedField, obj *Grant) (ret graphql.Marshaler) {
+func (ec *executionContext) _Grant_rows(ctx context.Context, field graphql.CollectedField, obj *configapp.GrantItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -9051,8 +9001,8 @@ func (ec *executionContext) _ImportTable_candidate(ctx context.Context, field gr
 			return obj.Candidate, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *Entity) graphql.Marshaler {
-			return ec.marshalNEntity2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐEntity(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *configapp.EntityItem) graphql.Marshaler {
+			return ec.marshalNEntity2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItem(ctx, selections, v)
 		},
 		true,
 		true,
@@ -11600,8 +11550,8 @@ func (ec *executionContext) _PlanPreview_entities(ctx context.Context, field gra
 			return obj.Entities, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []Entity) graphql.Marshaler {
-			return ec.marshalNEntity2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐEntityᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v []configapp.EntityItem) graphql.Marshaler {
+			return ec.marshalNEntity2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItemᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -11655,8 +11605,8 @@ func (ec *executionContext) _PlanPreview_roles(ctx context.Context, field graphq
 			return obj.Roles, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []Role) graphql.Marshaler {
-			return ec.marshalNRole2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐRoleᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v []configapp.RoleItem) graphql.Marshaler {
+			return ec.marshalNRole2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItemᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -11687,8 +11637,8 @@ func (ec *executionContext) _PlanPreview_users(ctx context.Context, field graphq
 			return obj.Users, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []User) graphql.Marshaler {
-			return ec.marshalNUser2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐUserᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v []configapp.UserItem) graphql.Marshaler {
+			return ec.marshalNUser2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItemᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -13446,7 +13396,7 @@ func (ec *executionContext) fieldContext_Query___schema(_ context.Context, field
 	return fc, nil
 }
 
-func (ec *executionContext) _Relationship_name(ctx context.Context, field graphql.CollectedField, obj *Relationship) (ret graphql.Marshaler) {
+func (ec *executionContext) _Relationship_name(ctx context.Context, field graphql.CollectedField, obj *configapp.RelationshipItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -13469,7 +13419,7 @@ func (ec *executionContext) fieldContext_Relationship_name(_ context.Context, fi
 	return graphql.NewScalarFieldContext("Relationship", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Relationship_target(ctx context.Context, field graphql.CollectedField, obj *Relationship) (ret graphql.Marshaler) {
+func (ec *executionContext) _Relationship_target(ctx context.Context, field graphql.CollectedField, obj *configapp.RelationshipItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -13492,7 +13442,7 @@ func (ec *executionContext) fieldContext_Relationship_target(_ context.Context, 
 	return graphql.NewScalarFieldContext("Relationship", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Relationship_cardinality(ctx context.Context, field graphql.CollectedField, obj *Relationship) (ret graphql.Marshaler) {
+func (ec *executionContext) _Relationship_cardinality(ctx context.Context, field graphql.CollectedField, obj *configapp.RelationshipItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -13515,7 +13465,7 @@ func (ec *executionContext) fieldContext_Relationship_cardinality(_ context.Cont
 	return graphql.NewScalarFieldContext("Relationship", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Relationship_joinOn(ctx context.Context, field graphql.CollectedField, obj *Relationship) (ret graphql.Marshaler) {
+func (ec *executionContext) _Relationship_joinOn(ctx context.Context, field graphql.CollectedField, obj *configapp.RelationshipItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -13800,7 +13750,7 @@ func (ec *executionContext) fieldContext_Revision_yaml(_ context.Context, field 
 	return graphql.NewScalarFieldContext("Revision", field, true, true, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Role_name(ctx context.Context, field graphql.CollectedField, obj *Role) (ret graphql.Marshaler) {
+func (ec *executionContext) _Role_name(ctx context.Context, field graphql.CollectedField, obj *configapp.RoleItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -13823,7 +13773,7 @@ func (ec *executionContext) fieldContext_Role_name(_ context.Context, field grap
 	return graphql.NewScalarFieldContext("Role", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Role_description(ctx context.Context, field graphql.CollectedField, obj *Role) (ret graphql.Marshaler) {
+func (ec *executionContext) _Role_description(ctx context.Context, field graphql.CollectedField, obj *configapp.RoleItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -13846,7 +13796,7 @@ func (ec *executionContext) fieldContext_Role_description(_ context.Context, fie
 	return graphql.NewScalarFieldContext("Role", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Role_grants(ctx context.Context, field graphql.CollectedField, obj *Role) (ret graphql.Marshaler) {
+func (ec *executionContext) _Role_grants(ctx context.Context, field graphql.CollectedField, obj *configapp.RoleItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -13858,8 +13808,8 @@ func (ec *executionContext) _Role_grants(ctx context.Context, field graphql.Coll
 			return obj.Grants, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []Grant) graphql.Marshaler {
-			return ec.marshalNGrant2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐGrantᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v []configapp.GrantItem) graphql.Marshaler {
+			return ec.marshalNGrant2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐGrantItemᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -13876,29 +13826,6 @@ func (ec *executionContext) fieldContext_Role_grants(_ context.Context, field gr
 		},
 	}
 	return fc, nil
-}
-
-func (ec *executionContext) _Role_members(ctx context.Context, field graphql.CollectedField, obj *Role) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Role_members(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Members, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
-			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Role_members(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Role", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _ScanBatch_id(ctx context.Context, field graphql.CollectedField, obj *configapp.ScanBatch) (ret graphql.Marshaler) {
@@ -14313,8 +14240,8 @@ func (ec *executionContext) _ScanJob_state(ctx context.Context, field graphql.Co
 			return obj.State, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v configapp.ScanState) graphql.Marshaler {
-			return ec.marshalNScanState2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐScanState(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNScanState2string(ctx, selections, v)
 		},
 		true,
 		true,
@@ -15445,7 +15372,7 @@ func (ec *executionContext) fieldContext_UnscannedSchemas_schemas(_ context.Cont
 	return graphql.NewScalarFieldContext("UnscannedSchemas", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _User_name(ctx context.Context, field graphql.CollectedField, obj *User) (ret graphql.Marshaler) {
+func (ec *executionContext) _User_name(ctx context.Context, field graphql.CollectedField, obj *configapp.UserItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -15468,7 +15395,7 @@ func (ec *executionContext) fieldContext_User_name(_ context.Context, field grap
 	return graphql.NewScalarFieldContext("User", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _User_description(ctx context.Context, field graphql.CollectedField, obj *User) (ret graphql.Marshaler) {
+func (ec *executionContext) _User_description(ctx context.Context, field graphql.CollectedField, obj *configapp.UserItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -15491,7 +15418,7 @@ func (ec *executionContext) fieldContext_User_description(_ context.Context, fie
 	return graphql.NewScalarFieldContext("User", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _User_roles(ctx context.Context, field graphql.CollectedField, obj *User) (ret graphql.Marshaler) {
+func (ec *executionContext) _User_roles(ctx context.Context, field graphql.CollectedField, obj *configapp.UserItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -15514,7 +15441,7 @@ func (ec *executionContext) fieldContext_User_roles(_ context.Context, field gra
 	return graphql.NewScalarFieldContext("User", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _User_grants(ctx context.Context, field graphql.CollectedField, obj *User) (ret graphql.Marshaler) {
+func (ec *executionContext) _User_grants(ctx context.Context, field graphql.CollectedField, obj *configapp.UserItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -15526,8 +15453,8 @@ func (ec *executionContext) _User_grants(ctx context.Context, field graphql.Coll
 			return obj.Grants, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []Grant) graphql.Marshaler {
-			return ec.marshalNGrant2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐGrantᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v []configapp.GrantItem) graphql.Marshaler {
+			return ec.marshalNGrant2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐGrantItemᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -15546,7 +15473,7 @@ func (ec *executionContext) fieldContext_User_grants(_ context.Context, field gr
 	return fc, nil
 }
 
-func (ec *executionContext) _User_subject(ctx context.Context, field graphql.CollectedField, obj *User) (ret graphql.Marshaler) {
+func (ec *executionContext) _User_subject(ctx context.Context, field graphql.CollectedField, obj *configapp.UserItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -15569,7 +15496,7 @@ func (ec *executionContext) fieldContext_User_subject(_ context.Context, field g
 	return graphql.NewScalarFieldContext("User", field, false, false, errors.New("field of type JSON does not have child fields"))
 }
 
-func (ec *executionContext) _User_disabled(ctx context.Context, field graphql.CollectedField, obj *User) (ret graphql.Marshaler) {
+func (ec *executionContext) _User_disabled(ctx context.Context, field graphql.CollectedField, obj *configapp.UserItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -15581,41 +15508,18 @@ func (ec *executionContext) _User_disabled(ctx context.Context, field graphql.Co
 			return obj.Disabled, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
-			return ec.marshalNBoolean2bool(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *bool) graphql.Marshaler {
+			return ec.marshalOBoolean2ᚖbool(ctx, selections, v)
 		},
 		true,
-		true,
+		false,
 	)
 }
 func (ec *executionContext) fieldContext_User_disabled(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("User", field, false, false, errors.New("field of type Boolean does not have child fields"))
 }
 
-func (ec *executionContext) _User_hasToken(ctx context.Context, field graphql.CollectedField, obj *User) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_User_hasToken(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.HasToken, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
-			return ec.marshalNBoolean2bool(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_User_hasToken(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("User", field, false, false, errors.New("field of type Boolean does not have child fields"))
-}
-
-func (ec *executionContext) _User_tokenHash(ctx context.Context, field graphql.CollectedField, obj *User) (ret graphql.Marshaler) {
+func (ec *executionContext) _User_tokenHash(ctx context.Context, field graphql.CollectedField, obj *configapp.UserItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -17789,7 +17693,7 @@ func (ec *executionContext) unmarshalInputCatalogFilter(ctx context.Context, obj
 			it.Search = data
 		case "status":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("status"))
-			data, err := ec.unmarshalOTableStatus2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐTableStatusᚄ(ctx, v)
+			data, err := ec.unmarshalOTableStatus2ᚕstringᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -18176,7 +18080,7 @@ func (ec *executionContext) unmarshalInputGrantInput(ctx context.Context, obj an
 			it.Entity = data
 		case "actions":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("actions"))
-			data, err := ec.unmarshalNAction2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐActionᚄ(ctx, v)
+			data, err := ec.unmarshalNAction2ᚕstringᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -18721,7 +18625,7 @@ func (ec *executionContext) unmarshalInputSimulationInput(ctx context.Context, o
 			it.Entity = data
 		case "action":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("action"))
-			data, err := ec.unmarshalNAction2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐAction(ctx, v)
+			data, err := ec.unmarshalNAction2string(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -19775,7 +19679,7 @@ func (ec *executionContext) _DraftRevision(ctx context.Context, sel ast.Selectio
 
 var entityImplementors = []string{"Entity"}
 
-func (ec *executionContext) _Entity(ctx context.Context, sel ast.SelectionSet, obj *Entity) graphql.Marshaler {
+func (ec *executionContext) _Entity(ctx context.Context, sel ast.SelectionSet, obj *configapp.EntityItem) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, entityImplementors)
 
 	out := graphql.NewFieldSet(fields)
@@ -19785,11 +19689,6 @@ func (ec *executionContext) _Entity(ctx context.Context, sel ast.SelectionSet, o
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("Entity")
-		case "id":
-			out.Values[i] = ec._Entity_id(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		case "name":
 			out.Values[i] = ec._Entity_name(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -19852,7 +19751,7 @@ func (ec *executionContext) _Entity(ctx context.Context, sel ast.SelectionSet, o
 			}
 		case "mcp":
 			out.Values[i] = ec._Entity_mcp(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
+			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
 		case "params":
@@ -19867,7 +19766,7 @@ func (ec *executionContext) _Entity(ctx context.Context, sel ast.SelectionSet, o
 			}
 		case "allowCascade":
 			out.Values[i] = ec._Entity_allowCascade(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
+			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
 		default:
@@ -19956,7 +19855,7 @@ func (ec *executionContext) _EntityCapability(ctx context.Context, sel ast.Selec
 
 var entityMCPImplementors = []string{"EntityMCP"}
 
-func (ec *executionContext) _EntityMCP(ctx context.Context, sel ast.SelectionSet, obj *EntityMcp) graphql.Marshaler {
+func (ec *executionContext) _EntityMCP(ctx context.Context, sel ast.SelectionSet, obj *configapp.EntityMCPItem) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, entityMCPImplementors)
 
 	out := graphql.NewFieldSet(fields)
@@ -19968,17 +19867,17 @@ func (ec *executionContext) _EntityMCP(ctx context.Context, sel ast.SelectionSet
 			out.Values[i] = graphql.MarshalString("EntityMCP")
 		case "dmlTools":
 			out.Values[i] = ec._EntityMCP_dmlTools(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
+			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
 		case "customTool":
 			out.Values[i] = ec._EntityMCP_customTool(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
+			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
 		case "trustedProcedure":
 			out.Values[i] = ec._EntityMCP_trustedProcedure(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
+			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
 		default:
@@ -20100,7 +19999,7 @@ func (ec *executionContext) _ExecutionStatus(ctx context.Context, sel ast.Select
 
 var fieldImplementors = []string{"Field"}
 
-func (ec *executionContext) _Field(ctx context.Context, sel ast.SelectionSet, obj *Field) graphql.Marshaler {
+func (ec *executionContext) _Field(ctx context.Context, sel ast.SelectionSet, obj *configapp.FieldItem) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, fieldImplementors)
 
 	out := graphql.NewFieldSet(fields)
@@ -20132,7 +20031,7 @@ func (ec *executionContext) _Field(ctx context.Context, sel ast.SelectionSet, ob
 			}
 		case "exclude":
 			out.Values[i] = ec._Field_exclude(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
+			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
 		default:
@@ -20211,7 +20110,7 @@ func (ec *executionContext) _FieldReference(ctx context.Context, sel ast.Selecti
 
 var grantImplementors = []string{"Grant"}
 
-func (ec *executionContext) _Grant(ctx context.Context, sel ast.SelectionSet, obj *Grant) graphql.Marshaler {
+func (ec *executionContext) _Grant(ctx context.Context, sel ast.SelectionSet, obj *configapp.GrantItem) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, grantImplementors)
 
 	out := graphql.NewFieldSet(fields)
@@ -20233,7 +20132,7 @@ func (ec *executionContext) _Grant(ctx context.Context, sel ast.SelectionSet, ob
 			}
 		case "fieldsRestricted":
 			out.Values[i] = ec._Grant_fieldsRestricted(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
+			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
 		case "readFields":
@@ -22398,7 +22297,7 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 
 var relationshipImplementors = []string{"Relationship"}
 
-func (ec *executionContext) _Relationship(ctx context.Context, sel ast.SelectionSet, obj *Relationship) graphql.Marshaler {
+func (ec *executionContext) _Relationship(ctx context.Context, sel ast.SelectionSet, obj *configapp.RelationshipItem) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, relationshipImplementors)
 
 	out := graphql.NewFieldSet(fields)
@@ -22638,7 +22537,7 @@ func (ec *executionContext) _Revision(ctx context.Context, sel ast.SelectionSet,
 
 var roleImplementors = []string{"Role"}
 
-func (ec *executionContext) _Role(ctx context.Context, sel ast.SelectionSet, obj *Role) graphql.Marshaler {
+func (ec *executionContext) _Role(ctx context.Context, sel ast.SelectionSet, obj *configapp.RoleItem) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, roleImplementors)
 
 	out := graphql.NewFieldSet(fields)
@@ -22660,11 +22559,6 @@ func (ec *executionContext) _Role(ctx context.Context, sel ast.SelectionSet, obj
 			}
 		case "grants":
 			out.Values[i] = ec._Role_grants(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "members":
-			out.Values[i] = ec._Role_members(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -23539,7 +23433,7 @@ func (ec *executionContext) _UnscannedSchemas(ctx context.Context, sel ast.Selec
 
 var userImplementors = []string{"User"}
 
-func (ec *executionContext) _User(ctx context.Context, sel ast.SelectionSet, obj *User) graphql.Marshaler {
+func (ec *executionContext) _User(ctx context.Context, sel ast.SelectionSet, obj *configapp.UserItem) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, userImplementors)
 
 	out := graphql.NewFieldSet(fields)
@@ -23576,12 +23470,7 @@ func (ec *executionContext) _User(ctx context.Context, sel ast.SelectionSet, obj
 			}
 		case "disabled":
 			out.Values[i] = ec._User_disabled(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "hasToken":
-			out.Values[i] = ec._User_hasToken(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
+			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
 		case "tokenHash":
@@ -24423,23 +24312,29 @@ func (ec *executionContext) ___Type(ctx context.Context, sel ast.SelectionSet, o
 
 // region    ***************************** type.gotpl *****************************
 
-func (ec *executionContext) unmarshalNAction2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐAction(ctx context.Context, v any) (Action, error) {
-	var res Action
-	err := res.UnmarshalGQL(v)
+func (ec *executionContext) unmarshalNAction2string(ctx context.Context, v any) (string, error) {
+	res, err := graphql.UnmarshalString(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNAction2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐAction(ctx context.Context, sel ast.SelectionSet, v Action) graphql.Marshaler {
-	return v
+func (ec *executionContext) marshalNAction2string(ctx context.Context, sel ast.SelectionSet, v string) graphql.Marshaler {
+	_ = sel
+	res := graphql.MarshalString(v)
+	if res == graphql.Null {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+	}
+	return res
 }
 
-func (ec *executionContext) unmarshalNAction2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐActionᚄ(ctx context.Context, v any) ([]Action, error) {
+func (ec *executionContext) unmarshalNAction2ᚕstringᚄ(ctx context.Context, v any) ([]string, error) {
 	vSlice := graphql.CoerceList(v)
 	var err error
-	res := make([]Action, len(vSlice))
+	res := make([]string, len(vSlice))
 	for i := range vSlice {
 		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalNAction2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐAction(ctx, vSlice[i])
+		res[i], err = ec.unmarshalNAction2string(ctx, vSlice[i])
 		if err != nil {
 			return nil, err
 		}
@@ -24447,11 +24342,11 @@ func (ec *executionContext) unmarshalNAction2ᚕgithubᚗcomᚋnethinweiᚋsql�
 	return res, nil
 }
 
-func (ec *executionContext) marshalNAction2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐActionᚄ(ctx context.Context, sel ast.SelectionSet, v []Action) graphql.Marshaler {
+func (ec *executionContext) marshalNAction2ᚕstringᚄ(ctx context.Context, sel ast.SelectionSet, v []string) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNAction2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐAction(ctx, sel, v[i])
+		return ec.marshalNAction2string(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -24744,15 +24639,15 @@ func (ec *executionContext) marshalNDraftRevision2ᚕgithubᚗcomᚋnethinweiᚋ
 	return ret
 }
 
-func (ec *executionContext) marshalNEntity2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐEntity(ctx context.Context, sel ast.SelectionSet, v Entity) graphql.Marshaler {
+func (ec *executionContext) marshalNEntity2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItem(ctx context.Context, sel ast.SelectionSet, v Entity) graphql.Marshaler {
 	return ec._Entity(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNEntity2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐEntityᚄ(ctx context.Context, sel ast.SelectionSet, v []Entity) graphql.Marshaler {
+func (ec *executionContext) marshalNEntity2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItemᚄ(ctx context.Context, sel ast.SelectionSet, v []Entity) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNEntity2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐEntity(ctx, sel, v[i])
+		return ec.marshalNEntity2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItem(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -24764,7 +24659,7 @@ func (ec *executionContext) marshalNEntity2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑm
 	return ret
 }
 
-func (ec *executionContext) marshalNEntity2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐEntity(ctx context.Context, sel ast.SelectionSet, v *Entity) graphql.Marshaler {
+func (ec *executionContext) marshalNEntity2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItem(ctx context.Context, sel ast.SelectionSet, v *configapp.EntityItem) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -24794,16 +24689,6 @@ func (ec *executionContext) marshalNEntityCapability2ᚕgithubᚗcomᚋnethinwei
 	return ret
 }
 
-func (ec *executionContext) marshalNEntityMCP2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐEntityMcp(ctx context.Context, sel ast.SelectionSet, v *EntityMcp) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._EntityMCP(ctx, sel, v)
-}
-
 func (ec *executionContext) marshalNEntityVisibility2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐEntityVisibility(ctx context.Context, sel ast.SelectionSet, v EntityVisibility) graphql.Marshaler {
 	return ec._EntityVisibility(ctx, sel, &v)
 }
@@ -24824,15 +24709,15 @@ func (ec *executionContext) marshalNEntityVisibility2ᚕgithubᚗcomᚋnethinwei
 	return ret
 }
 
-func (ec *executionContext) marshalNField2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐField(ctx context.Context, sel ast.SelectionSet, v Field) graphql.Marshaler {
+func (ec *executionContext) marshalNField2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐFieldItem(ctx context.Context, sel ast.SelectionSet, v configapp.FieldItem) graphql.Marshaler {
 	return ec._Field(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNField2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐFieldᚄ(ctx context.Context, sel ast.SelectionSet, v []Field) graphql.Marshaler {
+func (ec *executionContext) marshalNField2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐFieldItemᚄ(ctx context.Context, sel ast.SelectionSet, v []configapp.FieldItem) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNField2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐField(ctx, sel, v[i])
+		return ec.marshalNField2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐFieldItem(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -24869,15 +24754,15 @@ func (ec *executionContext) marshalNFieldReference2ᚕgithubᚗcomᚋnethinwei�
 	return ret
 }
 
-func (ec *executionContext) marshalNGrant2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐGrant(ctx context.Context, sel ast.SelectionSet, v Grant) graphql.Marshaler {
+func (ec *executionContext) marshalNGrant2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐGrantItem(ctx context.Context, sel ast.SelectionSet, v configapp.GrantItem) graphql.Marshaler {
 	return ec._Grant(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNGrant2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐGrantᚄ(ctx context.Context, sel ast.SelectionSet, v []Grant) graphql.Marshaler {
+func (ec *executionContext) marshalNGrant2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐGrantItemᚄ(ctx context.Context, sel ast.SelectionSet, v []configapp.GrantItem) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNGrant2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐGrant(ctx, sel, v[i])
+		return ec.marshalNGrant2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐGrantItem(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -25372,15 +25257,15 @@ func (ec *executionContext) unmarshalNPublishInput2githubᚗcomᚋnethinweiᚋsq
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNRelationship2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐRelationship(ctx context.Context, sel ast.SelectionSet, v Relationship) graphql.Marshaler {
+func (ec *executionContext) marshalNRelationship2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRelationshipItem(ctx context.Context, sel ast.SelectionSet, v configapp.RelationshipItem) graphql.Marshaler {
 	return ec._Relationship(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNRelationship2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐRelationshipᚄ(ctx context.Context, sel ast.SelectionSet, v []Relationship) graphql.Marshaler {
+func (ec *executionContext) marshalNRelationship2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRelationshipItemᚄ(ctx context.Context, sel ast.SelectionSet, v []configapp.RelationshipItem) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNRelationship2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐRelationship(ctx, sel, v[i])
+		return ec.marshalNRelationship2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRelationshipItem(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -25437,15 +25322,15 @@ func (ec *executionContext) marshalNRevisionState2githubᚗcomᚋnethinweiᚋsql
 	return v
 }
 
-func (ec *executionContext) marshalNRole2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐRole(ctx context.Context, sel ast.SelectionSet, v Role) graphql.Marshaler {
+func (ec *executionContext) marshalNRole2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItem(ctx context.Context, sel ast.SelectionSet, v Role) graphql.Marshaler {
 	return ec._Role(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNRole2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐRoleᚄ(ctx context.Context, sel ast.SelectionSet, v []Role) graphql.Marshaler {
+func (ec *executionContext) marshalNRole2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItemᚄ(ctx context.Context, sel ast.SelectionSet, v []Role) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNRole2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐRole(ctx, sel, v[i])
+		return ec.marshalNRole2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItem(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -25527,14 +25412,20 @@ func (ec *executionContext) marshalNScanJob2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑ
 	return ec._ScanJob(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNScanState2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐScanState(ctx context.Context, v any) (configapp.ScanState, error) {
-	var res configapp.ScanState
-	err := res.UnmarshalGQL(v)
+func (ec *executionContext) unmarshalNScanState2string(ctx context.Context, v any) (string, error) {
+	res, err := graphql.UnmarshalString(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNScanState2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐScanState(ctx context.Context, sel ast.SelectionSet, v configapp.ScanState) graphql.Marshaler {
-	return v
+func (ec *executionContext) marshalNScanState2string(ctx context.Context, sel ast.SelectionSet, v string) graphql.Marshaler {
+	_ = sel
+	res := graphql.MarshalString(v)
+	if res == graphql.Null {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+	}
+	return res
 }
 
 func (ec *executionContext) marshalNSchemaImport2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐSchemaImport(ctx context.Context, sel ast.SelectionSet, v *SchemaImport) graphql.Marshaler {
@@ -25770,14 +25661,20 @@ func (ec *executionContext) unmarshalNTableRef2ᚕgithubᚗcomᚋnethinweiᚋsql
 	return res, nil
 }
 
-func (ec *executionContext) unmarshalNTableStatus2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐTableStatus(ctx context.Context, v any) (configapp.TableStatus, error) {
-	var res configapp.TableStatus
-	err := res.UnmarshalGQL(v)
+func (ec *executionContext) unmarshalNTableStatus2string(ctx context.Context, v any) (string, error) {
+	res, err := graphql.UnmarshalString(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNTableStatus2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐTableStatus(ctx context.Context, sel ast.SelectionSet, v configapp.TableStatus) graphql.Marshaler {
-	return v
+func (ec *executionContext) marshalNTableStatus2string(ctx context.Context, sel ast.SelectionSet, v string) graphql.Marshaler {
+	_ = sel
+	res := graphql.MarshalString(v)
+	if res == graphql.Null {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+	}
+	return res
 }
 
 func (ec *executionContext) marshalNTaskStatus2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐTaskStatus(ctx context.Context, sel ast.SelectionSet, v TaskStatus) graphql.Marshaler {
@@ -25836,15 +25733,15 @@ func (ec *executionContext) marshalNUnscannedSchemas2ᚕgithubᚗcomᚋnethinwei
 	return ret
 }
 
-func (ec *executionContext) marshalNUser2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐUser(ctx context.Context, sel ast.SelectionSet, v User) graphql.Marshaler {
+func (ec *executionContext) marshalNUser2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItem(ctx context.Context, sel ast.SelectionSet, v User) graphql.Marshaler {
 	return ec._User(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNUser2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐUserᚄ(ctx context.Context, sel ast.SelectionSet, v []User) graphql.Marshaler {
+func (ec *executionContext) marshalNUser2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItemᚄ(ctx context.Context, sel ast.SelectionSet, v []User) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNUser2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐUser(ctx, sel, v[i])
+		return ec.marshalNUser2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItem(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -26165,6 +26062,13 @@ func (ec *executionContext) marshalOBoolean2ᚖbool(ctx context.Context, sel ast
 	return res
 }
 
+func (ec *executionContext) marshalOEntityMCP2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityMCPItem(ctx context.Context, sel ast.SelectionSet, v *configapp.EntityMCPItem) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._EntityMCP(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalOEntityMCPInput2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐEntityMCPInput(ctx context.Context, v any) (*EntityMCPInput, error) {
 	if v == nil {
 		return nil, nil
@@ -26415,16 +26319,16 @@ func (ec *executionContext) marshalOTableComments2ᚖgithubᚗcomᚋnethinweiᚋ
 	return ec._TableComments(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalOTableStatus2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐTableStatusᚄ(ctx context.Context, v any) ([]configapp.TableStatus, error) {
+func (ec *executionContext) unmarshalOTableStatus2ᚕstringᚄ(ctx context.Context, v any) ([]string, error) {
 	if v == nil {
 		return nil, nil
 	}
 	vSlice := graphql.CoerceList(v)
 	var err error
-	res := make([]configapp.TableStatus, len(vSlice))
+	res := make([]string, len(vSlice))
 	for i := range vSlice {
 		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalNTableStatus2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐTableStatus(ctx, vSlice[i])
+		res[i], err = ec.unmarshalNTableStatus2string(ctx, vSlice[i])
 		if err != nil {
 			return nil, err
 		}
@@ -26432,14 +26336,14 @@ func (ec *executionContext) unmarshalOTableStatus2ᚕgithubᚗcomᚋnethinweiᚋ
 	return res, nil
 }
 
-func (ec *executionContext) marshalOTableStatus2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐTableStatusᚄ(ctx context.Context, sel ast.SelectionSet, v []configapp.TableStatus) graphql.Marshaler {
+func (ec *executionContext) marshalOTableStatus2ᚕstringᚄ(ctx context.Context, sel ast.SelectionSet, v []string) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNTableStatus2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐTableStatus(ctx, sel, v[i])
+		return ec.marshalNTableStatus2string(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {

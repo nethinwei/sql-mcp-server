@@ -13,7 +13,7 @@ import (
 )
 
 type ActionVisibility struct {
-	Action Action                `json:"action"`
+	Action string                `json:"action"`
 	Result *configapp.Simulation `json:"result"`
 }
 
@@ -59,15 +59,6 @@ type ColumnComment struct {
 	Description string `json:"description"`
 }
 
-type Configuration struct {
-	Datasources []Datasource `json:"datasources"`
-	Entities    []Entity     `json:"entities"`
-	Roles       []Role       `json:"roles"`
-	Users       []User       `json:"users"`
-	// Every other top-level section (server, tools, cost, budget, cache, ...) as YAML-shaped JSON.
-	Settings any `json:"settings"`
-}
-
 type Datasource struct {
 	Name   string `json:"name"`
 	Driver string `json:"driver"`
@@ -102,38 +93,9 @@ type DraftRevision struct {
 	BasedOn *string `json:"basedOn,omitempty"`
 }
 
-type Entity struct {
-	// The canonical identity, datasource.schema.name (datasource.name without a schema).
-	ID string `json:"id"`
-	// Unique within the datasource and schema.
-	Name string `json:"name"`
-	// The table, view or procedure; null means the entity name.
-	Source *string `json:"source,omitempty"`
-	// null means the datasource named default.
-	Datasource *string `json:"datasource,omitempty"`
-	Schema     *string `json:"schema,omitempty"`
-	// table, view or procedure; null means table.
-	Kind        *string  `json:"kind,omitempty"`
-	Description *string  `json:"description,omitempty"`
-	PrimaryKey  []string `json:"primaryKey"`
-	// Unique keys, each a field list, that identify one row like the primary key.
-	UniqueKeys    [][]string     `json:"uniqueKeys"`
-	Fields        []Field        `json:"fields"`
-	Relationships []Relationship `json:"relationships"`
-	TenantPolicy  any            `json:"tenantPolicy,omitempty"`
-	// Entity-level roles, fieldACL and rowPolicies, kept for compatibility.
-	LegacyAccess any        `json:"legacyAccess,omitempty"`
-	Mcp          *EntityMcp `json:"mcp"`
-	Params       []string   `json:"params"`
-	// Entities a procedure writes; empty invalidates its datasource's cached reads.
-	Affects []string `json:"affects"`
-	// Admit deletes and key updates that foreign keys cascade to other tables without checking permissions there.
-	AllowCascade bool `json:"allowCascade"`
-}
-
 type EntityCapability struct {
 	Entity    string    `json:"entity"`
-	Action    Action    `json:"action"`
+	Action    string    `json:"action"`
 	Privilege Privilege `json:"privilege"`
 	// The connection the action routes to.
 	Connection string `json:"connection"`
@@ -161,12 +123,6 @@ type EntityInput struct {
 	AllowCascade  *bool               `json:"allowCascade,omitempty"`
 }
 
-type EntityMcp struct {
-	DmlTools         bool `json:"dmlTools"`
-	CustomTool       bool `json:"customTool"`
-	TrustedProcedure bool `json:"trustedProcedure"`
-}
-
 type EntityMCPInput struct {
 	DmlTools         *bool `json:"dmlTools,omitempty"`
 	CustomTool       *bool `json:"customTool,omitempty"`
@@ -189,14 +145,6 @@ type ExecutionStatus struct {
 	Tasks []TaskStatus `json:"tasks"`
 }
 
-type Field struct {
-	Name        string  `json:"name"`
-	Alias       *string `json:"alias,omitempty"`
-	Description *string `json:"description,omitempty"`
-	Mask        *string `json:"mask,omitempty"`
-	Exclude     bool    `json:"exclude"`
-}
-
 type FieldInput struct {
 	Name        string  `json:"name"`
 	Alias       *string `json:"alias,omitempty"`
@@ -205,19 +153,9 @@ type FieldInput struct {
 	Exclude     *bool   `json:"exclude,omitempty"`
 }
 
-type Grant struct {
-	Entity  string   `json:"entity"`
-	Actions []Action `json:"actions"`
-	// False grants every visible field; true limits to readFields/writeFields.
-	FieldsRestricted bool     `json:"fieldsRestricted"`
-	ReadFields       []string `json:"readFields"`
-	WriteFields      []string `json:"writeFields"`
-	Rows             any      `json:"rows,omitempty"`
-}
-
 type GrantInput struct {
 	Entity           string   `json:"entity"`
-	Actions          []Action `json:"actions"`
+	Actions          []string `json:"actions"`
 	FieldsRestricted *bool    `json:"fieldsRestricted,omitempty"`
 	ReadFields       []string `json:"readFields,omitempty"`
 	WriteFields      []string `json:"writeFields,omitempty"`
@@ -283,7 +221,7 @@ type ImportTable struct {
 	// Triggers or rules: a write may change other tables.
 	SideEffects bool `json:"sideEffects"`
 	// A zero-permission entity proposal; add it to a draft to configure it.
-	Candidate *Entity `json:"candidate"`
+	Candidate *configapp.EntityItem `json:"candidate"`
 }
 
 type LaneStatus struct {
@@ -308,12 +246,12 @@ type PlanPreview struct {
 	PlanID string                `json:"planId"`
 	Report *configapp.PlanReport `json:"report"`
 	// Entities added or changed, whole.
-	Entities []Entity `json:"entities"`
+	Entities []configapp.EntityItem `json:"entities"`
 	// IDs of the entities added.
 	Added []string `json:"added"`
 	// Roles and users added or changed, whole.
-	Roles []Role `json:"roles"`
-	Users []User `json:"users"`
+	Roles []configapp.RoleItem `json:"roles"`
+	Users []configapp.UserItem `json:"users"`
 	// The draft with the plan applied, as validate checks it.
 	Validation *configapp.Validation `json:"validation"`
 }
@@ -337,26 +275,11 @@ type PublishInput struct {
 type Query struct {
 }
 
-type Relationship struct {
-	Name        string `json:"name"`
-	Target      string `json:"target"`
-	Cardinality string `json:"cardinality"`
-	JoinOn      any    `json:"joinOn"`
-}
-
 type RelationshipInput struct {
 	Name        string `json:"name"`
 	Target      string `json:"target"`
 	Cardinality string `json:"cardinality"`
 	JoinOn      any    `json:"joinOn"`
-}
-
-type Role struct {
-	Name        string  `json:"name"`
-	Description *string `json:"description,omitempty"`
-	Grants      []Grant `json:"grants"`
-	// Users that have this role.
-	Members []string `json:"members"`
 }
 
 type RoleInput struct {
@@ -405,7 +328,7 @@ type SimulationInput struct {
 	// A configured user name, or role:<name> to evaluate a role.
 	User   string `json:"user"`
 	Entity string `json:"entity"`
-	Action Action `json:"action"`
+	Action string `json:"action"`
 	// Requested fields; empty means the default projection.
 	Fields []string `json:"fields,omitempty"`
 	// Extra subject attributes; configured user attributes win.
@@ -442,18 +365,6 @@ type UnappliedRevision struct {
 	Error           string `json:"error"`
 }
 
-type User struct {
-	Name        string   `json:"name"`
-	Description *string  `json:"description,omitempty"`
-	Roles       []string `json:"roles"`
-	Grants      []Grant  `json:"grants"`
-	Subject     any      `json:"subject,omitempty"`
-	Disabled    bool     `json:"disabled"`
-	HasToken    bool     `json:"hasToken"`
-	// The sha256 hash of the user's bearer token (never the token); null when none.
-	TokenHash *string `json:"tokenHash,omitempty"`
-}
-
 type UserInput struct {
 	Name        string       `json:"name"`
 	Description *string      `json:"description,omitempty"`
@@ -475,69 +386,6 @@ type VisibilityInput struct {
 	// A configured user name, or role:<name> to evaluate a role.
 	User    string `json:"user"`
 	Subject any    `json:"subject,omitempty"`
-}
-
-type Action string
-
-const (
-	ActionRead      Action = "READ"
-	ActionCreate    Action = "CREATE"
-	ActionUpdate    Action = "UPDATE"
-	ActionDelete    Action = "DELETE"
-	ActionExecute   Action = "EXECUTE"
-	ActionAggregate Action = "AGGREGATE"
-)
-
-var AllAction = []Action{
-	ActionRead,
-	ActionCreate,
-	ActionUpdate,
-	ActionDelete,
-	ActionExecute,
-	ActionAggregate,
-}
-
-func (e Action) IsValid() bool {
-	switch e {
-	case ActionRead, ActionCreate, ActionUpdate, ActionDelete, ActionExecute, ActionAggregate:
-		return true
-	}
-	return false
-}
-
-func (e Action) String() string {
-	return string(e)
-}
-
-func (e *Action) UnmarshalGQL(v any) error {
-	str, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("enums must be strings")
-	}
-
-	*e = Action(str)
-	if !e.IsValid() {
-		return fmt.Errorf("%s is not a valid Action", str)
-	}
-	return nil
-}
-
-func (e Action) MarshalGQL(w io.Writer) {
-	_, _ = fmt.Fprint(w, strconv.Quote(e.String()))
-}
-
-func (e *Action) UnmarshalJSON(b []byte) error {
-	s, err := strconv.Unquote(string(b))
-	if err != nil {
-		return err
-	}
-	return e.UnmarshalGQL(s)
-}
-
-func (e Action) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	e.MarshalGQL(&buf)
-	return buf.Bytes(), nil
 }
 
 type ImportStatus string

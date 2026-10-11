@@ -103,13 +103,39 @@ func New(opts ...Option) (*Engine, error) {
 	}, nil
 }
 
-// Submit schedules fn under backpressure and returns fn's result value and
-// error. It returns ErrOverloaded if the in-flight queue is full, ErrCircuitOpen
-// if the breaker is open, ErrRateLimited if concurrency exceeds the adaptive
-// limit. Concurrent calls with the same non-empty key share a single execution
-// (singleflight) and all receive the leader's result. An empty key opts out of
-// de-duplication (writes/unique ops). Panics in fn are recovered as errors.
-func (e *Engine) Submit(ctx context.Context, key string, fn func(context.Context) (any, error)) (any, error) {
+// Submit schedules fn on e under backpressure and returns fn's result value
+// and error. It returns ErrOverloaded if the in-flight queue is full,
+// ErrCircuitOpen if the breaker is open, ErrRateLimited if concurrency
+// exceeds the adaptive limit. Concurrent calls with the same non-empty key
+// share a single execution (singleflight) and all receive the leader's
+// result. An empty key opts out of de-duplication (writes/unique ops).
+// Panics in fn are recovered as errors.
+func Submit[T any](ctx context.Context, e *Engine, key string, fn func(context.Context) (T, error)) (T, error) {
+	return typed[T](e.submit(ctx, key, erased(fn)))
+}
+
+// Run runs fn on e under the rate limit, its panics recovered, but outside
+// the lane, the breaker, the adaptive limit and the IO slots: for a call
+// ending a transaction, which must reach its database however it is held
+// back, and holds its connection already.
+func Run[T any](ctx context.Context, e *Engine, fn func(context.Context) (T, error)) (T, error) {
+	return typed[T](e.run(ctx, erased(fn)))
+}
+
+// erased is fn returning its value as any, for the engine's untyped core
+// (singleflight shares one value among callers).
+func erased[T any](fn func(context.Context) (T, error)) func(context.Context) (any, error) {
+	return func(ctx context.Context) (any, error) { return fn(ctx) }
+}
+
+// typed is v as a T; the zero T when v is not one (a failed call returns
+// nil).
+func typed[T any](v any, err error) (T, error) {
+	t, _ := v.(T)
+	return t, err
+}
+
+func (e *Engine) submit(ctx context.Context, key string, fn func(context.Context) (any, error)) (any, error) {
 	done, err := e.admit()
 	if err != nil {
 		return nil, err
@@ -131,11 +157,7 @@ func (e *Engine) Submit(ctx context.Context, key string, fn func(context.Context
 	})
 }
 
-// Run runs fn under the rate limit, its panics recovered, but outside the
-// lane, the breaker, the adaptive limit and the IO slots: for a call ending
-// a transaction, which must reach its database however it is held back, and
-// holds its connection already.
-func (e *Engine) Run(ctx context.Context, fn func(context.Context) (any, error)) (any, error) {
+func (e *Engine) run(ctx context.Context, fn func(context.Context) (any, error)) (any, error) {
 	done, err := e.admit()
 	if err != nil {
 		return nil, err

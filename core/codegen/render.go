@@ -268,14 +268,6 @@ func (b *builder) renderPredicate(p relalg.Predicate) error {
 	case relalg.Not:
 		b.sql.WriteString("NOT ")
 		return b.renderPredicate(pp.P)
-	case relalg.IsNull:
-		b.sql.WriteString(b.qident(pp.Field))
-		if pp.Not {
-			b.sql.WriteString(" IS NOT NULL")
-		} else {
-			b.sql.WriteString(" IS NULL")
-		}
-		return nil
 	default:
 		return fmt.Errorf("%w: %T", ErrUnsupportedExpr, p)
 	}

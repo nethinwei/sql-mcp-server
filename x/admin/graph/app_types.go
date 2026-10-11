@@ -5,6 +5,17 @@ import "github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 // The configuration service's results and inputs, under the names of their
 // GraphQL types (gqlgen binds those names in this package).
 type (
+	// The configuration read model is the workspace's items: a value as the
+	// configuration says it, null when unset.
+	// (Field is bound in gqlgen.yml: an alias of that name would also bind
+	// the introspection type __Field.)
+	Entity       = configapp.EntityItem
+	Relationship = configapp.RelationshipItem
+	EntityMCP    = configapp.EntityMCPItem
+	Grant        = configapp.GrantItem
+	Role         = configapp.RoleItem
+	User         = configapp.UserItem
+
 	CatalogCounts      = configapp.CatalogCounts
 	FieldReference     = configapp.FieldReference
 	CatalogCoverage    = configapp.CatalogCoverage
@@ -30,14 +41,12 @@ type (
 	ScanBatchInput     = configapp.ScanBatchInput
 	ScanBatchItem      = configapp.ScanBatchItem
 	ScanJob            = configapp.ScanJob
-	ScanState          = configapp.ScanState
 	SchemaInfo         = configapp.SchemaInfo
 	SchemaList         = configapp.SchemaList
 	ScopeCondition     = configapp.ScopeCondition
 	ScopeStats         = configapp.ScopeStats
 	Simulation         = configapp.Simulation
 	TableLink          = configapp.TableLink
-	TableStatus        = configapp.TableStatus
 	UnscannedSchemas   = configapp.UnscannedSchemas
 	Validation         = configapp.Validation
 	Workspace          = configapp.Workspace
@@ -49,16 +58,4 @@ type (
 	AppliedPlan        = configapp.AppliedPlan
 	WorkspaceEditInput = configapp.WorkspaceEditInput
 	WorkspaceItemInput = configapp.WorkspaceItemInput
-)
-
-// The values of the bound enums.
-const (
-	ScanStatePending     = configapp.ScanStatePending
-	ScanStateRunning     = configapp.ScanStateRunning
-	ScanStateDone        = configapp.ScanStateDone
-	ScanStateFailed      = configapp.ScanStateFailed
-	ScanStateCanceled    = configapp.ScanStateCanceled
-	TableStatusNew       = configapp.TableStatusNew
-	TableStatusWorkspace = configapp.TableStatusWorkspace
-	TableStatusPublished = configapp.TableStatusPublished
 )

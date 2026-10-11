@@ -25,8 +25,7 @@ func toSchemaImport(in *configapp.Imports) *SchemaImport {
 // importTable shows a scanned table with the entity proposed for it.
 func importTable(c configplan.Candidate) ImportTable {
 	d := c.Table
-	candidate := toEntity(c.Entity)
-	candidate.ID = c.ID
+	candidate := configapp.EntityItemOf(c.Entity)
 	table := ImportTable{
 		Schema: d.Schema, Table: d.Source, Description: d.Description, Status: ImportStatusNew,
 		Columns: importColumns(d), Keys: importKeys(d), Indexes: importIndexes(d),

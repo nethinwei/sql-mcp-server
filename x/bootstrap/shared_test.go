@@ -142,7 +142,7 @@ func TestGenerationsShareTheIOPool(t *testing.T) { //nolint:paralleltest // uses
 	next := published(t, shared, cfg) // the reload keeps the IO pool at 1
 	hold, held := make(chan struct{}), make(chan struct{})
 	go func() {
-		_, _ = old.Engine.Submit(context.Background(), "", func(context.Context) (any, error) {
+		_, _ = engine.Submit(context.Background(), old.Engine, "", func(context.Context) (any, error) {
 			close(held)
 			<-hold
 			return nil, nil
@@ -152,7 +152,7 @@ func TestGenerationsShareTheIOPool(t *testing.T) { //nolint:paralleltest // uses
 	defer close(hold)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	_, err := next.Engine.Submit(ctx, "", func(context.Context) (any, error) { return nil, nil })
+	_, err := engine.Submit(ctx, next.Engine, "", func(context.Context) (any, error) { return nil, nil })
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("the new configuration ran past the shared IO pool: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestFailedReloadKeepsSharedSettings(t *testing.T) { //nolint:paralleltest /
 	}
 	hold, held := make(chan struct{}), make(chan struct{})
 	go func() {
-		_, _ = startup.Engine.Submit(context.Background(), "", func(context.Context) (any, error) {
+		_, _ = engine.Submit(context.Background(), startup.Engine, "", func(context.Context) (any, error) {
 			close(held)
 			<-hold
 			return nil, nil
@@ -222,7 +222,8 @@ func TestFailedReloadKeepsSharedSettings(t *testing.T) { //nolint:paralleltest /
 	defer close(hold)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if _, err := startup.Engine.Submit(ctx, "", func(context.Context) (any, error) { return nil, nil }); err == nil {
+	nothing := func(context.Context) (any, error) { return nil, nil }
+	if _, err := engine.Submit(ctx, startup.Engine, "", nothing); err == nil {
 		t.Fatal("a failed reload must not raise the serving IO pool")
 	}
 }
@@ -237,7 +238,7 @@ func TestGenerationsShareTheServeLane(t *testing.T) { //nolint:paralleltest // u
 	next := published(t, shared, cfg)
 	hold, held := make(chan struct{}), make(chan struct{})
 	go func() {
-		_, _ = old.Engine.Submit(context.Background(), "", func(context.Context) (any, error) {
+		_, _ = engine.Submit(context.Background(), old.Engine, "", func(context.Context) (any, error) {
 			close(held)
 			<-hold
 			return nil, nil
@@ -245,7 +246,7 @@ func TestGenerationsShareTheServeLane(t *testing.T) { //nolint:paralleltest // u
 	}()
 	<-held
 	defer close(hold)
-	_, err := next.Engine.Submit(context.Background(), "", func(context.Context) (any, error) { return nil, nil })
+	_, err := engine.Submit(context.Background(), next.Engine, "", func(context.Context) (any, error) { return nil, nil })
 	if !errors.Is(err, engine.ErrOverloaded) {
 		t.Fatalf("the new configuration ran past the shared in-flight bound: %v", err)
 	}

@@ -234,15 +234,8 @@ type Or struct{ Preds []Predicate }
 // Not negates a predicate.
 type Not struct{ P Predicate }
 
-// IsNull tests null/non-null of a field.
-type IsNull struct {
-	Field string
-	Not   bool
-}
-
 // Marker methods seal the Predicate interface.
 func (Condition) pred() {}
 func (And) pred()       {}
 func (Or) pred()        {}
 func (Not) pred()       {}
-func (IsNull) pred()    {}

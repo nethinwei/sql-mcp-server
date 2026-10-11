@@ -5,10 +5,6 @@ package configapp
 // (gqlgen autobind), and the configuration MCP endpoint returns them as JSON.
 
 import (
-	"bytes"
-	"fmt"
-	"io"
-	"strconv"
 	"time"
 )
 
@@ -41,8 +37,8 @@ type CatalogFilter struct {
 	// Glob patterns on table names.
 	Tables []string `json:"tables,omitempty"`
 	// A part of the table name or its comment.
-	Search *string       `json:"search,omitempty"`
-	Status []TableStatus `json:"status,omitempty"`
+	Search *string  `json:"search,omitempty"`
+	Status []string `json:"status,omitempty"`
 	// Only configured tables whose columns and fields differ.
 	Drift *bool `json:"drift,omitempty"`
 }
@@ -74,9 +70,9 @@ type CatalogRow struct {
 	ForeignKeys  int `json:"foreignKeys"`
 	ReferencedBy int `json:"referencedBy"`
 	// Whether a key identifies a row.
-	HasKey      bool        `json:"hasKey"`
-	SideEffects bool        `json:"sideEffects"`
-	Status      TableStatus `json:"status"`
+	HasKey      bool   `json:"hasKey"`
+	SideEffects bool   `json:"sideEffects"`
+	Status      string `json:"status"`
 	// The entity that reads the table.
 	Entity *string `json:"entity,omitempty"`
 	// Columns without a field, and fields without a column.
@@ -270,9 +266,9 @@ type ScanBatchItem struct {
 }
 
 type ScanJob struct {
-	ID         string    `json:"id"`
-	Datasource string    `json:"datasource"`
-	State      ScanState `json:"state"`
+	ID         string `json:"id"`
+	Datasource string `json:"datasource"`
+	State      string `json:"state"`
 	// Why the scan failed or stopped.
 	Error *string `json:"error,omitempty"`
 }
@@ -341,126 +337,24 @@ type Validation struct {
 	Warnings []string `json:"warnings"`
 }
 
-type ScanState string
-
+// The states of a scan job (GraphQL ScanState), as scanjobs names them.
 const (
-	ScanStatePending  ScanState = "PENDING"
-	ScanStateRunning  ScanState = "RUNNING"
-	ScanStateDone     ScanState = "DONE"
-	ScanStateFailed   ScanState = "FAILED"
-	ScanStateCanceled ScanState = "CANCELED"
+	ScanStatePending  = "PENDING"
+	ScanStateRunning  = "RUNNING"
+	ScanStateDone     = "DONE"
+	ScanStateFailed   = "FAILED"
+	ScanStateCanceled = "CANCELED"
 )
 
-var AllScanState = []ScanState{
-	ScanStatePending,
-	ScanStateRunning,
-	ScanStateDone,
-	ScanStateFailed,
-	ScanStateCanceled,
-}
-
-func (e ScanState) IsValid() bool {
-	switch e {
-	case ScanStatePending, ScanStateRunning, ScanStateDone, ScanStateFailed, ScanStateCanceled:
-		return true
-	}
-	return false
-}
-
-func (e ScanState) String() string {
-	return string(e)
-}
-
-func (e *ScanState) UnmarshalGQL(v any) error {
-	str, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("enums must be strings")
-	}
-
-	*e = ScanState(str)
-	if !e.IsValid() {
-		return fmt.Errorf("%s is not a valid ScanState", str)
-	}
-	return nil
-}
-
-func (e ScanState) MarshalGQL(w io.Writer) {
-	_, _ = fmt.Fprint(w, strconv.Quote(e.String()))
-}
-
-func (e *ScanState) UnmarshalJSON(b []byte) error {
-	s, err := strconv.Unquote(string(b))
-	if err != nil {
-		return err
-	}
-	return e.UnmarshalGQL(s)
-}
-
-func (e ScanState) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	e.MarshalGQL(&buf)
-	return buf.Bytes(), nil
-}
-
-type TableStatus string
-
+// How a scanned table stands to the configuration (GraphQL TableStatus).
 const (
 	// No entity reads the table.
-	TableStatusNew TableStatus = "NEW"
+	TableStatusNew = "NEW"
 	// An entity of the workspace reads it, not yet published.
-	TableStatusWorkspace TableStatus = "WORKSPACE"
+	TableStatusWorkspace = "WORKSPACE"
 	// A published entity reads it.
-	TableStatusPublished TableStatus = "PUBLISHED"
+	TableStatusPublished = "PUBLISHED"
 )
-
-var AllTableStatus = []TableStatus{
-	TableStatusNew,
-	TableStatusWorkspace,
-	TableStatusPublished,
-}
-
-func (e TableStatus) IsValid() bool {
-	switch e {
-	case TableStatusNew, TableStatusWorkspace, TableStatusPublished:
-		return true
-	}
-	return false
-}
-
-func (e TableStatus) String() string {
-	return string(e)
-}
-
-func (e *TableStatus) UnmarshalGQL(v any) error {
-	str, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("enums must be strings")
-	}
-
-	*e = TableStatus(str)
-	if !e.IsValid() {
-		return fmt.Errorf("%s is not a valid TableStatus", str)
-	}
-	return nil
-}
-
-func (e TableStatus) MarshalGQL(w io.Writer) {
-	_, _ = fmt.Fprint(w, strconv.Quote(e.String()))
-}
-
-func (e *TableStatus) UnmarshalJSON(b []byte) error {
-	s, err := strconv.Unquote(string(b))
-	if err != nil {
-		return err
-	}
-	return e.UnmarshalGQL(s)
-}
-
-func (e TableStatus) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	e.MarshalGQL(&buf)
-	return buf.Bytes(), nil
-}
 
 // Workspace is an administrator's workspace as it stands: the one copy of
 // their unpublished work, written by them (in any console) and their agents.

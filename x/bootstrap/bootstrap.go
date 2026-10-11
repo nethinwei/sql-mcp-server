@@ -595,22 +595,14 @@ func budgetLimits(c config.BudgetConfig, principals map[string]config.BudgetLimi
 ) {
 	roles := make(map[string]budget.Limits, len(c.Roles)+len(principals))
 	for name, limits := range c.Roles {
-		roles[name] = toBudgetLimits(limits)
+		roles[name] = budget.Limits(limits)
 	}
 	for principal, limits := range principals {
-		roles[principal] = toBudgetLimits(limits)
+		roles[principal] = budget.Limits(limits)
 	}
 	tenants := make(map[string]budget.Limits, len(c.Tenants))
 	for name, limits := range c.Tenants {
-		tenants[name] = toBudgetLimits(limits)
+		tenants[name] = budget.Limits(limits)
 	}
 	return roles, tenants
-}
-
-func toBudgetLimits(c config.BudgetLimits) budget.Limits {
-	return budget.Limits{
-		MaxConcurrent: c.MaxConcurrent, MaxExecution: c.MaxExecution,
-		MaxEstimatedScannedRows: c.MaxEstimatedScannedRows, MaxReturnedRows: c.MaxReturnedRows,
-		MaxReturnedBytes: c.MaxReturnedBytes, MaxSessionCost: c.MaxSessionCost,
-	}
 }

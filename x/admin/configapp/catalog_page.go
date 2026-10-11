@@ -174,9 +174,7 @@ func toCatalogRow(row configplan.Row, referenced int) CatalogRow {
 		View: t.Kind == entity.KindView, Columns: len(t.Attributes), ForeignKeys: len(t.ForeignKeys),
 		ReferencedBy: referenced, SideEffects: t.SideEffects,
 		HasKey: len(t.PrimaryKey()) > 0 || len(configplan.IdentityUniqueKeys(t)) > 0,
-		Status: TableStatus(
-			strings.ToUpper(string(row.Status)),
-		), Added: kit.OrEmpty(row.Added), Missing: kit.OrEmpty(row.Missing),
+		Status: strings.ToUpper(string(row.Status)), Added: kit.OrEmpty(row.Added), Missing: kit.OrEmpty(row.Missing),
 	}
 	if row.Entity != nil {
 		out.Entity = kit.Optional(row.Entity.ID())

@@ -32,7 +32,7 @@ func (s Schema) View(now, base Snapshot, c Conflict) (Open, bool) {
 	if !c.Pinned {
 		theirs = s.GetAt(theirsItem, path)
 	}
-	if s.sameAt(path, mine, theirs) {
+	if s.comparer().sameAt(path, mine, theirs) {
 		return Open{}, false
 	}
 	c.Path = path

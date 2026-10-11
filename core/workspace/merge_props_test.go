@@ -231,9 +231,10 @@ func checkMerge(t *testing.T, seed uint32) {
 	where := fmt.Sprintf("seed %d", seed)
 	for _, c := range conflicts {
 		// A conflict holds both sides as they are, differing, and keeps mine.
-		if !schema.sameAt(c.Path, c.Mine, schema.GetAt(local, c.Path)) ||
-			!schema.sameAt(c.Path, c.Theirs, schema.GetAt(next, c.Path)) || schema.sameAt(c.Path, c.Mine, c.Theirs) ||
-			!schema.sameAt(c.Path, schema.GetAt(value, c.Path), c.Mine) {
+		if !schema.comparer().sameAt(c.Path, c.Mine, schema.GetAt(local, c.Path)) ||
+			!schema.comparer().sameAt(c.Path, c.Theirs, schema.GetAt(next, c.Path)) ||
+			schema.comparer().sameAt(c.Path, c.Mine, c.Theirs) ||
+			!schema.comparer().sameAt(c.Path, schema.GetAt(value, c.Path), c.Mine) {
 			t.Fatalf("%s: conflict %+v", where, c)
 		}
 	}
@@ -244,7 +245,7 @@ func checkMerge(t *testing.T, seed uint32) {
 		theirs = schema.SetAt(theirs, c.Path, c.Theirs)
 	}
 	for _, c := range conflicts {
-		if !schema.sameAt(c.Path, schema.GetAt(theirs, c.Path), schema.GetAt(next, c.Path)) {
+		if !schema.comparer().sameAt(c.Path, schema.GetAt(theirs, c.Path), schema.GetAt(next, c.Path)) {
 			t.Fatalf("%s: taking theirs at %s", where, c.Path)
 		}
 	}
@@ -272,13 +273,13 @@ func checkLeaves(t *testing.T, where string, sides [3]any, value any, conflicts 
 		b, l, n := schema.GetAt(base, p), schema.GetAt(local, p), schema.GetAt(next, p)
 		// A side's change survives unless the other changed the same value.
 		want := l
-		if schema.sameAt(p, l, b) {
+		if schema.comparer().sameAt(p, l, b) {
 			want = n
 		}
-		if !schema.sameAt(p, schema.GetAt(value, p), want) {
+		if !schema.comparer().sameAt(p, schema.GetAt(value, p), want) {
 			t.Fatalf("%s at %s: %s, want %s", where, p, show(schema.GetAt(value, p)), show(want))
 		}
-		if !schema.sameAt(p, l, b) && !schema.sameAt(p, n, b) && !schema.sameAt(p, l, n) {
+		if !schema.comparer().sameAt(p, l, b) && !schema.comparer().sameAt(p, n, b) && !schema.comparer().sameAt(p, l, n) {
 			t.Fatalf("%s: an unreported conflict at %s", where, p)
 		}
 	}

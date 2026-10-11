@@ -477,7 +477,7 @@ func TestPermissionMatrix(t *testing.T) {
 		query string
 		ok    bool
 	}{
-		{[]string{auth.PermRead}, `{ published { id config { users { name hasToken } } } }`, true},
+		{[]string{auth.PermRead}, `{ published { id config { users { name tokenHash } } } }`, true},
 		{[]string{auth.PermRead}, `mutation { createDraft(draft: {base: "1"}) { id } }`, false},
 		{[]string{auth.PermRead}, `mutation { generateUserToken { token } }`, false},
 		{[]string{auth.PermRead}, `mutation { startSchemaScan(datasource: "shop") { id } }`, false},

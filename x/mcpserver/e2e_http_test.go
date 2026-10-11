@@ -46,10 +46,10 @@ func (t identityTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 func startE2EHTTPServer(t *testing.T, app *bootstrap.App) *httptest.Server {
 	t.Helper()
 	handler, err := mcpserver.Handler(mcpserver.NewServer(app), mcpserver.HTTPConfig{
-		Addr:              "127.0.0.1:0",
-		Token:             e2eHTTPToken,
-		TrustProxyHeaders: true,
-		TrustedProxyCIDRs: []string{"127.0.0.0/8", "::1/128"},
+		Addr: "127.0.0.1:0",
+		HTTPAuth: mcpserver.HTTPAuth{
+			Token: e2eHTTPToken, TrustProxyHeaders: true, TrustedProxyCIDRs: []string{"127.0.0.0/8", "::1/128"},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)

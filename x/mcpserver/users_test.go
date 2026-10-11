@@ -186,7 +186,7 @@ func TestValidateHTTPSecurityAcceptsUsersAsAuthentication(t *testing.T) {
 	if err := validateHTTPSecurity(HTTPConfig{Addr: ":8080"}); err == nil {
 		t.Fatal("exposed listener without auth must be rejected")
 	}
-	if err := validateHTTPSecurity(HTTPConfig{Addr: ":8080", Users: testUsers()}); err != nil {
+	if err := validateHTTPSecurity(HTTPConfig{Addr: ":8080", HTTPAuth: HTTPAuth{Users: testUsers()}}); err != nil {
 		t.Fatalf("configured users authenticate an exposed listener: %v", err)
 	}
 }
