@@ -9,6 +9,10 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+## 0.1.14 - 2026-10-11
+
+升级步骤汇总见 [`docs/releases/v0.1.14.md`](docs/releases/v0.1.14.md#迁移)。
+
 ### Added
 
 - 可信 SQL 逃生通道 `execute_sql`（管理面 2，设计见 `docs/design/sql-escape-hatch.md`）：
@@ -31,6 +35,10 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 ### Changed
 
 - `tools/list` 的结果因调用身份而异（只影响 `execute_sql` 的可见性）。
+- EXPLAIN 解析把不读表的计划（PostgreSQL `Result` / `Values Scan`、MySQL `INSERT … VALUES`
+  的目标节点、OceanBase `EXPRESSION`）视为点查：`cost.sqlEscape.estimate: required` 下
+  常量查询与 `INSERT … VALUES` 可通过估算，受治理面的语句不受影响。
+- 审计与预算对 `execute_sql` 的 `returnedRows` 以实际行数计（0 行不再记作 1）。
 
 ## 0.1.13 - 2026-10-11
 

@@ -1,7 +1,7 @@
 # Roadmap
 
-当前稳定基线为 `v0.1.13`。已发布能力以
-[发布说明](releases/v0.1.13.md)、[CHANGELOG](../CHANGELOG.md)、
+当前稳定基线为 `v0.1.14`。已发布能力以
+[发布说明](releases/v0.1.14.md)、[CHANGELOG](../CHANGELOG.md)、
 [配置参考](configuration.md)和[安全模型](security.md)为准。
 
 本文件只给出未发布成果的顺序和门禁：
@@ -47,10 +47,11 @@
 
 ## Committed
 
-`v0.1.14` — [管理面 2 · Trusted SQL Escape Hatch](#管理面-2--trusted-sql-escape-hatch)，
-实施方案与评审决议见[设计文档](design/sql-escape-hatch.md)，退出门禁已全部满足，待发布。
-问题证据、非目标与退出门禁见该节；2026-09-30 路线图复审将管理面阶段提前到
-`Next` 之前。
+`v0.1.14` 交付[管理面 2 · Trusted SQL Escape Hatch](#管理面-2--trusted-sql-escape-hatch)：
+可信 SQL 逃生通道 `execute_sql`、系统权限 `sql:execute@<数据源>`、审计同步写入；
+实施方案与评审决议见[设计文档](design/sql-escape-hatch.md)，退出门禁已全部满足，见
+[发布说明](releases/v0.1.14.md)。2026-09-30 路线图复审将管理面阶段提前到 `Next` 之前；
+下一个 Committed 版本待路线图复审确定。
 
 `v0.1.13` 交付多管理员协作的管理面与执行总线：方案驱动的批量配置、配置 MCP 令牌、
 持久化扫描批次、服务端工作区与版本管理模块、快进发布、执行总线、配置意图与生效值、
