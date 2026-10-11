@@ -90,8 +90,11 @@ type Info struct {
 // Result is a tool's outcome: the rows returned to the agent plus usage for
 // budgets and audit.
 type Result struct {
-	Content              []map[string]any
-	ReturnedRows         int64
+	Content      []map[string]any
+	ReturnedRows int64
+	// Counted says ReturnedRows is the row count even when zero; otherwise
+	// zero means the tool did not count and Content's size stands in.
+	Counted              bool
 	ReturnedBytes        int64
 	EstimatedScannedRows int64
 	// Grants lists covering grant IDs for audit; it is not sent to clients.
@@ -368,7 +371,7 @@ func finalizeToolResult(
 
 // returnedRows is the row count a tool reported, or its result size.
 func returnedRows(res Result) int64 {
-	if res.ReturnedRows > 0 {
+	if res.Counted || res.ReturnedRows > 0 {
 		return res.ReturnedRows
 	}
 	return int64(len(res.Content))

@@ -146,6 +146,12 @@ func parseOBExplain(b []byte) (cost.Plan, error) {
 		switch {
 		case strings.Contains(op, "SORT"):
 			plan.HasSort = true
+		case strings.Contains(op, "EXPRESSION"):
+			// Rows computed without a table: a constant SELECT, or the values
+			// an INSERT writes. A scan anywhere in the plan outranks it.
+			if scans == 0 {
+				plan.ScanType = cost.ScanPoint
+			}
 		case strings.Contains(op, "SCAN") || strings.Contains(op, "GET"):
 			if scan := obScanType(op); scans == 0 || cost.Worse(scan, plan.ScanType) {
 				plan.ScanType = scan

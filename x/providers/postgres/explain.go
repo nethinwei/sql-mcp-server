@@ -283,6 +283,10 @@ func pgScanType(node string) cost.ScanType {
 		return cost.ScanIndex
 	case strings.Contains(node, "Tid Scan"):
 		return cost.ScanPoint
+	case node == "Result" || node == "Values Scan":
+		// No table is read: a constant SELECT, or the rows INSERT ... VALUES
+		// writes. A scan elsewhere in the plan still outranks it.
+		return cost.ScanPoint
 	}
 	return cost.ScanUnknown
 }

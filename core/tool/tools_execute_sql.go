@@ -124,7 +124,7 @@ func (ExecuteSQLTool) Run(ctx context.Context, input json.RawMessage, tc Context
 			return Result{}, err
 		}
 		trace.rowsAffected = r.RowsAffected
-		return Result{Content: []map[string]any{{"rowsAffected": r.RowsAffected}}}, nil
+		return Result{Content: []map[string]any{{"rowsAffected": r.RowsAffected}}, Counted: true}, nil
 	}
 	got, err := st.queryRaw(ctx)
 	if err != nil {
@@ -134,7 +134,7 @@ func (ExecuteSQLTool) Run(ctx context.Context, input json.RawMessage, tc Context
 		Content: []map[string]any{{
 			"columns": got.columns, "rows": got.rows, "rowCount": len(got.rows), "truncated": got.truncated,
 		}},
-		ReturnedRows: int64(len(got.rows)),
+		ReturnedRows: int64(len(got.rows)), Counted: true,
 	}, nil
 }
 
@@ -170,12 +170,14 @@ func (t *escapeTrace) fill(ev *audit.Event, phase string) {
 }
 
 // UnestimableError is a statement the escape hatch could not estimate: the
-// datasource's EXPLAIN refused it (DDL, SET, SHOW, a syntax error). It is
-// refused while cost.sqlEscape.estimate is required, as cost exceeded.
+// datasource's EXPLAIN failed on it (DDL, SET, SHOW, a syntax error, an
+// error raised while planning). It is refused while
+// cost.sqlEscape.estimate is required, as cost exceeded, with the
+// database's message first: that is what the caller has to act on.
 type UnestimableError struct{ Cause error }
 
 func (e *UnestimableError) Error() string {
-	return "execute_sql: the statement cannot be estimated: " + e.Cause.Error()
+	return "execute_sql: EXPLAIN failed: " + e.Cause.Error()
 }
 
 // Unwrap returns cost.ErrCostExceeded: an estimate the gate requires is missing.

@@ -114,3 +114,26 @@ Optimization Info:
 		t.Fatal("sized without optimization info")
 	}
 }
+
+func TestParseOBExplainExpression(t *testing.T) {
+	t.Parallel()
+	for name, raw := range map[string]string{
+		"constant select": `{"ID":0,"OPERATOR":"EXPRESSION","NAME":"","EST.ROWS":1,"EST.TIME(us)":1}`,
+		"insert values": `{"ID":0,"OPERATOR":"DISTRIBUTED INSERT","NAME":"","EST.ROWS":1,"EST.TIME(us)":13,` +
+			`"CHILD_1":{"ID":1,"OPERATOR":"EXPRESSION","NAME":"","EST.ROWS":1,"EST.TIME(us)":1}}`,
+	} {
+		p, err := parseOBExplain([]byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.ScanType != cost.ScanPoint || p.EstimatedRows != 1 {
+			t.Errorf("%s: %+v, want a point read of one row", name, p)
+		}
+	}
+	// A scan anywhere in the plan outranks the expression.
+	raw := `{"ID":0,"OPERATOR":"DISTRIBUTED INSERT","EST.ROWS":2,"CHILD_1":{"ID":1,"OPERATOR":"EXPRESSION",` +
+		`"EST.ROWS":2,"CHILD_1":{"ID":2,"OPERATOR":"TABLE FULL SCAN","NAME":"users","EST.ROWS":2}}}`
+	if p, _ := parseOBExplain([]byte(raw)); p.ScanType != cost.ScanFull {
+		t.Errorf("INSERT ... SELECT: ScanType = %v, want ScanFull", p.ScanType)
+	}
+}

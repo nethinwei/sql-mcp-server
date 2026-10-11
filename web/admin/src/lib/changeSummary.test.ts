@@ -31,6 +31,17 @@ describe('summarize', () => {
     ])
   })
 
+  it('reports a system permission gained through a role or directly', () => {
+    const next = clone(base)
+    next.roles[0].permissions = ['sql:execute@shop']
+    next.users[1].permissions = ['sql:execute@shop']
+    const s = summarize(base, next)
+    expect(s.users).toEqual([
+      { user: 'bi', gained: [{ entity: 'shop', action: 'SQL' }], lost: [], rescoped: [], subjectChanged: false },
+      { user: 'ops', gained: [{ entity: 'shop', action: 'SQL' }], lost: [], rescoped: [], subjectChanged: false },
+    ])
+  })
+
   it('ignores a rule that duplicates or is covered by an unrestricted one', () => {
     const next = clone(base)
     next.users[0].grants = [{ entity: 'orders', actions: ['READ'] }]

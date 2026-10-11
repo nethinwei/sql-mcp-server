@@ -179,8 +179,9 @@ Agent 会看到它们。
 `maxReturnedRows`（到上限即截断并标 `truncated: true`，不报错）、`cost.maxBytes` 与预算的
 `maxReturnedBytes`、并发 / rate limit、session 预算。`cost.enabled: false` 只关闭估算。
 估算默认必需（`cost.sqlEscape.estimate: required`）：每条语句先在逃生通道连接上
-EXPLAIN，按与闸门相同的阈值打分（软拒绝同样拒绝），EXPLAIN 不接受的语句（DDL、`SET`、
-`SHOW`、语法错误）一律拒绝；`skip` 关闭估算，只保留硬上限。MySQL / OceanBase 连接默认
+EXPLAIN，按与闸门相同的阈值打分（软拒绝同样拒绝），EXPLAIN 失败的语句（DDL、`SET`、
+`SHOW`、语法错误、规划期报错）一律拒绝并回显数据库原文；不读表的语句（常量 `SELECT`、
+`INSERT … VALUES`）估算为点查；`skip` 关闭估算，只保留硬上限。MySQL / OceanBase 连接默认
 附加的 `sql_safe_updates=1` 对逃生通道同样生效：无键的 UPDATE / DELETE 会被数据库拒绝，
 需要时在该连接的 DSN 中显式设置。
 
@@ -191,8 +192,9 @@ EXPLAIN，按与闸门相同的阈值打分（软拒绝同样拒绝），EXPLAIN
 SQL 文本不脱敏地进入审计文件。
 
 无论 `query` 还是 `exec`，执行后该数据源的读缓存整体失效并记录会话写入（语句可能
-写入，服务不知道改了什么）。每次调用一条语句；驱动层是否接受多语句不作承诺，审计
-记录的是整段文本。`execute_sql` 不接受事务令牌，也不进入读缓存与 singleflight。
+写入，服务不知道改了什么）。每次调用一条语句：PostgreSQL 的扩展协议拒绝多语句，
+MySQL / OceanBase 取决于连接参数（默认关闭），服务不作承诺，审计记录的是整段文本。
+`execute_sql` 不接受事务令牌，也不进入读缓存与 singleflight。
 
 ## Secret
 

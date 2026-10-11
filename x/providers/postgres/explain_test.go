@@ -214,3 +214,26 @@ func TestFullScanRelations(t *testing.T) {
 		t.Fatal("a scan naming no table is sized")
 	}
 }
+
+func TestParsePGExplainReadsNoTable(t *testing.T) {
+	t.Parallel()
+	for name, raw := range map[string]string{
+		"constant select": `[{"Plan":{"Node Type":"Result","Total Cost":0.01,"Plan Rows":1}}]`,
+		"insert values": `[{"Plan":{"Node Type":"ModifyTable","Operation":"Insert","Relation Name":"refunds",` +
+			`"Plan Rows":0,"Plans":[{"Node Type":"Values Scan","Plan Rows":2}]}}]`,
+	} {
+		p, _, err := parsePGExplain([]byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.ScanType != cost.ScanPoint {
+			t.Errorf("%s: ScanType = %v, want ScanPoint", name, p.ScanType)
+		}
+	}
+	// A table scan below a Result still counts.
+	raw := `[{"Plan":{"Node Type":"Result","Plan Rows":100,` +
+		`"Plans":[{"Node Type":"Seq Scan","Relation Name":"users","Plan Rows":100}]}}]`
+	if p, _, _ := parsePGExplain([]byte(raw)); p.ScanType != cost.ScanFull {
+		t.Errorf("Result over Seq Scan: ScanType = %v, want ScanFull", p.ScanType)
+	}
+}

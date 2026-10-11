@@ -428,8 +428,13 @@ RunTool（hook、预算、engine、审计）
 
 仍属剩余风险、不作承诺的事项：
 
-- **多语句**：不解析 SQL 就无法禁止驱动层接受的多语句（PG simple protocol 无参数
-  时允许；MySQL 默认关闭）。审计记录完整文本，硬上限对整次调用生效，写进 TM-013
-  剩余风险。
+- **多语句**：不解析 SQL 就无法禁止驱动层接受的多语句（pgx 走扩展协议，实测拒绝
+  `cannot insert multiple commands into a prepared statement`；MySQL / OceanBase 取决于
+  DSN 的 `multiStatements`，默认关闭）。审计记录完整文本，硬上限对整次调用生效，写进
+  TM-013 剩余风险。
+- **不读表的语句**：常量 `SELECT`、`INSERT … VALUES` 的计划没有扫描节点，本地走查时
+  三库都被 `required` 估算以“未知扫描”拒绝；修正为各 provider 把不读表的节点
+  （PostgreSQL `Result` / `Values Scan`、MySQL `insert` 节点、OceanBase `EXPRESSION`）
+  视为点查，集成测试加入这两类语句。
 - **`raw` 读不进读缓存**：排障查询不该命中缓存；若后续需要，再按
   `(datasource, sql, args)` 加键并随 `exec` 整库失效。
