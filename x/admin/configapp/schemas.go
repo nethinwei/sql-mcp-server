@@ -6,6 +6,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 )
 
@@ -24,7 +25,7 @@ func (r *Service) SchemaList(ctx context.Context, datasource string, refresh boo
 	}
 	out := &SchemaList{
 		Datasource: datasource, Schemas: make([]SchemaInfo, 0, len(listed.all)),
-		DefaultSchema: optional(listed.current), ListedAt: listed.at, Source: src.Token(),
+		DefaultSchema: kit.Optional(listed.current), ListedAt: listed.at, Source: src.Token(),
 	}
 	names := listed.all
 	if len(names) == 0 {

@@ -1,14 +1,16 @@
-package store
+// Package storetest holds hand-written fakes of the store interfaces for
+// tests: a DB, a Tx and Rows whose answers the test configures and whose
+// calls it reads back, without a mocking library.
+package storetest
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"reflect"
-)
 
-// This file contains hand-written fakes for testing. They are exported so other
-// core packages can depend on store.DB/Rows/Tx fakes without a mocking library.
+	"github.com/nethinwei/sql-mcp-server/core/store"
+)
 
 // ErrScanBeforeNext is returned when Scan is called before Next.
 var ErrScanBeforeNext = errors.New("store: Scan called before Next")
@@ -22,7 +24,7 @@ var ErrNoExecFn = errors.New("store: no ExecFn configured")
 // ErrNoBeginFn is returned when a FakeDB has no BeginFn configured.
 var ErrNoBeginFn = errors.New("store: no BeginFn configured")
 
-// FakeRows is a hand-written Rows implementation for tests.
+// FakeRows is a hand-written store.Rows implementation for tests.
 type FakeRows struct {
 	Cols   []string
 	Rows   [][]any
@@ -89,16 +91,16 @@ type LoggedExec struct {
 // FakeDB is a hand-written DB and TxBeginner for tests. Configure the *Fn
 // fields to control responses; calls are recorded for assertion.
 type FakeDB struct {
-	QueryFn func(ctx context.Context, query string, args ...any) (Rows, error)
-	ExecFn  func(ctx context.Context, query string, args ...any) (Result, error)
-	BeginFn func(ctx context.Context, opts *TxOptions) (Tx, error)
+	QueryFn func(ctx context.Context, query string, args ...any) (store.Rows, error)
+	ExecFn  func(ctx context.Context, query string, args ...any) (store.Result, error)
+	BeginFn func(ctx context.Context, opts *store.TxOptions) (store.Tx, error)
 
 	Queries []LoggedQuery
 	Execs   []LoggedExec
 	TxBegun int
 }
 
-func (d *FakeDB) QueryContext(ctx context.Context, query string, args ...any) (Rows, error) {
+func (d *FakeDB) QueryContext(ctx context.Context, query string, args ...any) (store.Rows, error) {
 	d.Queries = append(d.Queries, LoggedQuery{Query: query, Args: args})
 	if d.QueryFn == nil {
 		return nil, ErrNoQueryFn
@@ -106,15 +108,15 @@ func (d *FakeDB) QueryContext(ctx context.Context, query string, args ...any) (R
 	return d.QueryFn(ctx, query, args...)
 }
 
-func (d *FakeDB) ExecContext(ctx context.Context, query string, args ...any) (Result, error) {
+func (d *FakeDB) ExecContext(ctx context.Context, query string, args ...any) (store.Result, error) {
 	d.Execs = append(d.Execs, LoggedExec{Query: query, Args: args})
 	if d.ExecFn == nil {
-		return Result{}, ErrNoExecFn
+		return store.Result{}, ErrNoExecFn
 	}
 	return d.ExecFn(ctx, query, args...)
 }
 
-func (d *FakeDB) BeginTx(ctx context.Context, opts *TxOptions) (Tx, error) {
+func (d *FakeDB) BeginTx(ctx context.Context, opts *store.TxOptions) (store.Tx, error) {
 	d.TxBegun++
 	if d.BeginFn == nil {
 		return nil, ErrNoBeginFn
@@ -122,7 +124,7 @@ func (d *FakeDB) BeginTx(ctx context.Context, opts *TxOptions) (Tx, error) {
 	return d.BeginFn(ctx, opts)
 }
 
-// FakeTx is a hand-written Tx for tests.
+// FakeTx is a hand-written store.Tx for tests.
 type FakeTx struct {
 	Committed  bool
 	RolledBack bool
@@ -134,10 +136,10 @@ func (t *FakeTx) Rollback() error { t.RolledBack = true; return nil }
 // QueryContext and ExecContext on FakeTx defer to package-level helpers; tests
 // usually configure a shared FakeDB for tx behavior. For simplicity they return
 // zero values unless overridden via fields.
-func (t *FakeTx) QueryContext(_ context.Context, _ string, _ ...any) (Rows, error) {
+func (t *FakeTx) QueryContext(_ context.Context, _ string, _ ...any) (store.Rows, error) {
 	return nil, ErrNoQueryFn
 }
 
-func (t *FakeTx) ExecContext(_ context.Context, _ string, _ ...any) (Result, error) {
-	return Result{}, ErrNoExecFn
+func (t *FakeTx) ExecContext(_ context.Context, _ string, _ ...any) (store.Result, error) {
+	return store.Result{}, ErrNoExecFn
 }

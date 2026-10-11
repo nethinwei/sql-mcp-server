@@ -239,7 +239,7 @@ func parsePGExplain(b []byte) (cost.Plan, pgPlanNode, error) {
 // the largest row estimate rather than classifying only a wrapper root node.
 func walkPlan(n pgPlanNode, p *cost.Plan) {
 	if scan := pgScanType(n.NodeType); scan != cost.ScanUnknown &&
-		(p.ScanType == cost.ScanUnknown || scanRisk(scan) > scanRisk(p.ScanType)) {
+		(p.ScanType == cost.ScanUnknown || cost.Worse(scan, p.ScanType)) {
 		p.ScanType = scan
 	}
 	if n.PlanRows > p.EstimatedRows {
@@ -256,21 +256,6 @@ func walkPlan(n pgPlanNode, p *cost.Plan) {
 	}
 	for _, sub := range n.Plans {
 		walkPlan(sub, p)
-	}
-}
-
-func scanRisk(scan cost.ScanType) int {
-	switch scan {
-	case cost.ScanFull:
-		return 4
-	case cost.ScanSeq:
-		return 3
-	case cost.ScanIndex:
-		return 2
-	case cost.ScanPoint:
-		return 1
-	default:
-		return 0
 	}
 }
 

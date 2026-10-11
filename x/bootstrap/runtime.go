@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/nethinwei/sql-mcp-server/core/config"
 )
 
 // ErrRuntimeClosed is returned when a closed runtime is used.
@@ -250,14 +252,36 @@ func publishReload(r *Runtime, old *appSnapshot, next *App, revoked []string) er
 // Watch polls path for content changes and reloads it. Reload errors are
 // reported through onError and do not stop the watcher or replace the old App.
 func (r *Runtime) Watch(ctx context.Context, path string, interval time.Duration, onError func(error)) error {
-	if interval <= 0 {
-		interval = time.Second
-	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	last := sha256.Sum256(data)
+	last, report := sha256.Sum256(data), reporter(onError)
+	return poll(ctx, interval, time.Second, func() {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			report(err)
+			return
+		}
+		sum := sha256.Sum256(data)
+		if sum == last {
+			return
+		}
+		if err := r.Reload(path); err != nil {
+			report(err)
+			r.holdLoaded(LoadBytes(data))
+			return
+		}
+		last = sum
+	})
+}
+
+// poll runs tick every interval (def when interval is not positive) until
+// ctx ends, and returns why it ended.
+func poll(ctx context.Context, interval, def time.Duration, tick func()) error {
+	if interval <= 0 {
+		interval = def
+	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -265,28 +289,24 @@ func (r *Runtime) Watch(ctx context.Context, path string, interval time.Duration
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			data, err := os.ReadFile(path)
-			if err != nil {
-				if onError != nil {
-					onError(err)
-				}
-				continue
-			}
-			sum := sha256.Sum256(data)
-			if sum == last {
-				continue
-			}
-			if err := r.Reload(path); err != nil {
-				if onError != nil {
-					onError(err)
-				}
-				if cfg, err := LoadBytes(data); err == nil {
-					r.holdChanged(cfg)
-				}
-				continue
-			}
-			last = sum
+			tick()
 		}
+	}
+}
+
+// reporter reports errors to onError, or nowhere.
+func reporter(onError func(error)) func(error) {
+	if onError == nil {
+		return func(error) {}
+	}
+	return onError
+}
+
+// holdLoaded holds the users a configuration that failed to apply changes,
+// when it loads (see holdChanged).
+func (r *Runtime) holdLoaded(cfg *config.Config, err error) {
+	if err == nil {
+		r.holdChanged(cfg)
 	}
 }
 

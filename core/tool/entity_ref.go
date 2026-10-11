@@ -70,9 +70,10 @@ func resolveEntityRef(ctx context.Context, tc Context, ref string) (string, erro
 	if len(matches) == 1 {
 		return matches[0].Name, nil
 	}
+	visible := UsableBy(ctx, tc.Authorizer, tc.Role, tc.Subject)
 	var usable []entity.Entity
 	for _, e := range matches {
-		if canUse(ctx, tc, e) {
+		if visible(e) {
 			usable = append(usable, e)
 		}
 	}
@@ -82,7 +83,6 @@ func resolveEntityRef(ctx context.Context, tc Context, ref string) (string, erro
 	case 1:
 		return usable[0].Name, nil
 	}
-	visible := UsableBy(ctx, tc.Authorizer, tc.Role, tc.Subject)
 	candidates := make([]string, 0, len(usable))
 	for _, e := range usable {
 		candidates = append(candidates, tc.Registry.ShortName(e, visible))
@@ -90,36 +90,39 @@ func resolveEntityRef(ctx context.Context, tc Context, ref string) (string, erro
 	return "", &AmbiguousEntityError{Ref: ref, Candidates: candidates}
 }
 
-// canUse reports that the caller can reach e for some action (see UsableBy).
-func canUse(ctx context.Context, tc Context, e entity.Entity) bool {
-	return UsableBy(ctx, tc.Authorizer, tc.Role, tc.Subject)(e)
-}
-
 // UsableBy reports the entities a caller can reach for some action, as
 // entity discovery does (see rbac.Decision.Reachable); every entity when
-// authz is nil.
+// authz is nil. The answer for each entity is kept: naming one entity among
+// many asks about its namesakes, and listing them asks about each.
 func UsableBy(
 	ctx context.Context, authz rbac.Authorizer, role string, subject map[string]any,
 ) func(entity.Entity) bool {
+	if authz == nil {
+		return func(entity.Entity) bool { return true }
+	}
+	known := map[string]bool{}
 	return func(e entity.Entity) bool {
-		if authz == nil {
-			return true
+		if ok, seen := known[e.Name]; seen {
+			return ok
 		}
+		ok := false
 		for _, action := range entity.ActionsFor(e.Kind) {
 			dec, err := authz.Authorize(ctx, rbac.Request{Role: role, Subject: subject, Entity: e.Name, Action: action})
 			if err == nil && dec.Reachable() {
-				return true
+				ok = true
+				break
 			}
 		}
-		return false
+		known[e.Name] = ok
+		return ok
 	}
 }
 
 // entityName is how the caller refers to e: the shortest reference naming it
-// alone among the entities the caller can use.
-func entityName(ctx context.Context, tc Context, e entity.Entity) string {
+// alone among the entities visible accepts (see UsableBy).
+func entityName(tc Context, e entity.Entity, visible func(entity.Entity) bool) string {
 	if tc.Registry == nil {
 		return e.Name
 	}
-	return tc.Registry.ShortName(e, UsableBy(ctx, tc.Authorizer, tc.Role, tc.Subject))
+	return tc.Registry.ShortName(e, visible)
 }

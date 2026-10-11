@@ -5,7 +5,6 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
-	"github.com/nethinwei/sql-mcp-server/core/relalg"
 )
 
 // configToEntities converts config entities to the core entity model, named
@@ -41,7 +40,7 @@ func configToEntity(ec config.EntityConfig, refs config.EntityRefs) (entity.Enti
 	if err != nil {
 		return entity.Entity{}, err
 	}
-	tenantPolicy, err := filterConfigToPredicate(ec.TenantPolicy)
+	tenantPolicy, err := config.ParseFilter(ec.TenantPolicy)
 	if err != nil {
 		return entity.Entity{}, fmt.Errorf("tenant policy for entity %q: %w", ec.Name, err)
 	}
@@ -100,7 +99,7 @@ func entityFieldAccessFromConfig(fieldACL map[string]config.FieldACLConfig) enti
 func entityRowPoliciesFromConfig(policies config.RowPolicies) (entity.RowPolicies, error) {
 	rowPolicies := entity.RowPolicies{}
 	for r, fc := range policies {
-		p, err := filterConfigToPredicate(fc)
+		p, err := config.ParseFilter(fc)
 		if err != nil {
 			return nil, fmt.Errorf("row policy for role %q: %w", r, err)
 		}
@@ -139,47 +138,4 @@ func parseKind(s string) entity.Kind {
 		return entity.KindProcedure
 	}
 	return entity.KindTable
-}
-
-// filterConfigToPredicate converts a declarative filter config to a relalg
-// predicate. Supported shapes: {op,field,value}, {and:[...]}, {or:[...]}.
-func filterConfigToPredicate(fc config.FilterConfig) (relalg.Predicate, error) {
-	if fc == nil {
-		return nil, nil
-	}
-	if op, ok := fc["op"].(string); ok {
-		field, _ := fc["field"].(string)
-		return relalg.Condition{Field: field, Op: relalg.Op(op), Value: fc["value"]}, nil
-	}
-	if and, ok := fc["and"].([]any); ok {
-		return combineFilters(and, relalg.And{})
-	}
-	if or, ok := fc["or"].([]any); ok {
-		return combineFilters(or, relalg.Or{})
-	}
-	return nil, fmt.Errorf("invalid filter config: missing op/and/or")
-}
-
-func combineFilters(items []any, wrap relalg.Predicate) (relalg.Predicate, error) {
-	preds := make([]relalg.Predicate, 0, len(items))
-	for _, item := range items {
-		m, ok := item.(config.FilterConfig)
-		if !ok {
-			return nil, fmt.Errorf("filter item is not an object")
-		}
-		p, err := filterConfigToPredicate(m)
-		if err != nil {
-			return nil, err
-		}
-		preds = append(preds, p)
-	}
-	switch w := wrap.(type) {
-	case relalg.And:
-		w.Preds = preds
-		return w, nil
-	case relalg.Or:
-		w.Preds = preds
-		return w, nil
-	}
-	return nil, fmt.Errorf("unsupported combiner")
 }

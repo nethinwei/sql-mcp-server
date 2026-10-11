@@ -54,13 +54,14 @@ var (
 	ErrDatasourceForbidden = errors.New("tool: the datasource connection is not permitted to do this")
 )
 
-type databaseError struct{ err error }
+// classified is a sentinel error (its kind, what clients and callers see)
+// with the error that caused it, kept for logs and the audit record: it is
+// its kind to errors.Is, and unwraps to its cause.
+type classified struct{ kind, cause error }
 
-func (e *databaseError) Error() string { return ErrDatabase.Error() }
-func (e *databaseError) Unwrap() error { return e.err }
-func (e *databaseError) Is(target error) bool {
-	return target == ErrDatabase
-}
+func (e *classified) Error() string        { return e.kind.Error() }
+func (e *classified) Unwrap() error        { return e.cause }
+func (e *classified) Is(target error) bool { return target == e.kind }
 
 // WrapDBError classifies a database driver error while preserving its cause:
 // a refused privilege becomes ErrDatasourceForbidden, anything else
@@ -70,15 +71,10 @@ func WrapDBError(err error) error {
 		return err
 	}
 	if errors.Is(err, store.ErrPermissionDenied) {
-		return &forbiddenError{err: err}
+		return &classified{kind: ErrDatasourceForbidden, cause: err}
 	}
-	return &databaseError{err: err}
+	return &classified{kind: ErrDatabase, cause: err}
 }
-
-type forbiddenError struct{ err error }
-
-func (e *forbiddenError) Error() string   { return ErrDatasourceForbidden.Error() }
-func (e *forbiddenError) Unwrap() []error { return []error{ErrDatasourceForbidden, e.err} }
 
 // Info is a tool's static metadata, mapped to an MCP tool definition.
 type Info struct {
@@ -102,20 +98,16 @@ type Result struct {
 	Grants []string
 }
 
-// Context carries per-request dependencies (injected, no mutable global state).
-type Context struct {
-	Role       string         // principal key: a role name, or "user:<name>" for a user
-	User       string         // configured user name, empty on the role path
-	UserRoles  []string       // the user's roles, for audit
-	Subject    map[string]any // caller attributes for row-level ${subject.x} policies
-	Session    string         // MCP session ID when the transport provides one
-	DecisionID string         // per-call ID correlating response, audit, and trace
-	DB         store.DB
-	Dialect    dialect.Dialect
+// Services are what every call of one configuration shares: the entities and
+// the policy, the cache, the engine, the audit sink and the hooks, the
+// limits, the datasources, and the process state (transactions, budgets,
+// write tracking, result memory) that outlives the configuration. A Context
+// refers to them; it never copies them. A nil field degrades to a no-op
+// where the call can go on without it.
+type Services struct {
 	Registry   *entity.Registry
 	Authorizer rbac.Authorizer
 	Masker     mask.Masker
-	Gate       cost.Gate
 	Cache      cache.Cache[[]map[string]any]
 	// Generation is the configuration generation serving the call; cached
 	// reads of different generations are kept apart.
@@ -128,17 +120,34 @@ type Context struct {
 	Hooks        *hook.Hooks
 	Limits
 	Feedback     cost.FeedbackStore
-	Analyze      cost.AnalyzePolicy
-	DataSource   string
 	Sources      map[string]DataSource
 	Budget       budget.Manager
-	BudgetLimits budget.Limits
 	Transactions *TransactionManager
 	Writes       *WriteTracker
 	TxBeginners  map[string]store.TxBeginner
-	Transaction  string
 	// ResultMemory bounds the results the process holds at once.
 	ResultMemory *ResultMemory
+}
+
+// Context is one call: who makes it, where it is routed, and the Services
+// it runs on. It is passed by value and routed by copy (see routeEntity).
+type Context struct {
+	*Services
+	Role       string         // principal key: a role name, or "user:<name>" for a user
+	User       string         // configured user name, empty on the role path
+	UserRoles  []string       // the user's roles, for audit
+	Subject    map[string]any // caller attributes for row-level ${subject.x} policies
+	Session    string         // MCP session ID when the transport provides one
+	DecisionID string         // per-call ID correlating response, audit, and trace
+	// DB, Dialect, Gate and Analyze are the entity's datasource's, once
+	// routed (see routeEntity); DataSource names it.
+	DB           store.DB
+	Dialect      dialect.Dialect
+	Gate         cost.Gate
+	Analyze      cost.AnalyzePolicy
+	DataSource   string
+	BudgetLimits budget.Limits
+	Transaction  string
 	// results meters the call's rows (see meterCall).
 	results *resultMeter
 	// followsWrite is set by routeEntity while reads follow the session's
@@ -209,6 +218,9 @@ type endsTransaction interface {
 // Tool.Run directly, keeping the wiring in the core where it is unit-testable.
 // A nil Engine/Auditor/Hooks each degrade to a no-op.
 func RunTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Result, error) {
+	if tc.Services == nil {
+		tc.Services = &Services{}
+	}
 	info := t.Info()
 	name := info.Name
 	start := time.Now()
@@ -329,7 +341,7 @@ func engineSubmitKey(ctx context.Context, t Tool, input json.RawMessage, tc Cont
 	if tc.Transactions == nil {
 		return "", ErrTransactionNotFound
 	}
-	return "", tc.Transactions.Validate(ctx, transaction, tc.Session, tc.Role, tc.Subject)
+	return "", tc.Transactions.Validate(ctx, transaction, callerOf(tc))
 }
 
 // finalizeToolResult accounts usage against the lease. Exceeding a limit after
@@ -569,14 +581,7 @@ func keysetAfter(pks []string, cursor map[string]any) (relalg.Predicate, []strin
 }
 
 func toExceededError(d cost.Decision) error {
-	p := cost.Plan{}
-	if d.Plan != nil {
-		p = *d.Plan
-	}
-	s := cost.Score{}
-	if d.Score != nil {
-		s = *d.Score
-	}
+	p, s := d.Estimate()
 	return &cost.ExceededError{Plan: p, Score: s, Hints: d.Hints, Soft: d.Soft}
 }
 
@@ -635,13 +640,7 @@ func checkGateDetailed(
 		tc.Hooks.FireCostGate(ctx, cost.Plan{}, cost.Score{}, "hard")
 		return compiled, nil, err
 	}
-	plan, score := cost.Plan{}, cost.Score{}
-	if dec.Plan != nil {
-		plan = *dec.Plan
-	}
-	if dec.Score != nil {
-		score = *dec.Score
-	}
+	plan, score := dec.Estimate()
 	maxEstimated := tc.BudgetLimits.MaxEstimatedScannedRows
 	if dec.Plan != nil && maxEstimated > 0 &&
 		dec.Plan.EstimatedRows > maxEstimated {

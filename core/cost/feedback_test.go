@@ -11,13 +11,14 @@ import (
 func TestMemoryStoreAverage(t *testing.T) {
 	t.Parallel()
 	s := NewMemoryStore()
-	s.Record(Feedback{Template: "q1", Rows: 10})
-	s.Record(Feedback{Template: "q1", Rows: 20})
-	got, ok := s.AverageRows("q1")
+	s.Record(Feedback{Template: "q1", ActualRows: 10})
+	s.Record(Feedback{Template: "q1", ActualRows: 20})
+	stats, ok := s.Stats("q1")
+	got := stats.AverageRows
 	if !ok || got != 15 {
 		t.Fatalf("got %d, %v, want 15", got, ok)
 	}
-	if _, ok := s.AverageRows("missing"); ok {
+	if _, ok := s.Stats("missing"); ok {
 		t.Fatal("missing template should miss")
 	}
 }
@@ -96,7 +97,9 @@ func TestFeedbackAnomalyInvalidatesPlan(t *testing.T) {
 }
 
 func TestAnalyzePolicyRequiresExplicitReadOnlyEnable(t *testing.T) {
-	sampler := FakeAnalyzeSampler{Plan: Plan{EstimatedRows: 7}}
+	sampler := analyzeSamplerFunc(func(context.Context, codegen.Compiled) (Plan, error) {
+		return Plan{EstimatedRows: 7}, nil
+	})
 	policy := AnalyzePolicy{Sampler: sampler, Config: AnalyzeConfig{Enabled: true, ReadOnly: true, SampleRate: 1}}
 	plan, sampled, err := policy.Sample(
 		context.Background(),
@@ -139,8 +142,8 @@ func TestAnalyzePolicyUsesIndependentTimeout(t *testing.T) {
 func TestNoopFeedbackStore(t *testing.T) {
 	t.Parallel()
 	var s NoopFeedbackStore
-	s.Record(Feedback{Template: "q", Rows: 1})
-	if _, ok := s.AverageRows("q"); ok {
+	s.Record(Feedback{Template: "q", ActualRows: 1})
+	if _, ok := s.Stats("q"); ok {
 		t.Fatal("noop should miss")
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/cost"
 	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 )
 
 // guardedPair is shared services with two connections, a and b, whose
@@ -22,12 +23,12 @@ func guardedPair(t *testing.T, failA, failB *bool) (*Shared, store.DB, store.DB,
 	cfg := &config.Config{Databases: map[string]config.DatabaseConfig{"x": {Driver: "postgres", DSN: "x"}}}
 	cfg.ApplyDefaults()
 	cfg.RateLimit.BreakerThreshold, cfg.RateLimit.BreakerCooldown = 1, 50*time.Millisecond
-	db := func(fail *bool) *store.FakeDB {
-		return &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+	db := func(fail *bool) *storetest.FakeDB {
+		return &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
 			if *fail {
 				return nil, errors.New("connection refused")
 			}
-			return store.NewFakeRows([]string{"id"}, []any{int64(1)}), nil
+			return storetest.NewFakeRows([]string{"id"}, []any{int64(1)}), nil
 		}}
 	}
 	pa, pb := &fakeProvider{}, &fakeProvider{}

@@ -5,9 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/catalog"
 )
 
@@ -53,24 +53,17 @@ func (s *SQLStore) PutCatalogList(ctx context.Context, source, datasource string
 
 // CatalogVersions implements catalog.Store.
 func (s *SQLStore) CatalogVersions(ctx context.Context, source string) ([]catalog.Version, error) {
-	rows, err := s.db.QueryContext(ctx, s.dialect.rebind(
-		"SELECT schema_name, scanned_us, table_count FROM smcp_catalog_schemas WHERE source_id = ? ORDER BY schema_name"),
+	out, err := queryAll(ctx, s, s.db, func(row scanner) (v catalog.Version, err error) {
+		var scanned int64
+		err = row.Scan(&v.Name, &scanned, &v.Tables)
+		v.ScannedAt = fromMicros(scanned)
+		return v, err
+	}, "SELECT schema_name, scanned_us, table_count FROM smcp_catalog_schemas WHERE source_id = ? ORDER BY schema_name",
 		source)
 	if err != nil {
 		return nil, fmt.Errorf("configstore: list scanned schemas: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-	out := []catalog.Version{}
-	for rows.Next() {
-		var v catalog.Version
-		var scanned int64
-		if err := rows.Scan(&v.Name, &scanned, &v.Tables); err != nil {
-			return nil, err
-		}
-		v.ScannedAt = fromMicros(scanned)
-		out = append(out, v)
-	}
-	return out, rows.Err()
+	return kit.OrEmpty(out), nil
 }
 
 // CatalogSchemas implements catalog.Store.
@@ -83,41 +76,30 @@ func (s *SQLStore) CatalogSchemas(ctx context.Context, source string, names []st
 		for _, n := range batch {
 			args = append(args, n)
 		}
-		rows, err := s.db.QueryContext(ctx, s.dialect.rebind(
+		read, err := queryAll(ctx, s, s.db, scanSchema,
 			"SELECT schema_name, payload, scanned_us FROM smcp_catalog_schemas WHERE source_id = ? AND schema_name IN ("+
-				strings.TrimSuffix(strings.Repeat("?, ", len(batch)), ", ")+") ORDER BY schema_name"), args...)
+				placeholders(len(batch))+") ORDER BY schema_name", args...)
 		if err != nil {
 			return nil, fmt.Errorf("configstore: read scanned schemas: %w", err)
-		}
-		read, err := scanSchemas(rows)
-		if err != nil {
-			return nil, err
 		}
 		out = append(out, read...)
 	}
 	return out, nil
 }
 
-func scanSchemas(rows *sql.Rows) ([]catalog.Schema, error) {
-	defer func() { _ = rows.Close() }()
-	var out []catalog.Schema
-	for rows.Next() {
-		var name, payload string
-		var scanned int64
-		if err := rows.Scan(&name, &payload, &scanned); err != nil {
-			return nil, err
-		}
-		var sc catalog.Schema
-		if err := json.Unmarshal([]byte(payload), &sc); err != nil {
-			return nil, fmt.Errorf("configstore: decode scanned schema %q: %w", name, err)
-		}
-		sc.Name, sc.ScannedAt = name, fromMicros(scanned)
-		if sc.Tables == nil {
-			sc.Tables = []catalog.Table{}
-		}
-		out = append(out, sc)
+func scanSchema(row scanner) (catalog.Schema, error) {
+	var name, payload string
+	var scanned int64
+	if err := row.Scan(&name, &payload, &scanned); err != nil {
+		return catalog.Schema{}, err
 	}
-	return out, rows.Err()
+	var sc catalog.Schema
+	if err := json.Unmarshal([]byte(payload), &sc); err != nil {
+		return catalog.Schema{}, fmt.Errorf("configstore: decode scanned schema %q: %w", name, err)
+	}
+	sc.Name, sc.ScannedAt = name, fromMicros(scanned)
+	sc.Tables = kit.OrEmpty(sc.Tables)
+	return sc, nil
 }
 
 // PutCatalogSchemas implements catalog.Store.

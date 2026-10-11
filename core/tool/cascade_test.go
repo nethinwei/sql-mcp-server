@@ -10,6 +10,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
 )
 
@@ -23,7 +24,13 @@ func cascadeRegistry(t *testing.T, allow bool, auditExposed bool) *entity.Regist
 		Keys:       []entity.Key{{Name: "pk", Columns: []string{"id"}, Primary: true}},
 		Role:       entity.RoleAccess{entity.ActionDelete: {"w", "scoped"}, entity.ActionUpdate: {"w", "scoped"}},
 		Cascades: []entity.Cascade{
-			{Table: "orders", Entity: "orders", Columns: []string{"id"}, OnDelete: entity.FKCascade, OnUpdate: entity.FKCascade},
+			{
+				Table:    "orders",
+				Entity:   "orders",
+				Columns:  []string{"id"},
+				OnDelete: entity.FKCascade,
+				OnUpdate: entity.FKCascade,
+			},
 			{Table: "audit", Columns: []string{"id"}, OnDelete: entity.FKSetNull},
 		},
 	}
@@ -74,13 +81,15 @@ func TestCascadingWritesNeedUnrestrictedPermissionOnEveryCascadedEntity(t *testi
 		t.Run(name, func(t *testing.T) {
 			reg := cascadeRegistry(t, tc.allow, tc.audit)
 			executed := false
-			db := &store.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
+			db := &storetest.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
 				executed = true
 				return store.Result{RowsAffected: 1}, nil
 			}}
 			ctx := Context{
-				Role: tc.role, DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
-				Authorizer: rbac.NewRoleAuthorizer(reg),
+				Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+				Role:     tc.role,
+				DB:       db,
+				Dialect:  testdialect.Postgres{},
 			}
 			_, err := tc.tool.Run(context.Background(), json.RawMessage(tc.input), ctx)
 			if tc.wantForbidden != errors.Is(err, ErrUnauthorized) || tc.wantForbidden == executed {
@@ -98,12 +107,15 @@ func TestCascadeChecksReachEveryLevelAndRewrittenField(t *testing.T) {
 	for role, wantForbidden := range map[string]bool{"deep": false, "shallow": true, "fields": true} {
 		t.Run(role, func(t *testing.T) {
 			executed := false
-			db := &store.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
+			db := &storetest.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
 				executed = true
 				return store.Result{RowsAffected: 1}, nil
 			}}
 			ctx := Context{
-				Role: role, DB: db, Dialect: testdialect.Postgres{}, Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
+				Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+				Role:     role,
+				DB:       db,
+				Dialect:  testdialect.Postgres{},
 			}
 			input := `{"entity":"customers","filter":[{"field":"id","op":"eq","value":1}]}`
 			_, err := DeleteTool{}.Run(context.Background(), json.RawMessage(input), ctx)

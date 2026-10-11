@@ -19,6 +19,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/core/workspace"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/configedit"
@@ -121,6 +122,7 @@ func (r *Service) Revision(ctx context.Context, id string) (revision.Revision, e
 // Built is a merged, validated and normalized configuration.
 type Built struct {
 	Base    revision.Revision
+	Spec    *config.Spec
 	Config  *config.Config
 	Payload []byte
 }
@@ -133,14 +135,15 @@ func (r *Service) BuildDraft(ctx context.Context, d Draft) (Built, error) {
 	if err != nil {
 		return Built{}, err
 	}
-	if err := base.Verify(); err != nil {
+	baseSpec, _, err := bootstrap.LoadRevisionSpec(base)
+	if err != nil {
 		return Built{}, fmt.Errorf("base revision %d: %w", base.ID, err)
 	}
-	cfg, payload, err := configedit.Apply(base.Payload, d.Edit)
+	spec, cfg, payload, err := configedit.ApplySpec(baseSpec, d.Edit)
 	if err != nil {
 		return Built{}, err
 	}
-	return Built{Base: base, Config: cfg, Payload: payload}, nil
+	return Built{Base: base, Spec: spec, Config: cfg, Payload: payload}, nil
 }
 
 // SelectConfig is the configuration against is.
@@ -181,7 +184,7 @@ func (r *Service) RestartChanges(ctx context.Context, next *config.Config) ([]st
 	if err != nil {
 		return nil, err
 	}
-	return orEmpty(bootstrap.RestartChanges(cur, next)), nil
+	return kit.OrEmpty(bootstrap.RestartChanges(cur, next)), nil
 }
 
 // DiscardDraft discards a draft, saved by anyone, an agent included: it
@@ -269,42 +272,10 @@ func (r *Service) Validate(ctx context.Context, against Against) (*Validation, e
 	}
 	hash := revision.Hash(built.Payload)
 	return &Validation{Ok: true, ContentHash: &hash, RestartRequired: changes,
-		Warnings: orEmpty(bootstrap.CapabilityWarnings(built.Config, r.capabilities()))}, nil
+		Warnings: kit.OrEmpty(bootstrap.CapabilityWarnings(built.Config, r.capabilities()))}, nil
 }
 
 func hasDatasource(cfg *config.Config, name string) bool {
 	_, ok := cfg.Databases[name]
 	return ok
-}
-
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
-func derefBool(b *bool) bool { return b != nil && *b }
-
-func derefInt(n *int, fallback int) int {
-	if n == nil {
-		return fallback
-	}
-	return *n
-}
-
-// optional is s, nil when empty.
-func optional(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}
-
-// orEmpty is s, never nil.
-func orEmpty[T any](s []T) []T {
-	if s == nil {
-		return []T{}
-	}
-	return s
 }

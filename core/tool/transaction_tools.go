@@ -49,15 +49,8 @@ func (BeginTransactionTool) Run(ctx context.Context, input json.RawMessage, tc C
 	if err != nil {
 		return Result{}, err
 	}
-	token, err := tc.Transactions.Begin(
-		ctx,
-		beginner,
-		tc.Session,
-		tc.Role,
-		tc.Subject,
-		datasource,
-		&store.TxOptions{Isolation: isolation, ReadOnly: readOnly},
-	)
+	token, err := tc.Transactions.Begin(ctx, beginner, callerOf(tc), datasource,
+		&store.TxOptions{Isolation: isolation, ReadOnly: readOnly})
 	if err != nil {
 		return Result{}, err
 	}
@@ -194,7 +187,7 @@ func (CommitTransactionTool) Run(ctx context.Context, input json.RawMessage, tc 
 	if tc.Transactions == nil {
 		return Result{}, ErrTransactionNotFound
 	}
-	targets, err := tc.Transactions.Commit(ctx, token, tc.Session, tc.Role, tc.Subject)
+	targets, err := tc.Transactions.Commit(ctx, token, callerOf(tc))
 	if errors.Is(err, ErrOutcomeUnknown) {
 		_ = applyWrite(tc, writeTargets(tc), targets) // it may have committed
 	}
@@ -225,7 +218,7 @@ func (RollbackTransactionTool) Run(ctx context.Context, input json.RawMessage, t
 	if tc.Transactions == nil {
 		return Result{}, ErrTransactionNotFound
 	}
-	if err := tc.Transactions.Rollback(ctx, token, tc.Session, tc.Role, tc.Subject); err != nil {
+	if err := tc.Transactions.Rollback(ctx, token, callerOf(tc)); err != nil {
 		return Result{}, err
 	}
 	return Result{Content: []map[string]any{{"rolledBack": true}}}, nil

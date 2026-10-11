@@ -21,7 +21,7 @@ func (s Service) MergeDraft(ctx context.Context, username, by string, draft int6
 	if err != nil {
 		return State{}, err
 	}
-	from, err := s.basedOn(ctx, d)
+	from, err := revision.BasedOn(ctx, s.Revisions, d)
 	if err != nil {
 		return State{}, err
 	}
@@ -62,21 +62,6 @@ func (s Service) MergeDraft(ctx context.Context, username, by string, draft int6
 		entry := workspace.LogEntry{Op: "merge", Items: s.Schema.Changes(local, now), Note: "#" + idOf(draft)}
 		return onto, entry, nil
 	})
-}
-
-// basedOn is the first revision up rev's parents that was published.
-func (s Service) basedOn(ctx context.Context, rev revision.Revision) (int64, error) {
-	for rev.State.Unpublished() && rev.ParentID != 0 {
-		parent, err := s.Revisions.Get(ctx, rev.ParentID)
-		if err != nil {
-			return 0, err
-		}
-		rev = parent
-	}
-	if rev.State.Unpublished() {
-		return rev.ParentID, nil
-	}
-	return rev.ID, nil
 }
 
 // Checkpoint saves username's workspace as a draft (to share with other

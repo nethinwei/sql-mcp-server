@@ -8,11 +8,6 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 )
 
-var configActions = map[string]entity.Action{
-	"read": entity.ActionRead, "create": entity.ActionCreate, "update": entity.ActionUpdate,
-	"delete": entity.ActionDelete, "execute": entity.ActionExecute, "aggregate": entity.ActionAggregate,
-}
-
 // UserPrincipal returns the principal key of a configured user.
 func UserPrincipal(user string) string {
 	return config.UserPrincipalPrefix + user
@@ -70,13 +65,13 @@ func accessPolicy(cfg *config.Config) (rbac.Policy, error) {
 func compileGrants(owner string, grants []config.GrantConfig, refs config.EntityRefs) (map[string][]rbac.Grant, error) {
 	out := make(map[string][]rbac.Grant, len(grants))
 	for i, gc := range grants {
-		rows, err := filterConfigToPredicate(gc.Rows)
+		rows, err := config.ParseFilter(gc.Rows)
 		if err != nil {
 			return nil, fmt.Errorf("grant %d rows: %w", i, err)
 		}
 		g := rbac.Grant{ID: fmt.Sprintf("%s#%d", owner, i), Rows: rows}
 		for _, name := range gc.Actions {
-			action, ok := configActions[name]
+			action, ok := entity.ParseAction(name)
 			if !ok {
 				return nil, fmt.Errorf("grant %d: unknown action %q", i, name)
 			}

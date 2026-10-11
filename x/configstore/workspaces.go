@@ -70,10 +70,7 @@ func (s *SQLStore) PutWorkspace(
 		return workspace.Workspace{}, err
 	}
 	w.UpdatedAt = s.timestamp()
-	err = s.withTx(ctx, func(tx *sql.Tx) error {
-		if err := s.lock(ctx, tx); err != nil {
-			return err
-		}
+	err = s.locked(ctx, func(tx *sql.Tx) error {
 		current, ok, err := s.workspace(ctx, tx, w.Username)
 		if err != nil {
 			return err
@@ -135,24 +132,20 @@ func (s *SQLStore) WorkspaceLog(ctx context.Context, username string, limit int)
 		q += " LIMIT ?"
 		args = append(args, limit)
 	}
-	rows, err := s.db.QueryContext(ctx, s.dialect.rebind(q), args...)
+	out, err := queryAll(ctx, s, s.db, scanLogEntry, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("configstore: read workspace log: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-	var out []workspace.LogEntry
-	for rows.Next() {
-		var e workspace.LogEntry
-		var at int64
-		var items string
-		if err := rows.Scan(&e.Version, &at, &e.By, &e.Op, &items, &e.Note); err != nil {
-			return nil, err
-		}
-		e.At = fromMicros(at)
-		if err := json.Unmarshal([]byte(items), &e.Items); err != nil {
-			return nil, err
-		}
-		out = append(out, e)
+	return out, nil
+}
+
+func scanLogEntry(row scanner) (workspace.LogEntry, error) {
+	var e workspace.LogEntry
+	var at int64
+	var items string
+	if err := row.Scan(&e.Version, &at, &e.By, &e.Op, &items, &e.Note); err != nil {
+		return workspace.LogEntry{}, err
 	}
-	return out, rows.Err()
+	e.At = fromMicros(at)
+	return e, json.Unmarshal([]byte(items), &e.Items)
 }

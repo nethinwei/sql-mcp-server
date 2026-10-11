@@ -4,18 +4,14 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/nethinwei/sql-mcp-server/core/codegen"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
 )
 
 func runAggregate(ctx context.Context, tc Context, in aggregateInput) (Result, error) {
-	ctx, cancel := withTimeout(ctx, tc, 0)
-	defer cancel()
-	tc, endMetering := meterCall(tc, true)
-	defer endMetering()
-	tc.Transaction = in.Transaction
+	ctx, tc, end := beginCall(ctx, tc, true, in.Transaction)
+	defer end()
 	plan, err := prepareAggregate(ctx, tc, in)
 	if err != nil {
 		return Result{}, err
@@ -28,29 +24,25 @@ func runAggregate(ctx context.Context, tc Context, in aggregateInput) (Result, e
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{Content: got.rows, ReturnedRows: int64(len(got.rows)), EstimatedScannedRows: st.sql.estimatedRows()}, nil
+	return Result{
+		Content:              got.rows,
+		ReturnedRows:         int64(len(got.rows)),
+		EstimatedScannedRows: st.sql.estimatedRows(),
+	}, nil
 }
 
 type aggregatePlan struct {
-	res   entity.Resolved
-	tc    Context
+	entityPlan
 	full  relalg.Predicate
 	grant grant
 }
 
 func prepareAggregate(ctx context.Context, tc Context, in aggregateInput) (aggregatePlan, error) {
-	res, err := resolveDMLEntity(tc, in.Entity)
+	ep, pred, err := planEntity(ctx, tc, in.Entity, entity.ActionAggregate, in.Filter)
 	if err != nil {
 		return aggregatePlan{}, err
 	}
-	tc, err = routeEntity(ctx, tc, res.Entity, entity.ActionAggregate)
-	if err != nil {
-		return aggregatePlan{}, err
-	}
-	pred, err := filterToPredicate(in.Filter, tc.MaxFilterConditions)
-	if err != nil {
-		return aggregatePlan{}, err
-	}
+	res, tc := ep.res, ep.tc
 	aggFields := aggregateFieldNames(in)
 	if err := validateFields(res, aggFields...); err != nil {
 		return aggregatePlan{}, err
@@ -65,7 +57,7 @@ func prepareAggregate(ctx context.Context, tc Context, in aggregateInput) (aggre
 	if err != nil {
 		return aggregatePlan{}, err
 	}
-	return aggregatePlan{res: res, tc: tc, full: andPreds(pred, g.RowFilter), grant: g}, nil
+	return aggregatePlan{entityPlan: ep, full: andPreds(pred, g.RowFilter), grant: g}, nil
 }
 
 func aggregateFieldNames(in aggregateInput) []string {
@@ -81,7 +73,7 @@ func aggregateFieldNames(in aggregateInput) []string {
 
 func compileAggregate(ctx context.Context, plan aggregatePlan, in aggregateInput) (statement, error) {
 	tc, res := plan.tc, plan.res
-	scan := relalg.Scan{Relation: relalg.RelationRef{Name: res.Entity.Source, Schema: res.Entity.Schema}}
+	scan := relalg.Scan{Relation: res.Entity.Ref()}
 	var expr relalg.Expr = scan
 	if plan.full != nil {
 		expr = relalg.Select{Input: scan, Predicate: plan.full}
@@ -91,9 +83,7 @@ func compileAggregate(ctx context.Context, plan aggregatePlan, in aggregateInput
 		return statement{}, err
 	}
 	expr = relalg.Aggregate{Input: expr, GroupBy: in.GroupBy, Aggregates: calls}
-	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(expr,
-		codegen.WithPrimaryKey(res.Entity.PrimaryKey()...),
-		codegen.WithMaxINCardinality(effectiveMaxIN(tc)))
+	compiled, err := compile(tc, res.Entity, expr)
 	if err != nil {
 		return statement{}, err
 	}

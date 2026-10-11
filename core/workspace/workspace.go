@@ -32,7 +32,10 @@ type Item struct {
 	Value any `json:"value"`
 }
 
-// Snapshot is a configuration as items, in order.
+// Snapshot is a configuration as items, in order. Lookups by ref walk it;
+// an operation that looks many up indexes it first (Index), and one that
+// changes many items applies them at once (Apply): a configuration may hold
+// thousands of items.
 type Snapshot []Item
 
 // Get is the value of ref, or Missing.
@@ -47,33 +50,64 @@ func (s Snapshot) index(ref Ref) int {
 	return slices.IndexFunc(s, func(it Item) bool { return it.Ref == ref })
 }
 
+// Index is the position of each item by ref.
+func (s Snapshot) Index() map[Ref]int {
+	out := make(map[Ref]int, len(s))
+	for i, it := range s {
+		out[it.Ref] = i
+	}
+	return out
+}
+
 // With returns s with ref's value replaced where it is, appended when
 // absent, or removed when value is Missing.
 func (s Snapshot) With(ref Ref, value any) Snapshot {
-	out := slices.Clone(s)
-	i := out.index(ref)
-	switch {
-	case IsMissing(value) && i >= 0:
-		return slices.Delete(out, i, i+1)
-	case IsMissing(value):
-		return out
-	case i >= 0:
-		out[i].Value = value
-		return out
+	return s.Apply(map[Ref]any{ref: value}, []Ref{ref})
+}
+
+// Apply returns s with each ref of order set to its value in values:
+// replaced where it is, appended when absent (in that order), or removed
+// when the value is Missing. It walks s once.
+func (s Snapshot) Apply(values map[Ref]any, order []Ref) Snapshot {
+	out := make(Snapshot, 0, len(s)+len(order))
+	for _, it := range s {
+		if v, ok := values[it.Ref]; ok {
+			if !IsMissing(v) {
+				out = append(out, Item{Ref: it.Ref, Value: v})
+			}
+			continue
+		}
+		out = append(out, it)
 	}
-	return append(out, Item{Ref: ref, Value: value})
+	present := s.Index()
+	for _, ref := range order {
+		if _, ok := present[ref]; ok {
+			continue
+		}
+		if v := values[ref]; v != nil && !IsMissing(v) {
+			out = append(out, Item{Ref: ref, Value: v})
+			present[ref] = len(out) - 1
+		}
+	}
+	return out
 }
 
 // Changes are the refs whose value differs between a and b.
 func (sc Schema) Changes(a, b Snapshot) []Ref {
 	var out []Ref
+	at := a.Index()
 	for _, it := range b {
-		if !sc.Same(a.Get(it.Ref), it.Value) {
+		was := Missing
+		if i, ok := at[it.Ref]; ok {
+			was = a[i].Value
+		}
+		if !sc.Same(was, it.Value) {
 			out = append(out, it.Ref)
 		}
 	}
+	in := b.Index()
 	for _, it := range a {
-		if b.index(it.Ref) < 0 {
+		if _, ok := in[it.Ref]; !ok {
 			out = append(out, it.Ref)
 		}
 	}

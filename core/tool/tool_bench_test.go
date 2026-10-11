@@ -9,6 +9,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/mask"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
 )
 
@@ -26,12 +27,14 @@ func benchReadContext(b *testing.B, rows int) Context {
 	for i := range values {
 		values[i] = []any{int64(i), "alice@x.com"}
 	}
-	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
-		return store.NewFakeRows([]string{"id", "email"}, values...), nil
+	db := &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return storetest.NewFakeRows([]string{"id", "email"}, values...), nil
 	}}
 	return Context{
-		Role: "reader", DB: db, Dialect: testdialect.Postgres{},
-		Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Masker: mask.NewRuleMasker(),
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Masker: mask.NewRuleMasker()},
+		Role:     "reader",
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
 	}
 }
 

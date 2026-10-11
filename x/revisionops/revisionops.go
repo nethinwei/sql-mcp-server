@@ -136,7 +136,7 @@ func (s Service) Publish(ctx context.Context, req PublishRequest) (revision.Revi
 	// Publishing replaces the whole configuration, so a draft must build on
 	// what is published: one built on an earlier revision would undo every
 	// change published since (a non-fast-forward push). It is rebased first.
-	basedOn, err := s.basedOn(ctx, target)
+	basedOn, err := revision.BasedOn(ctx, s.Store, target)
 	if err != nil {
 		return revision.Revision{}, err
 	}
@@ -159,25 +159,6 @@ func (s Service) Publish(ctx context.Context, req PublishRequest) (revision.Revi
 	}
 	s.audit("publish", rev, req.Author)
 	return rev, nil
-}
-
-// basedOn is the revision a draft builds on: the nearest ancestor that was
-// published (a draft may build on another draft, discarded or not); 0 when
-// none was.
-func (s Service) basedOn(ctx context.Context, rev revision.Revision) (int64, error) {
-	seen := map[int64]bool{}
-	for id := rev.ParentID; id != 0 && !seen[id]; {
-		seen[id] = true
-		parent, err := s.Store.Get(ctx, id)
-		if err != nil {
-			return 0, err
-		}
-		if !parent.State.Unpublished() {
-			return parent.ID, nil
-		}
-		id = parent.ParentID
-	}
-	return 0, nil
 }
 
 // RollbackRequest restores earlier published content as a new revision.

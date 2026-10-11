@@ -42,17 +42,27 @@ func RestartChanges(old, next *config.Config) []string {
 // LoadRevision verifies a revision's content hash and decodes its payload
 // under the store-mode secret rule.
 func LoadRevision(rev revision.Revision) (*config.Config, error) {
+	_, cfg, err := LoadRevisionSpec(rev)
+	return cfg, err
+}
+
+// LoadRevisionSpec is LoadRevision keeping what the payload says too.
+func LoadRevisionSpec(rev revision.Revision) (*config.Spec, *config.Config, error) {
 	if err := rev.Verify(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	cfg, err := LoadBytes(rev.Payload)
+	spec, err := configyaml.DecodeSpec(rev.Payload)
 	if err != nil {
-		return nil, err
+		return nil, nil, fmt.Errorf("load config: %w", err)
+	}
+	cfg, err := loadSpec(spec)
+	if err != nil {
+		return nil, nil, err
 	}
 	if err := ValidateStorePayload(cfg); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return cfg, nil
+	return spec, cfg, nil
 }
 
 // CheckPublishable verifies that target loads under the store rules and
@@ -95,7 +105,16 @@ func servesTLS(cfg *config.Config) bool {
 // LoadBytes decodes, defaults and validates YAML configuration bytes and
 // checks that every driver is registered, like Load does for a file.
 func LoadBytes(data []byte) (*config.Config, error) {
-	cfg, err := configyaml.Decode(data)
+	spec, err := configyaml.DecodeSpec(data)
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+	return loadSpec(spec)
+}
+
+// loadSpec resolves spec and checks that every driver is registered.
+func loadSpec(spec *config.Spec) (*config.Config, error) {
+	cfg, err := config.Resolve(spec)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
@@ -186,30 +205,16 @@ func (r *Runtime) WatchStore(
 	build func(revision.Revision) (*App, error),
 	onError func(error),
 ) error {
-	if interval <= 0 {
-		interval = 5 * time.Second
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	report := func(err error) {
-		if onError != nil {
-			onError(err)
-		}
-	}
+	report := reporter(onError)
 	r.applied.Store(current)
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
+	return poll(ctx, interval, 5*time.Second, func() {
 		rev, err := store.Published(ctx)
 		if err != nil {
 			report(fmt.Errorf("store poll: %w", err))
-			continue
+			return
 		}
 		if rev.ID == current {
-			continue
+			return
 		}
 		err = rev.Verify()
 		if err == nil {
@@ -217,13 +222,11 @@ func (r *Runtime) WatchStore(
 		}
 		if err != nil {
 			r.markStale(rev.ID, err, report)
-			if cfg, err := LoadRevision(rev); err == nil {
-				r.holdChanged(cfg)
-			}
-			continue
+			r.holdLoaded(LoadRevision(rev))
+			return
 		}
 		r.stale.Store(nil)
 		current = rev.ID
 		r.applied.Store(current)
-	}
+	})
 }

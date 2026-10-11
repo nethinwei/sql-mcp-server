@@ -9,6 +9,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
 )
 
@@ -23,14 +24,17 @@ func TestRunToolAuditsUserRolesAndCoveringGrants(t *testing.T) {
 		},
 		Principals: map[string]rbac.Principal{"user:alice": {Roles: []string{"analyst"}}},
 	}
-	db := &store.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
-		return store.NewFakeRows([]string{"id"}, []any{int64(1)}), nil
+	db := &storetest.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
+		return storetest.NewFakeRows([]string{"id"}, []any{int64(1)}), nil
 	}}
 	auditor := &recorderAuditor{}
 	tc := Context{
-		Role: "user:alice", User: "alice", UserRoles: []string{"analyst"},
-		DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
-		Authorizer: rbac.NewGrantAuthorizer(reg, policy), Auditor: auditor,
+		Services:  &Services{Registry: reg, Authorizer: rbac.NewGrantAuthorizer(reg, policy), Auditor: auditor},
+		Role:      "user:alice",
+		User:      "alice",
+		UserRoles: []string{"analyst"},
+		DB:        db,
+		Dialect:   testdialect.Postgres{},
 	}
 	input, _ := json.Marshal(readInput{Entity: "users", Fields: []string{"id"}})
 	if _, err := RunTool(context.Background(), ReadTool{}, input, tc); err != nil {

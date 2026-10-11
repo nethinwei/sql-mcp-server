@@ -58,11 +58,19 @@ func within(c, outer Conflict) bool { return c.Ref == outer.Ref && c.Path.within
 // differently keeps local's and is returned as a conflict against source
 // (pinned: next's value held in the conflict).
 func (s Schema) Replay(old, local, next Snapshot, source Source, pinned bool) (Snapshot, []Conflict) {
-	out := next
+	changed := s.Changes(old, local)
+	oldAt, localAt, nextAt := old.Index(), local.Index(), next.Index()
+	at := func(snap Snapshot, index map[Ref]int, ref Ref) any {
+		if i, ok := index[ref]; ok {
+			return snap[i].Value
+		}
+		return Missing
+	}
+	values := make(map[Ref]any, len(changed))
 	var found []Conflict
-	for _, ref := range s.Changes(old, local) {
-		v, conflicts := s.Merge(old.Get(ref), local.Get(ref), next.Get(ref), nil)
-		out = out.With(ref, v)
+	for _, ref := range changed {
+		v, conflicts := s.Merge(at(old, oldAt, ref), at(local, localAt, ref), at(next, nextAt, ref), nil)
+		values[ref] = v
 		for _, vc := range conflicts {
 			c := Conflict{ID: NewID(), Ref: ref, Path: vc.Path, Source: source, Pinned: pinned}
 			if pinned {
@@ -74,7 +82,7 @@ func (s Schema) Replay(old, local, next Snapshot, source Source, pinned bool) (S
 			found = append(found, c)
 		}
 	}
-	return out, found
+	return next.Apply(values, changed), found
 }
 
 // Carry keeps the conflicts not resolved before (pending) next to those
@@ -131,7 +139,8 @@ func (s Schema) Resolve(now, base Snapshot, cs []Conflict, id string, theirs boo
 	}
 	var left []Conflict
 	for _, c := range cs {
-		decided := c.ID == id || within(c, chosen.Conflict) && len(c.Path) > len(chosen.Path) && c.Source == chosen.Source
+		decided := c.ID == id ||
+			within(c, chosen.Conflict) && len(c.Path) > len(chosen.Path) && c.Source == chosen.Source
 		if _, ok := s.View(now, base, c); !decided && ok {
 			left = append(left, c)
 		}

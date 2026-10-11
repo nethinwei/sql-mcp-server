@@ -26,7 +26,8 @@ import (
 func reconcile(before, after workspace.Snapshot, renames map[workspace.Ref]workspace.Ref) (
 	workspace.Snapshot, error,
 ) {
-	r := reconciliation{before: before, renames: renames, moved: map[string]string{}, roles: map[string]string{}}
+	r := reconciliation{before: before, beforeAt: before.Index(), renames: renames, moved: map[string]string{},
+		roles: map[string]string{}}
 	for to, from := range renames {
 		switch {
 		case to.Kind == ItemEntity && from.Kind == ItemEntity:
@@ -43,15 +44,16 @@ func reconcile(before, after workspace.Snapshot, renames map[workspace.Ref]works
 			r.moved[to.Key] = ""
 		}
 	}
+	afterAt := after.Index()
 	for _, it := range before {
-		if it.Kind == ItemRole && workspace.IsMissing(after.Get(it.Ref)) {
+		if _, kept := afterAt[it.Ref]; it.Kind == ItemRole && !kept {
 			if _, renamed := r.roles[it.Key]; !renamed {
 				r.roles[it.Key] = "" // removed
 			}
 		}
 	}
 	r.beforeIdx, r.afterIdx = configrefs.NewIndex(entitiesOf(before)), configrefs.NewIndex(entitiesOf(after))
-	out := after
+	changed := map[workspace.Ref]any{}
 	for _, it := range after {
 		v, ok := object(it.Value)
 		if !ok {
@@ -59,15 +61,16 @@ func reconcile(before, after workspace.Snapshot, renames map[workspace.Ref]works
 		}
 		next := cloneJSON(v).(map[string]any)
 		if r.item(it.Ref, next) {
-			out = out.With(it.Ref, next)
+			changed[it.Ref] = next
 		}
 	}
-	return r.pruneFields(out), nil
+	return r.pruneFields(after.Apply(changed, nil)), nil
 }
 
 type reconciliation struct {
-	before  workspace.Snapshot
-	renames map[workspace.Ref]workspace.Ref
+	before   workspace.Snapshot
+	beforeAt map[workspace.Ref]int
+	renames  map[workspace.Ref]workspace.Ref
 	// moved maps renamed entities' IDs to their new ones and replaced ones
 	// to ""; roles maps renamed roles to their new names and removed ones to
 	// "".
@@ -81,8 +84,11 @@ func (r reconciliation) previous(ref workspace.Ref) map[string]any {
 	if from, ok := r.renames[ref]; ok {
 		ref = from
 	}
-	v, _ := object(r.before.Get(ref))
-	return v
+	if i, ok := r.beforeAt[ref]; ok {
+		v, _ := object(r.before[i].Value)
+		return v
+	}
+	return nil
 }
 
 // item reconciles v, the value of ref, in place; it reports a change.
@@ -300,6 +306,7 @@ func (r reconciliation) pruneFields(out workspace.Snapshot) workspace.Snapshot {
 	if len(removed) == 0 {
 		return out
 	}
+	pruned := map[workspace.Ref]any{}
 	for _, it := range out {
 		if it.Kind != ItemRole && it.Kind != ItemUser {
 			continue
@@ -310,10 +317,10 @@ func (r reconciliation) pruneFields(out workspace.Snapshot) workspace.Snapshot {
 		}
 		next := cloneJSON(v).(map[string]any)
 		if r.pruneGrants(next, removed) {
-			out = out.With(it.Ref, next)
+			pruned[it.Ref] = next
 		}
 	}
-	return out
+	return out.Apply(pruned, nil)
 }
 
 func (r reconciliation) pruneGrants(v map[string]any, removed map[string][]any) bool {

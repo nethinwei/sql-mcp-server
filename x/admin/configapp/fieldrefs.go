@@ -2,11 +2,10 @@ package configapp
 
 import (
 	"context"
-	"encoding/json"
 	"slices"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
-	"github.com/nethinwei/sql-mcp-server/core/workspace"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/configrefs"
 )
@@ -38,21 +37,11 @@ func (r *Service) FieldReferences(ctx context.Context, entity string) ([]FieldRe
 	if err != nil || !ok {
 		return []FieldReference{}, err
 	}
-	sections, err := sectionsIn(st.Workspace.Items)
+	sections, err := sectionsOfItems(st.Workspace.Items)
 	if err != nil {
 		return nil, err
 	}
 	return fieldReferencesOf(sections, entity), nil
-}
-
-// sectionsIn are items as Sections.
-func sectionsIn(items workspace.Snapshot) (Sections, error) {
-	data, err := sectionsOfItems(items)
-	if err != nil {
-		return Sections{}, err
-	}
-	var s Sections
-	return s, json.Unmarshal(data, &s)
 }
 
 var fieldReferenceOrder = []string{"role", "user", "relationship", "primaryKey", "uniqueKey", "tenantPolicy"}
@@ -61,7 +50,7 @@ func fieldReferencesOf(s Sections, id string) []FieldReference {
 	entities := make([]config.EntityConfig, 0, len(s.Entities))
 	for _, e := range s.Entities {
 		entities = append(entities, config.EntityConfig{
-			Name: e.Name, DataSource: deref(e.Datasource), Schema: deref(e.Schema),
+			Name: e.Name, DataSource: kit.Deref(e.Datasource), Schema: kit.Deref(e.Schema),
 		})
 	}
 	c := fieldRefs{index: configrefs.NewIndex(entities), id: id, out: []FieldReference{}}
@@ -93,7 +82,7 @@ func (c *fieldRefs) add(entity, field, kind, name, via string) {
 	}) {
 		return
 	}
-	c.out = append(c.out, FieldReference{Field: field, Kind: kind, Name: name, Via: optional(via)})
+	c.out = append(c.out, FieldReference{Field: field, Kind: kind, Name: name, Via: kit.Optional(via)})
 }
 
 // grants are a role's or user's: row filters first, as they block a removal.

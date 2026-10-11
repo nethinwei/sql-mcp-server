@@ -13,6 +13,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/engine"
 	coreprovider "github.com/nethinwei/sql-mcp-server/core/provider"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 	"github.com/nethinwei/sql-mcp-server/x/providers/postgres"
@@ -37,7 +38,7 @@ func init() {
 	providerregistry.Register(sharedTestDriver, func(string, providerregistry.Options) (coreprovider.Provider, error) {
 		sharedOpened.Add(1)
 		return countingProvider{benchProvider{
-			fakeProvider: &fakeProvider{dialect: postgres.Dialect{}, FakeDB: store.FakeDB{
+			fakeProvider: &fakeProvider{dialect: postgres.Dialect{}, FakeDB: storetest.FakeDB{
 				ExecFn: func(context.Context, string, ...any) (store.Result, error) {
 					return store.Result{RowsAffected: 1}, nil
 				},

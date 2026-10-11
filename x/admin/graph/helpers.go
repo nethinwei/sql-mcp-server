@@ -17,15 +17,6 @@ import (
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
-func derefBool(b *bool) bool { return b != nil && *b }
-
 // withPayload returns obj's revision, fetching the payload when obj came
 // from a payload-free listing.
 func (r *Resolver) withPayload(ctx context.Context, obj *Revision) (revision.Revision, error) {
@@ -115,11 +106,4 @@ func configSchema() (any, error) {
 		return nil, fmt.Errorf("decode config schema: %w", err)
 	}
 	return schema, nil
-}
-
-func derefInt(n *int, fallback int) int {
-	if n == nil {
-		return fallback
-	}
-	return *n
 }

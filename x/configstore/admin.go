@@ -68,23 +68,7 @@ func (s *SQLStore) ListAdmins(ctx context.Context) ([]AdminAccount, error) {
 }
 
 func (s *SQLStore) listAdmins(ctx context.Context, q execer) ([]AdminAccount, error) {
-	rows, err := q.QueryContext(
-		ctx,
-		s.dialect.rebind("SELECT "+adminColumns+" FROM smcp_admin_accounts ORDER BY username"),
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	var out []AdminAccount
-	for rows.Next() {
-		a, err := scanAdmin(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, a)
-	}
-	return out, rows.Err()
+	return queryAll(ctx, s, q, scanAdmin, "SELECT "+adminColumns+" FROM smcp_admin_accounts ORDER BY username")
 }
 
 // MutateAdmins is the only way to change accounts. In one transaction
@@ -97,10 +81,7 @@ func (s *SQLStore) MutateAdmins(
 	ctx context.Context, fn func(all []AdminAccount) ([]AdminAccount, error),
 ) ([]AdminAccount, error) {
 	var written []AdminAccount
-	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		if err := s.lock(ctx, tx); err != nil {
-			return err
-		}
+	err := s.locked(ctx, func(tx *sql.Tx) error {
 		all, err := s.listAdmins(ctx, tx)
 		if err != nil {
 			return err

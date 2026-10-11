@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 )
 
 // PendingState is how administrators handle one pending item (a recurring
@@ -33,20 +35,11 @@ func scanPending(row scanner) (PendingState, error) {
 }
 
 func (s *SQLStore) pendingStates(ctx context.Context, query string, args ...any) ([]PendingState, error) {
-	rows, err := s.db.QueryContext(ctx, s.dialect.rebind(query), args...)
+	out, err := queryAll(ctx, s, s.db, scanPending, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("configstore: read pending states: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-	out := []PendingState{}
-	for rows.Next() {
-		p, err := scanPending(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
+	return kit.OrEmpty(out), nil
 }
 
 // PendingStates returns the state of every item handled so far.

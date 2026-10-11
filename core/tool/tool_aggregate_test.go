@@ -11,6 +11,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/mask"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
 )
 
@@ -25,10 +26,15 @@ func TestAggregateTool(t *testing.T) {
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	auth := rbac.NewRoleAuthorizer(reg)
-	db := &store.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
-		return store.NewFakeRows([]string{"dept", "count"}, []any{"eng", int64(5)}), nil
+	db := &storetest.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
+		return storetest.NewFakeRows([]string{"dept", "count"}, []any{"eng", int64(5)}), nil
 	}}
-	tc := Context{Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Registry: reg, Authorizer: auth}
+	tc := Context{
+		Services: &Services{Registry: reg, Authorizer: auth},
+		Role:     "reader",
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
+	}
 	in, _ := json.Marshal(
 		aggregateInput{Entity: "users", GroupBy: []string{"dept"}, Aggregates: []aggJSON{{Func: "count"}}},
 	)
@@ -51,11 +57,16 @@ func TestAggregateToolRejectsInvalidFunc(t *testing.T) {
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	auth := rbac.NewRoleAuthorizer(reg)
-	db := &store.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
+	db := &storetest.FakeDB{QueryFn: func(_ context.Context, _ string, _ ...any) (store.Rows, error) {
 		t.Fatal("query must not run for an invalid aggregate func")
 		return nil, nil
 	}}
-	tc := Context{Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Registry: reg, Authorizer: auth}
+	tc := Context{
+		Services: &Services{Registry: reg, Authorizer: auth},
+		Role:     "reader",
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
+	}
 	in, _ := json.Marshal(aggregateInput{Entity: "users", Aggregates: []aggJSON{{Func: "count(*);drop"}}})
 	_, err := AggregateTool{}.Run(context.Background(), in, tc)
 	if !errors.Is(err, ErrInvalidInput) {
@@ -73,12 +84,14 @@ func TestAggregateToolMasksResultRows(t *testing.T) {
 		MCP:        entity.MCPFlags{DMLTools: true},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
-	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
-		return store.NewFakeRows([]string{"email"}, []any{"alice@example.com"}), nil
+	db := &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return storetest.NewFakeRows([]string{"email"}, []any{"alice@example.com"}), nil
 	}}
 	tc := Context{
-		Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
-		Authorizer: rbac.NewRoleAuthorizer(reg), Masker: mask.NewRuleMasker(),
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Masker: mask.NewRuleMasker()},
+		Role:     "reader",
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
 	}
 	result, err := (AggregateTool{}).Run(
 		context.Background(),
@@ -128,12 +141,14 @@ func maskedFieldTestContext(t *testing.T) Context {
 		MCP: entity.MCPFlags{DMLTools: true},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
-	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
-		return store.NewFakeRows([]string{"secret"}, []any{"alice@example.com"}), nil
+	db := &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return storetest.NewFakeRows([]string{"secret"}, []any{"alice@example.com"}), nil
 	}}
 	return Context{
-		Role: "role", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
-		Authorizer: rbac.NewRoleAuthorizer(reg),
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+		Role:     "role",
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
 	}
 }
 

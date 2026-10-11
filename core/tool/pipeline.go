@@ -175,7 +175,7 @@ func (st statement) fail(err error) error {
 	}
 	if st.tc.Transaction == "" && uncertain(err) {
 		// Inside a transaction nothing is committed yet; its commit tells.
-		return &OutcomeUnknownError{err: err}
+		return outcomeUnknown(err)
 	}
 	return writeError(st.res, err)
 }
@@ -198,12 +198,9 @@ func (st statement) settle(ctx context.Context, err error) error {
 // ran. Retrying it blindly may apply it twice.
 var ErrOutcomeUnknown = errors.New("tool: the database may or may not have carried out the write")
 
-// OutcomeUnknownError is ErrOutcomeUnknown with the database error that made
-// the outcome unknown, kept for the audit log; clients never see it.
-type OutcomeUnknownError struct{ err error }
-
-func (e *OutcomeUnknownError) Error() string   { return ErrOutcomeUnknown.Error() }
-func (e *OutcomeUnknownError) Unwrap() []error { return []error{ErrOutcomeUnknown, e.err} }
+// outcomeUnknown is ErrOutcomeUnknown with the database error that made the
+// outcome unknown, kept for the audit log; clients never see it.
+func outcomeUnknown(err error) error { return &classified{kind: ErrOutcomeUnknown, cause: err} }
 
 // uncertain reports whether a failed statement may still have taken effect:
 // its connection broke or its deadline passed after it may have been sent. A

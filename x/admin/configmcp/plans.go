@@ -7,6 +7,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 	"github.com/nethinwei/sql-mcp-server/x/configplan"
 )
@@ -16,7 +17,7 @@ import (
 // preview itself (it does not evaluate the plan again).
 
 type planIn struct {
-	Plan configplan.Plan `json:"plan" jsonschema:"the plan: scope plus import, grants, fields or sync"`
+	Plan configplan.Plan `json:"plan"             jsonschema:"the plan: scope plus import, grants, fields or sync"`
 	// Review is set to review a recurring template's proposal.
 	Review bool `json:"review,omitempty" jsonschema:"report every new table a grant covers, to confirm"`
 }
@@ -96,7 +97,10 @@ func summarize(p *configapp.Preview) previewSummary {
 				out.ToConfirmIDs = append(out.ToConfirmIDs, x.ID)
 			}
 		}
-		i := slices.IndexFunc(out.Exceptions, func(e exceptionSummary) bool { return e.Kind == x.Kind && e.Level == x.Level })
+		i := slices.IndexFunc(
+			out.Exceptions,
+			func(e exceptionSummary) bool { return e.Kind == x.Kind && e.Level == x.Level },
+		)
 		if i < 0 {
 			out.Exceptions = append(out.Exceptions, exceptionSummary{Kind: x.Kind, Level: x.Level})
 			i = len(out.Exceptions) - 1
@@ -115,18 +119,14 @@ func changes(r *configapp.PlanReport, kind string) []changeSummary {
 	out := []changeSummary{}
 	for i, c := range r.Changes {
 		if kind == "" || c.Kind == kind {
-			out = append(out, changeSummary{Index: i, Kind: c.Kind, Principal: deref(c.Principal), Actions: c.Actions,
-				Mask: deref(c.Mask), Fields: c.Fields, Entities: len(c.Entities)})
+			out = append(
+				out,
+				changeSummary{Index: i, Kind: c.Kind, Principal: kit.Deref(c.Principal), Actions: c.Actions,
+					Mask: kit.Deref(c.Mask), Fields: c.Fields, Entities: len(c.Entities)},
+			)
 		}
 	}
 	return out
-}
-
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
 }
 
 // page returns items[offset:offset+limit] with the total.

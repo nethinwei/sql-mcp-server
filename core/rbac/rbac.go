@@ -101,11 +101,33 @@ type Policy struct {
 type GrantAuthorizer struct {
 	registry *entity.Registry
 	policy   Policy
+	// entityGrants are the entity-level roles/fieldACL/rowPolicies of each
+	// entity compiled into one grant per role, by entity name and role:
+	// compiled once, as the registry and the policy never change.
+	entityGrants map[string]map[string]Grant
 }
 
 // NewGrantAuthorizer returns an Authorizer for the registry and policy.
 func NewGrantAuthorizer(reg *entity.Registry, policy Policy) *GrantAuthorizer {
-	return &GrantAuthorizer{registry: reg, policy: policy}
+	a := &GrantAuthorizer{registry: reg, policy: policy, entityGrants: map[string]map[string]Grant{}}
+	for _, e := range reg.Entities() {
+		byRole := map[string]Grant{}
+		for _, roles := range e.Role {
+			for _, r := range roles {
+				role := NormalizeRole(r)
+				if _, done := byRole[role]; done {
+					continue
+				}
+				if g, ok := entityRoleGrant(e, role); ok {
+					byRole[role] = g
+				}
+			}
+		}
+		if len(byRole) > 0 {
+			a.entityGrants[e.Name] = byRole
+		}
+	}
+	return a
 }
 
 // NewRoleAuthorizer returns an Authorizer that only uses entity-level role
@@ -220,7 +242,7 @@ func (a *GrantAuthorizer) candidates(e entity.Entity, principal string, action e
 				out = append(out, g)
 			}
 		}
-		if g, ok := entityRoleGrant(e, role); ok && g.allows(action) {
+		if g, ok := a.entityGrants[e.Name][role]; ok && g.allows(action) {
 			out = append(out, g)
 		}
 	}

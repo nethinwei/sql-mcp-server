@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/catalog"
 )
 
@@ -39,53 +39,35 @@ func scanBatch(row scanner) (catalog.Batch, error) {
 	return b, nil
 }
 
+func scanItem(row scanner) (catalog.BatchItem, error) {
+	var it catalog.BatchItem
+	var notBefore int64
+	if err := row.Scan(&it.Schema, &it.State, &it.Error, &it.Attempts, &notBefore); err != nil {
+		return catalog.BatchItem{}, err
+	}
+	it.NotBefore = fromMicros(notBefore)
+	return it, nil
+}
+
 // withItems reads the items of each batch.
 func (s *SQLStore) withItems(ctx context.Context, q execer, batches []catalog.Batch) error {
 	for i := range batches {
-		rows, err := q.QueryContext(ctx, s.dialect.rebind(
-			"SELECT "+itemColumns+" FROM smcp_scan_batch_items WHERE batch_id = ? ORDER BY ordinal"), batches[i].ID)
+		items, err := queryAll(ctx, s, q, scanItem,
+			"SELECT "+itemColumns+" FROM smcp_scan_batch_items WHERE batch_id = ? ORDER BY ordinal", batches[i].ID)
 		if err != nil {
 			return fmt.Errorf("configstore: read scan batch items: %w", err)
 		}
-		batches[i].Items = []catalog.BatchItem{}
-		for rows.Next() {
-			var it catalog.BatchItem
-			var notBefore int64
-			if err := rows.Scan(&it.Schema, &it.State, &it.Error, &it.Attempts, &notBefore); err != nil {
-				_ = rows.Close()
-				return err
-			}
-			it.NotBefore = fromMicros(notBefore)
-			batches[i].Items = append(batches[i].Items, it)
-		}
-		err = rows.Err()
-		_ = rows.Close()
-		if err != nil {
-			return err
-		}
+		batches[i].Items = kit.OrEmpty(items)
 	}
 	return nil
 }
 
 func (s *SQLStore) batches(ctx context.Context, query string, args ...any) ([]catalog.Batch, error) {
-	rows, err := s.db.QueryContext(ctx, s.dialect.rebind(query), args...)
+	out, err := queryAll(ctx, s, s.db, scanBatch, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("configstore: read scan batches: %w", err)
 	}
-	out := []catalog.Batch{}
-	for rows.Next() {
-		b, err := scanBatch(rows)
-		if err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		out = append(out, b)
-	}
-	err = rows.Err()
-	_ = rows.Close()
-	if err != nil {
-		return nil, err
-	}
+	out = kit.OrEmpty(out)
 	return out, s.withItems(ctx, s.db, out)
 }
 
@@ -94,10 +76,7 @@ func (s *SQLStore) batches(ctx context.Context, query string, args ...any) ([]ca
 // processes.
 func (s *SQLStore) CreateBatch(ctx context.Context, b catalog.Batch, maxOpen int) (catalog.Batch, bool, error) {
 	var existing *catalog.Batch
-	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		if err := s.lock(ctx, tx); err != nil {
-			return err
-		}
+	err := s.locked(ctx, func(tx *sql.Tx) error {
 		if b.RequestKey != "" {
 			found, err := scanBatch(s.queryRow(ctx, tx, "SELECT "+batchColumns+
 				" FROM smcp_scan_batches WHERE datasource = ? AND request_key = ?", b.Datasource, b.RequestKey))
@@ -142,9 +121,8 @@ func (s *SQLStore) insertItems(ctx context.Context, tx *sql.Tx, id string, items
 		for i, it := range chunk {
 			args = append(args, id, start+i, it.Schema, it.State, it.Error, it.Attempts, toMicros(it.NotBefore))
 		}
-		values := strings.TrimSuffix(strings.Repeat("(?, ?, ?, ?, ?, ?, ?), ", len(chunk)), ", ")
 		if _, err := s.exec(ctx, tx, "INSERT INTO smcp_scan_batch_items (batch_id, ordinal, "+itemColumns+
-			") VALUES "+values, args...); err != nil {
+			") VALUES "+tuples(len(chunk), 7), args...); err != nil {
 			return err
 		}
 	}
@@ -217,8 +195,7 @@ func (s *SQLStore) MoveItem(
 			args = append(args, st)
 		}
 		res, err := s.exec(ctx, tx, "UPDATE smcp_scan_batch_items SET state = ?, error_text = ?, attempts = ?, "+
-			"not_before_us = ? WHERE batch_id = ? AND schema_name = ? AND state IN ("+
-			strings.TrimSuffix(strings.Repeat("?, ", len(from)), ", ")+")", args...)
+			"not_before_us = ? WHERE batch_id = ? AND schema_name = ? AND state IN ("+placeholders(len(from))+")", args...)
 		if err != nil {
 			return err
 		}
@@ -272,27 +249,17 @@ var dataMigrations = map[int64]func(ctx context.Context, s *SQLStore, tx *sql.Tx
 // version 4, a JSON array in their payload, to rows; a schema being scanned
 // stays running, for whoever takes the batch over to scan again.
 func migrateBatchItems(ctx context.Context, s *SQLStore, tx *sql.Tx) error {
-	rows, err := tx.QueryContext(ctx, "SELECT id, payload FROM smcp_scan_batches")
+	type kept struct{ id, payload string }
+	payloads, err := queryAll(ctx, s, tx, func(row scanner) (k kept, err error) {
+		return k, row.Scan(&k.id, &k.payload)
+	}, "SELECT id, payload FROM smcp_scan_batches")
 	if err != nil {
 		return err
 	}
-	payloads := map[string]string{}
-	for rows.Next() {
-		var id, payload string
-		if err := rows.Scan(&id, &payload); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		payloads[id] = payload
-	}
-	err = rows.Err()
-	_ = rows.Close()
-	if err != nil {
-		return err
-	}
-	for id, payload := range payloads {
+	for _, b := range payloads {
+		id := b.id
 		var old []struct{ Schema, State, Error string }
-		if err := json.Unmarshal([]byte(payload), &old); err != nil {
+		if err := json.Unmarshal([]byte(b.payload), &old); err != nil {
 			return fmt.Errorf("scan batch %q: %w", id, err)
 		}
 		items := make([]catalog.BatchItem, 0, len(old))

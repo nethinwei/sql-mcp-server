@@ -37,14 +37,3 @@ func (p AnalyzePolicy) Sample(ctx context.Context, c codegen.Compiled) (Plan, bo
 	plan, err := p.Sampler.ExplainAnalyze(ctx, c)
 	return plan, true, err
 }
-
-// FakeAnalyzeSampler is a test implementation.
-type FakeAnalyzeSampler struct {
-	Plan Plan
-	Err  error
-}
-
-// ExplainAnalyze implements AnalyzeSampler.
-func (f FakeAnalyzeSampler) ExplainAnalyze(context.Context, codegen.Compiled) (Plan, error) {
-	return f.Plan, f.Err
-}

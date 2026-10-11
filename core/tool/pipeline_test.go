@@ -19,6 +19,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
 )
 
@@ -90,11 +91,11 @@ func databaseUses(t *testing.T, name string) []string {
 
 func TestStatementWithoutGrantIsRefused(t *testing.T) {
 	t.Parallel()
-	db := &store.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
+	db := &storetest.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
 		t.Fatal("an unauthorized statement ran")
 		return store.Result{}, nil
 	}}
-	st := newStatement(Context{DB: db}, entity.Resolved{}, grant{}, gated{})
+	st := newStatement(Context{Services: &Services{}, DB: db}, entity.Resolved{}, grant{}, gated{})
 	st.sql.SQL = "DELETE FROM users"
 	if _, err := st.exec(context.Background()); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("err = %v", err)
@@ -111,18 +112,18 @@ func containsString(list []string, s string) bool {
 }
 
 // wideRows serves n rows of about size bytes each and counts those read.
-func wideRows(n, size int, read *int) *store.FakeDB {
-	return &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+func wideRows(n, size int, read *int) *storetest.FakeDB {
+	return &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
 		rows := make([][]any, n)
 		for i := range rows {
 			rows[i] = []any{int64(i), strings.Repeat("x", size)}
 		}
-		return &countingRows{FakeRows: store.NewFakeRows([]string{"id", "email"}, rows...), read: read}, nil
+		return &countingRows{FakeRows: storetest.NewFakeRows([]string{"id", "email"}, rows...), read: read}, nil
 	}}
 }
 
 type countingRows struct {
-	*store.FakeRows
+	*storetest.FakeRows
 	read *int
 }
 
@@ -137,8 +138,10 @@ func (r *countingRows) Next() bool {
 func readerContext(db store.DB) Context {
 	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
 	return Context{
-		Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
-		Authorizer: rbac.NewRoleAuthorizer(reg),
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+		Role:     "reader",
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
 	}
 }
 
@@ -191,13 +194,16 @@ func TestWriteWithLostConnectionHasUnknownOutcome(t *testing.T) {
 	e := testUsersEntity()
 	e.Role[entity.ActionUpdate] = []string{"writer"}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
-	db := &store.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
+	db := &storetest.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
 		return store.Result{}, io.ErrUnexpectedEOF
 	}}
 	writes := NewWriteTracker()
 	tc := Context{
-		Role: "writer", Session: "s", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
-		Authorizer: rbac.NewRoleAuthorizer(reg), Writes: writes,
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Writes: writes},
+		Role:     "writer",
+		Session:  "s",
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
 	}
 	in, _ := json.Marshal(updateInput{
 		Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: 1}}, Set: map[string]any{"id": 2},
@@ -221,7 +227,7 @@ func TestWriteWithLostConnectionHasUnknownOutcome(t *testing.T) {
 }
 
 type uncertainCommitTx struct {
-	store.FakeTx
+	storetest.FakeTx
 	err error
 }
 
@@ -232,34 +238,38 @@ func (t *uncertainCommitTx) Commit() error { return t.err }
 // nobody else anything.
 func TestCommitOutcomeAndTombstones(t *testing.T) {
 	t.Parallel()
-	txs := []store.Tx{&uncertainCommitTx{err: context.DeadlineExceeded}, &store.FakeTx{}}
-	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+	txs := []store.Tx{&uncertainCommitTx{err: context.DeadlineExceeded}, &storetest.FakeTx{}}
+	db := &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
 		tx := txs[0]
 		txs = txs[1:]
 		return tx, nil
 	}}
 	manager := NewTransactionManager(time.Minute, 0)
 	ctx := context.Background()
-	uncertainToken, _ := manager.Begin(ctx, db, "s", "writer", nil, "primary", nil)
+	uncertainToken, _ := manager.Begin(ctx, db, Caller{Session: "s", Role: "writer"}, "primary", nil)
 	target := CacheTarget{Physical: "db", Relation: "users"}
-	if err := manager.MarkDirty(bg, uncertainToken, "s", "writer", nil, "primary", nil, target); err != nil {
+	writer := Caller{Session: "s", Role: "writer"}
+	if err := manager.MarkDirty(bg, uncertainToken, writer, "primary", nil, target); err != nil {
 		t.Fatal(err)
 	}
-	targets, err := manager.Commit(ctx, uncertainToken, "s", "writer", nil)
+	targets, err := manager.Commit(ctx, uncertainToken, Caller{Session: "s", Role: "writer"})
 	if !errors.Is(err, ErrOutcomeUnknown) || len(targets) != 1 {
 		t.Fatalf("Commit = %v, %v", targets, err)
 	}
-	committedToken, _ := manager.Begin(ctx, db, "s", "writer", nil, "primary", nil)
-	if _, err := manager.Commit(ctx, committedToken, "s", "writer", nil); err != nil {
+	committedToken, _ := manager.Begin(ctx, db, Caller{Session: "s", Role: "writer"}, "primary", nil)
+	if _, err := manager.Commit(ctx, committedToken, Caller{Session: "s", Role: "writer"}); err != nil {
 		t.Fatal(err)
 	}
 	for token, want := range map[string]string{uncertainToken: OutcomeUnknown, committedToken: OutcomeCommitted} {
 		var ended *TransactionEndedError
-		_, err := manager.Commit(ctx, token, "s", "writer", nil)
+		_, err := manager.Commit(ctx, token, Caller{Session: "s", Role: "writer"})
 		if !errors.As(err, &ended) || ended.Outcome != want || !errors.Is(err, ErrTransactionNotFound) {
 			t.Fatalf("again = %v, want %s", err, want)
 		}
-		if err := manager.Validate(bg, token, "other", "writer", nil); errors.As(err, &ended) {
+		if err := manager.Validate(bg, token, Caller{Session: "other", Role: "writer"}); errors.As(
+			err,
+			&ended,
+		) {
 			t.Fatalf("another session learned the outcome: %v", err)
 		}
 	}
@@ -272,10 +282,10 @@ func TestCommitOutcomeAndTombstones(t *testing.T) {
 func TestResultMemoryIsNotHeldPastTheCall(t *testing.T) {
 	t.Parallel()
 	started, release := make(chan struct{}), make(chan struct{})
-	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+	db := &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
 		close(started)
 		<-release
-		return store.NewFakeRows([]string{"id", "email"}, []any{int64(1), "a@example.com"}), nil
+		return storetest.NewFakeRows([]string{"id", "email"}, []any{int64(1), "a@example.com"}), nil
 	}}
 	eng, err := engine.New(engine.WithIOPool(1))
 	if err != nil {
@@ -311,14 +321,16 @@ func TestWriteIsNeverRefusedForResultMemory(t *testing.T) {
 	t.Parallel()
 	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
 	inserts := 0
-	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+	db := &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
 		inserts++
-		return store.NewFakeRows([]string{"id"}, []any{int64(7)}), nil
+		return storetest.NewFakeRows([]string{"id"}, []any{int64(7)}), nil
 	}}
 	memory := NewResultMemory(1)
 	tc := Context{
-		Role: "writer", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
-		Authorizer: rbac.NewRoleAuthorizer(reg), ResultMemory: memory,
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), ResultMemory: memory},
+		Role:     "writer",
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
 	}
 	in, _ := json.Marshal(createInput{Entity: "users", Values: map[string]any{"id": 7}})
 	if _, err := RunTool(context.Background(), CreateTool{}, in, tc); err != nil || inserts != 1 {

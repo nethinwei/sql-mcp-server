@@ -319,8 +319,9 @@ Provider 适用范围使用以下口径：
   （`TestPreviewForReview`）；`x/admin/configmcp` 的范围令牌（`TestScopedTokens`）
   与确认绑定（`TestConfirmationsAreBoundToExceptions`）；`x/admin/auth` 的数据源
   范围；`x/configplan` 的随机性质测试与例外分级测试；`x/revisionops` 的差异脱敏
-  （`TestDiffRedactsSecrets`）；`x/admin/configapp/scans_test.go` 的失去批次后延迟
-  写入与配额，`catalogtest` 的 `MoveItems`、`CreateBatchQuota`；
+  （`TestDiffRedactsSecrets`）；`x/leasing` 的失去批次后延迟写入、存储故障与交错
+  模型（`TestInterleavings`），`x/admin/configapp/scans_test.go` 的配额，`catalogtest`
+  的 `MoveItems`、`CreateBatchQuota`；
   `x/workspaceops` 的并发写合并、冲突阻止提交与提交期间写入（`TestConcurrentWritesMerge`、
   `TestCommit`），`core/workspace` 的合并性质测试（`TestMergeProperties`）。
 - **持续验证**：单元测试默认运行。

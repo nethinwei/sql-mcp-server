@@ -6,9 +6,10 @@ import (
 	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
-	"github.com/nethinwei/sql-mcp-server/core/relalg"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/revisionops"
@@ -69,7 +70,7 @@ func NewSimulator(cfg *config.Config, who string, subject map[string]any) (*Simu
 // Evaluate evaluates action (read, aggregate, create, update, delete or
 // execute) on an entity, for fields (none: the default projection).
 func (s *Simulator) Evaluate(ctx context.Context, entityName, action string, fields []string) (*Simulation, error) {
-	a, ok := entityActions[strings.ToLower(action)]
+	a, ok := entity.ParseAction(strings.ToLower(action))
 	if !ok {
 		return nil, fmt.Errorf("unknown action %q", action)
 	}
@@ -83,11 +84,11 @@ func (s *Simulator) Evaluate(ctx context.Context, entityName, action string, fie
 		return nil, err
 	}
 	out := &Simulation{
-		Allowed: dec.Allowed, Reason: dec.Reason, Fields: orEmpty(dec.Fields), Grants: orEmpty(dec.Grants),
+		Allowed: dec.Allowed, Reason: dec.Reason, Fields: kit.OrEmpty(dec.Fields), Grants: kit.OrEmpty(dec.Grants),
 		FieldScopes: dec.FieldScopes,
 	}
 	if dec.Allowed && dec.RowFilter != nil {
-		out.RowFilter = predicateJSON(dec.RowFilter)
+		out.RowFilter = config.FilterOf(dec.RowFilter)
 	}
 	return out, nil
 }
@@ -116,29 +117,6 @@ func (r *Service) Simulate(ctx context.Context, in SimulateRequest) (*Simulation
 		return nil, err
 	}
 	return s.Evaluate(ctx, in.Entity, in.Action, in.Fields)
-}
-
-// predicateJSON renders a predicate in the rowPolicies JSON form.
-func predicateJSON(p relalg.Predicate) any {
-	switch x := p.(type) {
-	case relalg.Condition:
-		return map[string]any{"op": string(x.Op), "field": x.Field, "value": x.Value}
-	case relalg.And:
-		return map[string]any{"and": predicateList(x.Preds)}
-	case relalg.Or:
-		return map[string]any{"or": predicateList(x.Preds)}
-	case relalg.Not:
-		return map[string]any{"not": predicateJSON(x.P)}
-	}
-	return fmt.Sprintf("%v", p)
-}
-
-func predicateList(ps []relalg.Predicate) []any {
-	out := make([]any, 0, len(ps))
-	for _, p := range ps {
-		out = append(out, predicateJSON(p))
-	}
-	return out
 }
 
 // Diff is the unified diff, secrets redacted, from a revision to the

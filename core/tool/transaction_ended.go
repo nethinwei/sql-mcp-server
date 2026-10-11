@@ -41,7 +41,7 @@ type tombstone struct {
 func (m *TransactionManager) buryLocked(token string, handle *transactionHandle, outcome string) {
 	now := time.Now()
 	m.tombstones[token] = tombstone{
-		token: token, session: handle.session, scope: handle.role + handle.subject, outcome: outcome, at: now,
+		token: token, session: handle.session, scope: handle.scope, outcome: outcome, at: now,
 	}
 	m.buried = append(m.buried, token)
 	for len(m.buried) > 0 {
@@ -58,11 +58,11 @@ func (m *TransactionManager) buryLocked(token string, handle *transactionHandle,
 
 // endedError is the error for a token with no open transaction: how it
 // ended, when it ended recently for the same caller, otherwise not found.
-func (m *TransactionManager) endedError(token, session, role string, subject map[string]any) error {
+func (m *TransactionManager) endedError(token string, caller Caller) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	t, ok := m.tombstones[token]
-	if !ok || time.Since(t.at) >= tombstoneRetention || t.session != session || t.scope != role+scopeKey("", subject) {
+	if !ok || time.Since(t.at) >= tombstoneRetention || t.session != caller.Session || t.scope != caller.scope() {
 		return ErrTransactionNotFound
 	}
 	return &TransactionEndedError{Outcome: t.outcome}

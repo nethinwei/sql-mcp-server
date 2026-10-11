@@ -9,17 +9,9 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
 )
 
-type writePlan struct {
-	res entity.Resolved
-	tc  Context
-}
-
 func runInsert(ctx context.Context, tc Context, in createInput) (Result, error) {
-	ctx, cancel := withTimeout(ctx, tc, 0)
-	defer cancel()
-	tc, endMetering := meterCall(tc, false)
-	defer endMetering()
-	tc.Transaction = in.Transaction
+	ctx, tc, end := beginCall(ctx, tc, false, in.Transaction)
+	defer end()
 	st, err := prepareInsert(ctx, tc, in)
 	if err != nil {
 		return Result{}, err
@@ -31,14 +23,11 @@ func runInsert(ctx context.Context, tc Context, in createInput) (Result, error) 
 }
 
 func prepareInsert(ctx context.Context, tc Context, in createInput) (statement, error) {
-	res, err := resolveDMLEntity(tc, in.Entity)
+	plan, _, err := planEntity(ctx, tc, in.Entity, entity.ActionCreate, nil)
 	if err != nil {
 		return statement{}, err
 	}
-	tc, err = routeEntity(ctx, tc, res.Entity, entity.ActionCreate)
-	if err != nil {
-		return statement{}, err
-	}
+	res, tc := plan.res, plan.tc
 	keys := sortedKeys(in.Values)
 	if err := validateFields(res, keys...); err != nil {
 		return statement{}, err
@@ -57,11 +46,10 @@ func prepareInsert(ctx context.Context, tc Context, in createInput) (statement, 
 	for i, k := range keys {
 		tup[i] = in.Values[k]
 	}
-	target := relalg.RelationRef{Name: res.Entity.Source, Schema: res.Entity.Schema}
-	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(
-		relalg.Insert{Target: target, Columns: keys, Tuples: []relalg.Tuple{tup}},
-		codegen.WithPrimaryKey(res.Entity.PrimaryKey()...),
-		codegen.WithMaxINCardinality(effectiveMaxIN(tc)),
+	compiled, err := compile(
+		tc,
+		res.Entity,
+		relalg.Insert{Target: res.Entity.Ref(), Columns: keys, Tuples: []relalg.Tuple{tup}},
 	)
 	if err != nil {
 		return statement{}, err
@@ -121,11 +109,8 @@ func runFilteredWrite(
 	transaction string,
 	prepare func(context.Context, Context) (statement, error),
 ) (Result, error) {
-	ctx, cancel := withTimeout(ctx, tc, 0)
-	defer cancel()
-	tc, endMetering := meterCall(tc, false)
-	defer endMetering()
-	tc.Transaction = transaction
+	ctx, tc, end := beginCall(ctx, tc, false, transaction)
+	defer end()
 	st, err := prepare(ctx, tc)
 	if err != nil {
 		return Result{}, err
@@ -138,7 +123,7 @@ func runFilteredWrite(
 }
 
 func prepareUpdate(ctx context.Context, tc Context, in updateInput) (statement, error) {
-	plan, pred, err := prepareFilteredWrite(ctx, tc, in.Entity, entity.ActionUpdate, in.Filter)
+	plan, pred, err := planEntity(ctx, tc, in.Entity, entity.ActionUpdate, in.Filter)
 	if err != nil {
 		return statement{}, err
 	}
@@ -170,12 +155,11 @@ func prepareUpdate(ctx context.Context, tc Context, in updateInput) (statement, 
 	for _, k := range sortedKeys(in.Set) {
 		setItems = append(setItems, relalg.SetItem{Field: k, Value: in.Set[k]})
 	}
-	target := relalg.RelationRef{Name: plan.res.Entity.Source, Schema: plan.res.Entity.Schema}
-	compiled, err := codegen.Renderer{Dialect: plan.tc.Dialect}.Compile(
-		relalg.Update{Target: target, Predicate: full, Set: setItems},
-		codegen.WithPrimaryKey(plan.res.Entity.PrimaryKey()...),
-		codegen.WithIdentityKeys(plan.res.Entity.IdentityKeys(true, plan.tc.Transaction != "")...),
-		codegen.WithMaxINCardinality(effectiveMaxIN(plan.tc)),
+	compiled, err := compile(
+		plan.tc,
+		plan.res.Entity,
+		relalg.Update{Target: plan.res.Entity.Ref(), Predicate: full, Set: setItems},
+		identityKeys(plan.tc, plan.res.Entity, true),
 	)
 	if err != nil {
 		return statement{}, err
@@ -184,7 +168,7 @@ func prepareUpdate(ctx context.Context, tc Context, in updateInput) (statement, 
 }
 
 func prepareDelete(ctx context.Context, tc Context, in deleteInput) (statement, error) {
-	plan, pred, err := prepareFilteredWrite(ctx, tc, in.Entity, entity.ActionDelete, in.Filter)
+	plan, pred, err := planEntity(ctx, tc, in.Entity, entity.ActionDelete, in.Filter)
 	if err != nil {
 		return statement{}, err
 	}
@@ -208,13 +192,8 @@ func prepareDelete(ctx context.Context, tc Context, in deleteInput) (statement, 
 	if err := checkCascades(ctx, plan.tc, plan.res.Entity, entity.ActionDelete, nil); err != nil {
 		return statement{}, err
 	}
-	target := relalg.RelationRef{Name: plan.res.Entity.Source, Schema: plan.res.Entity.Schema}
-	compiled, err := codegen.Renderer{Dialect: plan.tc.Dialect}.Compile(
-		relalg.Delete{Target: target, Predicate: full},
-		codegen.WithPrimaryKey(plan.res.Entity.PrimaryKey()...),
-		codegen.WithIdentityKeys(plan.res.Entity.IdentityKeys(true, plan.tc.Transaction != "")...),
-		codegen.WithMaxINCardinality(effectiveMaxIN(plan.tc)),
-	)
+	compiled, err := compile(plan.tc, plan.res.Entity, relalg.Delete{Target: plan.res.Entity.Ref(), Predicate: full},
+		identityKeys(plan.tc, plan.res.Entity, true))
 	if err != nil {
 		return statement{}, err
 	}
@@ -222,7 +201,7 @@ func prepareDelete(ctx context.Context, tc Context, in deleteInput) (statement, 
 }
 
 // statement gates compiled, the write of the plan.
-func (p writePlan) statement(ctx context.Context, g grant, compiled codegen.Compiled) (statement, error) {
+func (p entityPlan) statement(ctx context.Context, g grant, compiled codegen.Compiled) (statement, error) {
 	sql, err := gateSQL(ctx, p.tc, compiled)
 	if err != nil {
 		return statement{}, err
@@ -230,26 +209,4 @@ func (p writePlan) statement(ctx context.Context, g grant, compiled codegen.Comp
 	st := newStatement(p.tc, p.res, g, sql)
 	st.write = true
 	return st, nil
-}
-
-func prepareFilteredWrite(
-	ctx context.Context,
-	tc Context,
-	entityName string,
-	action entity.Action,
-	filter []condJSON,
-) (writePlan, relalg.Predicate, error) {
-	res, err := resolveDMLEntity(tc, entityName)
-	if err != nil {
-		return writePlan{}, nil, err
-	}
-	tc, err = routeEntity(ctx, tc, res.Entity, action)
-	if err != nil {
-		return writePlan{}, nil, err
-	}
-	pred, err := filterToPredicate(filter, tc.MaxFilterConditions)
-	if err != nil {
-		return writePlan{}, nil, err
-	}
-	return writePlan{res: res, tc: tc}, pred, nil
 }

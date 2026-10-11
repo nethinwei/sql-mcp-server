@@ -13,6 +13,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
@@ -40,7 +41,7 @@ func (r *mutationResolver) Publish(ctx context.Context, input PublishInput) (*Re
 	if err != nil {
 		return nil, err
 	}
-	req := revisionops.PublishRequest{ID: id, RestartRequired: derefBool(input.RestartRequired), Author: p.Username}
+	req := revisionops.PublishRequest{ID: id, RestartRequired: kit.DerefBool(input.RestartRequired), Author: p.Username}
 	if input.ExpectedPublished != nil {
 		expected, err := configapp.ParseID(*input.ExpectedPublished)
 		if err != nil {
@@ -62,7 +63,7 @@ func (r *mutationResolver) Rollback(ctx context.Context, input RollbackInput) (*
 		return nil, err
 	}
 	req := revisionops.RollbackRequest{
-		RestartRequired: derefBool(input.RestartRequired), Author: p.Username, Comment: deref(input.Comment),
+		RestartRequired: kit.DerefBool(input.RestartRequired), Author: p.Username, Comment: kit.Deref(input.Comment),
 	}
 	if input.To != nil {
 		if req.To, err = configapp.ParseID(*input.To); err != nil {
@@ -202,7 +203,7 @@ func (r *queryResolver) Revision(ctx context.Context, id string) (*Revision, err
 
 // Revisions is the resolver for the revisions field.
 func (r *queryResolver) Revisions(ctx context.Context, limit *int) ([]Revision, error) {
-	revs, err := r.App.Revisions(ctx, derefInt(limit, 50))
+	revs, err := r.App.Revisions(ctx, kit.DerefInt(limit, 50))
 	if err != nil {
 		return nil, err
 	}

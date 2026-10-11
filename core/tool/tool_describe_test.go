@@ -14,7 +14,7 @@ import (
 func TestDescribeTool(t *testing.T) {
 	t.Parallel()
 	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
-	tc := Context{Role: "reader", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}
+	tc := Context{Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}, Role: "reader"}
 	in, _ := json.Marshal(map[string]any{"entity": "users"})
 	res, err := DescribeTool{}.Run(context.Background(), in, tc)
 	if err != nil {
@@ -35,7 +35,7 @@ func TestDescribeToolFiltersUnauthorizedEntitiesAndFields(t *testing.T) {
 		Role: entity.RoleAccess{entity.ActionRead: {"admin"}}, MCP: entity.MCPFlags{DMLTools: true},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{users, adminOnly})
-	tc := Context{Role: "reader", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}
+	tc := Context{Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}, Role: "reader"}
 	list, err := DescribeTool{}.Run(context.Background(), json.RawMessage(`{}`), tc)
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestDescribeToolListsSplitFieldScopes(t *testing.T) {
 	policy := rbac.Policy{Roles: map[string]map[string][]rbac.Grant{
 		"reader": {"users": {read("n", "id", "name"), read("p", "id", "phone")}},
 	}}
-	tc := Context{Role: "reader", Registry: reg, Authorizer: rbac.NewGrantAuthorizer(reg, policy)}
+	tc := Context{Services: &Services{Registry: reg, Authorizer: rbac.NewGrantAuthorizer(reg, policy)}, Role: "reader"}
 	list, err := DescribeTool{}.Run(context.Background(), json.RawMessage(`{}`), tc)
 	if err != nil || len(list.Content) != 1 || list.Content[0]["name"] != "users" {
 		t.Fatalf("list = %#v, %v", list.Content, err)
@@ -96,7 +96,7 @@ func TestDescribeToolListsSplitFieldScopes(t *testing.T) {
 func TestDescribeRejectsInvalidInput(t *testing.T) {
 	t.Parallel()
 	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
-	tc := Context{Role: "reader", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}
+	tc := Context{Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}, Role: "reader"}
 	for _, input := range []string{`{"entitty":"users"}`, `[]`, `{"entity":1}`} {
 		if _, err := (DescribeTool{}).Run(context.Background(), json.RawMessage(input), tc); !errors.Is(
 			err, ErrInvalidInput,
@@ -126,7 +126,7 @@ func TestDescribeReportsKeysAndWritability(t *testing.T) {
 		Role: entity.RoleAccess{entity.ActionRead: {"reader"}},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
-	tc := Context{Role: "reader", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}
+	tc := Context{Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}, Role: "reader"}
 	res, err := DescribeTool{}.Run(context.Background(), json.RawMessage(`{"entity":"orders"}`), tc)
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +143,13 @@ func TestDescribeReportsKeysAndWritability(t *testing.T) {
 		"id": {false, false}, "order_no": {true, false}, "note": {false, false}, "total_cents": {false, true},
 	} {
 		if fields[name]["required"] != want[0] || fields[name]["readOnly"] != want[1] {
-			t.Errorf("%s: required=%v readOnly=%v, want %v", name, fields[name]["required"], fields[name]["readOnly"], want)
+			t.Errorf(
+				"%s: required=%v readOnly=%v, want %v",
+				name,
+				fields[name]["required"],
+				fields[name]["readOnly"],
+				want,
+			)
 		}
 	}
 }

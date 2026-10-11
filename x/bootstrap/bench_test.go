@@ -10,6 +10,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
 	"github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
@@ -23,7 +24,7 @@ type benchProvider struct {
 }
 
 func (p benchProvider) QueryContext(context.Context, string, ...any) (store.Rows, error) {
-	return store.NewFakeRows([]string{"id", "email"}, p.rows...), nil
+	return storetest.NewFakeRows([]string{"id", "email"}, p.rows...), nil
 }
 
 func (p benchProvider) Introspector() introspect.Introspector { return p.tables }

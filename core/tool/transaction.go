@@ -24,12 +24,29 @@ var (
 	ErrTransactionStale = errors.New("tool: transaction datasource was reconfigured; roll it back and begin again")
 )
 
+// Caller is who holds a transaction: the transport session it was begun in
+// and the authorization identity it was begun under. A statement of the
+// transaction must come from the same caller.
+type Caller struct {
+	Session string
+	Role    string
+	Subject map[string]any
+}
+
+// callerOf is the caller tc serves.
+func callerOf(tc Context) Caller {
+	return Caller{Session: tc.Session, Role: tc.Role, Subject: tc.Subject}
+}
+
+// scope is the authorization identity of the caller, the key its
+// transactions are counted under.
+func (c Caller) scope() string { return scopeKey(c.Role, c.Subject) }
+
 type transactionHandle struct {
 	tx         store.Tx
 	connection store.TxBeginner // the connection begun on
-	role       string
-	subject    string
 	session    string
+	scope      string // the caller's, see Caller.scope
 	datasource string
 	dirty      map[CacheTarget]struct{}
 	expires    time.Time
@@ -98,12 +115,11 @@ func (m *TransactionManager) UpdateLimits(ttl time.Duration, maxOpen int) {
 func (m *TransactionManager) Begin(
 	ctx context.Context,
 	beginner store.TxBeginner,
-	session, role string,
-	subject map[string]any,
+	caller Caller,
 	datasource string,
 	opts *store.TxOptions,
 ) (string, error) {
-	scope := scopeKey(role, subject)
+	scope := caller.scope()
 	if err := m.checkBeginCapacity(scope, beginner); err != nil {
 		return "", err
 	}
@@ -120,7 +136,7 @@ func (m *TransactionManager) Begin(
 		return "", err
 	}
 	handle := &transactionHandle{
-		tx: tx, connection: beginner, session: session, role: role, subject: scopeKey("", subject),
+		tx: tx, connection: beginner, session: caller.Session, scope: scope,
 		datasource: datasource, dirty: make(map[CacheTarget]struct{}), cancel: cancel,
 	}
 	if ttl > 0 {
@@ -225,9 +241,8 @@ func (m *TransactionManager) addHandle(scope, token string, handle *transactionH
 // removeLocked drops a handle; m.mu is held.
 func (m *TransactionManager) removeLocked(token string, handle *transactionHandle) {
 	delete(m.handles, token)
-	scope := handle.role + handle.subject
-	if m.open[scope]--; m.open[scope] <= 0 {
-		delete(m.open, scope)
+	if m.open[handle.scope]--; m.open[handle.scope] <= 0 {
+		delete(m.open, handle.scope)
 	}
 	if m.byConnection[handle.connection]--; m.byConnection[handle.connection] <= 0 {
 		delete(m.byConnection, handle.connection)
@@ -295,8 +310,8 @@ func (h *transactionHandle) abort() {
 // waits on the database, which may be gone.
 func (m *TransactionManager) lookup(
 	ctx context.Context,
-	token, session, role string,
-	subject map[string]any,
+	token string,
+	caller Caller,
 	datasource string,
 	connections []store.TxBeginner,
 ) (*transactionHandle, error) {
@@ -311,9 +326,9 @@ func (m *TransactionManager) lookup(
 				return nil, ctx.Err()
 			}
 		}
-		return nil, m.endedError(token, session, role, subject)
+		return nil, m.endedError(token, caller)
 	}
-	if handle.session != session || handle.role != role || handle.subject != scopeKey("", subject) ||
+	if handle.session != caller.Session || handle.scope != caller.scope() ||
 		datasource != "" && handle.datasource != datasource {
 		return nil, ErrTransactionScope
 	}
@@ -329,12 +344,12 @@ func (m *TransactionManager) lookup(
 
 func (m *TransactionManager) DB(
 	ctx context.Context,
-	token, session, role string,
-	subject map[string]any,
+	token string,
+	caller Caller,
 	datasource string,
 	connections []store.TxBeginner,
 ) (store.DB, error) {
-	handle, err := m.lookup(ctx, token, session, role, subject, datasource, connections)
+	handle, err := m.lookup(ctx, token, caller, datasource, connections)
 	if err != nil {
 		return nil, err
 	}
@@ -343,8 +358,8 @@ func (m *TransactionManager) DB(
 
 // Validate verifies a token's transport and authorization identity without
 // exposing its transaction or datasource.
-func (m *TransactionManager) Validate(ctx context.Context, token, session, role string, subject map[string]any) error {
-	_, err := m.lookup(ctx, token, session, role, subject, "", nil)
+func (m *TransactionManager) Validate(ctx context.Context, token string, caller Caller) error {
+	_, err := m.lookup(ctx, token, caller, "", nil)
 	return err
 }
 
@@ -357,21 +372,21 @@ func (m *TransactionManager) Configuration() (time.Duration, int) {
 
 func (m *TransactionManager) finish(
 	ctx context.Context,
-	token, session, role string,
-	subject map[string]any,
+	token string,
+	caller Caller,
 	commit bool,
 ) ([]CacheTarget, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	handle, err := m.lookup(ctx, token, session, role, subject, "", nil)
+	handle, err := m.lookup(ctx, token, caller, "", nil)
 	if err != nil {
 		return nil, err
 	}
 	m.mu.Lock()
 	if m.handles[token] != handle {
 		m.mu.Unlock()
-		return nil, m.endedError(token, session, role, subject)
+		return nil, m.endedError(token, caller)
 	}
 	end := m.endingLocked(token, handle)
 	m.mu.Unlock()
@@ -382,7 +397,7 @@ func (m *TransactionManager) finish(
 
 // finish commits or rolls back the transaction, and reports how it ended. A
 // commit that may have committed (see uncertain) returns what the
-// transaction wrote with an OutcomeUnknownError, for the caller to follow.
+// transaction wrote with ErrOutcomeUnknown, for the caller to follow.
 func (h *transactionHandle) finish(ctx context.Context, commit bool) (string, []CacheTarget, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -407,7 +422,7 @@ func (h *transactionHandle) finish(ctx context.Context, commit bool) (string, []
 	if err := h.tx.Commit(); err != nil {
 		_ = h.tx.Rollback()
 		if uncertain(err) {
-			return OutcomeUnknown, targets, &OutcomeUnknownError{err: err}
+			return OutcomeUnknown, targets, outcomeUnknown(err)
 		}
 		return OutcomeRolledBack, nil, WrapDBError(err)
 	}
@@ -416,19 +431,15 @@ func (h *transactionHandle) finish(ctx context.Context, commit bool) (string, []
 
 // Commit commits and returns the cache targets the transaction wrote. The list
 // is returned only after a commit that succeeded, or may have (with an
-// OutcomeUnknownError), so callers can invalidate global read caches without
+// ErrOutcomeUnknown), so callers can invalidate global read caches without
 // rollback pollution.
-func (m *TransactionManager) Commit(
-	ctx context.Context,
-	token, session, role string,
-	subject map[string]any,
-) ([]CacheTarget, error) {
-	return m.finish(ctx, token, session, role, subject, true)
+func (m *TransactionManager) Commit(ctx context.Context, token string, caller Caller) ([]CacheTarget, error) {
+	return m.finish(ctx, token, caller, true)
 }
 
 // Rollback rolls back the transaction.
-func (m *TransactionManager) Rollback(ctx context.Context, token, session, role string, subject map[string]any) error {
-	_, err := m.finish(ctx, token, session, role, subject, false)
+func (m *TransactionManager) Rollback(ctx context.Context, token string, caller Caller) error {
+	_, err := m.finish(ctx, token, caller, false)
 	return err
 }
 
@@ -436,13 +447,13 @@ func (m *TransactionManager) Rollback(ctx context.Context, token, session, role 
 // connections are as for DB.
 func (m *TransactionManager) MarkDirty(
 	ctx context.Context,
-	token, session, role string,
-	subject map[string]any,
+	token string,
+	caller Caller,
 	datasource string,
 	connections []store.TxBeginner,
 	targets ...CacheTarget,
 ) error {
-	handle, err := m.lookup(ctx, token, session, role, subject, datasource, connections)
+	handle, err := m.lookup(ctx, token, caller, datasource, connections)
 	if err != nil {
 		return err
 	}

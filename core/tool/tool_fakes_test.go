@@ -13,6 +13,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 )
 
 // recorderAuditor is a synchronous audit.Auditor fake for tests.
@@ -24,7 +25,7 @@ func (r *recorderAuditor) Record(_ context.Context, e audit.Event) error {
 }
 
 type queryTx struct {
-	store.FakeTx
+	storetest.FakeTx
 	query func(context.Context, string, ...any) (store.Rows, error)
 }
 

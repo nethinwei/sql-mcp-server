@@ -31,18 +31,15 @@ func (ReadTool) Enabled(f config.ToolFlags) bool { return f.ReadRecords }
 func (ReadTool) CostGated()                      {}
 
 func (ReadTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
-	var in readInput
-	if err := decodeInput(input, &in); err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+	in, err := decodeTool(input, func(in *readInput) error { return normalizeMapValues(in.Cursor) })
+	if err != nil {
+		return Result{}, err
 	}
 	if in.Offset > 0 && in.Limit == 0 {
 		return Result{}, fmt.Errorf("%w: offset requires limit", ErrInvalidInput)
 	}
 	if tc.MaxExpand > 0 && len(in.Expand) > tc.MaxExpand {
 		return Result{}, fmt.Errorf("%w: too many relationships", ErrInvalidInput)
-	}
-	if err := normalizeMapValues(in.Cursor); err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
 	return runRead(ctx, tc, in)
 }

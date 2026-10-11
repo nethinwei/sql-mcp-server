@@ -2,17 +2,36 @@ package store
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 )
 
+// preparedFakeDB prepares statements and counts them; it runs nothing
+// unprepared.
 type preparedFakeDB struct {
-	FakeDB
 	prepared int
 	closed   int
 	mu       sync.Mutex
 }
+
+func (d *preparedFakeDB) QueryContext(context.Context, string, ...any) (Rows, error) {
+	return nil, errors.New("unprepared query")
+}
+
+func (d *preparedFakeDB) ExecContext(context.Context, string, ...any) (Result, error) {
+	return Result{}, errors.New("unprepared exec")
+}
+
+// closedRows is a Rows with no rows, closed when the test is done with it.
+type closedRows struct{}
+
+func (closedRows) Next() bool                 { return false }
+func (closedRows) Scan(...any) error          { return errors.New("no rows") }
+func (closedRows) Columns() ([]string, error) { return []string{"id"}, nil }
+func (closedRows) Close() error               { return nil }
+func (closedRows) Err() error                 { return nil }
 
 func (d *preparedFakeDB) PrepareContext(context.Context, string) (Prepared, error) {
 	d.mu.Lock()
@@ -24,7 +43,7 @@ func (d *preparedFakeDB) PrepareContext(context.Context, string) (Prepared, erro
 type preparedFakeStmt struct{ db *preparedFakeDB }
 
 func (s *preparedFakeStmt) QueryContext(context.Context, ...any) (Rows, error) {
-	return NewFakeRows([]string{"id"}, []any{1}), nil
+	return closedRows{}, nil
 }
 func (s *preparedFakeStmt) ExecContext(context.Context, ...any) (Result, error) {
 	return Result{RowsAffected: 1}, nil
@@ -135,15 +154,6 @@ func TestPreparedDBCloseWaitsForRowsClose(t *testing.T) {
 	db.mu.Unlock()
 	if closed != 1 {
 		t.Fatalf("closed after rows release = %d, want 1", closed)
-	}
-}
-
-func TestPreparedDBFallsBackForPlainDB(t *testing.T) {
-	db := &FakeDB{ExecFn: func(context.Context, string, ...any) (Result, error) {
-		return Result{RowsAffected: 1}, nil
-	}}
-	if _, err := WithPreparedCache(db, 2).ExecContext(context.Background(), "update t set x=1"); err != nil {
-		t.Fatal(err)
 	}
 }
 

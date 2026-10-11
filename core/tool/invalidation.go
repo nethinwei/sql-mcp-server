@@ -185,7 +185,7 @@ func afterWrite(ctx context.Context, tc Context, e entity.Entity, transaction st
 	if tc.Transactions == nil {
 		return ErrTransactionNotFound
 	}
-	return tc.Transactions.MarkDirty(ctx, transaction, tc.Session, tc.Role, tc.Subject, e.DatasourceName(),
+	return tc.Transactions.MarkDirty(ctx, transaction, callerOf(tc), e.DatasourceName(),
 		txConnections(tc, e.DatasourceName()), targets...)
 }
 

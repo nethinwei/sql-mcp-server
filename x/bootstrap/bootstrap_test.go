@@ -17,6 +17,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
+	"github.com/nethinwei/sql-mcp-server/core/cost/costtest"
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/engine"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
@@ -24,6 +25,7 @@ import (
 	coreprovider "github.com/nethinwei/sql-mcp-server/core/provider"
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
@@ -68,12 +70,13 @@ func TestAppCloseContextDrainsBeforeTransactionsAndProviders(t *testing.T) {
 		})
 	}()
 	<-started
-	tx := &store.FakeTx{}
-	beginner := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+	tx := &storetest.FakeTx{}
+	beginner := &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
 		return tx, nil
 	}}
 	manager := tool.NewTransactionManager(time.Minute, 1)
-	if _, err := manager.Begin(context.Background(), beginner, "s", "reader", nil, "default", nil); err != nil {
+	caller := tool.Caller{Session: "s", Role: "reader"}
+	if _, err := manager.Begin(context.Background(), beginner, caller, "default", nil); err != nil {
 		t.Fatal(err)
 	}
 	provider := &fakeProvider{}
@@ -100,7 +103,7 @@ func TestAppCloseContextDrainsBeforeTransactionsAndProviders(t *testing.T) {
 }
 
 type fakeProvider struct {
-	store.FakeDB
+	storetest.FakeDB
 	dialect     dialect.Dialect
 	explainPlan *cost.Plan
 	closed      int
@@ -109,16 +112,16 @@ type fakeProvider struct {
 func (p *fakeProvider) Dialect() dialect.Dialect { return p.dialect }
 func (p *fakeProvider) Explainer() cost.Explainer {
 	if p.explainPlan != nil {
-		return cost.FakeExplainer{Plan: *p.explainPlan}
+		return costtest.FakeExplainer{Plan: *p.explainPlan}
 	}
-	return cost.FakeExplainer{Plan: cost.Plan{
+	return costtest.FakeExplainer{Plan: cost.Plan{
 		ScanType: cost.ScanIndex, EstimatedRows: 1, StatsFresh: true,
 	}}
 }
 func (p *fakeProvider) Introspector() introspect.Introspector { return nil }
 func (p *fakeProvider) Close() error                          { p.closed++; return nil }
 func (p *fakeProvider) QueryContext(context.Context, string, ...any) (store.Rows, error) {
-	return store.NewFakeRows([]string{"id"}), nil
+	return storetest.NewFakeRows([]string{"id"}), nil
 }
 
 type fakeAnalyzeProvider struct{ *fakeProvider }
@@ -227,7 +230,7 @@ func TestConfigToEntities(t *testing.T) {
 
 func TestFilterConfigToPredicate(t *testing.T) {
 	t.Parallel()
-	p, err := filterConfigToPredicate(config.FilterConfig{"op": "eq", "field": "id", "value": 1})
+	p, err := config.ParseFilter(config.FilterConfig{"op": "eq", "field": "id", "value": 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +239,7 @@ func TestFilterConfigToPredicate(t *testing.T) {
 		t.Fatalf("got %+v", p)
 	}
 
-	p2, err := filterConfigToPredicate(config.FilterConfig{
+	p2, err := config.ParseFilter(config.FilterConfig{
 		"and": []any{
 			config.FilterConfig{"op": "gt", "field": "id", "value": 0},
 			config.FilterConfig{"op": "is_null", "field": "deleted_at"},
@@ -448,9 +451,9 @@ func TestAssembleKeepsMandatorySafetyWhenCostEstimateDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer app.Close()
-	chain, ok := app.Gate.(*cost.ChainGate)
+	chain, ok := app.Sources["default"].Gate.(*cost.ChainGate)
 	if !ok {
-		t.Fatalf("gate type = %T", app.Gate)
+		t.Fatalf("gate type = %T", app.Sources["default"].Gate)
 	}
 	foundWriteGuard := false
 	for _, layer := range chain.Layers() {
@@ -484,7 +487,7 @@ func TestAssembleUsesConservativeMySQLEstimate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	decision, err := app.Gate.Check(context.Background(), compiled)
+	decision, err := app.Sources["default"].Gate.Check(context.Background(), compiled)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,8 +553,8 @@ func TestAssembleWiresAnalyzePolicyPerDatasource(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer app.Close()
-	if !app.Analyze.Config.Enabled || app.Sources["default"].Analyze.Config.SampleRate != 0.5 {
-		t.Fatalf("analyze wiring = %+v / %+v", app.Analyze, app.Sources["default"].Analyze)
+	if !app.Sources["default"].Analyze.Config.Enabled || app.Sources["default"].Analyze.Config.SampleRate != 0.5 {
+		t.Fatalf("analyze wiring = %+v / %+v", app.Sources["default"].Analyze, app.Sources["default"].Analyze)
 	}
 }
 
@@ -683,9 +686,13 @@ func TestAssembleFailureAcquiresNoResources(t *testing.T) {
 func TestConfigurePoolReachesBuiltInProviders(t *testing.T) {
 	t.Parallel()
 	for driver, wrap := range map[string]func(*sqladapter.Pool) Provider{
-		"pgx":   func(p *sqladapter.Pool) Provider { return &postgres.Provider{Pool: p} },
-		"mysql": func(p *sqladapter.Pool) Provider { return &mysql.Provider{Pool: p} },
-		"ob":    func(p *sqladapter.Pool) Provider { return &oceanbase.Provider{Pool: p} },
+		"pgx": func(p *sqladapter.Pool) Provider {
+			return &postgres.Provider{Base: sqladapter.NewBase(p, nil, nil, nil)}
+		},
+		"mysql": func(p *sqladapter.Pool) Provider { return &mysql.Provider{Base: sqladapter.NewBase(p, nil, nil, nil)} },
+		"ob": func(p *sqladapter.Pool) Provider {
+			return &oceanbase.Provider{Base: sqladapter.NewBase(p, nil, nil, nil)}
+		},
 	} {
 		name := driver
 		if name == "ob" {

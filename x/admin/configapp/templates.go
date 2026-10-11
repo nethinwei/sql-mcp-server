@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
 )
@@ -84,11 +85,7 @@ func (r *Service) PlanTemplateVersions(ctx context.Context, name string) ([]Plan
 // SavePlanTemplate creates a template, or saves a new version of one
 // while it is still at in.ExpectedVersion.
 func (r *Service) SavePlanTemplate(ctx context.Context, in PlanTemplateInput) (*PlanTemplate, error) {
-	who, err := auth.RequireUnlimited(ctx, auth.PermWrite)
-	if err != nil {
-		return nil, err
-	}
-	store, err := r.plans()
+	who, store, err := r.planStore(ctx, auth.PermWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +103,7 @@ func (r *Service) SavePlanTemplate(ctx context.Context, in PlanTemplateInput) (*
 	}
 	saved, err := store.PutPlanTemplate(ctx, configstore.PlanTemplate{
 		Name: name, Plan: data, Recurring: in.Recurring, Author: who.Username,
-	}, derefInt(in.ExpectedVersion, 0))
+	}, kit.DerefInt(in.ExpectedVersion, 0))
 	if err != nil {
 		return nil, err
 	}

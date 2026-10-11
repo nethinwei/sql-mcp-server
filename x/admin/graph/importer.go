@@ -4,9 +4,9 @@ import (
 	"context"
 	"slices"
 
-	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 	"github.com/nethinwei/sql-mcp-server/x/configplan"
 )
@@ -14,21 +14,9 @@ import (
 // toSchemaImport shows the scanned tables of a datasource with the entity
 // proposed for each.
 func toSchemaImport(in *configapp.Imports) *SchemaImport {
-	out := &SchemaImport{Datasource: in.Datasource, DefaultSchema: optional(in.DefaultSchema), Source: in.Source,
+	out := &SchemaImport{Datasource: in.Datasource, DefaultSchema: kit.Optional(in.DefaultSchema), Source: in.Source,
 		Tables: make([]ImportTable, 0, len(in.Tables))}
 	for _, c := range in.Tables {
-		out.Tables = append(out.Tables, importTable(c))
-	}
-	return out
-}
-
-// buildSchemaImport compares the scanned tables with the configured entities
-// of datasource and proposes a zero-permission candidate entity per table.
-func buildSchemaImport(datasource string, cat introspect.Catalog, cfg *config.Config) *SchemaImport {
-	out := &SchemaImport{
-		Datasource: datasource, DefaultSchema: optional(cat.Default), Tables: make([]ImportTable, 0, len(cat.Tables)),
-	}
-	for _, c := range configplan.Candidates(datasource, cat, cfg, nil, nil) {
 		out.Tables = append(out.Tables, importTable(c))
 	}
 	return out
@@ -45,7 +33,7 @@ func importTable(c configplan.Candidate) ImportTable {
 		ForeignKeys: importForeignKeys(d), SideEffects: d.SideEffects, Candidate: &candidate,
 	}
 	if c.Configured != nil {
-		table.Status, table.ConfiguredAs = ImportStatusConfigured, optional(c.Configured.Name)
+		table.Status, table.ConfiguredAs = ImportStatusConfigured, kit.Optional(c.Configured.Name)
 	}
 	return table
 }
@@ -65,7 +53,10 @@ func importColumns(d entity.Entity) []ImportColumn {
 func importKeys(d entity.Entity) []ImportKey {
 	out := make([]ImportKey, 0, len(d.Keys))
 	for _, k := range d.Keys {
-		out = append(out, ImportKey{Name: k.Name, Columns: k.Columns, Primary: k.Primary, Reason: optional(k.Reason)})
+		out = append(
+			out,
+			ImportKey{Name: k.Name, Columns: k.Columns, Primary: k.Primary, Reason: kit.Optional(k.Reason)},
+		)
 	}
 	return out
 }
@@ -74,8 +65,8 @@ func importIndexes(d entity.Entity) []ImportIndex {
 	out := make([]ImportIndex, 0, len(d.Indexes))
 	for _, ix := range d.Indexes {
 		out = append(out, ImportIndex{
-			Name: ix.Name, Method: ix.Method, Parts: orEmpty(ix.Parts), Unique: ix.Unique, Primary: ix.Primary,
-			Where: optional(ix.Where),
+			Name: ix.Name, Method: ix.Method, Parts: kit.OrEmpty(ix.Parts), Unique: ix.Unique, Primary: ix.Primary,
+			Where: kit.Optional(ix.Where),
 		})
 	}
 	return out
@@ -86,7 +77,7 @@ func importForeignKeys(d entity.Entity) []ImportForeignKey {
 	for _, fk := range d.ForeignKeys {
 		out = append(out, ImportForeignKey{
 			Name: fk.Name, Columns: fk.Columns, RefSchema: fk.RefSchema, RefTable: fk.RefRelation,
-			RefColumns: fk.RefColumns, OnDelete: optional(fk.OnDelete), OnUpdate: optional(fk.OnUpdate),
+			RefColumns: fk.RefColumns, OnDelete: kit.Optional(fk.OnDelete), OnUpdate: kit.Optional(fk.OnUpdate),
 		})
 	}
 	return out
@@ -98,7 +89,7 @@ func referencedCatalog(ctx context.Context, in introspect.Introspector, refs []T
 	var schemas []string
 	unqualified := false
 	for _, ref := range refs {
-		if schema := deref(ref.Schema); schema == "" {
+		if schema := kit.Deref(ref.Schema); schema == "" {
 			unqualified = true
 		} else if !slices.Contains(schemas, schema) {
 			schemas = append(schemas, schema)
@@ -127,7 +118,7 @@ func lookupTableComments(
 	}
 	out := make([]*TableComments, len(tables))
 	for i, ref := range tables {
-		if d, ok := catalogs[ref.Datasource].Lookup(deref(ref.Schema), ref.Table); ok {
+		if d, ok := catalogs[ref.Datasource].Lookup(kit.Deref(ref.Schema), ref.Table); ok {
 			out[i] = tableComments(d)
 		}
 	}

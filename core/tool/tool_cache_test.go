@@ -41,7 +41,7 @@ func TestWriteInvalidatesByRelation(t *testing.T) {
 				_ = c.Set(context.Background(), key(e), []map[string]any{{}}, 0)
 			}
 			// Through the targets worked out once per configuration.
-			tcx := Context{Registry: reg, Cache: c, WriteTargets: BuildWriteTargets(reg)}
+			tcx := Context{Services: &Services{Registry: reg, Cache: c, WriteTargets: BuildWriteTargets(reg)}}
 			if err := afterWrite(bg, tcx, tc.writer, ""); err != nil {
 				t.Fatal(err)
 			}
@@ -122,7 +122,7 @@ func TestWriteInvalidatesDatasourcesReachingTheSameDatabase(t *testing.T) {
 			_ = c.Set(context.Background(), key(e), []map[string]any{{}}, 0)
 		}
 		writes := NewWriteTracker()
-		tcx := Context{Registry: reg, Cache: c, Writes: writes, Session: "s"}
+		tcx := Context{Services: &Services{Registry: reg, Cache: c, Writes: writes}, Session: "s"}
 		if err := afterWrite(bg, tcx, byName[writer], ""); err != nil {
 			t.Fatal(err)
 		}

@@ -11,6 +11,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
 )
 
@@ -31,13 +32,20 @@ func TestWriteConstraintViolationIsAnActionableDenial(t *testing.T) {
 		"only the key named": {Kind: store.ConstraintUnique, Constraint: "users_email_key", Err: errors.New("raw")},
 	} {
 		t.Run(name, func(t *testing.T) {
-			db := &store.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
+			db := &storetest.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
 				return store.Result{}, driverErr
 			}}
 			tc := Context{
-				Role: "w", DB: db, Dialect: testdialect.MySQL{}, Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
+				Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+				Role:     "w",
+				DB:       db,
+				Dialect:  testdialect.MySQL{},
 			}
-			_, err := CreateTool{}.Run(context.Background(), json.RawMessage(`{"entity":"users","values":{"email":"a"}}`), tc)
+			_, err := CreateTool{}.Run(
+				context.Background(),
+				json.RawMessage(`{"entity":"users","values":{"email":"a"}}`),
+				tc,
+			)
 			denial, ok := DenialFor(err, "d")
 			if !ok || denial.Code != CodeConstraintViolation || !denial.Retryable {
 				t.Fatalf("denial = %+v (%v)", denial, err)
@@ -58,7 +66,8 @@ func TestRefusedPrivilegeIsADatasourceForbiddenDenial(t *testing.T) {
 	raw := fmt.Errorf("%w: %w", store.ErrPermissionDenied, errors.New("permission denied for table secret_salaries"))
 	err := WrapDBError(raw)
 	denial, ok := DenialFor(err, "d")
-	if !ok || denial.Code != CodeDatasourceForbidden || denial.Retryable || strings.Contains(denial.Reason, "salaries") {
+	if !ok || denial.Code != CodeDatasourceForbidden || denial.Retryable ||
+		strings.Contains(denial.Reason, "salaries") {
 		t.Fatalf("denial = %+v", denial)
 	}
 	if !errors.Is(err, raw) {

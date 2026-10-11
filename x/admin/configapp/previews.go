@@ -12,6 +12,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/workspace"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/configplan"
 )
@@ -191,7 +192,7 @@ func takeable(p *Preview) error {
 		return errors.New("the plan changes nothing")
 	}
 	if !p.Validation.Ok {
-		return fmt.Errorf("the plan's outcome does not validate: %s", deref(p.Validation.Error))
+		return fmt.Errorf("the plan's outcome does not validate: %s", kit.Deref(p.Validation.Error))
 	}
 	for _, x := range p.Proposal.Report.Exceptions {
 		if x.Level == configplan.LevelBlock {
@@ -218,14 +219,14 @@ func toPlanReport(r configplan.Report) *PlanReport {
 	}
 	for _, c := range r.Changes {
 		out.Changes = append(out.Changes, PlanChange{
-			Kind: c.Kind, Principal: optional(c.Principal), Actions: orEmpty(c.Actions), Mask: optional(c.Mask),
-			Fields: c.Fields, Entities: orEmpty(c.Entities),
+			Kind: c.Kind, Principal: kit.Optional(c.Principal), Actions: kit.OrEmpty(c.Actions), Mask: kit.Optional(c.Mask),
+			Fields: c.Fields, Entities: kit.OrEmpty(c.Entities),
 		})
 	}
 	for _, x := range r.Exceptions {
 		out.Exceptions = append(out.Exceptions, PlanException{
 			ID: digest([]string{x.Kind, x.Ref, x.Entity, x.Detail}), Kind: x.Kind, Level: x.Level, Warning: x.Warning,
-			Ref: optional(x.Ref), Entity: optional(x.Entity), Detail: optional(x.Detail),
+			Ref: kit.Optional(x.Ref), Entity: kit.Optional(x.Entity), Detail: kit.Optional(x.Detail),
 		})
 	}
 	datasources := make([]string, 0, len(r.Unscanned))
@@ -244,6 +245,17 @@ func (r *Service) plans() (PlanStore, error) {
 		return nil, errors.New("plan templates and MCP tokens need a configuration store")
 	}
 	return r.Plans, nil
+}
+
+// planStore is the plan store, for a caller holding perm who is not limited
+// to some datasources (what the store keeps spans every one).
+func (r *Service) planStore(ctx context.Context, perm string) (auth.Principal, PlanStore, error) {
+	who, err := auth.RequireUnlimited(ctx, perm)
+	if err != nil {
+		return auth.Principal{}, nil, err
+	}
+	store, err := r.plans()
+	return who, store, err
 }
 
 // pendingStatus is a state as it reads now: a snooze that ended is open.

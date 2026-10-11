@@ -1,7 +1,7 @@
 package config
 
 import (
-	"strings"
+	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"time"
 )
 
@@ -24,7 +24,7 @@ func (c *Config) ApplyDefaults() {
 }
 
 func (c *Config) applyServerDefaults() {
-	c.Server.Role = canonicalRole(c.Server.Role)
+	c.Server.Role = rbac.NormalizeRole(c.Server.Role)
 	if len(c.Server.Secrets.AllowedRoots) == 0 {
 		c.Server.Secrets.AllowedRoots = DefaultSecretRoots()
 	}
@@ -235,14 +235,10 @@ func laneDefaults(l *LaneConfig, maxConcurrent, maxQueue int) {
 	}
 }
 
-func canonicalRole(role string) string {
-	return strings.ToLower(strings.TrimSpace(role))
-}
-
 func canonicalRoleList(values []string) []string {
 	out := make([]string, len(values))
 	for i, value := range values {
-		out[i] = canonicalRole(value)
+		out[i] = rbac.NormalizeRole(value)
 	}
 	return out
 }

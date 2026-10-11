@@ -11,10 +11,11 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 )
 
 type failingCommitTx struct {
-	store.FakeTx
+	storetest.FakeTx
 	err error
 }
 
@@ -27,43 +28,45 @@ func (t *failingCommitTx) Commit() error {
 var bg = context.Background()
 
 func TestTransactionBindingCapacityAndCloseRollback(t *testing.T) {
-	tx := &store.FakeTx{}
-	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+	tx := &storetest.FakeTx{}
+	db := &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
 		return tx, nil
 	}}
 	manager := NewTransactionManager(time.Minute, 1)
 	subject := map[string]any{"tenant_id": "a"}
-	token, err := manager.Begin(context.Background(), db, "session-a", "writer", subject, "primary", nil)
+	writerA := Caller{Session: "session-a", Role: "writer", Subject: subject}
+	readerA := Caller{Session: "session-a", Role: "reader", Subject: subject}
+	writerB := Caller{Session: "session-b", Role: "writer", Subject: subject}
+	tenantB := Caller{Session: "session-a", Role: "writer", Subject: map[string]any{"tenant_id": "b"}}
+	token, err := manager.Begin(context.Background(), db, writerA, "primary", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.DB(bg, token, "session-a", "reader", subject, "primary", nil); !errors.Is(
+	if _, err := manager.DB(bg, token, readerA, "primary", nil); !errors.Is(
 		err,
 		ErrTransactionScope,
 	) {
 		t.Fatalf("role mismatch error = %v", err)
 	}
-	if _, err := manager.DB(
-		bg, token, "session-a", "writer", map[string]any{"tenant_id": "b"}, "primary", nil,
-	); !errors.Is(
+	if _, err := manager.DB(bg, token, tenantB, "primary", nil); !errors.Is(
 		err,
 		ErrTransactionScope,
 	) {
 		t.Fatalf("subject mismatch error = %v", err)
 	}
-	if _, err := manager.DB(bg, token, "session-a", "writer", subject, "other", nil); !errors.Is(
+	if _, err := manager.DB(bg, token, writerA, "other", nil); !errors.Is(
 		err,
 		ErrTransactionScope,
 	) {
 		t.Fatalf("datasource mismatch error = %v", err)
 	}
-	if _, err := manager.DB(bg, token, "session-b", "writer", subject, "primary", nil); !errors.Is(
+	if _, err := manager.DB(bg, token, writerB, "primary", nil); !errors.Is(
 		err,
 		ErrTransactionScope,
 	) {
 		t.Fatalf("session mismatch error = %v", err)
 	}
-	if _, err := manager.Begin(context.Background(), db, "session-a", "writer", subject, "primary", nil); !errors.Is(
+	if _, err := manager.Begin(context.Background(), db, writerA, "primary", nil); !errors.Is(
 		err,
 		ErrTransactionCapacity,
 	) {
@@ -76,31 +79,43 @@ func TestTransactionBindingCapacityAndCloseRollback(t *testing.T) {
 }
 
 func TestTransactionCommitAndTTL(t *testing.T) {
-	committed := &store.FakeTx{}
-	expired := &store.FakeTx{}
+	committed := &storetest.FakeTx{}
+	expired := &storetest.FakeTx{}
 	txs := []store.Tx{committed, expired}
-	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+	db := &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
 		tx := txs[0]
 		txs = txs[1:]
 		return tx, nil
 	}}
 	manager := NewTransactionManager(10*time.Millisecond, 2)
-	token, err := manager.Begin(context.Background(), db, "", "writer", nil, "default", nil)
+	token, err := manager.Begin(
+		context.Background(),
+		db,
+		Caller{Role: "writer"},
+		"default",
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.Commit(context.Background(), token, "", "writer", nil); err != nil {
+	if _, err := manager.Commit(context.Background(), token, Caller{Role: "writer"}); err != nil {
 		t.Fatal(err)
 	}
 	if !committed.Committed {
 		t.Fatal("transaction was not committed")
 	}
-	token, err = manager.Begin(context.Background(), db, "", "writer", nil, "default", nil)
+	token, err = manager.Begin(
+		context.Background(),
+		db,
+		Caller{Role: "writer"},
+		"default",
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(20 * time.Millisecond)
-	if _, err := manager.DB(bg, token, "", "writer", nil, "default", nil); !errors.Is(
+	if _, err := manager.DB(bg, token, Caller{Role: "writer"}, "default", nil); !errors.Is(
 		err,
 		ErrTransactionNotFound,
 	) {
@@ -115,7 +130,7 @@ func TestTransactionCommitAndTTL(t *testing.T) {
 // slowRollbackTx signals rolling when its rollback starts, which then waits
 // for release.
 type slowRollbackTx struct {
-	store.FakeTx
+	storetest.FakeTx
 	rolling, release chan struct{}
 }
 
@@ -129,20 +144,26 @@ func (t *slowRollbackTx) Rollback() error {
 func TestTransactionExpiryRollsBackOutsideTheManagerLock(t *testing.T) {
 	slow := &slowRollbackTx{rolling: make(chan struct{}), release: make(chan struct{})}
 	defer close(slow.release)
-	txs := []store.Tx{slow, &store.FakeTx{}}
-	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+	txs := []store.Tx{slow, &storetest.FakeTx{}}
+	db := &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
 		tx := txs[0]
 		txs = txs[1:]
 		return tx, nil
 	}}
 	manager := NewTransactionManager(10*time.Millisecond, 0)
-	if _, err := manager.Begin(context.Background(), db, "", "writer", nil, "default", nil); err != nil {
+	if _, err := manager.Begin(context.Background(), db, Caller{Role: "writer"}, "default", nil); err != nil {
 		t.Fatal(err)
 	}
 	<-slow.rolling
 	began := make(chan error, 1)
 	go func() {
-		_, err := manager.Begin(context.Background(), db, "", "writer", nil, "default", nil)
+		_, err := manager.Begin(
+			context.Background(),
+			db,
+			Caller{Role: "writer"},
+			"default",
+			nil,
+		)
 		began <- err
 	}()
 	select {
@@ -157,14 +178,20 @@ func TestTransactionExpiryRollsBackOutsideTheManagerLock(t *testing.T) {
 
 func TestTransactionLifetimeOutlivesBeginRequest(t *testing.T) {
 	var transactionContext context.Context
-	tx := &store.FakeTx{}
-	db := &store.FakeDB{BeginFn: func(ctx context.Context, _ *store.TxOptions) (store.Tx, error) {
+	tx := &storetest.FakeTx{}
+	db := &storetest.FakeDB{BeginFn: func(ctx context.Context, _ *store.TxOptions) (store.Tx, error) {
 		transactionContext = ctx
 		return tx, nil
 	}}
 	manager := NewTransactionManager(time.Minute, 1)
 	requestContext, cancelRequest := context.WithCancel(context.Background())
-	token, err := manager.Begin(requestContext, db, "session", "writer", nil, "default", nil)
+	token, err := manager.Begin(
+		requestContext,
+		db,
+		Caller{Session: "session", Role: "writer"},
+		"default",
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +201,7 @@ func TestTransactionLifetimeOutlivesBeginRequest(t *testing.T) {
 		t.Fatal("transaction lifetime was tied to completed begin request")
 	case <-time.After(10 * time.Millisecond):
 	}
-	if _, err := manager.DB(bg, token, "session", "writer", nil, "default", nil); err != nil {
+	if _, err := manager.DB(bg, token, Caller{Session: "session", Role: "writer"}, "default", nil); err != nil {
 		t.Fatal(err)
 	}
 	manager.Close()
@@ -184,16 +211,22 @@ func TestTransactionCommitFailureRollsBackAndWrapsError(t *testing.T) {
 	t.Parallel()
 	cause := errors.New("commit failed")
 	tx := &failingCommitTx{err: cause}
-	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+	db := &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
 		return tx, nil
 	}}
 	manager := NewTransactionManager(time.Minute, 1)
 	defer manager.Close()
-	token, err := manager.Begin(context.Background(), db, "", "writer", nil, "default", nil)
+	token, err := manager.Begin(
+		context.Background(),
+		db,
+		Caller{Role: "writer"},
+		"default",
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = manager.Commit(context.Background(), token, "", "writer", nil)
+	_, err = manager.Commit(context.Background(), token, Caller{Role: "writer"})
 	if !errors.Is(err, ErrDatabase) || !errors.Is(err, cause) {
 		t.Fatalf("commit error = %v", err)
 	}
@@ -211,52 +244,54 @@ func TestTransactionToolsUseRequestContextAndTimeout(t *testing.T) {
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	manager := NewTransactionManager(time.Minute, 3)
 	defer manager.Close()
-	beginner := &store.FakeDB{BeginFn: func(ctx context.Context, _ *store.TxOptions) (store.Tx, error) {
+	beginner := &storetest.FakeDB{BeginFn: func(ctx context.Context, _ *store.TxOptions) (store.Tx, error) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}}
-	tc := Context{
-		Role: "reader", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
-		Transactions: manager, TxBeginners: map[string]store.TxBeginner{"default": beginner},
-		Limits: Limits{Timeout: 5 * time.Millisecond},
-	}
+	tc := Context{Role: "reader", Services: &Services{
+		Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Transactions: manager,
+		TxBeginners: map[string]store.TxBeginner{"default": beginner}, Limits: Limits{Timeout: 5 * time.Millisecond},
+	}}
 	_, err := (BeginTransactionTool{}).Run(context.Background(), json.RawMessage(`{}`), tc)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("begin timeout error = %v", err)
 	}
 
-	tx := &store.FakeTx{}
-	immediate := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+	tx := &storetest.FakeTx{}
+	immediate := &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
 		return tx, nil
 	}}
-	token, err := manager.Begin(context.Background(), immediate, "", "reader", nil, "default", nil)
+	token, err := manager.Begin(context.Background(), immediate, Caller{Role: "reader"}, "default", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	input, _ := json.Marshal(map[string]string{"transaction": token})
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = (CommitTransactionTool{}).Run(cancelled, input, Context{
-		Role: "reader", Transactions: manager,
-	})
+	ended := Context{Services: &Services{Transactions: manager}, Role: "reader"}
+	_, err = (CommitTransactionTool{}).Run(cancelled, input, ended)
 	if !errors.Is(err, context.Canceled) || tx.Committed {
 		t.Fatalf("commit context error = %v, committed = %v", err, tx.Committed)
 	}
-	_, err = (RollbackTransactionTool{}).Run(cancelled, input, Context{
-		Role: "reader", Transactions: manager,
-	})
+	_, err = (RollbackTransactionTool{}).Run(cancelled, input, ended)
 	if !errors.Is(err, context.Canceled) || tx.RolledBack {
 		t.Fatalf("rollback context error = %v, rolled back = %v", err, tx.RolledBack)
 	}
 }
 
 func TestTransactionDisconnectRollsBackSession(t *testing.T) {
-	tx := &store.FakeTx{}
-	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+	tx := &storetest.FakeTx{}
+	db := &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
 		return tx, nil
 	}}
 	manager := NewTransactionManager(time.Minute, 2)
-	token, err := manager.Begin(context.Background(), db, "session-a", "writer", nil, "default", nil)
+	token, err := manager.Begin(
+		context.Background(),
+		db,
+		Caller{Session: "session-a", Role: "writer"},
+		"default",
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +299,7 @@ func TestTransactionDisconnectRollsBackSession(t *testing.T) {
 	if !tx.RolledBack {
 		t.Fatal("session disconnect did not rollback transaction")
 	}
-	if _, err := manager.DB(bg, token, "session-a", "writer", nil, "default", nil); !errors.Is(
+	if _, err := manager.DB(bg, token, Caller{Session: "session-a", Role: "writer"}, "default", nil); !errors.Is(
 		err,
 		ErrTransactionNotFound,
 	) {
@@ -275,18 +310,18 @@ func TestTransactionDisconnectRollsBackSession(t *testing.T) {
 
 func TestTransactionCapacityIsIsolatedByScope(t *testing.T) {
 	t.Parallel()
-	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
-		return &store.FakeTx{}, nil
+	db := &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+		return &storetest.FakeTx{}, nil
 	}}
 	manager := NewTransactionManager(time.Minute, 1)
 	defer manager.Close()
-	if _, err := manager.Begin(context.Background(), db, "", "role-a", nil, "default", nil); err != nil {
+	if _, err := manager.Begin(context.Background(), db, Caller{Role: "role-a"}, "default", nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.Begin(context.Background(), db, "", "role-b", nil, "default", nil); err != nil {
+	if _, err := manager.Begin(context.Background(), db, Caller{Role: "role-b"}, "default", nil); err != nil {
 		t.Fatalf("one scope consumed another scope's capacity: %v", err)
 	}
-	if _, err := manager.Begin(context.Background(), db, "", "role-a", nil, "default", nil); !errors.Is(
+	if _, err := manager.Begin(context.Background(), db, Caller{Role: "role-a"}, "default", nil); !errors.Is(
 		err,
 		ErrTransactionCapacity,
 	) {
@@ -296,8 +331,8 @@ func TestTransactionCapacityIsIsolatedByScope(t *testing.T) {
 
 func TestTransactionCacheInvalidatesOnlyAfterCommit(t *testing.T) {
 	t.Parallel()
-	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
-		return &store.FakeTx{}, nil
+	db := &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+		return &storetest.FakeTx{}, nil
 	}}
 	manager := NewTransactionManager(time.Minute, 2)
 	defer manager.Close()
@@ -305,11 +340,17 @@ func TestTransactionCacheInvalidatesOnlyAfterCommit(t *testing.T) {
 	users := CacheTarget{Physical: "db", Relation: "users"}
 	key := cache.Key{Database: users.Physical, Relation: users.Relation, SQL: "select"}
 	_ = cc.Set(context.Background(), key, []map[string]any{{"id": 1}}, 0)
-	token, _ := manager.Begin(context.Background(), db, "", "writer", nil, "default", nil)
-	if err := manager.MarkDirty(bg, token, "", "writer", nil, "default", nil, users); err != nil {
+	token, _ := manager.Begin(
+		context.Background(),
+		db,
+		Caller{Role: "writer"},
+		"default",
+		nil,
+	)
+	if err := manager.MarkDirty(bg, token, Caller{Role: "writer"}, "default", nil, users); err != nil {
 		t.Fatal(err)
 	}
-	tc := Context{Role: "writer", Transactions: manager, Cache: cc}
+	tc := Context{Services: &Services{Transactions: manager, Cache: cc}, Role: "writer"}
 	input, _ := json.Marshal(map[string]string{"transaction": token})
 	if _, err := (RollbackTransactionTool{}).Run(context.Background(), input, tc); err != nil {
 		t.Fatal(err)
@@ -317,8 +358,14 @@ func TestTransactionCacheInvalidatesOnlyAfterCommit(t *testing.T) {
 	if _, ok := cc.Get(context.Background(), key); !ok {
 		t.Fatal("rollback polluted global cache")
 	}
-	token, _ = manager.Begin(context.Background(), db, "", "writer", nil, "default", nil)
-	_ = manager.MarkDirty(bg, token, "", "writer", nil, "default", nil, users)
+	token, _ = manager.Begin(
+		context.Background(),
+		db,
+		Caller{Role: "writer"},
+		"default",
+		nil,
+	)
+	_ = manager.MarkDirty(bg, token, Caller{Role: "writer"}, "default", nil, users)
 	input, _ = json.Marshal(map[string]string{"transaction": token})
 	if _, err := (CommitTransactionTool{}).Run(context.Background(), input, tc); err != nil {
 		t.Fatal(err)
@@ -336,16 +383,20 @@ func TestBeginTransactionRequiresRoleAndDefaultsReadOnly(t *testing.T) {
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	var got *store.TxOptions
-	db := &store.FakeDB{BeginFn: func(_ context.Context, opts *store.TxOptions) (store.Tx, error) {
+	db := &storetest.FakeDB{BeginFn: func(_ context.Context, opts *store.TxOptions) (store.Tx, error) {
 		copy := *opts
 		got = &copy
-		return &store.FakeTx{}, nil
+		return &storetest.FakeTx{}, nil
 	}}
 	manager := NewTransactionManager(time.Minute, 2)
 	defer manager.Close()
 	base := Context{
-		Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Transactions: manager,
-		TxBeginners: map[string]store.TxBeginner{"default": db},
+		Services: &Services{
+			Registry:     reg,
+			Authorizer:   rbac.NewRoleAuthorizer(reg),
+			Transactions: manager,
+			TxBeginners:  map[string]store.TxBeginner{"default": db},
+		},
 	}
 	reader := base
 	reader.Role = "reader"
@@ -375,14 +426,19 @@ func TestBeginTransactionBindsResolvedDefaultDatasource(t *testing.T) {
 	t.Parallel()
 	e := entity.Entity{Name: "users", DataSource: "main", Role: entity.RoleAccess{entity.ActionRead: {"reader"}}}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
-	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
-		return &store.FakeTx{}, nil
+	db := &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+		return &storetest.FakeTx{}, nil
 	}}
 	manager := NewTransactionManager(time.Minute, 2)
 	defer manager.Close()
 	tc := Context{
-		Role: "reader", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Transactions: manager,
-		TxBeginners: map[string]store.TxBeginner{"main": db},
+		Services: &Services{
+			Registry:     reg,
+			Authorizer:   rbac.NewRoleAuthorizer(reg),
+			Transactions: manager,
+			TxBeginners:  map[string]store.TxBeginner{"main": db},
+		},
+		Role: "reader",
 	}
 	res, err := (BeginTransactionTool{}).Run(context.Background(), json.RawMessage(`{}`), tc)
 	if err != nil {
@@ -392,7 +448,7 @@ func TestBeginTransactionBindsResolvedDefaultDatasource(t *testing.T) {
 		t.Fatalf("datasource = %v, want main", got)
 	}
 	token := res.Content[0]["transaction"].(string)
-	if _, err := manager.DB(bg, token, "", "reader", nil, "main", nil); err != nil {
+	if _, err := manager.DB(bg, token, Caller{Role: "reader"}, "main", nil); err != nil {
 		t.Fatalf("transaction not bound to resolved datasource: %v", err)
 	}
 }
@@ -403,11 +459,17 @@ func TestTransactionManagerUpdateLimits(t *testing.T) {
 	t.Parallel()
 	manager := NewTransactionManager(time.Minute, 1)
 	defer manager.Close()
-	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
-		return &store.FakeTx{}, nil
+	db := &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+		return &storetest.FakeTx{}, nil
 	}}
 	begin := func() error {
-		_, err := manager.Begin(context.Background(), db, "", "writer", nil, "default", nil)
+		_, err := manager.Begin(
+			context.Background(),
+			db,
+			Caller{Role: "writer"},
+			"default",
+			nil,
+		)
 		return err
 	}
 	if err := begin(); err != nil {
@@ -427,24 +489,34 @@ func TestTransactionManagerUpdateLimits(t *testing.T) {
 
 func TestTransactionRejectsStatementsAfterItsConnectionIsReconfigured(t *testing.T) {
 	t.Parallel()
-	begin := func(context.Context, *store.TxOptions) (store.Tx, error) { return &store.FakeTx{}, nil }
-	before, after := &store.FakeDB{BeginFn: begin}, &store.FakeDB{BeginFn: begin}
+	begin := func(context.Context, *store.TxOptions) (store.Tx, error) { return &storetest.FakeTx{}, nil }
+	before, after := &storetest.FakeDB{BeginFn: begin}, &storetest.FakeDB{BeginFn: begin}
 	manager := NewTransactionManager(time.Minute, 2)
 	defer manager.Close()
-	token, err := manager.Begin(context.Background(), before, "s", "writer", nil, "main", nil)
+	sWriter := Caller{Session: "s", Role: "writer"}
+	token, err := manager.Begin(context.Background(), before, sWriter, "main", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.DB(bg, token, "s", "writer", nil, "main", []store.TxBeginner{before}); err != nil {
+	if _, err := manager.DB(bg, token, sWriter, "main", []store.TxBeginner{before}); err != nil {
 		t.Fatalf("on the connection it began on: %v", err)
 	}
 	// A reload pointed main at another database.
 	cc := cache.NewTTLCache[[]map[string]any](time.Minute, 0)
 	users := entity.Entity{Name: "users", Source: "users", DataSource: "main"}
 	reg, _ := entity.NewRegistry([]entity.Entity{users})
-	tc := Context{Role: "writer", Session: "s", Transactions: manager, Cache: cc, Registry: reg,
-		TxBeginners: map[string]store.TxBeginner{"main": after}, Writes: NewWriteTracker()}
-	if _, err := manager.DB(bg, token, "s", "writer", nil, "main", txConnections(tc, "main")); !errors.Is(
+	tc := Context{
+		Services: &Services{
+			Transactions: manager,
+			Cache:        cc,
+			Registry:     reg,
+			TxBeginners:  map[string]store.TxBeginner{"main": after},
+			Writes:       NewWriteTracker(),
+		},
+		Role:    "writer",
+		Session: "s",
+	}
+	if _, err := manager.DB(bg, token, sWriter, "main", txConnections(tc, "main")); !errors.Is(
 		err,
 		ErrTransactionStale,
 	) {
@@ -461,8 +533,8 @@ func TestTransactionRejectsStatementsAfterItsConnectionIsReconfigured(t *testing
 
 func TestCommitFollowsWritesLikeAutocommit(t *testing.T) {
 	t.Parallel()
-	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
-		return &store.FakeTx{}, nil
+	db := &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+		return &storetest.FakeTx{}, nil
 	}}
 	rel := func(table string) string { return "pg1\x00shop\x00public\x00" + table }
 	orders := entity.Entity{Name: "orders", Source: "orders", DataSource: "ro", Relation: rel("orders")}
@@ -472,8 +544,12 @@ func TestCommitFollowsWritesLikeAutocommit(t *testing.T) {
 	manager := NewTransactionManager(time.Minute, 2)
 	defer manager.Close()
 	writes := NewWriteTracker()
-	tc := Context{Role: "writer", Session: "s", Transactions: manager, Registry: reg, Writes: writes}
-	token, _ := manager.Begin(context.Background(), db, "s", "writer", nil, "rw", nil)
+	tc := Context{
+		Services: &Services{Transactions: manager, Registry: reg, Writes: writes},
+		Role:     "writer",
+		Session:  "s",
+	}
+	token, _ := manager.Begin(context.Background(), db, Caller{Session: "s", Role: "writer"}, "rw", nil)
 	if err := afterWrite(bg, tc, customers, token); err != nil {
 		t.Fatal(err)
 	}
@@ -495,30 +571,38 @@ func TestCommitFollowsWritesLikeAutocommit(t *testing.T) {
 // connection takes at most its limit, another is not held back by it, and a
 // transaction ending frees its place.
 func TestTransactionConnectionLimit(t *testing.T) {
-	begins := func() *store.FakeDB {
-		return &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
-			return &store.FakeTx{}, nil
+	begins := func() *storetest.FakeDB {
+		return &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+			return &storetest.FakeTx{}, nil
 		}}
 	}
 	a, b := begins(), begins()
 	manager := NewTransactionManager(time.Minute, 0)
 	defer manager.Close()
 	manager.SetConnectionLimit(1)
-	first, err := manager.Begin(context.Background(), a, "", "writer", nil, "default", nil)
+	first, err := manager.Begin(
+		context.Background(),
+		a,
+		Caller{Role: "writer"},
+		"default",
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.Begin(context.Background(), a, "", "other", nil, "default", nil); !errors.Is(
-		err, ErrTransactionCapacity) {
+	if _, err := manager.Begin(context.Background(), a, Caller{Role: "other"}, "default", nil); !errors.Is(
+		err,
+		ErrTransactionCapacity,
+	) {
 		t.Fatalf("a second transaction on a full connection: %v", err)
 	}
-	if _, err := manager.Begin(context.Background(), b, "", "writer", nil, "default", nil); err != nil {
+	if _, err := manager.Begin(context.Background(), b, Caller{Role: "writer"}, "default", nil); err != nil {
 		t.Fatalf("another connection was held back: %v", err)
 	}
-	if _, err := manager.Commit(context.Background(), first, "", "writer", nil); err != nil {
+	if _, err := manager.Commit(context.Background(), first, Caller{Role: "writer"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.Begin(context.Background(), a, "", "other", nil, "default", nil); err != nil {
+	if _, err := manager.Begin(context.Background(), a, Caller{Role: "other"}, "default", nil); err != nil {
 		t.Fatalf("an ended transaction kept its place: %v", err)
 	}
 }
@@ -528,16 +612,25 @@ func TestTransactionConnectionLimit(t *testing.T) {
 func TestTransactionLookupEndsWithTheCaller(t *testing.T) {
 	slow := &slowRollbackTx{rolling: make(chan struct{}), release: make(chan struct{})}
 	defer close(slow.release)
-	db := &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) { return slow, nil }}
+	db := &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) { return slow, nil }}
 	manager := NewTransactionManager(10*time.Millisecond, 0)
-	token, err := manager.Begin(context.Background(), db, "", "writer", nil, "default", nil)
+	token, err := manager.Begin(
+		context.Background(),
+		db,
+		Caller{Role: "writer"},
+		"default",
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	<-slow.rolling
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	if _, err := manager.DB(ctx, token, "", "writer", nil, "default", nil); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := manager.DB(ctx, token, Caller{Role: "writer"}, "default", nil); !errors.Is(
+		err,
+		context.DeadlineExceeded,
+	) {
 		t.Fatalf("a lookup waited past its caller for the rollback: %v", err)
 	}
 }

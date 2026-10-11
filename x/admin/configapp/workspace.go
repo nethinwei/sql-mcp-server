@@ -10,6 +10,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/core/workspace"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/configplan"
 	"github.com/nethinwei/sql-mcp-server/x/workspaceops"
@@ -34,13 +35,13 @@ func (r *Service) workspaces() (workspaceops.Service, error) {
 }
 
 func toWorkspace(st workspaceops.State) (*Workspace, error) {
-	sections, err := sectionsOfItems(st.Workspace.Items)
+	sections, err := rawSections(st.Workspace.Items)
 	if err != nil {
 		return nil, err
 	}
 	w := st.Workspace
 	out := &Workspace{Base: strconv.FormatInt(w.Base, 10), Version: int(w.Version), UpdatedBy: w.UpdatedBy,
-		Sections: json.RawMessage(sections), Conflicts: []WorkspaceConflict{}, Notes: []WorkspaceNote{}}
+		Sections: sections, Conflicts: []WorkspaceConflict{}, Notes: []WorkspaceNote{}}
 	if !w.UpdatedAt.IsZero() {
 		out.UpdatedAt = &w.UpdatedAt
 	}
@@ -55,7 +56,7 @@ func toWorkspace(st workspaceops.State) (*Workspace, error) {
 		out.Taken = append(out.Taken, strconv.FormatInt(id, 10))
 	}
 	if w.Checkpoint != 0 && w.CheckpointAt == w.Version {
-		out.Checkpoint = optional(strconv.FormatInt(w.Checkpoint, 10))
+		out.Checkpoint = kit.Optional(strconv.FormatInt(w.Checkpoint, 10))
 	}
 	return out, nil
 }
@@ -64,7 +65,7 @@ func toConflict(c workspace.Open) WorkspaceConflict {
 	wc := WorkspaceConflict{ID: c.ID, Kind: c.Ref.Kind, Key: c.Ref.Key, Path: c.Path.String(),
 		Mine: c.Mine, MineGone: workspace.IsMissing(c.Mine), Theirs: c.TheirsValue,
 		TheirsGone: workspace.IsMissing(c.TheirsValue), Source: c.Source.Kind,
-		FromID: optional(c.Source.ID), FromBy: optional(c.Source.By)}
+		FromID: kit.Optional(c.Source.ID), FromBy: kit.Optional(c.Source.By)}
 	if wc.MineGone {
 		wc.Mine = nil
 	}
@@ -95,13 +96,17 @@ func (r *Service) workspaceOp(ctx context.Context, perm string,
 
 // Workspace is the caller's workspace; nil when nothing is published.
 func (r *Service) Workspace(ctx context.Context) (*Workspace, error) {
-	out, err := r.workspaceOp(ctx, auth.PermRead, func(ops workspaceops.Service, user string) (workspaceops.State, error) {
-		st, ok, err := ops.Read(ctx, user)
-		if err == nil && !ok {
-			err = workspaceops.ErrNothingPublished
-		}
-		return st, err
-	})
+	out, err := r.workspaceOp(
+		ctx,
+		auth.PermRead,
+		func(ops workspaceops.Service, user string) (workspaceops.State, error) {
+			st, ok, err := ops.Read(ctx, user)
+			if err == nil && !ok {
+				err = workspaceops.ErrNothingPublished
+			}
+			return st, err
+		},
+	)
 	if errors.Is(err, workspaceops.ErrNothingPublished) {
 		return nil, nil
 	}
@@ -216,7 +221,7 @@ func (r *Service) CheckpointWorkspace(ctx context.Context, comment *string) (rev
 	if err != nil {
 		return revision.Revision{}, err
 	}
-	return ops.Checkpoint(ctx, who.Username, who.Username, strings.TrimSpace(deref(comment)))
+	return ops.Checkpoint(ctx, who.Username, who.Username, strings.TrimSpace(kit.Deref(comment)))
 }
 
 // CommitWorkspace publishes the caller's workspace at the version reviewed.
@@ -234,8 +239,8 @@ func (r *Service) CommitWorkspace(ctx context.Context, in CommitInput) (revision
 		return revision.Revision{}, err
 	}
 	return ops.Commit(ctx, who.Username, who.Username, workspaceops.CommitRequest{Version: int64(in.Version),
-		ExpectedPublished: expected, RestartRequired: derefBool(in.RestartRequired),
-		Comment: strings.TrimSpace(deref(in.Comment))})
+		ExpectedPublished: expected, RestartRequired: kit.DerefBool(in.RestartRequired),
+		Comment: strings.TrimSpace(kit.Deref(in.Comment))})
 }
 
 // WorkspaceLog is the caller's workspace log, newest first.
@@ -248,7 +253,7 @@ func (r *Service) WorkspaceLog(ctx context.Context, limit *int) ([]WorkspaceLogE
 	if err != nil {
 		return nil, err
 	}
-	log, err := ops.Log(ctx, who.Username, derefInt(limit, 100))
+	log, err := ops.Log(ctx, who.Username, kit.DerefInt(limit, 100))
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +264,7 @@ func (r *Service) WorkspaceLog(ctx context.Context, limit *int) ([]WorkspaceLogE
 			items = append(items, WorkspaceRef(ref))
 		}
 		out = append(out, WorkspaceLogEntry{Version: int(e.Version), At: e.At, By: e.By, Op: e.Op, Items: items,
-			Note: optional(e.Note)})
+			Note: kit.Optional(e.Note)})
 	}
 	return out, nil
 }
@@ -277,7 +282,17 @@ func (r *Service) workspaceDraft(ctx context.Context, username string) (*Draft, 
 	}
 	edit, err := codec{r}.edit(st.Workspace.Items)
 	if err == nil {
-		removeSettings(st.Base, &edit) // as committing it does (codec.Build)
+		// As committing it does (codec.Build): the settings the base has
+		// that the item does not are removed.
+		settings, _ := st.Base.Get(settingsRef).(map[string]any)
+		for key := range settings {
+			if _, kept := edit.Settings[key]; !kept {
+				if edit.Settings == nil {
+					edit.Settings = map[string]any{}
+				}
+				edit.Settings[key] = nil
+			}
+		}
 	}
 	return &Draft{Base: strconv.FormatInt(st.Workspace.Base, 10), Edit: edit}, st, err
 }
@@ -401,12 +416,11 @@ func (r *Service) ApplyPlan(ctx context.Context, in ApplyRequest) (*AppliedPlan,
 // evaluations: a change made meanwhile to another value of the same item
 // leaves it as it was.
 func (r *Service) changes(pc planContext, payload []byte) (workspace.Snapshot, string, error) {
-	c := codec{r}
-	before, err := c.itemsOf(pc.payload)
+	before, err := itemsOfSpec(pc.spec)
 	if err != nil {
 		return nil, "", err
 	}
-	after, err := c.itemsOf(payload)
+	after, err := itemsOfPayload(payload)
 	if err != nil {
 		return nil, "", err
 	}

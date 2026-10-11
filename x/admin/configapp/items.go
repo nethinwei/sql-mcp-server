@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
+	"reflect"
 	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/configedit"
 	"github.com/nethinwei/sql-mcp-server/x/configyaml"
 )
@@ -39,8 +40,8 @@ type EntityItem struct {
 	Description   *string            `json:"description,omitempty"`
 	PrimaryKey    []string           `json:"primaryKey"`
 	UniqueKeys    [][]string         `json:"uniqueKeys"`
-	Fields        []FieldItem        `json:"fields"        merge:"key=name"`
-	Relationships []RelationshipItem `json:"relationships" merge:"key=name"`
+	Fields        []FieldItem        `json:"fields"                 merge:"key=name"`
+	Relationships []RelationshipItem `json:"relationships"          merge:"key=name"`
 	TenantPolicy  any                `json:"tenantPolicy,omitempty"`
 	LegacyAccess  any                `json:"legacyAccess,omitempty"`
 	Mcp           *EntityMCPItem     `json:"mcp,omitempty"`
@@ -55,7 +56,7 @@ type FieldItem struct {
 	Alias       *string `json:"alias,omitempty"`
 	Description *string `json:"description,omitempty"`
 	Mask        *string `json:"mask,omitempty"`
-	Exclude     *bool   `json:"exclude,omitempty" merge:"unset"`
+	Exclude     *bool   `json:"exclude,omitempty"     merge:"unset"`
 }
 
 // RelationshipItem is a relationship of an entity.
@@ -129,13 +130,13 @@ func SectionsOf(spec *config.Spec) (Sections, error) {
 	for _, e := range spec.Entities {
 		s.Entities = append(s.Entities, entityItem(e))
 	}
-	for _, name := range sortedKeys(spec.Roles) {
+	for _, name := range kit.SortedKeys(spec.Roles) {
 		def := spec.Roles[name]
 		s.Roles = append(s.Roles, RoleItem{
 			Name: name, Description: nonEmpty(def.Description), Grants: grantItems(def.Grants),
 		})
 	}
-	for _, name := range sortedKeys(spec.Users) {
+	for _, name := range kit.SortedKeys(spec.Users) {
 		u := spec.Users[name]
 		item := UserItem{
 			Name: name, Description: nonEmpty(u.Description), Roles: listOf([]string(u.Roles)),
@@ -149,6 +150,21 @@ func SectionsOf(spec *config.Spec) (Sections, error) {
 	return s, nil
 }
 
+// settingsKeys are the top-level sections spec writes that the settings
+// item holds.
+func settingsKeys(spec *config.Spec) []string {
+	v := reflect.ValueOf(spec).Elem()
+	t := v.Type()
+	var out []string
+	for i := range t.NumField() {
+		name := config.YAMLName(t.Field(i))
+		if name != "" && !v.Field(i).IsZero() && !slices.Contains(structuredSections, name) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // SectionsOfPayload are the sections of a stored payload.
 func SectionsOfPayload(payload []byte) (Sections, error) {
 	spec, err := configyaml.DecodeSpec(payload)
@@ -160,7 +176,9 @@ func SectionsOfPayload(payload []byte) (Sections, error) {
 
 func entityItem(e config.EntitySpec) EntityItem {
 	out := EntityItem{
-		Name: deref(e.Name), Source: nonEmpty(e.Source), Datasource: nonEmpty(e.DataSource), Schema: nonEmpty(e.Schema),
+		Name: kit.Deref(
+			e.Name,
+		), Source: nonEmpty(e.Source), Datasource: nonEmpty(e.DataSource), Schema: nonEmpty(e.Schema),
 		Kind: nonEmpty(e.Kind), Description: nonEmpty(e.Description), PrimaryKey: listOf([]string(e.PrimaryKey)),
 		UniqueKeys: listOf([][]string(e.UniqueKeys)), Params: listOf([]string(e.Params)),
 		Affects: listOf([]string(e.Affects)), AllowCascade: e.AllowCascade,
@@ -173,7 +191,9 @@ func entityItem(e config.EntitySpec) EntityItem {
 	}
 	for _, f := range e.Fields {
 		out.Fields = append(out.Fields, FieldItem{
-			Name: deref(f.Name), Alias: nonEmpty(f.Alias), Description: nonEmpty(f.Description), Mask: nonEmpty(f.Mask),
+			Name: kit.Deref(
+				f.Name,
+			), Alias: nonEmpty(f.Alias), Description: nonEmpty(f.Description), Mask: nonEmpty(f.Mask),
 			Exclude: f.Exclude,
 		})
 	}
@@ -183,7 +203,7 @@ func entityItem(e config.EntitySpec) EntityItem {
 			joinOn[k] = v
 		}
 		out.Relationships = append(out.Relationships, RelationshipItem{
-			Name: deref(r.Name), Target: deref(r.Target), Cardinality: deref(r.Cardinality), JoinOn: joinOn,
+			Name: kit.Deref(r.Name), Target: kit.Deref(r.Target), Cardinality: kit.Deref(r.Cardinality), JoinOn: joinOn,
 		})
 	}
 	if e.TenantPolicy != nil {
@@ -233,7 +253,7 @@ func legacyAccess(e config.EntitySpec) map[string]any {
 func grantItems(gs config.List[config.GrantSpec]) []GrantItem {
 	out := make([]GrantItem, 0, len(gs))
 	for _, g := range gs {
-		item := GrantItem{Entity: deref(g.Entity), Actions: make([]string, 0, len(g.Actions)),
+		item := GrantItem{Entity: kit.Deref(g.Entity), Actions: make([]string, 0, len(g.Actions)),
 			ReadFields: []string{}, WriteFields: []string{}}
 		for _, a := range g.Actions {
 			item.Actions = append(item.Actions, strings.ToUpper(a))
@@ -308,7 +328,9 @@ func (in EntityItem) spec() (config.EntitySpec, error) {
 	}
 	for _, f := range in.Fields {
 		e.Fields = append(e.Fields, config.FieldSpec{
-			Name: ptr(f.Name), Alias: nonEmpty(f.Alias), Description: nonEmpty(f.Description), Mask: nonEmpty(f.Mask),
+			Name: kit.Ptr(
+				f.Name,
+			), Alias: nonEmpty(f.Alias), Description: nonEmpty(f.Description), Mask: nonEmpty(f.Mask),
 			Exclude: onlyTrue(f.Exclude),
 		})
 	}
@@ -318,7 +340,7 @@ func (in EntityItem) spec() (config.EntitySpec, error) {
 			return config.EntitySpec{}, fmt.Errorf("entity %q relationship %q joinOn: %w", in.Name, r.Name, err)
 		}
 		e.Relationships = append(e.Relationships, config.RelationshipSpec{
-			Name: ptr(r.Name), Target: ptr(r.Target), Cardinality: ptr(r.Cardinality), JoinOn: joinOn,
+			Name: kit.Ptr(r.Name), Target: kit.Ptr(r.Target), Cardinality: kit.Ptr(r.Cardinality), JoinOn: joinOn,
 		})
 	}
 	if in.TenantPolicy != nil {
@@ -367,7 +389,7 @@ func grantSpecs(gs []GrantItem) (config.List[config.GrantSpec], error) {
 		for _, a := range g.Actions {
 			actions = append(actions, strings.ToLower(a))
 		}
-		gs := config.GrantSpec{Entity: ptr(g.Entity), Actions: actions}
+		gs := config.GrantSpec{Entity: kit.Ptr(g.Entity), Actions: actions}
 		restricted := g.ReadFields != nil || g.WriteFields != nil
 		if g.FieldsRestricted != nil {
 			restricted = *g.FieldsRestricted
@@ -408,7 +430,7 @@ func (u UserItem) spec() (configedit.User, error) {
 
 // nonEmpty is s as a Spec and an item hold it: nil when empty (empty text
 // is unset).
-func nonEmpty(s *string) *string { return optional(deref(s)) }
+func nonEmpty(s *string) *string { return kit.Optional(kit.Deref(s)) }
 
 // onlyTrue is a switch off unless set as a Spec holds it: nil unless on.
 func onlyTrue(b *bool) *bool {
@@ -425,8 +447,6 @@ func listSpec[T any](l []T) config.List[T] {
 	}
 	return config.List[T](l)
 }
-
-func ptr[T any](v T) *T { return &v }
 
 // NormalizeJSON turns json.Number values (GraphQL variables decode numbers
 // so) into int64 or float64, so YAML encodes them as numbers, not strings.
@@ -473,8 +493,4 @@ func listOf[T any](s []T) []T {
 		return []T{}
 	}
 	return s
-}
-
-func sortedKeys[V any](m map[string]V) []string {
-	return slices.Sorted(maps.Keys(m))
 }

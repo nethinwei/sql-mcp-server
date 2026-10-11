@@ -15,6 +15,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/configedit"
 	"github.com/nethinwei/sql-mcp-server/x/configplan"
@@ -25,6 +26,7 @@ type planContext struct {
 	// base is the draft, or the published configuration; payload is its
 	// normalized form and baseID the revision a draft of it builds on.
 	base      *config.Config
+	spec      *config.Spec
 	payload   []byte
 	baseID    int64
 	published *config.Config
@@ -50,17 +52,19 @@ func (r *Service) planContext(ctx context.Context, draft *Draft) (planContext, e
 	if err != nil {
 		return planContext{}, err
 	}
-	published, err := bootstrap.LoadRevision(rev)
+	spec, published, err := bootstrap.LoadRevisionSpec(rev)
 	if err != nil {
 		return planContext{}, err
 	}
-	pc := planContext{base: published, payload: rev.Payload, baseID: rev.ID, published: published, publishedID: rev.ID}
+	pc := planContext{
+		base: published, spec: spec, payload: rev.Payload, baseID: rev.ID, published: published, publishedID: rev.ID,
+	}
 	if draft != nil {
 		d, err := r.BuildDraft(ctx, *draft)
 		if err != nil {
 			return planContext{}, err
 		}
-		pc.base, pc.payload, pc.baseID = d.Config, d.Payload, d.Base.ID
+		pc.base, pc.spec, pc.payload, pc.baseID = d.Config, d.Spec, d.Payload, d.Base.ID
 	}
 	pc.baseHash = revision.Hash(pc.payload)
 	pc.sources, pc.fingerprint, err = scans.sources(ctx, published)
@@ -114,15 +118,10 @@ func DecodePlan(v any) (configplan.Plan, error) {
 	return configplan.Decode(data)
 }
 
-var entityActions = map[string]entity.Action{
-	"read": entity.ActionRead, "create": entity.ActionCreate, "update": entity.ActionUpdate,
-	"delete": entity.ActionDelete, "execute": entity.ActionExecute, "aggregate": entity.ActionAggregate,
-}
-
 // denied reports the entity actions the serving connections cannot run.
 func denied(caps bootstrap.EntityCapabilities) func(string, string) (string, bool) {
 	return func(id, action string) (string, bool) {
-		a, known := entityActions[strings.ToLower(action)]
+		a, known := entity.ParseAction(strings.ToLower(action))
 		c, ok := caps[id][a]
 		if !known || !ok || c.Privilege != introspect.PrivilegeDenied {
 			return "", false
@@ -155,7 +154,7 @@ func (r *Service) evaluate(ctx context.Context, pc planContext, p configplan.Pla
 	}
 	out := &Preview{PlanID: planID(pc, p, review), Plan: p, Review: review, Proposal: proposal, Base: pc.base,
 		Report: toPlanReport(proposal.Report)}
-	cfg, payload, err := configedit.Apply(pc.payload, proposal.Edit())
+	_, cfg, payload, err := configedit.ApplySpec(pc.spec, proposal.Edit())
 	if err != nil {
 		msg := err.Error()
 		out.Validation = &Validation{Error: &msg, RestartRequired: []string{}, Warnings: []string{}}
@@ -167,7 +166,7 @@ func (r *Service) evaluate(ctx context.Context, pc planContext, p configplan.Pla
 	}
 	hash := revision.Hash(payload)
 	out.Validation = &Validation{Ok: true, ContentHash: &hash, RestartRequired: changes,
-		Warnings: orEmpty(bootstrap.CapabilityWarnings(cfg, r.capabilities()))}
+		Warnings: kit.OrEmpty(bootstrap.CapabilityWarnings(cfg, r.capabilities()))}
 	out.changed, out.effect, err = r.changes(pc, payload)
 	return out, err
 }

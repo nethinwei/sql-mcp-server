@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/mask"
 )
 
@@ -45,8 +46,8 @@ import (
 var enums = map[string][]string{
 	"transport":      {"stdio", "http"},
 	"entityKind":     {"table", "view", "procedure"},
-	"grantAction":    {"read", "create", "update", "delete", "execute", "aggregate"},
-	"cardinality":    {"one", "one-to-one", "belongs-to", "many", "one-to-many", "has-many"},
+	"grantAction":    entity.ActionNames(),
+	"cardinality":    entity.Cardinalities,
 	"connectionRole": {"primary", "replica"},
 	"pooler":         {"transaction"},
 	// Mask rules are the masker's; an unknown one would fail every startup.

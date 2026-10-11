@@ -30,63 +30,123 @@ import (
 // checked before any resource is acquired. Each datasource's read connection
 // serves introspection and EXPLAIN.
 func AssembleWithConnections(cfg *config.Config, connections Connections) (*App, error) {
-	return assembleWith(cfg, connections, nil)
+	return assembleOn(cfg, connections, nil, nil)
 }
 
-// assembleWith wires an App on connections, on shared services when shared
-// is not nil and on services of its own otherwise.
-func assembleWith(cfg *config.Config, connections Connections, shared *Shared) (*App, error) {
-	return assembleOn(cfg, connections, shared, nil)
+// assembly is an App being assembled: what assembleOn is given, then what
+// each of its steps built, in order.
+type assembly struct {
+	cfg         *config.Config
+	connections Connections
+	// shared are the services of the process the App runs on, nil for
+	// services of its own; gs are its shared connections, which its work
+	// reaches the connections through (nil reaches them as they are).
+	shared *Shared
+	gs     guards
+	// providers are the read connections, by datasource.
+	providers   map[string]Provider
+	checked     checkedAssembly
+	feedback    cost.FeedbackStore
+	sources     map[string]tool.DataSource
+	txBeginners map[string]store.TxBeginner
+	prepared    map[string]*store.PreparedDB
+	engine      *engine.Engine
+	auditor     audit.Auditor
+	cache       cache.Cache[[]map[string]any]
 }
 
-// assembleOn is assembleWith with the shared connections (gs) the work
-// reaches the connections through; nil reaches them as they are.
+// assembleOn wires an App on connections, on shared services when shared is
+// not nil and on services of its own otherwise, reaching the connections
+// through gs.
 func assembleOn(cfg *config.Config, connections Connections, shared *Shared, gs guards) (*App, error) {
-	providers, err := readConnections(cfg, connections)
-	if err != nil {
+	a := &assembly{cfg: cfg, connections: connections, shared: shared, gs: gs}
+	if err := a.check(); err != nil {
 		return nil, err
 	}
-	b := sharedBus(shared)
-	if err := checkDefaultSchemas(b, cfg, connections); err != nil {
+	if err := a.acquire(); err != nil {
+		a.release()
 		return nil, err
 	}
-	checked, err := checkAssembly(b, cfg, providers)
-	if err != nil {
-		return nil, err
+	return a.app(), nil
+}
+
+// check derives what assembly needs from the configuration and the live
+// schema, before any resource is acquired.
+func (a *assembly) check() (err error) {
+	if a.providers, err = readConnections(a.cfg, a.connections); err != nil {
+		return err
 	}
-	if shared == nil { // shared connections are sized as the App is published (see Shared.apply)
-		for _, p := range (&App{Connections: connections}).allProviders() {
+	b := sharedBus(a.shared)
+	if err := checkDefaultSchemas(b, a.cfg, a.connections); err != nil {
+		return err
+	}
+	a.checked, err = checkAssembly(b, a.cfg, a.providers)
+	return err
+}
+
+// acquire builds the parts that hold resources: the data sources (prepared
+// statement caches), the engine and the auditor. release lets go of what it
+// built so far.
+func (a *assembly) acquire() (err error) {
+	cfg := a.cfg
+	if a.shared == nil { // shared connections are sized as the App is published (see Shared.apply)
+		for _, p := range (&App{Connections: a.connections}).allProviders() {
 			configurePool(p, cfg.RateLimit.IOPool, cfg.RateLimit.ConnMaxIdleTime, cfg.RateLimit.ConnMaxLifetime)
 		}
 	}
-	feedback := newFeedbackStore(cfg)
-	sources, txBeginners, prepared, err := buildDataSources(cfg, connections, providers, feedback, gs)
+	a.feedback = newFeedbackStore(cfg)
+	a.sources, a.txBeginners, a.prepared, err = buildDataSources(cfg, a.connections, a.providers, a.feedback, a.gs)
 	if err != nil {
-		closePrepared(prepared)
-		return nil, err
+		return err
 	}
-	eng, err := newAssembleEngine(cfg, shared)
-	if err != nil {
-		closePrepared(prepared)
-		return nil, err
+	if a.engine, err = newAssembleEngine(cfg, a.shared); err != nil {
+		return err
 	}
-	aud, err := newAssembleAuditor(cfg, sharedBus(shared))
-	if err != nil {
-		eng.Close()
-		closePrepared(prepared)
-		return nil, err
+	if a.auditor, err = newAssembleAuditor(cfg, sharedBus(a.shared)); err != nil {
+		return err
 	}
-	defaultName, defaultSource := defaultDatasource(providers, sources)
-	app := newAssembledApp(
-		cfg, providers, prepared, sources, txBeginners, checked.registry,
-		rbac.NewGrantAuthorizer(checked.registry, checked.policy), aud, newAssembleCache(cfg, shared), checked.masker,
-		feedback, defaultSource, defaultName, eng, checked.tools,
-	)
-	app.Connections, app.config = connections, cfg
-	app.WriteTargets = tool.BuildWriteTargets(checked.registry)
-	app.attachProcess(cfg, shared)
-	app.assessInBackground(cfg, connections, checked.registry.Entities())
-	return app, nil
+	a.cache = newAssembleCache(cfg, a.shared)
+	return nil
+}
+
+func (a *assembly) release() {
+	if a.engine != nil {
+		a.engine.Close()
+	}
+	closePrepared(a.prepared)
+}
+
+// app is the App of what was assembled.
+func (a *assembly) app() *App {
+	cfg, checked := a.cfg, a.checked
+	defaultName := defaultDatasource(a.providers)
+	app := &App{
+		Provider:      a.providers[defaultName],
+		Providers:     a.providers,
+		Connections:   a.connections,
+		Prepared:      a.prepared,
+		Sources:       a.sources,
+		defaultSource: defaultName,
+		Registry:      checked.registry,
+		Authorizer:    rbac.NewGrantAuthorizer(checked.registry, checked.policy),
+		Masker:        checked.masker,
+		Feedback:      a.feedback,
+		Engine:        a.engine,
+		Tools:         checked.tools,
+		Auditor:       a.auditor,
+		Cache:         a.cache,
+		Budget:        newBudgetManager(cfg.Budget, userBudgets(cfg)),
+		Transactions:  tool.NewTransactionManager(cfg.Transactions.TTL, cfg.Transactions.MaxOpen),
+		Writes:        tool.NewWriteTracker(),
+		ResultMemory:  tool.NewResultMemory(cfg.RateLimit.MaxResultMemory),
+		TxBeginners:   a.txBeginners,
+		WriteTargets:  tool.BuildWriteTargets(checked.registry),
+		config:        cfg,
+	}
+	applyAssembledAppConfig(app, cfg)
+	app.attachProcess(cfg, a.shared)
+	app.assessInBackground(cfg, a.connections, checked.registry.Entities())
+	return app
 }
 
 // attachProcess gives the App the process's call state when it runs on
@@ -419,7 +479,7 @@ func dataSourceForProvider(
 			Timeout:    cfg.Cost.AQE.Timeout,
 		},
 	}
-	threshold := toThreshold(cfg.Cost)
+	threshold := cfg.Cost.Threshold()
 	threshold.Datasource = name
 	threshold.DialectName = prov.Dialect().Name()
 	threshold.LegacyExactSQL = legacyExactSQL
@@ -451,7 +511,7 @@ func newAssembleEngine(cfg *config.Config, shared *Shared) (*engine.Engine, erro
 	if shared != nil {
 		return shared.engine(cfg)
 	}
-	limiter, rps, breaker := rateLimiters(cfg)
+	limiter, rps, breaker := rateLimiters(cfg.RateLimit)
 	return engine.New(
 		engine.WithIOPool(cfg.RateLimit.IOPool),
 		engine.WithMaxInflight(cfg.RateLimit.MaxInflight),
@@ -494,57 +554,16 @@ func newAssembleMasker(cfg *config.Config, entities []entity.Entity) (mask.Maske
 	return rm, nil
 }
 
-func defaultDatasource(providers map[string]Provider, sources map[string]tool.DataSource) (string, tool.DataSource) {
+// defaultDatasource is the datasource a request names none of: "default",
+// or the only one.
+func defaultDatasource(providers map[string]Provider) string {
 	defaultName := "default"
 	if _, ok := providers[defaultName]; !ok && len(providers) == 1 {
 		for name := range providers {
 			defaultName = name
 		}
 	}
-	return defaultName, sources[defaultName]
-}
-
-func newAssembledApp(
-	cfg *config.Config,
-	providers map[string]Provider,
-	prepared map[string]*store.PreparedDB,
-	sources map[string]tool.DataSource,
-	txBeginners map[string]store.TxBeginner,
-	reg *entity.Registry,
-	authz rbac.Authorizer,
-	aud audit.Auditor,
-	cc cache.Cache[[]map[string]any],
-	msk mask.Masker,
-	feedback cost.FeedbackStore,
-	defaultSource tool.DataSource,
-	defaultName string,
-	eng *engine.Engine,
-	tools *tool.Registry,
-) *App {
-	app := &App{
-		Provider:     providers[defaultName],
-		Providers:    providers,
-		Prepared:     prepared,
-		Sources:      sources,
-		Dialect:      defaultSource.Dialect,
-		Registry:     reg,
-		Authorizer:   authz,
-		Masker:       msk,
-		Feedback:     feedback,
-		Analyze:      defaultSource.Analyze,
-		Gate:         defaultSource.Gate,
-		Engine:       eng,
-		Tools:        tools,
-		Auditor:      aud,
-		Cache:        cc,
-		Budget:       newBudgetManager(cfg.Budget, userBudgets(cfg)),
-		Transactions: tool.NewTransactionManager(cfg.Transactions.TTL, cfg.Transactions.MaxOpen),
-		Writes:       tool.NewWriteTracker(),
-		ResultMemory: tool.NewResultMemory(cfg.RateLimit.MaxResultMemory),
-		TxBeginners:  txBeginners,
-	}
-	applyAssembledAppConfig(app, cfg)
-	return app
+	return defaultName
 }
 
 func applyAssembledAppConfig(app *App, cfg *config.Config) {

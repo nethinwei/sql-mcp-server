@@ -209,7 +209,7 @@ func (s *Shared) apply(app *App) {
 	cfg := app.config
 	s.mu.Lock()
 	if applied := rateLimitsOf(cfg); s.rateLimit == nil || *s.rateLimit != applied {
-		_, rps, _ := rateLimiters(cfg)
+		_, rps, _ := rateLimiters(cfg.RateLimit)
 		s.quota.Update(cfg.RateLimit.IOPool, nil, rps, nil)
 		s.rateLimit, s.limits = &applied, cfg.RateLimit
 		for _, c := range s.pools {
@@ -257,7 +257,7 @@ func (s *Shared) healthParts() (*ratelimit.Breaker, *ratelimit.Adaptive) {
 	if s.rateLimit == nil {
 		return nil, nil
 	}
-	limiter, _, breaker := rateLimiters(&config.Config{RateLimit: s.limits})
+	limiter, _, breaker := rateLimiters(s.limits)
 	return breaker, limiter
 }
 
@@ -286,16 +286,11 @@ func (g guards) health(datasource, connection string) *health {
 
 // rateLimiters builds cfg's adaptive limiter, rate limiter and breaker; all
 // nil when rate limiting is off.
-func rateLimiters(cfg *config.Config) (*ratelimit.Adaptive, *ratelimit.TokenBucket, *ratelimit.Breaker) {
-	if !cfg.RateLimit.EnabledOrDefault() {
+func rateLimiters(c config.RateLimitConfig) (*ratelimit.Adaptive, *ratelimit.TokenBucket, *ratelimit.Breaker) {
+	if !c.EnabledOrDefault() {
 		return nil, nil, nil
 	}
-	return ratelimit.NewAdaptive(
-			int64(cfg.RateLimit.IOPool),
-			int64(cfg.RateLimit.MinConcurrency),
-			int64(cfg.RateLimit.MaxInflight),
-			cfg.RateLimit.RTTThreshold,
-		),
-		ratelimit.NewTokenBucket(cfg.RateLimit.RPS),
-		ratelimit.NewBreaker(int64(cfg.RateLimit.BreakerThreshold), cfg.RateLimit.BreakerCooldown)
+	return ratelimit.NewAdaptive(int64(c.IOPool), int64(c.MinConcurrency), int64(c.MaxInflight), c.RTTThreshold),
+		ratelimit.NewTokenBucket(c.RPS),
+		ratelimit.NewBreaker(int64(c.BreakerThreshold), c.BreakerCooldown)
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/revision"
@@ -73,6 +74,37 @@ func fromMicros(us int64) time.Time {
 	return time.UnixMicro(us).UTC()
 }
 
+// queryAll runs query on q and scans every row with scan; nil when there is
+// none.
+func queryAll[T any](
+	ctx context.Context, s *SQLStore, q execer, scan func(scanner) (T, error), query string, args ...any,
+) ([]T, error) {
+	rows, err := q.QueryContext(ctx, s.dialect.rebind(query), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []T
+	for rows.Next() {
+		v, err := scan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// placeholders are n placeholders, comma separated, for an IN list.
+func placeholders(n int) string {
+	return strings.TrimSuffix(strings.Repeat("?, ", n), ", ")
+}
+
+// tuples are rows tuples of cols placeholders each, for a multi-row INSERT.
+func tuples(rows, cols int) string {
+	return strings.TrimSuffix(strings.Repeat("("+placeholders(cols)+"), ", rows), ", ")
+}
+
 // withTx runs fn in a transaction, rolling back on error.
 func (s *SQLStore) withTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -86,27 +118,41 @@ func (s *SQLStore) withTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	return tx.Commit()
 }
 
-// lock serializes writers on the publish lock row.
-func (s *SQLStore) lock(ctx context.Context, tx *sql.Tx) error {
-	_, err := s.exec(ctx, tx, "UPDATE smcp_store_meta SET meta_value = meta_value + 1 WHERE meta_key = ?",
-		metaPublishLock)
-	return err
+// locked runs fn in a transaction under the store lock: writers of every
+// kind, of every process, run one after another.
+func (s *SQLStore) locked(ctx context.Context, fn func(*sql.Tx) error) error {
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		if err := s.lock(ctx, tx); err != nil {
+			return err
+		}
+		return fn(tx)
+	})
 }
 
-// lockRevisions locks like lock, for a write that changes revisions other
-// than by creating one, which it counts (see Sequence).
-func (s *SQLStore) lockRevisions(ctx context.Context, tx *sql.Tx) error {
-	if err := s.lock(ctx, tx); err != nil {
-		return err
-	}
-	_, err := s.exec(ctx, tx, "UPDATE smcp_store_meta SET meta_value = meta_value + 1 WHERE meta_key = ?",
-		metaRevisionSeq)
+// lockedRevisions is locked for a write that changes revisions other than
+// by creating one, which it counts (see Sequence).
+func (s *SQLStore) lockedRevisions(ctx context.Context, fn func(*sql.Tx) error) error {
+	return s.locked(ctx, func(tx *sql.Tx) error {
+		if err := s.bump(ctx, tx, metaRevisionSeq); err != nil {
+			return err
+		}
+		return fn(tx)
+	})
+}
+
+// lock serializes writers on the publish lock row.
+func (s *SQLStore) lock(ctx context.Context, tx *sql.Tx) error {
+	return s.bump(ctx, tx, metaPublishLock)
+}
+
+// bump adds one to a counter row, locking it for the rest of tx.
+func (s *SQLStore) bump(ctx context.Context, tx *sql.Tx, key string) error {
+	_, err := s.exec(ctx, tx, "UPDATE smcp_store_meta SET meta_value = meta_value + 1 WHERE meta_key = ?", key)
 	return err
 }
 
 func (s *SQLStore) allocateID(ctx context.Context, tx *sql.Tx) (int64, error) {
-	if _, err := s.exec(ctx, tx, "UPDATE smcp_store_meta SET meta_value = meta_value + 1 WHERE meta_key = ?",
-		metaNextID); err != nil {
+	if err := s.bump(ctx, tx, metaNextID); err != nil {
 		return 0, err
 	}
 	var next int64
@@ -171,20 +217,11 @@ func (s *SQLStore) list(ctx context.Context, q execer, limit int) ([]revision.Re
 	if limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d", limit)
 	}
-	rows, err := q.QueryContext(ctx, s.dialect.rebind(query))
+	out, err := queryAll(ctx, s, q, scanRevision, query)
 	if err != nil {
 		return nil, fmt.Errorf("configstore: list revisions: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-	var out []revision.Revision
-	for rows.Next() {
-		r, err := scanRevision(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // Published implements revision.Store.
@@ -230,10 +267,7 @@ func (s *SQLStore) setState(
 // Publish implements revision.Store.
 func (s *SQLStore) Publish(ctx context.Context, id, expectedCurrent int64, _ revision.Meta) (revision.Revision, error) {
 	var out revision.Revision
-	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		if err := s.lockRevisions(ctx, tx); err != nil {
-			return err
-		}
+	err := s.lockedRevisions(ctx, func(tx *sql.Tx) error {
 		target, err := s.get(ctx, tx, id)
 		if err != nil {
 			return err
@@ -264,10 +298,7 @@ func (s *SQLStore) Publish(ctx context.Context, id, expectedCurrent int64, _ rev
 // Discard implements revision.Store.
 func (s *SQLStore) Discard(ctx context.Context, id int64) (revision.Revision, error) {
 	var out revision.Revision
-	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		if err := s.lockRevisions(ctx, tx); err != nil {
-			return err
-		}
+	err := s.lockedRevisions(ctx, func(tx *sql.Tx) error {
 		target, err := s.get(ctx, tx, id)
 		if err != nil {
 			return err
@@ -294,10 +325,7 @@ func (s *SQLStore) Rollback(
 		return revision.Revision{}, revision.ErrNoPublished
 	}
 	var out revision.Revision
-	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		if err := s.lockRevisions(ctx, tx); err != nil {
-			return err
-		}
+	err := s.lockedRevisions(ctx, func(tx *sql.Tx) error {
 		current, err := s.currentLocked(ctx, tx, expectedCurrent)
 		if err != nil {
 			return err
@@ -339,10 +367,7 @@ func (s *SQLStore) ImportHistory(ctx context.Context, revs []revision.Revision) 
 	if err := revision.ValidateHistory(revs); err != nil {
 		return err
 	}
-	return s.withTx(ctx, func(tx *sql.Tx) error {
-		if err := s.lockRevisions(ctx, tx); err != nil {
-			return err
-		}
+	return s.lockedRevisions(ctx, func(tx *sql.Tx) error {
 		var count int64
 		if err := s.queryRow(ctx, tx, "SELECT COUNT(*) FROM smcp_revisions").Scan(&count); err != nil {
 			return err

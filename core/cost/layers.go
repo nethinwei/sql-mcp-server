@@ -258,7 +258,7 @@ func (g AggregateGuard) Check(_ context.Context, c codegen.Compiled) (Decision, 
 	if !g.RequirePredicate || c.Kind != codegen.KindAggregate {
 		return Decision{Allow: true}, nil
 	}
-	p := compiledPredicate(c.Expr)
+	p := codegen.PredicateOf(c.Expr)
 	if p != nil && relalg.ValidatePredicate(p) == nil {
 		return Decision{Allow: true}, nil
 	}
@@ -276,26 +276,4 @@ func aggregatePredicateHint(c codegen.Compiled) string {
 	}
 	return "aggregate queries require a filter; add one, e.g. " +
 		`{"field":"<any allowed field>","op":"is_not_null"}`
-}
-
-func compiledPredicate(e relalg.Expr) relalg.Predicate {
-	switch n := e.(type) {
-	case relalg.Select:
-		if inner := compiledPredicate(n.Input); inner != nil {
-			return relalg.And{Preds: []relalg.Predicate{inner, n.Predicate}}
-		}
-		return n.Predicate
-	case relalg.Project:
-		return compiledPredicate(n.Input)
-	case relalg.Sort:
-		return compiledPredicate(n.Input)
-	case relalg.Limit:
-		return compiledPredicate(n.Input)
-	case relalg.Distinct:
-		return compiledPredicate(n.Input)
-	case relalg.Aggregate:
-		return compiledPredicate(n.Input)
-	default:
-		return nil
-	}
 }

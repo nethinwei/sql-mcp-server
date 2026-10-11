@@ -24,7 +24,6 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/cache"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
-	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/engine"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/hook"
@@ -45,6 +44,8 @@ type Provider = coreprovider.Provider
 
 // App is the assembled application, ready to serve.
 type App struct {
+	// Provider is the read connection of the default datasource (the one a
+	// request names none of).
 	Provider Provider
 	// Providers holds each datasource's read connection, which also serves
 	// introspection and EXPLAIN; Connections holds every connection.
@@ -52,16 +53,16 @@ type App struct {
 	Connections Connections
 	Prepared    map[string]*store.PreparedDB
 	Sources     map[string]tool.DataSource
-	Dialect     dialect.Dialect
-	Registry    *entity.Registry
-	Authorizer  rbac.Authorizer
-	Masker      mask.Masker
-	Gate        cost.Gate
-	Engine      *engine.Engine
-	Tools       *tool.Registry
-	ToolFlags   config.ToolFlags
-	DefaultRole string
-	DefaultUser string
+	// defaultSource names the default datasource in Sources.
+	defaultSource string
+	Registry      *entity.Registry
+	Authorizer    rbac.Authorizer
+	Masker        mask.Masker
+	Engine        *engine.Engine
+	Tools         *tool.Registry
+	ToolFlags     config.ToolFlags
+	DefaultRole   string
+	DefaultUser   string
 	// Users maps an enabled user name to its identity; UserTokens maps a
 	// tokenHash to the user name. Both follow the snapshot on reload.
 	Users        map[string]UserIdentity
@@ -71,7 +72,6 @@ type App struct {
 	Hooks        *hook.Hooks
 	Cache        cache.Cache[[]map[string]any]
 	Feedback     cost.FeedbackStore
-	Analyze      cost.AnalyzePolicy
 	Budget       *budget.MemoryManager
 	Transactions *tool.TransactionManager
 	Writes       *tool.WriteTracker
@@ -121,33 +121,25 @@ func (a *App) Config() *config.Config { return a.config }
 
 // ToolContext builds a per-request tool.Context for the given role.
 func (a *App) ToolContext(role string) tool.Context {
-	tc := tool.Context{
-		Role:         role,
-		DB:           a.Provider,
-		Dialect:      a.Dialect,
-		Registry:     a.Registry,
-		Authorizer:   a.Authorizer,
-		Masker:       a.Masker,
-		Gate:         a.Gate,
-		Cache:        a.Cache,
-		Engine:       a.Engine,
-		Auditor:      a.Auditor,
-		Hooks:        a.Hooks,
-		Limits:       a.Limits,
-		Feedback:     a.Feedback,
-		Analyze:      a.Analyze,
-		Sources:      a.Sources,
-		Transactions: a.Transactions,
-		Writes:       a.Writes,
-		ResultMemory: a.ResultMemory,
-		TxBeginners:  a.TxBeginners,
-		Generation:   a.generation,
-		WriteTargets: a.WriteTargets,
+	src := a.Sources[a.defaultSource]
+	return tool.Context{
+		Services: a.Services(), Role: role,
+		DB: a.Provider, Dialect: src.Dialect, Gate: src.Gate, Analyze: src.Analyze,
+	}
+}
+
+// Services are the App's, as every call runs on them.
+func (a *App) Services() *tool.Services {
+	s := &tool.Services{
+		Registry: a.Registry, Authorizer: a.Authorizer, Masker: a.Masker, Cache: a.Cache, Engine: a.Engine,
+		Auditor: a.Auditor, Hooks: a.Hooks, Limits: a.Limits, Feedback: a.Feedback, Sources: a.Sources,
+		Transactions: a.Transactions, Writes: a.Writes, ResultMemory: a.ResultMemory, TxBeginners: a.TxBeginners,
+		Generation: a.generation, WriteTargets: a.WriteTargets,
 	}
 	if a.Budget != nil { // a nil *MemoryManager must stay a nil interface
-		tc.Budget = a.Budget
+		s.Budget = a.Budget
 	}
-	return tc
+	return s
 }
 
 // ToolContextForSubject builds a per-request tool.Context for a role plus
@@ -493,26 +485,6 @@ func reconcileEntities(
 		return nil, fmt.Errorf("schema drift (configured but missing in DB): %v", drift.Missing)
 	}
 	return identifyRelations(reconciled, physical, &cat), nil
-}
-
-// toThreshold maps config.CostConfig to cost.Threshold.
-func toThreshold(c config.CostConfig) cost.Threshold {
-	return cost.Threshold{
-		SoftScore:                 c.SoftScore,
-		HardScore:                 c.HardScore,
-		MaxRows:                   c.MaxRows,
-		MaxBytes:                  c.MaxBytes,
-		RejectFullScan:            c.RejectFullScan,
-		FullScanMaxRows:           c.FullScanMaxRows,
-		WhitelistPKPoint:          c.WhitelistPKPoint,
-		RequirePKForWrite:         c.RequirePKForWriteOrDefault(),
-		RequireAggregatePredicate: true,
-		ExplainFailClosed:         c.EnabledOrDefault(),
-		RequireKnownScan:          c.RequireKnownScan,
-		RequireFreshStats:         c.RequireFreshStats,
-		AllowTemplates:            c.AllowTemplates,
-		RejectTemplates:           c.RejectTemplates,
-	}
 }
 
 var secretRe = regexp.MustCompile(`\$\{([^}]+)\}`)

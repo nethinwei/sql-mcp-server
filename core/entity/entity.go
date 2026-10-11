@@ -53,6 +53,29 @@ func (a Action) String() string {
 	return "unknown"
 }
 
+// Actions lists every action, in the order configuration names them.
+var Actions = []Action{ActionRead, ActionCreate, ActionUpdate, ActionDelete, ActionExecute, ActionAggregate}
+
+// ActionNames lists the names of Actions, as configuration writes them.
+func ActionNames() []string {
+	out := make([]string, len(Actions))
+	for i, a := range Actions {
+		out[i] = a.String()
+	}
+	return out
+}
+
+// ParseAction is the action named name (read, create, update, delete,
+// execute or aggregate); false when none is.
+func ParseAction(name string) (Action, bool) {
+	for _, a := range Actions {
+		if a.String() == name {
+			return a, true
+		}
+	}
+	return 0, false
+}
+
 // Domain is a column's value domain as introspected from the database.
 type Domain struct {
 	Type     string
@@ -202,10 +225,25 @@ type RowPolicies map[string]relalg.Predicate
 
 // Relationship describes a link to another entity for nested expansion.
 type Relationship struct {
-	Name        string
-	Target      string
+	Name   string
+	Target string
+	// Cardinality is one of Cardinalities: how many target rows a row has.
 	Cardinality string
 	JoinOn      map[string]string // this field -> target field
+}
+
+// Cardinalities a relationship may declare: the first three name one target
+// row, the others a list of them.
+var Cardinalities = []string{"one", "one-to-one", "belongs-to", "many", "one-to-many", "has-many"}
+
+// Single reports whether the relationship names at most one target row,
+// expanded as one object rather than a list.
+func (r Relationship) Single() bool {
+	switch r.Cardinality {
+	case "one", "one-to-one", "belongs-to":
+		return true
+	}
+	return false
 }
 
 // Entity is a complete description of an exposed relation.
@@ -331,6 +369,11 @@ func (e Entity) RelationKey() string {
 		source = e.Name
 	}
 	return "datasource:" + e.DatasourceName() + "\x00\x00" + e.Schema + "\x00" + source
+}
+
+// Ref names the relation the entity reads or writes, for the IR.
+func (e Entity) Ref() relalg.RelationRef {
+	return relalg.RelationRef{Name: e.Source, Schema: e.Schema}
 }
 
 // PrimaryKey returns the columns of the primary key, or nil if none is declared.

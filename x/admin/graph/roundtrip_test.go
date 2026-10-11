@@ -13,6 +13,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 	"github.com/nethinwei/sql-mcp-server/x/configyaml"
@@ -117,7 +118,7 @@ func TestWorkspaceRoundTripKeepsEveryField(t *testing.T) {
 		items = append(items, map[string]any{"kind": kind, "key": key, "value": value, "previous": value})
 	}
 	for _, e := range sections.Entities {
-		write("entity", entity.ID(deref(e.Datasource), deref(e.Schema), e.Name), e)
+		write("entity", entity.ID(kit.Deref(e.Datasource), kit.Deref(e.Schema), e.Name), e)
 	}
 	for _, r := range sections.Roles {
 		write("role", r.Name, r)

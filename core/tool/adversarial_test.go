@@ -12,6 +12,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
 )
 
@@ -32,13 +33,15 @@ func adversarialReadContext(t *testing.T, queries *int) Context {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+	db := &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
 		*queries++
-		return store.NewFakeRows([]string{"id"}, []any{int64(1)}), nil
+		return storetest.NewFakeRows([]string{"id"}, []any{int64(1)}), nil
 	}}
 	return Context{
-		Role: "reader", DB: db, Dialect: testdialect.Postgres{},
-		Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+		Role:     "reader",
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
 	}
 }
 
@@ -100,14 +103,16 @@ func TestAdversarialRowPolicyIsAlwaysConjoined(t *testing.T) {
 	}
 	var gotSQL string
 	var gotArgs []any
-	db := &store.FakeDB{QueryFn: func(_ context.Context, sql string, args ...any) (store.Rows, error) {
+	db := &storetest.FakeDB{QueryFn: func(_ context.Context, sql string, args ...any) (store.Rows, error) {
 		gotSQL, gotArgs = sql, append([]any(nil), args...)
-		return store.NewFakeRows([]string{"id"}), nil
+		return storetest.NewFakeRows([]string{"id"}), nil
 	}}
 	tc := Context{
-		Role: "reader", Subject: map[string]any{"tenant_id": int64(7)},
-		DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
-		Authorizer: rbac.NewRoleAuthorizer(reg),
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+		Role:     "reader",
+		Subject:  map[string]any{"tenant_id": int64(7)},
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
 	}
 	_, err = (ReadTool{}).Run(context.Background(), json.RawMessage(
 		`{"entity":"users","filter":[{"field":"tenant_id","op":"eq","value":8}]}`,
@@ -133,19 +138,19 @@ func TestAdversarialCacheAndSingleflightScopeIsolation(t *testing.T) {
 	}{
 		{
 			name:     "same authorization scope",
-			left:     Context{Role: "reader", Subject: map[string]any{"tenant_id": 1}},
-			right:    Context{Role: "reader", Subject: map[string]any{"tenant_id": 1}},
+			left:     Context{Services: &Services{}, Role: "reader", Subject: map[string]any{"tenant_id": 1}},
+			right:    Context{Services: &Services{}, Role: "reader", Subject: map[string]any{"tenant_id": 1}},
 			wantSame: true,
 		},
 		{
 			name:  "different role",
-			left:  Context{Role: "reader", Subject: map[string]any{"tenant_id": 1}},
-			right: Context{Role: "auditor", Subject: map[string]any{"tenant_id": 1}},
+			left:  Context{Services: &Services{}, Role: "reader", Subject: map[string]any{"tenant_id": 1}},
+			right: Context{Services: &Services{}, Role: "auditor", Subject: map[string]any{"tenant_id": 1}},
 		},
 		{
 			name:  "different subject",
-			left:  Context{Role: "reader", Subject: map[string]any{"tenant_id": 1}},
-			right: Context{Role: "reader", Subject: map[string]any{"tenant_id": 2}},
+			left:  Context{Services: &Services{}, Role: "reader", Subject: map[string]any{"tenant_id": 1}},
+			right: Context{Services: &Services{}, Role: "reader", Subject: map[string]any{"tenant_id": 2}},
 		},
 	}
 	for _, test := range tests {

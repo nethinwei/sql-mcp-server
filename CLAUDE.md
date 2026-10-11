@@ -78,7 +78,8 @@ MCP SDK、YAML、gqlgen 都在 `x/` 或 `cmd/`。新增数据库只改 `x/provid
   `x/admin/graph`（gqlgen，schema-first，`schema.graphqls`；读模型如实返回配置值，
   未设置即 null）。
 - **批量配置**（`docs/design/planning.md`）：`x/catalog`（扫描目录 DTO、Store 与
-  扫描批次，配置库 schema 3/4 持久化）→ `x/configplan`（纯计算：Plan → Proposal +
+  扫描批次，配置库 schema 3/4 持久化；批次的跨进程租约/心跳/接管/重试在 `x/leasing`，
+  交错模型测试 `TestInterleavings` 锁定其不变量）→ `x/configplan`（纯计算：Plan → Proposal +
   Report、目录索引，候选实体命名也在这里）→ `x/admin/configapp`（配置服务：目录、
   扫描批次、方案预览快照、管理员工作区（委托 `x/workspaceops`；方案写入绑定实际影响）、
   模板、待处理、令牌、差异与模拟；鉴权与业务规则只在

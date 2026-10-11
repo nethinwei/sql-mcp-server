@@ -8,6 +8,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/workspace"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/configrefs"
 )
 
@@ -99,7 +100,12 @@ func seededItems(t *testing.T) workspace.Snapshot {
 
 func TestReconcileRemovedEntityTakesItsReferences(t *testing.T) {
 	before := seededItems(t)
-	out := mustReconcile(t, before, written(t, before, map[workspace.Ref]string{entityID("default.customers"): ""}), nil)
+	out := mustReconcile(
+		t,
+		before,
+		written(t, before, map[workspace.Ref]string{entityID("default.customers"): ""}),
+		nil,
+	)
 	if got := grantEntities(t, out, ItemRole, "analyst"); !slices.Equal(got, []string{"orders"}) {
 		t.Errorf("role grants = %v", got)
 	}
@@ -377,7 +383,7 @@ func TestFieldReferences(t *testing.T) {
 		var out []string
 		for _, r := range fieldReferencesOf(s, entity) {
 			if r.Field == field {
-				out = append(out, r.Kind+":"+r.Name+":"+deref(r.Via))
+				out = append(out, r.Kind+":"+r.Name+":"+kit.Deref(r.Via))
 			}
 		}
 		return out

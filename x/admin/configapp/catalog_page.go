@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/core/entity"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/configplan"
 )
@@ -40,7 +41,8 @@ func (s *Scans) indexOf(pc planContext) *configplan.Index {
 
 func scopeOf(f CatalogFilter) configplan.Scope {
 	s := configplan.Scope{
-		Datasources: f.Datasources, Schemas: f.Schemas, Tables: f.Tables, Search: deref(f.Search), Drift: derefBool(f.Drift),
+		Datasources: f.Datasources, Schemas: f.Schemas, Tables: f.Tables,
+		Search: kit.Deref(f.Search), Drift: kit.DerefBool(f.Drift),
 	}
 	for _, st := range f.Status {
 		s.Status = append(s.Status, configplan.Status(strings.ToLower(string(st))))
@@ -150,7 +152,7 @@ func coverage(sources []configplan.Source, who auth.Principal) []CatalogCoverage
 			continue
 		}
 		c := CatalogCoverage{
-			Datasource: src.Datasource, Scanned: len(src.Scanned), Unscanned: orEmpty(unscanned[src.Datasource]),
+			Datasource: src.Datasource, Scanned: len(src.Scanned), Unscanned: kit.OrEmpty(unscanned[src.Datasource]),
 		}
 		if src.Listed != nil {
 			c.Listed = new(len(src.Listed))
@@ -174,10 +176,10 @@ func toCatalogRow(row configplan.Row, referenced int) CatalogRow {
 		HasKey: len(t.PrimaryKey()) > 0 || len(configplan.IdentityUniqueKeys(t)) > 0,
 		Status: TableStatus(
 			strings.ToUpper(string(row.Status)),
-		), Added: orEmpty(row.Added), Missing: orEmpty(row.Missing),
+		), Added: kit.OrEmpty(row.Added), Missing: kit.OrEmpty(row.Missing),
 	}
 	if row.Entity != nil {
-		out.Entity = optional(row.Entity.ID())
+		out.Entity = kit.Optional(row.Entity.ID())
 	}
 	if !row.ScannedAt.IsZero() {
 		out.ScannedAt = &row.ScannedAt
@@ -242,10 +244,10 @@ func (r *Service) CatalogLinks(ctx context.Context, ref string, against Against)
 	}
 	entities := configplan.ConfiguredTables(src.Datasource, src.Catalog, pc.base)
 	link := func(schema, table, name string, columns, refColumns []string) TableLink {
-		l := TableLink{Ref: configplan.Ref(src.Datasource, schema, table), Name: name, Columns: orEmpty(columns),
-			RefColumns: orEmpty(refColumns)}
+		l := TableLink{Ref: configplan.Ref(src.Datasource, schema, table), Name: name, Columns: kit.OrEmpty(columns),
+			RefColumns: kit.OrEmpty(refColumns)}
 		if e, ok := entities[configplan.TableKey(schema, table)]; ok {
-			l.Entity = optional(e.ID())
+			l.Entity = kit.Optional(e.ID())
 		}
 		return l
 	}

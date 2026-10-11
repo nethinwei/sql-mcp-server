@@ -126,6 +126,31 @@ type Store interface {
 	Close() error
 }
 
+// Getter reads one revision, as Store does.
+type Getter interface {
+	Get(ctx context.Context, id int64) (Revision, error)
+}
+
+// BasedOn is the published revision rev builds on: rev itself when it was
+// published, else the nearest ancestor that was (a draft may build on another
+// draft, discarded or not); 0 when none was.
+func BasedOn(ctx context.Context, store Getter, rev Revision) (int64, error) {
+	seen := map[int64]bool{}
+	for rev.State.Unpublished() {
+		id := rev.ParentID
+		if id == 0 || seen[id] {
+			return 0, nil
+		}
+		seen[id] = true
+		parent, err := store.Get(ctx, id)
+		if err != nil {
+			return 0, err
+		}
+		rev = parent
+	}
+	return rev.ID, nil
+}
+
 // HashPrefix prefixes every content hash.
 const HashPrefix = "sha256:"
 

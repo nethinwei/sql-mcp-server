@@ -285,7 +285,7 @@ func grantedActions(cfg *config.Config) map[string][]entity.Action {
 	refs := config.NewEntityRefs(cfg.Entities)
 	out := map[string][]entity.Action{}
 	add := func(entityName, action string) {
-		if a, ok := configActions[action]; ok && !slices.Contains(out[entityName], a) {
+		if a, ok := entity.ParseAction(action); ok && !slices.Contains(out[entityName], a) {
 			out[entityName] = append(out[entityName], a)
 		}
 	}

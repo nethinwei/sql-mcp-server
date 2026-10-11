@@ -2,10 +2,10 @@ package config
 
 import (
 	"fmt"
+	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"net"
 
 	"github.com/nethinwei/sql-mcp-server/core/cost"
-	"github.com/nethinwei/sql-mcp-server/core/relalg"
 )
 
 // Validate checks a configuration whose defaults are applied (ApplyDefaults;
@@ -105,7 +105,12 @@ func validateConnections(name string, db DatabaseConfig) error {
 		case !ok:
 			return fmt.Errorf("config: database %q routing.%s names unknown connection %q", name, action, conn)
 		case target.Role == "replica" && action != "read":
-			return fmt.Errorf("config: database %q routes %s to replica %q; replicas serve reads only", name, action, conn)
+			return fmt.Errorf(
+				"config: database %q routes %s to replica %q; replicas serve reads only",
+				name,
+				action,
+				conn,
+			)
 		}
 	}
 	return nil
@@ -207,7 +212,7 @@ func (c *Config) validateEntity(e EntityConfig, refs EntityRefs) error {
 		return err
 	}
 	for role, policy := range e.RowPolicies {
-		if err := validateRowPolicy(policy); err != nil {
+		if _, err := ParseFilter(policy); err != nil {
 			return fmt.Errorf("config: entity %q row policy for role %q: %w", e.Name, role, err)
 		}
 	}
@@ -405,7 +410,7 @@ func validateRelationshipJoin(relation RelationshipConfig, localFields map[strin
 }
 
 func (c *Config) normalizeRoles() error {
-	c.Server.Role = canonicalRole(c.Server.Role)
+	c.Server.Role = rbac.NormalizeRole(c.Server.Role)
 	for i := range c.Entities {
 		if err := c.normalizeEntityRoles(&c.Entities[i]); err != nil {
 			return err
@@ -427,7 +432,7 @@ func (c *Config) normalizeEntityRoles(e *EntityConfig) error {
 
 	fieldACL := make(map[string]FieldACLConfig, len(e.FieldACL))
 	for role, acl := range e.FieldACL {
-		key := canonicalRole(role)
+		key := rbac.NormalizeRole(role)
 		if key == "" {
 			return fmt.Errorf("config: entity %q has an empty field ACL role", e.Name)
 		}
@@ -440,7 +445,7 @@ func (c *Config) normalizeEntityRoles(e *EntityConfig) error {
 
 	policies := make(RowPolicies, len(e.RowPolicies))
 	for role, policy := range e.RowPolicies {
-		key := canonicalRole(role)
+		key := rbac.NormalizeRole(role)
 		if key == "" {
 			return fmt.Errorf("config: entity %q has an empty row-policy role", e.Name)
 		}
@@ -456,7 +461,7 @@ func (c *Config) normalizeEntityRoles(e *EntityConfig) error {
 func (c *Config) normalizeBudgetRoles() error {
 	roles := make(map[string]BudgetLimits, len(c.Budget.Roles))
 	for role, limits := range c.Budget.Roles {
-		key := canonicalRole(role)
+		key := rbac.NormalizeRole(role)
 		if key == "" {
 			return fmt.Errorf("config: budget has an empty role")
 		}
@@ -504,33 +509,4 @@ func firstDuplicate(values []string) (string, bool) {
 		seen[value] = true
 	}
 	return "", false
-}
-
-func validateRowPolicy(policy FilterConfig) error {
-	if op, ok := policy["op"]; ok {
-		name, ok := op.(string)
-		if !ok || !relalg.Op(name).Valid() {
-			return fmt.Errorf("invalid operator %q", op)
-		}
-		return nil
-	}
-	for _, key := range []string{"and", "or"} {
-		if raw, ok := policy[key]; ok {
-			items, ok := raw.([]any)
-			if !ok {
-				return fmt.Errorf("%s must be a list", key)
-			}
-			for _, item := range items {
-				child, ok := item.(map[string]any)
-				if !ok {
-					return fmt.Errorf("%s item must be an object", key)
-				}
-				if err := validateRowPolicy(child); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-	}
-	return fmt.Errorf("missing op/and/or")
 }

@@ -173,6 +173,19 @@ type Decision struct {
 	Rewritten *codegen.Compiled
 }
 
+// Estimate is the plan and score the decision carries, zero when it has none.
+func (d Decision) Estimate() (Plan, Score) {
+	var plan Plan
+	var score Score
+	if d.Plan != nil {
+		plan = *d.Plan
+	}
+	if d.Score != nil {
+		score = *d.Score
+	}
+	return plan, score
+}
+
 // Layer is one stage of the gate.
 type Layer interface {
 	Name() string
@@ -370,17 +383,6 @@ func Hints(p Plan, th Threshold) []string {
 	}
 	h = append(h, "rewrite the query and retry")
 	return h
-}
-
-// FakeExplainer is a hand-written Explainer for tests.
-type FakeExplainer struct {
-	Plan Plan
-	Err  error
-}
-
-// Explain returns the configured Plan/Err.
-func (f FakeExplainer) Explain(_ context.Context, _ string, _ []any) (Plan, error) {
-	return f.Plan, f.Err
 }
 
 func ptrScore(s Score) *Score { return &s }

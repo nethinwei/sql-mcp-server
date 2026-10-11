@@ -8,9 +8,11 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
+	"github.com/nethinwei/sql-mcp-server/core/cost/costtest"
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/mcpserver"
 	pgprov "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
@@ -18,16 +20,16 @@ import (
 
 // instantProvider answers every query at once with one row, so the
 // benchmark measures the MCP protocol and the governed tool path.
-type instantProvider struct{ store.FakeDB }
+type instantProvider struct{ storetest.FakeDB }
 
 func (*instantProvider) Dialect() dialect.Dialect { return pgprov.Dialect{} }
 func (*instantProvider) Explainer() cost.Explainer {
-	return cost.FakeExplainer{Plan: cost.Plan{ScanType: cost.ScanIndex, EstimatedRows: 1, StatsFresh: true}}
+	return costtest.FakeExplainer{Plan: cost.Plan{ScanType: cost.ScanIndex, EstimatedRows: 1, StatsFresh: true}}
 }
 func (*instantProvider) Introspector() introspect.Introspector { return nil }
 func (*instantProvider) Close() error                          { return nil }
 func (*instantProvider) QueryContext(context.Context, string, ...any) (store.Rows, error) {
-	return store.NewFakeRows([]string{"id", "email"}, []any{int64(1), "alice@x.com"}), nil
+	return storetest.NewFakeRows([]string{"id", "email"}, []any{int64(1), "alice@x.com"}), nil
 }
 
 // BenchmarkMCPPointRead measures one tools/call of read_records over an

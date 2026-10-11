@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 )
 
 // PlanTemplate is a saved plan: a scope and rules the console and the
@@ -45,20 +47,11 @@ func scanTemplate(row scanner) (PlanTemplate, error) {
 }
 
 func (s *SQLStore) templates(ctx context.Context, query string, args ...any) ([]PlanTemplate, error) {
-	rows, err := s.db.QueryContext(ctx, s.dialect.rebind(query), args...)
+	out, err := queryAll(ctx, s, s.db, scanTemplate, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("configstore: list plan templates: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-	out := []PlanTemplate{}
-	for rows.Next() {
-		t, err := scanTemplate(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, t)
-	}
-	return out, rows.Err()
+	return kit.OrEmpty(out), nil
 }
 
 // PlanTemplates returns the current version of every template, by name.
@@ -78,10 +71,7 @@ func (s *SQLStore) PlanTemplateVersions(ctx context.Context, name string) ([]Pla
 // expected, or it fails with ErrTemplateConflict.
 func (s *SQLStore) PutPlanTemplate(ctx context.Context, t PlanTemplate, expected int) (PlanTemplate, error) {
 	t.UpdatedAt = s.timestamp()
-	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		if err := s.lock(ctx, tx); err != nil {
-			return err
-		}
+	err := s.locked(ctx, func(tx *sql.Tx) error {
 		current, err := scanTemplate(s.queryRow(ctx, tx,
 			"SELECT "+templateColumns+" FROM smcp_plan_templates WHERE name = ?", t.Name))
 		exists := err == nil

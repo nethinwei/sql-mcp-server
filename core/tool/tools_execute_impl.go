@@ -4,18 +4,14 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/nethinwei/sql-mcp-server/core/codegen"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
 )
 
 func runExecute(ctx context.Context, tc Context, in executeInput, requireDMLTools bool) (Result, error) {
-	ctx, cancel := withTimeout(ctx, tc, 0)
-	defer cancel()
-	tc, endMetering := meterCall(tc, false)
-	defer endMetering()
-	tc.Transaction = in.Transaction
+	ctx, tc, end := beginCall(ctx, tc, false, in.Transaction)
+	defer end()
 	res, tc, g, err := prepareExecute(ctx, tc, in, requireDMLTools)
 	if err != nil {
 		return Result{}, err
@@ -74,14 +70,7 @@ func compileExecute(ctx context.Context, tc Context, res entity.Resolved, in exe
 	if err != nil {
 		return gated{}, err
 	}
-	expr := relalg.Call{
-		Procedure: relalg.RelationRef{Name: res.Entity.Source, Schema: res.Entity.Schema},
-		Args:      args,
-	}
-	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(
-		expr,
-		codegen.WithMaxINCardinality(effectiveMaxIN(tc)),
-	)
+	compiled, err := compile(tc, res.Entity, relalg.Call{Procedure: res.Entity.Ref(), Args: args})
 	if err != nil {
 		return gated{}, err
 	}

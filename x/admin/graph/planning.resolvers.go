@@ -9,6 +9,7 @@ import (
 	"context"
 	"strconv"
 
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 )
 
@@ -25,7 +26,7 @@ func (r *mutationResolver) ApplyPlan(ctx context.Context, input ApplyPlanInput) 
 		return nil, err
 	}
 	applied, err := r.App.ApplyPlan(ctx, configapp.ApplyRequest{Plan: p, PlanID: input.PlanID,
-		Review: derefBool(input.Review), Confirmed: input.Confirmed})
+		Review: kit.DerefBool(input.Review), Confirmed: input.Confirmed})
 	return applied, apiError(err)
 }
 
@@ -114,7 +115,7 @@ func (r *mutationResolver) RetryScanBatch(ctx context.Context, id string) (*conf
 
 // Catalog is the resolver for the catalog field.
 func (r *queryResolver) Catalog(ctx context.Context, input CatalogInput) (*configapp.CatalogPage, error) {
-	return r.App.Catalog(ctx, *input.Filter, workspace, derefInt(input.Offset, 0), derefInt(input.Limit, 50))
+	return r.App.Catalog(ctx, *input.Filter, workspace, kit.DerefInt(input.Offset, 0), kit.DerefInt(input.Limit, 50))
 }
 
 // CatalogRefs is the resolver for the catalogRefs field.
@@ -152,7 +153,7 @@ func (r *queryResolver) PreviewPlan(ctx context.Context, input PlanPreviewInput)
 	if err != nil {
 		return nil, err
 	}
-	preview, err := r.App.PreviewPlan(ctx, p, workspace, derefBool(input.Review))
+	preview, err := r.App.PreviewPlan(ctx, p, workspace, kit.DerefBool(input.Review))
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +205,7 @@ func (r *queryResolver) Drafts(ctx context.Context) ([]DraftRevision, error) {
 	for _, d := range all {
 		dr := DraftRevision{Revision: toRevision(d.Revision)}
 		if d.BasedOn != 0 {
-			dr.BasedOn = optional(strconv.FormatInt(d.BasedOn, 10))
+			dr.BasedOn = kit.Optional(strconv.FormatInt(d.BasedOn, 10))
 		}
 		out = append(out, dr)
 	}

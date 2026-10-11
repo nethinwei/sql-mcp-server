@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 	"github.com/nethinwei/sql-mcp-server/x/configplan"
 )
@@ -29,7 +30,7 @@ func toPlanPreview(p *configapp.Preview) *PlanPreview {
 	proposal := p.Proposal
 	out := &PlanPreview{
 		PlanID: p.PlanID, Report: p.Report, Entities: make([]Entity, 0, len(proposal.Entities)),
-		Added: orEmpty(proposal.Added), Validation: p.Validation,
+		Added: kit.OrEmpty(proposal.Added), Validation: p.Validation,
 	}
 	for _, e := range proposal.Entities {
 		out.Entities = append(out.Entities, toEntity(e))

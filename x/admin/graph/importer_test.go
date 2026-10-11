@@ -7,7 +7,9 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
+	"github.com/nethinwei/sql-mcp-server/x/configplan"
 )
 
 func table(schema, name string, fks ...entity.ForeignKey) entity.Entity {
@@ -28,7 +30,13 @@ func TestSchemaImportKeepsSameNamedTablesApart(t *testing.T) {
 		}),
 	}
 	cfg := &config.Config{Entities: []config.EntityConfig{
-		{Name: "users", Source: "users", Schema: "public", DataSource: "shop", Fields: []config.FieldConfig{{Name: "id"}}},
+		{
+			Name:       "users",
+			Source:     "users",
+			Schema:     "public",
+			DataSource: "shop",
+			Fields:     []config.FieldConfig{{Name: "id"}},
+		},
 	}}
 	got := map[string]ImportTable{}
 	for _, tb := range buildSchemaImport("shop", introspect.Catalog{Tables: discovered, Default: "public"}, cfg).Tables {
@@ -214,4 +222,16 @@ func TestSchemaListShowsTheDefaultSchemaScan(t *testing.T) {
 	if s := resp.SchemaList.Schemas; len(s) != 1 || s[0].ScannedAt == nil || *s[0].Tables != 0 {
 		t.Fatalf("after the scan = %+v", s)
 	}
+}
+
+// buildSchemaImport compares the scanned tables with the configured entities
+// of datasource and proposes a zero-permission candidate entity per table.
+func buildSchemaImport(datasource string, cat introspect.Catalog, cfg *config.Config) *SchemaImport {
+	out := &SchemaImport{
+		Datasource: datasource, DefaultSchema: kit.Optional(cat.Default), Tables: make([]ImportTable, 0, len(cat.Tables)),
+	}
+	for _, c := range configplan.Candidates(datasource, cat, cfg, nil, nil) {
+		out.Tables = append(out.Tables, importTable(c))
+	}
+	return out
 }

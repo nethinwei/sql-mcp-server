@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 )
 
 // AdminToken is a named token of an administrator for the configuration MCP
@@ -70,21 +72,12 @@ func (s *SQLStore) AdminTokens(ctx context.Context, username string) ([]AdminTok
 }
 
 func (s *SQLStore) adminTokens(ctx context.Context, q execer, username string) ([]AdminToken, error) {
-	rows, err := q.QueryContext(ctx, s.dialect.rebind(
-		"SELECT "+tokenColumns+" FROM smcp_admin_tokens WHERE username = ? ORDER BY created_us, id"), username)
+	out, err := queryAll(ctx, s, q, scanToken,
+		"SELECT "+tokenColumns+" FROM smcp_admin_tokens WHERE username = ? ORDER BY created_us, id", username)
 	if err != nil {
 		return nil, fmt.Errorf("configstore: list admin tokens: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-	out := []AdminToken{}
-	for rows.Next() {
-		t, err := scanToken(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, t)
-	}
-	return out, rows.Err()
+	return kit.OrEmpty(out), nil
 }
 
 // AdminTokenByHash returns the token with a hash; false when none.
@@ -103,10 +96,7 @@ func (s *SQLStore) AdminTokenByHash(ctx context.Context, hash string) (AdminToke
 // its tokens, and returns it with its creation time.
 func (s *SQLStore) CreateAdminToken(ctx context.Context, t AdminToken) (AdminToken, error) {
 	t.CreatedAt = s.timestamp()
-	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		if err := s.lock(ctx, tx); err != nil {
-			return err
-		}
+	err := s.locked(ctx, func(tx *sql.Tx) error {
 		all, err := s.adminTokens(ctx, tx, t.Username)
 		if err != nil {
 			return err

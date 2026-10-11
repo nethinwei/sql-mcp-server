@@ -19,6 +19,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/admin/scanjobs"
 	"github.com/nethinwei/sql-mcp-server/x/catalog"
 	"github.com/nethinwei/sql-mcp-server/x/configplan"
+	"github.com/nethinwei/sql-mcp-server/x/leasing"
 )
 
 // RequestScanTimeout bounds the reads that answer within their request:
@@ -38,8 +39,8 @@ type Scans struct {
 	cache map[scanKey]keptSchema
 	clock func() time.Time
 	last  time.Time
-	// batches are the scan batches started.
-	batches *batches
+	// batches runs the scan batches this process owns.
+	batches *leasing.Runner
 	// built caches each source's catalog by the versions of its schemas;
 	// indexes the indexed catalogs and matches the rows of catalog filters.
 	builtMu sync.Mutex
@@ -89,11 +90,13 @@ func NewScans(opts scanjobs.Options, store catalog.Store) *Scans {
 	if store == nil {
 		store = catalog.NewMemoryStore()
 	}
-	return &Scans{
+	s := &Scans{
 		bus: opts.Bus, pool: scanjobs.New[struct{}](opts), store: store, cache: map[scanKey]keptSchema{},
-		clock: time.Now, batches: newBatches(), built: map[string]builtCatalog{},
+		clock: time.Now, built: map[string]builtCatalog{},
 		indexes: newLRU[*configplan.Index](indexBudget), matches: newLRU[[]int32](matchBudget),
 	}
+	s.batches = leasing.New(store, leasing.Options{Now: s.now, Bus: opts.Bus})
+	return s
 }
 
 // now is the store's microsecond time, increasing from call to call, so a
@@ -111,7 +114,7 @@ func (s *Scans) now() time.Time {
 
 // Close cancels the scans and batches and stops the workers.
 func (s *Scans) Close() {
-	s.batches.close()
+	s.batches.Close()
 	s.pool.Close()
 }
 

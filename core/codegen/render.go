@@ -94,6 +94,11 @@ func (b *builder) renderSelect(e relalg.Expr) error {
 	if err := b.flatten(e, ctx); err != nil {
 		return err
 	}
+	for _, p := range ctx.wherePreds {
+		if err := b.validate(p); err != nil {
+			return err
+		}
+	}
 	if err := b.writeSelectClause(ctx); err != nil {
 		return err
 	}
@@ -224,10 +229,13 @@ func (b *builder) renderAggregateCols(ctx *selectCtx) (string, error) {
 	return strings.Join(parts, ", "), nil
 }
 
+// validate checks a predicate once, before it is rendered: every operator is
+// whitelisted and every IN list bounded (a raw operator must never reach SQL).
+func (b *builder) validate(p relalg.Predicate) error {
+	return relalg.ValidatePredicateWithMaxINCardinality(p, b.maxINCardinality)
+}
+
 func (b *builder) renderPredicate(p relalg.Predicate) error {
-	if err := relalg.ValidatePredicateWithMaxINCardinality(p, b.maxINCardinality); err != nil {
-		return err
-	}
 	switch pp := p.(type) {
 	case nil:
 		return nil
@@ -360,6 +368,9 @@ func (b *builder) renderUpdate(n relalg.Update) error {
 		b.args = append(b.args, s.Value)
 	}
 	if n.Predicate != nil {
+		if err := b.validate(n.Predicate); err != nil {
+			return err
+		}
 		b.sql.WriteString(" WHERE ")
 		if err := b.renderPredicate(n.Predicate); err != nil {
 			return err
@@ -373,6 +384,9 @@ func (b *builder) renderDelete(n relalg.Delete) error {
 	b.sql.WriteString("DELETE FROM ")
 	b.sql.WriteString(b.qtable(n.Target))
 	if n.Predicate != nil {
+		if err := b.validate(n.Predicate); err != nil {
+			return err
+		}
 		b.sql.WriteString(" WHERE ")
 		if err := b.renderPredicate(n.Predicate); err != nil {
 			return err

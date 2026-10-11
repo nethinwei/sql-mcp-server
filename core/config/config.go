@@ -3,6 +3,8 @@ package config
 import (
 	"errors"
 	"time"
+
+	"github.com/nethinwei/sql-mcp-server/core/cost"
 )
 
 // Sentinel validation errors.
@@ -204,7 +206,7 @@ func (e EntityConfig) DatasourceName() string {
 // RoleDefinition is a named set of grants declared at the top level. Entity
 // level roles/fieldACL/rowPolicies remain valid and merge into the same role.
 type RoleDefinition struct {
-	Description string        `yaml:"description,omitempty" json:"description,omitempty"`
+	Description string        `yaml:"description,omitempty"   json:"description,omitempty"`
 	Grants      []GrantConfig `yaml:"grants,omitempty"      json:"grants,omitempty"`
 	// Permissions holds system permissions such as "sql:execute@<datasource>".
 	// None is supported yet; any value fails validation.
@@ -224,7 +226,7 @@ type GrantConfig struct {
 // UserConfig is one authenticated caller. TokenHash is "sha256:<hex>" of the
 // bearer token; the plaintext token never appears in configuration.
 type UserConfig struct {
-	Description string         `yaml:"description,omitempty" json:"description,omitempty"`
+	Description string         `yaml:"description,omitempty"   json:"description,omitempty"`
 	TokenHash   string         `yaml:"tokenHash,omitempty"   json:"tokenHash,omitempty" schema:"pattern=@tokenHash"`
 	Roles       []string       `yaml:"roles,omitempty"       json:"roles,omitempty" schema:"pattern=@accessName"`
 	Subject     map[string]any `yaml:"subject,omitempty"     json:"subject,omitempty"`
@@ -243,9 +245,9 @@ type RelationshipConfig struct {
 
 // FieldConfig configures one column.
 type FieldConfig struct {
-	Name        string `yaml:"name"                  json:"name" schema:"required,minLength=1"`
+	Name        string `yaml:"name"        json:"name" schema:"required,minLength=1"`
 	Alias       string `yaml:"alias,omitempty"       json:"alias,omitempty"`
-	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+	Description string `yaml:"description,omitempty"   json:"description,omitempty"`
 	Mask        string `yaml:"mask,omitempty"        json:"mask,omitempty" schema:"enum=@maskRule"`
 	Exclude     bool   `yaml:"exclude,omitempty"     json:"exclude,omitempty"`
 }
@@ -263,7 +265,7 @@ type RoleConfig struct {
 // FieldACLConfig restricts one role to named readable and writable fields.
 // Omitting a role leaves existing entity-level authorization behavior intact.
 type FieldACLConfig struct {
-	Read  []string `yaml:"read,omitempty"  json:"read,omitempty"`
+	Read  []string `yaml:"read,omitempty"      json:"read,omitempty"`
 	Write []string `yaml:"write,omitempty" json:"write,omitempty"`
 }
 
@@ -370,7 +372,7 @@ type BudgetConfig struct {
 
 // BudgetLimits is unlimited when all fields are zero.
 type BudgetLimits struct {
-	MaxConcurrent           int           `yaml:"maxConcurrent"            json:"maxConcurrent" schema:"min=0"`
+	MaxConcurrent           int           `yaml:"maxConcurrent" json:"maxConcurrent" schema:"min=0"`
 	MaxExecution            time.Duration `yaml:"maxExecution"             json:"maxExecution" schema:"min=0"`
 	MaxEstimatedScannedRows int64         `yaml:"maxEstimatedScannedRows"  json:"maxEstimatedScannedRows" schema:"min=0"`
 	MaxReturnedRows         int64         `yaml:"maxReturnedRows"          json:"maxReturnedRows" schema:"min=0"`
@@ -385,6 +387,27 @@ func (c CostConfig) EnabledOrDefault() bool {
 		return *c.Enabled
 	}
 	return true
+}
+
+// Threshold is the cost gate's threshold the configuration sets, before the
+// datasource and dialect it applies to are named.
+func (c CostConfig) Threshold() cost.Threshold {
+	return cost.Threshold{
+		SoftScore:                 c.SoftScore,
+		HardScore:                 c.HardScore,
+		MaxRows:                   c.MaxRows,
+		MaxBytes:                  c.MaxBytes,
+		RejectFullScan:            c.RejectFullScan,
+		FullScanMaxRows:           c.FullScanMaxRows,
+		WhitelistPKPoint:          c.WhitelistPKPoint,
+		RequirePKForWrite:         c.RequirePKForWriteOrDefault(),
+		RequireAggregatePredicate: true,
+		ExplainFailClosed:         c.EnabledOrDefault(),
+		RequireKnownScan:          c.RequireKnownScan,
+		RequireFreshStats:         c.RequireFreshStats,
+		AllowTemplates:            c.AllowTemplates,
+		RejectTemplates:           c.RejectTemplates,
+	}
 }
 
 // RequirePKForWriteOrDefault reports whether writes must be primary-key scoped.
@@ -409,7 +432,7 @@ type CacheConfig struct {
 
 // RateLimitConfig configures the engine's concurrency and rate limits.
 type RateLimitConfig struct {
-	Enabled          *bool         `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Enabled          *bool         `yaml:"enabled,omitempty"           json:"enabled,omitempty"`
 	RPS              float64       `yaml:"rps"               json:"rps" schema:"min=0"`
 	MaxInflight      int           `yaml:"maxInflight"       json:"maxInflight" schema:"min=0"`
 	IOPool           int           `yaml:"ioPool"            json:"ioPool" schema:"min=0"`
@@ -432,7 +455,7 @@ func (c RateLimitConfig) EnabledOrDefault() bool {
 
 // MaskConfig controls field masking. Enabled defaults to true when unset.
 type MaskConfig struct {
-	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Enabled *bool `yaml:"enabled,omitempty"           json:"enabled,omitempty"`
 }
 
 // EnabledOrDefault reports whether masking is on; nil means default true.
@@ -445,7 +468,7 @@ func (c MaskConfig) EnabledOrDefault() bool {
 
 // AuditConfig configures the audit sink.
 type AuditConfig struct {
-	Enabled   bool   `yaml:"enabled"   json:"enabled"`
+	Enabled   bool   `yaml:"enabled"         json:"enabled"`
 	Path      string `yaml:"path"      json:"path"`
 	QueueSize int    `yaml:"queueSize" json:"queueSize" schema:"min=0"`
 }

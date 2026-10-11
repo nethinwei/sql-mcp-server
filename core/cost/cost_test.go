@@ -1,4 +1,4 @@
-package cost
+package cost_test
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
+	"github.com/nethinwei/sql-mcp-server/core/cost"
+	"github.com/nethinwei/sql-mcp-server/core/cost/costtest"
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
@@ -15,22 +17,22 @@ import (
 
 func TestScorePlan(t *testing.T) {
 	t.Parallel()
-	if s := ScorePlan(Plan{ScanType: ScanFull}); s.Value >= 50 {
+	if s := cost.ScorePlan(cost.Plan{ScanType: cost.ScanFull}); s.Value >= 50 {
 		t.Fatalf("full scan score %d too high", s.Value)
 	}
-	if s := ScorePlan(Plan{ScanType: ScanPoint, StatsFresh: true}); s.Value != 100 {
+	if s := cost.ScorePlan(cost.Plan{ScanType: cost.ScanPoint, StatsFresh: true}); s.Value != 100 {
 		t.Fatalf("point score = %d, want 100", s.Value)
 	}
-	if s := ScorePlan(Plan{ScanType: ScanUnknown}); s.Value != 35 {
+	if s := cost.ScorePlan(cost.Plan{ScanType: cost.ScanUnknown}); s.Value != 35 {
 		t.Fatalf("unknown+stale score = %d, want 35", s.Value)
 	}
 }
 
 func TestEstimateHardRejectFullScan(t *testing.T) {
 	t.Parallel()
-	est := Estimate{
-		Explainer: FakeExplainer{Plan: Plan{ScanType: ScanFull, StatsFresh: true}},
-		Threshold: Threshold{RejectFullScan: true, HardScore: 40, SoftScore: 60},
+	est := cost.Estimate{
+		Explainer: costtest.FakeExplainer{Plan: cost.Plan{ScanType: cost.ScanFull, StatsFresh: true}},
+		Threshold: cost.Threshold{RejectFullScan: true, HardScore: 40, SoftScore: 60},
 	}
 	d, err := est.Check(context.Background(), codegen.Compiled{SQL: "SELECT * FROM t"})
 	if err != nil {
@@ -43,9 +45,9 @@ func TestEstimateHardRejectFullScan(t *testing.T) {
 
 func TestEstimateSoftReject(t *testing.T) {
 	t.Parallel()
-	est := Estimate{
-		Explainer: FakeExplainer{Plan: Plan{ScanType: ScanSeq, StatsFresh: true}}, // score 60
-		Threshold: Threshold{SoftScore: 70, HardScore: 30},
+	est := cost.Estimate{
+		Explainer: costtest.FakeExplainer{Plan: cost.Plan{ScanType: cost.ScanSeq, StatsFresh: true}}, // score 60
+		Threshold: cost.Threshold{SoftScore: 70, HardScore: 30},
 	}
 	d, _ := est.Check(context.Background(), codegen.Compiled{})
 	if !d.Soft {
@@ -55,9 +57,9 @@ func TestEstimateSoftReject(t *testing.T) {
 
 func TestEstimateExplainFailureDegrades(t *testing.T) {
 	t.Parallel()
-	est := Estimate{
-		Explainer: FakeExplainer{Err: errors.New("explain failed")},
-		Threshold: Threshold{RequireKnownScan: true},
+	est := cost.Estimate{
+		Explainer: costtest.FakeExplainer{Err: errors.New("explain failed")},
+		Threshold: cost.Threshold{RequireKnownScan: true},
 	}
 	d, _ := est.Check(context.Background(), codegen.Compiled{})
 	if d.Allow {
@@ -67,9 +69,9 @@ func TestEstimateExplainFailureDegrades(t *testing.T) {
 
 func TestEstimateFailClosed(t *testing.T) {
 	t.Parallel()
-	for _, est := range []Estimate{
-		{Explainer: FakeExplainer{Err: errors.New("explain failed")}, FailClosed: true},
-		{Explainer: FakeExplainer{Plan: Plan{ScanType: ScanUnknown}}, FailClosed: true},
+	for _, est := range []cost.Estimate{
+		{Explainer: costtest.FakeExplainer{Err: errors.New("explain failed")}, FailClosed: true},
+		{Explainer: costtest.FakeExplainer{Plan: cost.Plan{ScanType: cost.ScanUnknown}}, FailClosed: true},
 	} {
 		d, err := est.Check(context.Background(), codegen.Compiled{Kind: codegen.KindRead})
 		if err != nil {
@@ -79,7 +81,7 @@ func TestEstimateFailClosed(t *testing.T) {
 			t.Fatalf("fail-closed estimate must hard reject: %+v", d)
 		}
 	}
-	defaultEstimate := Estimate{Explainer: FakeExplainer{Err: errors.New("explain failed")}}
+	defaultEstimate := cost.Estimate{Explainer: costtest.FakeExplainer{Err: errors.New("explain failed")}}
 	if d, _ := defaultEstimate.Check(context.Background(), codegen.Compiled{Kind: codegen.KindRead}); !d.Allow {
 		t.Fatalf("default estimate must retain fail-open compatibility: %+v", d)
 	}
@@ -87,9 +89,9 @@ func TestEstimateFailClosed(t *testing.T) {
 
 func TestEstimatePass(t *testing.T) {
 	t.Parallel()
-	est := Estimate{
-		Explainer: FakeExplainer{Plan: Plan{ScanType: ScanIndex, StatsFresh: true}}, // 85
-		Threshold: Threshold{SoftScore: 70, HardScore: 30},
+	est := cost.Estimate{
+		Explainer: costtest.FakeExplainer{Plan: cost.Plan{ScanType: cost.ScanIndex, StatsFresh: true}}, // 85
+		Threshold: cost.Threshold{SoftScore: 70, HardScore: 30},
 	}
 	d, _ := est.Check(context.Background(), codegen.Compiled{})
 	if !d.Allow {
@@ -99,7 +101,7 @@ func TestEstimatePass(t *testing.T) {
 
 func TestEnforceCapWrapsLimit(t *testing.T) {
 	t.Parallel()
-	ec := EnforceCap{HardRows: 100}
+	ec := cost.EnforceCap{HardRows: 100}
 	d, _ := ec.Check(context.Background(), codegen.Compiled{SQL: "SELECT * FROM t", ReadOnly: true})
 	if d.Rewritten == nil || !strings.Contains(d.Rewritten.SQL, "LIMIT 100") {
 		t.Fatalf("expected wrapped LIMIT, got %+v", d)
@@ -108,7 +110,7 @@ func TestEnforceCapWrapsLimit(t *testing.T) {
 
 func TestEnforceCapSkipsWrites(t *testing.T) {
 	t.Parallel()
-	ec := EnforceCap{HardRows: 100}
+	ec := cost.EnforceCap{HardRows: 100}
 	d, _ := ec.Check(context.Background(), codegen.Compiled{SQL: "UPDATE t SET x=1", ReadOnly: false})
 	if d.Rewritten != nil {
 		t.Fatal("write should not be wrapped")
@@ -117,7 +119,7 @@ func TestEnforceCapSkipsWrites(t *testing.T) {
 
 func TestEnforceCapHandlesKindsWithoutWrappingCall(t *testing.T) {
 	t.Parallel()
-	ec := EnforceCap{HardRows: 10}
+	ec := cost.EnforceCap{HardRows: 10}
 	for _, kind := range []codegen.Kind{codegen.KindRead, codegen.KindAggregate} {
 		d, _ := ec.Check(context.Background(), codegen.Compiled{Kind: kind, SQL: "SELECT 1"})
 		if d.Rewritten == nil {
@@ -134,7 +136,7 @@ func TestEnforceCapHandlesKindsWithoutWrappingCall(t *testing.T) {
 
 func TestStaticRulePKWhitelist(t *testing.T) {
 	t.Parallel()
-	sr := StaticRule{PKWhitelist: true}
+	sr := cost.StaticRule{PKWhitelist: true}
 	d, _ := sr.Check(context.Background(), codegen.Compiled{IsKeyPoint: true})
 	if !d.Allow || !d.Bypass || d.Plan == nil {
 		t.Fatalf("PK point should be whitelisted with bypass, got %+v", d)
@@ -143,7 +145,7 @@ func TestStaticRulePKWhitelist(t *testing.T) {
 
 func TestStaticRuleRejectPrecedesPKWhitelist(t *testing.T) {
 	t.Parallel()
-	sr := StaticRule{PKWhitelist: true, LegacyExactSQL: true, RejectTemplates: []string{"SELECT blocked"}}
+	sr := cost.StaticRule{PKWhitelist: true, LegacyExactSQL: true, RejectTemplates: []string{"SELECT blocked"}}
 	d, err := sr.Check(context.Background(), codegen.Compiled{SQL: "SELECT blocked", IsKeyPoint: true})
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +157,7 @@ func TestStaticRuleRejectPrecedesPKWhitelist(t *testing.T) {
 
 func TestStaticRuleTemplates(t *testing.T) {
 	t.Parallel()
-	sr := StaticRule{
+	sr := cost.StaticRule{
 		LegacyExactSQL:  true,
 		AllowTemplates:  []string{"SELECT 1"},
 		RejectTemplates: []string{"SELECT bad"},
@@ -179,14 +181,14 @@ func TestStaticRuleTemplates(t *testing.T) {
 
 func TestStaticRuleExactSQLIsDatasourceScoped(t *testing.T) {
 	compiled := codegen.Compiled{SQL: "SELECT 1"}
-	primary := StaticRule{
+	primary := cost.StaticRule{
 		Datasource: "primary", AllowTemplates: []string{"primary:SELECT 1"},
 	}
 	d, _ := primary.Check(context.Background(), compiled)
 	if !d.Bypass {
 		t.Fatal("datasource-qualified exact SQL did not match its source")
 	}
-	replica := StaticRule{
+	replica := cost.StaticRule{
 		Datasource: "replica", AllowTemplates: []string{"primary:SELECT 1", "SELECT 1"},
 	}
 	d, _ = replica.Check(context.Background(), compiled)
@@ -216,32 +218,32 @@ func TestValidateTemplateScopes(t *testing.T) {
 		{name: "unknown datasource", reject: []string{"archive:SELECT bad"}, want: "rejectTemplates"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := ValidateTemplateScopes(datasources, tc.allow, tc.reject)
+			err := cost.ValidateTemplateScopes(datasources, tc.allow, tc.reject)
 			if tc.want == "" {
 				if err != nil {
-					t.Fatalf("ValidateTemplateScopes() error = %v", err)
+					t.Fatalf("cost.ValidateTemplateScopes() error = %v", err)
 				}
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.want) ||
 				!strings.Contains(err.Error(), "fp:v2:<sha256>") ||
 				!strings.Contains(err.Error(), "primary:") {
-				t.Fatalf("ValidateTemplateScopes() error = %v, want migration guidance for %s", err, tc.want)
+				t.Fatalf("cost.ValidateTemplateScopes() error = %v, want migration guidance for %s", err, tc.want)
 			}
 		})
 	}
-	if err := ValidateTemplateScopes([]string{"primary"}, []string{"SELECT 1"}, []string{"SELECT bad"}); err != nil {
+	if err := cost.ValidateTemplateScopes([]string{"primary"}, []string{"SELECT 1"}, []string{"SELECT bad"}); err != nil {
 		t.Fatalf("single datasource compatibility error = %v", err)
 	}
 }
 
 func TestChainGateShortCircuits(t *testing.T) {
 	t.Parallel()
-	g := NewGate(
-		StaticRule{PKWhitelist: false},
-		Estimate{
-			Explainer: FakeExplainer{Plan: Plan{ScanType: ScanFull, StatsFresh: true}},
-			Threshold: Threshold{RejectFullScan: true},
+	g := cost.NewGate(
+		cost.StaticRule{PKWhitelist: false},
+		cost.Estimate{
+			Explainer: costtest.FakeExplainer{Plan: cost.Plan{ScanType: cost.ScanFull, StatsFresh: true}},
+			Threshold: cost.Threshold{RejectFullScan: true},
 		},
 	)
 	d, _ := g.Check(context.Background(), codegen.Compiled{IsKeyPoint: false})
@@ -252,11 +254,11 @@ func TestChainGateShortCircuits(t *testing.T) {
 
 func TestChainGatePKWhitelistSkipsEstimate(t *testing.T) {
 	t.Parallel()
-	g := NewGate(
-		StaticRule{PKWhitelist: true},
-		Estimate{
-			Explainer: FakeExplainer{Plan: Plan{ScanType: ScanFull}},
-			Threshold: Threshold{RejectFullScan: true},
+	g := cost.NewGate(
+		cost.StaticRule{PKWhitelist: true},
+		cost.Estimate{
+			Explainer: costtest.FakeExplainer{Plan: cost.Plan{ScanType: cost.ScanFull}},
+			Threshold: cost.Threshold{RejectFullScan: true},
 		},
 	)
 	d, _ := g.Check(context.Background(), codegen.Compiled{IsKeyPoint: true})
@@ -267,13 +269,13 @@ func TestChainGatePKWhitelistSkipsEstimate(t *testing.T) {
 
 func TestChainGateBypassStillRunsEnforcement(t *testing.T) {
 	t.Parallel()
-	g := NewGate(
-		StaticRule{PKWhitelist: true},
-		Estimate{
-			Explainer: FakeExplainer{Plan: Plan{ScanType: ScanFull}},
-			Threshold: Threshold{RejectFullScan: true},
+	g := cost.NewGate(
+		cost.StaticRule{PKWhitelist: true},
+		cost.Estimate{
+			Explainer: costtest.FakeExplainer{Plan: cost.Plan{ScanType: cost.ScanFull}},
+			Threshold: cost.Threshold{RejectFullScan: true},
 		},
-		EnforceCap{HardRows: 25},
+		cost.EnforceCap{HardRows: 25},
 	)
 	d, err := g.Check(context.Background(), codegen.Compiled{
 		Kind: codegen.KindRead, SQL: "SELECT * FROM t", ReadOnly: true, IsKeyPoint: true,
@@ -282,50 +284,50 @@ func TestChainGateBypassStillRunsEnforcement(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !d.Allow || d.Rewritten == nil || !strings.Contains(d.Rewritten.SQL, "LIMIT 25") {
-		t.Fatalf("bypass must skip Estimate but retain EnforceCap: %+v", d)
+		t.Fatalf("bypass must skip cost.Estimate but retain EnforceCap: %+v", d)
 	}
 }
 
 func TestCostExceededErrorUnwrap(t *testing.T) {
 	t.Parallel()
-	e := &ExceededError{Plan: Plan{ScanType: ScanFull}}
-	if !errors.Is(e, ErrCostExceeded) {
-		t.Fatal("errors.Is(ErrCostExceeded) failed")
+	e := &cost.ExceededError{Plan: cost.Plan{ScanType: cost.ScanFull}}
+	if !errors.Is(e, cost.ErrCostExceeded) {
+		t.Fatal("errors.Is(cost.ErrCostExceeded) failed")
 	}
 }
 
 func TestNewGateFromCapabilities(t *testing.T) {
 	t.Parallel()
 	caps := testdialect.Postgres{}.Capabilities()
-	g := NewGateFromCapabilities(caps,
-		FakeExplainer{Plan: Plan{ScanType: ScanIndex, StatsFresh: true}},
-		Threshold{SoftScore: 70, HardScore: 30, MaxRows: 1000}, nil)
+	g := cost.NewGateFromCapabilities(caps,
+		costtest.FakeExplainer{Plan: cost.Plan{ScanType: cost.ScanIndex, StatsFresh: true}},
+		cost.Threshold{SoftScore: 70, HardScore: 30, MaxRows: 1000}, nil)
 	d, _ := g.Check(context.Background(), codegen.Compiled{ReadOnly: true})
 	if !d.Allow {
 		t.Fatalf("expected pass, got %+v", d)
 	}
 	if d.Rewritten == nil {
-		t.Fatal("expected EnforceCap to wrap with LIMIT")
+		t.Fatal("expected cost.EnforceCap to wrap with LIMIT")
 	}
 }
 
 func TestNewGateFromCapabilitiesSQLiteSkipsEstimate(t *testing.T) {
 	t.Parallel()
-	// SQLite has no ExplainCost, so Estimate must not be assembled.
+	// SQLite has no ExplainCost, so cost.Estimate must not be assembled.
 	caps := dialect.Capabilities{ExplainCost: false, ExplainAccurate: false}
-	g := NewGateFromCapabilities(caps, nil, Threshold{MaxRows: 100}, nil)
+	g := cost.NewGateFromCapabilities(caps, nil, cost.Threshold{MaxRows: 100}, nil)
 	names := []string{}
 	for _, l := range g.Layers() {
 		names = append(names, l.Name())
 	}
 	if strings.Contains(strings.Join(names, ","), "estimate") {
-		t.Fatalf("SQLite should not assemble Estimate layer: %v", names)
+		t.Fatalf("SQLite should not assemble cost.Estimate layer: %v", names)
 	}
 }
 
 func TestWriteGuard(t *testing.T) {
 	t.Parallel()
-	var wg WriteGuard
+	var wg cost.WriteGuard
 	if d, _ := wg.Check(context.Background(), codegen.Compiled{ReadOnly: true}); !d.Allow {
 		t.Fatal("read should pass the write guard")
 	}
@@ -341,10 +343,10 @@ func TestWriteGuard(t *testing.T) {
 func TestCallGuardDefaultsDenyAndAllowsReviewedTemplate(t *testing.T) {
 	t.Parallel()
 	call := codegen.Compiled{Kind: codegen.KindCall, SQL: "CALL p()"}
-	if d, _ := (CallGuard{}).Check(context.Background(), call); d.Allow {
+	if d, _ := (cost.CallGuard{}).Check(context.Background(), call); d.Allow {
 		t.Fatal("CALL should be denied by default")
 	}
-	guard := CallGuard{LegacyExactSQL: true, AllowTemplates: []string{"CALL p()"}}
+	guard := cost.CallGuard{LegacyExactSQL: true, AllowTemplates: []string{"CALL p()"}}
 	if d, _ := guard.Check(context.Background(), call); !d.Allow {
 		t.Fatalf("reviewed CALL should be allowed: %+v", d)
 	}
@@ -352,7 +354,7 @@ func TestCallGuardDefaultsDenyAndAllowsReviewedTemplate(t *testing.T) {
 
 func TestAggregateGuardRequiresPredicate(t *testing.T) {
 	t.Parallel()
-	guard := AggregateGuard{RequirePredicate: true}
+	guard := cost.AggregateGuard{RequirePredicate: true}
 	unfiltered := codegen.Compiled{
 		Kind: codegen.KindAggregate,
 		Expr: relalg.Aggregate{
@@ -377,7 +379,7 @@ func TestAggregateGuardRequiresPredicate(t *testing.T) {
 // verbatim, using the primary key when known (2026-07-12 pilot attribution).
 func TestAggregateGuardHintNamesExecutableRepair(t *testing.T) {
 	t.Parallel()
-	guard := AggregateGuard{RequirePredicate: true}
+	guard := cost.AggregateGuard{RequirePredicate: true}
 	unfiltered := codegen.Compiled{
 		Kind:       codegen.KindAggregate,
 		PrimaryKey: []string{"id"},
@@ -403,27 +405,27 @@ func TestAggregateGuardHintNamesExecutableRepair(t *testing.T) {
 func TestAllowedCallStillRunsCallGuard(t *testing.T) {
 	t.Parallel()
 	call := codegen.Compiled{Kind: codegen.KindCall, SQL: "CALL p()"}
-	g := NewGate(
-		StaticRule{LegacyExactSQL: true, AllowTemplates: []string{"CALL p()"}},
-		CallGuard{},
+	g := cost.NewGate(
+		cost.StaticRule{LegacyExactSQL: true, AllowTemplates: []string{"CALL p()"}},
+		cost.CallGuard{},
 	)
 	if d, _ := g.Check(context.Background(), call); d.Allow {
-		t.Fatal("StaticRule allow bypass must not skip CallGuard")
+		t.Fatal("cost.StaticRule allow bypass must not skip cost.CallGuard")
 	}
 }
 
 func TestNewGateFromCapabilitiesWriteGuardMySQL(t *testing.T) {
 	t.Parallel()
-	// MySQL has no trustworthy Estimate; WriteGuard must still block non-PK
+	// MySQL has no trustworthy cost.Estimate; cost.WriteGuard must still block non-PK
 	// writes deterministically.
 	caps := testdialect.MySQL{}.Capabilities()
-	g := NewGateFromCapabilities(caps, nil, Threshold{RequirePKForWrite: true, MaxRows: 1000}, nil)
+	g := cost.NewGateFromCapabilities(caps, nil, cost.Threshold{RequirePKForWrite: true, MaxRows: 1000}, nil)
 	d, err := g.Check(context.Background(), codegen.Compiled{SQL: "UPDATE t SET x=1", IsKeyPoint: false})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if d.Allow {
-		t.Fatal("non-PK write must be rejected by WriteGuard on MySQL")
+		t.Fatal("non-PK write must be rejected by cost.WriteGuard on MySQL")
 	}
 	dpk, err := g.Check(context.Background(), codegen.Compiled{SQL: "UPDATE t SET x=1 WHERE id=1", IsKeyPoint: true})
 	if err != nil {
@@ -436,23 +438,23 @@ func TestNewGateFromCapabilitiesWriteGuardMySQL(t *testing.T) {
 
 type stubLayer struct {
 	name     string
-	phase    Phase
-	decision Decision
+	phase    cost.Phase
+	decision cost.Decision
 }
 
 func (s stubLayer) Name() string { return s.name }
 
-func (s stubLayer) Phase() Phase { return s.phase }
+func (s stubLayer) Phase() cost.Phase { return s.phase }
 
-func (s stubLayer) Check(context.Context, codegen.Compiled) (Decision, error) {
+func (s stubLayer) Check(context.Context, codegen.Compiled) (cost.Decision, error) {
 	return s.decision, nil
 }
 
 func TestChainGateReturnsSoftDenyFromChain(t *testing.T) {
 	t.Parallel()
-	g := NewGate(Estimate{
-		Explainer: FakeExplainer{Plan: Plan{ScanType: ScanSeq, StatsFresh: true}},
-		Threshold: Threshold{SoftScore: 70, HardScore: 30},
+	g := cost.NewGate(cost.Estimate{
+		Explainer: costtest.FakeExplainer{Plan: cost.Plan{ScanType: cost.ScanSeq, StatsFresh: true}},
+		Threshold: cost.Threshold{SoftScore: 70, HardScore: 30},
 	})
 	d, err := g.Check(context.Background(), codegen.Compiled{Kind: codegen.KindRead})
 	if err != nil {
@@ -465,9 +467,9 @@ func TestChainGateReturnsSoftDenyFromChain(t *testing.T) {
 
 func TestChainGateHardDenyWithoutRewritten(t *testing.T) {
 	t.Parallel()
-	g := NewGate(stubLayer{
+	g := cost.NewGate(stubLayer{
 		name:     "hard",
-		decision: Decision{Allow: false, Soft: false},
+		decision: cost.Decision{Allow: false, Soft: false},
 	})
 	d, err := g.Check(context.Background(), codegen.Compiled{SQL: "SELECT original"})
 	if err != nil {
@@ -481,9 +483,9 @@ func TestChainGateHardDenyWithoutRewritten(t *testing.T) {
 func TestChainGateSoftDenyAttachesLayerRewritten(t *testing.T) {
 	t.Parallel()
 	hint := codegen.Compiled{SQL: "SELECT hinted"}
-	g := NewGate(stubLayer{
+	g := cost.NewGate(stubLayer{
 		name: "soft",
-		decision: Decision{
+		decision: cost.Decision{
 			Allow: false, Soft: true, Rewritten: &hint,
 		},
 	})
@@ -502,14 +504,14 @@ func TestChainGateSoftDenyAttachesLayerRewritten(t *testing.T) {
 func TestChainGateSoftDenyUsesFinalCompiledAfterRewrite(t *testing.T) {
 	t.Parallel()
 	first := codegen.Compiled{SQL: "SELECT first"}
-	g := NewGate(
+	g := cost.NewGate(
 		stubLayer{
 			name:     "rewrite",
-			decision: Decision{Allow: true, Rewritten: &first},
+			decision: cost.Decision{Allow: true, Rewritten: &first},
 		},
 		stubLayer{
 			name:     "soft",
-			decision: Decision{Allow: false, Soft: true},
+			decision: cost.Decision{Allow: false, Soft: true},
 		},
 	)
 	d, err := g.Check(context.Background(), codegen.Compiled{SQL: "SELECT original", Kind: codegen.KindRead})
@@ -542,10 +544,11 @@ func TestEstimateSmallTableFullScan(t *testing.T) {
 		{output: 1, table: 0, limit: 1000, sized: false, allow: false},
 		{output: 71, table: 71, limit: 0, sized: true, allow: false},
 	} {
-		est := Estimate{
-			Explainer: FakeExplainer{Plan: Plan{ScanType: ScanFull, EstimatedRows: c.output, TableRows: c.table,
-				TableSized: c.sized, StatsFresh: true}},
-			Threshold: Threshold{RejectFullScan: true, FullScanMaxRows: c.limit, HardScore: 40, SoftScore: 60},
+		est := cost.Estimate{
+			Explainer: costtest.FakeExplainer{Plan: cost.Plan{
+				ScanType: cost.ScanFull, EstimatedRows: c.output, TableRows: c.table, TableSized: c.sized, StatsFresh: true,
+			}},
+			Threshold: cost.Threshold{RejectFullScan: true, FullScanMaxRows: c.limit, HardScore: 40, SoftScore: 60},
 		}
 		d, err := est.Check(context.Background(), codegen.Compiled{SQL: "SELECT * FROM t"})
 		if err != nil {
@@ -561,7 +564,7 @@ func TestEstimateSmallTableFullScan(t *testing.T) {
 // not an estimate to judge: the hold-back is reported as such, never as a
 // cost denial.
 func TestEstimateReportsARefusedExplain(t *testing.T) {
-	est := Estimate{Explainer: FakeExplainer{Err: ratelimit.ErrCircuitOpen}, FailClosed: true}
+	est := cost.Estimate{Explainer: costtest.FakeExplainer{Err: ratelimit.ErrCircuitOpen}, FailClosed: true}
 	_, err := est.Check(context.Background(), codegen.Compiled{SQL: "SELECT * FROM t"})
 	if !errors.Is(err, ratelimit.ErrCircuitOpen) {
 		t.Fatalf("a refused EXPLAIN became %v", err)

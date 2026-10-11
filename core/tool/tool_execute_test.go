@@ -11,6 +11,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
 )
 
@@ -26,17 +27,20 @@ func TestExecuteToolCallsProcedure(t *testing.T) {
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	auth := rbac.NewRoleAuthorizer(reg)
 	called := false
-	db := &store.FakeDB{QueryFn: func(_ context.Context, q string, _ ...any) (store.Rows, error) {
+	db := &storetest.FakeDB{QueryFn: func(_ context.Context, q string, _ ...any) (store.Rows, error) {
 		called = true
 		if !strings.Contains(q, "CALL") {
 			t.Errorf("expected CALL, got %q", q)
 		}
-		return store.NewFakeRows([]string{"n"}, []any{int64(42)}), nil
+		return storetest.NewFakeRows([]string{"n"}, []any{int64(42)}), nil
 	}}
 	events := []string{}
 	tc := Context{
-		Role: "caller", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
-		Authorizer: auth, Gate: recordingGate{events: &events},
+		Services: &Services{Registry: reg, Authorizer: auth},
+		Role:     "caller",
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
+		Gate:     recordingGate{events: &events},
 	}
 	in, _ := json.Marshal(executeInput{Entity: "sp", Args: map[string]any{"x": 1}})
 	res, err := ExecuteTool{}.Run(context.Background(), in, tc)
@@ -58,7 +62,7 @@ func TestExecuteToolRejectsNonProcedure(t *testing.T) {
 	t.Parallel()
 	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
 	auth := rbac.NewRoleAuthorizer(reg)
-	tc := Context{Role: "reader", Dialect: testdialect.Postgres{}, Registry: reg, Authorizer: auth}
+	tc := Context{Services: &Services{Registry: reg, Authorizer: auth}, Role: "reader", Dialect: testdialect.Postgres{}}
 	in, _ := json.Marshal(executeInput{Entity: "users"})
 	_, err := ExecuteTool{}.Run(context.Background(), in, tc)
 	if !errors.Is(err, ErrInvalidInput) {
@@ -73,10 +77,15 @@ func TestExecuteToolRejectsUntrustedProcedure(t *testing.T) {
 		MCP:  entity.MCPFlags{DMLTools: true},
 	}
 	registry, _ := entity.NewRegistry([]entity.Entity{entityConfig})
-	_, err := ExecuteTool{}.Run(context.Background(), json.RawMessage(`{"entity":"sp","args":{"x":1}}`), Context{
-		Role: "caller", Dialect: testdialect.Postgres{}, Registry: registry,
-		Authorizer: rbac.NewRoleAuthorizer(registry),
-	})
+	_, err := ExecuteTool{}.Run(
+		context.Background(),
+		json.RawMessage(`{"entity":"sp","args":{"x":1}}`),
+		Context{
+			Services: &Services{Registry: registry, Authorizer: rbac.NewRoleAuthorizer(registry)},
+			Role:     "caller",
+			Dialect:  testdialect.Postgres{},
+		},
+	)
 	if !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("error = %v, want unauthorized", err)
 	}
@@ -99,8 +108,9 @@ func TestEntityToolsRejectDMLDisabled(t *testing.T) {
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	tc := Context{
-		Role: "role", Dialect: testdialect.Postgres{}, Registry: reg,
-		Authorizer: rbac.NewRoleAuthorizer(reg),
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+		Role:     "role",
+		Dialect:  testdialect.Postgres{},
 	}
 	cases := []struct {
 		name  string
@@ -136,15 +146,17 @@ func TestProcedureToolRunsWhenDMLDisabled(t *testing.T) {
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	auth := rbac.NewRoleAuthorizer(reg)
-	db := &store.FakeDB{QueryFn: func(_ context.Context, _ string, args ...any) (store.Rows, error) {
+	db := &storetest.FakeDB{QueryFn: func(_ context.Context, _ string, args ...any) (store.Rows, error) {
 		if len(args) != 1 || args[0] != "acme" {
 			t.Fatalf("args = %v, want [acme]", args)
 		}
-		return store.NewFakeRows([]string{"ok"}, []any{true}), nil
+		return storetest.NewFakeRows([]string{"ok"}, []any{true}), nil
 	}}
 	tc := Context{
-		Role: "caller", DB: db, Dialect: testdialect.Postgres{},
-		Registry: reg, Authorizer: auth,
+		Services: &Services{Registry: reg, Authorizer: auth},
+		Role:     "caller",
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
 	}
 	pt := ProcedureTool{Entity: e}
 	if pt.Info().Name != ProcedureToolName(e) || strings.Contains(pt.Info().Name, "execute_entity") {
@@ -169,7 +181,7 @@ func TestExecuteToolDoesNotRetryQueryFailureWithExec(t *testing.T) {
 		}, MCP: entity.MCPFlags{DMLTools: true, TrustedProcedure: true},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
-	db := &store.FakeDB{
+	db := &storetest.FakeDB{
 		QueryFn: func(context.Context, string, ...any) (store.Rows, error) { return nil, want },
 		ExecFn: func(context.Context, string, ...any) (store.Result, error) {
 			t.Fatal("failed procedure query must not be executed a second time")
@@ -177,11 +189,10 @@ func TestExecuteToolDoesNotRetryQueryFailureWithExec(t *testing.T) {
 		},
 	}
 	tc := Context{
-		Role:       "caller",
-		DB:         db,
-		Dialect:    testdialect.Postgres{},
-		Registry:   reg,
-		Authorizer: rbac.NewRoleAuthorizer(reg),
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+		Role:     "caller",
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
 	}
 	_, err := ExecuteTool{}.Run(context.Background(), json.RawMessage(`{"entity":"sp","args":{"x":1}}`), tc)
 	if !errors.Is(err, ErrDatabase) || !errors.Is(err, want) || len(db.Execs) != 0 {
@@ -199,15 +210,14 @@ func TestExecuteToolFiltersProcedureColumnsFailClosed(t *testing.T) {
 		MCP:         entity.MCPFlags{DMLTools: true, TrustedProcedure: true},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
-	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
-		return store.NewFakeRows([]string{"visible", "secret", "excluded", "undeclared"}, []any{1, 2, 3, 4}), nil
+	db := &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return storetest.NewFakeRows([]string{"visible", "secret", "excluded", "undeclared"}, []any{1, 2, 3, 4}), nil
 	}}
 	tc := Context{
-		Role:       "caller",
-		DB:         db,
-		Dialect:    testdialect.Postgres{},
-		Registry:   reg,
-		Authorizer: rbac.NewRoleAuthorizer(reg),
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+		Role:     "caller",
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
 	}
 	result, err := ExecuteTool{}.Run(context.Background(), json.RawMessage(`{"entity":"sp","args":{"x":1}}`), tc)
 	if err != nil {
@@ -229,16 +239,18 @@ func TestExecuteToolClosesRowsBeforeAfterWrite(t *testing.T) {
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	events := []string{}
 	rows := &recordingRows{
-		Rows:   store.NewFakeRows([]string{"n"}, []any{int64(1)}),
+		Rows:   storetest.NewFakeRows([]string{"n"}, []any{int64(1)}),
 		events: &events,
 	}
-	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+	db := &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
 		return rows, nil
 	}}
 	cc := &recordingCache{events: &events}
 	tc := Context{
-		Role: "caller", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
-		Authorizer: rbac.NewRoleAuthorizer(reg), Cache: cc,
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Cache: cc},
+		Role:     "caller",
+		DB:       db,
+		Dialect:  testdialect.Postgres{},
 	}
 	_, err := (ExecuteTool{}).Run(context.Background(), json.RawMessage(`{"entity":"sp","args":{"x":1}}`), tc)
 	if err != nil {
@@ -260,17 +272,22 @@ func TestExecuteToolClosesRowsOnAfterWriteError(t *testing.T) {
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	events := []string{}
 	rows := &recordingRows{
-		Rows:   store.NewFakeRows([]string{"n"}, []any{int64(1)}),
+		Rows:   storetest.NewFakeRows([]string{"n"}, []any{int64(1)}),
 		events: &events,
 	}
-	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+	db := &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
 		return rows, nil
 	}}
 	want := errors.New("cache invalidation failed")
 	tc := Context{
-		Role: "caller", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
-		Authorizer: rbac.NewRoleAuthorizer(reg),
-		Cache:      &recordingCache{events: &events, err: want},
+		Services: &Services{
+			Registry:   reg,
+			Authorizer: rbac.NewRoleAuthorizer(reg),
+			Cache:      &recordingCache{events: &events, err: want},
+		},
+		Role:    "caller",
+		DB:      db,
+		Dialect: testdialect.Postgres{},
 	}
 	_, err := (ExecuteTool{}).Run(context.Background(), json.RawMessage(`{"entity":"sp","args":{"x":1}}`), tc)
 	if !errors.Is(err, want) {
@@ -305,22 +322,22 @@ func procedureConsumptionRegistry(t *testing.T) *entity.Registry {
 
 func procedureConsumptionCases() []struct {
 	name             string
-	rows             *store.FakeRows
+	rows             *storetest.FakeRows
 	limits           budget.Limits
 	maxProcedureRows int64
 	want             error
 } {
 	return []struct {
 		name             string
-		rows             *store.FakeRows
+		rows             *storetest.FakeRows
 		limits           budget.Limits
 		maxProcedureRows int64
 		want             error
 	}{
 		{
 			name: "iteration error",
-			rows: func() *store.FakeRows {
-				rows := store.NewFakeRows([]string{"n"})
+			rows: func() *storetest.FakeRows {
+				rows := storetest.NewFakeRows([]string{"n"})
 				rows.SetErr(errors.New("driver iteration failed"))
 				return rows
 			}(),
@@ -328,13 +345,13 @@ func procedureConsumptionCases() []struct {
 		},
 		{
 			name:   "budget error",
-			rows:   store.NewFakeRows([]string{"n"}, []any{1}, []any{2}),
+			rows:   storetest.NewFakeRows([]string{"n"}, []any{1}, []any{2}),
 			limits: budget.Limits{MaxReturnedRows: 1},
 			want:   budget.ErrExceeded,
 		},
 		{
 			name:             "procedure hard cap",
-			rows:             store.NewFakeRows([]string{"n"}, []any{1}, []any{2}),
+			rows:             storetest.NewFakeRows([]string{"n"}, []any{1}, []any{2}),
 			maxProcedureRows: 1,
 			want:             budget.ErrExceeded,
 		},
@@ -346,7 +363,7 @@ func assertExecuteConsumptionError(
 	reg *entity.Registry,
 	tcse struct {
 		name             string
-		rows             *store.FakeRows
+		rows             *storetest.FakeRows
 		limits           budget.Limits
 		maxProcedureRows int64
 		want             error
@@ -354,13 +371,20 @@ func assertExecuteConsumptionError(
 ) {
 	t.Helper()
 	cc := &recordingCache{}
-	db := &store.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+	db := &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
 		return tcse.rows, nil
 	}}
 	tc := Context{
-		Role: "caller", DB: db, Dialect: testdialect.Postgres{}, Registry: reg,
-		Authorizer: rbac.NewRoleAuthorizer(reg), Cache: cc, BudgetLimits: tcse.limits,
-		Limits: Limits{MaxProcedureRows: tcse.maxProcedureRows},
+		Services: &Services{
+			Registry:   reg,
+			Authorizer: rbac.NewRoleAuthorizer(reg),
+			Cache:      cc,
+			Limits:     Limits{MaxProcedureRows: tcse.maxProcedureRows},
+		},
+		Role:         "caller",
+		DB:           db,
+		Dialect:      testdialect.Postgres{},
+		BudgetLimits: tcse.limits,
 	}
 	_, err := (ExecuteTool{}).Run(context.Background(), json.RawMessage(`{"entity":"sp","args":{"x":1}}`), tc)
 	if !errors.Is(err, tcse.want) {

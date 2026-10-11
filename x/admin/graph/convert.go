@@ -10,6 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 )
@@ -63,7 +64,7 @@ func toDatasources(cfg *config.Config) []Datasource {
 			Connections: make([]DatasourceConnection, 0, len(connections)),
 		}
 		if db.ReadAfterWrite > 0 {
-			ds.ReadAfterWrite = optional(db.ReadAfterWrite.String())
+			ds.ReadAfterWrite = kit.Optional(db.ReadAfterWrite.String())
 		}
 		for _, connection := range slices.Sorted(maps.Keys(connections)) {
 			c := connections[connection]
@@ -72,7 +73,7 @@ func toDatasources(cfg *config.Config) []Datasource {
 				role = "primary"
 			}
 			ds.Connections = append(ds.Connections, DatasourceConnection{
-				Name: connection, Dsn: bootstrap.RedactDSN(db.Driver, c.DSN), Role: role, Pooler: optional(c.Pooler),
+				Name: connection, Dsn: bootstrap.RedactDSN(db.Driver, c.DSN), Role: role, Pooler: kit.Optional(c.Pooler),
 			})
 		}
 		out = append(out, ds)
@@ -81,29 +82,13 @@ func toDatasources(cfg *config.Config) []Datasource {
 	return out
 }
 
-// optional maps unset text to null, matching the omitempty encoding.
-func optional(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}
-
-// orEmpty returns s, or an empty list for a non-null API field.
-func orEmpty[T any](s []T) []T {
-	if s == nil {
-		return []T{}
-	}
-	return s
-}
-
 func toEntity(e config.EntityConfig) Entity {
 	out := Entity{
-		ID: e.ID(), Name: e.Name, Source: optional(e.Source), Datasource: optional(e.DataSource), Schema: optional(e.Schema),
-		Kind:        optional(e.Kind),
-		Description: optional(e.Description), PrimaryKey: orEmpty(e.PrimaryKey),
-		UniqueKeys: orEmpty(e.UniqueKeys), Params: orEmpty(e.Params),
-		Affects: orEmpty(e.Affects), AllowCascade: e.AllowCascade,
+		ID: e.ID(), Name: e.Name, Source: kit.Optional(e.Source), Datasource: kit.Optional(e.DataSource),
+		Schema: kit.Optional(e.Schema), Kind: kit.Optional(e.Kind),
+		Description: kit.Optional(e.Description), PrimaryKey: kit.OrEmpty(e.PrimaryKey),
+		UniqueKeys: kit.OrEmpty(e.UniqueKeys), Params: kit.OrEmpty(e.Params),
+		Affects: kit.OrEmpty(e.Affects), AllowCascade: e.AllowCascade,
 		Fields:        make([]Field, 0, len(e.Fields)),
 		Relationships: make([]Relationship, 0, len(e.Relationships)),
 		Mcp: &EntityMcp{
@@ -112,7 +97,7 @@ func toEntity(e config.EntityConfig) Entity {
 	}
 	for _, f := range e.Fields {
 		out.Fields = append(out.Fields, Field{
-			Name: f.Name, Alias: optional(f.Alias), Description: optional(f.Description), Mask: optional(f.Mask),
+			Name: f.Name, Alias: kit.Optional(f.Alias), Description: kit.Optional(f.Description), Mask: kit.Optional(f.Mask),
 			Exclude: f.Exclude,
 		})
 	}
@@ -153,7 +138,7 @@ func legacyAccess(e config.EntityConfig) map[string]any {
 	if len(e.FieldACL) > 0 {
 		acl := map[string]any{}
 		for role, a := range e.FieldACL {
-			acl[role] = map[string]any{"read": orEmpty(a.Read), "write": orEmpty(a.Write)}
+			acl[role] = map[string]any{"read": kit.OrEmpty(a.Read), "write": kit.OrEmpty(a.Write)}
 		}
 		out["fieldACL"] = acl
 	}
@@ -175,7 +160,7 @@ func toGrant(g config.GrantConfig) Grant {
 	}
 	if g.Fields != nil {
 		out.FieldsRestricted = true
-		out.ReadFields, out.WriteFields = orEmpty(g.Fields.Read), orEmpty(g.Fields.Write)
+		out.ReadFields, out.WriteFields = kit.OrEmpty(g.Fields.Read), kit.OrEmpty(g.Fields.Write)
 	}
 	if g.Rows != nil {
 		out.Rows = g.Rows
@@ -200,9 +185,11 @@ func toRoles(cfg *config.Config) []Role {
 	}
 	out := make([]Role, 0, len(cfg.Roles))
 	for name, def := range cfg.Roles {
-		m := orEmpty(members[name])
+		m := kit.OrEmpty(members[name])
 		sort.Strings(m)
-		out = append(out, Role{Name: name, Description: optional(def.Description), Grants: toGrants(def.Grants), Members: m})
+		out = append(out, Role{
+			Name: name, Description: kit.Optional(def.Description), Grants: toGrants(def.Grants), Members: m,
+		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -212,8 +199,8 @@ func toUsers(cfg *config.Config) []User {
 	out := make([]User, 0, len(cfg.Users))
 	for name, u := range cfg.Users {
 		user := User{
-			Name: name, Description: optional(u.Description), Roles: orEmpty(u.Roles), Grants: toGrants(u.Grants),
-			Disabled: u.Disabled, HasToken: u.TokenHash != "", TokenHash: optional(u.TokenHash),
+			Name: name, Description: kit.Optional(u.Description), Roles: kit.OrEmpty(u.Roles), Grants: toGrants(u.Grants),
+			Disabled: u.Disabled, HasToken: u.TokenHash != "", TokenHash: kit.Optional(u.TokenHash),
 		}
 		if len(u.Subject) > 0 {
 			user.Subject = u.Subject

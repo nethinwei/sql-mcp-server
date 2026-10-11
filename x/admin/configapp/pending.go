@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/configplan"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
@@ -27,8 +28,8 @@ func digest(v any) string {
 
 func toPendingState(p configstore.PendingState, now time.Time) *PendingState {
 	out := &PendingState{
-		Key: p.Key, Status: pendingStatus(p.Status, p.Until, now), Owner: optional(p.Owner),
-		Reason: optional(p.Reason), UpdatedBy: p.UpdatedBy, UpdatedAt: p.UpdatedAt,
+		Key: p.Key, Status: pendingStatus(p.Status, p.Until, now), Owner: kit.Optional(p.Owner),
+		Reason: kit.Optional(p.Reason), UpdatedBy: p.UpdatedBy, UpdatedAt: p.UpdatedAt,
 	}
 	if !p.Until.IsZero() {
 		out.Until = &p.Until
@@ -47,7 +48,7 @@ func (r *Service) pendingStates(ctx context.Context) (map[string]*PendingState, 
 	}
 	out := make(map[string]*PendingState, len(all))
 	for _, p := range all {
-		out[p.Key] = toPendingState(p, r.Scans.clock())
+		out[p.Key] = toPendingState(p, r.now())
 	}
 	return out, nil
 }
@@ -83,7 +84,7 @@ func (r *Service) Pending(ctx context.Context, against Against) (*PendingWork, e
 		if row.Drift() && row.Entity != nil {
 			key := "drift:" + row.Ref + ":" + digest([][]string{row.Added, row.Missing})
 			out.DriftTables = append(out.DriftTables, PendingTable{Key: key, Ref: row.Ref, Entity: row.Entity.ID(),
-				Added: orEmpty(row.Added), Missing: orEmpty(row.Missing), State: states[key]})
+				Added: kit.OrEmpty(row.Added), Missing: kit.OrEmpty(row.Missing), State: states[key]})
 		}
 	}
 	for _, schemas := range configplan.Unscanned(pc.sources, configplan.Scope{Datasources: f.Datasources}) {
@@ -136,18 +137,14 @@ var pendingStatuses = []string{"open", "snoozed", "ignored"}
 
 // SetPendingState records who handles a pending item and how.
 func (r *Service) SetPendingState(ctx context.Context, in PendingStateInput) (*PendingState, error) {
-	who, err := auth.RequireUnlimited(ctx, auth.PermWrite)
-	if err != nil {
-		return nil, err
-	}
-	store, err := r.plans()
+	who, store, err := r.planStore(ctx, auth.PermWrite)
 	if err != nil {
 		return nil, err
 	}
 	state := configstore.PendingState{
 		Key: strings.TrimSpace(
 			in.Key,
-		), Status: in.Status, Owner: deref(in.Owner), Reason: strings.TrimSpace(deref(in.Reason)),
+		), Status: in.Status, Owner: kit.Deref(in.Owner), Reason: strings.TrimSpace(kit.Deref(in.Reason)),
 		UpdatedBy: who.Username,
 	}
 	if in.Until != nil {
@@ -158,7 +155,7 @@ func (r *Service) SetPendingState(ctx context.Context, in PendingStateInput) (*P
 		return nil, errors.New("a pending item key has 1 to 255 bytes")
 	case !slices.Contains(pendingStatuses, state.Status):
 		return nil, errors.New("status is open, snoozed or ignored")
-	case state.Status == "snoozed" && !state.Until.After(r.Scans.clock()):
+	case state.Status == "snoozed" && !state.Until.After(r.now()):
 		return nil, errors.New("a snooze needs a time in the future")
 	case state.Status == "ignored" && state.Reason == "":
 		return nil, errors.New("say why the item is ignored")
@@ -167,7 +164,7 @@ func (r *Service) SetPendingState(ctx context.Context, in PendingStateInput) (*P
 	if err != nil {
 		return nil, err
 	}
-	return toPendingState(saved, r.Scans.clock()), nil
+	return toPendingState(saved, r.now()), nil
 }
 
 // PendingLog lists what was set of a pending item, newest first.

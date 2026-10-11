@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 )
 
@@ -135,7 +136,7 @@ func withProxyIdentity(users UserDirectory, next http.Handler) http.Handler {
 			http.Error(w, "X-MCP-User and X-MCP-Role are mutually exclusive", http.StatusBadRequest)
 			return
 		}
-		id, ok := users.UserByName(canonicalRole(name))
+		id, ok := users.UserByName(rbac.NormalizeRole(name))
 		if !ok {
 			http.Error(w, "unknown or disabled user", http.StatusForbidden)
 			return

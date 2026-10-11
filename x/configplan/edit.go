@@ -2,9 +2,9 @@ package configplan
 
 import (
 	"slices"
-	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/configedit"
 )
 
@@ -19,25 +19,16 @@ func (p Proposal) Edit() configedit.Edit {
 	if len(p.Roles) > 0 {
 		roles := config.SpecOf(&config.Config{Roles: p.Config.Roles}).Roles
 		edit.Roles = []configedit.Role{}
-		for _, name := range sortedKeys(p.Config.Roles) {
+		for _, name := range kit.SortedKeys(p.Config.Roles) {
 			edit.Roles = append(edit.Roles, configedit.Role{Name: name, RoleDefinitionSpec: roles[name]})
 		}
 	}
 	if len(p.Users) > 0 {
 		users := config.SpecOf(&config.Config{Users: p.Config.Users}).Users
 		edit.Users = []configedit.User{}
-		for _, name := range sortedKeys(p.Config.Users) {
+		for _, name := range kit.SortedKeys(p.Config.Users) {
 			edit.Users = append(edit.Users, configedit.User{Name: name, UserSpec: users[name]})
 		}
 	}
 	return edit
-}
-
-func sortedKeys[V any](m map[string]V) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	slices.SortFunc(out, strings.Compare)
-	return out
 }

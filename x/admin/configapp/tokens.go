@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
 )
@@ -33,11 +34,7 @@ func toMcpToken(t configstore.AdminToken) McpToken {
 
 // McpTokens lists the caller's tokens.
 func (r *Service) McpTokens(ctx context.Context) ([]McpToken, error) {
-	who, err := auth.RequireUnlimited(ctx, auth.PermRead)
-	if err != nil {
-		return nil, err
-	}
-	store, err := r.plans()
+	who, store, err := r.planStore(ctx, auth.PermRead)
 	if err != nil {
 		return nil, err
 	}
@@ -55,16 +52,12 @@ func (r *Service) McpTokens(ctx context.Context) ([]McpToken, error) {
 // CreateMcpToken creates a token of the caller for one client; the token
 // is returned once.
 func (r *Service) CreateMcpToken(ctx context.Context, in McpTokenInput) (*McpTokenSecret, error) {
-	who, err := auth.RequireUnlimited(ctx, auth.PermRead)
-	if err != nil {
-		return nil, err
-	}
-	store, err := r.plans()
+	who, store, err := r.planStore(ctx, auth.PermRead)
 	if err != nil {
 		return nil, err
 	}
 	name := strings.TrimSpace(in.Name)
-	days := derefInt(in.ExpiresInDays, 0)
+	days := kit.DerefInt(in.ExpiresInDays, 0)
 	switch {
 	case name == "" || utf8.RuneCountInString(name) > 64:
 		return nil, errors.New("a token name has 1 to 64 characters")
@@ -88,7 +81,7 @@ func (r *Service) CreateMcpToken(ctx context.Context, in McpTokenInput) (*McpTok
 	t := configstore.AdminToken{ID: hex.EncodeToString(id[:]), Username: who.Username, Name: name,
 		TokenHash: config.TokenHash(token), Scope: scope}
 	if days > 0 {
-		t.ExpiresAt = r.Scans.clock().Add(time.Duration(days) * 24 * time.Hour).UTC().Truncate(time.Microsecond)
+		t.ExpiresAt = r.now().Add(time.Duration(days) * 24 * time.Hour).UTC().Truncate(time.Microsecond)
 	}
 	saved, err := store.CreateAdminToken(ctx, t)
 	if err != nil {
@@ -100,11 +93,7 @@ func (r *Service) CreateMcpToken(ctx context.Context, in McpTokenInput) (*McpTok
 
 // RevokeMcpToken revokes one of the caller's tokens.
 func (r *Service) RevokeMcpToken(ctx context.Context, id string) (bool, error) {
-	who, err := auth.RequireUnlimited(ctx, auth.PermRead)
-	if err != nil {
-		return false, err
-	}
-	store, err := r.plans()
+	who, store, err := r.planStore(ctx, auth.PermRead)
 	if err != nil {
 		return false, err
 	}

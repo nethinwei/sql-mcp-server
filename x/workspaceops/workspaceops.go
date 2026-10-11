@@ -186,28 +186,9 @@ func (s Service) WriteItems(ctx context.Context, username, by, op string, writes
 	return s.apply(ctx, username, by, func(w *workspace.Workspace, base workspace.Snapshot) (
 		workspace.Snapshot, workspace.LogEntry, error,
 	) {
-		var found []workspace.Conflict
-		refs := make([]workspace.Ref, 0, len(writes))
-		before, renames := w.Items, map[workspace.Ref]workspace.Ref{}
-		for _, wr := range writes {
-			if wr.From != nil && *wr.From != wr.Ref {
-				renames[wr.Ref] = *wr.From
-				if !workspace.IsMissing(w.Items.Get(*wr.From)) {
-					w.Items = w.Items.With(*wr.From, workspace.Missing)
-					refs = append(refs, *wr.From)
-				}
-			}
-			current := w.Items.Get(wr.Ref)
-			value := wr.Value
-			if !s.Schema.Same(current, wr.Previous) {
-				var conflicts []workspace.ValueConflict
-				value, conflicts = s.Schema.Merge(wr.Previous, wr.Value, current, nil)
-				found = append(found, s.pinned(wr.Ref, conflicts, workspace.Source{Kind: workspace.SourceWorkspace,
-					By: w.UpdatedBy})...)
-			}
-			w.Items = w.Items.With(wr.Ref, value)
-			refs = append(refs, wr.Ref)
-		}
+		before := w.Items
+		values, refs, renames, found := s.batch(w, writes)
+		w.Items = before.Apply(values, refs)
 		var err error
 		if w.Items, refs, err = s.reconcile(before, w.Items, renames, refs); err != nil {
 			return nil, workspace.LogEntry{}, err
@@ -222,6 +203,47 @@ func (s Service) WriteItems(ctx context.Context, username, by, op string, writes
 		}
 		return nil, entry, nil
 	})
+}
+
+// batch applies writes at once over w's items: values holds what each ref
+// becomes (an item a rename replaces goes missing), read back by the writes
+// that follow it in the same batch; a write whose previous value is not the
+// current one merges with it, and found keeps what conflicted.
+func (s Service) batch(w *workspace.Workspace, writes []Write) (
+	map[workspace.Ref]any, []workspace.Ref, map[workspace.Ref]workspace.Ref, []workspace.Conflict,
+) {
+	var found []workspace.Conflict
+	refs := make([]workspace.Ref, 0, len(writes))
+	before, renames := w.Items, map[workspace.Ref]workspace.Ref{}
+	at, values := before.Index(), map[workspace.Ref]any{}
+	current := func(ref workspace.Ref) any {
+		if v, ok := values[ref]; ok {
+			return v
+		}
+		if i, ok := at[ref]; ok {
+			return before[i].Value
+		}
+		return workspace.Missing
+	}
+	for _, wr := range writes {
+		if wr.From != nil && *wr.From != wr.Ref {
+			renames[wr.Ref] = *wr.From
+			if !workspace.IsMissing(current(*wr.From)) {
+				values[*wr.From] = workspace.Missing
+				refs = append(refs, *wr.From)
+			}
+		}
+		value := wr.Value
+		if was := current(wr.Ref); !s.Schema.Same(was, wr.Previous) {
+			var conflicts []workspace.ValueConflict
+			value, conflicts = s.Schema.Merge(wr.Previous, wr.Value, was, nil)
+			found = append(found, s.pinned(wr.Ref, conflicts, workspace.Source{Kind: workspace.SourceWorkspace,
+				By: w.UpdatedBy})...)
+		}
+		values[wr.Ref] = value
+		refs = append(refs, wr.Ref)
+	}
+	return values, refs, renames, found
 }
 
 // renamesLast puts the renames after the other writes: the removal of the

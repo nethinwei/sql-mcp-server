@@ -18,8 +18,7 @@ import (
 )
 
 type readPlan struct {
-	res              entity.Resolved
-	tc               Context
+	entityPlan
 	projectionFields []string
 	full             relalg.Predicate
 	keysetCols       []string // ORDER BY for keyset pagination
@@ -27,11 +26,8 @@ type readPlan struct {
 }
 
 func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
-	ctx, cancel := withTimeout(ctx, tc, 0)
-	defer cancel()
-	tc, endMetering := meterCall(tc, true)
-	defer endMetering()
-	tc.Transaction = in.Transaction
+	ctx, tc, end := beginCall(ctx, tc, true, in.Transaction)
+	defer end()
 	start := time.Now()
 	plan, err := prepareReadPlan(ctx, tc, in)
 	if err != nil {
@@ -65,18 +61,11 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 }
 
 func prepareReadPlan(ctx context.Context, tc Context, in readInput) (readPlan, error) {
-	res, err := resolveDMLEntity(tc, in.Entity)
+	ep, pred, err := planEntity(ctx, tc, in.Entity, entity.ActionRead, in.Filter)
 	if err != nil {
 		return readPlan{}, err
 	}
-	tc, err = routeEntity(ctx, tc, res.Entity, entity.ActionRead)
-	if err != nil {
-		return readPlan{}, err
-	}
-	pred, err := filterToPredicate(in.Filter, tc.MaxFilterConditions)
-	if err != nil {
-		return readPlan{}, err
-	}
+	res, tc := ep.res, ep.tc
 	readFields, projectionFields, err := readFieldNames(res, in)
 	if err != nil {
 		return readPlan{}, err
@@ -100,7 +89,7 @@ func prepareReadPlan(ctx context.Context, tc Context, in readInput) (readPlan, e
 		return readPlan{}, err
 	}
 	return readPlan{
-		res: res, tc: tc, projectionFields: projectionFields,
+		entityPlan: ep, projectionFields: projectionFields,
 		full: andPreds(andPreds(pred, g.RowFilter), keyset), keysetCols: keysetCols, grant: g,
 	}, nil
 }
@@ -114,7 +103,11 @@ func cursorPredicate(e entity.Entity, cursor map[string]any) (relalg.Predicate, 
 	}
 	key := e.CursorKey()
 	if key == nil {
-		return nil, nil, fmt.Errorf("%w: entity %q has no primary or unique key for cursor paging", ErrInvalidInput, e.Name)
+		return nil, nil, fmt.Errorf(
+			"%w: entity %q has no primary or unique key for cursor paging",
+			ErrInvalidInput,
+			e.Name,
+		)
 	}
 	keyset, cols := keysetAfter(key, cursor)
 	if len(cols) != len(cursor) {
@@ -145,10 +138,7 @@ func readFieldNames(res entity.Resolved, in readInput) ([]string, []string, erro
 func compileReadQuery(ctx context.Context, plan readPlan, in readInput) (statement, string, cache.Key, error) {
 	tc, res := plan.tc, plan.res
 	expr := buildReadExpression(res, in, plan)
-	compiled, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(expr,
-		codegen.WithPrimaryKey(res.Entity.PrimaryKey()...),
-		codegen.WithIdentityKeys(res.Entity.IdentityKeys(false, tc.Transaction != "")...),
-		codegen.WithMaxINCardinality(effectiveMaxIN(tc)))
+	compiled, err := compile(tc, res.Entity, expr, identityKeys(tc, res.Entity, false))
 	if err != nil {
 		return statement{}, "", cache.Key{}, err
 	}
@@ -167,7 +157,7 @@ func compileReadQuery(ctx context.Context, plan readPlan, in readInput) (stateme
 }
 
 func buildReadExpression(res entity.Resolved, in readInput, plan readPlan) relalg.Expr {
-	scan := relalg.Scan{Relation: relalg.RelationRef{Name: res.Entity.Source, Schema: res.Entity.Schema}}
+	scan := relalg.Scan{Relation: res.Entity.Ref()}
 	var expr relalg.Expr = scan
 	if plan.full != nil {
 		expr = relalg.Select{Input: scan, Predicate: plan.full}
@@ -180,11 +170,7 @@ func buildReadExpression(res entity.Resolved, in readInput, plan readPlan) relal
 		expr = relalg.Sort{Input: expr, OrderBy: order}
 	}
 	if len(plan.grant.Fields) > 0 {
-		items := make([]relalg.ProjectItem, len(plan.grant.Fields))
-		for i, f := range plan.grant.Fields {
-			items[i] = relalg.ProjectItem{Field: f}
-		}
-		expr = relalg.Project{Input: expr, Items: items}
+		expr = relalg.Project{Input: expr, Items: relalg.ProjectFields(plan.grant.Fields)}
 	}
 	if in.Limit > 0 {
 		expr = relalg.Limit{Input: expr, Count: in.Limit, Offset: in.Offset}
@@ -427,18 +413,12 @@ func compileExpandBatch(
 		return statement{}, err
 	}
 	full := andPreds(predicate, g.RowFilter)
-	scan := relalg.Scan{Relation: relalg.RelationRef{Name: target.Entity.Source, Schema: target.Entity.Schema}}
+	scan := relalg.Scan{Relation: target.Entity.Ref()}
 	expr := relalg.Expr(relalg.Select{Input: scan, Predicate: full})
 	if len(g.Fields) > 0 {
-		items := make([]relalg.ProjectItem, len(g.Fields))
-		for i, field := range g.Fields {
-			items[i] = relalg.ProjectItem{Field: field}
-		}
-		expr = relalg.Project{Input: expr, Items: items}
+		expr = relalg.Project{Input: expr, Items: relalg.ProjectFields(g.Fields)}
 	}
-	compiled, err := codegen.Renderer{Dialect: targetTC.Dialect}.Compile(expr,
-		codegen.WithPrimaryKey(target.Entity.PrimaryKey()...),
-		codegen.WithIdentityKeys(target.Entity.IdentityKeys(false, tc.Transaction != "")...),
+	compiled, err := compile(targetTC, target.Entity, expr, identityKeys(tc, target.Entity, false),
 		codegen.WithMaxINCardinality(max(len(tuples), effectiveMaxIN(targetTC))))
 	if err != nil {
 		return statement{}, err
@@ -464,17 +444,14 @@ func attachExpandedChildren(
 		if key, ok := rowJoinKey(parents.kept[i], join.local); ok {
 			children = grouped[key]
 		}
-		switch relation.Cardinality {
-		case "one", "one-to-one", "belongs-to":
-			if len(children) > 0 {
-				row[name] = children[0]
-			} else {
-				row[name] = nil
-			}
+		switch {
+		case relation.Single() && len(children) > 0:
+			row[name] = children[0]
+		case relation.Single():
+			row[name] = nil
+		case children == nil:
+			row[name] = []map[string]any{}
 		default:
-			if children == nil {
-				children = []map[string]any{}
-			}
 			row[name] = children
 		}
 	}

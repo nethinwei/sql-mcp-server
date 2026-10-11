@@ -11,15 +11,16 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
 )
 
 // routedDB records which connection served each statement.
-func routedDB(name string, used *[]string) *store.FakeDB {
-	return &store.FakeDB{
+func routedDB(name string, used *[]string) *storetest.FakeDB {
+	return &storetest.FakeDB{
 		QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
 			*used = append(*used, name)
-			return store.NewFakeRows([]string{"id"}, []any{int64(1)}), nil
+			return storetest.NewFakeRows([]string{"id"}, []any{int64(1)}), nil
 		},
 		ExecFn: func(context.Context, string, ...any) (store.Result, error) {
 			*used = append(*used, name)
@@ -29,10 +30,10 @@ func routedDB(name string, used *[]string) *store.FakeDB {
 }
 
 // beginsOn records which connection began each transaction.
-func beginsOn(name string, began *[]string) *store.FakeDB {
-	return &store.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
+func beginsOn(name string, began *[]string) *storetest.FakeDB {
+	return &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
 		*began = append(*began, name)
-		return &store.FakeTx{}, nil
+		return &storetest.FakeTx{}, nil
 	}}
 }
 
@@ -53,11 +54,14 @@ func TestActionsRouteToTheirConnection(t *testing.T) {
 	var used []string
 	writes := NewWriteTracker()
 	tc := Context{
-		Role: "u", Session: "s1", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Writes: writes,
-		Sources: map[string]DataSource{"default": {
-			DB: routedDB("replica", &used), Write: routedDB("rw", &used), Execute: routedDB("proc", &used),
-			Dialect: testdialect.MySQL{}, ReadAfterWrite: time.Hour,
-		}},
+		Services: &Services{
+			Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Writes: writes,
+			Sources: map[string]DataSource{"default": {
+				DB: routedDB("replica", &used), Write: routedDB("rw", &used), Execute: routedDB("proc", &used),
+				Dialect: testdialect.MySQL{}, ReadAfterWrite: time.Hour,
+			}},
+		},
+		Role: "u", Session: "s1",
 	}
 	run := func(tc Context, tl Tool, input string) {
 		t.Helper()
@@ -113,9 +117,13 @@ func TestReadOnlyTransactionsBeginOnTheReadConnection(t *testing.T) {
 	manager := NewTransactionManager(time.Minute, 4)
 	defer manager.Close()
 	tc := Context{
-		Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Transactions: manager,
-		TxBeginners: map[string]store.TxBeginner{"main": beginsOn("rw", &began)},
-		Sources:     map[string]DataSource{"main": {ReadTx: beginsOn("replica", &began)}},
+		Services: &Services{
+			Registry:     reg,
+			Authorizer:   rbac.NewRoleAuthorizer(reg),
+			Transactions: manager,
+			TxBeginners:  map[string]store.TxBeginner{"main": beginsOn("rw", &began)},
+			Sources:      map[string]DataSource{"main": {ReadTx: beginsOn("replica", &began)}},
+		},
 	}
 	for role, input := range map[string]string{"reader": `{}`, "writer": `{"readOnly":false}`} {
 		tc.Role = role
@@ -141,13 +149,15 @@ func TestReadsFollowingAWriteSkipSharedResults(t *testing.T) {
 	manager := NewTransactionManager(time.Minute, 4)
 	defer manager.Close()
 	tc := Context{
-		Role: "u", Session: "s1", Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Writes: NewWriteTracker(),
-		Cache: cache.NewTTLCache[[]map[string]any](time.Minute, 0), Transactions: manager,
-		TxBeginners: map[string]store.TxBeginner{"default": beginsOn("rw", &began)},
-		Sources: map[string]DataSource{"default": {
-			DB: routedDB("replica", &used), Write: routedDB("rw", &used), Dialect: testdialect.MySQL{},
-			ReadAfterWrite: time.Hour, ReadTx: beginsOn("replica", &began),
-		}},
+		Role: "u", Session: "s1", Services: &Services{
+			Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Writes: NewWriteTracker(),
+			Cache: cache.NewTTLCache[[]map[string]any](time.Minute, 0), Transactions: manager,
+			TxBeginners: map[string]store.TxBeginner{"default": beginsOn("rw", &began)},
+			Sources: map[string]DataSource{"default": {
+				DB: routedDB("replica", &used), Write: routedDB("rw", &used), Dialect: testdialect.MySQL{},
+				ReadAfterWrite: time.Hour, ReadTx: beginsOn("replica", &began),
+			}},
+		},
 	}
 	other := tc
 	other.Session = "s2"

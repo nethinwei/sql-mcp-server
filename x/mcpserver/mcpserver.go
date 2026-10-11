@@ -412,22 +412,18 @@ type requestSubject struct {
 // role- and tenant-scoped context, so a single process is no longer pinned to
 // one role. Exported so custom transports can inject an authenticated subject.
 func WithSubject(ctx context.Context, role string, attrs map[string]any) context.Context {
-	return context.WithValue(ctx, subjectCtxKey{}, requestSubject{role: canonicalRole(role), attrs: attrs})
+	return context.WithValue(ctx, subjectCtxKey{}, requestSubject{role: rbac.NormalizeRole(role), attrs: attrs})
 }
 
 func subjectFromContext(ctx context.Context, defaultRole string) (string, map[string]any) {
 	if s, ok := ctx.Value(subjectCtxKey{}).(requestSubject); ok {
 		role := s.role
 		if role == "" {
-			role = canonicalRole(defaultRole)
+			role = rbac.NormalizeRole(defaultRole)
 		}
 		return role, s.attrs
 	}
-	return canonicalRole(defaultRole), nil
-}
-
-func canonicalRole(role string) string {
-	return strings.ToLower(strings.TrimSpace(role))
+	return rbac.NormalizeRole(defaultRole), nil
 }
 
 // withRequestSubject extracts the caller's role and attributes from request

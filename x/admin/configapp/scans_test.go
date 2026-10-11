@@ -2,15 +2,12 @@ package configapp
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
@@ -206,111 +203,6 @@ func TestScansAreSharedThroughTheStore(t *testing.T) {
 	}
 }
 
-// A batch whose process stopped is taken over by another once its heartbeat
-// is stale: what was not scanned is scanned there, and the batch ends.
-func TestScanBatchIsTakenOver(t *testing.T) {
-	t.Parallel()
-	store := catalog.NewMemoryStore()
-	first := NewScans(scanjobs.Options{}, store)
-	blocked := func(string) func(context.Context) (struct{}, error) {
-		return func(ctx context.Context) (struct{}, error) {
-			<-ctx.Done()
-			return struct{}{}, ctx.Err()
-		}
-	}
-	b, err := first.startBatch(context.Background(), "shop", "root", "", []string{"a", "b", "c"}, blocked)
-	if err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(300 * time.Millisecond)
-	first.Close() // the process stops while scanning
-	second := NewScans(scanjobs.Options{}, store)
-	t.Cleanup(second.Close)
-	ownedBySecond := func(owner string) bool { return strings.HasPrefix(owner, second.batches.owner+".") }
-	if second.takeOver(context.Background(), runners(nil)); ownedBySecond(batchState(t, store, b.ID).Owner) {
-		t.Fatal("a batch with a fresh heartbeat was taken over")
-	}
-	second.clock = func() time.Time { return time.Now().Add(time.Minute) }
-	second.takeOver(context.Background(), runners(nil))
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		got := batchState(t, store, b.ID)
-		if !got.FinishedAt.IsZero() {
-			for _, item := range got.Items {
-				if item.State != "done" {
-					t.Fatalf("items = %+v", got.Items)
-				}
-			}
-			if !ownedBySecond(got.Owner) {
-				t.Fatalf("owner = %s", got.Owner)
-			}
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("not finished: %+v", got)
-		}
-	}
-}
-
-// A run that lost its batch (paused past its heartbeat while another process
-// took it over) writes nothing when it resumes, and stops.
-func TestScanBatchLateWriteOfALostRun(t *testing.T) {
-	t.Parallel()
-	store := catalog.NewMemoryStore()
-	scans := NewScans(scanjobs.Options{}, store)
-	t.Cleanup(scans.Close)
-	now := time.Now()
-	b := catalog.Batch{ID: "b1", Datasource: "shop", Owner: scans.batches.run(), StartedAt: now, Heartbeat: now,
-		Items: []catalog.BatchItem{{Schema: "a", State: catalog.ItemRunning}}}
-	if _, _, err := store.CreateBatch(context.Background(), b, 1); err != nil {
-		t.Fatal(err)
-	}
-	later := now.Add(time.Minute)
-	if ok, _ := store.ClaimBatch(context.Background(), "b1", "other.run", later, later); !ok {
-		t.Fatal("not taken over")
-	}
-	stopped := false
-	late := &batchRun{id: "b1", owner: b.Owner, stop: func() { stopped = true }}
-	if scans.move(late, catalog.BatchItem{Schema: "a", State: catalog.ItemDone}, catalog.ItemRunning) {
-		t.Fatal("the lost run moved an item")
-	}
-	got := batchState(t, store, "b1")
-	if got.Owner != "other.run" || got.Items[0].State != catalog.ItemRunning || !late.lost.Load() || !stopped {
-		t.Fatalf("after the lost run's write: %+v (lost %v, stopped %v)", got, late.lost.Load(), stopped)
-	}
-}
-
-// A scan that fails is tried again after a backoff, up to batchAttempts
-// scans; one that keeps failing ends failed with why.
-func TestScanBatchRetries(t *testing.T) {
-	t.Parallel()
-	store := catalog.NewMemoryStore()
-	scans := NewScans(scanjobs.Options{}, store)
-	t.Cleanup(scans.Close)
-	scans.batches.backoff = 10 * time.Millisecond
-	var calls sync.Map
-	flaky := func(schema string) func(context.Context) (struct{}, error) {
-		return func(context.Context) (struct{}, error) {
-			n, _ := calls.LoadOrStore(schema, new(atomic.Int32))
-			if c := n.(*atomic.Int32).Add(1); schema == "broken" || c == 1 {
-				return struct{}{}, fmt.Errorf("scan %d of %s failed", c, schema)
-			}
-			return struct{}{}, nil
-		}
-	}
-	b, err := scans.startBatch(context.Background(), "shop", "root", "", []string{"broken", "flaky"}, flaky)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := waitFinished(t, store, b.ID)
-	if broken := got.Items[0]; broken.State != catalog.ItemFailed || broken.Attempts != batchAttempts ||
-		broken.Error != "scan 3 of broken failed" {
-		t.Fatalf("broken = %+v", broken)
-	}
-	if flaky := got.Items[1]; flaky.State != catalog.ItemDone || flaky.Attempts != 2 || flaky.Error != "" {
-		t.Fatalf("flaky = %+v", flaky)
-	}
-}
-
 func waitFinished(t *testing.T, store catalog.Store, id string) catalog.Batch {
 	t.Helper()
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
@@ -320,14 +212,6 @@ func waitFinished(t *testing.T, store catalog.Store, id string) catalog.Batch {
 		if time.Now().After(deadline) {
 			t.Fatalf("batch %s not finished: %+v", id, batchState(t, store, id))
 		}
-	}
-}
-
-func runners(err error) func(context.Context, string) (scanRunner, error) {
-	return func(context.Context, string) (scanRunner, error) {
-		return func(string) func(context.Context) (struct{}, error) {
-			return func(context.Context) (struct{}, error) { return struct{}{}, err }
-		}, nil
 	}
 }
 
@@ -435,166 +319,5 @@ func TestScanBatchRequestKey(t *testing.T) {
 	waitFinished(t, store, first.ID)
 	if runs.Load() != 1 {
 		t.Fatalf("scanned %d times", runs.Load())
-	}
-}
-
-// failingMoves fails the item moves of a store while fail says so.
-type failingMoves struct {
-	catalog.Store
-	fail func() bool
-}
-
-func (f failingMoves) MoveItem(
-	ctx context.Context, id, owner string, now time.Time, it catalog.BatchItem, from ...string,
-) (bool, error) {
-	if f.fail() {
-		return false, errors.New("store unavailable")
-	}
-	return f.Store.MoveItem(ctx, id, owner, now, it, from...)
-}
-
-// A store that fails a moment does not lose work: the write is tried again
-// and the batch goes on. One that keeps failing stops the run, leaving the
-// batch unfinished, as last recorded, for a takeover; nothing is canceled.
-func TestScanBatchStoreFailures(t *testing.T) {
-	t.Parallel()
-	succeeds := func(string) func(context.Context) (struct{}, error) {
-		return func(context.Context) (struct{}, error) { return struct{}{}, nil }
-	}
-	var failures atomic.Int32
-	failures.Store(1)
-	once := failingMoves{Store: catalog.NewMemoryStore(), fail: func() bool { return failures.Add(-1) >= 0 }}
-	scans := NewScans(scanjobs.Options{}, once)
-	t.Cleanup(scans.Close)
-	b, err := scans.startBatch(context.Background(), "shop", "root", "", []string{"a"}, succeeds)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := waitFinished(t, once, b.ID); got.Items[0].State != catalog.ItemDone {
-		t.Fatalf("after a failure for a moment: %+v", got.Items)
-	}
-	broken := failingMoves{Store: catalog.NewMemoryStore(), fail: func() bool { return true }}
-	stuck := NewScans(scanjobs.Options{}, broken)
-	t.Cleanup(stuck.Close)
-	b, err = stuck.startBatch(context.Background(), "shop", "root", "", []string{"a"}, succeeds)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		stuck.batches.mu.Lock()
-		_, running := stuck.batches.running[b.ID]
-		stuck.batches.mu.Unlock()
-		if !running {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the run does not stop")
-		}
-	}
-	if got := batchState(t, broken, b.ID); !got.FinishedAt.IsZero() || got.Items[0].State != catalog.ItemPending {
-		t.Fatalf("a run the store failed ended the batch: %+v", got)
-	}
-}
-
-// lostAnswers makes the item moves of a store and then, while lose says so,
-// answers with an error as if the connection broke after the commit.
-type lostAnswers struct {
-	catalog.Store
-	lose func() bool
-}
-
-func (l lostAnswers) MoveItem(
-	ctx context.Context, id, owner string, now time.Time, it catalog.BatchItem, from ...string,
-) (bool, error) {
-	moved, err := l.Store.MoveItem(ctx, id, owner, now, it, from...)
-	if err == nil && l.lose() {
-		return false, errors.New("connection reset")
-	}
-	return moved, err
-}
-
-// A move made whose answer was lost counts as made: the schema is scanned,
-// not skipped.
-func TestScanBatchLostAnswers(t *testing.T) {
-	t.Parallel()
-	var lose atomic.Int32
-	lose.Store(1)
-	store := lostAnswers{Store: catalog.NewMemoryStore(), lose: func() bool { return lose.Add(-1) >= 0 }}
-	scans := NewScans(scanjobs.Options{}, store)
-	t.Cleanup(scans.Close)
-	var runs atomic.Int32
-	counted := func(string) func(context.Context) (struct{}, error) {
-		return func(context.Context) (struct{}, error) {
-			runs.Add(1)
-			return struct{}{}, nil
-		}
-	}
-	b, err := scans.startBatch(context.Background(), "shop", "root", "", []string{"a"}, counted)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := waitFinished(t, store, b.ID)
-	if got.Items[0].State != catalog.ItemDone || got.Items[0].Attempts != 1 || runs.Load() != 1 {
-		t.Fatalf("after a lost answer: %+v, scanned %d times", got.Items, runs.Load())
-	}
-}
-
-// A takeover that cannot queue the schemas being scanned again does not run
-// the batch: it stays unfinished, as it was, and a later takeover runs it.
-func TestScanBatchTakeoverWaitsForTheStore(t *testing.T) {
-	t.Parallel()
-	var down atomic.Bool
-	down.Store(true)
-	store := failingMoves{Store: catalog.NewMemoryStore(), fail: down.Load}
-	old := time.Now().Add(-time.Hour)
-	if _, _, err := store.CreateBatch(context.Background(), catalog.Batch{ID: "b1", Datasource: "shop",
-		Owner: "gone.run", StartedAt: old, Heartbeat: old, Items: []catalog.BatchItem{
-			{Schema: "a", State: catalog.ItemRunning, Attempts: 1}, {Schema: "b", State: catalog.ItemPending}}}, 1); err != nil {
-		t.Fatal(err)
-	}
-	scans := NewScans(scanjobs.Options{}, store)
-	t.Cleanup(scans.Close)
-	scans.takeOver(context.Background(), runners(nil))
-	if got := batchState(t, store, "b1"); !got.FinishedAt.IsZero() || got.Items[0].State != catalog.ItemRunning {
-		t.Fatalf("a takeover the store failed ran the batch: %+v", got)
-	}
-	down.Store(false)
-	scans.clock = func() time.Time { return time.Now().Add(time.Minute) }
-	scans.takeOver(context.Background(), runners(nil))
-	got := waitFinished(t, store, "b1")
-	for _, it := range got.Items {
-		if it.State != catalog.ItemDone {
-			t.Fatalf("after the store is back: %+v", got.Items)
-		}
-	}
-}
-
-// Closing the bus stops the running batches as the process stopping does:
-// Close does not wait for them, and they stay unfinished for a takeover.
-func TestBusCloseStopsScanBatches(t *testing.T) {
-	t.Parallel()
-	store := catalog.NewMemoryStore()
-	b := bus.New(8, nil)
-	scans := NewScans(scanjobs.Options{Bus: b}, store)
-	t.Cleanup(scans.Close)
-	scans.WatchBatches(runners(nil))
-	blocked := func(string) func(context.Context) (struct{}, error) {
-		return func(ctx context.Context) (struct{}, error) {
-			<-ctx.Done()
-			return struct{}{}, ctx.Err()
-		}
-	}
-	batch, err := scans.startBatch(context.Background(), "shop", "root", "", []string{"a", "b"}, blocked)
-	if err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(300 * time.Millisecond)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := b.Close(ctx); err != nil {
-		t.Fatalf("bus close = %v; tasks %+v", err, b.Stats().Tasks)
-	}
-	if got := batchState(t, store, batch.ID); !got.FinishedAt.IsZero() {
-		t.Fatalf("closing the bus finished the batch: %+v", got)
 	}
 }
