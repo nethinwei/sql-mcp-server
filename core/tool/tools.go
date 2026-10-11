@@ -4,7 +4,7 @@ package tool
 func DefaultTools() []Tool {
 	return []Tool{
 		DescribeTool{}, ReadTool{}, CreateTool{}, UpdateTool{},
-		DeleteTool{}, ExecuteTool{}, AggregateTool{},
+		DeleteTool{}, ExecuteTool{}, AggregateTool{}, ExecuteSQLTool{},
 		BeginTransactionTool{}, CommitTransactionTool{}, RollbackTransactionTool{},
 	}
 }

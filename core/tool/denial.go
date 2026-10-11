@@ -49,6 +49,7 @@ const (
 	CodeDatasourceForbidden = "DATASOURCE_FORBIDDEN"
 	CodeAmbiguousEntity     = "AMBIGUOUS_ENTITY"
 	CodeOutcomeUnknown      = "OUTCOME_UNKNOWN"
+	CodeAuditUnavailable    = "AUDIT_UNAVAILABLE"
 )
 
 var sentinelDenials = []struct {
@@ -67,6 +68,7 @@ var sentinelDenials = []struct {
 	{ErrTransactionScope, CodeTransactionScope, false},
 	{ErrTransactionCapacity, CodeTransactionCapacity, true},
 	{ErrTransactionStale, CodeTransactionStale, false},
+	{ErrAuditUnavailable, CodeAuditUnavailable, false},
 }
 
 // DenialFor maps a business-level error to the rejection contract. ok is
@@ -106,6 +108,9 @@ func DenialFor(err error, decisionID string) (Denial, bool) {
 
 // typedDenial maps the error types that carry constraints for the agent.
 func typedDenial(err error) (Denial, bool) {
+	if d, ok := escapeDenial(err); ok {
+		return d, true
+	}
 	if errors.Is(err, ErrOutcomeUnknown) {
 		// Not retryable as is: a blind retry may apply the write twice.
 		return Denial{

@@ -69,6 +69,8 @@ type Datasource struct {
 	Routing *DatasourceRouting `json:"routing"`
 	// How long a session reads from the write connection after writing (a Go duration); empty when off.
 	ReadAfterWrite *string `json:"readAfterWrite,omitempty"`
+	// Set when the datasource admits the SQL escape hatch (execute_sql); null otherwise.
+	SQLEscape *DatasourceSQLEscape `json:"sqlEscape,omitempty"`
 }
 
 type DatasourceConnection struct {
@@ -85,6 +87,11 @@ type DatasourceRouting struct {
 	Read    string `json:"read"`
 	Write   string `json:"write"`
 	Execute string `json:"execute"`
+}
+
+type DatasourceSQLEscape struct {
+	// The connection execute_sql runs on; its account bounds the hatch.
+	Connection string `json:"connection"`
 }
 
 type DraftRevision struct {
@@ -286,6 +293,7 @@ type RoleInput struct {
 	Name        string       `json:"name"`
 	Description *string      `json:"description,omitempty"`
 	Grants      []GrantInput `json:"grants,omitempty"`
+	Permissions []string     `json:"permissions,omitempty"`
 }
 
 type RollbackInput struct {
@@ -370,6 +378,7 @@ type UserInput struct {
 	Description *string      `json:"description,omitempty"`
 	Roles       []string     `json:"roles,omitempty"`
 	Grants      []GrantInput `json:"grants,omitempty"`
+	Permissions []string     `json:"permissions,omitempty"`
 	Subject     any          `json:"subject,omitempty"`
 	Disabled    *bool        `json:"disabled,omitempty"`
 	TokenHash   *string      `json:"tokenHash,omitempty"`

@@ -66,6 +66,7 @@ func newServerWithTools(acquire appAcquire) (*mcp.Server, *listedTools) {
 	tools := &listedTools{acquire: acquire, defs: map[string]string{}}
 	tools.sync(s, app)
 	release()
+	s.AddReceivingMiddleware(listEscapeHatchPerUser(acquire))
 	registerSchemaResource(s, acquire)
 	registerPrompts(s)
 	return s, tools
@@ -694,15 +695,6 @@ type sessionIdentity struct {
 	subject string
 }
 
-type sessionIdentityStore struct {
-	mu       sync.RWMutex
-	sessions map[string]sessionIdentity
-}
-
-func newSessionIdentityStore() *sessionIdentityStore {
-	return &sessionIdentityStore{sessions: make(map[string]sessionIdentity)}
-}
-
 func requestIdentity(ctx context.Context) sessionIdentity {
 	subject, _ := ctx.Value(subjectCtxKey{}).(requestSubject)
 	role := strings.TrimSpace(subject.role)
@@ -715,48 +707,4 @@ func requestIdentity(ctx context.Context) sessionIdentity {
 		}
 	}
 	return sessionIdentity{role: role, subject: attrs}
-}
-
-func (s *sessionIdentityStore) bind(sessionID string, identity sessionIdentity) bool {
-	if sessionID == "" {
-		return false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if existing, ok := s.sessions[sessionID]; ok {
-		return existing == identity
-	}
-	s.sessions[sessionID] = identity
-	return true
-}
-
-func (s *sessionIdentityStore) matches(sessionID string, identity sessionIdentity) bool {
-	s.mu.RLock()
-	existing, ok := s.sessions[sessionID]
-	s.mu.RUnlock()
-	return ok && existing == identity
-}
-
-func (s *sessionIdentityStore) close(sessionID string) {
-	s.mu.Lock()
-	delete(s.sessions, sessionID)
-	s.mu.Unlock()
-}
-
-func bindSessionIdentity(store *sessionIdentityStore, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		identity := requestIdentity(r.Context())
-		sessionID := strings.TrimSpace(r.Header.Get(sessionIDHeader))
-		switch r.Method {
-		case http.MethodPost, http.MethodGet, http.MethodDelete:
-			if sessionID != "" && !store.matches(sessionID, identity) {
-				http.Error(w, "MCP session identity mismatch", http.StatusForbidden)
-				return
-			}
-		}
-		next.ServeHTTP(w, r)
-		if sessionID == "" && r.Method == http.MethodPost {
-			_ = store.bind(strings.TrimSpace(w.Header().Get(sessionIDHeader)), identity)
-		}
-	})
 }

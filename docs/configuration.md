@@ -73,6 +73,12 @@ users:
   约束中列出可选字段集。完整语义见[授权模型设计](design/authorization-model.md)。
 - 用户表随热重载生效；删除或禁用用户后其 HTTP 会话被解除并回滚在途事务。
 - 未配置 `users` 时行为与之前完全一致。
+- 系统权限 `permissions`（角色与用户都可写，取并集）目前只有
+  `sql:execute@<数据源>`：让用户对该数据源使用可信 SQL 逃生通道 `execute_sql`。工具
+  还要求 `tools.executeSql: true`（默认关闭，开启时必须 `audit.enabled`）和数据源声明
+  `sqlEscape: {connection: <连接名>}`；三者缺一不可。权限引用的数据源必须存在；数据源
+  未声明 `sqlEscape` 时权限可以保留但不生效。估算策略见 `cost.sqlEscape.estimate`。
+  运行时行为见[安全模型](security.md#可信-sql-逃生通道)。
 
 ## 成本
 
@@ -224,6 +230,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `deleteRecord` | 布尔 |  |  | delete_record：按主键删除记录。 |
 | `executeEntity` | 布尔 |  |  | execute_entity：执行存储过程实体。不影响实体 mcp.customTool 注册的独立工具。 |
 | `aggregateRecords` | 布尔 |  |  | aggregate_records：分组统计。 |
+| `executeSql` | 布尔 |  |  | execute_sql：可信 SQL 逃生通道，默认关闭。开启后还须用户持有 sql:execute@<datasource> 且数据源声明 sqlEscape；未授权用户在 tools/list 中看不到它。开启要求 audit.enabled。 |
 | `beginTransaction` | 布尔 |  |  | 开启事务。 |
 | `commitTransaction` | 布尔 |  |  | 提交事务。 |
 | `rollbackTransaction` | 布尔 |  |  | 回滚事务。 |
@@ -263,6 +270,8 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `aqe.timeout` | 时长 | `"1s"` | 0–5s | 采样超时，独立于主查询；启用采样时必须大于 0。 |
 | `aqe.maxFingerprints` | 整数 | `4096` | ≥ 1 | 全局最多跟踪的模板数。 |
 | `aqe` | 对象 |  |  | 基于实际执行反馈的自适应估算与可选的 EXPLAIN ANALYZE 采样。 |
+| `sqlEscape.estimate` | 字符串 | `"required"` | 可选 `required`、`skip` | required（默认）：每条语句先 EXPLAIN，无法估算（DDL、SET、SHOW 等）或超出阈值即拒绝；skip：不估算，只保留硬上限。 |
+| `sqlEscape` | 对象 |  |  | execute_sql 的估算策略。超时、行数与字节上限、并发与预算是不可关闭的硬上限，这里只决定 EXPLAIN 估算。 |
 
 ### `budget`：预算
 
@@ -369,6 +378,8 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `routing.execute` | 字符串 |  |  | 存储过程使用的连接；不能是 replica。 |
 | `routing` | 对象 |  |  | 各类动作使用的连接；只有一个连接时可省略。 |
 | `readAfterWrite` | 时长 |  | ≥ 0 | 同一会话写入后，在这段时间内的读取改走 write 连接，以便在副本上读到自己的写入；0 表示不切换。 |
+| `sqlEscape.connection` | 字符串 |  | 必填；非空 | 逃生通道使用的连接名；该账号的数据库权限就是逃生通道的上限，服务不解析、不改写、不脱敏 SQL。建议使用独立账号。 |
+| `sqlEscape` | 对象 |  |  | 声明后该数据源允许可信 SQL 逃生通道（execute_sql）；省略即不允许，任何权限都不能对它执行任意 SQL。 |
 
 ### 定义 `entity`
 
@@ -423,7 +434,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | --- | --- | --- | --- | --- |
 | `description` | 字符串 |  |  | 角色说明。 |
 | `grants` | `grant` 列表 |  |  | 角色的授权项。 |
-| `permissions` | 字符串列表 |  |  | 系统权限（如 sql:execute@<datasource>），为后续版本预留；本版声明任何值都会校验失败。 |
+| `permissions` | 字符串列表 |  |  | 系统权限。sql:execute@<datasource> 让角色的用户在该数据源（须已配置且声明 sqlEscape）使用 execute_sql；其他系统权限为后续版本预留，本版声明即校验失败。 |
 
 ### 定义 `grant`
 
@@ -449,7 +460,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `roles` | 字符串列表 |  | 格式 `^[a-z0-9][a-z0-9_-]*$` | 用户拥有的角色，可以是顶层角色或实体级授权中出现的角色名。 |
 | `subject` | 自由对象 |  |  | 固定的主体属性，供 ${subject.x} 解析；优先于代理 X-MCP-Subject 中的同名属性。 |
 | `grants` | `grant` 列表 |  |  | 只给这个用户的直授授权。 |
-| `permissions` | 字符串列表 |  |  | 系统权限，为后续版本预留；本版声明任何值都会校验失败。 |
+| `permissions` | 字符串列表 |  |  | 只给这个用户的系统权限，与角色的 permissions 取并集；取值同角色的 permissions。 |
 | `disabled` | 布尔 |  |  | 禁用后无法认证，也不能作为 server.user；会话立即解除。 |
 
 ### 定义 `budgetLimits`

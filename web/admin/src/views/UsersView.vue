@@ -35,7 +35,10 @@ const columns = computed<DataTableColumns<UserInput>>(() => [
       ? h(NSpace, { size: 4 }, () => (u.roles ?? []).map((r) => h(NTag, { size: 'small', type: 'info', bordered: false }, () => r)))
       : h(NText, { depth: 3 }, () => '—'),
   },
-  { title: t('users.directGrants'), key: 'grants', width: 80, render: (u) => (u.grants ?? []).length || '—' },
+  {
+    title: t('users.directGrants'), key: 'grants', width: 80,
+    render: (u) => (u.grants ?? []).length + (u.permissions ?? []).length || '—',
+  },
   {
     title: t('users.state'), key: 'state', width: 130,
     render: (u) => u.disabled
@@ -48,7 +51,7 @@ const columns = computed<DataTableColumns<UserInput>>(() => [
 
 function create() {
   if (error.value) return
-  ws.upsertUser({ name: name.value, roles: roles.value, grants: [] })
+  ws.upsertUser({ name: name.value, roles: roles.value, grants: [], permissions: [] })
   creating.value = false
   void router.push({ name: 'user', params: { name: name.value }, query: { token: '1' } })
 }

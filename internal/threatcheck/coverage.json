@@ -199,5 +199,30 @@
     "gaps": [
       "令牌只按数据源收窄，不能按操作或单个工具收窄；/admin/mcp 无单独限速"
     ]
+  },
+  "TM-013": {
+    "severity": "critical",
+    "tests": [
+      {"file": "core/tool/tool_execute_sql_test.go", "name": "TestExecuteSQLMatrix"},
+      {"file": "core/tool/tool_execute_sql_test.go", "name": "TestExecuteSQLLimitsSurviveCostDisabled"},
+      {"file": "core/tool/tool_execute_sql_test.go", "name": "TestExecuteSQLRefusesWhenAuditFails"},
+      {"file": "core/tool/tool_execute_sql_test.go", "name": "TestExecuteSQLEstimate"},
+      {"file": "core/tool/tool_execute_sql_test.go", "name": "TestExecuteSQLExecAndInvalidation"},
+      {"file": "core/tool/tool_execute_sql_test.go", "name": "TestExecuteSQLEchoesDatabaseErrors"},
+      {"file": "core/tool/tool_execute_sql_test.go", "name": "TestOnlyExecuteSQLUsesRawStatements"},
+      {"file": "x/mcpserver/execute_sql_test.go", "name": "TestExecuteSQLListedAndCalledPerUser"},
+      {"file": "x/mcpserver/execute_sql_test.go", "name": "TestExecuteSQLStdioDefaultIdentity"},
+      {"file": "x/mcpserver/execute_sql_test.go", "name": "TestReloadRevokesExecuteSQL"},
+      {"file": "x/bootstrap/bootstrap_test.go", "name": "TestAssembleRoutesEscapeHatch"},
+      {"file": "core/config/config_access_test.go", "name": "TestValidateSQLEscape"},
+      {"file": "core/rbac/rbac_test.go", "name": "TestPolicyHasPermission"},
+      {"file": "core/audit/audit_test.go", "name": "TestRecordSync"},
+      {"file": "x/providers/postgres/integration_test.go", "name": "TestPGExecuteSQL"},
+      {"file": "x/providers/mysql/integration_test.go", "name": "TestMySQLExecuteSQL"},
+      {"file": "x/providers/oceanbase/integration_test.go", "name": "TestOBExecuteSQL"}
+    ],
+    "gaps": [
+      "权限上限等于连接账号的数据库权限；数据库错误原文回显；驱动层多语句无法禁止"
+    ]
   }
 }

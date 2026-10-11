@@ -129,7 +129,10 @@ func TestOptionalBlocksLoadWithDefaults(t *testing.T) {
 		"explicit tools":    func(c *Config) { c.Tools = ToolFlags{ReadRecords: true, present: true} },
 		"cost switched on":  func(c *Config) { c.Cost.Enabled = &on },
 		"budget role entry": func(c *Config) { c.Budget.Roles = map[string]BudgetLimits{"reader": {}} },
-		"entity":            func(c *Config) { c.Entities = []EntityConfig{{Name: "orders", DataSource: "main"}} },
+		"sql escape hatch": func(c *Config) {
+			c.Databases["main"] = DatabaseConfig{Driver: "postgres", DSN: "x", SQLEscape: SQLEscapeConfig{Connection: "default"}}
+		},
+		"entity": func(c *Config) { c.Entities = []EntityConfig{{Name: "orders", DataSource: "main"}} },
 		"role with a grant": func(c *Config) {
 			c.Entities = []EntityConfig{{Name: "orders", DataSource: "main", Fields: []FieldConfig{{Name: "id"}}}}
 			c.Roles = map[string]RoleDefinition{"r": {Grants: []GrantConfig{{Entity: "orders", Actions: []string{"read"}}}}}

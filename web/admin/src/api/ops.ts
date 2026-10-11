@@ -21,6 +21,7 @@ export const DatasourcePartsFragment = graphql(`
     name driver dsn readAfterWrite
     connections { name dsn role pooler }
     routing { read write execute }
+    sqlEscape { connection }
   }
 `)
 

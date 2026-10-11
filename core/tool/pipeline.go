@@ -3,11 +3,13 @@ package tool
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 
 	"github.com/nethinwei/sql-mcp-server/core/budget"
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
+	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
@@ -61,6 +63,61 @@ func admitInsert(compiled codegen.Compiled) gated {
 	return gated{Compiled: compiled}
 }
 
+// authorizeSQL authorizes the SQL escape hatch (execute_sql) on datasource
+// for tc's caller: the datasource must admit the hatch (tc.Escapes holds the
+// admitting datasources only, and none while tools.executeSql is off) and
+// the caller must hold sql:execute@<datasource>, which only a configured
+// user can. Which condition failed reaches the audit log alone; the client
+// sees one unauthorized.
+func authorizeSQL(tc Context, datasource string) (grant, EscapeRoute, error) {
+	permission := config.SQLExecutePermission(datasource)
+	route, admitted := tc.Escapes[datasource]
+	if !admitted {
+		return grant{}, EscapeRoute{}, fmt.Errorf("%w: datasource %q does not admit execute_sql",
+			ErrUnauthorized, datasource)
+	}
+	checker, ok := tc.Authorizer.(rbac.PermissionChecker)
+	if !ok || !checker.HasPermission(tc.Role, permission) {
+		return grant{}, EscapeRoute{}, fmt.Errorf("%w: %s does not hold %s", ErrUnauthorized, tc.Role, permission)
+	}
+	return grant{rbac.Decision{Allowed: true, Grants: []string{"permission:" + permission}}}, route, nil
+}
+
+// estimateSQL is the escape hatch's cost gate: EXPLAIN on the escape
+// connection, judged as the Estimate layer judges plans, and a statement
+// EXPLAIN cannot estimate refused. There is no estimate when the
+// configuration skips it or has no EXPLAIN (cost.enabled: false); the hard
+// limits apply either way.
+func estimateSQL(ctx context.Context, tc Context, route EscapeRoute, sql string, args []any) (gated, error) {
+	compiled := codegen.Compiled{SQL: sql, Args: args}
+	if !tc.SQLEscapeEstimateRequired || route.Explainer == nil {
+		return gated{Compiled: compiled}, nil
+	}
+	plan, err := route.Explainer.Explain(ctx, sql, args)
+	if err != nil {
+		tc.Hooks.FireCostGate(ctx, cost.Plan{ScanType: cost.ScanUnknown}, cost.Score{}, "hard")
+		return gated{}, &UnestimableError{Cause: err}
+	}
+	dec := cost.Estimate{Threshold: route.Threshold, FailClosed: true}.Evaluate(plan, nil)
+	if limit := tc.BudgetLimits.MaxEstimatedScannedRows; dec.Plan != nil && limit > 0 && dec.Plan.EstimatedRows > limit {
+		return gated{}, fmt.Errorf("%w: estimated scanned rows %d exceed limit %d",
+			budget.ErrExceeded, dec.Plan.EstimatedRows, limit)
+	}
+	verdict := "allow"
+	if !dec.Allow {
+		verdict = "hard"
+		if dec.Soft {
+			verdict = "soft"
+		}
+	}
+	estimated, score := dec.Estimate()
+	tc.Hooks.FireCostGate(ctx, estimated, score, verdict)
+	if !dec.Allow {
+		return gated{}, toExceededError(dec)
+	}
+	return gated{Compiled: compiled, plan: dec.Plan}, nil
+}
+
 // estimatedRows is the rows the gate estimated the statement scans.
 func (g gated) estimatedRows() int64 {
 	if g.plan == nil {
@@ -84,11 +141,82 @@ type statement struct {
 	// rowCap bounds the rows of the statement (0: no bound of its own).
 	rowCap int64
 	write  bool // a write: its errors and its effects are followed
+	// raw is the escape hatch's statement, of no entity: its rows are
+	// neither shaped nor masked and are cut at rowCap rather than refused,
+	// its errors keep the driver's message, and whatever its mode it may
+	// have changed anything in its database.
+	raw bool
 }
 
 // newStatement plans running sql on tc for res under g.
 func newStatement(tc Context, res entity.Resolved, g grant, sql gated) statement {
 	return statement{tc: tc, res: res, grant: g, sql: sql}
+}
+
+// newRawStatement plans running the escape hatch's sql on tc under g: a
+// write when exec, bounded by the stricter of the call's row caps.
+func newRawStatement(tc Context, g grant, sql gated, exec bool) statement {
+	return statement{
+		tc: tc, grant: g, sql: sql, raw: true, write: exec,
+		rowCap: minLimit(tc.MaxRows, tc.BudgetLimits.MaxReturnedRows),
+	}
+}
+
+// rawRows are an escape hatch query's rows: positional under their column
+// names (a statement may return one name twice), cut at the row cap.
+type rawRows struct {
+	columns   []string
+	rows      [][]any
+	truncated bool
+}
+
+// queryRaw runs st, the escape hatch's query, and reads its rows as they
+// are, counted against the call's byte limit and cut at its row cap.
+func (st statement) queryRaw(ctx context.Context) (out rawRows, err error) {
+	if err := st.admitted(); err != nil {
+		return rawRows{}, err
+	}
+	defer func() { err = st.settle(ctx, err) }()
+	rows, err := st.tc.DB.QueryContext(ctx, st.sql.SQL, st.sql.Args...)
+	if err != nil {
+		return rawRows{}, st.fail(err)
+	}
+	defer func() { _ = rows.Close() }()
+	if out.columns, err = rows.Columns(); err != nil {
+		return rawRows{}, st.fail(err)
+	}
+	out.rows = [][]any{}
+	for rows.Next() {
+		if st.rowCap > 0 && int64(len(out.rows)) >= st.rowCap {
+			out.truncated = true
+			break
+		}
+		values := make([]any, len(out.columns))
+		pointers := make([]any, len(out.columns))
+		for i := range values {
+			pointers[i] = &values[i]
+		}
+		if err := rows.Scan(pointers...); err != nil {
+			return rawRows{}, st.fail(err)
+		}
+		if err := st.tc.results.add(rowOf(out.columns, values)); err != nil {
+			return rawRows{}, err
+		}
+		out.rows = append(out.rows, values)
+	}
+	if err := rows.Err(); err != nil {
+		return rawRows{}, st.fail(err)
+	}
+	return out, nil
+}
+
+// rowOf is values under columns, as the meter counts a row.
+func rowOf(columns []string, values []any) map[string]any {
+	row := make(map[string]any, len(columns))
+	for i, c := range columns {
+		row[c] = values[i]
+	}
+	return row
 }
 
 // admitted refuses a statement made without an authorization or without SQL
@@ -170,6 +298,9 @@ func (st statement) present(row map[string]any) {
 
 // fail classifies a database error of st.
 func (st statement) fail(err error) error {
+	if st.raw {
+		return st.failRaw(err)
+	}
 	if !st.write {
 		return WrapDBError(err)
 	}
@@ -180,10 +311,34 @@ func (st statement) fail(err error) error {
 	return writeError(st.res, err)
 }
 
+// failRaw classifies a database error of the escape hatch's statement,
+// keeping the driver's message: the caller holds the connection's whole
+// account, and the message is what they are after.
+func (st statement) failRaw(err error) error {
+	if st.write && uncertain(err) {
+		return outcomeUnknown(err)
+	}
+	kind := ErrDatabase
+	if errors.Is(err, store.ErrPermissionDenied) {
+		kind = ErrDatasourceForbidden
+	}
+	return &RawDBError{Kind: kind, Cause: err}
+}
+
 // settle follows a write once it ended, whatever its outcome: the database
 // may have carried out part of a write that failed, and a procedure may write
-// even when its result is unusable.
+// even when its result is unusable. The escape hatch's statement is followed
+// whatever its mode: a query may write too (UPDATE ... RETURNING), and what
+// it changed is unknown, so every cached read of its database is dropped.
 func (st statement) settle(ctx context.Context, err error) error {
+	if st.raw {
+		st.tc.Writes.Record(st.tc.Session, st.tc.DataSource)
+		w := writeTargets(st.tc)
+		if followErr := applyWrite(st.tc, w, []CacheTarget{{Physical: w.database(st.tc.DataSource)}}); err == nil {
+			return followErr
+		}
+		return err
+	}
 	if !st.write {
 		return err
 	}

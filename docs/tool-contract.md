@@ -44,6 +44,11 @@
    - `DATASOURCE_FORBIDDEN`（不可重试）：动作路由到的数据源连接没有对应的数据库权限
      （包括连接到只读服务器），授权本身允许；需要管理员补权限或调整路由，修改请求无法
      绕过；
+   - `AUDIT_UNAVAILABLE`（不可重试）：`execute_sql` 的审计记录无法写入，调用未执行或结果
+     已被扣下（`exec` 的效果可能已发生，按 `OUTCOME_UNKNOWN` 的口径确认）；
+   - `DATABASE_ERROR` / `DATASOURCE_FORBIDDEN` 对 `execute_sql` 的**例外**：`reason` 携带
+     驱动返回的错误原文，`constraints.sqlstate` 携带 SQLSTATE（驱动提供时）；受治理面的
+     工具仍不回显原文；
    - `OUTCOME_UNKNOWN`（不可重试）：写入或提交执行期间连接中断或超时，数据库可能已经
      执行也可能没有；原样重试可能重复写入，应先读取受影响的行（或事务写过的内容）再决定；
      相关读缓存已按“已写入”失效；
@@ -92,7 +97,16 @@
    - `role` 是授权主体：角色名，或已配置用户的 `user:<name>`；`user`、`roles`
      分别为用户名及其角色；`grants` 为本次授权使用的覆盖授权项 ID（v0.1.11
      起新增，兼容变化）；
+   - `execute_sql`（v0.1.14 起新增，兼容变化）每次调用写两条事件，`action` 为 `sql`，
+     `grants` 为 `permission:sql:execute@<数据源>`，可选字段 `phase`（`begin` 在执行前、
+     `end` 在执行后）、`datasource`、`connection`、`sql`（原样的语句文本，不脱敏）、
+     `rowsAffected`；两条事件共用 `decisionId`，同步写入，可能排在队列中更早的异步事件
+     之后，消费方按 `time` 排序；
    - `cost` 的内部结构暂不属于定版契约，消费方不得依赖其字段名。
+
+`execute_sql` 的输出不是行列表而是一个对象：`query` 模式为
+`{"columns": [...], "rows": [[...]], "rowCount": n, "truncated": bool}`（行按位置给出，
+同名列不合并；到行上限即停并标 `truncated`），`exec` 模式为 `{"rowsAffected": n}`。
 
 ## 兼容 vs 破坏性变化
 

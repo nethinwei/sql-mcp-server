@@ -90,8 +90,11 @@ type Info struct {
 // Result is a tool's outcome: the rows returned to the agent plus usage for
 // budgets and audit.
 type Result struct {
-	Content              []map[string]any
-	ReturnedRows         int64
+	Content      []map[string]any
+	ReturnedRows int64
+	// Counted says ReturnedRows is the row count even when zero; otherwise
+	// zero means the tool did not count and Content's size stands in.
+	Counted              bool
 	ReturnedBytes        int64
 	EstimatedScannedRows int64
 	// Grants lists covering grant IDs for audit; it is not sent to clients.
@@ -127,6 +130,8 @@ type Services struct {
 	TxBeginners  map[string]store.TxBeginner
 	// ResultMemory bounds the results the process holds at once.
 	ResultMemory *ResultMemory
+	// Escapes are the datasources admitting the SQL escape hatch, by name.
+	Escapes map[string]EscapeRoute
 }
 
 // Context is one call: who makes it, where it is routed, and the Services
@@ -172,6 +177,9 @@ type Limits struct {
 	TransactionBeginTimeout    time.Duration
 	TransactionCommitTimeout   time.Duration
 	TransactionRollbackTimeout time.Duration
+	// SQLEscapeEstimateRequired refuses SQL the escape hatch cannot
+	// estimate (cost.sqlEscape.estimate: required).
+	SQLEscapeEstimateRequired bool
 }
 
 // DataSource is the per-entity execution route: DB is the read connection;
@@ -186,6 +194,18 @@ type DataSource struct {
 	Dialect        dialect.Dialect
 	Gate           cost.Gate
 	Analyze        cost.AnalyzePolicy
+}
+
+// EscapeRoute is where the SQL escape hatch (execute_sql) runs on a
+// datasource: the connection its sqlEscape names, EXPLAIN on that same
+// connection (nil when the provider has none) and the thresholds the
+// estimate is scored against.
+type EscapeRoute struct {
+	Connection string
+	DB         store.DB
+	Dialect    dialect.Dialect
+	Explainer  cost.Explainer
+	Threshold  cost.Threshold
 }
 
 // Tool is a single DML capability.
@@ -243,6 +263,9 @@ func RunTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Re
 	var res Result
 	tc, endMetering := meterCall(tc, info.ReadOnly)
 	defer endMetering() // after the audit: the result is held until the call ends
+	if _, durable := t.(durablyAudited); durable {
+		ctx = withEscapeTrace(ctx)
+	}
 	if err == nil {
 		if ends {
 			res, err = invokeDirect(ctx, t, input, tc)
@@ -255,40 +278,10 @@ func RunTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Re
 		tc.Hooks.FireOnError(ctx, err)
 	}
 	tc.Hooks.FireAfterTool(ctx, name, err)
-	recordToolAudit(ctx, tc, info, auditInput, res, err, start)
+	if auditErr := recordToolAudit(ctx, tc, info, auditInput, res, err, start); auditErr != nil && err == nil {
+		res, err = Result{}, auditErr // a durably audited call whose record failed: fail closed
+	}
 	return res, err
-}
-
-func acquireToolBudget(ctx context.Context, action string, tc Context) (budget.Lease, context.Context, Context, error) {
-	if tc.Budget == nil {
-		return nil, ctx, tc, nil
-	}
-	scope := budget.Scope{
-		Role: tc.Role, Tenant: tenantKey(tc.Subject), Session: tc.Session,
-	}
-	lease, err := tc.Budget.AcquireWithReservation(ctx, scope, budget.Reservation{Cost: budgetReservation(action, tc)})
-	if err != nil {
-		return nil, ctx, tc, err
-	}
-	ctx = lease.Context()
-	tc.BudgetLimits = lease.Limits()
-	return lease, ctx, tc, nil
-}
-
-// budgetReservation is the session cost held while a call runs: its row cap
-// for row-returning actions, otherwise 1.
-func budgetReservation(action string, tc Context) int64 {
-	reserved := int64(1)
-	switch action {
-	case entity.ActionRead.String(), entity.ActionAggregate.String():
-		reserved = tc.MaxRows
-	case entity.ActionExecute.String():
-		reserved = tc.MaxProcedureRows
-	}
-	if reserved <= 0 {
-		return 1
-	}
-	return reserved
 }
 
 func invokeTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Result, error) {
@@ -378,7 +371,7 @@ func finalizeToolResult(
 
 // returnedRows is the row count a tool reported, or its result size.
 func returnedRows(res Result) int64 {
-	if res.ReturnedRows > 0 {
+	if res.Counted || res.ReturnedRows > 0 {
 		return res.ReturnedRows
 	}
 	return int64(len(res.Content))

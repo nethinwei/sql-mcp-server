@@ -91,6 +91,7 @@ export default {
     entityCount: '{count} 个实体',
     routing: '读 → {read}，写 → {write}，执行 → {execute}',
     readAfterWrite: '写后 {d} 内读走写连接',
+    sqlEscape: 'SQL 逃生通道（execute_sql）：走连接 {c}',
     cliOnly: '数据源与连接串只能用 CLI 修改（避免经后台写入凭据）。导入的表默认零权限，可以在加入工作区时直接授权给角色。', scan: '扫描', rescan: '重新扫描', searchTables: '搜索表名或说明',
     refreshSchemas: '刷新库列表',
     defaultSchema: '默认', notScanned: '未扫描', scannedMeta: '{count} 张表 · {at} 扫描',
@@ -325,7 +326,14 @@ export default {
     grantsFromRoles: '当前没有直授权限，权限全部来自角色：{roles}', noRoles: '（无角色）',
     deleteTitle: '删除用户 {name}？', deleteBody: '发布后此用户的 token 立即失效。',
   },
+  systemPermissions: {
+    title: '系统权限', hint: '勾选 sql:execute@<数据源> 后，拥有此角色的用户可以对该数据源使用 execute_sql（可信 SQL 逃生通道）。只有声明了 sqlEscape 的数据源可选。',
+    userHint: '只给这个用户的系统权限；通常优先通过角色授权。',
+    placeholder: '选择可执行任意 SQL 的数据源', none: '没有数据源声明 sqlEscape，无法授予',
+    executable: '此用户可对这些数据源使用 execute_sql：{list}', notExecutable: '此用户不能使用 execute_sql',
+  },
   simulate: {
+    executeSql: '可对这些数据源使用 execute_sql：{list}', noExecuteSql: '不能使用 execute_sql',
     notInConfig: '{source} 中没有 {list}，已清除对应选择',
     sourceWorkspace: '工作区：基于 #{id}，含未发布修改', sourceWorkspaceClean: '工作区：与版本 #{id} 一致', sourcePublished: '已发布版本 #{id}',
     rerun: '重新计算', stale: '条件已变化，下方是上一次的结果，请重新计算。', askedFor: '本次模拟：',

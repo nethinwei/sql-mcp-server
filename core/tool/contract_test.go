@@ -37,6 +37,7 @@ func currentContract(t *testing.T) contractSnapshot {
 		"aggregate_records": schemaAggregate,
 		"begin_transaction": schemaBeginTransaction,
 		"transaction_token": transactionTokenSchema,
+		"execute_sql":       schemaExecuteSQL,
 	}
 	tools := make(map[string]any, len(schemas))
 	for name, raw := range schemas {

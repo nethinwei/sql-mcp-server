@@ -19,6 +19,7 @@ const error = computed(() => nameError(name.value, ws.roles.map((r) => r.name)))
 const cards = computed(() => ws.roles.map((r) => ({
   ...r,
   members: ws.users.filter((u) => (u.roles ?? []).includes(r.name)).map((u) => u.name),
+  permissions: r.permissions ?? [],
   // Grants may name one entity by different references: count it once.
   entities: [...new Set((r.grants ?? []).map((g) => {
     const id = ws.entityIndex.idOf(g.entity)
@@ -28,7 +29,7 @@ const cards = computed(() => ws.roles.map((r) => ({
 
 function create() {
   if (error.value) return
-  ws.upsertRole({ name: name.value, description: description.value, grants: [] })
+  ws.upsertRole({ name: name.value, description: description.value, grants: [], permissions: [] })
   creating.value = false
   void router.push({ name: 'role', params: { name: name.value } })
 }
@@ -51,7 +52,8 @@ onMounted(() => { if (route.query.create) creating.value = true })
             <div class="tags">
               <n-tag v-for="e in r.entities.slice(0, 5)" :key="e" size="small" :bordered="false">{{ e }}</n-tag>
               <n-text v-if="r.entities.length > 5" depth="3" class="small">+{{ r.entities.length - 5 }}</n-text>
-              <n-text v-if="!r.entities.length" type="warning" class="small">{{ t('roles.none') }}</n-text>
+              <n-tag v-for="p in r.permissions" :key="p" size="small" type="info" :bordered="false">{{ p }}</n-tag>
+              <n-text v-if="!r.entities.length && !r.permissions.length" type="warning" class="small">{{ t('roles.none') }}</n-text>
             </div>
             <n-text depth="3" class="small">
               {{ t('roles.members', { count: r.members.length }, r.members.length) }}<template v-if="r.members.length">: {{ r.members.join(', ') }}</template>

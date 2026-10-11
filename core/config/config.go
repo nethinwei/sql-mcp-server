@@ -99,7 +99,22 @@ type DatabaseConfig struct {
 	// ReadAfterWrite routes a session's reads to the write connection for
 	// this long after it writes, so it reads its own writes on a replica.
 	ReadAfterWrite time.Duration `yaml:"readAfterWrite,omitempty" json:"readAfterWrite,omitempty" schema:"min=0"`
+	// SQLEscape, when set, admits the trusted SQL escape hatch (execute_sql)
+	// to this database on the connection it names; unset, no user may run
+	// SQL on it whatever their permissions. It hot-reloads like the other
+	// connection settings.
+	SQLEscape SQLEscapeConfig `yaml:"sqlEscape,omitempty" json:"sqlEscape,omitempty"`
 }
+
+// SQLEscapeConfig declares the connection the SQL escape hatch runs on. The
+// account of that connection bounds what the hatch can do: the server runs
+// the SQL as it is, without parsing, rewriting or masking.
+type SQLEscapeConfig struct {
+	Connection string `yaml:"connection" json:"connection" schema:"required,minLength=1"`
+}
+
+// Enabled reports whether the database admits the escape hatch.
+func (s SQLEscapeConfig) Enabled() bool { return s.Connection != "" }
 
 // Connections are a database's connections by name.
 type Connections map[string]ConnectionConfig
@@ -208,8 +223,9 @@ func (e EntityConfig) DatasourceName() string {
 type RoleDefinition struct {
 	Description string        `yaml:"description,omitempty"   json:"description,omitempty"`
 	Grants      []GrantConfig `yaml:"grants,omitempty"      json:"grants,omitempty"`
-	// Permissions holds system permissions such as "sql:execute@<datasource>".
-	// None is supported yet; any value fails validation.
+	// Permissions holds system permissions: "sql:execute@<datasource>" admits
+	// the role's users to the SQL escape hatch of that datasource. No other
+	// permission is supported yet; any other value fails validation.
 	Permissions []string `yaml:"permissions,omitempty" json:"permissions,omitempty"`
 }
 
@@ -282,13 +298,17 @@ type MCPFlags struct {
 // ToolFlags toggles each DML tool. present records that the tools section was
 // written (see Spec), so an explicit all-false object differs from omission.
 type ToolFlags struct {
-	DescribeEntities    bool `yaml:"describeEntities"    json:"describeEntities"`
-	ReadRecords         bool `yaml:"readRecords"         json:"readRecords"`
-	CreateRecord        bool `yaml:"createRecord"        json:"createRecord"`
-	UpdateRecord        bool `yaml:"updateRecord"        json:"updateRecord"`
-	DeleteRecord        bool `yaml:"deleteRecord"        json:"deleteRecord"`
-	ExecuteEntity       bool `yaml:"executeEntity"       json:"executeEntity"`
-	AggregateRecords    bool `yaml:"aggregateRecords"    json:"aggregateRecords"`
+	DescribeEntities bool `yaml:"describeEntities"    json:"describeEntities"`
+	ReadRecords      bool `yaml:"readRecords"         json:"readRecords"`
+	CreateRecord     bool `yaml:"createRecord"        json:"createRecord"`
+	UpdateRecord     bool `yaml:"updateRecord"        json:"updateRecord"`
+	DeleteRecord     bool `yaml:"deleteRecord"        json:"deleteRecord"`
+	ExecuteEntity    bool `yaml:"executeEntity"       json:"executeEntity"`
+	AggregateRecords bool `yaml:"aggregateRecords"    json:"aggregateRecords"`
+	// ExecuteSQL registers execute_sql, the trusted SQL escape hatch. Off by
+	// default; a user still needs sql:execute@<datasource> and the datasource
+	// its sqlEscape connection.
+	ExecuteSQL          bool `yaml:"executeSql" json:"executeSql"`
 	BeginTransaction    bool `yaml:"beginTransaction"    json:"beginTransaction"`
 	CommitTransaction   bool `yaml:"commitTransaction"   json:"commitTransaction"`
 	RollbackTransaction bool `yaml:"rollbackTransaction" json:"rollbackTransaction"`
@@ -325,27 +345,28 @@ type LaneConfig struct {
 // CostConfig configures the defense-in-depth cost gate. SoftScore/HardScore are
 // the 0-100 normalized thresholds (from cost.ScorePlan) for soft/hard reject.
 type CostConfig struct {
-	Enabled             *bool         `yaml:"enabled,omitempty"           json:"enabled,omitempty"`
-	SoftScore           int           `yaml:"softScore"                   json:"softScore" schema:"min=0,max=100"`
-	HardScore           int           `yaml:"hardScore"                   json:"hardScore" schema:"min=0,max=100"`
-	MaxRows             int64         `yaml:"maxRows"                     json:"maxRows" schema:"min=1"`
-	MaxBytes            int64         `yaml:"maxBytes"                    json:"maxBytes" schema:"min=1"`
-	MaxINListSize       int           `yaml:"maxINListSize"               json:"maxINListSize" schema:"min=1"`
-	MaxFilterConditions int           `yaml:"maxFilterConditions"         json:"maxFilterConditions" schema:"min=1"`
-	MaxGroupByFields    int           `yaml:"maxGroupByFields"            json:"maxGroupByFields" schema:"min=1"`
-	MaxAggregates       int           `yaml:"maxAggregates"               json:"maxAggregates" schema:"min=1"`
-	MaxExpand           int           `yaml:"maxExpand"                   json:"maxExpand" schema:"min=1"`
-	MaxProcedureRows    int64         `yaml:"maxProcedureRows"            json:"maxProcedureRows" schema:"min=1"`
-	RejectFullScan      bool          `yaml:"rejectFullScan"              json:"rejectFullScan"`
-	FullScanMaxRows     int64         `yaml:"fullScanMaxRows"             json:"fullScanMaxRows" schema:"min=0"`
-	WhitelistPKPoint    bool          `yaml:"whitelistPKPoint"            json:"whitelistPKPoint"`
-	RequirePKForWrite   *bool         `yaml:"requirePKForWrite,omitempty" json:"requirePKForWrite,omitempty"`
-	RequireKnownScan    bool          `yaml:"requireKnownScan"            json:"requireKnownScan"`
-	RequireFreshStats   bool          `yaml:"requireFreshStats"           json:"requireFreshStats"`
-	QueryTimeout        time.Duration `yaml:"queryTimeout"                json:"queryTimeout" schema:"min=0"`
-	AllowTemplates      []string      `yaml:"allowTemplates"              json:"allowTemplates"`
-	RejectTemplates     []string      `yaml:"rejectTemplates"             json:"rejectTemplates"`
-	AQE                 AQEConfig     `yaml:"aqe"                         json:"aqe"`
+	Enabled             *bool               `yaml:"enabled,omitempty"           json:"enabled,omitempty"`
+	SoftScore           int                 `yaml:"softScore"                   json:"softScore" schema:"min=0,max=100"`
+	HardScore           int                 `yaml:"hardScore"                   json:"hardScore" schema:"min=0,max=100"`
+	MaxRows             int64               `yaml:"maxRows"                     json:"maxRows" schema:"min=1"`
+	MaxBytes            int64               `yaml:"maxBytes"                    json:"maxBytes" schema:"min=1"`
+	MaxINListSize       int                 `yaml:"maxINListSize"               json:"maxINListSize" schema:"min=1"`
+	MaxFilterConditions int                 `yaml:"maxFilterConditions"         json:"maxFilterConditions" schema:"min=1"`
+	MaxGroupByFields    int                 `yaml:"maxGroupByFields"            json:"maxGroupByFields" schema:"min=1"`
+	MaxAggregates       int                 `yaml:"maxAggregates"               json:"maxAggregates" schema:"min=1"`
+	MaxExpand           int                 `yaml:"maxExpand"                   json:"maxExpand" schema:"min=1"`
+	MaxProcedureRows    int64               `yaml:"maxProcedureRows"            json:"maxProcedureRows" schema:"min=1"`
+	RejectFullScan      bool                `yaml:"rejectFullScan"              json:"rejectFullScan"`
+	FullScanMaxRows     int64               `yaml:"fullScanMaxRows"             json:"fullScanMaxRows" schema:"min=0"`
+	WhitelistPKPoint    bool                `yaml:"whitelistPKPoint"            json:"whitelistPKPoint"`
+	RequirePKForWrite   *bool               `yaml:"requirePKForWrite,omitempty" json:"requirePKForWrite,omitempty"`
+	RequireKnownScan    bool                `yaml:"requireKnownScan"            json:"requireKnownScan"`
+	RequireFreshStats   bool                `yaml:"requireFreshStats"           json:"requireFreshStats"`
+	QueryTimeout        time.Duration       `yaml:"queryTimeout"                json:"queryTimeout" schema:"min=0"`
+	AllowTemplates      []string            `yaml:"allowTemplates"              json:"allowTemplates"`
+	RejectTemplates     []string            `yaml:"rejectTemplates"             json:"rejectTemplates"`
+	AQE                 AQEConfig           `yaml:"aqe"                         json:"aqe"`
+	SQLEscape           SQLEscapeCostConfig `yaml:"sqlEscape"             json:"sqlEscape"`
 	present             map[string]bool
 }
 
@@ -362,6 +383,25 @@ type AQEConfig struct {
 	MaxFingerprints   int           `yaml:"maxFingerprints"   json:"maxFingerprints" schema:"min=1"`
 	present           map[string]bool
 }
+
+// SQLEscapeCostConfig bounds the SQL escape hatch's estimate. Its hard
+// limits (timeout, rows, bytes, budgets) are the governed plane's and cannot
+// be switched off; only the EXPLAIN estimate is configurable.
+type SQLEscapeCostConfig struct {
+	// Estimate is required (the default: a statement EXPLAIN cannot estimate
+	// is refused) or skip (no estimate, the hard limits alone).
+	Estimate string `yaml:"estimate" json:"estimate" schema:"enum=@sqlEscapeEstimate"`
+}
+
+// EstimateRequired reports whether the escape hatch refuses statements it
+// cannot estimate.
+func (c SQLEscapeCostConfig) EstimateRequired() bool { return c.Estimate != SQLEscapeEstimateSkip }
+
+// Values of SQLEscapeCostConfig.Estimate.
+const (
+	SQLEscapeEstimateRequired = "required"
+	SQLEscapeEstimateSkip     = "skip"
+)
 
 // BudgetConfig contains role and tenant scoped resource limits.
 type BudgetConfig struct {

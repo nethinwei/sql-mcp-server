@@ -1,7 +1,7 @@
 # Roadmap
 
-当前稳定基线为 `v0.1.13`。已发布能力以
-[发布说明](releases/v0.1.13.md)、[CHANGELOG](../CHANGELOG.md)、
+当前稳定基线为 `v0.1.14`。已发布能力以
+[发布说明](releases/v0.1.14.md)、[CHANGELOG](../CHANGELOG.md)、
 [配置参考](configuration.md)和[安全模型](security.md)为准。
 
 本文件只给出未发布成果的顺序和门禁：
@@ -47,9 +47,11 @@
 
 ## Committed
 
-`v0.1.14` — [管理面 2 · Trusted SQL Escape Hatch](#管理面-2--trusted-sql-escape-hatch)。
-问题证据、非目标与退出门禁见该节；2026-09-30 路线图复审将管理面阶段提前到
-`Next` 之前。
+`v0.1.14` 交付[管理面 2 · Trusted SQL Escape Hatch](#管理面-2--trusted-sql-escape-hatch)：
+可信 SQL 逃生通道 `execute_sql`、系统权限 `sql:execute@<数据源>`、审计同步写入；
+实施方案与评审决议见[设计文档](design/sql-escape-hatch.md)，退出门禁已全部满足，见
+[发布说明](releases/v0.1.14.md)。2026-09-30 路线图复审将管理面阶段提前到 `Next` 之前；
+下一个 Committed 版本待路线图复审确定。
 
 `v0.1.13` 交付多管理员协作的管理面与执行总线：方案驱动的批量配置、配置 MCP 令牌、
 持久化扫描批次、服务端工作区与版本管理模块、快进发布、执行总线、配置意图与生效值、
@@ -223,11 +225,13 @@ delegation chain 仍属 L7）；不支持显式 deny 规则；stdio 保持进程
 
 **退出门禁**：
 
-- [ ] 开关、用户权限、数据源许可任一缺失时，工具不出现在该用户的
-  `tools/list` 且调用被拒绝，有矩阵测试；
-- [ ] timeout、结果 cap 与预算在本入口上有测试锁定，且配置无法关闭；
-- [ ] 审计 sink 不可用时拒绝执行，有故障注入测试；
-- [ ] [核心不变量](invariants.md)与[威胁模型](threat-model.md)登记本入口的
+- [x] 开关、用户权限、数据源许可任一缺失时，工具不出现在该用户的
+  `tools/list` 且调用被拒绝，有矩阵测试（`TestExecuteSQLMatrix`、
+  `TestExecuteSQLListedAndCalledPerUser`）；
+- [x] timeout、结果 cap 与预算在本入口上有测试锁定，且配置无法关闭
+  （`TestExecuteSQLLimitsSurviveCostDisabled`）；
+- [x] 审计 sink 不可用时拒绝执行，有故障注入测试（`TestExecuteSQLRefusesWhenAuditFails`）；
+- [x] [核心不变量](invariants.md)（I29）与[威胁模型](threat-model.md)（TM-013）登记本入口的
   例外范围（I3、I24 等只对受治理面成立）与新 threat ID；README、
   [安全模型](security.md)的产品边界表述同步更新。
 
@@ -268,7 +272,9 @@ delegation chain 仍属 L7）；不支持显式 deny 规则；stdio 保持进程
 
 ### 管理面 4 — Admin API, Login and Schema Import
 
-预期 `v0.1.14`，前置：管理面 1、管理面 3。
+核心路径（本地账号登录、GraphQL 管理 API、schema 导入、simulate）已随 `v0.1.11` 交付，
+前置：管理面 1、管理面 3。OIDC / 通用 OAuth2 登录未交付、待排期（见各版本发布说明的
+已知限制）。
 
 **问题证据**：见本阶段进入条件第三项。服务已经掌握 schema，缺的是把它变成
 受治理配置的管理接口。

@@ -54,14 +54,14 @@ func ParseExplain(b []byte) (cost.Plan, error) {
 	}
 	tables, readsNothing, fullScans, sized := 0, false, 0, 0
 	eachJSONObject(root.QueryBlock, func(node map[string]any) {
-		if message, ok := node["message"].(string); ok && noTableRead(message) {
+		if noteNode(node, &plan) {
 			readsNothing = true
 		}
-		if sort, _ := node["using_filesort"].(bool); sort {
-			plan.HasSort = true
-		}
-		if temp, _ := node["using_temporary_table"].(bool); temp {
-			plan.HasTempTable = true
+		if insert, _ := node["insert"].(bool); insert {
+			// INSERT ... VALUES: the target carries access_type ALL although
+			// nothing is read; a SELECT source is a node of its own.
+			readsNothing = true
+			return
 		}
 		access, ok := node["access_type"].(string)
 		if !ok {
@@ -98,6 +98,20 @@ func sizeFullScan(node map[string]any, plan *cost.Plan) int {
 	}
 	plan.TableRows = max(plan.TableRows, int64(rows))
 	return 1
+}
+
+// noteNode records what a node says beside its access type (a sort, a
+// temporary table) and reports a message settling the query without a
+// table read.
+func noteNode(node map[string]any, plan *cost.Plan) (readsNothing bool) {
+	if sort, _ := node["using_filesort"].(bool); sort {
+		plan.HasSort = true
+	}
+	if temp, _ := node["using_temporary_table"].(bool); temp {
+		plan.HasTempTable = true
+	}
+	message, ok := node["message"].(string)
+	return ok && noTableRead(message)
 }
 
 // noTableRead reports an EXPLAIN message saying the optimizer answers the

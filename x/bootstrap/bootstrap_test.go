@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/core/audit"
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
@@ -23,6 +24,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	coreprovider "github.com/nethinwei/sql-mcp-server/core/provider"
+	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
@@ -707,5 +709,68 @@ func TestConfigurePoolReachesBuiltInProviders(t *testing.T) {
 			t.Errorf("%s: MaxOpenConnections = %d, want 7", driver, got)
 		}
 		_ = db.Close()
+	}
+}
+
+// escapeHatchConfig admits execute_sql on datasource main for alice (role
+// dba); on switches the tool.
+func escapeHatchConfig(t *testing.T, on bool) *config.Config {
+	t.Helper()
+	cfg := &config.Config{
+		Databases: map[string]config.DatabaseConfig{"main": {
+			Driver: "postgres", DSN: "x", SQLEscape: config.SQLEscapeConfig{Connection: config.DefaultConnection},
+		}},
+		Entities: []config.EntityConfig{{Name: "users", DataSource: "main", Fields: []config.FieldConfig{{Name: "id"}}}},
+		Roles:    map[string]config.RoleDefinition{"dba": {Permissions: []string{"sql:execute@main"}}},
+		Users:    map[string]config.UserConfig{"alice": {Roles: []string{"dba"}}},
+		Audit:    config.AuditConfig{Enabled: true, Path: t.TempDir() + "/audit.jsonl"},
+	}
+	cfg.Tools = config.DefaultToolFlags()
+	cfg.Tools.ExecuteSQL = on
+	cfg.ApplyDefaults()
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+// The escape hatch is routed only while tools.executeSql is on, to the
+// connection the datasource's sqlEscape names, with the auditor durable and
+// the policy answering sql:execute permissions.
+func TestAssembleRoutesEscapeHatch(t *testing.T) {
+	t.Parallel()
+	escapeConfig := func(on bool) *config.Config { return escapeHatchConfig(t, on) }
+	plan := cost.Plan{ScanType: cost.ScanIndex, EstimatedRows: 1, StatsFresh: true}
+	provider := func() map[string]Provider {
+		return map[string]Provider{"main": &fakeProvider{dialect: postgres.Dialect{}, explainPlan: &plan}}
+	}
+	app, err := AssembleWithProviders(escapeConfig(true), provider())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	route, ok := app.Escapes["main"]
+	if !ok || route.Connection != config.DefaultConnection || route.DB == nil || route.Explainer == nil ||
+		route.Threshold.Datasource != "main" || route.Dialect.Name() != "postgres" {
+		t.Fatalf("escape route = %+v (%v)", route, ok)
+	}
+	if _, durable := app.Auditor.(audit.Durable); !durable {
+		t.Fatal("the auditor must record durably")
+	}
+	checker, ok := app.Authorizer.(rbac.PermissionChecker)
+	if !ok || !checker.HasPermission("user:alice", "sql:execute@main") ||
+		checker.HasPermission("dba", "sql:execute@main") {
+		t.Fatal("the policy must answer sql:execute permissions for users only")
+	}
+	if !app.Services().SQLEscapeEstimateRequired || app.Services().Escapes["main"].Connection == "" {
+		t.Fatal("the services must carry the hatch's route and estimate policy")
+	}
+	off, err := AssembleWithProviders(escapeConfig(false), provider())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer off.Close()
+	if len(off.Escapes) != 0 {
+		t.Fatalf("no datasource admits the hatch while the switch is off: %v", off.Escapes)
 	}
 }

@@ -155,6 +155,13 @@ type Datasource {
   routing: DatasourceRouting!
   "How long a session reads from the write connection after writing (a Go duration); empty when off."
   readAfterWrite: String
+  "Set when the datasource admits the SQL escape hatch (execute_sql); null otherwise."
+  sqlEscape: DatasourceSqlEscape
+}
+
+type DatasourceSqlEscape {
+  "The connection execute_sql runs on; its account bounds the hatch."
+  connection: String!
 }
 
 type DatasourceConnection {
@@ -231,6 +238,8 @@ type Role {
   name: String!
   description: String
   grants: [Grant!]!
+  "System permissions: sql:execute@<datasource> admits the role's users to execute_sql on that datasource."
+  permissions: [String!]!
 }
 
 type Grant {
@@ -248,6 +257,8 @@ type User {
   description: String
   roles: [String!]!
   grants: [Grant!]!
+  "System permissions of the user's own, united with its roles' (same values as a role's)."
+  permissions: [String!]!
   subject: JSON
   disabled: Boolean
   "The sha256 hash of the user's bearer token (never the token); null when none."
@@ -542,6 +553,7 @@ input RoleInput {
   name: String!
   description: String
   grants: [GrantInput!]
+  permissions: [String!]
 }
 
 input GrantInput {
@@ -558,6 +570,7 @@ input UserInput {
   description: String
   roles: [String!]
   grants: [GrantInput!]
+  permissions: [String!]
   subject: JSON
   disabled: Boolean
   tokenHash: String

@@ -108,6 +108,12 @@ defs.database.routing.execute:
 defs.database.readAfterWrite:
   zh-CN: 同一会话写入后，在这段时间内的读取改走 write 连接，以便在副本上读到自己的写入；0 表示不切换。
   en: For this long after a session writes, its reads use the write connection, so it reads its own writes despite replica lag; 0 disables it.
+defs.database.sqlEscape:
+  zh-CN: 声明后该数据源允许可信 SQL 逃生通道（execute_sql）；省略即不允许，任何权限都不能对它执行任意 SQL。
+  en: Declares that the datasource admits the trusted SQL escape hatch (execute_sql); omitted, no permission runs SQL on it.
+defs.database.sqlEscape.connection:
+  zh-CN: 逃生通道使用的连接名；该账号的数据库权限就是逃生通道的上限，服务不解析、不改写、不脱敏 SQL。建议使用独立账号。
+  en: Connection the escape hatch runs on; its account's database privileges bound the hatch, as the SQL is run as it is (no parsing, rewriting or masking). A dedicated account is recommended.
 
 entities:
   zh-CN: 显式暴露给 Agent 的实体；可以为空。启动自省会拒绝数据库中缺失的表、视图或字段。
@@ -243,8 +249,8 @@ defs.role.grants:
   zh-CN: 角色的授权项。
   en: The role's grants.
 defs.role.permissions:
-  zh-CN: 系统权限（如 sql:execute@<datasource>），为后续版本预留；本版声明任何值都会校验失败。
-  en: System permissions (such as sql:execute@<datasource>), reserved; any value fails validation in this version.
+  zh-CN: 系统权限。sql:execute@<datasource> 让角色的用户在该数据源（须已配置且声明 sqlEscape）使用 execute_sql；其他系统权限为后续版本预留，本版声明即校验失败。
+  en: System permissions. sql:execute@<datasource> admits the role's users to execute_sql on that datasource (which must exist and declare sqlEscape); other system permissions are reserved and fail validation in this version.
 defs.grant:
   zh-CN: 一条实体授权。一次请求只使用覆盖其全部字段的授权项，它们的行范围取 OR，再 AND 实体 tenantPolicy。
   en: One entity grant. A request uses only the grants covering all its fields; their row scopes are ORed and then ANDed with the entity tenantPolicy.
@@ -289,8 +295,8 @@ defs.user.grants:
   zh-CN: 只给这个用户的直授授权。
   en: Grants for this user only.
 defs.user.permissions:
-  zh-CN: 系统权限，为后续版本预留；本版声明任何值都会校验失败。
-  en: System permissions, reserved; any value fails validation in this version.
+  zh-CN: 只给这个用户的系统权限，与角色的 permissions 取并集；取值同角色的 permissions。
+  en: System permissions for this user only, united with the roles' permissions; same values as a role's permissions.
 defs.user.disabled:
   zh-CN: 禁用后无法认证，也不能作为 server.user；会话立即解除。
   en: A disabled user cannot authenticate or be server.user; its sessions end immediately.
@@ -320,6 +326,9 @@ tools.executeEntity:
 tools.aggregateRecords:
   zh-CN: aggregate_records：分组统计。
   en: 'aggregate_records: grouped aggregates.'
+tools.executeSql:
+  zh-CN: execute_sql：可信 SQL 逃生通道，默认关闭。开启后还须用户持有 sql:execute@<datasource> 且数据源声明 sqlEscape；未授权用户在 tools/list 中看不到它。开启要求 audit.enabled。
+  en: 'execute_sql: the trusted SQL escape hatch, off by default. A user also needs sql:execute@<datasource> and the datasource its sqlEscape; unauthorized users do not see it in tools/list. Requires audit.enabled.'
 tools.beginTransaction:
   zh-CN: 开启事务。
   en: Begin a transaction.
@@ -421,6 +430,12 @@ cost.aqe.timeout:
 cost.aqe.maxFingerprints:
   zh-CN: 全局最多跟踪的模板数。
   en: Maximum templates tracked globally.
+cost.sqlEscape:
+  zh-CN: execute_sql 的估算策略。超时、行数与字节上限、并发与预算是不可关闭的硬上限，这里只决定 EXPLAIN 估算。
+  en: The estimate policy of execute_sql. Timeout, row and byte caps, concurrency and budgets are hard limits that cannot be switched off; this only decides the EXPLAIN estimate.
+cost.sqlEscape.estimate:
+  zh-CN: required（默认）：每条语句先 EXPLAIN，无法估算（DDL、SET、SHOW 等）或超出阈值即拒绝；skip：不估算，只保留硬上限。
+  en: 'required (the default): every statement is EXPLAINed first and refused when it cannot be estimated (DDL, SET, SHOW) or exceeds the thresholds; skip: no estimate, the hard limits alone.'
 
 budget:
   title: {zh-CN: '预算', en: 'Budgets'}

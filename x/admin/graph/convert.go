@@ -47,6 +47,9 @@ func toDatasources(cfg *config.Config) []Datasource {
 		if db.ReadAfterWrite > 0 {
 			ds.ReadAfterWrite = kit.Optional(db.ReadAfterWrite.String())
 		}
+		if db.SQLEscape.Enabled() {
+			ds.SQLEscape = &DatasourceSQLEscape{Connection: db.SQLEscape.Connection}
+		}
 		for _, connection := range slices.Sorted(maps.Keys(connections)) {
 			c := connections[connection]
 			role := c.Role

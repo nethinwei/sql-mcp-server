@@ -184,3 +184,34 @@ func TestAuthorizeFieldACL(t *testing.T) {
 		t.Fatal("configured role with no readable fields must fail closed")
 	}
 }
+
+// System permissions are held by configured users only, directly or
+// through a role; a bare role principal holds none.
+func TestPolicyHasPermission(t *testing.T) {
+	t.Parallel()
+	policy := Policy{
+		RolePermissions: map[string][]string{"dba": {"sql:execute@crm"}},
+		Principals: map[string]Principal{
+			"user:alice": {Roles: []string{"dba"}},
+			"user:bob":   {Permissions: []string{"sql:execute@shop"}},
+		},
+	}
+	for who, want := range map[string]map[string]bool{
+		"user:alice": {"sql:execute@crm": true, "sql:execute@shop": false},
+		"user:bob":   {"sql:execute@crm": false, "sql:execute@shop": true},
+		"User:Alice": {"sql:execute@crm": true},
+		"dba":        {"sql:execute@crm": false},
+		"user:carol": {"sql:execute@crm": false},
+	} {
+		for permission, allowed := range want {
+			if got := policy.HasPermission(who, permission); got != allowed {
+				t.Errorf("HasPermission(%q, %q) = %v, want %v", who, permission, got, allowed)
+			}
+		}
+	}
+	reg, _ := entity.NewRegistry(nil)
+	var checker PermissionChecker = NewGrantAuthorizer(reg, policy)
+	if !checker.HasPermission("user:alice", "sql:execute@crm") {
+		t.Fatal("the authorizer answers from its policy")
+	}
+}

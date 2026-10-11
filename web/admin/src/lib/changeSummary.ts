@@ -23,10 +23,13 @@ export interface Config {
   users: UserInput[]
 }
 
-/** One entity action, e.g. orders · READ. */
+/** The system permission sql:execute@<datasource>, as an access of the datasource. */
+export const sqlAction = 'SQL'
+
+/** One entity action, e.g. orders · READ, or a datasource's sql:execute. */
 export interface Access {
   entity: string
-  action: Action
+  action: Action | typeof sqlAction
 }
 
 export interface UserChange {
@@ -83,7 +86,7 @@ function accessOf(cfg: Config, user: UserInput): Map<string, string> {
   if (user.disabled) return new Map()
   const scopes = new Map<string, Set<string>>()
   const add = (entity: string, action: string, read: unknown, write: unknown, rows: unknown) => {
-    const k = key({ entity, action: action as Action })
+    const k = key({ entity, action: action as Access['action'] })
     const scope = read == null && write == null && rows == null ? unrestricted : json([sorted(read), sorted(write), rows])
     scopes.set(k, (scopes.get(k) ?? new Set()).add(scope))
   }
@@ -97,6 +100,14 @@ function accessOf(cfg: Config, user: UserInput): Map<string, string> {
       add(index.idOf(g.entity) ?? g.entity, action, g.fieldsRestricted ? g.readFields ?? [] : null,
         g.fieldsRestricted ? g.writeFields ?? [] : null, g.rows ?? null)
     }
+  }
+  const permissions = [
+    ...(user.permissions ?? []),
+    ...(user.roles ?? []).flatMap((r) => cfg.roles.find((x) => x.name === r)?.permissions ?? []),
+  ]
+  for (const p of permissions) {
+    const m = /^sql:execute@(.+)$/.exec(p)
+    if (m) add(m[1], sqlAction, null, null, null)
   }
   const roles = new Set((user.roles ?? []).map((r) => r.toLowerCase()))
   for (const e of cfg.entities) {
@@ -114,7 +125,7 @@ function accessOf(cfg: Config, user: UserInput): Map<string, string> {
 
 function access(k: string): Access {
   const [entity, action] = k.split('\u0000')
-  return { entity, action: action as Action }
+  return { entity, action: action as Access['action'] }
 }
 
 function userChanges(before: Config, after: Config): UserChange[] {

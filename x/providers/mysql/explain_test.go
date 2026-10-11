@@ -117,3 +117,18 @@ func TestParseMySQLExplainReadsNoTable(t *testing.T) {
 		t.Errorf("a message beside a table read: %+v", p)
 	}
 }
+
+func TestParseMySQLExplainInsertValues(t *testing.T) {
+	t.Parallel()
+	raw := `{"query_block":{"select_id":1,"table":{"insert":true,"table_name":"stock_log","access_type":"ALL"}}}`
+	p, _ := ParseExplain([]byte(raw))
+	if p.ScanType != cost.ScanPoint || p.EstimatedRows != 0 {
+		t.Fatalf("INSERT ... VALUES: %+v, want a point read of no rows", p)
+	}
+	// INSERT ... SELECT reads its source.
+	raw = `{"query_block":{"select_id":1,"table":{"insert":true,"table_name":"stock_log","access_type":"ALL"},` +
+		`"insert_from":{"table":{"table_name":"stock","access_type":"ALL","rows_examined_per_scan":900}}}}`
+	if p, _ = ParseExplain([]byte(raw)); p.ScanType != cost.ScanFull || p.EstimatedRows != 900 {
+		t.Fatalf("INSERT ... SELECT: %+v, want the source's full scan", p)
+	}
+}

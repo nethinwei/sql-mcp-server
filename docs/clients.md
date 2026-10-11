@@ -27,6 +27,8 @@
   执行人工 smoke，该项不作为安全保证；
 - stdio 模板以 `--role` 固定单一角色，不具备 per-request tenant 身份；需要
   tenant 隔离的演示必须走 HTTP + 可信身份注入。
+- `tools/list` 的结果因调用身份而异：`execute_sql` 只对持有 `sql:execute@<数据源>` 的用户
+  列出（stdio 取 `server.user`）；客户端不应缓存一个身份的工具列表给另一个身份用。
 
 ## 常见故障
 

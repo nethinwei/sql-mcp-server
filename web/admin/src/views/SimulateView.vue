@@ -15,6 +15,7 @@ import { describeFilter, type Filter } from '@/lib/filter'
 import { parseSimulationQuery } from '@/lib/simulation'
 import { useSimulationConfig } from '@/lib/simulationConfig'
 import { EntityIndex, entityId } from '@/lib/entityRefs'
+import { executableDatasources, userPermissions } from '@/lib/systemPermissions'
 import type { Action, SimulateQuery as SimulateResult } from '@/gql/graphql'
 
 type Simulation = SimulateResult['simulate']
@@ -37,6 +38,17 @@ const tab = ref<'overview' | 'single'>('overview')
 // configuration (see lib/simulationConfig).
 const { config, loading: configLoading, error: configError } = useSimulationConfig(source)
 const sourceLabel = computed(() => config.value?.label ?? '')
+// Where execute_sql is usable by who: a user's permissions and its roles',
+// or a role's own, on the datasources admitting the hatch (the datasources
+// are the same whatever the source: they are not part of the workspace).
+const executable = computed(() => {
+  const c = config.value
+  if (!c || !who.value) return null
+  const permissions = who.value.startsWith('role:')
+    ? c.roles.find((r) => `role:${r.name}` === who.value)?.permissions ?? []
+    : (() => { const u = c.users.find((u) => u.name === who.value); return u ? userPermissions(u, c.roles) : [] })()
+  return executableDatasources(permissions, ws.datasources)
+})
 const whoOptions = computed(() => [
   { type: 'group', label: t('simulate.group.users'), key: 'u', children: (config.value?.users ?? []).map((u) => ({ label: u.name, value: u.name })) },
   { type: 'group', label: t('simulate.group.roles'), key: 'r', children: (config.value?.roles ?? []).map((r) => ({ label: t('simulate.roleOption', { name: r.name }), value: `role:${r.name}` })) },
@@ -157,6 +169,9 @@ onMounted(() => {
         </n-radio-group>
         <n-text depth="3" class="small">{{ sourceLabel }}</n-text>
       </n-space>
+      <n-text v-if="executable" depth="3" class="small executable">
+        {{ executable.length ? t('simulate.executeSql', { list: executable.join(', ') }) : t('simulate.noExecuteSql') }}
+      </n-text>
     </n-card>
 
     <n-tabs v-model:value="tab" type="line" animated>

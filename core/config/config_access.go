@@ -24,6 +24,20 @@ func IsStoreTable(name string) bool {
 	return strings.HasPrefix(strings.ToLower(name), StoreTablePrefix)
 }
 
+// SQLExecutePrefix prefixes the system permission admitting a user to the
+// SQL escape hatch of one datasource: "sql:execute@<datasource>".
+const SQLExecutePrefix = "sql:execute@"
+
+// SQLExecutePermission is the permission admitting a user to the SQL escape
+// hatch of datasource.
+func SQLExecutePermission(datasource string) string { return SQLExecutePrefix + datasource }
+
+// ParseSQLExecute returns the datasource a sql:execute permission names.
+func ParseSQLExecute(permission string) (string, bool) {
+	datasource, ok := strings.CutPrefix(permission, SQLExecutePrefix)
+	return datasource, ok && datasource != ""
+}
+
 // TokenHashPrefix is the only supported tokenHash algorithm.
 const TokenHashPrefix = "sha256:"
 
@@ -81,6 +95,7 @@ func (c *Config) normalizeRoleDefinitions() error {
 		for i := range def.Grants {
 			def.Grants[i].Actions = canonicalRoleList(def.Grants[i].Actions)
 		}
+		def.Permissions = canonicalPermissions(def.Permissions)
 		roles[key] = def
 	}
 	if c.Roles != nil {
@@ -104,12 +119,25 @@ func (c *Config) normalizeUsers() error {
 		for i := range user.Grants {
 			user.Grants[i].Actions = canonicalRoleList(user.Grants[i].Actions)
 		}
+		user.Permissions = canonicalPermissions(user.Permissions)
 		users[key] = user
 	}
 	if c.Users != nil {
 		c.Users = users
 	}
 	return nil
+}
+
+// canonicalPermissions trims permissions; nil stays nil (unset).
+func canonicalPermissions(permissions []string) []string {
+	if permissions == nil {
+		return nil
+	}
+	out := make([]string, 0, len(permissions))
+	for _, p := range permissions {
+		out = append(out, strings.TrimSpace(p))
+	}
+	return out
 }
 
 func canonicalAccessName(kind, name string) (string, error) {
@@ -124,8 +152,9 @@ func canonicalAccessName(kind, name string) (string, error) {
 }
 
 // validateAccess checks top-level roles, users, tenant policies and user
-// budgets. It runs after entity validation so entity references are known.
-func (c *Config) validateAccess() error {
+// budgets. It runs after entity validation so entity references are known;
+// databases are the datasources system permissions may name.
+func (c *Config) validateAccess(databases map[string]DatabaseConfig) error {
 	entities := NewEntityRefs(c.Entities)
 	for _, e := range c.Entities {
 		if e.TenantPolicy != nil {
@@ -135,17 +164,17 @@ func (c *Config) validateAccess() error {
 		}
 	}
 	for name, def := range c.Roles {
-		if err := validatePermissions("role", name, def.Permissions); err != nil {
+		if err := validatePermissions("role", name, def.Permissions, databases); err != nil {
 			return err
 		}
 		if err := validateGrants("role", name, def.Grants, entities); err != nil {
 			return err
 		}
 	}
-	return c.validateUsers(entities)
+	return c.validateUsers(entities, databases)
 }
 
-func (c *Config) validateUsers(entities EntityRefs) error {
+func (c *Config) validateUsers(entities EntityRefs, databases map[string]DatabaseConfig) error {
 	known := c.knownRoles()
 	if len(c.Users) > 0 {
 		for role := range known {
@@ -159,7 +188,7 @@ func (c *Config) validateUsers(entities EntityRefs) error {
 		hashes[TokenHash(c.Server.Auth.Token)] = "server.auth.token"
 	}
 	for name, user := range c.Users {
-		if err := validateUser(name, user, known, hashes, entities); err != nil {
+		if err := validateUser(name, user, known, hashes, entities, databases); err != nil {
 			return err
 		}
 	}
@@ -188,6 +217,7 @@ func validateUser(
 	known map[string]bool,
 	hashes map[string]string,
 	entities EntityRefs,
+	databases map[string]DatabaseConfig,
 ) error {
 	if user.TokenHash != "" {
 		if other, exists := hashes[user.TokenHash]; exists {
@@ -203,7 +233,7 @@ func validateUser(
 			return fmt.Errorf("config: user %q references unknown role %q", name, role)
 		}
 	}
-	if err := validatePermissions("user", name, user.Permissions); err != nil {
+	if err := validatePermissions("user", name, user.Permissions, databases); err != nil {
 		return err
 	}
 	return validateGrants("user", name, user.Grants, entities)
@@ -234,12 +264,25 @@ func (c *Config) knownRoles() map[string]bool {
 	return known
 }
 
-func validatePermissions(kind, owner string, permissions []string) error {
-	if len(permissions) > 0 {
-		return fmt.Errorf(
-			"config: %s %q declares system permission %q, which is not supported in this version",
-			kind, owner, permissions[0],
-		)
+// validatePermissions accepts sql:execute@<datasource> on a configured
+// datasource (whether or not it admits the escape hatch: that is the
+// datasource's own, independent condition) and refuses every other system
+// permission, which no version supports yet.
+func validatePermissions(kind, owner string, permissions []string, databases map[string]DatabaseConfig) error {
+	if duplicate, ok := firstDuplicate(permissions); ok {
+		return fmt.Errorf("config: %s %q lists permission %q twice", kind, owner, duplicate)
+	}
+	for _, p := range permissions {
+		datasource, ok := ParseSQLExecute(p)
+		if !ok {
+			return fmt.Errorf(
+				"config: %s %q declares system permission %q, which is not supported in this version",
+				kind, owner, p,
+			)
+		}
+		if _, known := databases[datasource]; !known {
+			return fmt.Errorf("config: %s %q permission %q names unknown datasource %q", kind, owner, p, datasource)
+		}
 	}
 	return nil
 }

@@ -3,8 +3,10 @@
 > **The governed SQL gateway for untrusted AI agents.**
 
 面向不可信 AI Agent 的受控 SQL 数据访问网关。通过显式 Entity、关系代数 IR 和
-参数化 codegen 访问 PostgreSQL、MySQL 与 OceanBase，**不接受任意 SQL，不提供
-DDL**。
+参数化 codegen 访问 PostgreSQL、MySQL 与 OceanBase，**受治理面不接受任意 SQL，不提供
+DDL**。可信操作者另有独立的 SQL 逃生通道 `execute_sql`：默认关闭，只对被显式授予
+`sql:execute@<数据源>` 的用户可见，走单独声明的连接，受硬上限与写入失败即拒绝的
+审计约束（见[安全模型](docs/security.md#可信-sql-逃生通道)）。
 
 ## 核心差异
 
@@ -74,7 +76,7 @@ make build
 
 ### 版本与规划
 
-- 当前 GA：`v0.1.13`（[发布说明](docs/releases/v0.1.13.md)）；
+- 当前 GA：`v0.1.14`（[发布说明](docs/releases/v0.1.14.md)）；
 - 全版本摘要：[CHANGELOG](CHANGELOG.md)；历史能力与迁移：
   [发布说明索引](docs/releases/README.md)；
 - 未发布产品规划：[Roadmap](docs/roadmap.md)；

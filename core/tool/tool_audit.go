@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -10,6 +11,9 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 )
 
+// recordToolAudit records a call's event: best-effort, except for a durably
+// audited call (the SQL escape hatch, see escapeTrace), whose "end" event is
+// written before returning and whose failure to write is returned.
 func recordToolAudit(
 	ctx context.Context,
 	tc Context,
@@ -18,11 +22,11 @@ func recordToolAudit(
 	res Result,
 	err error,
 	start time.Time,
-) {
+) error {
 	if tc.Auditor == nil {
-		return
+		return nil
 	}
-	_ = tc.Auditor.Record(ctx, audit.Event{
+	ev := audit.Event{
 		Time:         time.Now(),
 		DecisionID:   tc.DecisionID,
 		Role:         tc.Role,
@@ -38,7 +42,38 @@ func recordToolAudit(
 		Error:        errString(err),
 		Duration:     time.Since(start),
 		ReturnedRows: returnedRows(res),
-	})
+	}
+	trace, durable := ctx.Value(escapeTraceKey{}).(*escapeTrace)
+	if !durable {
+		_ = tc.Auditor.Record(ctx, ev)
+		return nil
+	}
+	trace.fill(&ev, "end")
+	return recordDurably(ctx, tc, ev)
+}
+
+// recordDurably writes ev before returning, or reports the escape hatch's
+// audit unavailable: with no durable sink, or a sink that failed.
+func recordDurably(ctx context.Context, tc Context, ev audit.Event) error {
+	d, ok := tc.Auditor.(audit.Durable)
+	if !ok {
+		return ErrAuditUnavailable
+	}
+	if err := d.RecordSync(ctx, ev); err != nil {
+		return fmt.Errorf("%w: %v", ErrAuditUnavailable, err)
+	}
+	return nil
+}
+
+// auditSQLBegin records an execute_sql call before its statement runs, or
+// refuses the call: the hatch is audited fail closed, so no record, no SQL.
+func auditSQLBegin(ctx context.Context, tc Context, g grant, trace *escapeTrace) error {
+	ev := audit.Event{
+		Time: time.Now(), DecisionID: tc.DecisionID, Role: tc.Role, User: tc.User, Roles: tc.UserRoles,
+		Grants: g.Grants, Action: ActionSQL, Tool: executeSQLName, Allowed: true,
+	}
+	trace.fill(&ev, "begin")
+	return recordDurably(ctx, tc, ev)
 }
 
 // denialCode maps a tool error to its stable machine code for the audit

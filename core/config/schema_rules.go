@@ -44,12 +44,13 @@ import (
 // absent object in the schema.
 
 var enums = map[string][]string{
-	"transport":      {"stdio", "http"},
-	"entityKind":     {"table", "view", "procedure"},
-	"grantAction":    entity.ActionNames(),
-	"cardinality":    entity.Cardinalities,
-	"connectionRole": {"primary", "replica"},
-	"pooler":         {"transaction"},
+	"transport":         {"stdio", "http"},
+	"entityKind":        {"table", "view", "procedure"},
+	"grantAction":       entity.ActionNames(),
+	"cardinality":       entity.Cardinalities,
+	"connectionRole":    {"primary", "replica"},
+	"pooler":            {"transaction"},
+	"sqlEscapeEstimate": {SQLEscapeEstimateRequired, SQLEscapeEstimateSkip},
 	// Mask rules are the masker's; an unknown one would fail every startup.
 	"maskRule": mask.BuiltinRules(),
 }

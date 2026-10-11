@@ -101,6 +101,22 @@ func unavailable(err error) bool {
 	return errors.Is(err, ratelimit.ErrCircuitOpen) || errors.Is(err, ratelimit.ErrRateLimited)
 }
 
+// Evaluate judges a plan the caller obtained itself (err being what its
+// EXPLAIN returned) as Check judges the plans it obtains: the SQL escape
+// hatch estimates SQL it never compiled this way.
+func (e Estimate) Evaluate(plan Plan, err error) Decision {
+	th := e.Threshold
+	if err != nil {
+		plan = Plan{ScanType: ScanUnknown, StatsFresh: false}
+	}
+	plan = smallTable(plan, th)
+	score := ScorePlan(plan)
+	dec, _ := e.evaluatePlan(plan, err, score, th, func(soft bool) (Decision, error) {
+		return Decision{Allow: false, Soft: soft, Plan: &plan, Score: ptrScore(score), Hints: Hints(plan, th)}, nil
+	})
+	return dec
+}
+
 func (e Estimate) explainPlan(ctx context.Context, c codegen.Compiled) (Plan, error) {
 	plan, err := e.Explainer.Explain(ctx, c.SQL, c.Args)
 	if err != nil {

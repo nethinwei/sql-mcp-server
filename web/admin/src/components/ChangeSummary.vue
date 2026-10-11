@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { NButton, NSpace, NTable, NTag, NText } from 'naive-ui'
-import { isEmpty, type Access, type Summary } from '@/lib/changeSummary'
+import { isEmpty, sqlAction, type Access, type Summary } from '@/lib/changeSummary'
 import { simulationRoute } from '@/lib/simulation'
 
 // What a change does to people and data, before the YAML diff: access gained
@@ -15,7 +15,8 @@ const router = useRouter()
 /** Simulates a user against the workspace (which holds the changes under review). */
 const simulate = (user: string) => router.push(simulationRoute({ who: user, source: 'workspace' }))
 const empty = computed(() => isEmpty(props.summary))
-const label = (a: Access) => `${a.entity} · ${t(`grants.actions.${a.action}`)}`
+const label = (a: Access) =>
+  a.action === sqlAction ? `sql:execute@${a.entity}` : `${a.entity} · ${t(`grants.actions.${a.action}`)}`
 </script>
 
 <template>

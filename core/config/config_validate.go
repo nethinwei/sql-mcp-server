@@ -31,7 +31,10 @@ func (c *Config) Validate() error {
 	if err := c.validateEntities(databases); err != nil {
 		return err
 	}
-	if err := c.validateAccess(); err != nil {
+	if err := c.validateAccess(databases); err != nil {
+		return err
+	}
+	if err := c.validateSQLEscape(); err != nil {
 		return err
 	}
 	// Per-field rules (ranges, enums, patterns) come from `schema` tags.
@@ -96,6 +99,11 @@ func validateConnections(name string, db DatabaseConfig) error {
 	case len(db.Connections) == 0 && db.Routing != (RoutingConfig{}):
 		return fmt.Errorf("config: database %q sets routing without connections", name)
 	}
+	if conn := db.SQLEscape.Connection; conn != "" {
+		if _, ok := db.ConnectionsOrDSN()[conn]; !ok {
+			return fmt.Errorf("config: database %q sqlEscape.connection names unknown connection %q", name, conn)
+		}
+	}
 	route := db.Route()
 	for action, conn := range map[string]string{"read": route.Read, "write": route.Write, "execute": route.Execute} {
 		target, ok := db.ConnectionsOrDSN()[conn]
@@ -112,6 +120,15 @@ func validateConnections(name string, db DatabaseConfig) error {
 				conn,
 			)
 		}
+	}
+	return nil
+}
+
+// validateSQLEscape requires the escape hatch to be audited: without an
+// audit sink the fail-closed audit of execute_sql cannot hold.
+func (c *Config) validateSQLEscape() error {
+	if c.Tools.ExecuteSQL && !c.Audit.Enabled {
+		return fmt.Errorf("config: tools.executeSql requires audit.enabled")
 	}
 	return nil
 }
