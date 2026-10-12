@@ -1,7 +1,7 @@
 # Roadmap
 
-当前稳定基线为 `v0.1.14`。已发布能力以
-[发布说明](releases/v0.1.14.md)、[CHANGELOG](../CHANGELOG.md)、
+当前稳定基线为 `v0.1.15`。已发布能力以
+[发布说明](releases/v0.1.15.md)、[CHANGELOG](../CHANGELOG.md)、
 [配置参考](configuration.md)和[安全模型](security.md)为准。
 
 本文件只给出未发布成果的顺序和门禁：
@@ -47,59 +47,17 @@
 
 ## Committed
 
-### v0.1.15 — Provider Capability Model
-
-2026-10-12 路线图复审确定（`v0.1.14` 发布后）：管理面 1–5 的核心路径已全部交付，
-`v0.2.0` 的关键路径转回数据面，原 `Next 1` 获得版本承诺。`v0.1.10` 发布后技术
-前置已满足；原进入门禁中"结合 Tool Contract 设计评估共同复审"一项解除——该评估
-针对 Agent 澄清类失败，与 capability 无依赖，改由
-[Dormant](#dormant--eval-driven-agent-improvement) 跟踪。进入门禁与退出验收以
-[Provider Roadmap](provider-roadmap.md) Capability Model 章节为唯一事实源，实施方案见
-[设计文档](design/capability-model.md)。复审决议：现有静默降级（PostgreSQL
-transaction pooler、DSN 覆盖原生上限、MySQL 写语句无原生超时）默认如实报告并告警，
-新增可选严格模式使硬限制缺少 `enforced` 且无核心层等价强制时 fail closed；
-同版附带收掉[管理面 4](#管理面-4--admin-api-login-and-schema-import)的两项测试缺口。
-实施中纠正一处评审判断：pgx 在请求超时时本就发送 cancel request，PostgreSQL 无需改动
-驱动配置；conformance 发现并修复聚合列名跨库不一致（按位置命名，SQL 与模板指纹不变）；
-控制台校验在发布前判定硬限制（见设计文档“实施记录”）。
-
-**问题证据**：现有实现（`core/dialect.Capabilities`）是平铺 bool，成本
-闸门装配（`cost.NewGateFromCapabilities`）直接消费这些 bool，无法表达
-保证强度与证据状态——即无法区分"数据库提供该能力"与"本服务已装配可测试
-的强制机制"。SQLite 与任何新 Provider 立项的前置工程项。
-
-**阶段结果**：
-
-- capability 重构为"范围 + 强度 + 证据"模型：保证强度统一为
-  `unsupported` / `best_effort` / `enforced`；字段定义以 Provider Roadmap
-  为唯一事实源；
-- 闸门装配与 codegen 渲染改为消费新模型；
-- PostgreSQL、MySQL、OceanBase 三个现有 Provider 的声明按新模型迁移；
-  [Provider 兼容矩阵](provider-compatibility.md)可区分保证强度与证据状态；
-- 字段取舍以 SQLite（`Next 1` 交付对象）为校验对象：模型必须能表达
-  "缺少 `enforced` 成本证明时由核心层等价强制或 fail closed"这类组合；
-- **跨 Provider conformance 套件**（≥5 任务）：PostgreSQL / MySQL /
-  OceanBase 上结果等价、拒绝等价、治理等价，作为 capability model 的
-  首个实际消费者。
-
-**非目标**：不新增 Provider（SQLite 随 `Next 1`）；不引入 L13 实现方式
-维度（仅预留）；不改变三库现有运行时行为与闸门语义（行为等价重构）。
-
-**退出门禁**：
-
-- [x] 每项 capability 分别表达范围、保证强度和证据，不再存在混合语义的
-  单 bool（`core/dialect.Profile`，按连接判定；`TestNewGateFromCapabilitiesMatchesTheFormerBools`
-  锁定行为等价）；
-- [x] "`best_effort` 不能满足硬限制；缺少 `enforced` 能力时，必须由核心层
-  提供等价强制或 fail closed" 有测试锁定（`cost.requireNativeLimits`，
-  `TestRequireNativeLimitsRefusesTheConfiguration`；三库 `Test*StatementTimeout`）；
-- [x] ≥5 个跨 Provider 诊断任务全绿（`conformance.RunGovernance` 六项；发现并修复聚合列名
-  跨库不一致）；
-- [x] 三库 integration/conformance/workload 差分无回归；兼容矩阵更新（矩阵改为生成；
-  `make ci`、MCP e2e 与三库完整 integration 通过）。
+`v0.1.15` 交付 Provider Capability Model 后，按 [Next 1](#next-1--evidence-backed-sqlite)
+的既定条件，Evidence-Backed SQLite 获得版本承诺（预期 `v0.1.16`）：先写设计文档并评审，
+范围与退出验收以 [Provider Roadmap](provider-roadmap.md) 为唯一事实源。SQLite 同时承担
+把 DSN 密钥解析移入 provider 的收尾（见能力模型设计）。
 
 ### 已交付
 
+- `v0.1.15`：Provider Capability Model——按连接判定的能力与保证强度、硬限制告警与严格
+  模式 `cost.requireNativeLimits`、发布前判定、生成的兼容矩阵、跨库治理等价任务；聚合
+  结果列名跨库统一；管理面 4 的测试缺口收口（[发布说明](releases/v0.1.15.md)、
+  [设计文档](design/capability-model.md)）；
 - `v0.1.14`：[管理面 2](#管理面-2--trusted-sql-escape-hatch) 可信 SQL 逃生通道
   `execute_sql`（[发布说明](releases/v0.1.14.md)）；
 - `v0.1.13`：多管理员协作的管理面与执行总线——方案驱动的批量配置、配置 MCP
@@ -127,7 +85,7 @@ transaction pooler、DSN 覆盖原生上限、MySQL 写语句无原生超时）�
 - [ ] 管理面 4、5 收口：管理面 4 的门禁随 `v0.1.15` 全部满足；管理面 5 剩余交互判据的
   外部实测与前端供应链核实，见[管理面 5](#管理面-5--admin-console-ui)；OIDC / 通用
   OAuth2 登录经 2026-10-12 复审降为 [Later](#later)，不再是本判据的一部分；
-- [ ] Provider capability model 交付（`Committed`，`v0.1.15`）；
+- [x] Provider capability model 交付（`v0.1.15`）；
 - [ ] Evidence-Backed SQLite 交付（`Next 1`，预期 `v0.1.16`）并通过
   conformance + workload 差分验收；
 - [ ] dogfooding：至少一套真实或脱敏的支付中台工作负载经 `EVAL_DSN`
@@ -279,12 +237,12 @@ incompatible drift 拒绝 readiness、配置 revision 与 schema revision 绑定
 进入门禁、SQLite 首版范围和退出验收均以
 [Provider Roadmap](provider-roadmap.md) 为唯一事实源；`v0.1.8` conformance
 suite 与 `v0.1.9` workload 差分是任何新 Provider 的验收前置；capability
-model（`v0.1.15` Committed）为前置工程。
+model（`v0.1.15` 已交付）为前置工程。
 
 **进入条件已确立**（`v0.1.9` 发布复审）：架构验证 + 采用目标——SQLite 是
 新 capability model 的首个新增 Provider 消费者，验证"弱成本证明、核心层
 兜底"的执行模型，同时是产生真实采用证据的最低门槛入口。capability model
-交付后本阶段即获得版本承诺（预期 `v0.1.16`）。SQLite 驱动已随管理面 3 的
+已交付，本阶段获得版本承诺（预期 `v0.1.16`，见 [Committed](#committed)）。SQLite 驱动已随管理面 3 的
 配置存储引入，Provider 复用同一驱动。
 
 阶段结果：一个受现有 IR 和统一 engine 约束的窄 SQLite Provider，通过

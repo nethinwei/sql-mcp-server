@@ -1,7 +1,7 @@
 # 设计：Provider Capability Model
 
-状态：**已实现（2026-10-12，v0.1.15 Committed，待发布）**；决议见文末，实现中的发现见“实施记录”。对应主
-[Roadmap](../roadmap.md#v0115--provider-capability-model)；能力范围、保证强度与
+状态：**已随 v0.1.15 交付（2026-10-12）**，见[发布说明](../releases/v0.1.15.md)；决议见文末，
+实现中的发现见“实施记录”。对应主 [Roadmap](../roadmap.md#已交付)；能力范围、保证强度与
 进入条件以 [Provider Roadmap](../provider-roadmap.md#provider-capability-model)
 为唯一事实源，本文落到实现。相关设计：[固定数据面管线](pipeline.md)（执行器）、
 [数据源模型](datasource-model.md)（连接、路由与 pooler）、

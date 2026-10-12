@@ -101,9 +101,8 @@ Databricks SQL、广泛国产数据库铺开和“接入几十个 JDBC/ADBC 数�
 
 ## Provider Capability Model
 
-> **路线图顺序**（2026-10-12 复审）：Capability Model 为 `v0.1.15` 的
-> `Committed`，不再与 Tool Contract 设计评估捆绑；SQLite 为 `Next 1`
-> （预期 `v0.1.16`）。
+> **路线图顺序**（2026-10-12 复审）：Capability Model 已随 `v0.1.15` 交付；SQLite 为
+> `Next 1`，随之获得版本承诺（预期 `v0.1.16`）。
 
 新增 Provider 前先扩展 capability model。`v0.1.15` 起实现为“范围 + 强度 + 证据”的
 `core/dialect.Profile`，强度按连接判定（取代此前平铺的 bool）；实现与首批能力键见

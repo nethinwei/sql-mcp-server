@@ -1,7 +1,7 @@
 # 发布说明索引
 
-当前 GA 为 `v0.1.14`（[发布说明](v0.1.14.md)、
-[GitHub Release](https://github.com/nethinwei/sql-mcp-server/releases/tag/v0.1.14)）。
+当前 GA 为 `v0.1.15`（[发布说明](v0.1.15.md)、
+[GitHub Release](https://github.com/nethinwei/sql-mcp-server/releases/tag/v0.1.15)）。
 
 本目录中的发布说明描述各版本发布时点的能力、迁移和证据状态。当前运行时行为以
 [配置参考](../configuration.md)、[安全模型](../security.md)和
@@ -10,6 +10,10 @@
 
 ## 版本
 
+- [`v0.1.15`](v0.1.15.md)（2026-10-12）：Provider Capability Model——按连接判定的能力
+  与保证强度、硬限制告警与严格模式 `cost.requireNativeLimits`、发布前判定、生成的兼容
+  矩阵、跨库治理等价任务；聚合结果列名跨库统一（修复）；管理 API 逐操作越权矩阵与
+  TM-014；包含 breaking 迁移；
 - [`v0.1.14`](v0.1.14.md)（2026-10-11）：可信 SQL 逃生通道 `execute_sql`（管理面 2）、
   系统权限 `sql:execute@<数据源>`、审计同步写入与 `AUDIT_UNAVAILABLE`、`tools/list`
   按用户过滤；无 breaking；
