@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"iter"
 )
 
@@ -70,10 +71,22 @@ type Row = map[string]any
 // the Rows when iteration ends — whether by exhausting the cursor, an early
 // break, or a terminal error — so callers need not close it themselves. Use it
 // with range over func to stream large result sets without materializing them.
-func Iter(rows Rows) iter.Seq2[Row, error] {
+func Iter(rows Rows) iter.Seq2[Row, error] { return IterNamed(rows, nil) }
+
+// IterNamed is Iter with the columns named by position: names[i] keys the
+// i-th column whatever the database called it (databases name computed
+// columns differently, and may give two the same name). A nil names keeps
+// the database's names; a count that differs from the columns is an error.
+func IterNamed(rows Rows, names []string) iter.Seq2[Row, error] {
 	return func(yield func(Row, error) bool) {
 		defer func() { _ = rows.Close() }()
 		cols, err := rows.Columns()
+		if err == nil && names != nil {
+			if len(names) != len(cols) {
+				err = fmt.Errorf("store: %d columns, %d names", len(cols), len(names))
+			}
+			cols = names
+		}
 		if err != nil {
 			yield(nil, err)
 			return

@@ -26,3 +26,18 @@ func TestUnknownDriver(t *testing.T) {
 		t.Fatalf("New() error = %v, want ErrUnsupportedDriver", err)
 	}
 }
+
+// The native timeout leaves the request's deadline a margin: a tenth, at
+// most a second, never down to nothing.
+func TestNativeTimeout(t *testing.T) {
+	for timeout, want := range map[time.Duration]time.Duration{
+		30 * time.Second:       29 * time.Second,
+		5 * time.Second:        4500 * time.Millisecond,
+		300 * time.Millisecond: 270 * time.Millisecond,
+		time.Millisecond:       time.Millisecond,
+	} {
+		if got := (Options{Timeout: timeout}).NativeTimeout(); got != want {
+			t.Errorf("NativeTimeout(%v) = %v, want %v", timeout, got, want)
+		}
+	}
+}

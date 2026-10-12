@@ -107,11 +107,19 @@ func TestAppCloseContextDrainsBeforeTransactionsAndProviders(t *testing.T) {
 type fakeProvider struct {
 	storetest.FakeDB
 	dialect     dialect.Dialect
+	limits      dialect.Profile
 	explainPlan *cost.Plan
 	closed      int
 }
 
 func (p *fakeProvider) Dialect() dialect.Dialect { return p.dialect }
+func (p *fakeProvider) Profile() dialect.Profile {
+	var caps dialect.Profile
+	if p.dialect != nil {
+		caps = p.dialect.Capabilities()
+	}
+	return caps.With(p.limits)
+}
 func (p *fakeProvider) Explainer() cost.Explainer {
 	if p.explainPlan != nil {
 		return costtest.FakeExplainer{Plan: *p.explainPlan}

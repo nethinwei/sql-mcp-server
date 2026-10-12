@@ -47,6 +47,15 @@ type ApplyPlanInput struct {
 	Confirmed []string `json:"confirmed,omitempty"`
 }
 
+type CapabilityClaim struct {
+	// Capability key, e.g. limit.timeout.read.
+	Key      string             `json:"key"`
+	Strength CapabilityStrength `json:"strength"`
+	Evidence CapabilityEvidence `json:"evidence"`
+	// How it is provided, or why it is degraded.
+	Reason *string `json:"reason,omitempty"`
+}
+
 type CatalogInput struct {
 	Filter *configapp.CatalogFilter `json:"filter"`
 	Offset *int                     `json:"offset,omitempty"`
@@ -57,6 +66,12 @@ type CatalogInput struct {
 type ColumnComment struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
+}
+
+type ConnectionCapabilities struct {
+	Datasource string            `json:"datasource"`
+	Connection string            `json:"connection"`
+	Claims     []CapabilityClaim `json:"claims"`
 }
 
 type Datasource struct {
@@ -244,6 +259,17 @@ type LaneStatus struct {
 	Completed int `json:"completed"`
 }
 
+// A statement timeout a datasource relies on that its connection does not enforce on the database side.
+type LimitIssue struct {
+	Datasource string `json:"datasource"`
+	Connection string `json:"connection"`
+	Key        string `json:"key"`
+	// The work relying on it: reads, writes, procedures or the SQL escape hatch.
+	Use      string             `json:"use"`
+	Strength CapabilityStrength `json:"strength"`
+	Reason   *string            `json:"reason,omitempty"`
+}
+
 type Mutation struct {
 }
 
@@ -268,6 +294,12 @@ type PlanPreviewInput struct {
 	// Report every new table a grant covers (exception review, to confirm), as
 	// reviewing a recurring template's proposal needs.
 	Review *bool `json:"review,omitempty"`
+}
+
+type ProviderCapabilities struct {
+	Connections []ConnectionCapabilities `json:"connections"`
+	// Empty under cost.requireNativeLimits: such a configuration does not load.
+	Issues []LimitIssue `json:"issues"`
 }
 
 type PublishInput struct {
@@ -395,6 +427,122 @@ type VisibilityInput struct {
 	// A configured user name, or role:<name> to evaluate a role.
 	User    string `json:"user"`
 	Subject any    `json:"subject,omitempty"`
+}
+
+type CapabilityEvidence string
+
+const (
+	CapabilityEvidenceDbVerified   CapabilityEvidence = "DB_VERIFIED"
+	CapabilityEvidenceCoreVerified CapabilityEvidence = "CORE_VERIFIED"
+	CapabilityEvidenceDeclared     CapabilityEvidence = "DECLARED"
+	CapabilityEvidenceExternal     CapabilityEvidence = "EXTERNAL"
+)
+
+var AllCapabilityEvidence = []CapabilityEvidence{
+	CapabilityEvidenceDbVerified,
+	CapabilityEvidenceCoreVerified,
+	CapabilityEvidenceDeclared,
+	CapabilityEvidenceExternal,
+}
+
+func (e CapabilityEvidence) IsValid() bool {
+	switch e {
+	case CapabilityEvidenceDbVerified, CapabilityEvidenceCoreVerified, CapabilityEvidenceDeclared, CapabilityEvidenceExternal:
+		return true
+	}
+	return false
+}
+
+func (e CapabilityEvidence) String() string {
+	return string(e)
+}
+
+func (e *CapabilityEvidence) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = CapabilityEvidence(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid CapabilityEvidence", str)
+	}
+	return nil
+}
+
+func (e CapabilityEvidence) MarshalGQL(w io.Writer) {
+	_, _ = fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *CapabilityEvidence) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e CapabilityEvidence) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type CapabilityStrength string
+
+const (
+	CapabilityStrengthEnforced    CapabilityStrength = "ENFORCED"
+	CapabilityStrengthBestEffort  CapabilityStrength = "BEST_EFFORT"
+	CapabilityStrengthUnsupported CapabilityStrength = "UNSUPPORTED"
+)
+
+var AllCapabilityStrength = []CapabilityStrength{
+	CapabilityStrengthEnforced,
+	CapabilityStrengthBestEffort,
+	CapabilityStrengthUnsupported,
+}
+
+func (e CapabilityStrength) IsValid() bool {
+	switch e {
+	case CapabilityStrengthEnforced, CapabilityStrengthBestEffort, CapabilityStrengthUnsupported:
+		return true
+	}
+	return false
+}
+
+func (e CapabilityStrength) String() string {
+	return string(e)
+}
+
+func (e *CapabilityStrength) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = CapabilityStrength(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid CapabilityStrength", str)
+	}
+	return nil
+}
+
+func (e CapabilityStrength) MarshalGQL(w io.Writer) {
+	_, _ = fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *CapabilityStrength) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e CapabilityStrength) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }
 
 type ImportStatus string

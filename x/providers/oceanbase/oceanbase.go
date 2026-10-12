@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/provider"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
@@ -14,7 +15,11 @@ func init() {
 	providerregistry.Register("oceanbase", func(dsn string, opts providerregistry.Options) (provider.Provider, error) {
 		return Open(dsn, opts)
 	})
+	providerregistry.RegisterLimits("oceanbase", Limits)
 }
+
+// timeoutVariable is OceanBase's statement timeout, which bounds writes too.
+const timeoutVariable = "ob_query_timeout"
 
 // Provider adapts an OceanBase database to the core interfaces.
 type Provider struct{ sqladapter.Base }
@@ -27,11 +32,18 @@ func NewWithTimeout(dsn string, timeout time.Duration) (*Provider, error) {
 
 // Open opens OceanBase with opts (see mysql.NewAdapter).
 func Open(dsn string, opts providerregistry.Options) (*Provider, error) {
-	ad, err := mysql.NewAdapter(dsn, opts, "ob_query_timeout")
+	ad, limits, err := mysql.NewAdapter(dsn, opts, timeoutVariable)
 	if err != nil {
 		return nil, err
 	}
-	return &Provider{sqladapter.NewBase(ad, Dialect{}, obExplainer{db: ad.DB()}, mysql.NewIntrospector(ad.DB()))}, nil
+	base := sqladapter.NewBase(ad, Dialect{}, obExplainer{db: ad.DB()}, mysql.NewIntrospector(ad.DB()))
+	return &Provider{base.WithLimits(limits)}, nil
+}
+
+// Limits is what an OceanBase connection to dsn opened with opts guarantees on
+// the server, without connecting.
+func Limits(dsn string, opts providerregistry.Options) (dialect.Profile, error) {
+	return mysql.LimitsFor(dsn, opts, timeoutVariable)
 }
 
 // bootstrap sizes and pings the pool through DB(); keep it reachable (an

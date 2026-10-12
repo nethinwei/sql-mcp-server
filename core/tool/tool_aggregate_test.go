@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -47,6 +48,52 @@ func TestAggregateTool(t *testing.T) {
 	}
 }
 
+// Every aggregate column is named the same on every database, by position,
+// so two aggregates of one function stay apart (PostgreSQL names both "sum")
+// and the SQL, which fingerprints match, keeps no alias. A name taken by a
+// group-by field is refused.
+func TestAggregateToolNamesItsColumns(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{
+		Name: "users", Source: "users",
+		Attributes: []entity.Attribute{{Name: "dept"}, {Name: "salary"}, {Name: "bonus"}, {Name: "count"}},
+		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
+		Role:       entity.RoleAccess{entity.ActionAggregate: {"reader"}},
+		MCP:        entity.MCPFlags{DMLTools: true},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	var sql string
+	db := &storetest.FakeDB{QueryFn: func(_ context.Context, q string, _ ...any) (store.Rows, error) {
+		sql = q
+		return storetest.NewFakeRows([]string{"dept", "count", "sum", "sum"},
+			[]any{"eng", int64(2), int64(10), int64(3)}), nil
+	}}
+	tc := Context{
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+		Role:     "reader", DB: db, Dialect: testdialect.Postgres{},
+	}
+	in, _ := json.Marshal(aggregateInput{Entity: "users", GroupBy: []string{"dept"}, Aggregates: []aggJSON{
+		{Func: "count"}, {Func: "sum", Field: "salary"}, {Func: "sum", Field: "bonus"},
+	}})
+	res, err := (AggregateTool{}).Run(context.Background(), in, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"dept": "eng", "count": int64(2), "sum_salary": int64(10), "sum_bonus": int64(3)}
+	if len(res.Content) != 1 || !reflect.DeepEqual(res.Content[0], want) {
+		t.Fatalf("rows = %v, want %v", res.Content, want)
+	}
+	if strings.Contains(sql, " AS ") {
+		t.Fatalf("the names must stay out of the SQL: %s", sql)
+	}
+	clash, _ := json.Marshal(aggregateInput{
+		Entity: "users", GroupBy: []string{"count"}, Aggregates: []aggJSON{{Func: "count"}},
+	})
+	if _, err := (AggregateTool{}).Run(context.Background(), clash, tc); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("an aggregate named as a group-by field: %v", err)
+	}
+}
+
 func TestAggregateToolRejectsInvalidFunc(t *testing.T) {
 	t.Parallel()
 	e := entity.Entity{
@@ -74,18 +121,20 @@ func TestAggregateToolRejectsInvalidFunc(t *testing.T) {
 	}
 }
 
+// Aggregate rows pass the masker too (defense in depth): a result column
+// named as a masked field is masked.
 func TestAggregateToolMasksResultRows(t *testing.T) {
 	t.Parallel()
 	e := entity.Entity{
 		Name:       "users",
 		Source:     "users",
-		Attributes: []entity.Attribute{{Name: "email", Mask: "email"}},
+		Attributes: []entity.Attribute{{Name: "count", Mask: "email"}},
 		Role:       entity.RoleAccess{entity.ActionAggregate: {"reader"}},
 		MCP:        entity.MCPFlags{DMLTools: true},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	db := &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
-		return storetest.NewFakeRows([]string{"email"}, []any{"alice@example.com"}), nil
+		return storetest.NewFakeRows([]string{"count(*)"}, []any{"alice@example.com"}), nil
 	}}
 	tc := Context{
 		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Masker: mask.NewRuleMasker()},
@@ -101,7 +150,7 @@ func TestAggregateToolMasksResultRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := result.Content[0]["email"]; got != "a***@example.com" {
+	if got := result.Content[0]["count"]; got != "a***@example.com" {
 		t.Fatalf("aggregate result was not masked: %v", got)
 	}
 }

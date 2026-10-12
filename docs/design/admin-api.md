@@ -1,9 +1,9 @@
 # 设计评审：管理 API、管理员登录与 Schema 导入
 
 状态：**评审结论（2026-10-03，管理面 4）**，本地账号登录、管理 API 与 schema 导入已随
-v0.1.11 交付；OIDC / OAuth2 登录待排期。对应主
+v0.1.11 交付；OIDC / OAuth2 登录于 2026-10-12 路线图复审降为 Later。对应主
 [Roadmap](../roadmap.md#管理面-4--admin-api-login-and-schema-import)
-管理面 4。首轮实现本地账号登录，OIDC/OAuth2 作为同一版本的第二轮。
+管理面 4。
 
 ## 目标与非目标
 

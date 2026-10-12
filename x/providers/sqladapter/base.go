@@ -14,11 +14,28 @@ type Base struct {
 	dialect      dialect.Dialect
 	explainer    cost.Explainer
 	introspector introspect.Introspector
+	limits       dialect.Profile
 }
 
 // NewBase is a Base on pool with the given adapters.
 func NewBase(pool *Pool, d dialect.Dialect, e cost.Explainer, i introspect.Introspector) Base {
 	return Base{Pool: pool, dialect: d, explainer: e, introspector: i}
+}
+
+// WithLimits returns b with the claims that depend on how its connection was
+// opened (timeouts, native write refusals).
+func (b Base) WithLimits(limits dialect.Profile) Base {
+	b.limits = limits
+	return b
+}
+
+// Profile is the connection's capabilities: its dialect's and its limits.
+func (b Base) Profile() dialect.Profile {
+	var caps dialect.Profile
+	if b.dialect != nil {
+		caps = b.dialect.Capabilities()
+	}
+	return caps.With(b.limits)
 }
 
 // Dialect returns the database's dialect.

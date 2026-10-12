@@ -370,6 +370,34 @@ Provider 适用范围使用以下口径：
   未加密、未签名。
 - **Provider**：共享层（与数据库方言无关）；EXPLAIN 的可用性与返回形状按方言不同。
 
+### TM-014 — 管理 API 越权、会话劫持与资源耗尽
+
+- **等级/状态**：high / 逐操作权限矩阵、会话与 CSRF、登录闸门、深度与复杂度上限已由
+  单元测试验证。
+- **攻击**：只有部分 `admin:*` 权限的管理员调用超出其权限的查询或变更（例如只读管理员
+  发布、写管理员管理账号）；新增的 GraphQL 操作遗漏鉴权；跨站请求借浏览器中的会话
+  Cookie 发起变更；暴力猜测密码或用大量并发登录耗尽 argon2id 的 CPU；被停用或改密的
+  账号继续使用旧会话；用很深或很宽（大量别名）的查询耗尽服务端资源；生产环境通过
+  GraphQL introspection 枚举接口。
+- **控制**：每个 resolver 或其调用的配置服务（`x/admin/configapp`）在执行前、解析输入
+  （方案、范围、版本号）之前要求操作所需的权限（`auth.Require`），只读、写、发布、账号管理分开，`admin:*` 持有全部；会话
+  Cookie 为 HttpOnly + SameSite，变更请求必须携带与会话绑定的 CSRF 头；登录有全局并发
+  闸门与按用户名的失败锁定；停用账号与改密立即吊销该账号的全部会话，会话有空闲与绝对
+  超时；查询深度与复杂度有上限，超出即在执行前拒绝；introspection 与 playground 默认
+  关闭。配置 MCP 端点（`/admin/mcp`）只接受令牌，不接受会话 Cookie（见 TM-012）。
+- **现有证据**：`x/admin/graph/authz_matrix_test.go` 的
+  `TestEveryOperationEnforcesItsPermissions`：从 schema 为每个查询与变更自动生成参数合法
+  的请求，在四种权限的全部 16 种组合下调用，断言当且仅当缺少所需权限时被拒；新增操作
+  未登记所需权限即失败；`TestAuthorizationPrecedesInput` 以非法的版本号与方案调用每个
+  需要权限的操作，断言无权限时先得到权限拒绝。`x/admin/admin_test.go` 的登录、CSRF、锁定、并发闸门、停用与
+  改密吊销、会话超时、深度（`TestSelectionDepth`）与复杂度（`TestComplexityLimit`）
+  上限、playground 默认关闭与 `/admin/mcp` 拒绝会话测试；`x/admin/graph` 的
+  `TestAdminAccountsKeepAnAccountManager`。
+- **持续验证**：以上测试在默认单元测试中运行。
+- **剩余风险**：会话只在进程内保存，多副本部署需要会话粘性；只有本地账号登录，没有
+  OIDC/OAuth2 与多因素认证（OIDC 已降为 Later）；登录闸门之外没有按账号的请求限速。
+- **Provider**：共享层（与数据库方言无关）。
+
 ## 证据维护规则
 
 - 本账本每个 threat ID 到回归测试的映射由

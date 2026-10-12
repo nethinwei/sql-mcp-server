@@ -89,7 +89,7 @@ func (r Renderer) Compile(e relalg.Expr, opts ...CompileOption) (Compiled, error
 		return Compiled{}, fmt.Errorf("%w: maximum must be positive", relalg.ErrINCardinality)
 	}
 	b := &builder{dialect: r.Dialect, maxINCardinality: cfg.maxINCardinality}
-	if r.Dialect.Capabilities().Returning && len(cfg.pkCols) > 0 {
+	if r.Dialect.Capabilities().Enforced(dialect.Returning) && len(cfg.pkCols) > 0 {
 		b.returningCols = cfg.pkCols
 	}
 	if err := b.render(e); err != nil {

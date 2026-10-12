@@ -38,6 +38,8 @@
 | Statement（语句） | 执行器执行的一条语句：授权结果 + 过闸 SQL | `core/tool/pipeline.go`，见 [design/pipeline.md](design/pipeline.md) |
 | Outcome unknown（结果未知） | 写入或提交期间连接中断或超时，数据库可能已执行 | `ErrOutcomeUnknown`、`OUTCOME_UNKNOWN` |
 | Tombstone（墓碑） | 事务结束后保留 10 分钟的结束方式 | `TransactionEndedError` |
+| Capability（能力） | 一个连接在某项保证上的强度（`enforced`/`best_effort`/`unsupported`）与证据，按连接打开方式判定 | `dialect.Profile`、`Provider.Profile()`，见 [design/capability-model.md](design/capability-model.md) |
+| Statement timeout（语句超时） | 数据库把语句停在超时并回滚，结果确定（区别于结果未知） | `store.ErrStatementTimeout` |
 
 ## 生命周期
 
@@ -59,3 +61,5 @@
   数据源上原样执行 SQL 的独立入口；它不属于受治理面，“受治理面不接受任意 SQL”的
   表述不因它而改变。
 - **database**：配置键 `databases` 是数据源；指服务器上的库时说物理数据库。
+- **capability**：只指 Provider 能力（连接能保证什么）。连接账号对实体动作有没有数据库
+  权限叫连接权限（`bootstrap.EntityCapabilities`，GraphQL `capabilities`），不叫能力。

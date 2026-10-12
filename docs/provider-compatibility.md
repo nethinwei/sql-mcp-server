@@ -32,11 +32,62 @@
 |---|---|---|---|---|
 | EXPLAIN 估算 | 准确模式，真实数据库验证 | 保守 fail-closed，真实数据库验证 | 保守 fail-closed，真实数据库验证 | `Test*CostGate` / `Test*ReadPKWhitelist` 及 [安全模型](security.md#成本闸门) |
 | EXPLAIN ANALYZE feedback | 支持，默认关闭 | 未支持，启用时启动失败 | 未支持，启用时启动失败 | PostgreSQL `ExplainAnalyze` integration 与 bootstrap 校验 |
-| 连接级 timeout | 未独立验证（`statement_timeout`） | 未独立验证（`max_execution_time`） | 未独立验证（`ob_query_timeout`） | provider DSN/runtime 参数；数据库触发路径尚未独立 integration |
-| 应用 context timeout | 已实现 | 已实现 | 已实现 | 统一 bootstrap/tool 执行链 |
-| `sql_safe_updates` | 不适用 | 默认注入 | MySQL 协议路径注入 | `x/providers/mysql/adapter.go` |
+| 语句超时、无键写入兜底 | 见 [Provider 能力](#provider-能力) | 同左 | 同左 | 按连接判定；三库 `Test*StatementTimeout` integration |
+| 应用 context timeout | 已实现，并发送 cancel request | 已实现（只关闭连接） | 已实现（只关闭连接） | 统一 bootstrap/tool 执行链 |
 | scan row cap | 无 | 能力声明；不作为扫描硬保证 | 能力声明；不作为扫描硬保证 | 应用无法跨方言证明实际扫描行数 |
 | resource manager | 无 | 无 | 外部配置 | 由 OceanBase DBA 配置，本服务不代管 |
+
+## Provider 能力
+
+每项能力分别给出保证强度（`enforced` / `best_effort` / `unsupported`）与证据，强度按
+连接判定：服务注入的会话设置被 DSN 覆盖、或经 transaction pooler 时会降级。启动与
+热重载时，数据源依赖的硬限制（读、被授权的写与过程、开启时的 SQL 逃生通道的语句
+超时）不是 `enforced` 即告警；`cost.requireNativeLimits: true` 时拒绝加载。模型见
+[能力模型设计](design/capability-model.md)。
+
+<!-- BEGIN GENERATED: provider-capabilities -->
+<!-- 本节由 internal/capgen 根据各 provider 的能力声明生成，勿手改；`go generate ./x/providers/all` 重新生成。 -->
+
+默认连接（服务注入全部会话设置，不经 pooler）的保证强度与证据：
+
+| 能力 | PostgreSQL | MySQL | OceanBase |
+|---|---|---|---|
+| `write.returning` | `enforced`（核心层验证） | `unsupported`（核心层验证） | `unsupported`（核心层验证） |
+| `cost.explain` | `enforced`（真实数据库验证） | `enforced`（真实数据库验证） | `enforced`（真实数据库验证） |
+| `cost.explain.accurate` | `enforced`（真实数据库验证） | `best_effort`（真实数据库验证） | `best_effort`（真实数据库验证） |
+| `cost.explain.analyze` | `enforced`（真实数据库验证） | `unsupported`（核心层验证） | `unsupported`（核心层验证） |
+| `limit.timeout.read` | `enforced`（真实数据库验证） | `enforced`（真实数据库验证） | `enforced`（真实数据库验证） |
+| `limit.timeout.write` | `enforced`（真实数据库验证） | `unsupported`（仅声明） | `enforced`（真实数据库验证） |
+| `limit.unkeyedWrite` | `unsupported`（仅声明） | `enforced`（真实数据库验证） | `enforced`（真实数据库验证） |
+
+按连接判定的限制（默认连接，以及与默认不同的连接方式）：
+
+| Provider | 连接方式 | 能力 | 强度 | 说明 |
+|---|---|---|---|---|
+| PostgreSQL | 默认 | `limit.timeout.read` | `enforced` | statement_timeout just under cost.queryTimeout, and a cancel request at the request deadline |
+| PostgreSQL | 默认 | `limit.timeout.write` | `enforced` | statement_timeout just under cost.queryTimeout, and a cancel request at the request deadline |
+| PostgreSQL | 默认 | `limit.unkeyedWrite` | `unsupported` | no database-side refusal; the gate's WriteGuard refuses unkeyed writes |
+| PostgreSQL | DSN 设置 `statement_timeout` | `limit.timeout.read` | `enforced` | a cancel request at the request deadline (the DSN sets its own statement_timeout) |
+| PostgreSQL | DSN 设置 `statement_timeout` | `limit.timeout.write` | `enforced` | a cancel request at the request deadline (the DSN sets its own statement_timeout) |
+| PostgreSQL | `pooler: transaction` | `limit.timeout.read` | `enforced` | a cancel request at the request deadline (the transaction pooler drops statement_timeout and must forward cancel requests, as pgbouncer does) |
+| PostgreSQL | `pooler: transaction` | `limit.timeout.write` | `enforced` | a cancel request at the request deadline (the transaction pooler drops statement_timeout and must forward cancel requests, as pgbouncer does) |
+| MySQL | 默认 | `limit.timeout.read` | `enforced` | max_execution_time just under cost.queryTimeout (SELECT only) |
+| MySQL | 默认 | `limit.timeout.write` | `unsupported` | max_execution_time stops SELECT only, and a cancelled request only closes the connection: bound writes on the database side (DBA) |
+| MySQL | 默认 | `limit.unkeyedWrite` | `enforced` | sql_safe_updates = 1 |
+| MySQL | DSN 设置 `max_execution_time` | `limit.timeout.read` | `best_effort` | the DSN sets max_execution_time, so cost.queryTimeout is not applied natively |
+| MySQL | DSN 设置 `sql_safe_updates=0` | `limit.unkeyedWrite` | `unsupported` | the DSN turns sql_safe_updates off; the gate's WriteGuard still refuses unkeyed writes |
+| MySQL | `pooler: transaction` | `limit.timeout.read` | `best_effort` | max_execution_time is a session setting a transaction pooler does not keep |
+| MySQL | `pooler: transaction` | `limit.unkeyedWrite` | `best_effort` | sql_safe_updates is a session setting a transaction pooler does not keep |
+| OceanBase | 默认 | `limit.timeout.read` | `enforced` | ob_query_timeout just under cost.queryTimeout |
+| OceanBase | 默认 | `limit.timeout.write` | `enforced` | ob_query_timeout just under cost.queryTimeout |
+| OceanBase | 默认 | `limit.unkeyedWrite` | `enforced` | sql_safe_updates = 1 |
+| OceanBase | DSN 设置 `ob_query_timeout` | `limit.timeout.read` | `best_effort` | the DSN sets ob_query_timeout, so cost.queryTimeout is not applied natively |
+| OceanBase | DSN 设置 `ob_query_timeout` | `limit.timeout.write` | `best_effort` | the DSN sets ob_query_timeout, so cost.queryTimeout is not applied natively |
+| OceanBase | DSN 设置 `sql_safe_updates=0` | `limit.unkeyedWrite` | `unsupported` | the DSN turns sql_safe_updates off; the gate's WriteGuard still refuses unkeyed writes |
+| OceanBase | `pooler: transaction` | `limit.timeout.read` | `best_effort` | ob_query_timeout is a session setting a transaction pooler does not keep |
+| OceanBase | `pooler: transaction` | `limit.timeout.write` | `best_effort` | ob_query_timeout is a session setting a transaction pooler does not keep |
+| OceanBase | `pooler: transaction` | `limit.unkeyedWrite` | `best_effort` | sql_safe_updates is a session setting a transaction pooler does not keep |
+<!-- END GENERATED: provider-capabilities -->
 
 ## 关键安全差异
 

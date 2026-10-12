@@ -163,7 +163,10 @@ go test -race -tags=integration -timeout 20m ./x/providers/...
 
 该通道包含三库 conformance 差分（`Test{PG,MySQL,OB}Conformance`）：同一
 IR 的 reference interpreter 结果与真实数据库执行结果比对，语义定义见
-[IR 语义规范](design/ir-semantics.md)，corpus 在 `internal/conformance`。
+[IR 语义规范](design/ir-semantics.md)，corpus 在 `internal/conformance`；随后经完整
+工具链运行跨库治理等价任务（`conformance.RunGovernance`：受治理读、对抗过滤、受治理
+聚合、全表扫描与无键写入的拒绝码、语句超时分类）。`Test{PG,MySQL,OB}StatementTimeout`
+是兼容矩阵中语句超时与无键写入兜底“真实数据库验证”的证据。
 
 运行 MCP e2e：
 

@@ -397,13 +397,18 @@
           "type": "boolean"
         },
         "queryTimeout": {
-          "description": "Query timeout, also sent as the database statement timeout.",
-          "x-description-zh-CN": "查询超时，同时下发为数据库语句超时。",
+          "description": "Query timeout; the database statement timeout is set a tenth shorter (at most a second), so the database stops the statement first.",
+          "x-description-zh-CN": "查询超时；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。",
           "type": "string",
           "x-format": "duration",
           "x-minimum": "0",
           "default": "30s",
           "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
+        },
+        "requireNativeLimits": {
+          "description": "Strict mode. Refuse the configuration when a datasource's connection cannot stop statements at queryTimeout on the database side (the capability is not enforced), and fail its validation in the console; off, it only warns.",
+          "x-description-zh-CN": "严格模式：数据源的连接无法在数据库侧把语句限制在 queryTimeout 内（能力不是 enforced）时，拒绝加载该配置，控制台校验也报错；关闭时只告警。",
+          "type": "boolean"
         },
         "allowTemplates": {
           "description": "SQL templates that skip estimation; prefer fp:v2:\u003csha256\u003e fingerprints, and with several datasources write exact SQL as datasource:SQL. Safety checks still apply.",

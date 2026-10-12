@@ -277,6 +277,14 @@ func (r *queryResolver) Capabilities(ctx context.Context) ([]EntityCapability, e
 	return toCapabilities(r.capabilities()), nil
 }
 
+// ProviderCapabilities is the resolver for the providerCapabilities field.
+func (r *queryResolver) ProviderCapabilities(ctx context.Context) (*ProviderCapabilities, error) {
+	if _, err := auth.Require(ctx, auth.PermRead); err != nil {
+		return nil, err
+	}
+	return r.providerCapabilities(), nil
+}
+
 // Diff is the resolver for the diff field.
 func (r *queryResolver) Diff(ctx context.Context, from string, to *string) (string, error) {
 	return r.App.Diff(ctx, from, workspaceOr(to))

@@ -1243,6 +1243,7 @@ type CostSpec struct {
 	RequireKnownScan    *bool              `yaml:"requireKnownScan,omitempty" json:"requireKnownScan,omitempty"`
 	RequireFreshStats   *bool              `yaml:"requireFreshStats,omitempty" json:"requireFreshStats,omitempty"`
 	QueryTimeout        *time.Duration     `yaml:"queryTimeout,omitempty" json:"queryTimeout,omitempty"`
+	RequireNativeLimits *bool              `yaml:"requireNativeLimits,omitempty" json:"requireNativeLimits,omitempty"`
 	AllowTemplates      List[string]       `yaml:"allowTemplates,omitempty" json:"allowTemplates,omitempty"`
 	RejectTemplates     List[string]       `yaml:"rejectTemplates,omitempty" json:"rejectTemplates,omitempty"`
 	AQE                 *AQESpec           `yaml:"aqe,omitempty" json:"aqe,omitempty"`
@@ -1360,6 +1361,12 @@ func (s CostSpec) config() CostConfig {
 	if s.QueryTimeout != nil {
 		out.present["queryTimeout"] = true
 	}
+	if s.RequireNativeLimits != nil {
+		out.RequireNativeLimits = *s.RequireNativeLimits
+	}
+	if s.RequireNativeLimits != nil {
+		out.present["requireNativeLimits"] = true
+	}
 	out.AllowTemplates = []string(s.AllowTemplates)
 	if s.AllowTemplates != nil {
 		out.present["allowTemplates"] = true
@@ -1447,6 +1454,9 @@ func (c CostConfig) spec() CostSpec {
 	}
 	if c.present["queryTimeout"] || c.QueryTimeout != *new(time.Duration) {
 		out.QueryTimeout = ptr(c.QueryTimeout)
+	}
+	if c.present["requireNativeLimits"] || c.RequireNativeLimits != *new(bool) {
+		out.RequireNativeLimits = ptr(c.RequireNativeLimits)
 	}
 	out.AllowTemplates = List[string](c.AllowTemplates)
 	out.RejectTemplates = List[string](c.RejectTemplates)

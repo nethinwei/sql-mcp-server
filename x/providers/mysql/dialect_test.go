@@ -1,6 +1,10 @@
 package mysql
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/nethinwei/sql-mcp-server/core/dialect"
+)
 
 func TestDialectQuoteIdent(t *testing.T) {
 	t.Parallel()
@@ -23,10 +27,10 @@ func TestDialectPlaceholder(t *testing.T) {
 func TestDialectCapabilities(t *testing.T) {
 	t.Parallel()
 	caps := (Dialect{}).Capabilities()
-	if caps.ExplainAccurate {
+	if caps.Enforced(dialect.ExplainAccurate) {
 		t.Error("mysql estimate should not be accurate")
 	}
-	if caps.Returning {
+	if caps.Has(dialect.Returning) {
 		t.Error("mysql should not support RETURNING")
 	}
 }

@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
 	"net/http"
 	"net/http/httptest"
@@ -239,6 +240,29 @@ func TestSelectionDepth(t *testing.T) {
 	rc := &graphql.OperationContext{Operation: doc.Operations[0], Doc: doc}
 	if gqlErr := depthLimit(maxQueryDepth).MutateOperationContext(context.Background(), rc); gqlErr == nil {
 		t.Fatal("an operation deeper than the limit must be rejected")
+	}
+}
+
+// An operation above the complexity limit is refused before any resolver
+// runs, however shallow: many aliases of a cheap field add up.
+func TestComplexityLimit(t *testing.T) {
+	f := newFixture(t)
+	_, cookie, csrf := f.login(t, "correct horse battery")
+	post := func(aliases int) string {
+		var q strings.Builder
+		q.WriteString(`{"query":"{`)
+		for i := range aliases {
+			fmt.Fprintf(&q, " m%d: me { username }", i)
+		}
+		q.WriteString(` }"}`)
+		return f.do(http.MethodPost, "/admin/graphql", q.String(), map[string]string{csrfHeader: csrf}, cookie).Body.String()
+	}
+	// me { username } costs 2.
+	if body := post(maxQueryComplexity / 2); !strings.Contains(body, `"m0":{"username":"root"}`) {
+		t.Fatalf("an operation at the limit must run: %s", body)
+	}
+	if body := post(maxQueryComplexity/2 + 1); !strings.Contains(body, "COMPLEXITY_LIMIT_EXCEEDED") {
+		t.Fatalf("an operation above the limit must be refused: %.300s", body)
 	}
 }
 

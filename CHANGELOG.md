@@ -9,6 +9,62 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+### Added
+
+- Provider 能力模型（`docs/design/capability-model.md`）：`core/dialect.Profile` 为每项能力
+  分别给出保证强度（`enforced` / `best_effort` / `unsupported`）、证据与原因，强度按连接
+  判定——服务注入的会话设置被 DSN 覆盖、经 transaction pooler，或 MySQL 写语句
+  （`max_execution_time` 只作用于 SELECT）时如实降级。首批能力键：`write.returning`、
+  `cost.explain`、`cost.explain.accurate`、`cost.explain.analyze`、`limit.timeout.read`、
+  `limit.timeout.write`、`limit.unkeyedWrite`。
+- 数据源依赖的语句超时（读；有人能经开启的工具写入或执行过程时的写与过程，以及写后读、
+  读写事务里落在写连接上的读；开启时的 SQL 逃生通道）不是 `enforced` 时，启动与热重载
+  告警（同一进程内只在变化时重复）；控制台的校验与发布审查对尚未应用的配置按其 DSN
+  （不连接）同样判定。新配置 `cost.requireNativeLimits`（默认 `false`，可热重载）开启后
+  这样的配置不能加载，控制台校验报错阻止发布（CLI 发布不连接数据库，由服务拒绝应用）。
+- 管理 API `providerCapabilities`（每个服务中连接的能力与未强制的硬限制）；控制台数据源
+  卡片显示未强制的语句超时，展开连接后显示明细与各连接在数据库侧的保证，新版本应用后
+  刷新。
+- 兼容矩阵的 Provider 能力表由 `go generate ./x/providers/all` 从各 provider 的声明生成；
+  `providerregistry.RegisterLimits`/`Limits`/`Drivers`，内置驱动都登记了不连接即可判定的
+  `Limits`。
+- 跨 Provider 治理等价任务（`internal/conformance.RunGovernance`）：受治理读、对抗过滤、
+  受治理聚合、全表扫描拒绝、无键写入拒绝、语句超时分类，三库 integration 运行；三库
+  语句超时与 `sql_safe_updates` 的真实数据库测试。
+- 管理 API 逐操作越权矩阵（每个查询与变更在 16 种权限组合下断言）、鉴权先于输入解析的
+  测试与复杂度上限测试；威胁 TM-014。
+
+### Changed
+
+- 数据库报告的语句超时（PostgreSQL 57014、MySQL 3024、OceanBase 4012）归类为
+  `store.ErrStatementTimeout`：遥测记为 timeout，写入超时按“未生效”而非结果未知处理
+  （语句已回滚）；与此前相同，计入熔断。
+- 注入数据库的语句超时（`statement_timeout`、`max_execution_time`、`ob_query_timeout`）
+  比 `cost.queryTimeout` 少十分之一（至多 1 秒），使数据库通常先于请求 deadline 停住语句
+  并报告结果确定。
+- 方案的范围统计、预览与应用都先鉴权再解析输入，工作区的 update/reset/合并草稿同样
+  先鉴权再解析版本号。
+
+### Fixed
+
+- `aggregate_records` 的聚合列名取数据库自己的命名：PostgreSQL 把同一函数的多个聚合都
+  命名为 `sum` 等，按列名转成行时互相覆盖、丢失结果；MySQL/OceanBase 的键为
+  `COUNT(*)`、``SUM(`amount`)``，跨数据库不一致。现由执行器按位置命名，生成的 SQL 不变
+  （`allowTemplates`、`rejectTemplates` 与估算反馈的指纹不受影响）。
+
+### Breaking
+
+- `aggregate_records` 的聚合列名在所有数据库上统一为 `count`（`count(*)`）与
+  `<func>_<field>`（如 `sum_amount`、`count_id`），与某个分组字段同名的聚合返回
+  `INVALID_INPUT`。按旧键名读取结果的客户端需要更新（只有 PostgreSQL 的 `count(*)` 键名
+  不变）。
+- 应用方案（控制台 `applyPlan`、配置 MCP `plan_apply`）与预览一样需要 `admin:read` 与
+  `admin:write`，此前只要 `admin:write`。
+- Go API：`dialect.Dialect.Capabilities()` 返回 `dialect.Profile`（移除
+  `dialect.Capabilities` 结构体）；`provider.Provider` 新增 `Profile()`；
+  `mysql.NewAdapter` 额外返回连接的限制；`cost.NewGateFromCapabilities` 接收
+  `dialect.Profile`。
+
 ## 0.1.14 - 2026-10-11
 
 升级步骤汇总见 [`docs/releases/v0.1.14.md`](docs/releases/v0.1.14.md#迁移)。

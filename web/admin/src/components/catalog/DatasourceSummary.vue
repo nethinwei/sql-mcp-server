@@ -1,8 +1,12 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NButton, NCard, NGi, NGrid, NTag, NText } from 'naive-ui'
 import { useWorkspace } from '@/stores/workspace'
+import { useStatus } from '@/stores/status'
+import { run } from '@/api/client'
+import { ProviderCapabilitiesQuery } from '@/api/ops'
+import { emptyProviderCapabilities, issuesOf, limitsOf, type ProviderCapabilities } from '@/lib/providerCapabilities'
 import type { CatalogQuery } from '@/gql/graphql'
 
 // One card per datasource: what it is, how much of it was scanned and how
@@ -17,6 +21,32 @@ const ws = useWorkspace()
 const open = ref<Record<string, boolean>>({})
 
 const entities = (ds: string) => ws.entities.filter((e) => (e.datasource ?? 'default') === ds).length
+
+// What the serving connections guarantee on the database side, as the
+// serving process judged them; edits not yet applied are judged on review.
+// The count of statement timeouts the datasource relies on but no serving
+// connection enforces shows on the card itself; the details fold away with
+// the DSNs. A newly applied revision reloads them.
+const caps = ref<ProviderCapabilities>(emptyProviderCapabilities)
+const status = useStatus()
+watch(() => status.server?.appliedRevision, async () => {
+  try {
+    caps.value = (await run(ProviderCapabilitiesQuery, {})).providerCapabilities
+  } catch {
+    // Without a report the cards show no guarantees.
+  }
+}, { immediate: true })
+const strength = (s: string) => t(`datasources.strength.${s}`)
+const issueLines = (ds: string) => issuesOf(caps.value, ds).map((i) => t('datasources.limitIssue', {
+  connection: i.connection, key: i.key, use: i.use, strength: strength(i.strength), reason: i.reason ?? '',
+}))
+const limitsText = (ds: string, connection: string) => {
+  const l = limitsOf(caps.value, ds, connection)
+  return l && t('datasources.limits', { read: strength(l.read), write: strength(l.write), unkeyed: strength(l.unkeyed) })
+}
+const connectionNames = (d: { name: string; connections: { name: string }[] }) =>
+  d.connections.length ? d.connections.map((c) => c.name) : caps.value.connections
+    .filter((c) => c.datasource === d.name).map((c) => c.connection)
 </script>
 
 <template>
@@ -38,6 +68,9 @@ const entities = (ds: string) => ws.entities.filter((e) => (e.datasource ?? 'def
           </template>
           {{ t('datasources.entityCount', { count: entities(d.name) }, entities(d.name)) }}
         </n-text>
+        <n-text v-if="issuesOf(caps, d.name).length" type="warning" class="line">
+          {{ t('datasources.limitIssues', { n: issuesOf(caps, d.name).length }) }}
+        </n-text>
         <n-button text size="tiny" class="toggle" :aria-expanded="!!open[d.name]" @click.stop="open[d.name] = !open[d.name]"
           @keydown.enter.stop @keydown.space.stop>
           {{ open[d.name] ? t('catalog.hideConnections') : t('catalog.showConnections', { n: d.connections.length || 1 }) }}
@@ -54,6 +87,12 @@ const entities = (ds: string) => ws.entities.filter((e) => (e.datasource ?? 'def
             </n-text>
           </template>
           <n-text v-if="d.sqlEscape" depth="3" class="line">{{ t('datasources.sqlEscape', { c: d.sqlEscape.connection }) }}</n-text>
+          <n-text v-for="line in issueLines(d.name)" :key="line" type="warning" class="line">{{ line }}</n-text>
+          <template v-for="c in connectionNames(d)" :key="c">
+            <n-text v-if="limitsText(d.name, c)" depth="3" class="line">
+              <template v-if="connectionNames(d).length > 1">{{ c }}: </template>{{ limitsText(d.name, c) }}
+            </n-text>
+          </template>
         </template>
       </n-card>
     </n-gi>

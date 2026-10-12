@@ -60,6 +60,18 @@ func (f serveAdminFlags) handler(
 			}
 			return nil
 		},
+		Profiles: func() ([]bootstrap.ConnectionProfile, []bootstrap.LimitIssue) {
+			if app := runtime.Current(); app != nil {
+				return app.Profiles(), app.LimitIssues()
+			}
+			return nil, nil
+		},
+		PlannedLimits: func(next *config.Config) []bootstrap.LimitIssue {
+			if app := runtime.Current(); app != nil {
+				return app.PlannedLimitIssues(next)
+			}
+			return nil
+		},
 		PathPrefix:   cfg.Server.PathPrefix,
 		SecureCookie: cfg.Server.Auth.TLS.Cert != "", Playground: *f.playground,
 	}), nil

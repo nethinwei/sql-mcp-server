@@ -21,7 +21,8 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
 )
 
-func setupMySQL(t testing.TB) (*mysql.Provider, func()) {
+// startMySQL starts a MySQL container and returns its DSN.
+func startMySQL(t testing.TB) (string, func()) {
 	t.Helper()
 	ctx := context.Background()
 	container, err := tcmysql.Run(ctx, "mysql:8",
@@ -36,6 +37,13 @@ func setupMySQL(t testing.TB) (*mysql.Provider, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return dsn, func() { _ = container.Terminate(context.Background()) }
+}
+
+func setupMySQL(t testing.TB) (*mysql.Provider, func()) {
+	t.Helper()
+	ctx := context.Background()
+	dsn, stop := startMySQL(t)
 	prov := connectMySQLWithRetry(t, dsn)
 	_, _ = prov.ExecContext(ctx,
 		"CREATE TABLE users (id int AUTO_INCREMENT PRIMARY KEY, email text, tenant_id int)")
@@ -43,7 +51,7 @@ func setupMySQL(t testing.TB) (*mysql.Provider, func()) {
 		"INSERT INTO users (email, tenant_id) VALUES ('alice@x.com', 7), ('bob@x.com', 8)")
 	return prov, func() {
 		_ = prov.Close()
-		_ = container.Terminate(context.Background())
+		stop()
 	}
 }
 

@@ -1,6 +1,6 @@
 # 设计评审：配置存储与 Revision
 
-状态：**评审结论（2026-10-03，管理面 3，预期 v0.1.12）**。本文把
+状态：**评审结论（2026-10-03，管理面 3，已随 v0.1.11 交付）**。本文把
 [Revision 与 Snapshot](revision-snapshot.md) 的评审结论落到可实现的存储边界、
 表结构、发布流程与运行时接入，实现以本文为准。对应主
 [Roadmap](../roadmap.md#管理面-3--structured-config-store-and-revisions)

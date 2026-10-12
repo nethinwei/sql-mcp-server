@@ -45,6 +45,23 @@ type Shared struct {
 	rateLimit *rateLimits            // applied to quota and to each connection's health
 	limits    config.RateLimitConfig // the rate limits applied, for connections opened later
 	pools     map[string]*sharedConnection
+	warned    string // the hard-limit warnings logged last (see checkNativeLimits)
+}
+
+// unwarned reports whether warnings differ from the ones the process logged
+// last, and remembers them: a reload that changes nothing about them does
+// not log them again. Without a Shared every assembly logs.
+func (s *Shared) unwarned(warnings string) bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.warned == warnings {
+		return false
+	}
+	s.warned = warnings
+	return true
 }
 
 // rateLimits are the rate-limit settings, comparable.

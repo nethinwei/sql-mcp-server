@@ -26,6 +26,7 @@ go test -race ./x/admin/graph -run TestDraftRoundTrip        # 单个测试
 go test -race -tags=integration ./x/configstore -run Postgres  # 集成测试带 build tag
 cd web/admin && npx vitest run src/lib/jsonSchema.test.ts      # 单个前端测试
 go generate ./core/config    # 重新生成 schema.json 与 docs/configuration.md 字段参考
+go generate ./x/providers/all  # 重新生成 docs/provider-compatibility.md 的 Provider 能力表
 go generate ./x/admin/graph  # gqlgen（schema.graphqls → generated.go/models_gen.go）
 cd web/admin && pnpm codegen # GraphQL 客户端类型（src/gql，已 gitignore）
 ```

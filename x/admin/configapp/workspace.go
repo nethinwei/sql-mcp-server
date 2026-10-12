@@ -173,33 +173,33 @@ func checkKey(ref workspace.Ref, value any) error {
 
 // UpdateWorkspace moves the caller's workspace onto revision to.
 func (r *Service) UpdateWorkspace(ctx context.Context, to string) (*Workspace, error) {
-	id, err := ParseID(to)
-	if err != nil {
-		return nil, err
-	}
 	return r.workspaceOp(ctx, auth.PermWrite, func(ops workspaceops.Service, user string) (workspaceops.State, error) {
+		id, err := ParseID(to)
+		if err != nil {
+			return workspaceops.State{}, err
+		}
 		return ops.Update(ctx, user, user, id)
 	})
 }
 
 // ResetWorkspace makes the caller's workspace revision to as it is.
 func (r *Service) ResetWorkspace(ctx context.Context, to string) (*Workspace, error) {
-	id, err := ParseID(to)
-	if err != nil {
-		return nil, err
-	}
 	return r.workspaceOp(ctx, auth.PermWrite, func(ops workspaceops.Service, user string) (workspaceops.State, error) {
+		id, err := ParseID(to)
+		if err != nil {
+			return workspaceops.State{}, err
+		}
 		return ops.Reset(ctx, user, user, id)
 	})
 }
 
 // MergeDraft takes draft id into the caller's workspace.
 func (r *Service) MergeDraft(ctx context.Context, id string) (*Workspace, error) {
-	draft, err := ParseID(id)
-	if err != nil {
-		return nil, err
-	}
 	return r.workspaceOp(ctx, auth.PermWrite, func(ops workspaceops.Service, user string) (workspaceops.State, error) {
+		draft, err := ParseID(id)
+		if err != nil {
+			return workspaceops.State{}, err
+		}
 		return ops.MergeDraft(ctx, user, user, draft)
 	})
 }
@@ -368,6 +368,10 @@ type AppliedPlan struct {
 // the workspace" and an agent's plan_apply both come here. A plan that
 // changes nothing, does not validate or has blocking exceptions fails.
 func (r *Service) ApplyPlan(ctx context.Context, in ApplyRequest) (*AppliedPlan, error) {
+	// Applying recomputes the preview: it reads what previewing reads.
+	if _, err := auth.Require(ctx, auth.PermRead); err != nil {
+		return nil, err
+	}
 	who, err := auth.Require(ctx, auth.PermWrite)
 	if err != nil {
 		return nil, err

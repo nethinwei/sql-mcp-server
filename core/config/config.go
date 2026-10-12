@@ -363,6 +363,7 @@ type CostConfig struct {
 	RequireKnownScan    bool                `yaml:"requireKnownScan"            json:"requireKnownScan"`
 	RequireFreshStats   bool                `yaml:"requireFreshStats"           json:"requireFreshStats"`
 	QueryTimeout        time.Duration       `yaml:"queryTimeout"                json:"queryTimeout" schema:"min=0"`
+	RequireNativeLimits bool                `yaml:"requireNativeLimits"         json:"requireNativeLimits"`
 	AllowTemplates      []string            `yaml:"allowTemplates"              json:"allowTemplates"`
 	RejectTemplates     []string            `yaml:"rejectTemplates"             json:"rejectTemplates"`
 	AQE                 AQEConfig           `yaml:"aqe"                         json:"aqe"`

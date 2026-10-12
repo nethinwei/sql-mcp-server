@@ -5,9 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/provider"
 )
 
@@ -35,15 +37,35 @@ func (o Options) OpenContext() context.Context {
 	return context.Background()
 }
 
+// NativeTimeout is the statement timeout a provider sets on the database:
+// Timeout less a margin (a tenth, at most a second, at least a millisecond
+// left), so the database stops a slow statement, and reports it stopped,
+// before the request's own deadline cuts the connection and leaves a write's
+// outcome unknown. The request's deadline starts before planning, so this
+// makes the database usually, not always, the first to stop.
+func (o Options) NativeTimeout() time.Duration {
+	native := o.Timeout - min(o.Timeout/10, time.Second)
+	return max(native, time.Millisecond)
+}
+
 // PoolerTransaction is the transaction-mode pooler setting.
 const PoolerTransaction = "transaction"
 
 // Factory opens a database provider.
 type Factory func(dsn string, opts Options) (provider.Provider, error)
 
+// LimitsFunc judges, without connecting, what a connection to dsn opened
+// with opts guarantees on the server (its statement timeouts and native
+// write refusals).
+type LimitsFunc func(dsn string, opts Options) (dialect.Profile, error)
+
+// ErrNoLimits is returned for a driver that registered no LimitsFunc.
+var ErrNoLimits = errors.New("providerregistry: the driver declares no limits")
+
 var (
 	mu        sync.RWMutex
 	factories = make(map[string]Factory)
+	limits    = make(map[string]LimitsFunc)
 )
 
 // Register adds a named provider factory. It panics for invalid or duplicate
@@ -63,6 +85,40 @@ func Register(name string, factory Factory) {
 	factories[name] = factory
 }
 
+// RegisterLimits adds the LimitsFunc of a driver. Like Register, it panics
+// for invalid or duplicate registrations.
+func RegisterLimits(name string, fn LimitsFunc) {
+	if name == "" || fn == nil {
+		panic("providerregistry: invalid limits registration for " + name)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if _, exists := limits[name]; exists {
+		panic("providerregistry: duplicate limits for " + name)
+	}
+	limits[name] = fn
+}
+
+// Limits judges a connection of driver to dsn opened with opts, without
+// connecting (see LimitsFunc).
+func Limits(driver, dsn string, opts Options) (dialect.Profile, error) {
+	mu.RLock()
+	fn, ok := limits[driver]
+	mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", ErrNoLimits, driver)
+	}
+	return fn(dsn, opts)
+}
+
+// HasLimits reports whether driver registered a LimitsFunc.
+func HasLimits(driver string) bool {
+	mu.RLock()
+	defer mu.RUnlock()
+	_, ok := limits[driver]
+	return ok
+}
+
 // New opens the provider registered under driver.
 func New(driver, dsn string, opts Options) (provider.Provider, error) {
 	mu.RLock()
@@ -72,6 +128,18 @@ func New(driver, dsn string, opts Options) (provider.Provider, error) {
 		return nil, fmt.Errorf("%w: %q", ErrUnsupportedDriver, driver)
 	}
 	return factory(dsn, opts)
+}
+
+// Drivers lists the registered driver names, sorted.
+func Drivers() []string {
+	mu.RLock()
+	defer mu.RUnlock()
+	out := make([]string, 0, len(factories))
+	for name := range factories {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // IsRegistered reports whether driver has a registered factory.

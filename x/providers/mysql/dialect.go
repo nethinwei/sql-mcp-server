@@ -16,6 +16,14 @@ func (Dialect) QuoteIdent(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
 func (Dialect) Placeholder(_ int) string { return "?" }
-func (Dialect) Capabilities() dialect.Capabilities {
-	return dialect.Capabilities{ExplainCost: true}
+func (Dialect) Capabilities() dialect.Profile {
+	return dialect.Profile{
+		dialect.Returning: {Strength: dialect.Unsupported, Evidence: dialect.CoreVerified,
+			Reason: "no RETURNING: exec + last insert id"},
+		dialect.Explain: {Strength: dialect.Enforced, Evidence: dialect.DBVerified, Reason: "EXPLAIN FORMAT=JSON"},
+		dialect.ExplainAccurate: {Strength: dialect.BestEffort, Evidence: dialect.DBVerified,
+			Reason: "estimates are coarse: the gate scores them only with explain fail-closed"},
+		dialect.ExplainAnalyze: {Strength: dialect.Unsupported, Evidence: dialect.CoreVerified,
+			Reason: "no EXPLAIN ANALYZE sampling"},
+	}
 }

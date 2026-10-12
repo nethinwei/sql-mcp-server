@@ -16,6 +16,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
@@ -573,6 +574,87 @@ func TestCapabilitiesAndValidationWarnings(t *testing.T) {
 	mustPost(t, c, `{ validate(revision: "1") { warnings } }`, &resp)
 	if len(resp.Validate.Warnings) != 1 || !strings.Contains(resp.Validate.Warnings[0], `connection "ro"`) {
 		t.Fatalf("warnings = %q", resp.Validate.Warnings)
+	}
+}
+
+// The serving connections' profiles and the limits they leave unenforced
+// reach a reader as the runtime reports them.
+func TestProviderCapabilities(t *testing.T) {
+	h := newHarness(t)
+	h.resolver.App.Profiles = func() ([]bootstrap.ConnectionProfile, []bootstrap.LimitIssue) {
+		degraded := dialect.Claim{Strength: dialect.BestEffort, Evidence: dialect.Declared, Reason: "the DSN sets it"}
+		return []bootstrap.ConnectionProfile{{Datasource: "shop", Connection: "ro", Profile: dialect.Profile{
+				dialect.TimeoutRead: degraded,
+			}}}, []bootstrap.LimitIssue{{
+				Datasource: "shop", Connection: "ro", Key: dialect.TimeoutRead, Claim: degraded, Use: "reads",
+			}}
+	}
+	var resp struct {
+		ProviderCapabilities struct {
+			Connections []struct {
+				Datasource, Connection string
+				Claims                 []struct{ Key, Strength, Evidence, Reason string }
+			}
+			Issues []struct{ Connection, Key, Use, Strength, Reason string }
+		}
+	}
+	mustPost(t, h.client(auth.PermRead), `{ providerCapabilities {
+		connections { datasource connection claims { key strength evidence reason } }
+		issues { connection key use strength reason } } }`, &resp)
+	got := resp.ProviderCapabilities
+	if len(got.Connections) != 1 || len(got.Connections[0].Claims) != len(dialect.Keys) {
+		t.Fatalf("connections = %+v", got.Connections)
+	}
+	for _, c := range got.Connections[0].Claims {
+		if c.Key == string(dialect.TimeoutRead) && (c.Strength != "BEST_EFFORT" || c.Reason != "the DSN sets it") {
+			t.Fatalf("timeout claim = %+v", c)
+		}
+		if c.Key == string(dialect.Returning) && c.Strength != "UNSUPPORTED" {
+			t.Fatalf("an unclaimed capability must read unsupported: %+v", c)
+		}
+	}
+	if len(got.Issues) != 1 || got.Issues[0].Use != "reads" || got.Issues[0].Strength != "BEST_EFFORT" {
+		t.Fatalf("issues = %+v", got.Issues)
+	}
+}
+
+// Validation reports the hard limits a configuration would rely on that its
+// connections would not enforce: warnings, or, under
+// cost.requireNativeLimits, the error that keeps it from being published.
+func TestValidateReportsPlannedLimits(t *testing.T) {
+	h := newHarness(t)
+	var judged []bool
+	h.resolver.App.PlannedLimits = func(cfg *config.Config) []bootstrap.LimitIssue {
+		judged = append(judged, cfg.Cost.RequireNativeLimits)
+		return []bootstrap.LimitIssue{{Datasource: "shop", Connection: "default", Key: dialect.TimeoutRead,
+			Use: "reads", Claim: dialect.Claim{Strength: dialect.BestEffort, Reason: "the DSN sets it"}}}
+	}
+	c := h.client(auth.PermAll)
+	var resp struct {
+		Validate struct {
+			Ok       bool
+			Error    *string
+			Warnings []string
+		}
+	}
+	mustPost(t, c, `{ validate(revision: "1") { ok error warnings } }`, &resp)
+	if !resp.Validate.Ok || len(resp.Validate.Warnings) != 1 ||
+		!strings.Contains(resp.Validate.Warnings[0], "the DSN sets it") {
+		t.Fatalf("validation = %+v", resp.Validate)
+	}
+	strict, err := h.store.Create(context.Background(), revision.Draft{
+		Payload: []byte(baseYAML + "cost:\n  requireNativeLimits: true\n"), ParentID: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustPost(t, c, `{ validate(revision: "`+strconv.FormatInt(strict.ID, 10)+`") { ok error warnings } }`, &resp)
+	if resp.Validate.Ok || resp.Validate.Error == nil ||
+		!strings.Contains(*resp.Validate.Error, "cost.requireNativeLimits") {
+		t.Fatalf("strict validation = %+v", resp.Validate)
+	}
+	if len(judged) != 2 || judged[0] || !judged[1] {
+		t.Fatalf("judged configurations = %v", judged)
 	}
 }
 

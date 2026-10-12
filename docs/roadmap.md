@@ -47,28 +47,72 @@
 
 ## Committed
 
-`v0.1.14` 交付[管理面 2 · Trusted SQL Escape Hatch](#管理面-2--trusted-sql-escape-hatch)：
-可信 SQL 逃生通道 `execute_sql`、系统权限 `sql:execute@<数据源>`、审计同步写入；
-实施方案与评审决议见[设计文档](design/sql-escape-hatch.md)，退出门禁已全部满足，见
-[发布说明](releases/v0.1.14.md)。2026-09-30 路线图复审将管理面阶段提前到 `Next` 之前；
-下一个 Committed 版本待路线图复审确定。
+### v0.1.15 — Provider Capability Model
 
-`v0.1.13` 交付多管理员协作的管理面与执行总线：方案驱动的批量配置、配置 MCP 令牌、
-持久化扫描批次、服务端工作区与版本管理模块、快进发布、执行总线、配置意图与生效值、
-固定数据面管线；见[发布说明](releases/v0.1.13.md)。
+2026-10-12 路线图复审确定（`v0.1.14` 发布后）：管理面 1–5 的核心路径已全部交付，
+`v0.2.0` 的关键路径转回数据面，原 `Next 1` 获得版本承诺。`v0.1.10` 发布后技术
+前置已满足；原进入门禁中"结合 Tool Contract 设计评估共同复审"一项解除——该评估
+针对 Agent 澄清类失败，与 capability 无依赖，改由
+[Dormant](#dormant--eval-driven-agent-improvement) 跟踪。进入门禁与退出验收以
+[Provider Roadmap](provider-roadmap.md) Capability Model 章节为唯一事实源，实施方案见
+[设计文档](design/capability-model.md)。复审决议：现有静默降级（PostgreSQL
+transaction pooler、DSN 覆盖原生上限、MySQL 写语句无原生超时）默认如实报告并告警，
+新增可选严格模式使硬限制缺少 `enforced` 且无核心层等价强制时 fail closed；
+同版附带收掉[管理面 4](#管理面-4--admin-api-login-and-schema-import)的两项测试缺口。
+实施中纠正一处评审判断：pgx 在请求超时时本就发送 cancel request，PostgreSQL 无需改动
+驱动配置；conformance 发现并修复聚合列名跨库不一致（按位置命名，SQL 与模板指纹不变）；
+控制台校验在发布前判定硬限制（见设计文档“实施记录”）。
 
-`v0.1.12` 交付管理面的规模化与运行时协调：元数据批量扫描与按库后台导入、发布后排空
-的热重载与跨快照共享服务、实体命名空间；见[发布说明](releases/v0.1.12.md)。
+**问题证据**：现有实现（`core/dialect.Capabilities`）是平铺 bool，成本
+闸门装配（`cost.NewGateFromCapabilities`）直接消费这些 bool，无法表达
+保证强度与证据状态——即无法区分"数据库提供该能力"与"本服务已装配可测试
+的强制机制"。SQLite 与任何新 Provider 立项的前置工程项。
 
-`v0.1.11` 已交付管理面 1，以及管理面 3、4、5 的核心路径（配置存储与 revision、
-管理 API 与 schema 导入、管理控制台）和[数据源模型](design/datasource-model.md)；
-未交付项（OIDC/OAuth2 登录、控制台交互判据的外部实测）见
-[发布说明](releases/v0.1.11.md)的已知限制，各节退出门禁按该清单复核。
+**阶段结果**：
 
-`v0.1.10` 已完成 Diagnostic Evaluation，成果与退出门禁见
-[发布说明](releases/v0.1.10.md)和
-[正式结论](../eval/results/2026-07-12-deepseek-v4-flash-diagnostic-v5.md)；
-其发布复审将 Tool Contract 升为设计评估，该设计评估随 `Next` 阶段处理。
+- capability 重构为"范围 + 强度 + 证据"模型：保证强度统一为
+  `unsupported` / `best_effort` / `enforced`；字段定义以 Provider Roadmap
+  为唯一事实源；
+- 闸门装配与 codegen 渲染改为消费新模型；
+- PostgreSQL、MySQL、OceanBase 三个现有 Provider 的声明按新模型迁移；
+  [Provider 兼容矩阵](provider-compatibility.md)可区分保证强度与证据状态；
+- 字段取舍以 SQLite（`Next 1` 交付对象）为校验对象：模型必须能表达
+  "缺少 `enforced` 成本证明时由核心层等价强制或 fail closed"这类组合；
+- **跨 Provider conformance 套件**（≥5 任务）：PostgreSQL / MySQL /
+  OceanBase 上结果等价、拒绝等价、治理等价，作为 capability model 的
+  首个实际消费者。
+
+**非目标**：不新增 Provider（SQLite 随 `Next 1`）；不引入 L13 实现方式
+维度（仅预留）；不改变三库现有运行时行为与闸门语义（行为等价重构）。
+
+**退出门禁**：
+
+- [x] 每项 capability 分别表达范围、保证强度和证据，不再存在混合语义的
+  单 bool（`core/dialect.Profile`，按连接判定；`TestNewGateFromCapabilitiesMatchesTheFormerBools`
+  锁定行为等价）；
+- [x] "`best_effort` 不能满足硬限制；缺少 `enforced` 能力时，必须由核心层
+  提供等价强制或 fail closed" 有测试锁定（`cost.requireNativeLimits`，
+  `TestRequireNativeLimitsRefusesTheConfiguration`；三库 `Test*StatementTimeout`）；
+- [x] ≥5 个跨 Provider 诊断任务全绿（`conformance.RunGovernance` 六项；发现并修复聚合列名
+  跨库不一致）；
+- [x] 三库 integration/conformance/workload 差分无回归；兼容矩阵更新（矩阵改为生成；
+  `make ci`、MCP e2e 与三库完整 integration 通过）。
+
+### 已交付
+
+- `v0.1.14`：[管理面 2](#管理面-2--trusted-sql-escape-hatch) 可信 SQL 逃生通道
+  `execute_sql`（[发布说明](releases/v0.1.14.md)）；
+- `v0.1.13`：多管理员协作的管理面与执行总线——方案驱动的批量配置、配置 MCP
+  令牌、持久化扫描批次、服务端工作区与版本管理、快进发布、执行总线、配置意图与
+  生效值、固定数据面管线（[发布说明](releases/v0.1.13.md)）；超出原管理面范围，
+  分别落地 [L18](roadmap/directions.md#l18-governed-configuration-scaffolding) 的
+  批量配置与多副本协作的最小子集；
+- `v0.1.12`：元数据批量扫描与按库后台导入、发布后排空的热重载与跨快照共享服务、
+  实体命名空间（[发布说明](releases/v0.1.12.md)）；
+- `v0.1.11`：管理面 1、3，管理面 4、5 的核心路径，以及
+  [数据源模型](design/datasource-model.md)（[发布说明](releases/v0.1.11.md)）；
+- `v0.1.10`：Diagnostic Evaluation（[发布说明](releases/v0.1.10.md)、
+  [正式结论](../eval/results/2026-07-12-deepseek-v4-flash-diagnostic-v5.md)）。
 
 ---
 
@@ -79,11 +123,12 @@
 满足即可发布：
 
 - [x] Diagnostic Eval 交付（`v0.1.10`）；
-- [ ] 管理面 1–5 交付（预期 `v0.1.11`–`v0.1.15`）：用户/角色/权限、
-  `execute_sql` 逃生通道、配置存储与 revision、管理 API 与 schema 导入、
-  管理后台 UI；
-- [ ] Provider capability model 交付（`Next 1`，预期 `v0.1.16`）；
-- [ ] Evidence-Backed SQLite 交付（`Next 2`，预期 `v0.1.17`）并通过
+- [x] 管理面 1、2、3 交付（`v0.1.11`、`v0.1.14`、`v0.1.11`）；
+- [ ] 管理面 4、5 收口：管理面 4 的门禁随 `v0.1.15` 全部满足；管理面 5 剩余交互判据的
+  外部实测与前端供应链核实，见[管理面 5](#管理面-5--admin-console-ui)；OIDC / 通用
+  OAuth2 登录经 2026-10-12 复审降为 [Later](#later)，不再是本判据的一部分；
+- [ ] Provider capability model 交付（`Committed`，`v0.1.15`）；
+- [ ] Evidence-Backed SQLite 交付（`Next 1`，预期 `v0.1.16`）并通过
   conformance + workload 差分验收；
 - [ ] dogfooding：至少一套真实或脱敏的支付中台工作负载经 `EVAL_DSN`
   模式运行并输出问题清单（v0.1.9 发布复审移交本 Milestone 的必要判据，
@@ -92,7 +137,7 @@
 - [ ] ≥1 页 dogfooding case study 与 ≥2 个 design partner 试用观察
   记录（外部证据冲刺）；
 - [ ] Result Provenance and Evidence Envelope 交付，或其进入门禁经
-  发布复审判定证据不成立并书面记录（`Next 3`）；
+  发布复审判定证据不成立并书面记录（`Next 2`）；
 - [ ] `v0.2.0` 发布链上 Eval 三轨（回归/负载/诊断）全绿，失败归因体系
   至少产出一次基于诊断轨或 dogfooding 的 go/no-go 结论。
 
@@ -100,9 +145,9 @@
 
 ## Parallel Workstream — 外部证据冲刺
 
-`Next 3` 与 Schema drift 治理的进入门禁依赖真实部署或真实用户反馈，该类证据
-当前没有生产机制。按下文"衡量与维护"的规则（没有生产机制的门禁项要么
-补建机制，要么降级），本工作流即为其证据生产机制，同时直接供给
+`Next 2`、Schema drift 治理与管理面 5 交互判据的门禁依赖真实部署或真实用户
+反馈，该类证据当前没有生产机制。按下文"衡量与维护"的规则（没有生产机制的
+门禁项要么补建机制，要么降级），本工作流即为其证据生产机制，同时直接供给
 `v0.2.0` Milestone 的 dogfooding、Demo 与 case study 判据：
 
 - 黄金 Demo 补全：在 [quickstart](quickstart.md) 现有低权限读取、字段
@@ -117,7 +162,9 @@
   负载也是采用证据；
 - 邀请 3–5 个 design partner（AI 数据分析、内部 BI、SaaS Agent 或
   数据库安全方向），每个只观察四件事：能否安装、能否配置第一个
-  Entity、Agent 能否发现并调用、第一次失败发生在哪里；
+  Entity、Agent 能否发现并调用、第一次失败发生在哪里；试用同时记录控制台
+  交互判据（从连接数据源到首个实体可调用、≥50 张表批量导入与授权的耗时与
+  首个卡点），作为[管理面 5](#管理面-5--admin-console-ui)剩余门禁的证据；
 - 每个试用形成一页 case study：原问题、数据库规模、Entity 数量、Agent
   任务、治理要求、接入成本、失败与修复、最终效果。
 
@@ -126,206 +173,81 @@
 
 ---
 
-## 管理面阶段（v0.1.11 起，先于 Next）
+## 管理面阶段
 
 2026-09-30 路线图复审将本阶段提前到 `Next` 之前：目标从"Agent 能否正确、
 安全地查到数据"扩展到"运营者能否放心地授权、变更、审计、迁移和管理这套
-系统"，并让不同的人与 Agent 在同一服务上获得与其身份相符的能力。
-
-**进入条件已确立**（维护者需求）：
-
-- 当前只有共享 bearer token 与进程级 `server.role`，服务没有身份分级，只能
-  把所有调用方整体按不可信处理；可信操作者因此只能绕过本服务直连数据库，
-  这类访问没有统一审计、预算和 decision trace；
-- 业务要求不同的人/角色看到不同的实体、字段和行。现有 `roles`/`fieldACL`/
-  `rowPolicies` 能按单一 role 表达差异，但没有"用户"概念，也无法让一个人
-  同时拥有多个角色或单独授权；
-- 接入需要先读 DDL 再手写 Entity/Field/Relation/Policy，而服务本身已能
-  introspect 表、列和主键；配置成本是采用的主要障碍；
-- 配置只能以 YAML 文件存在，用户、角色、revision 等结构化状态无处持久化，
-  部署迁移依赖手工搬运文件。
-
-阶段按依赖顺序推进：管理面 1 → 3 → 2 → 4 → 5（配置存储是管理后台的前置，
-先于逃生通道交付）；Schema drift 治理为并行项。
-同时只有一项进入 Committed。本阶段分别落地
-[企业身份](roadmap/directions.md#l7-enterprise-identity-and-scale)、
-[durable audit](roadmap/directions.md#l8-data-governance-and-durable-audit)、
-[管理 UI](roadmap/directions.md#l9-management-ui)、
-[受约束扩展点](roadmap/directions.md#l11-constrained-extensibility)与
-[受治理配置脚手架](roadmap/directions.md#l18-governed-configuration-scaffolding)
-的最小子集，其余部分仍按各方向的触发证据升级。任何管理面路径不得绕过统一的
-身份、授权、预算与审计链。
+系统"。`v0.1.11`–`v0.1.14` 交付了管理面 1–5 的核心路径；各项的设计以对应
+design 文档为准，已发布行为以发布说明为准。本节只保留交付版本、退出门禁的
+证据指针与剩余缺口。任何管理面路径不得绕过统一的身份、授权、预算与审计链。
 
 ### 管理面 1 — Users, Roles and Permissions
 
-预期 `v0.1.11`。设计先行：`docs/design/authorization-model.md` 评审通过后
-实现。
+已随 `v0.1.11` 交付；设计见[授权模型](design/authorization-model.md)。
 
-**问题证据**：见本阶段进入条件前两项。没有用户与多角色授权，逃生通道
-（管理面 2）与管理后台（管理面 4、5）都无法安全成立。
+- [x] 未配置 `users` 时行为与之前等价：`TestValidateAccessAllowsLegacyColonRolesWithoutUsers`、
+  `TestReloadTogglesUsers`；
+- [x] 多角色行范围 OR 与租户硬边界 AND 有 adversarial 与随机化测试，登记 TM-009；
+- [x] 缓存、singleflight、事务与预算不跨用户复用：用户主体键 `user:<name>` 进入
+  cache/singleflight/事务作用域（TM-004、TM-006），租户并发按租户聚合
+  （`TestTenantConcurrencySpansSessions`）；
+- [x] 身份不能经请求参数或未受信 header 提升，吊销与在途会话语义确定（TM-010）；
+- [x] 不同用户对同一实体得到不同字段与行（`x/mcpserver/e2e_users_test.go`）；
+  [核心不变量](invariants.md) I7、I25、I26 同步。
 
-**阶段结果**：
-
-- 顶层 `roles`：角色名 → 权限列表，权限内容由管理员自行配置；
-- 顶层 `users`：每个用户独立凭据（只存 hash，可吊销、可轮换）、所属角色列表、
-  直授权限与 subject 属性（如 tenant）；
-- 权限分两类：**实体权限**（实体、动作、可读/可写字段、行策略）与**系统
-  权限**（如 `sql:execute@<datasource>`、`admin:*` 细分项）；
-- 合并规则：用户有效权限 = 所属各角色权限 ∪ 直授权限。动作与字段取并集；
-  行策略取 OR；引用 `${subject.tenant*}` 的租户约束是硬边界，始终 AND，
-  不参与并集；
-- 兼容：旧的实体内 `roles`/`fieldACL`/`rowPolicies` 编译进同一套内部权限
-  模型；未配置 `users` 时行为与现状（共享 token + `server.role`）等价；
-- 可信代理注入的身份映射到同一用户模型，不形成第二套身份语义；
-- 审计与 decision trace 记录用户与生效角色。
-
-**非目标**：不自建完整 IAM/SSO（外部 IdP 登录随管理面 4，MCP OAuth 2.1、
-delegation chain 仍属 L7）；不支持显式 deny 规则；stdio 保持进程级默认身份。
-
-**退出门禁**：
-
-- [ ] 未配置 `users` 时行为与现状等价，有兼容测试；
-- [ ] 多角色行策略 OR 合并与租户硬边界 AND 有 adversarial 测试，登记新
-  threat ID；
-- [ ] 缓存、singleflight、事务与预算不能跨用户复用，有测试锁定；
-- [ ] 身份不能通过请求参数或未受信 header 提升；吊销、轮换在热重载与在途
-  会话下语义确定；
-- [ ] 不同用户对同一实体得到不同的可见字段和行，有 e2e 测试；
-  [核心不变量](invariants.md) I5–I8 表述同步更新。
-
----
+剩余风险（用户 token 无过期、`X-MCP-User` 无真实反向代理 e2e）见
+[威胁模型](threat-model.md) TM-010。
 
 ### 管理面 2 — Trusted SQL Escape Hatch
 
-预期 `v0.1.14`，前置：管理面 1。`execute` 已用于实体动作和
-`execute_entity`，新工具暂定名 `execute_sql`。
+已随 `v0.1.14` 交付；设计与评审决议见[设计文档](design/sql-escape-hatch.md)。
 
-**问题证据**：作为 SQL MCP Server，可信操作者需要完整 SQL 能力（排障、临时
-分析、运维）。缺少这个入口时，他们只能绕过本服务直连数据库，风险高于一个
-受审计、受上限约束的入口。
-
-**阶段结果**：
-
-- 独立 MCP tool `execute_sql`，默认不注册；必须同时满足：全局开关显式开启、
-  用户持有目标数据源的 `sql:execute@<datasource>` 权限、目标数据源显式声明
-  允许逃生通道；
-- `tools/list` 按用户过滤，未授权用户看不到该工具；
-- 逃生通道使用单独声明的数据源条目，权限上限等于该 DSN 的数据库权限；服务
-  不解析、不改写、不 sanitize SQL，DSN 账号权限就是边界；
-- 成本约束仍然生效：statement timeout、结果行数/字节 cap、并发与 rate limit、
-  用户/session 预算为不可关闭的硬上限。EXPLAIN 估算只对可 EXPLAIN 的语句
-  尝试，估算失败时默认拒绝，可显式配置为只保留硬上限；
-- 审计采用 `fail_closed` 语义（L8 的最小子集，仅作用于本入口）：审计写入失败
-  则拒绝执行；记录完整 SQL 文本、用户、数据源、耗时和影响行数；
-- 结果不套用实体级 mask/fieldACL（没有实体语义），文档与工具描述明确声明；
-- 受治理面不变：IR、Metric、语义层和扩展点不得调用 `execute_sql`。
-
-**非目标**：不做 SQL parser/sanitizer/自动改写；不做 NL2SQL；不与受治理面的
-事务 token 混用。
-
-**退出门禁**：
-
-- [x] 开关、用户权限、数据源许可任一缺失时，工具不出现在该用户的
-  `tools/list` 且调用被拒绝，有矩阵测试（`TestExecuteSQLMatrix`、
+- [x] 开关、用户权限、数据源许可的矩阵测试（`TestExecuteSQLMatrix`、
   `TestExecuteSQLListedAndCalledPerUser`）；
-- [x] timeout、结果 cap 与预算在本入口上有测试锁定，且配置无法关闭
-  （`TestExecuteSQLLimitsSurviveCostDisabled`）；
-- [x] 审计 sink 不可用时拒绝执行，有故障注入测试（`TestExecuteSQLRefusesWhenAuditFails`）；
-- [x] [核心不变量](invariants.md)（I29）与[威胁模型](threat-model.md)（TM-013）登记本入口的
-  例外范围（I3、I24 等只对受治理面成立）与新 threat ID；README、
-  [安全模型](security.md)的产品边界表述同步更新。
+- [x] timeout、结果 cap 与预算不可关闭（`TestExecuteSQLLimitsSurviveCostDisabled`）；
+- [x] 审计 sink 不可用时拒绝执行（`TestExecuteSQLRefusesWhenAuditFails`）；
+- [x] 不变量 I29、威胁 TM-013 登记例外范围；README 与[安全模型](security.md)同步。
 
----
+已知限制见[发布说明](releases/v0.1.14.md#已知限制)。
 
 ### 管理面 3 — Structured Config Store and Revisions
 
-预期 `v0.1.12`，前置：管理面 1。本项吸收原"最小控制面"范围，实现
-[Revision 与 Snapshot 设计](design/revision-snapshot.md)，详细设计见
-[配置存储与 Revision](design/config-store.md)。
+已随 `v0.1.11` 交付（原预期 `v0.1.12`）；设计见[配置存储与 Revision](design/config-store.md)。
 
-**问题证据**：见本阶段进入条件第四项。
-
-**阶段结果**：
-
-- `ConfigStore` 边界（对应 L11 `SnapshotStore`），首批实现为本地 SQLite
-  （默认，纯 Go 驱动）以及已接入的 PostgreSQL/MySQL/OceanBase；
-- 持久化 revision（`draft`/`published`/`superseded`/`rolled-back`）、用户、
-  角色和配置审计元数据；提供 diff、publish、rollback；
-- 部署迁移：任意两种 store 之间、store 与 YAML 之间可确定性往返
-  （`contentHash` 一致）；YAML 文件模式继续可用，并可作为 bootstrap；
-- store 自身 schema 版本化迁移，遇到未知版本 fail closed；
-- store 所用数据源与受治理数据源隔离：store 表不得被任何 Entity 引用，也不得
-  被 introspection 草稿收录；secret 只存占位符。
-
-**非目标**：不做多写或分布式共识；多实例 snapshot 分发仍属 L7；不存储查询
-结果。
-
-**退出门禁**：
-
-- [ ] SQLite、服务端数据库与 YAML 之间往返 `contentHash` 一致，有 golden 测试；
-- [ ] store 不可用时 fail-static、没有可用 snapshot 时 fail closed，符合
-  revision 设计的失败语义并有测试；
-- [ ] store 表不可被 Entity 暴露，有校验测试；
-- [ ] publish 复用热重载变更守卫（下沉到 `x/bootstrap`），与 CLI 共用一份规则。
-
----
+- [x] store 与 YAML 确定性往返（`TestMigrateRoundTripsFileAndStores`、
+  `TestStoredPayloadsRoundTripAsSpecs`），PostgreSQL/MySQL/OceanBase store 由
+  `x/configstore` 一致性套件在 integration 中覆盖；
+- [x] 篡改 payload 保留当前快照（`TestWatchStoreRejectsTamperedPayload`），没有已发布
+  revision 时拒绝启动；
+- [x] store 表不可被实体引用或被 introspection 收录（I27、TM-011）；
+- [x] 发布复用热重载变更守卫（`TestPublishGuardsRestartAndRollback`）。
 
 ### 管理面 4 — Admin API, Login and Schema Import
 
-核心路径（本地账号登录、GraphQL 管理 API、schema 导入、simulate）已随 `v0.1.11` 交付，
-前置：管理面 1、管理面 3。OIDC / 通用 OAuth2 登录未交付、待排期（见各版本发布说明的
-已知限制）。
+核心路径（本地账号登录、GraphQL 管理 API、schema 导入、simulate）已随 `v0.1.11`
+交付；设计见[管理 API](design/admin-api.md)。OIDC / 通用 OAuth2 登录未交付，
+2026-10-12 复审降为 [Later](#later)。
 
-**问题证据**：见本阶段进入条件第三项。服务已经掌握 schema，缺的是把它变成
-受治理配置的管理接口。
-
-**阶段结果**：
-
-- GraphQL 管理 API（schema-first），挂载于 `/admin/graphql`；resolver 按
-  `admin:*` 细分权限授权；限制查询深度与复杂度，生产环境关闭 GraphQL
-  introspection；所有写操作只产生 revision draft，经与 CLI 相同的校验链发布；
-- 人员登录可插拔：本地账号密码（首个管理员由 CLI 引导创建）、通用 OIDC、
-  通用 OAuth2（userinfo 映射，覆盖非标准 OIDC 平台）；登录后使用 HttpOnly
-  会话 Cookie 并防 CSRF；外部身份到本地用户与角色的映射可配置；
-- **Schema → 配置导入**（L18 的首个交付形态）：introspection 扩展为返回
-  表/列注释与外键；导入结果是**未授权草稿**（`discoverable: false`、无任何
-  角色），注释映射为 description，外键生成候选 relationship；
-- simulate：以指定用户预览可见实体、字段与行策略效果。
-
-**非目标**：不做通用数据库管理工具（不下发 DDL、不编辑业务数据）；不因
-introspection 自动授权；MCP 客户端的 OAuth 2.1 授权仍属 L7。
-
-**退出门禁**：
-
-- [ ] 导入草稿默认零权限，授权必须显式操作并留审计，有测试；
-- [ ] 管理 API 的每个操作都有越权测试，登记 threat ID；
-- [ ] 各登录模式有 state/nonce/重放、会话固定与 CSRF 测试；
-- [ ] 查询深度/复杂度上限有测试锁定。
-
----
+- [x] 导入草稿默认零权限（`TestSchemaImportProposesZeroPermissionCandidates`），
+  授权经工作区写入与发布留痕；
+- [x] 管理 API 每个操作都有越权测试并登记 threat ID：`TestEveryOperationEnforcesItsPermissions`
+  对每个查询与变更在 16 种权限组合下断言，新增操作未登记权限即失败；登记 TM-014
+  （配置 MCP 见 TM-012）；
+- [x] 本地账号登录的会话、CSRF、锁定、并发闸门与改密吊销测试（`x/admin/admin_test.go`）；
+  OIDC 的 state/nonce/重放门禁随 OIDC 一并移至 Later；
+- [x] 查询深度与复杂度上限有测试锁定（`TestSelectionDepth`、`TestComplexityLimit`）。
 
 ### 管理面 5 — Admin Console UI
 
-预期 `v0.1.15`，前置：管理面 4。
-
-**阶段结果**：
-
-- Web 管理后台，以 TS + Vue3 构建、嵌入服务二进制，挂载于 `/admin`；
-  类型与查询由 GraphQL schema 生成，配置表单由配置 JSON Schema 驱动；
-- 核心交互以"连接数据源 → 导入 → 授权 → Agent 可调用"为主线：批量导入
-  草稿、权限矩阵（角色 × 实体 × 动作/字段）、用户与角色管理、simulate、
-  revision diff/publish/rollback、decision trace 查看；追求最短路径和零手写
-  YAML。
-
-**非目标**：不做低代码平台；UI 不持有任何绕过管理 API 的写路径。
-
-**退出门禁**：
+核心路径已随 `v0.1.11` 交付，`v0.1.12`–`v0.1.14` 持续扩展（库 → 表导入、按规则
+配置、待处理、服务端工作区、系统权限）；使用见[控制台](console.md)。
 
 - [ ] 交互判据：新用户从连接数据源到首个实体可被 Agent 调用 ≤ 5 分钟；
-  ≥50 张表的 schema 完成批量导入与授权 ≤ 15 分钟；由维护者与 ≥2 位
-  外部试用者实测并记录首个卡点；
-- [ ] 前端依赖、构建与发布纳入[供应链规则](roadmap/metrics.md)，CI 含前端
-  lint 与测试。
+  ≥50 张表的 schema 完成批量导入与授权 ≤ 15 分钟；由维护者与 ≥2 位外部试用者
+  实测并记录首个卡点——尚无记录，证据由[外部证据冲刺](#parallel-workstream--外部证据冲刺)产出；
+- [ ] CI 含前端 lint 与测试（`make web`：eslint、vitest、vue-tsc、构建，已满足）；
+  前端依赖纳入[供应链规则](roadmap/metrics.md#可信供应链)（漏洞扫描、SBOM 覆盖
+  pnpm 依赖）待核实。
 
 ---
 
@@ -333,7 +255,7 @@ introspection 自动授权；MCP 客户端的 OAuth 2.1 授权仍属 L7。
 
 进入门禁：真实部署出现数据库 schema 演进需求，或管理后台的重新导入需要
 区分 schema 变化的影响。证据生产机制：外部证据冲刺的参考部署与管理后台的
-重新导入。
+重新导入（目录的表状态与差异、"待处理"页的 drift 已是该机制的入口）。
 
 阶段结果：把现有启动/reload 时的 drift 检查扩展为可分级的漂移治理——schema
 fingerprint、drift 分类（compatible / behavior-changing /
@@ -350,66 +272,27 @@ incompatible drift 拒绝 readiness、配置 revision 与 schema revision 绑定
 
 ---
 
-## Next（管理面之后、v0.2.0 前 — 数据面与采用）
+## Next（v0.2.0 前 — 数据面与采用）
 
-### Next 1 — Provider Capability Model
-
-`v0.1.10` 发布后技术前置已满足；是否获得版本承诺仍须结合本次发布复审的
-Tool Contract 设计评估决定，预期 `v0.1.16`。进入门禁与退出验收以
-[Provider Roadmap](provider-roadmap.md) Capability Model 章节为唯一事实源。
-
-**问题证据**：现有实现（`core/dialect.Capabilities`）是平铺 bool，成本
-闸门装配（`cost.NewGateFromCapabilities`）直接消费这些 bool，无法表达
-保证强度与证据状态——即无法区分"数据库提供该能力"与"本服务已装配可测试
-的强制机制"。SQLite 与新 Provider 立项的前置工程项。
-
-**阶段结果**：
-
-- capability 重构为"范围 + 强度 + 证据"模型：保证强度统一为
-  `unsupported` / `best_effort` / `enforced`；字段定义以 Provider Roadmap
-  为唯一事实源；
-- 闸门装配与 codegen 渲染改为消费新模型；
-- PostgreSQL、MySQL、OceanBase 三个现有 Provider 的声明按新模型迁移；
-  [Provider 兼容矩阵](provider-compatibility.md)可区分保证强度与证据状态；
-- 字段取舍以 SQLite（`Next 2` 交付对象）为校验对象：模型必须能表达
-  "缺少 `enforced` 成本证明时由核心层等价强制或 fail closed"这类组合；
-- **跨 Provider conformance 套件**（≥5 任务）：PostgreSQL / MySQL /
-  OceanBase 上结果等价、拒绝等价、治理等价，作为 capability model 的
-  首个实际消费者。
-
-**非目标**：不新增 Provider（SQLite 随 `Next 2`）；不引入 L13 实现方式
-维度（仅预留）；不改变三库现有运行时行为与闸门语义（行为等价重构）。
-
-**退出门禁**：
-
-- [ ] 每项 capability 分别表达范围、保证强度和证据，不再存在混合语义的
-  单 bool；
-- [ ] "`best_effort` 不能满足硬限制；缺少 `enforced` 能力时，必须由核心层
-  提供等价强制或 fail closed" 有测试锁定；
-- [ ] ≥5 个跨 Provider 诊断任务全绿；
-- [ ] 三库 integration/conformance/workload 差分无回归；兼容矩阵更新。
-
----
-
-### Next 2 — Evidence-Backed SQLite
+### Next 1 — Evidence-Backed SQLite
 
 进入门禁、SQLite 首版范围和退出验收均以
 [Provider Roadmap](provider-roadmap.md) 为唯一事实源；`v0.1.8` conformance
 suite 与 `v0.1.9` workload 差分是任何新 Provider 的验收前置；capability
-model（`Next 1`）为前置工程。
+model（`v0.1.15` Committed）为前置工程。
 
 **进入条件已确立**（`v0.1.9` 发布复审）：架构验证 + 采用目标——SQLite 是
 新 capability model 的首个新增 Provider 消费者，验证"弱成本证明、核心层
-兜底"的执行模型，同时是产生真实采用证据的最低门槛入口。`Next 1` 交付后
-本阶段即获得版本承诺（预期 `v0.1.17`）。SQLite 驱动随管理面 3 的
-配置存储先行引入，Provider 复用同一驱动。
+兜底"的执行模型，同时是产生真实采用证据的最低门槛入口。capability model
+交付后本阶段即获得版本承诺（预期 `v0.1.16`）。SQLite 驱动已随管理面 3 的
+配置存储引入，Provider 复用同一驱动。
 
 阶段结果：一个受现有 IR 和统一 engine 约束的窄 SQLite Provider，通过
 conformance corpus 与 workload 差分双重验收。
 
 ---
 
-### Next 3 — Result Provenance and Evidence Envelope
+### Next 2 — Result Provenance and Evidence Envelope
 
 进入门禁：Eval 失败归因、真实用户反馈或公开对照需求证明"Agent 给出的业务
 结论无法追溯到数据、配置版本和一次具体执行"是信任或采用障碍。证据生产
@@ -459,6 +342,11 @@ Expressiveness 维持 **no-go**，Catalog Discovery 继续观察；三项澄清�
 可测量失败；Tool Contract 的设计评估不得自动扩大核心能力，须以 v5 稳定失败
 做前后对照。无法解释答案来源时再评估 Evidence Envelope。
 
+Tool Contract 设计评估自 `v0.1.10` 转 go 后尚未执行；2026-10-12 复审将其与
+capability model 解耦（此前是其进入门禁之一），在本节跟踪，不占
+Committed 位。证据生产机制是诊断轨：执行时以 v5 的三项澄清任务与因果 unsupported
+任务为前后对照，没有可测量改善则维持现状。
+
 ---
 
 ## Later
@@ -469,7 +357,10 @@ Expressiveness 维持 **no-go**，Catalog Discovery 继续观察；三项澄清�
 （受监管部署前必须完成）、
 [MCP 协议一致性与契约稳定](roadmap/directions.md#l17-mcp-protocol-conformance-and-contract-stability)、
 [受治理配置脚手架](roadmap/directions.md#l18-governed-configuration-scaffolding)
-中 introspection 导入以外的部分（dbt manifest、数据字典导入等）、
+中 introspection 导入与方案批量配置以外的部分（dbt manifest、数据字典导入等）、
+管理后台的 OIDC / 通用 OAuth2 人员登录（2026-10-12 复审由管理面 4 降入；触发证据：
+真实部署要求接入企业 IdP/SSO，见
+[L7](roadmap/directions.md#l7-enterprise-identity-and-scale)）、
 第二种架构验证型 Provider（SQL Server 或 ClickHouse）及其他战略方向均按证据
 升级。具体范围、触发证据和跨阶段非目标见
 [Evidence-Gated Directions](roadmap/directions.md)；Provider 能力模型与候选顺序

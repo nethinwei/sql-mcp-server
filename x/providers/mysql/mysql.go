@@ -13,6 +13,7 @@ func init() {
 	providerregistry.Register("mysql", func(dsn string, opts providerregistry.Options) (provider.Provider, error) {
 		return Open(dsn, opts)
 	})
+	providerregistry.RegisterLimits("mysql", Limits)
 }
 
 // Provider adapts a MySQL database to the core interfaces.
@@ -25,11 +26,12 @@ func NewWithTimeout(dsn string, timeout time.Duration) (*Provider, error) {
 
 // Open opens MySQL with opts (see NewAdapter).
 func Open(dsn string, opts providerregistry.Options) (*Provider, error) {
-	ad, err := NewAdapter(dsn, opts, "")
+	ad, limits, err := NewAdapter(dsn, opts, "")
 	if err != nil {
 		return nil, err
 	}
-	return &Provider{sqladapter.NewBase(ad, Dialect{}, mysqlExplainer{db: ad.DB()}, NewIntrospector(ad.DB()))}, nil
+	base := sqladapter.NewBase(ad, Dialect{}, mysqlExplainer{db: ad.DB()}, NewIntrospector(ad.DB()))
+	return &Provider{base.WithLimits(limits)}, nil
 }
 
 // bootstrap sizes and pings the pool through DB(); keep it reachable (an

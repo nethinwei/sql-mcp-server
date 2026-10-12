@@ -16,6 +16,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/internal/kit"
+	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/configedit"
 	"github.com/nethinwei/sql-mcp-server/x/configplan"
@@ -107,6 +108,17 @@ func (s *Scans) sources(ctx context.Context, cfg *config.Config) ([]configplan.S
 		out = append(out, source)
 	}
 	return out, hex.EncodeToString(sum.Sum(nil)[:12]), nil
+}
+
+// AuthorizePlanning refuses a caller who may not scope, preview or apply
+// plans (admin:read and admin:write), before their input is even decoded.
+func AuthorizePlanning(ctx context.Context) error {
+	for _, perm := range []string{auth.PermRead, auth.PermWrite} {
+		if _, err := auth.Require(ctx, perm); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // DecodePlan reads a plan from its JSON value.

@@ -104,6 +104,12 @@
      之后，消费方按 `time` 排序；
    - `cost` 的内部结构暂不属于定版契约，消费方不得依赖其字段名。
 
+`aggregate_records` 的每行以分组字段名加聚合列组成；聚合列名在所有数据库上相同
+（v0.1.15 起）：`count(*)` 为 `count`，带字段的为 `<func>_<field>`（如 `sum_amount`），
+与某个分组字段同名的聚合被拒绝（`INVALID_INPUT`）。此前列名取数据库自己的命名
+（PostgreSQL 为 `count`/`sum`，同函数的多个聚合会互相覆盖；MySQL/OceanBase 为
+`COUNT(*)`/``SUM(`amount`)``）。
+
 `execute_sql` 的输出不是行列表而是一个对象：`query` 模式为
 `{"columns": [...], "rows": [[...]], "rowCount": n, "truncated": bool}`（行按位置给出，
 同名列不合并；到行上限即停并标 `truncated`），`exec` 模式为 `{"rowsAffected": n}`。

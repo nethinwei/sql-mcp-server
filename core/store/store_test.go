@@ -33,6 +33,31 @@ func TestIterYieldsAllRows(t *testing.T) {
 	}
 }
 
+// IterNamed keys columns by position: two columns the database names alike
+// stay apart, and a name count that does not fit the columns is an error.
+func TestIterNamed(t *testing.T) {
+	rows := storetest.NewFakeRows([]string{"sum", "sum"}, []any{int64(1), int64(2)})
+	var got []store.Row
+	for row, err := range store.IterNamed(rows, []string{"sum_a", "sum_b"}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, row)
+	}
+	if len(got) != 1 || got[0]["sum_a"] != int64(1) || got[0]["sum_b"] != int64(2) {
+		t.Fatalf("rows = %v", got)
+	}
+	mismatch := storetest.NewFakeRows([]string{"a", "b"}, []any{1, 2})
+	for _, err := range store.IterNamed(mismatch, []string{"a"}) {
+		if err == nil {
+			t.Fatal("a name count that does not fit must fail")
+		}
+	}
+	if !mismatch.Closed() {
+		t.Fatal("rows not closed after a mismatch")
+	}
+}
+
 func TestIterClosesOnEarlyBreak(t *testing.T) {
 	rows := storetest.NewFakeRows([]string{"id"},
 		[]any{int64(1)}, []any{int64(2)}, []any{int64(3)})

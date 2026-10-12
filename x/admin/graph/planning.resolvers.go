@@ -21,6 +21,9 @@ func (r *mutationResolver) EditWorkspace(ctx context.Context, input configapp.Wo
 
 // ApplyPlan is the resolver for the applyPlan field.
 func (r *mutationResolver) ApplyPlan(ctx context.Context, input ApplyPlanInput) (*configapp.AppliedPlan, error) {
+	if err := configapp.AuthorizePlanning(ctx); err != nil {
+		return nil, err
+	}
 	p, err := configapp.DecodePlan(input.Plan)
 	if err != nil {
 		return nil, err
@@ -140,6 +143,9 @@ func (r *queryResolver) CatalogLinks(ctx context.Context, ref string) (*configap
 
 // PlanScope is the resolver for the planScope field.
 func (r *queryResolver) PlanScope(ctx context.Context, scope any) (*configapp.ScopeStats, error) {
+	if err := configapp.AuthorizePlanning(ctx); err != nil {
+		return nil, err
+	}
 	s, err := decodeScope(scope)
 	if err != nil {
 		return nil, err
@@ -149,6 +155,9 @@ func (r *queryResolver) PlanScope(ctx context.Context, scope any) (*configapp.Sc
 
 // PreviewPlan is the resolver for the previewPlan field.
 func (r *queryResolver) PreviewPlan(ctx context.Context, input PlanPreviewInput) (*PlanPreview, error) {
+	if err := configapp.AuthorizePlanning(ctx); err != nil {
+		return nil, err
+	}
 	p, err := configapp.DecodePlan(input.Plan)
 	if err != nil {
 		return nil, err

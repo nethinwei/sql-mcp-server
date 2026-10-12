@@ -313,8 +313,8 @@ func TestNewGateFromCapabilities(t *testing.T) {
 
 func TestNewGateFromCapabilitiesSQLiteSkipsEstimate(t *testing.T) {
 	t.Parallel()
-	// SQLite has no ExplainCost, so cost.Estimate must not be assembled.
-	caps := dialect.Capabilities{ExplainCost: false, ExplainAccurate: false}
+	// SQLite has no EXPLAIN cost, so cost.Estimate must not be assembled.
+	caps := dialect.Profile{}
 	g := cost.NewGateFromCapabilities(caps, nil, cost.Threshold{MaxRows: 100}, nil)
 	names := []string{}
 	for _, l := range g.Layers() {
@@ -322,6 +322,33 @@ func TestNewGateFromCapabilitiesSQLiteSkipsEstimate(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(names, ","), "estimate") {
 		t.Fatalf("SQLite should not assemble cost.Estimate layer: %v", names)
+	}
+}
+
+// The profile assembles the Estimate layer exactly as the former bools did:
+// with EXPLAIN, when the estimates are trustworthy or explain fail-closed is on.
+func TestNewGateFromCapabilitiesMatchesTheFormerBools(t *testing.T) {
+	t.Parallel()
+	ex := costtest.FakeExplainer{Plan: cost.Plan{ScanType: cost.ScanIndex, StatsFresh: true}}
+	for _, explain := range []bool{false, true} {
+		for _, accurate := range []dialect.Strength{dialect.Unsupported, dialect.BestEffort, dialect.Enforced} {
+			for _, failClosed := range []bool{false, true} {
+				caps := dialect.Profile{dialect.ExplainAccurate: {Strength: accurate}}
+				if explain {
+					caps[dialect.Explain] = dialect.Claim{Strength: dialect.Enforced}
+				}
+				g := cost.NewGateFromCapabilities(caps, ex, cost.Threshold{ExplainFailClosed: failClosed}, nil)
+				got := false
+				for _, l := range g.Layers() {
+					got = got || l.Name() == "estimate"
+				}
+				want := explain && (accurate == dialect.Enforced || failClosed)
+				if got != want {
+					t.Errorf("explain=%v accurate=%s failClosed=%v: estimate=%v, want %v",
+						explain, accurate, failClosed, got, want)
+				}
+			}
+		}
 	}
 }
 

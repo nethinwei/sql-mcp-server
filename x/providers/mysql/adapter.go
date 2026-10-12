@@ -8,6 +8,7 @@ import (
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 
+	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 	"github.com/nethinwei/sql-mcp-server/x/providers/sqladapter"
@@ -21,40 +22,45 @@ import (
 // respected. Behind a transaction-mode pooler arguments are interpolated by
 // the driver instead of server-side prepared statements, which a pooler may
 // not keep. The adapter is shared with the oceanbase provider.
-func NewAdapter(dsn string, opts providerregistry.Options, oceanBaseVariable string) (*sqladapter.Pool, error) {
-	timeout := opts.Timeout
+//
+// It returns the connection's limits as well: what those settings guarantee
+// given what the DSN already set (see Limits).
+func NewAdapter(
+	dsn string, opts providerregistry.Options, oceanBaseVariable string,
+) (*sqladapter.Pool, dialect.Profile, error) {
 	cfg, err := mysqldriver.ParseDSN(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("mysql: parse dsn: %w", err)
+		return nil, nil, fmt.Errorf("mysql: parse dsn: %w", err)
 	}
 	if cfg.Params == nil {
 		cfg.Params = map[string]string{}
 	}
+	caps := limits(cfg.Params, opts.Pooler, oceanBaseVariable)
 	if _, ok := cfg.Params["sql_safe_updates"]; !ok {
 		cfg.Params["sql_safe_updates"] = "1"
 	}
-	if timeout <= 0 {
-		return nil, errors.New("mysql: statement timeout must be positive")
+	if opts.Timeout <= 0 {
+		return nil, nil, errors.New("mysql: statement timeout must be positive")
 	}
 	if opts.Pooler == providerregistry.PoolerTransaction {
 		cfg.InterpolateParams = true
 	}
 	if oceanBaseVariable == "" {
 		if _, ok := cfg.Params["max_execution_time"]; !ok {
-			cfg.Params["max_execution_time"] = strconv.FormatInt(timeout.Milliseconds(), 10)
+			cfg.Params["max_execution_time"] = strconv.FormatInt(opts.NativeTimeout().Milliseconds(), 10)
 		}
 	} else if _, ok := cfg.Params[oceanBaseVariable]; !ok {
-		cfg.Params[oceanBaseVariable] = strconv.FormatInt(timeout.Microseconds(), 10)
+		cfg.Params[oceanBaseVariable] = strconv.FormatInt(opts.NativeTimeout().Microseconds(), 10)
 	}
 	db, err := sql.Open("mysql", cfg.FormatDSN())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := db.PingContext(opts.OpenContext()); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("mysql: ping failed: %w", err)
+		return nil, nil, fmt.Errorf("mysql: ping failed: %w", err)
 	}
-	return sqladapter.New(db, newTextRows, classify), nil
+	return sqladapter.New(db, newTextRows, classify), caps, nil
 }
 
 // binaryTypes are the column types whose values are bytes, not text.

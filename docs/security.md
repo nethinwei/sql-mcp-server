@@ -108,6 +108,17 @@ PostgreSQL 使用准确 Estimate；MySQL/OceanBase 默认在 EXPLAIN 失败、�
 全表扫描时拒绝。`queryTimeout` 同时通过 Go context 与 provider 连接级
 statement timeout 生效；无法装配 EXPLAIN 的 provider 在启动时失败。
 
+数据库侧是否真的把语句停在 `queryTimeout` 按连接判定（[Provider 能力](provider-compatibility.md#provider-能力)）：
+服务注入的会话设置被 DSN 覆盖、经 transaction pooler，或 MySQL 的写语句
+（`max_execution_time` 只作用于 SELECT，取消请求只关闭连接）时，Go context 只约束
+调用方的等待，语句可能在数据库里继续执行。PostgreSQL 在请求超时时由驱动发送
+cancel request，仍在数据库侧终止。启动与热重载时，数据源依赖的语句超时（读、被
+授权的写与过程、开启时的 SQL 逃生通道）不是 `enforced` 即告警；
+`cost.requireNativeLimits: true` 时该配置不能加载（控制台校验在发布前按 DSN 同样判定）。
+注入的原生超时比 `queryTimeout` 少十分之一（至多 1 秒），使数据库通常先停住语句；数据库
+报告的语句超时统一归类为 `store.ErrStatementTimeout`：语句已回滚、结果确定，与其他数据库
+错误一样计入熔断。
+
 应用不能跨方言观测真实扫描行数，因此配置限制的是
 `maxEstimatedScannedRows`；返回行数绝不冒充扫描行数。数据库原生 timeout、
 应用 context、计划拒绝和结果 cap 构成边界，OceanBase resource manager 仍由

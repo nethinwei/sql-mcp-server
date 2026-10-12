@@ -22,10 +22,15 @@ var (
 // table, column, database or routine privilege, or a read-only server.
 var refusals = map[uint16]bool{1142: true, 1143: true, 1044: true, 1370: true, 1290: true}
 
+// timeouts are the errors of a statement its server-side timeout stopped:
+// MySQL's max_execution_time and OceanBase's ob_query_timeout.
+var timeouts = map[uint16]bool{3024: true, 4012: true}
+
 // classify turns an integrity violation into a *store.ConstraintError, a
-// refusal into store.ErrPermissionDenied, and a connection the driver found
-// broken in the middle of a command (ErrInvalidConn; one broken before it
-// is driver.ErrBadConn) into store.ErrConnectionLost.
+// refusal into store.ErrPermissionDenied, a statement its server-side timeout
+// stopped into store.ErrStatementTimeout, and a connection the driver found broken in the middle of a
+// command (ErrInvalidConn; one broken before it is driver.ErrBadConn) into
+// store.ErrConnectionLost.
 func classify(err error) error {
 	if errors.Is(err, mysqldriver.ErrInvalidConn) {
 		return fmt.Errorf("%w: %w", store.ErrConnectionLost, err)
@@ -33,6 +38,9 @@ func classify(err error) error {
 	var myErr *mysqldriver.MySQLError
 	if !errors.As(err, &myErr) {
 		return err
+	}
+	if timeouts[myErr.Number] {
+		return fmt.Errorf("%w: %w", store.ErrStatementTimeout, err)
 	}
 	if refusals[myErr.Number] {
 		return fmt.Errorf("%w: %w", store.ErrPermissionDenied, err)

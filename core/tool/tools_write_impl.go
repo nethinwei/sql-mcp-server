@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
+	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
@@ -16,7 +17,7 @@ func runInsert(ctx context.Context, tc Context, in createInput) (Result, error) 
 	if err != nil {
 		return Result{}, err
 	}
-	if st.tc.Dialect.Capabilities().Returning && len(st.res.Entity.PrimaryKey()) > 0 {
+	if st.tc.Dialect.Capabilities().Enforced(dialect.Returning) && len(st.res.Entity.PrimaryKey()) > 0 {
 		return insertWithReturning(ctx, st)
 	}
 	return insertWithExec(ctx, st, in)
