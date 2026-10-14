@@ -48,11 +48,14 @@ server.auth.token:
   zh-CN: 共享 bearer token，按字面读取（不做 ${ENV} 替换）。配置用户后各用户使用自己的 token。
   en: Shared bearer token, read literally (no ${ENV} expansion). Configured users use their own tokens.
 server.auth.trustProxyHeaders:
-  zh-CN: 信任代理传入的身份头（X-MCP-User / X-MCP-Role / X-MCP-Subject）；需要 mTLS 或 trustedProxyCIDRs 建立信任边界。
-  en: Trust identity headers (X-MCP-User / X-MCP-Role / X-MCP-Subject) from a proxy; needs mTLS or trustedProxyCIDRs as the trust boundary.
+  zh-CN: 信任代理传入的身份头（X-MCP-User / X-MCP-Role / X-MCP-Subject）；需要 trustedProxyCIDRs 或 trustedProxyCertSubjects 认定代理。
+  en: Trust identity headers (X-MCP-User / X-MCP-Role / X-MCP-Subject) from a proxy; needs trustedProxyCIDRs or trustedProxyCertSubjects to tell proxies.
 server.auth.trustedProxyCIDRs:
   zh-CN: 允许传入身份头的代理地址段。
   en: Proxy address ranges allowed to send identity headers.
+server.auth.trustedProxyCertSubjects:
+  zh-CN: mTLS 下允许传入身份头的代理客户端证书（叶证书 CN 或 DNS SAN，精确匹配）；其它客户端证书带身份头返回 403。
+  en: Under mTLS, the proxies' client certificates (leaf CN or DNS SAN, exact) allowed to send identity headers; other certificates sending them get 403.
 server.auth.tls:
   zh-CN: TLS / mTLS。cert 与 key 必须同时设置。
   en: TLS / mTLS. Set cert and key together.

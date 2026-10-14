@@ -66,7 +66,10 @@
       {"file": "cmd/sql-mcp-server/cli_auth_test.go", "name": "TestPreparedAuthsFailOnUnreadableCertificate"},
       {"file": "cmd/sql-mcp-server/cli_auth_test.go", "name": "TestPreparedAuthsFollowPublishedApps"},
       {"file": "x/mcpserver/http_test.go", "name": "TestWithRequestSubjectRejectsMalformedSubject"},
-      {"file": "x/mcpserver/http_test.go", "name": "TestTrustedProxyOnly"},
+      {"file": "x/mcpserver/http_test.go", "name": "TestTrustedProxyAddress"},
+      {"file": "x/mcpserver/http_test.go", "name": "TestTrustedProxyCertificate"},
+      {"file": "x/mcpserver/auth_reload_test.go", "name": "TestAuthChangesTrustProxyCertificateSubjects"},
+      {"file": "core/config/config_test.go", "name": "TestValidateProxyTrustBoundaries"},
       {"file": "x/mcpserver/http_test.go", "name": "TestTrustedProxyRejectsForgedIdentityFromUntrustedSource"},
       {"file": "core/config/config_test.go", "name": "TestValidateSecurityConstraints"},
       {"file": "x/mcpserver/e2e_http_test.go", "name": "TestE2EHTTPSubjectTenantScoping"}

@@ -59,11 +59,9 @@ func sessionHandler(s *mcp.Server, cfg HTTPConfig) http.Handler {
 func authenticated(cfg HTTPConfig, clientCAs *x509.CertPool, next http.Handler) http.Handler {
 	handler := next
 	if cfg.TrustProxyHeaders {
-		handler = withProxyIdentity(cfg.Users, handler)
-		if !cfg.mtlsEnabled() {
-			networks, _ := parseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
-			handler = trustedProxyOnly(networks, handler)
-		}
+		networks, _ := parseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
+		handler = trustedProxy(networks, cfg.TrustedProxyCertSubjects, cfg.mtlsEnabled(),
+			withProxyIdentity(cfg.Users, handler), handler)
 	}
 	handler = limitBody(cfg.MaxBodyBytes, handler)
 	handler = principalAuth(cfg.Token, cfg.Users, cfg.mtlsEnabled() || cfg.TrustProxyHeaders, handler)

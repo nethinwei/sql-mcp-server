@@ -15,7 +15,8 @@ func httpAuth(cfg *config.Config, users mcpserver.UserDirectory) mcpserver.HTTPA
 	a := cfg.Server.Auth
 	auth := mcpserver.HTTPAuth{
 		Token: a.Token, TrustProxyHeaders: a.TrustProxyHeaders, TrustedProxyCIDRs: a.TrustedProxyCIDRs,
-		TLSCert: a.TLS.Cert, TLSKey: a.TLS.Key, ClientCA: a.TLS.ClientCA,
+		TrustedProxyCertSubjects: a.TrustedProxyCertSubjects, TLSCert: a.TLS.Cert, TLSKey: a.TLS.Key,
+		ClientCA: a.TLS.ClientCA,
 	}
 	if len(cfg.Users) > 0 {
 		auth.Users = users

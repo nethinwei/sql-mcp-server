@@ -29,8 +29,11 @@ token 时使用默认身份；都不命中返回 401。没有共享 token 时，
 过期时间，轮换通过修改 `tokenHash` 并热重载完成。
 
 `X-MCP-Role` 和 `X-MCP-Subject` 不是身份认证机制。只有
-`server.auth.trustProxyHeaders: true` 时才读取它们，并且必须同时配置 mTLS
-`clientCA` 或非空 `trustedProxyCIDRs`。CIDR 模式只接受列表内来源地址；可信网关
+`server.auth.trustProxyHeaders: true` 时才读取它们，而且只接受来自代理的请求：来源地址
+在 `trustedProxyCIDRs` 内，或者在 mTLS 下客户端叶证书的 CN / DNS SAN 列在
+`trustedProxyCertSubjects` 中。二者必须至少配置一项，单有 mTLS 不够：持有 clientCA
+签发的证书只说明是调用方，不说明是代理。mTLS 下，其他证书不带身份头时按普通调用方
+处理，带身份头则返回 HTTP 403；CIDR 模式下，不在列表内的来源一律返回 403。可信网关
 仍必须删除外部同名 header、完成认证并重新注入身份。畸形的
 `X-MCP-Subject` JSON 返回 HTTP 400。`X-MCP-Role` 只能是角色名，含 `:` 的主体键
 （如 `user:alice`）返回 HTTP 400；通过导出的 `WithSubject` 注入同类值的自定义 transport

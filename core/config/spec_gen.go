@@ -290,10 +290,11 @@ func (c ServerConfig) spec() ServerSpec {
 
 // AuthSpec is a AuthConfig as written: a nil field was not.
 type AuthSpec struct {
-	Token             *string      `yaml:"token,omitempty" json:"token,omitempty"`
-	TrustProxyHeaders *bool        `yaml:"trustProxyHeaders,omitempty" json:"trustProxyHeaders,omitempty"`
-	TrustedProxyCIDRs List[string] `yaml:"trustedProxyCIDRs,omitempty" json:"trustedProxyCIDRs,omitempty"`
-	TLS               *TLSSpec     `yaml:"tls,omitempty" json:"tls,omitempty"`
+	Token                    *string      `yaml:"token,omitempty" json:"token,omitempty"`
+	TrustProxyHeaders        *bool        `yaml:"trustProxyHeaders,omitempty" json:"trustProxyHeaders,omitempty"`
+	TrustedProxyCIDRs        List[string] `yaml:"trustedProxyCIDRs,omitempty" json:"trustedProxyCIDRs,omitempty"`
+	TrustedProxyCertSubjects List[string] `yaml:"trustedProxyCertSubjects,omitempty" json:"trustedProxyCertSubjects,omitempty"`
+	TLS                      *TLSSpec     `yaml:"tls,omitempty" json:"tls,omitempty"`
 }
 
 func (s AuthSpec) config() AuthConfig {
@@ -305,6 +306,7 @@ func (s AuthSpec) config() AuthConfig {
 		out.TrustProxyHeaders = *s.TrustProxyHeaders
 	}
 	out.TrustedProxyCIDRs = []string(s.TrustedProxyCIDRs)
+	out.TrustedProxyCertSubjects = []string(s.TrustedProxyCertSubjects)
 	if s.TLS != nil {
 		out.TLS = s.TLS.config()
 	}
@@ -322,6 +324,7 @@ func (c AuthConfig) spec() AuthSpec {
 	out.Token = set(c.Token)
 	out.TrustProxyHeaders = set(c.TrustProxyHeaders)
 	out.TrustedProxyCIDRs = List[string](c.TrustedProxyCIDRs)
+	out.TrustedProxyCertSubjects = List[string](c.TrustedProxyCertSubjects)
 	if v := c.TLS.spec(); !isZero(v) {
 		out.TLS = &v
 	}

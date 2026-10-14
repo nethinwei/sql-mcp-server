@@ -124,16 +124,19 @@ Provider 适用范围使用以下口径：
 - **等级/状态**：critical / 已由 handler corpus 覆盖，真实代理 e2e 仍未实现。
 - **攻击**：外部调用方伪造 `X-MCP-Role`/`X-MCP-Subject`，利用错误的代理信任范围
   冒充其他 tenant 或 role。
-- **控制**：默认忽略代理身份 header；启用 `trustProxyHeaders` 时必须同时配置
-  mTLS `clientCA` 或非空 `trustedProxyCIDRs`；CIDR 模式校验来源地址；畸形
+- **控制**：默认忽略代理身份 header；启用 `trustProxyHeaders` 时必须配置非空
+  `trustedProxyCIDRs`，或在 mTLS 下配置 `trustedProxyCertSubjects`；单有 mTLS 不够，持证书
+  只说明是调用方。只接受来源地址在 CIDR 内，或叶证书 CN / DNS SAN 被列出的请求作为代理；
+  mTLS 下其他证书带身份头返回 403，CIDR 模式下其他来源一律返回 403；畸形
   subject JSON 返回 400。认证可热重载：新认证在装配前准备好（校验并读取证书，失败则 reload 失败），发布时
   直接切换到准备好的对象，不再读取文件，不会出现配置已发布而认证仍是旧的；
   启用 mTLS 时每个请求都按当前 `clientCA` 校验其连接实际出示的客户端证书，
   切换前建立、未出示证书（或由已替换 CA 签发）的连接不会被视为 mTLS 通道。
 - **现有证据**：`core/config/config_test.go` 的信任边界校验，
-  `x/mcpserver/http_test.go` 的 untrusted header、malformed subject、CIDR 和
-  session identity 测试，以及 `x/mcpserver/auth_reload_test.go` 的“热切换到
-  mTLS 后旧连接被拒”测试。
+  `x/mcpserver/http_test.go` 的 untrusted header、malformed subject、CIDR、代理证书主体
+  （`TestTrustedProxyCertificate`）和 session identity 测试，以及
+  `x/mcpserver/auth_reload_test.go` 的“热切换到 mTLS 后旧连接被拒”和“代理证书主体随
+  热重载生效”测试。
 - **持续验证**：`x/mcpserver/http_test.go` 覆盖不可信来源伪造身份、畸形和尾随
   subject JSON、body 边界与 session 身份切换；真实反向代理 e2e 仍是剩余工作。
 - **剩余风险**：服务不能证明代理已认证调用方或删除外部 header；错误配置 CIDR、

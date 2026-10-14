@@ -35,7 +35,9 @@
 - 桌面客户端无响应：确认 `command`/`--config` 均为绝对路径，且配置对
   stdio 模式不要求 HTTP 认证材料；
 - HTTP 401：缺少或错误的 `Authorization: Bearer` header；
-- HTTP 403 `untrusted proxy`：`trustProxyHeaders` 开启但调用方不在
-  `trustedProxyCIDRs` 内；
+- HTTP 403 `untrusted proxy`：`trustProxyHeaders` 开启，但调用方不在
+  `trustedProxyCIDRs` 内；mTLS 下则是带身份头的客户端证书不在
+  `trustedProxyCertSubjects` 中；
+- HTTP 400：`X-MCP-Role` 写成了主体键（如 `user:alice`），用户应通过 `X-MCP-User` 指定；
 - 身份 header 被忽略：`trustProxyHeaders` 未开启时 `X-MCP-Role`/
   `X-MCP-Subject` 一律不生效（fail closed，防伪造）。

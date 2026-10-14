@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -524,11 +525,14 @@ type HTTPConfig struct {
 // and serving TLS or not, are fixed for the listener.
 type HTTPAuth struct {
 	Token             string // shared-secret bearer token; empty disables token auth
-	TrustProxyHeaders bool   // trust X-MCP-Role/X-MCP-Subject identity headers
+	TrustProxyHeaders bool   // trust X-MCP-User/X-MCP-Role/X-MCP-Subject identity headers from proxies
 	TrustedProxyCIDRs []string
-	TLSCert           string
-	TLSKey            string
-	ClientCA          string // PEM bundle; when set, require+verify a client cert (mTLS)
+	// TrustedProxyCertSubjects names, under mTLS, the proxies' client
+	// certificates (leaf CN or DNS SAN); other certificates are callers.
+	TrustedProxyCertSubjects []string
+	TLSCert                  string
+	TLSKey                   string
+	ClientCA                 string // PEM bundle; when set, require+verify a client cert (mTLS)
 	// Users resolves configured users; nil means no users are configured.
 	// With users, bearer tokens may identify individual users and trusted
 	// proxies may send X-MCP-User.
@@ -612,8 +616,12 @@ func validateHTTPSecurity(c HTTPConfig) error {
 	if c.mtlsEnabled() && !c.tlsEnabled() {
 		return errors.New("mcpserver: mTLS (clientCA) requires a server certificate (tls.cert/tls.key)")
 	}
-	if c.TrustProxyHeaders && !c.mtlsEnabled() && len(c.TrustedProxyCIDRs) == 0 {
-		return errors.New("mcpserver: TrustProxyHeaders requires mTLS or at least one trusted proxy CIDR")
+	if len(c.TrustedProxyCertSubjects) > 0 && !c.mtlsEnabled() {
+		return errors.New("mcpserver: trusted proxy certificate subjects require mTLS (clientCA)")
+	}
+	if c.TrustProxyHeaders && len(c.TrustedProxyCIDRs) == 0 && len(c.TrustedProxyCertSubjects) == 0 {
+		return errors.New("mcpserver: TrustProxyHeaders requires a trusted proxy CIDR or, under mTLS, " +
+			"a trusted proxy certificate subject")
 	}
 	if _, err := parseTrustedProxyCIDRs(c.TrustedProxyCIDRs); err != nil {
 		return err
@@ -633,21 +641,46 @@ func parseTrustedProxyCIDRs(values []string) ([]*net.IPNet, error) {
 	return nets, nil
 }
 
-func trustedProxyOnly(networks []*net.IPNet, next http.Handler) http.Handler {
+// trustedProxy serves a request from a trusted proxy (a source address in
+// networks, or a client certificate named in subjects) with proxied, which
+// reads its identity headers. Any other request is refused unless mTLS
+// authenticated its channel: then it is served with direct when it carries no
+// identity header, since holding a certificate does not make a caller a proxy.
+func trustedProxy(networks []*net.IPNet, subjects []string, mtls bool, proxied, direct http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			host = r.RemoteAddr
+		switch {
+		case fromProxyAddress(networks, r) || fromProxyCertificate(subjects, r):
+			proxied.ServeHTTP(w, r)
+		case mtls && !hasIdentityHeader(r):
+			direct.ServeHTTP(w, r)
+		default:
+			http.Error(w, "untrusted proxy", http.StatusForbidden)
 		}
-		ip := net.ParseIP(host)
-		for _, network := range networks {
-			if ip != nil && network.Contains(ip) {
-				next.ServeHTTP(w, r)
-				return
-			}
-		}
-		http.Error(w, "untrusted proxy", http.StatusForbidden)
 	})
+}
+
+func fromProxyAddress(networks []*net.IPNet, r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && slices.ContainsFunc(networks, func(n *net.IPNet) bool { return n.Contains(ip) })
+}
+
+// fromProxyCertificate reports whether the leaf certificate of r's
+// connection (verified by requireClientCert) has a CN or DNS SAN in subjects.
+func fromProxyCertificate(subjects []string, r *http.Request) bool {
+	if len(subjects) == 0 || r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+		return false
+	}
+	leaf := r.TLS.PeerCertificates[0]
+	return slices.Contains(subjects, leaf.Subject.CommonName) ||
+		slices.ContainsFunc(leaf.DNSNames, func(name string) bool { return slices.Contains(subjects, name) })
+}
+
+func hasIdentityHeader(r *http.Request) bool {
+	return r.Header.Get(userHeader) != "" || r.Header.Get("X-MCP-Role") != "" || r.Header.Get("X-MCP-Subject") != ""
 }
 
 // tokenAuth rejects requests lacking a matching bearer token. Comparison is

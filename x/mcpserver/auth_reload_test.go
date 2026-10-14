@@ -232,3 +232,54 @@ func TestAuthChangesToMTLSRefuseOldConnections(t *testing.T) {
 		t.Fatal("a client certificate the CA signed must be accepted")
 	}
 }
+
+// Under mTLS a client certificate is a proxy only while its subject is
+// trusted: one the CA signed but not named is refused when it sends identity
+// headers, and a reload naming it makes it a proxy on its next request.
+func TestAuthChangesTrustProxyCertificateSubjects(t *testing.T) {
+	t.Parallel()
+	certPath, keyPath := writeCert(t, "server")
+	caPath, clientCert := newClientCA(t)
+	auth := func(subjects ...string) HTTPAuth {
+		return HTTPAuth{TLSCert: certPath, TLSKey: keyPath, ClientCA: caPath, TrustProxyHeaders: true,
+			TrustedProxyCertSubjects: subjects}
+	}
+	h, err := newHTTPServing(mcp.NewServer(&mcp.Implementation{Name: "t"}, nil), HTTPConfig{
+		Addr: "127.0.0.1:0", HTTPAuth: auth("gateway"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewUnstartedServer(h.handler())
+	srv.TLS = &tls.Config{GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) { return h.tls.Load(), nil }}
+	srv.StartTLS()
+	defer srv.Close()
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{
+		InsecureSkipVerify: true, Certificates: []tls.Certificate{clientCert},
+	}}}
+	post := func(role string) int {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/mcp", strings.NewReader("{}"))
+		if role != "" {
+			req.Header.Set("X-MCP-Role", role)
+		}
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, res.Body)
+		_ = res.Body.Close()
+		return res.StatusCode
+	}
+	if code := post("reader"); code != http.StatusForbidden {
+		t.Fatalf("an untrusted certificate sending X-MCP-Role: status %d, want 403", code)
+	}
+	if code := post(""); code == http.StatusForbidden || code == http.StatusUnauthorized {
+		t.Fatalf("an untrusted certificate without identity headers: status %d", code)
+	}
+	if err := h.apply(prepared(t, auth("client"))); err != nil {
+		t.Fatal(err)
+	}
+	if code := post("reader"); code == http.StatusForbidden || code == http.StatusUnauthorized {
+		t.Fatalf("a trusted certificate sending X-MCP-Role: status %d", code)
+	}
+}

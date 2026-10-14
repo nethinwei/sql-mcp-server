@@ -75,13 +75,21 @@
               "type": "string"
             },
             "trustProxyHeaders": {
-              "description": "Trust identity headers (X-MCP-User / X-MCP-Role / X-MCP-Subject) from a proxy; needs mTLS or trustedProxyCIDRs as the trust boundary.",
-              "x-description-zh-CN": "信任代理传入的身份头（X-MCP-User / X-MCP-Role / X-MCP-Subject）；需要 mTLS 或 trustedProxyCIDRs 建立信任边界。",
+              "description": "Trust identity headers (X-MCP-User / X-MCP-Role / X-MCP-Subject) from a proxy; needs trustedProxyCIDRs or trustedProxyCertSubjects to tell proxies.",
+              "x-description-zh-CN": "信任代理传入的身份头（X-MCP-User / X-MCP-Role / X-MCP-Subject）；需要 trustedProxyCIDRs 或 trustedProxyCertSubjects 认定代理。",
               "type": "boolean"
             },
             "trustedProxyCIDRs": {
               "description": "Proxy address ranges allowed to send identity headers.",
               "x-description-zh-CN": "允许传入身份头的代理地址段。",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "trustedProxyCertSubjects": {
+              "description": "Under mTLS, the proxies' client certificates (leaf CN or DNS SAN, exact) allowed to send identity headers; other certificates sending them get 403.",
+              "x-description-zh-CN": "mTLS 下允许传入身份头的代理客户端证书（叶证书 CN 或 DNS SAN，精确匹配）；其它客户端证书带身份头返回 403。",
               "type": "array",
               "items": {
                 "type": "string"

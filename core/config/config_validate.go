@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"net"
+	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/core/cost"
 )
@@ -56,9 +57,18 @@ func (c *Config) validateServerAuth() error {
 	if (c.Server.Auth.TLS.Cert == "") != (c.Server.Auth.TLS.Key == "") {
 		return fmt.Errorf("config: tls.cert and tls.key must be configured together")
 	}
-	if c.Server.Auth.TrustProxyHeaders && c.Server.Auth.TLS.ClientCA == "" &&
-		len(c.Server.Auth.TrustedProxyCIDRs) == 0 {
-		return fmt.Errorf("config: trustProxyHeaders requires mTLS clientCA or trustedProxyCIDRs")
+	auth := c.Server.Auth
+	if len(auth.TrustedProxyCertSubjects) > 0 && auth.TLS.ClientCA == "" {
+		return fmt.Errorf("config: trustedProxyCertSubjects requires mTLS clientCA")
+	}
+	if auth.TrustProxyHeaders && len(auth.TrustedProxyCIDRs) == 0 && len(auth.TrustedProxyCertSubjects) == 0 {
+		return fmt.Errorf("config: trustProxyHeaders requires trustedProxyCIDRs or, under mTLS, " +
+			"trustedProxyCertSubjects naming the proxies' client certificates")
+	}
+	for _, subject := range auth.TrustedProxyCertSubjects {
+		if strings.TrimSpace(subject) == "" {
+			return fmt.Errorf("config: trustedProxyCertSubjects has an empty subject")
+		}
 	}
 	for _, cidr := range c.Server.Auth.TrustedProxyCIDRs {
 		if _, _, err := net.ParseCIDR(cidr); err != nil {

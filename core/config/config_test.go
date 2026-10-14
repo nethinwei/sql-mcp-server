@@ -170,15 +170,63 @@ func TestValidate(t *testing.T) {
 
 func TestValidateSecurityConstraints(t *testing.T) {
 	t.Parallel()
-	cases := securityConstraintCases()
+	base := validSecurityConfig()
+	base.ApplyDefaults()
+	if err := base.Validate(); err != nil {
+		t.Fatalf("the base configuration must be valid, or every case below passes vacuously: %v", err)
+	}
+	cases := append(securityConstraintCases(), proxyTrustCases()...)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := validSecurityConfig()
 			tc.mutate(cfg)
+			cfg.ApplyDefaults()
 			if err := cfg.Validate(); err == nil {
 				t.Fatal("expected validation error")
 			}
 		})
+	}
+}
+
+// A proxy is told by its address or, under mTLS, by its certificate.
+func TestValidateProxyTrustBoundaries(t *testing.T) {
+	t.Parallel()
+	for name, auth := range map[string]AuthConfig{
+		"CIDR": {TrustProxyHeaders: true, TrustedProxyCIDRs: []string{"10.0.0.0/8"}},
+		"mTLS proxy certificate": {TrustProxyHeaders: true, TrustedProxyCertSubjects: []string{"gateway"},
+			TLS: TLSConfig{Cert: "cert.pem", Key: "key.pem", ClientCA: "ca.pem"}},
+	} {
+		cfg := validSecurityConfig()
+		cfg.Server.Auth = auth
+		cfg.ApplyDefaults()
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+}
+
+// proxyTrustCases are configurations that trust proxy headers without
+// telling the proxies.
+func proxyTrustCases() []struct {
+	name   string
+	mutate func(*Config)
+} {
+	mtls := TLSConfig{Cert: "cert.pem", Key: "key.pem", ClientCA: "ca.pem"}
+	return []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{"proxy headers with mTLS alone", func(c *Config) {
+			c.Server.Auth.TrustProxyHeaders, c.Server.Auth.TLS = true, mtls
+		}},
+		{"proxy certificate subjects without mTLS", func(c *Config) {
+			c.Server.Auth.TrustProxyHeaders = true
+			c.Server.Auth.TrustedProxyCertSubjects = []string{"gateway"}
+		}},
+		{"empty proxy certificate subject", func(c *Config) {
+			c.Server.Auth.TrustProxyHeaders, c.Server.Auth.TLS = true, mtls
+			c.Server.Auth.TrustedProxyCertSubjects = []string{" "}
+		}},
 	}
 }
 
