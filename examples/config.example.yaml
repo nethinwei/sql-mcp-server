@@ -10,6 +10,14 @@ server:
   transport: stdio
   addr: "127.0.0.1:8080"
   role: reader
+  # Default user for calls without a user identity; wins over role. Must name
+  # a configured, enabled user (see users below).
+  user: ""
+  # Behind a gateway serving this under a path it strips (e.g. /sql-mcp), and
+  # the MCP endpoint as clients reach it; the console builds client
+  # configuration from publicURL.
+  pathPrefix: ""
+  publicURL: ""
   secrets:
     allowedRoots: [/run/secrets, /var/run/secrets]
   auth:
@@ -17,10 +25,14 @@ server:
     # literal: unlike DSNs, auth fields do not resolve ${ENV} placeholders.
     token: ""
     # Enable only behind a gateway that authenticates callers, strips incoming
-    # X-MCP-Role/X-MCP-Subject, and injects trusted replacements.
+    # X-MCP-User/X-MCP-Role/X-MCP-Subject, and injects trusted replacements.
+    # X-MCP-Role names a role; a user is named with X-MCP-User.
     trustProxyHeaders: false
-    # Required with trustProxyHeaders unless clientCA enables mTLS.
+    # trustProxyHeaders needs one of these to tell the proxies: their source
+    # addresses, or, under mTLS, their client certificates (leaf CN or DNS
+    # SAN). Any other client certificate is a caller, not a proxy.
     trustedProxyCIDRs: []
+    trustedProxyCertSubjects: []
     tls:
       cert: ""
       key: ""
@@ -38,6 +50,30 @@ databases:
     dsn: "${MYSQL_USER}:${MYSQL_PASSWORD}@tcp(${MYSQL_HOST}:3306)/${MYSQL_DATABASE}?parseTime=true"
     # A whole DSN can instead come from a mounted secret:
     # dsn: "${file:/run/secrets/analytics_dsn}"
+  warehouse:
+    driver: postgres
+    # Several connections instead of dsn: accounts with different privileges
+    # or replicas (role: replica serves reads only), chosen by routing.
+    connections:
+      replica:
+        dsn: "postgres://${WH_RO_USER}:${WH_RO_PASSWORD}@${WH_REPLICA_HOST}:5432/warehouse"
+        role: replica
+      writer:
+        dsn: "postgres://${WH_RW_USER}:${WH_RW_PASSWORD}@${WH_HOST}:6432/warehouse"
+        # Behind a transaction-mode pooler (pgbouncer): no session state is
+        # kept, and the statement timeout is best effort (see
+        # cost.requireNativeLimits).
+        pooler: transaction
+    routing:
+      read: replica
+      write: writer
+      execute: writer
+    # A session's reads use the write connection this long after it writes.
+    readAfterWrite: 5s
+    # Admits the trusted SQL escape hatch (tools.executeSql) on this
+    # connection; omitted, no permission runs SQL here.
+    sqlEscape:
+      connection: replica
 
 tools:
   describeEntities: true
@@ -50,6 +86,9 @@ tools:
   beginTransaction: true
   commitTransaction: true
   rollbackTransaction: true
+  # execute_sql, the trusted SQL escape hatch: also needs audit.enabled, a
+  # datasource's sqlEscape and sql:execute@<datasource> (see roles/users).
+  executeSql: false
 
 cost:
   enabled: true
@@ -68,7 +107,13 @@ cost:
   requirePKForWrite: true
   requireKnownScan: true
   requireFreshStats: false
-  queryTimeout: 30s
+  queryTimeout: 30s # 0 (none) or at least 100ms
+  # Strict mode: refuse a configuration whose connections cannot stop
+  # statements at queryTimeout on the database side; off, it only warns.
+  requireNativeLimits: false
+  fullScanMaxRows: 1000 # full scans of tables this small are not rejected
+  sqlEscape:
+    estimate: required # required | skip: EXPLAIN execute_sql statements first
   # Prefer datasource-scoped fp:v2:<sha256> values from reviewed generated SQL.
   allowTemplates: []
   rejectTemplates: []
@@ -99,6 +144,14 @@ budget:
       maxReturnedRows: 5000
       maxReturnedBytes: 8388608
       maxSessionCost: 50000
+  users:
+    alice:
+      maxConcurrent: 2
+      maxExecution: 10s
+      maxEstimatedScannedRows: 20000
+      maxReturnedRows: 5000
+      maxReturnedBytes: 8388608
+      maxSessionCost: 50000
 
 cache:
   enabled: true
@@ -119,6 +172,7 @@ rateLimit:
   breakerCooldown: 5s
   connMaxIdleTime: 5m
   connMaxLifetime: 30m
+  maxResultMemory: 268435456 # result bytes held in memory by all calls together
 
 mask:
   enabled: true
@@ -134,6 +188,42 @@ transactions:
   beginTimeout: 5s
   commitTimeout: 30s
   rollbackTimeout: 30s
+  maxOpenPerConnection: 8 # transactions holding one connection
+
+# Database work other than tool calls; these lanes together hold at most half
+# of rateLimit.ioPool.
+execution:
+  admin: {maxConcurrent: 4, maxQueue: 16} # reads for administrators' requests
+  scan: {maxConcurrent: 2, maxQueue: 8} # schema scans and scan batches
+  background: {maxConcurrent: 2, maxQueue: 64}
+
+# Grant model: roles hold grants (entity, actions, field and row scopes) and
+# system permissions; users authenticate with their own tokens.
+roles:
+  analyst:
+    description: "Reads the orders of the caller's tenant"
+    grants:
+      - entity: orders
+        actions: [read, aggregate]
+        fields: {read: [id, user_id, total], write: []}
+        rows: {op: eq, field: tenant_id, value: "${subject.tenant_id}"}
+    # sql:execute@<datasource> admits execute_sql there.
+    permissions: []
+
+users:
+  alice:
+    description: "Analyst of tenant-demo"
+    # From `sql-mcp-server user token`; the plaintext never enters the config.
+    tokenHash: "sha256:6d593566435e956df597c1110116613303484f8a21dfcdaefeeb87563a17d2f3"
+    roles: [analyst]
+    subject: {tenant_id: tenant-demo} # wins over a proxy's X-MCP-Subject
+    grants:
+      - entity: users
+        actions: [read]
+        fields: {read: [id, email], write: []}
+        rows: {op: eq, field: tenant_id, value: "${subject.tenant_id}"}
+    permissions: []
+    disabled: false
 
 entities:
   - name: users
@@ -143,6 +233,10 @@ entities:
     kind: table
     description: "Registered users"
     primaryKey: [id]
+    uniqueKeys: [[email]] # identify one row like the primary key
+    # Cascading writes (foreign keys rewriting other tables) need delete or
+    # update permission on every cascaded entity unless this is true.
+    allowCascade: false
     mcp:
       dmlTools: true
       customTool: false
@@ -181,8 +275,8 @@ entities:
     roles:
       read: [reader, writer, admin]
       aggregate: [reader, writer, admin]
-    rowPolicies:
-      reader: {op: eq, field: tenant_id, value: "${subject.tenant_id}"}
+    # A tenant boundary ANDed for every principal, never merged across roles.
+    tenantPolicy: {op: eq, field: tenant_id, value: "${subject.tenant_id}"}
     fields:
       - {name: id}
       - {name: user_id}
@@ -194,6 +288,9 @@ entities:
     datasource: analytics
     kind: procedure
     params: [tenant_id]
+    # Entities the procedure writes, for read-cache invalidation; omitted,
+    # every cached read of the datasource is invalidated after it runs.
+    affects: []
     roles:
       execute: [admin]
     mcp:

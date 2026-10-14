@@ -75,6 +75,12 @@ services:
       OB_WRITER_PASSWORD: ledger_rw
       SQL_MCP_STORE: sqlite:/var/lib/sql-mcp-server/config.db
     command: ["serve", "--admin", "--watch"]
+    healthcheck:
+      # The image has no shell or curl; the binary checks its own readiness.
+      test: ["CMD", "/usr/local/bin/sql-mcp-server", "healthcheck"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
     volumes:
       - ./config.yaml:/config/config.yaml:ro
       - store:/var/lib/sql-mcp-server

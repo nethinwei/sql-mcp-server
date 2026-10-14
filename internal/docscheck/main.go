@@ -1,7 +1,8 @@
 // Command docscheck enforces documentation consistency (roadmap v0.1.9
 // accompanying item): every relative markdown link resolves to an existing
-// file, and the pinned version references (README GA line, roadmap baseline,
-// release notes, CHANGELOG) agree with each other.
+// file, the pinned version references (README GA line, roadmap baseline,
+// release notes, CHANGELOG) agree with each other, and the example
+// configuration shows every configuration field.
 package main
 
 import (
@@ -24,6 +25,7 @@ func main() {
 	var problems []string
 	problems = append(problems, checkLinks(root)...)
 	problems = append(problems, checkVersions(root)...)
+	problems = append(problems, checkExampleCoversSchema(root)...)
 	if len(problems) > 0 {
 		for _, p := range problems {
 			fmt.Fprintln(os.Stderr, p)
@@ -104,12 +106,36 @@ func checkVersions(root string) []string {
 		problems = append(problems, fmt.Sprintf(
 			"version drift: README GA is %s but %s does not exist", readme, releaseNote))
 	}
+	problems = append(problems, checkReleaseVersionNotPinned(root)...)
 	changelog, err := os.ReadFile(filepath.Join(root, "CHANGELOG.md"))
 	if err != nil {
 		problems = append(problems, fmt.Sprintf("CHANGELOG.md: %v", err))
 	} else if !strings.Contains(string(changelog), readme) {
 		problems = append(problems, fmt.Sprintf(
 			"version drift: README GA is %s but CHANGELOG.md does not mention it", readme))
+	}
+	return problems
+}
+
+// pinnedReleaseVersion is RELEASE_VERSION set to a number: the release
+// targets read it from server.json, and a stale pin would release (or bump
+// back to) an old version.
+var pinnedReleaseVersion = regexp.MustCompile(`RELEASE_VERSION\s*[?:]?=\s*v?[0-9]`)
+
+func checkReleaseVersionNotPinned(root string) []string {
+	paths := []string{filepath.Join(root, "Makefile")}
+	workflows, _ := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.yml"))
+	var problems []string
+	for _, path := range append(paths, workflows...) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("%s: %v", path, err))
+			continue
+		}
+		if match := pinnedReleaseVersion.Find(data); match != nil {
+			problems = append(problems, fmt.Sprintf(
+				"version drift: %s pins %q; the release version comes from server.json", path, match))
+		}
 	}
 	return problems
 }

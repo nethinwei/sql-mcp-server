@@ -7,11 +7,13 @@ import (
 	"crypto/x509/pkix"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -103,6 +105,48 @@ func TestTokenAuth(t *testing.T) {
 	}
 }
 
+// A body sent too slowly fails to read at the deadline; one read in time
+// lifts it, so the response may stream for longer.
+func TestLimitBodyReadDeadline(t *testing.T) {
+	t.Parallel()
+	const timeout = 100 * time.Millisecond
+	readErr := make(chan error, 1)
+	srv := httptest.NewServer(limitBody(1<<20, timeout, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, err := io.ReadAll(r.Body)
+		readErr <- err
+		if err != nil {
+			return
+		}
+		time.Sleep(3 * timeout) // a streamed response outlasting the deadline
+		_, _ = io.WriteString(w, "streamed")
+	})))
+	defer srv.Close()
+
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	_, _ = io.WriteString(conn, "POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\nslow")
+	select {
+	case err := <-readErr:
+		if err == nil {
+			t.Fatal("a body sent too slowly was read")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the read deadline did not apply")
+	}
+
+	res, err := http.Post(srv.URL+"/mcp", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if body, err := io.ReadAll(res.Body); err != nil || string(body) != "streamed" {
+		t.Fatalf("a response after the body was read: %q %v", body, err)
+	}
+}
+
 func TestLimitBodyBoundary(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -120,7 +164,7 @@ func TestLimitBodyBoundary(t *testing.T) {
 				_, readErr = io.ReadAll(r.Body)
 			})
 			req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(tc.body))
-			limitBody(8, next).ServeHTTP(httptest.NewRecorder(), req)
+			limitBody(8, 0, next).ServeHTTP(httptest.NewRecorder(), req)
 			if (readErr != nil) != tc.wantErr {
 				t.Fatalf("read error = %v, wantErr %v", readErr, tc.wantErr)
 			}

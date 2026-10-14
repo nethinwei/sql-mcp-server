@@ -58,6 +58,8 @@ func runCLI(ctx context.Context, args []string, stdout io.Writer) error {
 		return runExport(args, stdout)
 	case "explain":
 		return runExplain(args, stdout)
+	case "healthcheck":
+		return runHealthcheck(ctx, args, stdout)
 	case "version":
 		if len(args) != 0 {
 			return errors.New("version accepts no arguments")

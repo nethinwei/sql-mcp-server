@@ -494,9 +494,13 @@ type HTTPConfig struct {
 	IdleTimeout       time.Duration
 	MaxHeaderBytes    int
 	MaxBodyBytes      int64
-	Metrics           http.Handler
-	SessionTimeout    time.Duration
-	OnSessionClosed   func(string)
+	// BodyReadTimeout bounds reading a request body (default 30s): a client
+	// sending it slowly cannot hold a connection. It is lifted once the body
+	// is read, so streamed responses (SSE) are not cut.
+	BodyReadTimeout time.Duration
+	Metrics         http.Handler
+	SessionTimeout  time.Duration
+	OnSessionClosed func(string)
 	// RevokedPrincipals registers a callback receiving users removed or
 	// disabled by a reload; their sessions are dropped and rolled back, and
 	// the callback returns those sessions.
@@ -704,14 +708,45 @@ func tokenAuth(token string, next http.Handler) http.Handler {
 }
 
 // limitBody caps the request body size to guard against unbounded reads.
-func limitBody(maxBytes int64, next http.Handler) http.Handler {
+func limitBody(maxBytes int64, readTimeout time.Duration, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil && r.Body != http.NoBody && readTimeout > 0 {
+			rc := http.NewResponseController(w)
+			if rc.SetReadDeadline(time.Now().Add(readTimeout)) == nil {
+				body := &deadlineBody{ReadCloser: r.Body, lift: func() { _ = rc.SetReadDeadline(time.Time{}) }}
+				defer body.done()
+				r.Body = body
+			}
+		}
 		if r.Body != nil {
 			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 		}
 		next.ServeHTTP(w, r)
 	})
 }
+
+// deadlineBody lifts the read deadline set for reading it once it is read
+// or closed.
+type deadlineBody struct {
+	io.ReadCloser
+	lift   func()
+	lifted sync.Once
+}
+
+func (b *deadlineBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil {
+		b.done()
+	}
+	return n, err
+}
+
+func (b *deadlineBody) Close() error {
+	b.done()
+	return b.ReadCloser.Close()
+}
+
+func (b *deadlineBody) done() { b.lifted.Do(b.lift) }
 
 type sessionEventStore struct {
 	mcp.EventStore
