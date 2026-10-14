@@ -72,6 +72,12 @@ HTTP 暴露 `/mcp` 与三个无需认证的健康端点：
 - `/readyz/db`（database readiness）：所有已配置数据库可达（带 5 秒超时的
   轻量 ping，不走查询主路径）时返回 200，否则 503。
 
+镜像基于 distroless，没有 shell 和 curl，容器健康检查用二进制自带的子命令：
+`sql-mcp-server healthcheck [--url http://127.0.0.1:8080/readyz/snapshot] [--timeout 3s]`，
+返回 2xx 时退出码为 0。示例 compose 已为 `mcp` 服务配置了它，`docker compose up --wait`
+因此会等到服务就绪才返回。镜像本身不声明 `HEALTHCHECK`，因为 stdio 模式没有 HTTP 端点。
+HTTP 请求体默认须在 30 秒内读完，读完后解除该期限，流式响应（SSE）不受影响。
+
 readiness 探针 fail closed：未注入探针（如嵌入方直接使用 `Handler` 且未配置
 `SnapshotReady`/`DatabaseReady`）时同样返回 503。响应体不回显失败原因，避免
 在未认证端点泄露数据库细节。未认证的非 loopback 监听会 fail closed；认证、

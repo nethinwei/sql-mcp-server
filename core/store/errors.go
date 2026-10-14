@@ -33,6 +33,12 @@ func (e *ConstraintError) Unwrap() error { return e.Err }
 // server or transaction. Providers wrap driver errors with it.
 var ErrPermissionDenied = errors.New("store: permission denied")
 
+// ErrStatementTimeout marks a statement the database stopped at its timeout
+// (a server-side statement timeout, or the cancel request of a request whose
+// deadline passed): the database rolled it back, so it did not take effect.
+// Providers wrap driver errors with it.
+var ErrStatementTimeout = errors.New("store: statement stopped at its timeout")
+
 // ErrConnectionLost marks a statement whose connection broke while it ran:
 // the database may or may not have carried it out. Providers wrap driver
 // errors with it. A broken connection a driver reports before sending the

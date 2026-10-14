@@ -35,6 +35,9 @@ func (ReadTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Res
 	if err != nil {
 		return Result{}, err
 	}
+	if in.Limit < 0 || in.Offset < 0 {
+		return Result{}, fmt.Errorf("%w: limit and offset cannot be negative", ErrInvalidInput)
+	}
 	if in.Offset > 0 && in.Limit == 0 {
 		return Result{}, fmt.Errorf("%w: offset requires limit", ErrInvalidInput)
 	}

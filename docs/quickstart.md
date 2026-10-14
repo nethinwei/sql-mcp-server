@@ -15,6 +15,7 @@ docker compose -f examples/quickstart/compose.yaml up -d --wait
 curl -fsS http://127.0.0.1:8080/healthz
 ```
 
+`--wait` 会等到 `mcp` 服务的健康检查（`sql-mcp-server healthcheck`）通过才返回。
 服务只发布到本机 `127.0.0.1:8080`。示例 bearer token 为
 `quickstart-only-token`，不得用于其他环境。
 

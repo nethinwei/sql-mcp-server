@@ -138,6 +138,9 @@ type statement struct {
 	// keep are columns whose values are kept before the rows are masked, to
 	// join on them.
 	keep []string
+	// columns, when set, name its result columns by position, whatever the
+	// database names them (an aggregate's).
+	columns []string
 	// rowCap bounds the rows of the statement (0: no bound of its own).
 	rowCap int64
 	write  bool // a write: its errors and its effects are followed
@@ -247,7 +250,7 @@ func (st statement) query(ctx context.Context) (out queried, err error) {
 		return queried{}, st.fail(err)
 	}
 	out.rows = make([]map[string]any, 0)
-	for row, err := range store.Iter(rows) {
+	for row, err := range store.IterNamed(rows, st.columns) {
 		if err != nil {
 			return queried{}, st.fail(err)
 		}

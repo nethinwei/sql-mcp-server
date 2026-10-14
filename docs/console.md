@@ -160,19 +160,20 @@ sql-mcp-server admin set --username alice --disable
 sql-mcp-server admin set --username alice --permissions admin:*
 ```
 
-- 任何登录者都可以改自己的密码；改他人密码需要 `admin:accounts`。改密后该账号
-  已有的会话全部失效。
+- 任何登录者都可以改自己的密码，但需要输入当前密码；改他人密码需要
+  `admin:accounts`。改密后该账号已有的会话全部失效。
 - 系统始终保留至少一个启用且有 `admin:accounts` 的账号，控制台与 CLI 都不能
   禁用或降级最后一个；被锁在外面时用 `admin create` 新建账号，或
   `admin set --enable` 重新启用。
 - 会话保存在服务进程内存中，空闲 8 小时或登录满 24 小时后失效，服务重启后需要
-  重新登录。同一用户名连续 5 次登录失败锁定 1 分钟。
+  重新登录。同一用户名连续 5 次登录失败即锁定，锁定时长从 1 分钟起逐次翻倍，最长
+  1 小时。
 
 ## 安全建议
 
-- 生产环境通过 HTTPS 访问控制台。服务自己终止 TLS（`server.auth.tls.cert`）时
-  会话 Cookie 带 `Secure` 标记；由反向代理终止 TLS 时，Cookie 不带该标记，代理
-  应只对外提供 HTTPS。
+- 生产环境通过 HTTPS 访问控制台。服务自己终止 TLS（`server.auth.tls.cert`）或
+  `server.publicURL` 为 `https://` 时，会话 Cookie 带 `Secure` 标记；由反向代理终止
+  TLS 时请设置 `publicURL`，代理应只对外提供 HTTPS。
 - 监听非 loopback 地址时，MCP 端必须配置认证（`users`、`server.auth.token` 或
   mTLS 客户端证书），否则服务拒绝启动。
 - store 中只保存 token hash 与密码占位符；数据库凭据通过环境变量或 secret 文件

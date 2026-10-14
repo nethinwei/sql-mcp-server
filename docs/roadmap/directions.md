@@ -80,7 +80,9 @@ tenant、daily 和敏感数据预算。
 扩展端到端 OpenTelemetry、SLO/告警、外部审计 sink、生产 runbook、多实例观测、
 故障注入和 `doctor`。
 
-触发证据：至少一个持续运行的参考部署产生真实故障、容量或诊断数据。
+触发证据：至少一个持续运行的参考部署产生真实故障、容量或诊断数据。`v0.1.13`
+起 `/metrics` 由 OpenTelemetry 指标提供并新增执行总线指标（`smcp.bus.*`）；端到端
+trace、SLO/告警、外部审计 sink 与 `doctor` 仍按本触发证据升级。
 
 ## L6. Write Operation Governance
 
@@ -95,10 +97,12 @@ session、signed snapshot、灾难恢复和短期数据库凭证。
 
 触发证据：真实企业部署证明单实例身份与配置分发是采用或安全阻碍。用户、
 角色与权限模型已随
-[管理面 1](../roadmap.md#管理面-1--users-roles-and-permissions)确立进入条件，
-管理后台的 OIDC/OAuth2 人员登录随
+[管理面 1](../roadmap.md#管理面-1--users-roles-and-permissions)交付（`v0.1.11`），
+管理后台的本地账号登录随
 [管理面 4](../roadmap.md#管理面-4--admin-api-login-and-schema-import)交付；
-MCP 客户端 OAuth 2.1、delegation chain、多实例分发等其余部分仍按本触发证据升级。
+`v0.1.13` 起多副本从同一配置库加载已发布 revision 并共享扫描批次（跨进程租约）。
+管理后台的 OIDC/OAuth2 人员登录于 2026-10-12 复审降为 Later，与 MCP 客户端
+OAuth 2.1、delegation chain、signed snapshot 等其余部分一样按本触发证据升级。
 
 ## L8. Data Governance and Durable Audit
 
@@ -117,8 +121,8 @@ SQL 逃生通道，不改变受治理面的审计语义。
 触发证据：已由维护者需求确立（手写配置成本是主要采用障碍）。管理 API 与
 schema 导入并入
 [管理面 4](../roadmap.md#管理面-4--admin-api-login-and-schema-import)，
-UI 并入[管理面 5](../roadmap.md#管理面-5--admin-console-ui)，以管理面 3 的
-配置存储与 revision 为前置。
+UI 并入[管理面 5](../roadmap.md#管理面-5--admin-console-ui)，核心路径已随
+`v0.1.11` 交付；交互判据的外部实测仍是管理面 5 的剩余门禁。
 
 ## L10. Query Learning and Reuse
 
@@ -280,7 +284,9 @@ Relation 和 Policy。本方向提供安全的配置生成，核心原则是
 
 触发证据：真实大 schema 用户的接入成本证据（此时其价值可能大于新增第五、
 第六种数据库）。从已接入数据源 introspection 生成未授权草稿的部分已作为
-[管理面 4](../roadmap.md#管理面-4--admin-api-login-and-schema-import)的首个交付形态；dbt manifest、
+[管理面 4](../roadmap.md#管理面-4--admin-api-login-and-schema-import)的首个交付形态（`v0.1.11`）；
+按方案批量配置（规则授权、字段隐藏/脱敏、模板、三级例外报告与配置 MCP）已随
+`v0.1.13` 交付，设计见[批量配置](../design/planning.md)；dbt manifest、
 数据字典等外部导入仍按本触发证据升级。
 
 ## 跨阶段非目标

@@ -200,6 +200,13 @@ func (s Service) Rollback(ctx context.Context, req RollbackRequest) (RollbackRes
 		return RollbackResult{}, err
 	}
 	rev, err := s.Store.Rollback(ctx, current.ID, target.ID, revision.Meta{Author: req.Author, Comment: req.Comment})
+	if errors.Is(err, revision.ErrConflict) {
+		// Another publish committed since current was read: report it like
+		// a stale publish.
+		if latest, lerr := s.published(ctx); lerr == nil {
+			return RollbackResult{}, &ConflictError{Expected: current.ID, Published: latest.ID}
+		}
+	}
 	if err != nil {
 		return RollbackResult{}, err
 	}

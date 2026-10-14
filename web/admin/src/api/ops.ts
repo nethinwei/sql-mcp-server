@@ -132,6 +132,15 @@ export const CapabilitiesQuery = graphql(`
   query Capabilities { capabilities { entity action privilege connection columns reason } }
 `)
 
+export const ProviderCapabilitiesQuery = graphql(`
+  query ProviderCapabilities {
+    providerCapabilities {
+      connections { datasource connection claims { key strength evidence reason } }
+      issues { datasource connection key use strength reason }
+    }
+  }
+`)
+
 export const DiffQuery = graphql(`
   query Diff($from: ID!, $to: ID) { diff(from: $from, to: $to) }
 `)

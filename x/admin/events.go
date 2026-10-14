@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	// eventPollInterval is how often the published revision is read while a
-	// console listens; publishes from other processes sharing the store
-	// arrive this way too.
+	// eventPollInterval is how often the published revision, and the
+	// workspace of each administrator listening, is read while a console
+	// listens (publishes from other processes sharing the store arrive this
+	// way too), and how often a stream checks its session.
 	eventPollInterval = time.Second
 	// eventKeepAlive keeps proxies from closing an idle stream.
 	eventKeepAlive    = 25 * time.Second
@@ -133,23 +134,18 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cookie, _ := r.Cookie(cookieName)
-	rc := http.NewResponseController(w)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Accel-Buffering", "no")
 	events, stop := h.published.subscribe()
 	defer stop()
+	workspaces, stopWorkspaces := h.workspaces.subscribe(who.Username)
+	defer stopWorkspaces()
 	keepAlive := time.NewTicker(eventKeepAlive)
 	defer keepAlive.Stop()
 	check := time.NewTicker(eventPollInterval)
 	defer check.Stop()
-	write := func(format string, args ...any) bool {
-		_ = rc.SetWriteDeadline(time.Now().Add(eventWriteTimeout))
-		if _, err := fmt.Fprintf(w, format, args...); err != nil {
-			return false
-		}
-		return rc.Flush() == nil
-	}
+	write := eventWriter(w)
 	// Send the headers now: before anything is published there is no event,
 	// and clients and proxies would wait for the first one.
 	w.WriteHeader(http.StatusOK)
@@ -169,11 +165,28 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 			if !write(": keep-alive\n\n") {
 				return
 			}
+		case version := <-workspaces:
+			if !s.sendWorkspace(write, version) {
+				return
+			}
 		case <-check.C:
-			if !h.sessions.alive(cookie.Value) || !s.sendWorkspace(write, h.workspaceVersion(r.Context(), who.Username)) {
+			if !h.sessions.alive(cookie.Value) {
 				return
 			}
 		}
+	}
+}
+
+// eventWriter writes to an event stream and flushes, reporting whether the
+// console got it in time.
+func eventWriter(w http.ResponseWriter) func(format string, args ...any) bool {
+	rc := http.NewResponseController(w)
+	return func(format string, args ...any) bool {
+		_ = rc.SetWriteDeadline(time.Now().Add(eventWriteTimeout))
+		if _, err := fmt.Fprintf(w, format, args...); err != nil {
+			return false
+		}
+		return rc.Flush() == nil
 	}
 }
 

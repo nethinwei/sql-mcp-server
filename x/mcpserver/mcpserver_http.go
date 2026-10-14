@@ -30,6 +30,9 @@ func applyHTTPDefaults(cfg *HTTPConfig) {
 	if cfg.MaxBodyBytes <= 0 {
 		cfg.MaxBodyBytes = 4 << 20 // 4 MiB
 	}
+	if cfg.BodyReadTimeout <= 0 {
+		cfg.BodyReadTimeout = 30 * time.Second
+	}
 	if cfg.SessionTimeout <= 0 {
 		cfg.SessionTimeout = 5 * time.Minute
 	}
@@ -59,13 +62,11 @@ func sessionHandler(s *mcp.Server, cfg HTTPConfig) http.Handler {
 func authenticated(cfg HTTPConfig, clientCAs *x509.CertPool, next http.Handler) http.Handler {
 	handler := next
 	if cfg.TrustProxyHeaders {
-		handler = withProxyIdentity(cfg.Users, handler)
-		if !cfg.mtlsEnabled() {
-			networks, _ := parseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
-			handler = trustedProxyOnly(networks, handler)
-		}
+		networks, _ := parseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
+		handler = trustedProxy(networks, cfg.TrustedProxyCertSubjects, cfg.mtlsEnabled(),
+			withProxyIdentity(cfg.Users, handler), handler)
 	}
-	handler = limitBody(cfg.MaxBodyBytes, handler)
+	handler = limitBody(cfg.MaxBodyBytes, cfg.BodyReadTimeout, handler)
 	handler = principalAuth(cfg.Token, cfg.Users, cfg.mtlsEnabled() || cfg.TrustProxyHeaders, handler)
 	if cfg.mtlsEnabled() {
 		handler = requireClientCert(clientCAs, handler)
@@ -111,7 +112,7 @@ func buildHTTPMux(mcpHandler, metrics http.Handler, cfg HTTPConfig) *http.ServeM
 	mux.Handle("/readyz/snapshot", staleMarker(cfg.SnapshotStale, readinessHandler(cfg.SnapshotReady)))
 	mux.Handle("/readyz/db", readinessHandler(cfg.DatabaseReady))
 	if cfg.Admin != nil {
-		admin := limitBody(cfg.MaxBodyBytes, cfg.Admin)
+		admin := limitBody(cfg.MaxBodyBytes, cfg.BodyReadTimeout, cfg.Admin)
 		mux.Handle("/admin/", admin)
 		// /admin itself too: the console redirects it under its gateway prefix.
 		mux.Handle("/admin", admin)

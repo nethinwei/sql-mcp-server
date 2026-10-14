@@ -15,7 +15,9 @@ MCP_PUBLISHER ?= mcp-publisher
 PYTHON ?= python3
 SYFT ?= syft
 VERSION ?= dev
-RELEASE_VERSION ?= 0.1.4
+# The release being prepared is server.json's; release-bump takes the next
+# one explicitly.
+RELEASE_VERSION ?= $(shell $(PYTHON) -c 'import json; print(json.load(open("server.json"))["version"])')
 RELEASE_IMAGE ?= sql-mcp-server:release-preflight
 VERSION_PACKAGE := github.com/nethinwei/sql-mcp-server/version.value
 LDFLAGS ?= -X $(VERSION_PACKAGE)=$(VERSION)
@@ -70,6 +72,8 @@ release-snapshot: release-check
 # Rewrite all pinned version references (server.json, examples, README GA
 # lines) in one idempotent pass; editorial files stay manual.
 release-bump:
+	@test "$(origin RELEASE_VERSION)" != file || \
+		{ echo "release-bump: name the new version: make release-bump RELEASE_VERSION=x.y.z" >&2; exit 1; }
 	$(PYTHON) scripts/release/bump.py --version $(RELEASE_VERSION)
 
 release-metadata-check:

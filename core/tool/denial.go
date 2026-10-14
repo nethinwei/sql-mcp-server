@@ -208,7 +208,9 @@ func (e *AmbiguousFieldScopeError) Error() string {
 func (e *AmbiguousFieldScopeError) Unwrap() error { return ErrUnauthorized }
 
 // NewDecisionID returns a 128-bit random identifier correlating one tool
-// call's MCP response, audit event, and trace span.
+// call's MCP response, audit event, and trace span. crypto/rand.Read never
+// fails (since Go 1.24 it crashes the program instead), so the identifier is
+// never predictable.
 func NewDecisionID() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:])

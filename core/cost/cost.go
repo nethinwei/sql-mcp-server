@@ -310,9 +310,11 @@ func layerPhase(l Layer) Phase {
 }
 
 // NewGateFromCapabilities assembles the synchronous gate chain: StaticRule
-// always; Estimate only when the dialect's estimates are trustworthy; EnforceCap
-// when a row cap is configured. RuntimeGuard/DBNative run at execution time.
-func NewGateFromCapabilities(caps dialect.Capabilities, ex Explainer, th Threshold, feedback FeedbackStore) *ChainGate {
+// always; Estimate only when the connection has EXPLAIN and its estimates are
+// enforced as trustworthy, or explain fail-closed rejects whatever they cannot
+// show; EnforceCap when a row cap is configured. RuntimeGuard/DBNative run at
+// execution time.
+func NewGateFromCapabilities(caps dialect.Profile, ex Explainer, th Threshold, feedback FeedbackStore) *ChainGate {
 	layers := []Layer{StaticRule{
 		PKWhitelist: th.WhitelistPKPoint, Datasource: th.Datasource,
 		DialectName: th.DialectName, LegacyExactSQL: th.LegacyExactSQL, AllowTemplates: th.AllowTemplates,
@@ -328,7 +330,7 @@ func NewGateFromCapabilities(caps dialect.Capabilities, ex Explainer, th Thresho
 	if th.RequireAggregatePredicate {
 		layers = append(layers, AggregateGuard{RequirePredicate: true})
 	}
-	if caps.ExplainCost && ex != nil && (caps.ExplainAccurate || th.ExplainFailClosed) {
+	if caps.Has(dialect.Explain) && ex != nil && (caps.Enforced(dialect.ExplainAccurate) || th.ExplainFailClosed) {
 		layers = append(layers, Estimate{
 			Explainer: ex, Threshold: th, Feedback: feedback,
 			FailClosed: th.ExplainFailClosed,

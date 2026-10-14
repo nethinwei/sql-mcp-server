@@ -24,6 +24,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/engine"
 	"github.com/nethinwei/sql-mcp-server/core/hook"
 	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
+	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
 )
 
@@ -149,7 +150,7 @@ func Outcome(err error) string {
 		return outcomeCircuitOpen
 	case errors.Is(err, engine.ErrClosed):
 		return outcomeClosed
-	case errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, store.ErrStatementTimeout):
 		return outcomeTimeout
 	case errors.Is(err, context.Canceled):
 		return outcomeCanceled

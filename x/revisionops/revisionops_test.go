@@ -164,6 +164,22 @@ entities:
 	}
 }
 
+// A revision shown whole carries no secret either.
+func TestRedactedHidesSecrets(t *testing.T) {
+	t.Parallel()
+	shown := string(Redacted([]byte(`server: {auth: {token: tok-secret}}
+databases:
+  shop: {driver: postgres, dsn: "postgres://app:hunter2@db/shop"}
+`)))
+	if strings.Contains(shown, "hunter2") || strings.Contains(shown, "tok-secret") ||
+		!strings.Contains(shown, "postgres://app:***@db/shop") {
+		t.Fatalf("shown:\n%s", shown)
+	}
+	if broken := string(Redacted([]byte("database: [hunter2"))); strings.Contains(broken, "hunter2") {
+		t.Fatalf("an undecodable payload is shown:\n%s", broken)
+	}
+}
+
 func TestRawDiffComparesBytes(t *testing.T) {
 	t.Parallel()
 	diff, err := RawDiff("a", []byte("x: 1\n"), "b", []byte("x:   1\n"))
@@ -202,6 +218,34 @@ func TestPublishReportsAConcurrentPublishAsAConflict(t *testing.T) {
 	var conflict *ConflictError
 	if !errors.As(err, &conflict) || conflict.Published != b.ID {
 		t.Fatalf("publish racing another = %v, want a conflict naming revision %d", err, b.ID)
+	}
+}
+
+// Rollback, as a racingStore's, publishes another draft first.
+func (r *racingStore) Rollback(ctx context.Context, current, target int64, m revision.Meta) (revision.Revision, error) {
+	if !r.raced {
+		r.raced = true
+		if _, err := r.Store.Publish(ctx, r.other, current, m); err != nil {
+			return revision.Revision{}, err
+		}
+	}
+	return r.Store.Rollback(ctx, current, target, m)
+}
+
+func TestRollbackReportsAConcurrentPublishAsAConflict(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, _ := newService(t)
+	a, _, _ := s.Draft(ctx, DraftRequest{Payload: payload(t, "200")})
+	if _, err := s.Publish(ctx, PublishRequest{ID: a.ID}); err != nil {
+		t.Fatal(err)
+	}
+	b, _, _ := s.Draft(ctx, DraftRequest{Payload: payload(t, "300"), Parent: a.ID})
+	s.Store = &racingStore{Store: s.Store, other: b.ID}
+	_, err := s.Rollback(ctx, RollbackRequest{})
+	var conflict *ConflictError
+	if !errors.As(err, &conflict) || conflict.Expected != a.ID || conflict.Published != b.ID {
+		t.Fatalf("rollback racing a publish = %v, want a conflict naming revision %d", err, b.ID)
 	}
 }
 

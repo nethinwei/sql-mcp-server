@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
@@ -66,6 +67,14 @@ type Service struct {
 	// Capabilities reports the serving snapshot's capabilities; nil reports
 	// none.
 	Capabilities func() bootstrap.EntityCapabilities
+	// Profiles reports what the serving connections guarantee and the limits
+	// the serving configuration relies on that they do not enforce; nil
+	// reports none.
+	Profiles func() ([]bootstrap.ConnectionProfile, []bootstrap.LimitIssue)
+	// PlannedLimits judges a configuration not yet applied: the hard limits
+	// it would rely on that its connections would not enforce; nil judges
+	// none.
+	PlannedLimits func(*config.Config) []bootstrap.LimitIssue
 	// previews keeps recent plan previews.
 	previews previews
 }
@@ -270,9 +279,21 @@ func (r *Service) Validate(ctx context.Context, against Against) (*Validation, e
 	if err != nil {
 		return nil, err
 	}
+	warnings := bootstrap.CapabilityWarnings(built.Config, r.capabilities())
+	var issues []string
+	if r.PlannedLimits != nil {
+		for _, issue := range r.PlannedLimits(built.Config) {
+			issues = append(issues, "hard limit not enforced on the database side: "+issue.String())
+		}
+	}
+	if built.Config.Cost.RequireNativeLimits && len(issues) > 0 {
+		// The serving process would refuse to apply it (cost.requireNativeLimits).
+		msg := bootstrap.ErrNativeLimits.Error() + ":\n" + strings.Join(issues, "\n")
+		return &Validation{Error: &msg, RestartRequired: changes, Warnings: kit.OrEmpty(warnings)}, nil
+	}
 	hash := revision.Hash(built.Payload)
 	return &Validation{Ok: true, ContentHash: &hash, RestartRequired: changes,
-		Warnings: kit.OrEmpty(bootstrap.CapabilityWarnings(built.Config, r.capabilities()))}, nil
+		Warnings: kit.OrEmpty(append(warnings, issues...))}, nil
 }
 
 func hasDatasource(cfg *config.Config, name string) bool {

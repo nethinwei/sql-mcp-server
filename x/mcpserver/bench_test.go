@@ -23,6 +23,7 @@ import (
 type instantProvider struct{ storetest.FakeDB }
 
 func (*instantProvider) Dialect() dialect.Dialect { return pgprov.Dialect{} }
+func (*instantProvider) Profile() dialect.Profile { return pgprov.Dialect{}.Capabilities() }
 func (*instantProvider) Explainer() cost.Explainer {
 	return costtest.FakeExplainer{Plan: cost.Plan{ScanType: cost.ScanIndex, EstimatedRows: 1, StatsFresh: true}}
 }

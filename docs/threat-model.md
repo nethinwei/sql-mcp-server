@@ -124,16 +124,19 @@ Provider 适用范围使用以下口径：
 - **等级/状态**：critical / 已由 handler corpus 覆盖，真实代理 e2e 仍未实现。
 - **攻击**：外部调用方伪造 `X-MCP-Role`/`X-MCP-Subject`，利用错误的代理信任范围
   冒充其他 tenant 或 role。
-- **控制**：默认忽略代理身份 header；启用 `trustProxyHeaders` 时必须同时配置
-  mTLS `clientCA` 或非空 `trustedProxyCIDRs`；CIDR 模式校验来源地址；畸形
+- **控制**：默认忽略代理身份 header；启用 `trustProxyHeaders` 时必须配置非空
+  `trustedProxyCIDRs`，或在 mTLS 下配置 `trustedProxyCertSubjects`；单有 mTLS 不够，持证书
+  只说明是调用方。只接受来源地址在 CIDR 内，或叶证书 CN / DNS SAN 被列出的请求作为代理；
+  mTLS 下其他证书带身份头返回 403，CIDR 模式下其他来源一律返回 403；畸形
   subject JSON 返回 400。认证可热重载：新认证在装配前准备好（校验并读取证书，失败则 reload 失败），发布时
   直接切换到准备好的对象，不再读取文件，不会出现配置已发布而认证仍是旧的；
   启用 mTLS 时每个请求都按当前 `clientCA` 校验其连接实际出示的客户端证书，
   切换前建立、未出示证书（或由已替换 CA 签发）的连接不会被视为 mTLS 通道。
 - **现有证据**：`core/config/config_test.go` 的信任边界校验，
-  `x/mcpserver/http_test.go` 的 untrusted header、malformed subject、CIDR 和
-  session identity 测试，以及 `x/mcpserver/auth_reload_test.go` 的“热切换到
-  mTLS 后旧连接被拒”测试。
+  `x/mcpserver/http_test.go` 的 untrusted header、malformed subject、CIDR、代理证书主体
+  （`TestTrustedProxyCertificate`）和 session identity 测试，以及
+  `x/mcpserver/auth_reload_test.go` 的“热切换到 mTLS 后旧连接被拒”和“代理证书主体随
+  热重载生效”测试。
 - **持续验证**：`x/mcpserver/http_test.go` 覆盖不可信来源伪造身份、畸形和尾随
   subject JSON、body 边界与 session 身份切换；真实反向代理 e2e 仍是剩余工作。
 - **剩余风险**：服务不能证明代理已认证调用方或删除外部 header；错误配置 CIDR、
@@ -242,16 +245,22 @@ Provider 适用范围使用以下口径：
 
 - **等级/状态**：critical / 认证链路、代理头与吊销已由 handler 与 runtime 测试验证。
 - **攻击**：伪造或猜测用户 token；在已认证用户请求上附加 `X-MCP-User`/
-  `X-MCP-Role`/`X-MCP-Subject` 冒充他人或改写租户；利用被删除/禁用用户的旧会话
+  `X-MCP-Role`/`X-MCP-Subject` 冒充他人或改写租户；在可信代理后用
+  `X-MCP-Role: user:<name>`（或自定义 transport 的 `WithSubject`）冒充用户，拿到其授权与
+  `sql:execute`，并绕过配置 subject 的覆盖；利用被删除/禁用用户的旧会话
   与在途事务继续访问。
 - **控制**：用户 token 只以 `sha256:` hash 保存，CLI 生成 256 bit 随机 token；
   配置用户后，无共享 token 且非 mTLS/可信代理通道时必须携带用户 token；带用户
   token 的请求出现任何代理身份头返回 403；`X-MCP-User` 必须指向启用用户且不能与
-  `X-MCP-Role` 同时出现；用户表跟随 snapshot，热重载删除或禁用用户后解除其会话
+  `X-MCP-Role` 同时出现；`X-MCP-Role` 含 `:`（主体键）返回 400，非用户入口注入的主体键
+  解析为不持有授权的主体，用户身份只由用户 token 与 `X-MCP-User` 建立（v0.1.15 修复，
+  此前可冒充）；用户表跟随 snapshot，热重载删除或禁用用户后解除其会话
   绑定并回滚在途事务；启用/关闭用户功能随重载切换（是否要求用户 token 跟随当前
   快照是否配置了用户），新认证在装配前准备好。
-- **现有证据**：`x/mcpserver/users_test.go` 的认证矩阵、代理头、身份冲突与会话
-  吊销测试；`x/bootstrap/bootstrap_access_test.go` 的吊销通知测试；
+- **现有证据**：`x/mcpserver/users_test.go` 的认证矩阵、代理头、身份冲突、
+  主体键拒绝（`TestRoleHeaderCannotNameAPrincipal`、`TestWithSubjectCannotAssumeAUser`）与会话
+  吊销测试；`x/mcpserver/execute_sql_test.go` 的
+  `TestExecuteSQLRoleHeaderCannotImpersonateUser`（真实中间件链）；`x/bootstrap/bootstrap_access_test.go` 的吊销通知测试；
   `core/config/config_access_test.go` 的 tokenHash 与名称校验测试。
 - **持续验证**：以上测试在默认单元测试中运行。
 - **剩余风险**：token 没有过期时间；hash 未加盐，依赖 token 本身的高熵，人工设置
@@ -369,6 +378,34 @@ Provider 适用范围使用以下口径：
   SQL，驱动层接受的多语句无法禁止；`end` 事件写入失败时 `exec` 的效果已发生；审计文件
   未加密、未签名。
 - **Provider**：共享层（与数据库方言无关）；EXPLAIN 的可用性与返回形状按方言不同。
+
+### TM-014 — 管理 API 越权、会话劫持与资源耗尽
+
+- **等级/状态**：high / 逐操作权限矩阵、会话与 CSRF、登录闸门、深度与复杂度上限已由
+  单元测试验证。
+- **攻击**：只有部分 `admin:*` 权限的管理员调用超出其权限的查询或变更（例如只读管理员
+  发布、写管理员管理账号）；新增的 GraphQL 操作遗漏鉴权；跨站请求借浏览器中的会话
+  Cookie 发起变更；暴力猜测密码或用大量并发登录耗尽 argon2id 的 CPU；被停用或改密的
+  账号继续使用旧会话；用很深或很宽（大量别名）的查询耗尽服务端资源；生产环境通过
+  GraphQL introspection 枚举接口。
+- **控制**：每个 resolver 或其调用的配置服务（`x/admin/configapp`）在执行前、解析输入
+  （方案、范围、版本号）之前要求操作所需的权限（`auth.Require`），只读、写、发布、账号管理分开，`admin:*` 持有全部；会话
+  Cookie 为 HttpOnly + SameSite，变更请求必须携带与会话绑定的 CSRF 头；登录有全局并发
+  闸门与按用户名的失败锁定；停用账号与改密立即吊销该账号的全部会话，会话有空闲与绝对
+  超时；查询深度与复杂度有上限，超出即在执行前拒绝；introspection 与 playground 默认
+  关闭。配置 MCP 端点（`/admin/mcp`）只接受令牌，不接受会话 Cookie（见 TM-012）。
+- **现有证据**：`x/admin/graph/authz_matrix_test.go` 的
+  `TestEveryOperationEnforcesItsPermissions`：从 schema 为每个查询与变更自动生成参数合法
+  的请求，在四种权限的全部 16 种组合下调用，断言当且仅当缺少所需权限时被拒；新增操作
+  未登记所需权限即失败；`TestAuthorizationPrecedesInput` 以非法的版本号与方案调用每个
+  需要权限的操作，断言无权限时先得到权限拒绝。`x/admin/admin_test.go` 的登录、CSRF、锁定、并发闸门、停用与
+  改密吊销、会话超时、深度（`TestSelectionDepth`）与复杂度（`TestComplexityLimit`）
+  上限、playground 默认关闭与 `/admin/mcp` 拒绝会话测试；`x/admin/graph` 的
+  `TestAdminAccountsKeepAnAccountManager`。
+- **持续验证**：以上测试在默认单元测试中运行。
+- **剩余风险**：会话只在进程内保存，多副本部署需要会话粘性；只有本地账号登录，没有
+  OIDC/OAuth2 与多因素认证（OIDC 已降为 Later）；登录闸门之外没有按账号的请求限速。
+- **Provider**：共享层（与数据库方言无关）。
 
 ## 证据维护规则
 

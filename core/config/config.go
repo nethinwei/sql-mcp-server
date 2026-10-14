@@ -70,13 +70,17 @@ type SecretsConfig struct {
 // AuthConfig configures HTTP transport authentication. When the listener is not
 // bound to loopback, at least one of Token or TLS.ClientCA (mTLS) must be
 // configured or startup is refused (fail-closed). The caller identity headers
-// (X-MCP-Role / X-MCP-Subject) are trusted only when TrustProxyHeaders is true,
-// and either mTLS or TrustedProxyCIDRs establishes the proxy trust boundary.
+// (X-MCP-User / X-MCP-Role / X-MCP-Subject) are trusted only when
+// TrustProxyHeaders is true, and only from a proxy: a source address in
+// TrustedProxyCIDRs or, under mTLS, a client certificate whose subject is in
+// TrustedProxyCertSubjects. Holding a certificate the client CA signed does
+// not make a caller a proxy.
 type AuthConfig struct {
-	Token             string    `yaml:"token"             json:"token"`
-	TrustProxyHeaders bool      `yaml:"trustProxyHeaders" json:"trustProxyHeaders"`
-	TrustedProxyCIDRs []string  `yaml:"trustedProxyCIDRs" json:"trustedProxyCIDRs"`
-	TLS               TLSConfig `yaml:"tls"               json:"tls"`
+	Token                    string    `yaml:"token"                    json:"token"`
+	TrustProxyHeaders        bool      `yaml:"trustProxyHeaders"        json:"trustProxyHeaders"`
+	TrustedProxyCIDRs        []string  `yaml:"trustedProxyCIDRs"        json:"trustedProxyCIDRs"`
+	TrustedProxyCertSubjects []string  `yaml:"trustedProxyCertSubjects" json:"trustedProxyCertSubjects"`
+	TLS                      TLSConfig `yaml:"tls"                      json:"tls"`
 }
 
 // TLSConfig configures TLS/mTLS for the HTTP transport. Cert+Key enable TLS;
@@ -363,6 +367,7 @@ type CostConfig struct {
 	RequireKnownScan    bool                `yaml:"requireKnownScan"            json:"requireKnownScan"`
 	RequireFreshStats   bool                `yaml:"requireFreshStats"           json:"requireFreshStats"`
 	QueryTimeout        time.Duration       `yaml:"queryTimeout"                json:"queryTimeout" schema:"min=0"`
+	RequireNativeLimits bool                `yaml:"requireNativeLimits"         json:"requireNativeLimits"`
 	AllowTemplates      []string            `yaml:"allowTemplates"              json:"allowTemplates"`
 	RejectTemplates     []string            `yaml:"rejectTemplates"             json:"rejectTemplates"`
 	AQE                 AQEConfig           `yaml:"aqe"                         json:"aqe"`

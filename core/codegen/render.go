@@ -66,6 +66,9 @@ func (b *builder) flatten(e relalg.Expr, ctx *selectCtx) error {
 		}
 		ctx.order = n.OrderBy
 	case relalg.Limit:
+		if err := checkLimit(n); err != nil {
+			return err
+		}
 		if err := b.flatten(n.Input, ctx); err != nil {
 			return err
 		}
@@ -109,7 +112,11 @@ func (b *builder) renderSelect(e relalg.Expr) error {
 	}
 	b.writeGroupByClause(ctx)
 	b.writeOrderByClause(ctx)
-	b.writeLimitClause(ctx)
+	b.capBase = b.sql.String()
+	if ctx.hasLimit {
+		b.capLimit, b.capOffset = ctx.limit, ctx.offset
+	}
+	b.sql.WriteString(limitClause(b.capLimit, b.capOffset))
 	return nil
 }
 
@@ -173,16 +180,26 @@ func (b *builder) writeOrderByClause(ctx *selectCtx) {
 	}
 }
 
-func (b *builder) writeLimitClause(ctx *selectCtx) {
-	if !ctx.hasLimit {
-		return
+// checkLimit refuses a limit below 1 or a negative offset: LIMIT -1 reads as
+// no limit on some databases.
+func checkLimit(n relalg.Limit) error {
+	if n.Count < 1 || n.Offset < 0 {
+		return fmt.Errorf("codegen: limit %d offset %d: limit must be positive and offset not negative",
+			n.Count, n.Offset)
 	}
-	b.sql.WriteString(" LIMIT ")
-	b.sql.WriteString(strconv.FormatInt(ctx.limit, 10))
-	if ctx.offset > 0 {
-		b.sql.WriteString(" OFFSET ")
-		b.sql.WriteString(strconv.FormatInt(ctx.offset, 10))
+	return nil
+}
+
+// limitClause renders LIMIT limit OFFSET offset; a limit below 1 is none.
+func limitClause(limit, offset int64) string {
+	if limit < 1 {
+		return ""
 	}
+	clause := " LIMIT " + strconv.FormatInt(limit, 10)
+	if offset > 0 {
+		clause += " OFFSET " + strconv.FormatInt(offset, 10)
+	}
+	return clause
 }
 
 func (b *builder) renderCols(items []relalg.ProjectItem) string {
@@ -315,6 +332,14 @@ func (b *builder) renderCondition(c relalg.Condition) error {
 }
 
 func (b *builder) renderInsert(n relalg.Insert) error {
+	if len(n.Columns) == 0 || len(n.Tuples) == 0 {
+		return fmt.Errorf("codegen: insert needs columns and at least one tuple")
+	}
+	for _, tup := range n.Tuples {
+		if len(tup) != len(n.Columns) {
+			return fmt.Errorf("codegen: insert tuple has %d values for %d columns", len(tup), len(n.Columns))
+		}
+	}
 	b.noteTable(n.Target.Name)
 	b.sql.WriteString("INSERT INTO ")
 	b.sql.WriteString(b.qtable(n.Target))

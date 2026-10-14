@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -412,6 +413,9 @@ type requestSubject struct {
 // ServeHTTP derives it from request headers. Tool handlers read it to build a
 // role- and tenant-scoped context, so a single process is no longer pinned to
 // one role. Exported so custom transports can inject an authenticated subject.
+// role is a role, never a user's principal: a configured user is
+// authenticated by its token or X-MCP-User, and a role naming a principal
+// ("user:alice") holds no grant.
 func WithSubject(ctx context.Context, role string, attrs map[string]any) context.Context {
 	return context.WithValue(ctx, subjectCtxKey{}, requestSubject{role: rbac.NormalizeRole(role), attrs: attrs})
 }
@@ -433,11 +437,17 @@ func subjectFromContext(ctx context.Context, defaultRole string) (string, map[st
 // authenticated the caller; without it the headers are ignored and the default
 // role applies, so a raw client cannot forge identity by setting a header.
 //
-//	X-MCP-Role:    the caller's role
+//	X-MCP-Role:    the caller's role; a principal ("user:alice") is refused,
+//	               users are named by X-MCP-User
 //	X-MCP-Subject: optional JSON object of subject attributes (e.g. tenant_id)
 func withRequestSubject(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		role := r.Header.Get("X-MCP-Role")
+		if namesPrincipal(role) {
+			http.Error(w, "X-MCP-Role names a role, not a principal; name a user with X-MCP-User",
+				http.StatusBadRequest)
+			return
+		}
 		attrs, err := parseSubjectHeader(r.Header.Get("X-MCP-Subject"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -484,9 +494,13 @@ type HTTPConfig struct {
 	IdleTimeout       time.Duration
 	MaxHeaderBytes    int
 	MaxBodyBytes      int64
-	Metrics           http.Handler
-	SessionTimeout    time.Duration
-	OnSessionClosed   func(string)
+	// BodyReadTimeout bounds reading a request body (default 30s): a client
+	// sending it slowly cannot hold a connection. It is lifted once the body
+	// is read, so streamed responses (SSE) are not cut.
+	BodyReadTimeout time.Duration
+	Metrics         http.Handler
+	SessionTimeout  time.Duration
+	OnSessionClosed func(string)
 	// RevokedPrincipals registers a callback receiving users removed or
 	// disabled by a reload; their sessions are dropped and rolled back, and
 	// the callback returns those sessions.
@@ -515,11 +529,14 @@ type HTTPConfig struct {
 // and serving TLS or not, are fixed for the listener.
 type HTTPAuth struct {
 	Token             string // shared-secret bearer token; empty disables token auth
-	TrustProxyHeaders bool   // trust X-MCP-Role/X-MCP-Subject identity headers
+	TrustProxyHeaders bool   // trust X-MCP-User/X-MCP-Role/X-MCP-Subject identity headers from proxies
 	TrustedProxyCIDRs []string
-	TLSCert           string
-	TLSKey            string
-	ClientCA          string // PEM bundle; when set, require+verify a client cert (mTLS)
+	// TrustedProxyCertSubjects names, under mTLS, the proxies' client
+	// certificates (leaf CN or DNS SAN); other certificates are callers.
+	TrustedProxyCertSubjects []string
+	TLSCert                  string
+	TLSKey                   string
+	ClientCA                 string // PEM bundle; when set, require+verify a client cert (mTLS)
 	// Users resolves configured users; nil means no users are configured.
 	// With users, bearer tokens may identify individual users and trusted
 	// proxies may send X-MCP-User.
@@ -603,8 +620,12 @@ func validateHTTPSecurity(c HTTPConfig) error {
 	if c.mtlsEnabled() && !c.tlsEnabled() {
 		return errors.New("mcpserver: mTLS (clientCA) requires a server certificate (tls.cert/tls.key)")
 	}
-	if c.TrustProxyHeaders && !c.mtlsEnabled() && len(c.TrustedProxyCIDRs) == 0 {
-		return errors.New("mcpserver: TrustProxyHeaders requires mTLS or at least one trusted proxy CIDR")
+	if len(c.TrustedProxyCertSubjects) > 0 && !c.mtlsEnabled() {
+		return errors.New("mcpserver: trusted proxy certificate subjects require mTLS (clientCA)")
+	}
+	if c.TrustProxyHeaders && len(c.TrustedProxyCIDRs) == 0 && len(c.TrustedProxyCertSubjects) == 0 {
+		return errors.New("mcpserver: TrustProxyHeaders requires a trusted proxy CIDR or, under mTLS, " +
+			"a trusted proxy certificate subject")
 	}
 	if _, err := parseTrustedProxyCIDRs(c.TrustedProxyCIDRs); err != nil {
 		return err
@@ -624,21 +645,46 @@ func parseTrustedProxyCIDRs(values []string) ([]*net.IPNet, error) {
 	return nets, nil
 }
 
-func trustedProxyOnly(networks []*net.IPNet, next http.Handler) http.Handler {
+// trustedProxy serves a request from a trusted proxy (a source address in
+// networks, or a client certificate named in subjects) with proxied, which
+// reads its identity headers. Any other request is refused unless mTLS
+// authenticated its channel: then it is served with direct when it carries no
+// identity header, since holding a certificate does not make a caller a proxy.
+func trustedProxy(networks []*net.IPNet, subjects []string, mtls bool, proxied, direct http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			host = r.RemoteAddr
+		switch {
+		case fromProxyAddress(networks, r) || fromProxyCertificate(subjects, r):
+			proxied.ServeHTTP(w, r)
+		case mtls && !hasIdentityHeader(r):
+			direct.ServeHTTP(w, r)
+		default:
+			http.Error(w, "untrusted proxy", http.StatusForbidden)
 		}
-		ip := net.ParseIP(host)
-		for _, network := range networks {
-			if ip != nil && network.Contains(ip) {
-				next.ServeHTTP(w, r)
-				return
-			}
-		}
-		http.Error(w, "untrusted proxy", http.StatusForbidden)
 	})
+}
+
+func fromProxyAddress(networks []*net.IPNet, r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && slices.ContainsFunc(networks, func(n *net.IPNet) bool { return n.Contains(ip) })
+}
+
+// fromProxyCertificate reports whether the leaf certificate of r's
+// connection (verified by requireClientCert) has a CN or DNS SAN in subjects.
+func fromProxyCertificate(subjects []string, r *http.Request) bool {
+	if len(subjects) == 0 || r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+		return false
+	}
+	leaf := r.TLS.PeerCertificates[0]
+	return slices.Contains(subjects, leaf.Subject.CommonName) ||
+		slices.ContainsFunc(leaf.DNSNames, func(name string) bool { return slices.Contains(subjects, name) })
+}
+
+func hasIdentityHeader(r *http.Request) bool {
+	return r.Header.Get(userHeader) != "" || r.Header.Get("X-MCP-Role") != "" || r.Header.Get("X-MCP-Subject") != ""
 }
 
 // tokenAuth rejects requests lacking a matching bearer token. Comparison is
@@ -662,14 +708,45 @@ func tokenAuth(token string, next http.Handler) http.Handler {
 }
 
 // limitBody caps the request body size to guard against unbounded reads.
-func limitBody(maxBytes int64, next http.Handler) http.Handler {
+func limitBody(maxBytes int64, readTimeout time.Duration, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil && r.Body != http.NoBody && readTimeout > 0 {
+			rc := http.NewResponseController(w)
+			if rc.SetReadDeadline(time.Now().Add(readTimeout)) == nil {
+				body := &deadlineBody{ReadCloser: r.Body, lift: func() { _ = rc.SetReadDeadline(time.Time{}) }}
+				defer body.done()
+				r.Body = body
+			}
+		}
 		if r.Body != nil {
 			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 		}
 		next.ServeHTTP(w, r)
 	})
 }
+
+// deadlineBody lifts the read deadline set for reading it once it is read
+// or closed.
+type deadlineBody struct {
+	io.ReadCloser
+	lift   func()
+	lifted sync.Once
+}
+
+func (b *deadlineBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil {
+		b.done()
+	}
+	return n, err
+}
+
+func (b *deadlineBody) Close() error {
+	b.done()
+	return b.ReadCloser.Close()
+}
+
+func (b *deadlineBody) done() { b.lifted.Do(b.lift) }
 
 type sessionEventStore struct {
 	mcp.EventStore

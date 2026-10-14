@@ -115,7 +115,19 @@ func (r *Service) Workspace(ctx context.Context) (*Workspace, error) {
 
 // EditWorkspace writes items of the caller's workspace (see
 // workspaceops.WriteItems: an item written meanwhile merges).
+// The items are read only once the caller may write.
 func (r *Service) EditWorkspace(ctx context.Context, in WorkspaceEditInput) (*Workspace, error) {
+	return r.workspaceOp(ctx, auth.PermWrite, func(ops workspaceops.Service, user string) (workspaceops.State, error) {
+		writes, err := workspaceWrites(in)
+		if err != nil {
+			return workspaceops.State{}, err
+		}
+		return ops.WriteItems(ctx, user, user, "edit", writes, nil)
+	})
+}
+
+// workspaceWrites are the writes in names, checked.
+func workspaceWrites(in WorkspaceEditInput) ([]workspaceops.Write, error) {
 	writes := make([]workspaceops.Write, 0, len(in.Items))
 	for _, it := range in.Items {
 		ref := workspace.Ref{Kind: it.Kind, Key: it.Key}
@@ -132,9 +144,7 @@ func (r *Service) EditWorkspace(ctx context.Context, in WorkspaceEditInput) (*Wo
 		}
 		writes = append(writes, write)
 	}
-	return r.workspaceOp(ctx, auth.PermWrite, func(ops workspaceops.Service, user string) (workspaceops.State, error) {
-		return ops.WriteItems(ctx, user, user, "edit", writes, nil)
-	})
+	return writes, nil
 }
 
 // orMissing is a GraphQL JSON value as an item value (numbers as decoding
@@ -154,10 +164,21 @@ func orMissing(v any) any {
 	return out
 }
 
-// checkKey checks that value is the item ref names (renaming removes one
-// item and writes another).
+// checkKey checks that ref names an item of a known kind (the one settings
+// item is named settings) and value is that item (renaming removes one item
+// and writes another).
 func checkKey(ref workspace.Ref, value any) error {
-	if workspace.IsMissing(value) || ref.Kind == ItemSettings {
+	switch ref.Kind {
+	case ItemEntity, ItemRole, ItemUser:
+	case ItemSettings:
+		if ref != settingsRef {
+			return errors.New("the settings item is named " + strconv.Quote(ItemSettings))
+		}
+		return nil
+	default:
+		return errors.New("unknown workspace item kind " + strconv.Quote(ref.Kind))
+	}
+	if workspace.IsMissing(value) {
 		return nil
 	}
 	raw, err := json.Marshal(value)
@@ -173,33 +194,33 @@ func checkKey(ref workspace.Ref, value any) error {
 
 // UpdateWorkspace moves the caller's workspace onto revision to.
 func (r *Service) UpdateWorkspace(ctx context.Context, to string) (*Workspace, error) {
-	id, err := ParseID(to)
-	if err != nil {
-		return nil, err
-	}
 	return r.workspaceOp(ctx, auth.PermWrite, func(ops workspaceops.Service, user string) (workspaceops.State, error) {
+		id, err := ParseID(to)
+		if err != nil {
+			return workspaceops.State{}, err
+		}
 		return ops.Update(ctx, user, user, id)
 	})
 }
 
 // ResetWorkspace makes the caller's workspace revision to as it is.
 func (r *Service) ResetWorkspace(ctx context.Context, to string) (*Workspace, error) {
-	id, err := ParseID(to)
-	if err != nil {
-		return nil, err
-	}
 	return r.workspaceOp(ctx, auth.PermWrite, func(ops workspaceops.Service, user string) (workspaceops.State, error) {
+		id, err := ParseID(to)
+		if err != nil {
+			return workspaceops.State{}, err
+		}
 		return ops.Reset(ctx, user, user, id)
 	})
 }
 
 // MergeDraft takes draft id into the caller's workspace.
 func (r *Service) MergeDraft(ctx context.Context, id string) (*Workspace, error) {
-	draft, err := ParseID(id)
-	if err != nil {
-		return nil, err
-	}
 	return r.workspaceOp(ctx, auth.PermWrite, func(ops workspaceops.Service, user string) (workspaceops.State, error) {
+		draft, err := ParseID(id)
+		if err != nil {
+			return workspaceops.State{}, err
+		}
 		return ops.MergeDraft(ctx, user, user, draft)
 	})
 }
@@ -368,6 +389,10 @@ type AppliedPlan struct {
 // the workspace" and an agent's plan_apply both come here. A plan that
 // changes nothing, does not validate or has blocking exceptions fails.
 func (r *Service) ApplyPlan(ctx context.Context, in ApplyRequest) (*AppliedPlan, error) {
+	// Applying recomputes the preview: it reads what previewing reads.
+	if _, err := auth.Require(ctx, auth.PermRead); err != nil {
+		return nil, err
+	}
 	who, err := auth.Require(ctx, auth.PermWrite)
 	if err != nil {
 		return nil, err

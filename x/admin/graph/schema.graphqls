@@ -77,6 +77,12 @@ type Query {
   statements.
   """
   capabilities: [EntityCapability!]!
+  """
+  What each serving connection guarantees (provider capabilities, judged from
+  how the connection was opened), and the statement timeouts the serving
+  configuration relies on that its connections do not enforce.
+  """
+  providerCapabilities: ProviderCapabilities!
   "Unified diff from revision `from` to revision `to` (default: the signed-in administrator's workspace)."
   diff(from: ID!, to: ID): String!
   "Evaluate one authorization offline against a revision (default: the signed-in administrator's workspace)."
@@ -132,7 +138,10 @@ type Revision {
   settings, in the shape of EntityInput, RoleInput and UserInput.
   """
   sections: JSON!
-  "The normalized YAML payload."
+  """
+  The YAML payload in the current encoding, with its secrets (DSN passwords,
+  the HTTP token) redacted.
+  """
   yaml: String!
 }
 
@@ -431,6 +440,51 @@ type EntityCapability {
   reason: String
 }
 
+enum CapabilityStrength {
+  ENFORCED
+  BEST_EFFORT
+  UNSUPPORTED
+}
+
+enum CapabilityEvidence {
+  DB_VERIFIED
+  CORE_VERIFIED
+  DECLARED
+  EXTERNAL
+}
+
+type CapabilityClaim {
+  "Capability key, e.g. limit.timeout.read."
+  key: String!
+  strength: CapabilityStrength!
+  evidence: CapabilityEvidence!
+  "How it is provided, or why it is degraded."
+  reason: String
+}
+
+type ConnectionCapabilities {
+  datasource: String!
+  connection: String!
+  claims: [CapabilityClaim!]!
+}
+
+"A statement timeout a datasource relies on that its connection does not enforce on the database side."
+type LimitIssue {
+  datasource: String!
+  connection: String!
+  key: String!
+  "The work relying on it: reads, writes, procedures or the SQL escape hatch."
+  use: String!
+  strength: CapabilityStrength!
+  reason: String
+}
+
+type ProviderCapabilities {
+  connections: [ConnectionCapabilities!]!
+  "Empty under cost.requireNativeLimits: such a configuration does not load."
+  issues: [LimitIssue!]!
+}
+
 type ServerStatus {
   "Revision this process serves; null when it does not track the store."
   appliedRevision: ID
@@ -621,4 +675,6 @@ input AdminAccountUpdate {
 input SetAdminPasswordInput {
   username: String!
   password: String!
+  "The account's current password: required to change one's own."
+  currentPassword: String
 }

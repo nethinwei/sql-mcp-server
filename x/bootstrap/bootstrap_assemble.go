@@ -15,6 +15,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/cache"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
+	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/engine"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
@@ -75,6 +76,9 @@ func assembleOn(cfg *config.Config, connections Connections, shared *Shared, gs 
 // schema, before any resource is acquired.
 func (a *assembly) check() (err error) {
 	if a.providers, err = readConnections(a.cfg, a.connections); err != nil {
+		return err
+	}
+	if err := checkNativeLimits(a.cfg, a.connections, a.shared); err != nil {
 		return err
 	}
 	b := sharedBus(a.shared)
@@ -476,7 +480,7 @@ func buildEscapes(
 			prepared[key] = db
 		}
 		wrap, _ := gs.guard(name, connection, p)
-		explainer, _, _ := planners(p, gs.health(name, connection))
+		explainer, _ := planners(p, gs.health(name, connection))
 		threshold := cfg.Cost.Threshold()
 		threshold.Datasource, threshold.DialectName = name, p.Dialect().Name()
 		if !cfg.Cost.EnabledOrDefault() {
@@ -498,15 +502,16 @@ func dataSourceForProvider(
 	feedback cost.FeedbackStore,
 	legacyExactSQL bool,
 ) (tool.DataSource, error) {
-	explainer, sampler, supportsAnalyze := planners(prov, h)
-	if cfg.Cost.EnabledOrDefault() && prov.Dialect().Capabilities().ExplainCost && explainer == nil {
+	explainer, sampler := planners(prov, h)
+	caps := prov.Profile()
+	if cfg.Cost.EnabledOrDefault() && caps.Has(dialect.Explain) && explainer == nil {
 		return tool.DataSource{}, fmt.Errorf(
 			"datasource %q (%s) has no EXPLAIN implementation",
 			name,
 			prov.Dialect().Name(),
 		)
 	}
-	if cfg.Cost.AQE.ExplainAnalyze && !supportsAnalyze {
+	if cfg.Cost.AQE.ExplainAnalyze && (!caps.Has(dialect.ExplainAnalyze) || sampler == nil) {
 		return tool.DataSource{}, fmt.Errorf(
 			"datasource %q (%s) does not support EXPLAIN ANALYZE sampling",
 			name,
@@ -529,25 +534,25 @@ func dataSourceForProvider(
 	if !cfg.Cost.EnabledOrDefault() {
 		explainer = nil // no Estimate layer; mandatory safety layers remain
 	}
-	gate := cost.NewGateFromCapabilities(prov.Dialect().Capabilities(), explainer, threshold, feedback)
+	gate := cost.NewGateFromCapabilities(caps, explainer, threshold, feedback)
 	return tool.DataSource{DB: db, Dialect: prov.Dialect(), Gate: gate, Analyze: analyze}, nil
 }
 
 // planners are prov's EXPLAIN and EXPLAIN ANALYZE, under the health of the
 // connection when it has one: they reach the database as its queries do.
-func planners(prov Provider, h *health) (cost.Explainer, cost.AnalyzeSampler, bool) {
+func planners(prov Provider, h *health) (cost.Explainer, cost.AnalyzeSampler) {
 	explainer := prov.Explainer()
-	sampler, supportsAnalyze := prov.(cost.AnalyzeSampler)
+	sampler, _ := prov.(cost.AnalyzeSampler)
 	if h == nil {
-		return explainer, sampler, supportsAnalyze
+		return explainer, sampler
 	}
 	if explainer != nil {
 		explainer = guardedExplainer{Explainer: explainer, health: h}
 	}
-	if supportsAnalyze {
+	if sampler != nil {
 		sampler = guardedSampler{AnalyzeSampler: sampler, health: h}
 	}
-	return explainer, sampler, supportsAnalyze
+	return explainer, sampler
 }
 
 func newAssembleEngine(cfg *config.Config, shared *Shared) (*engine.Engine, error) {

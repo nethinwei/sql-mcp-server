@@ -290,10 +290,11 @@ func (c ServerConfig) spec() ServerSpec {
 
 // AuthSpec is a AuthConfig as written: a nil field was not.
 type AuthSpec struct {
-	Token             *string      `yaml:"token,omitempty" json:"token,omitempty"`
-	TrustProxyHeaders *bool        `yaml:"trustProxyHeaders,omitempty" json:"trustProxyHeaders,omitempty"`
-	TrustedProxyCIDRs List[string] `yaml:"trustedProxyCIDRs,omitempty" json:"trustedProxyCIDRs,omitempty"`
-	TLS               *TLSSpec     `yaml:"tls,omitempty" json:"tls,omitempty"`
+	Token                    *string      `yaml:"token,omitempty" json:"token,omitempty"`
+	TrustProxyHeaders        *bool        `yaml:"trustProxyHeaders,omitempty" json:"trustProxyHeaders,omitempty"`
+	TrustedProxyCIDRs        List[string] `yaml:"trustedProxyCIDRs,omitempty" json:"trustedProxyCIDRs,omitempty"`
+	TrustedProxyCertSubjects List[string] `yaml:"trustedProxyCertSubjects,omitempty" json:"trustedProxyCertSubjects,omitempty"`
+	TLS                      *TLSSpec     `yaml:"tls,omitempty" json:"tls,omitempty"`
 }
 
 func (s AuthSpec) config() AuthConfig {
@@ -305,6 +306,7 @@ func (s AuthSpec) config() AuthConfig {
 		out.TrustProxyHeaders = *s.TrustProxyHeaders
 	}
 	out.TrustedProxyCIDRs = []string(s.TrustedProxyCIDRs)
+	out.TrustedProxyCertSubjects = []string(s.TrustedProxyCertSubjects)
 	if s.TLS != nil {
 		out.TLS = s.TLS.config()
 	}
@@ -322,6 +324,7 @@ func (c AuthConfig) spec() AuthSpec {
 	out.Token = set(c.Token)
 	out.TrustProxyHeaders = set(c.TrustProxyHeaders)
 	out.TrustedProxyCIDRs = List[string](c.TrustedProxyCIDRs)
+	out.TrustedProxyCertSubjects = List[string](c.TrustedProxyCertSubjects)
 	if v := c.TLS.spec(); !isZero(v) {
 		out.TLS = &v
 	}
@@ -1243,6 +1246,7 @@ type CostSpec struct {
 	RequireKnownScan    *bool              `yaml:"requireKnownScan,omitempty" json:"requireKnownScan,omitempty"`
 	RequireFreshStats   *bool              `yaml:"requireFreshStats,omitempty" json:"requireFreshStats,omitempty"`
 	QueryTimeout        *time.Duration     `yaml:"queryTimeout,omitempty" json:"queryTimeout,omitempty"`
+	RequireNativeLimits *bool              `yaml:"requireNativeLimits,omitempty" json:"requireNativeLimits,omitempty"`
 	AllowTemplates      List[string]       `yaml:"allowTemplates,omitempty" json:"allowTemplates,omitempty"`
 	RejectTemplates     List[string]       `yaml:"rejectTemplates,omitempty" json:"rejectTemplates,omitempty"`
 	AQE                 *AQESpec           `yaml:"aqe,omitempty" json:"aqe,omitempty"`
@@ -1360,6 +1364,12 @@ func (s CostSpec) config() CostConfig {
 	if s.QueryTimeout != nil {
 		out.present["queryTimeout"] = true
 	}
+	if s.RequireNativeLimits != nil {
+		out.RequireNativeLimits = *s.RequireNativeLimits
+	}
+	if s.RequireNativeLimits != nil {
+		out.present["requireNativeLimits"] = true
+	}
 	out.AllowTemplates = []string(s.AllowTemplates)
 	if s.AllowTemplates != nil {
 		out.present["allowTemplates"] = true
@@ -1447,6 +1457,9 @@ func (c CostConfig) spec() CostSpec {
 	}
 	if c.present["queryTimeout"] || c.QueryTimeout != *new(time.Duration) {
 		out.QueryTimeout = ptr(c.QueryTimeout)
+	}
+	if c.present["requireNativeLimits"] || c.RequireNativeLimits != *new(bool) {
+		out.RequireNativeLimits = ptr(c.RequireNativeLimits)
 	}
 	out.AllowTemplates = List[string](c.AllowTemplates)
 	out.RejectTemplates = List[string](c.RejectTemplates)

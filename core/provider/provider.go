@@ -14,6 +14,9 @@ type Provider interface {
 	store.DB
 	store.TxBeginner
 	Dialect() dialect.Dialect
+	// Profile is what this connection guarantees: its dialect's capabilities
+	// and the limits that depend on how it was opened.
+	Profile() dialect.Profile
 	Explainer() cost.Explainer
 	Introspector() introspect.Introspector
 	Close() error

@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
@@ -24,6 +25,9 @@ func (CreateTool) Run(ctx context.Context, input json.RawMessage, tc Context) (R
 	in, err := decodeTool(input, func(in *createInput) error { return normalizeMapValues(in.Values) })
 	if err != nil {
 		return Result{}, err
+	}
+	if len(in.Values) == 0 {
+		return Result{}, fmt.Errorf("%w: values must set at least one field", ErrInvalidInput)
 	}
 	return runInsert(ctx, tc, in)
 }

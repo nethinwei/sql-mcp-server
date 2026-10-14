@@ -17,8 +17,11 @@ func (Postgres) QuoteIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 func (Postgres) Placeholder(i int) string { return "$" + strconv.Itoa(i+1) }
-func (Postgres) Capabilities() dialect.Capabilities {
-	return dialect.Capabilities{Returning: true, ExplainCost: true, ExplainAccurate: true}
+func (Postgres) Capabilities() dialect.Profile {
+	return dialect.Profile{
+		dialect.Returning: {Strength: dialect.Enforced}, dialect.Explain: {Strength: dialect.Enforced},
+		dialect.ExplainAccurate: {Strength: dialect.Enforced}, dialect.ExplainAnalyze: {Strength: dialect.Enforced},
+	}
 }
 
 // MySQL is a MySQL dialect for tests.
@@ -29,6 +32,8 @@ func (MySQL) QuoteIdent(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
 func (MySQL) Placeholder(_ int) string { return "?" }
-func (MySQL) Capabilities() dialect.Capabilities {
-	return dialect.Capabilities{ExplainCost: true}
+func (MySQL) Capabilities() dialect.Profile {
+	return dialect.Profile{
+		dialect.Explain: {Strength: dialect.Enforced}, dialect.ExplainAccurate: {Strength: dialect.BestEffort},
+	}
 }

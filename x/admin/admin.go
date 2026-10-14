@@ -24,6 +24,7 @@ import (
 	"github.com/vektah/gqlparser/v2/gqlerror"
 
 	"github.com/nethinwei/sql-mcp-server/core/bus"
+	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
@@ -65,6 +66,10 @@ type Config struct {
 	Status func() graph.RuntimeState
 	// Capabilities reports what the serving connections may do; optional.
 	Capabilities func() bootstrap.EntityCapabilities
+	// Profiles reports what the serving connections guarantee; optional.
+	Profiles func() ([]bootstrap.ConnectionProfile, []bootstrap.LimitIssue)
+	// PlannedLimits judges a configuration before it is applied; optional.
+	PlannedLimits func(*config.Config) []bootstrap.LimitIssue
 	// PathPrefix is the path a gateway serves the service under and strips
 	// from requests (server.pathPrefix); pages, the cookie and redirects
 	// carry it.
@@ -86,6 +91,8 @@ type Handler struct {
 	mux       *http.ServeMux
 	scans     *configapp.Scans
 	published *publishedFeed
+	// workspaces is nil when no store keeps workspaces.
+	workspaces *workspaceFeed
 }
 
 // New builds the admin handler.
@@ -95,8 +102,12 @@ func New(cfg Config) *Handler {
 		scans:     configapp.NewScans(scanjobs.Options{Bus: cfg.Bus}, cfg.Catalog),
 		published: newPublishedFeed(cfg.Bus, cfg.Store, eventPollInterval),
 	}
+	if cfg.Plans != nil {
+		h.workspaces = newWorkspaceFeed(cfg.Bus, h.workspaceVersion, eventPollInterval)
+	}
 	app := &configapp.Service{
-		Store: cfg.Store, Introspect: cfg.Introspect, Capabilities: cfg.Capabilities, Scans: h.scans, Plans: cfg.Plans,
+		Store: cfg.Store, Introspect: cfg.Introspect, Capabilities: cfg.Capabilities, Profiles: cfg.Profiles,
+		PlannedLimits: cfg.PlannedLimits, Scans: h.scans, Plans: cfg.Plans,
 	}
 	app.WatchScanBatches()
 	resolver := &graph.Resolver{App: app, Accounts: accounts.Service{Store: cfg.Accounts}, Status: cfg.Status}

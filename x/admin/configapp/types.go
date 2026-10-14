@@ -333,7 +333,9 @@ type Validation struct {
 	ContentHash *string `json:"contentHash,omitempty"`
 	// Changes against the published revision that need a restart.
 	RestartRequired []string `json:"restartRequired"`
-	// Grants the routed datasource connections cannot run (they do not block publishing).
+	// Grants the routed datasource connections cannot run, and hard limits
+	// the connections would not enforce (they do not block publishing unless
+	// cost.requireNativeLimits is on, which makes them the Error).
 	Warnings []string `json:"warnings"`
 }
 

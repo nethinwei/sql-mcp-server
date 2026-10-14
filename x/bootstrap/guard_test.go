@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -87,6 +88,11 @@ func TestCancelledCallsDoNotCount(t *testing.T) {
 		countsAgainstHealth(store.ErrPermissionDenied) || !countsAgainstHealth(errors.New("connection refused")) ||
 		!countsAgainstHealth(nil) {
 		t.Fatal("classification")
+	}
+	// A statement the database stopped at its timeout counts: when the
+	// database slows down, timeouts are how it shows.
+	if !countsAgainstHealth(fmt.Errorf("%w: canceling statement", store.ErrStatementTimeout)) {
+		t.Fatal("a database statement timeout must count against health")
 	}
 }
 

@@ -21,6 +21,15 @@ type UserDirectory interface {
 
 const userHeader = "X-MCP-User"
 
+// forgedPrincipal stands in for a role that names a principal without being
+// an authenticated user (a custom transport's WithSubject("user:alice")). No
+// configured role or user is named so, so it holds no grant.
+const forgedPrincipal = ":forged"
+
+// namesPrincipal reports whether role is a principal key ("user:alice")
+// rather than a role: role and user names cannot contain ':'.
+func namesPrincipal(role string) bool { return strings.Contains(role, ":") }
+
 // withUser attaches an authenticated user's principal and configured subject.
 func withUser(ctx context.Context, id bootstrap.UserIdentity, headerAttrs map[string]any) context.Context {
 	return context.WithValue(ctx, subjectCtxKey{}, requestSubject{
@@ -50,6 +59,9 @@ func mergeSubject(header, configured map[string]any) map[string]any {
 func callerIdentity(ctx context.Context, app *bootstrap.App) (string, map[string]any) {
 	s, ok := ctx.Value(subjectCtxKey{}).(requestSubject)
 	if ok && s.role != "" {
+		if !s.user && namesPrincipal(s.role) {
+			return forgedPrincipal, nil
+		}
 		return s.role, s.attrs
 	}
 	if app.DefaultUser != "" {

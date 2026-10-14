@@ -56,6 +56,13 @@ type ComplexityRoot struct {
 		Items func(childComplexity int) int
 	}
 
+	CapabilityClaim struct {
+		Evidence func(childComplexity int) int
+		Key      func(childComplexity int) int
+		Reason   func(childComplexity int) int
+		Strength func(childComplexity int) int
+	}
+
 	CatalogCounts struct {
 		All       func(childComplexity int) int
 		Drift     func(childComplexity int) int
@@ -114,6 +121,12 @@ type ComplexityRoot struct {
 		Roles       func(childComplexity int) int
 		Settings    func(childComplexity int) int
 		Users       func(childComplexity int) int
+	}
+
+	ConnectionCapabilities struct {
+		Claims     func(childComplexity int) int
+		Connection func(childComplexity int) int
+		Datasource func(childComplexity int) int
 	}
 
 	Datasource struct {
@@ -276,6 +289,15 @@ type ComplexityRoot struct {
 		Rejected      func(childComplexity int) int
 	}
 
+	LimitIssue struct {
+		Connection func(childComplexity int) int
+		Datasource func(childComplexity int) int
+		Key        func(childComplexity int) int
+		Reason     func(childComplexity int) int
+		Strength   func(childComplexity int) int
+		Use        func(childComplexity int) int
+	}
+
 	McpToken struct {
 		CreatedAt   func(childComplexity int) int
 		Datasources func(childComplexity int) int
@@ -411,6 +433,11 @@ type ComplexityRoot struct {
 		Version   func(childComplexity int) int
 	}
 
+	ProviderCapabilities struct {
+		Connections func(childComplexity int) int
+		Issues      func(childComplexity int) int
+	}
+
 	Query struct {
 		AdminAccounts        func(childComplexity int) int
 		Capabilities         func(childComplexity int) int
@@ -430,6 +457,7 @@ type ComplexityRoot struct {
 		PlanTemplateVersions func(childComplexity int, name string) int
 		PlanTemplates        func(childComplexity int) int
 		PreviewPlan          func(childComplexity int, input PlanPreviewInput) int
+		ProviderCapabilities func(childComplexity int) int
 		Published            func(childComplexity int) int
 		Revision             func(childComplexity int, id string) int
 		Revisions            func(childComplexity int, limit *int) int
@@ -701,6 +729,7 @@ type QueryResolver interface {
 	TableComments(ctx context.Context, tables []TableRef) ([]*TableComments, error)
 	Validate(ctx context.Context, revision *string) (*configapp.Validation, error)
 	Capabilities(ctx context.Context) ([]EntityCapability, error)
+	ProviderCapabilities(ctx context.Context) (*ProviderCapabilities, error)
 	Diff(ctx context.Context, from string, to *string) (string, error)
 	Simulate(ctx context.Context, input SimulationInput) (*configapp.Simulation, error)
 	Visibility(ctx context.Context, input VisibilityInput) ([]EntityVisibility, error)
@@ -796,6 +825,31 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.AppliedPlan.Items(childComplexity), true
+
+	case "CapabilityClaim.evidence":
+		if e.ComplexityRoot.CapabilityClaim.Evidence == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CapabilityClaim.Evidence(childComplexity), true
+	case "CapabilityClaim.key":
+		if e.ComplexityRoot.CapabilityClaim.Key == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CapabilityClaim.Key(childComplexity), true
+	case "CapabilityClaim.reason":
+		if e.ComplexityRoot.CapabilityClaim.Reason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CapabilityClaim.Reason(childComplexity), true
+	case "CapabilityClaim.strength":
+		if e.ComplexityRoot.CapabilityClaim.Strength == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CapabilityClaim.Strength(childComplexity), true
 
 	case "CatalogCounts.all":
 		if e.ComplexityRoot.CatalogCounts.All == nil {
@@ -1037,6 +1091,25 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Configuration.Users(childComplexity), true
+
+	case "ConnectionCapabilities.claims":
+		if e.ComplexityRoot.ConnectionCapabilities.Claims == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ConnectionCapabilities.Claims(childComplexity), true
+	case "ConnectionCapabilities.connection":
+		if e.ComplexityRoot.ConnectionCapabilities.Connection == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ConnectionCapabilities.Connection(childComplexity), true
+	case "ConnectionCapabilities.datasource":
+		if e.ComplexityRoot.ConnectionCapabilities.Datasource == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ConnectionCapabilities.Datasource(childComplexity), true
 
 	case "Datasource.connections":
 		if e.ComplexityRoot.Datasource.Connections == nil {
@@ -1674,6 +1747,43 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.LaneStatus.Rejected(childComplexity), true
+
+	case "LimitIssue.connection":
+		if e.ComplexityRoot.LimitIssue.Connection == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LimitIssue.Connection(childComplexity), true
+	case "LimitIssue.datasource":
+		if e.ComplexityRoot.LimitIssue.Datasource == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LimitIssue.Datasource(childComplexity), true
+	case "LimitIssue.key":
+		if e.ComplexityRoot.LimitIssue.Key == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LimitIssue.Key(childComplexity), true
+	case "LimitIssue.reason":
+		if e.ComplexityRoot.LimitIssue.Reason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LimitIssue.Reason(childComplexity), true
+	case "LimitIssue.strength":
+		if e.ComplexityRoot.LimitIssue.Strength == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LimitIssue.Strength(childComplexity), true
+	case "LimitIssue.use":
+		if e.ComplexityRoot.LimitIssue.Use == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LimitIssue.Use(childComplexity), true
 
 	case "McpToken.createdAt":
 		if e.ComplexityRoot.McpToken.CreatedAt == nil {
@@ -2384,6 +2494,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.PlanTemplate.Version(childComplexity), true
 
+	case "ProviderCapabilities.connections":
+		if e.ComplexityRoot.ProviderCapabilities.Connections == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderCapabilities.Connections(childComplexity), true
+	case "ProviderCapabilities.issues":
+		if e.ComplexityRoot.ProviderCapabilities.Issues == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProviderCapabilities.Issues(childComplexity), true
+
 	case "Query.adminAccounts":
 		if e.ComplexityRoot.Query.AdminAccounts == nil {
 			break
@@ -2543,6 +2666,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.PreviewPlan(childComplexity, args["input"].(PlanPreviewInput)), true
+	case "Query.providerCapabilities":
+		if e.ComplexityRoot.Query.ProviderCapabilities == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Query.ProviderCapabilities(childComplexity), true
 	case "Query.published":
 		if e.ComplexityRoot.Query.Published == nil {
 			break
@@ -3647,6 +3776,20 @@ func (ec *executionContext) childFields_AppliedPlan(ctx context.Context, field g
 	return nil, fmt.Errorf("no field named %q was found under type AppliedPlan", field.Name)
 }
 
+func (ec *executionContext) childFields_CapabilityClaim(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "key":
+		return ec.fieldContext_CapabilityClaim_key(ctx, field)
+	case "strength":
+		return ec.fieldContext_CapabilityClaim_strength(ctx, field)
+	case "evidence":
+		return ec.fieldContext_CapabilityClaim_evidence(ctx, field)
+	case "reason":
+		return ec.fieldContext_CapabilityClaim_reason(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CapabilityClaim", field.Name)
+}
+
 func (ec *executionContext) childFields_CatalogCounts(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "all":
@@ -3765,6 +3908,18 @@ func (ec *executionContext) childFields_Configuration(ctx context.Context, field
 		return ec.fieldContext_Configuration_settings(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Configuration", field.Name)
+}
+
+func (ec *executionContext) childFields_ConnectionCapabilities(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "datasource":
+		return ec.fieldContext_ConnectionCapabilities_datasource(ctx, field)
+	case "connection":
+		return ec.fieldContext_ConnectionCapabilities_connection(ctx, field)
+	case "claims":
+		return ec.fieldContext_ConnectionCapabilities_claims(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ConnectionCapabilities", field.Name)
 }
 
 func (ec *executionContext) childFields_Datasource(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -4087,6 +4242,24 @@ func (ec *executionContext) childFields_LaneStatus(ctx context.Context, field gr
 	return nil, fmt.Errorf("no field named %q was found under type LaneStatus", field.Name)
 }
 
+func (ec *executionContext) childFields_LimitIssue(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "datasource":
+		return ec.fieldContext_LimitIssue_datasource(ctx, field)
+	case "connection":
+		return ec.fieldContext_LimitIssue_connection(ctx, field)
+	case "key":
+		return ec.fieldContext_LimitIssue_key(ctx, field)
+	case "use":
+		return ec.fieldContext_LimitIssue_use(ctx, field)
+	case "strength":
+		return ec.fieldContext_LimitIssue_strength(ctx, field)
+	case "reason":
+		return ec.fieldContext_LimitIssue_reason(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type LimitIssue", field.Name)
+}
+
 func (ec *executionContext) childFields_McpToken(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "id":
@@ -4299,6 +4472,16 @@ func (ec *executionContext) childFields_PlanTemplate(ctx context.Context, field 
 		return ec.fieldContext_PlanTemplate_updatedAt(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type PlanTemplate", field.Name)
+}
+
+func (ec *executionContext) childFields_ProviderCapabilities(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "connections":
+		return ec.fieldContext_ProviderCapabilities_connections(ctx, field)
+	case "issues":
+		return ec.fieldContext_ProviderCapabilities_issues(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ProviderCapabilities", field.Name)
 }
 
 func (ec *executionContext) childFields_Relationship(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -5783,6 +5966,98 @@ func (ec *executionContext) fieldContext_AppliedPlan_items(_ context.Context, fi
 	return fc, nil
 }
 
+func (ec *executionContext) _CapabilityClaim_key(ctx context.Context, field graphql.CollectedField, obj *CapabilityClaim) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CapabilityClaim_key(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Key, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CapabilityClaim_key(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CapabilityClaim", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _CapabilityClaim_strength(ctx context.Context, field graphql.CollectedField, obj *CapabilityClaim) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CapabilityClaim_strength(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Strength, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v CapabilityStrength) graphql.Marshaler {
+			return ec.marshalNCapabilityStrength2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐCapabilityStrength(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CapabilityClaim_strength(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CapabilityClaim", field, false, false, errors.New("field of type CapabilityStrength does not have child fields"))
+}
+
+func (ec *executionContext) _CapabilityClaim_evidence(ctx context.Context, field graphql.CollectedField, obj *CapabilityClaim) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CapabilityClaim_evidence(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Evidence, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v CapabilityEvidence) graphql.Marshaler {
+			return ec.marshalNCapabilityEvidence2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐCapabilityEvidence(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CapabilityClaim_evidence(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CapabilityClaim", field, false, false, errors.New("field of type CapabilityEvidence does not have child fields"))
+}
+
+func (ec *executionContext) _CapabilityClaim_reason(ctx context.Context, field graphql.CollectedField, obj *CapabilityClaim) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CapabilityClaim_reason(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Reason, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_CapabilityClaim_reason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CapabilityClaim", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _CatalogCounts_all(ctx context.Context, field graphql.CollectedField, obj *configapp.CatalogCounts) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -6759,6 +7034,84 @@ func (ec *executionContext) _Configuration_settings(ctx context.Context, field g
 }
 func (ec *executionContext) fieldContext_Configuration_settings(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Configuration", field, false, false, errors.New("field of type JSON does not have child fields"))
+}
+
+func (ec *executionContext) _ConnectionCapabilities_datasource(ctx context.Context, field graphql.CollectedField, obj *ConnectionCapabilities) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ConnectionCapabilities_datasource(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Datasource, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ConnectionCapabilities_datasource(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ConnectionCapabilities", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ConnectionCapabilities_connection(ctx context.Context, field graphql.CollectedField, obj *ConnectionCapabilities) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ConnectionCapabilities_connection(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Connection, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ConnectionCapabilities_connection(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ConnectionCapabilities", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ConnectionCapabilities_claims(ctx context.Context, field graphql.CollectedField, obj *ConnectionCapabilities) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ConnectionCapabilities_claims(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Claims, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []CapabilityClaim) graphql.Marshaler {
+			return ec.marshalNCapabilityClaim2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐCapabilityClaimᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ConnectionCapabilities_claims(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ConnectionCapabilities",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_CapabilityClaim(ctx, field)
+		},
+	}
+	return fc, nil
 }
 
 func (ec *executionContext) _Datasource_name(ctx context.Context, field graphql.CollectedField, obj *Datasource) (ret graphql.Marshaler) {
@@ -9281,6 +9634,144 @@ func (ec *executionContext) _LaneStatus_completed(ctx context.Context, field gra
 }
 func (ec *executionContext) fieldContext_LaneStatus_completed(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("LaneStatus", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _LimitIssue_datasource(ctx context.Context, field graphql.CollectedField, obj *LimitIssue) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LimitIssue_datasource(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Datasource, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LimitIssue_datasource(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LimitIssue", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _LimitIssue_connection(ctx context.Context, field graphql.CollectedField, obj *LimitIssue) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LimitIssue_connection(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Connection, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LimitIssue_connection(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LimitIssue", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _LimitIssue_key(ctx context.Context, field graphql.CollectedField, obj *LimitIssue) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LimitIssue_key(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Key, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LimitIssue_key(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LimitIssue", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _LimitIssue_use(ctx context.Context, field graphql.CollectedField, obj *LimitIssue) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LimitIssue_use(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Use, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LimitIssue_use(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LimitIssue", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _LimitIssue_strength(ctx context.Context, field graphql.CollectedField, obj *LimitIssue) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LimitIssue_strength(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Strength, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v CapabilityStrength) graphql.Marshaler {
+			return ec.marshalNCapabilityStrength2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐCapabilityStrength(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_LimitIssue_strength(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LimitIssue", field, false, false, errors.New("field of type CapabilityStrength does not have child fields"))
+}
+
+func (ec *executionContext) _LimitIssue_reason(ctx context.Context, field graphql.CollectedField, obj *LimitIssue) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_LimitIssue_reason(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Reason, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_LimitIssue_reason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("LimitIssue", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _McpToken_id(ctx context.Context, field graphql.CollectedField, obj *configapp.McpToken) (ret graphql.Marshaler) {
@@ -12148,6 +12639,70 @@ func (ec *executionContext) fieldContext_PlanTemplate_updatedAt(_ context.Contex
 	return graphql.NewScalarFieldContext("PlanTemplate", field, false, false, errors.New("field of type Time does not have child fields"))
 }
 
+func (ec *executionContext) _ProviderCapabilities_connections(ctx context.Context, field graphql.CollectedField, obj *ProviderCapabilities) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderCapabilities_connections(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Connections, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []ConnectionCapabilities) graphql.Marshaler {
+			return ec.marshalNConnectionCapabilities2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐConnectionCapabilitiesᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderCapabilities_connections(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ProviderCapabilities",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ConnectionCapabilities(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ProviderCapabilities_issues(ctx context.Context, field graphql.CollectedField, obj *ProviderCapabilities) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProviderCapabilities_issues(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Issues, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []LimitIssue) graphql.Marshaler {
+			return ec.marshalNLimitIssue2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐLimitIssueᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProviderCapabilities_issues(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ProviderCapabilities",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_LimitIssue(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query_me(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -12602,6 +13157,38 @@ func (ec *executionContext) fieldContext_Query_capabilities(_ context.Context, f
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_EntityCapability(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_providerCapabilities(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_providerCapabilities(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Query().ProviderCapabilities(ctx)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *ProviderCapabilities) graphql.Marshaler {
+			return ec.marshalNProviderCapabilities2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐProviderCapabilities(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_providerCapabilities(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ProviderCapabilities(ctx, field)
 		},
 	}
 	return fc, nil
@@ -18712,7 +19299,7 @@ func (ec *executionContext) unmarshalInputSetAdminPasswordInput(ctx context.Cont
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"username", "password"}
+	fieldsInOrder := [...]string{"username", "password", "currentPassword"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -18733,6 +19320,13 @@ func (ec *executionContext) unmarshalInputSetAdminPasswordInput(ctx context.Cont
 				return it, err
 			}
 			it.Password = data
+		case "currentPassword":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("currentPassword"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CurrentPassword = data
 		}
 	}
 	return it, nil
@@ -19205,6 +19799,59 @@ func (ec *executionContext) _AppliedPlan(ctx context.Context, sel ast.SelectionS
 	return out
 }
 
+var capabilityClaimImplementors = []string{"CapabilityClaim"}
+
+func (ec *executionContext) _CapabilityClaim(ctx context.Context, sel ast.SelectionSet, obj *CapabilityClaim) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, capabilityClaimImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("CapabilityClaim")
+		case "key":
+			out.Values[i] = ec._CapabilityClaim_key(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "strength":
+			out.Values[i] = ec._CapabilityClaim_strength(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "evidence":
+			out.Values[i] = ec._CapabilityClaim_evidence(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "reason":
+			out.Values[i] = ec._CapabilityClaim_reason(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var catalogCountsImplementors = []string{"CatalogCounts"}
 
 func (ec *executionContext) _CatalogCounts(ctx context.Context, sel ast.SelectionSet, obj *configapp.CatalogCounts) graphql.Marshaler {
@@ -19607,6 +20254,54 @@ func (ec *executionContext) _Configuration(ctx context.Context, sel ast.Selectio
 			}
 		case "settings":
 			out.Values[i] = ec._Configuration_settings(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var connectionCapabilitiesImplementors = []string{"ConnectionCapabilities"}
+
+func (ec *executionContext) _ConnectionCapabilities(ctx context.Context, sel ast.SelectionSet, obj *ConnectionCapabilities) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, connectionCapabilitiesImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ConnectionCapabilities")
+		case "datasource":
+			out.Values[i] = ec._ConnectionCapabilities_datasource(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "connection":
+			out.Values[i] = ec._ConnectionCapabilities_connection(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "claims":
+			out.Values[i] = ec._ConnectionCapabilities_claims(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -20773,6 +21468,69 @@ func (ec *executionContext) _LaneStatus(ctx context.Context, sel ast.SelectionSe
 	return out
 }
 
+var limitIssueImplementors = []string{"LimitIssue"}
+
+func (ec *executionContext) _LimitIssue(ctx context.Context, sel ast.SelectionSet, obj *LimitIssue) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, limitIssueImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("LimitIssue")
+		case "datasource":
+			out.Values[i] = ec._LimitIssue_datasource(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "connection":
+			out.Values[i] = ec._LimitIssue_connection(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "key":
+			out.Values[i] = ec._LimitIssue_key(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "use":
+			out.Values[i] = ec._LimitIssue_use(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "strength":
+			out.Values[i] = ec._LimitIssue_strength(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "reason":
+			out.Values[i] = ec._LimitIssue_reason(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var mcpTokenImplementors = []string{"McpToken"}
 
 func (ec *executionContext) _McpToken(ctx context.Context, sel ast.SelectionSet, obj *configapp.McpToken) graphql.Marshaler {
@@ -21740,6 +22498,49 @@ func (ec *executionContext) _PlanTemplate(ctx context.Context, sel ast.Selection
 	return out
 }
 
+var providerCapabilitiesImplementors = []string{"ProviderCapabilities"}
+
+func (ec *executionContext) _ProviderCapabilities(ctx context.Context, sel ast.SelectionSet, obj *ProviderCapabilities) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, providerCapabilitiesImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ProviderCapabilities")
+		case "connections":
+			out.Values[i] = ec._ProviderCapabilities_connections(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "issues":
+			out.Values[i] = ec._ProviderCapabilities_issues(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var queryImplementors = []string{"Query"}
 
 func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) graphql.Marshaler {
@@ -22012,6 +22813,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_capabilities(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "providerCapabilities":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_providerCapabilities(ctx, field)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -24663,6 +25486,46 @@ func (ec *executionContext) marshalNBoolean2bool(ctx context.Context, sel ast.Se
 	return res
 }
 
+func (ec *executionContext) marshalNCapabilityClaim2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐCapabilityClaim(ctx context.Context, sel ast.SelectionSet, v CapabilityClaim) graphql.Marshaler {
+	return ec._CapabilityClaim(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNCapabilityClaim2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐCapabilityClaimᚄ(ctx context.Context, sel ast.SelectionSet, v []CapabilityClaim) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNCapabilityClaim2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐCapabilityClaim(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) unmarshalNCapabilityEvidence2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐCapabilityEvidence(ctx context.Context, v any) (CapabilityEvidence, error) {
+	var res CapabilityEvidence
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNCapabilityEvidence2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐCapabilityEvidence(ctx context.Context, sel ast.SelectionSet, v CapabilityEvidence) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) unmarshalNCapabilityStrength2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐCapabilityStrength(ctx context.Context, v any) (CapabilityStrength, error) {
+	var res CapabilityStrength
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNCapabilityStrength2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐCapabilityStrength(ctx context.Context, sel ast.SelectionSet, v CapabilityStrength) graphql.Marshaler {
+	return v
+}
+
 func (ec *executionContext) marshalNCatalogCounts2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐCatalogCounts(ctx context.Context, sel ast.SelectionSet, v *configapp.CatalogCounts) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -24783,6 +25646,26 @@ func (ec *executionContext) marshalNConfiguration2ᚖgithubᚗcomᚋnethinweiᚋ
 	return ec._Configuration(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNConnectionCapabilities2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐConnectionCapabilities(ctx context.Context, sel ast.SelectionSet, v ConnectionCapabilities) graphql.Marshaler {
+	return ec._ConnectionCapabilities(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNConnectionCapabilities2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐConnectionCapabilitiesᚄ(ctx context.Context, sel ast.SelectionSet, v []ConnectionCapabilities) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNConnectionCapabilities2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐConnectionCapabilities(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
 func (ec *executionContext) marshalNDatasource2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐDatasource(ctx context.Context, sel ast.SelectionSet, v Datasource) graphql.Marshaler {
 	return ec._Datasource(ctx, sel, &v)
 }
@@ -24853,11 +25736,11 @@ func (ec *executionContext) marshalNDraftRevision2ᚕgithubᚗcomᚋnethinweiᚋ
 	return ret
 }
 
-func (ec *executionContext) marshalNEntity2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItem(ctx context.Context, sel ast.SelectionSet, v configapp.EntityItem) graphql.Marshaler {
+func (ec *executionContext) marshalNEntity2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItem(ctx context.Context, sel ast.SelectionSet, v Entity) graphql.Marshaler {
 	return ec._Entity(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNEntity2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItemᚄ(ctx context.Context, sel ast.SelectionSet, v []configapp.EntityItem) graphql.Marshaler {
+func (ec *executionContext) marshalNEntity2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItemᚄ(ctx context.Context, sel ast.SelectionSet, v []Entity) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
@@ -25206,6 +26089,26 @@ func (ec *executionContext) marshalNLaneStatus2ᚕgithubᚗcomᚋnethinweiᚋsql
 	return ret
 }
 
+func (ec *executionContext) marshalNLimitIssue2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐLimitIssue(ctx context.Context, sel ast.SelectionSet, v LimitIssue) graphql.Marshaler {
+	return ec._LimitIssue(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNLimitIssue2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐLimitIssueᚄ(ctx context.Context, sel ast.SelectionSet, v []LimitIssue) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNLimitIssue2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐLimitIssue(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
 func (ec *executionContext) marshalNMcpToken2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐMcpToken(ctx context.Context, sel ast.SelectionSet, v configapp.McpToken) graphql.Marshaler {
 	return ec._McpToken(ctx, sel, &v)
 }
@@ -25466,6 +26369,16 @@ func (ec *executionContext) marshalNPrivilege2githubᚗcomᚋnethinweiᚋsqlᚑm
 	return v
 }
 
+func (ec *executionContext) marshalNProviderCapabilities2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐProviderCapabilities(ctx context.Context, sel ast.SelectionSet, v *ProviderCapabilities) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ProviderCapabilities(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNPublishInput2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐPublishInput(ctx context.Context, v any) (PublishInput, error) {
 	res, err := ec.unmarshalInputPublishInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -25536,11 +26449,11 @@ func (ec *executionContext) marshalNRevisionState2githubᚗcomᚋnethinweiᚋsql
 	return v
 }
 
-func (ec *executionContext) marshalNRole2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItem(ctx context.Context, sel ast.SelectionSet, v configapp.RoleItem) graphql.Marshaler {
+func (ec *executionContext) marshalNRole2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItem(ctx context.Context, sel ast.SelectionSet, v Role) graphql.Marshaler {
 	return ec._Role(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNRole2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItemᚄ(ctx context.Context, sel ast.SelectionSet, v []configapp.RoleItem) graphql.Marshaler {
+func (ec *executionContext) marshalNRole2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItemᚄ(ctx context.Context, sel ast.SelectionSet, v []Role) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
@@ -25947,11 +26860,11 @@ func (ec *executionContext) marshalNUnscannedSchemas2ᚕgithubᚗcomᚋnethinwei
 	return ret
 }
 
-func (ec *executionContext) marshalNUser2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItem(ctx context.Context, sel ast.SelectionSet, v configapp.UserItem) graphql.Marshaler {
+func (ec *executionContext) marshalNUser2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItem(ctx context.Context, sel ast.SelectionSet, v User) graphql.Marshaler {
 	return ec._User(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNUser2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItemᚄ(ctx context.Context, sel ast.SelectionSet, v []configapp.UserItem) graphql.Marshaler {
+func (ec *executionContext) marshalNUser2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItemᚄ(ctx context.Context, sel ast.SelectionSet, v []User) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]

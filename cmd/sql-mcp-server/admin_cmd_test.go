@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 )
 
@@ -48,5 +49,26 @@ func TestAdminCommandsKeepAnAccountManager(t *testing.T) {
 	if out := mustRun(t, "admin", "list", "--store", spec); !strings.Contains(out, "root") ||
 		strings.Contains(out, "true") {
 		t.Fatalf("root must stay enabled: %q", out)
+	}
+}
+
+// The console's cookie is Secure whenever browsers reach it over HTTPS:
+// served with TLS, or behind a proxy terminating it (an https publicURL).
+func TestSecureCookie(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		cert, publicURL string
+		want            bool
+	}{
+		{"", "", false},
+		{"cert.pem", "", true},
+		{"", "HTTPS://gw.example.com/sql-mcp/mcp", true},
+		{"", "http://127.0.0.1:8080/mcp", false},
+	} {
+		cfg := &config.Config{}
+		cfg.Server.Auth.TLS.Cert, cfg.Server.PublicURL = tc.cert, tc.publicURL
+		if got := secureCookie(cfg); got != tc.want {
+			t.Errorf("cert %q publicURL %q: Secure = %v", tc.cert, tc.publicURL, got)
+		}
 	}
 }

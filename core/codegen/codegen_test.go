@@ -52,6 +52,37 @@ func TestCompileProjectAndLimit(t *testing.T) {
 	}
 }
 
+// A limit is positive and an offset not negative: LIMIT -1 reads as no
+// limit on some databases, so codegen refuses it whoever built the IR.
+func TestCompileRejectsInvalidLimit(t *testing.T) {
+	t.Parallel()
+	r := Renderer{Dialect: testdialect.Postgres{}}
+	scan := relalg.Scan{Relation: relalg.RelationRef{Name: "users"}}
+	for _, l := range []relalg.Limit{{Count: 0}, {Count: -1}, {Count: 10, Offset: -1}} {
+		l.Input = scan
+		if c, err := r.Compile(l); err == nil {
+			t.Fatalf("limit %d offset %d compiled to %q", l.Count, l.Offset, c.SQL)
+		}
+	}
+}
+
+// An insert names its columns and gives each tuple one value per column.
+func TestCompileRejectsMalformedInsert(t *testing.T) {
+	t.Parallel()
+	r := Renderer{Dialect: testdialect.Postgres{}}
+	target := relalg.RelationRef{Name: "users"}
+	for name, ins := range map[string]relalg.Insert{
+		"no tuple":    {Target: target, Columns: []string{"name"}},
+		"no column":   {Target: target, Tuples: []relalg.Tuple{{}}},
+		"short tuple": {Target: target, Columns: []string{"name", "email"}, Tuples: []relalg.Tuple{{"alice"}}},
+		"long tuple":  {Target: target, Columns: []string{"name"}, Tuples: []relalg.Tuple{{"alice", "x"}}},
+	} {
+		if c, err := r.Compile(ins); err == nil {
+			t.Fatalf("%s compiled to %q", name, c.SQL)
+		}
+	}
+}
+
 func TestCompileAggregate(t *testing.T) {
 	t.Parallel()
 	r := Renderer{Dialect: testdialect.MySQL{}}

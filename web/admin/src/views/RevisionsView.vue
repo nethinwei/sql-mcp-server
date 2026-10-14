@@ -73,10 +73,12 @@ async function act(op: (restartRequired: boolean) => Promise<unknown>, done: str
     void status.refresh()
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
-    if (e instanceof ApiError && e.code === 'CONFLICT' && selected.value?.state === 'DRAFT') {
+    if (e instanceof ApiError && e.code === 'CONFLICT') {
+      // Another publish came first: show it; a draft is offered for review
+      // onto it, a rollback reports the conflict below.
       list.executeQuery({ requestPolicy: 'network-only' })
       await status.refresh()
-      return offerReview(selected.value.id)
+      if (selected.value?.state === 'DRAFT') return offerReview(selected.value.id)
     }
     if (!restartRequired && msg.includes('requires restart')) {
       dialog.warning({

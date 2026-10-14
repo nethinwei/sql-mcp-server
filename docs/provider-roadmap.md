@@ -4,8 +4,9 @@
 能力以 [Provider 兼容矩阵](provider-compatibility.md) 和
 [支持版本](supported-versions.md) 为准。
 
-Provider 扩展不改变“不接受任意 SQL”的产品边界，不作为 `v0.2.0` Control Plane
-Foundation 的前置项，也不自动占用任何版本号。每个候选只有满足进入条件并被提升为
+Provider 扩展不改变“不接受任意 SQL”的产品边界。除主 Roadmap `v0.2.0` Milestone
+已列入的 capability model 与 SQLite 外，其他候选不作为 `v0.2.0` 的前置项，也不
+自动占用任何版本号。每个候选只有满足进入条件并被提升为
 主 [Roadmap](roadmap.md) 中的 `Committed` 后，才构成发布承诺。
 
 ---
@@ -100,14 +101,13 @@ Databricks SQL、广泛国产数据库铺开和“接入几十个 JDBC/ADBC 数�
 
 ## Provider Capability Model
 
-> **路线图顺序**（`v0.1.10` 发布复审）：Capability Model 保持 `Next 1`，
-> 技术前置已满足，但不自动获得 `v0.1.11` 承诺；须与诊断结果触发的 Tool
-> Contract 设计评估共同复审。SQLite 保持 `Next 2`。
+> **路线图顺序**（2026-10-12 复审）：Capability Model 已随 `v0.1.15` 交付；SQLite 为
+> `Next 1`，随之获得版本承诺（预期 `v0.1.16`）。
 
-新增 Provider 前先扩展 capability model。当前实现
-（`core/dialect.Capabilities`）是平铺 bool，无法表达保证强度，且成本闸门装配
-直接消费这些 bool；将其重构为“范围 + 强度 + 证据”模型是任何新 Provider 或
-兼容性认证立项的**前置工程项**，应作为独立变更先行交付。每项 capability 必须
+新增 Provider 前先扩展 capability model。`v0.1.15` 起实现为“范围 + 强度 + 证据”的
+`core/dialect.Profile`，强度按连接判定（取代此前平铺的 bool）；实现与首批能力键见
+[能力模型设计](design/capability-model.md)。它是任何新 Provider 或兼容性认证立项的
+**前置工程项**：新 Provider 必须给出自己的 `Limits` 判定并出现在生成的兼容矩阵中。每项 capability 必须
 分别表达能力范围、保证强度和验证证据，不能用单个 bool 混合表示。保证强度
 统一为：
 

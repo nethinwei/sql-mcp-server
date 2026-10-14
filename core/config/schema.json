@@ -54,8 +54,8 @@
           "x-restart": true
         },
         "publicURL": {
-          "description": "The MCP endpoint as clients reach it, through any gateway or reverse proxy (for example https://gw.example.com/sql-mcp/mcp); the console builds client configuration with it, and uses the console's own origin plus /mcp when it is unset.",
-          "x-description-zh-CN": "客户端访问 MCP 端点的完整外部地址（经网关或反向代理时填写，如 https://gw.example.com/sql-mcp/mcp）；控制台据此生成客户端接入配置，未设置时用控制台所在域名加 /mcp。",
+          "description": "The MCP endpoint as clients reach it, through any gateway or reverse proxy (for example https://gw.example.com/sql-mcp/mcp); the console builds client configuration with it, and uses the console's own origin plus /mcp when it is unset. When it is https, the console's session cookie is Secure (a proxy terminating TLS).",
+          "x-description-zh-CN": "客户端访问 MCP 端点的完整外部地址（经网关或反向代理时填写，如 https://gw.example.com/sql-mcp/mcp）；控制台据此生成客户端接入配置，未设置时用控制台所在域名加 /mcp。为 https 时控制台会话 Cookie 带 Secure（代理终结 TLS 时）。",
           "type": "string",
           "pattern": "^https?://[^\\s/?#]+(/[^\\s?#]*)?$"
         },
@@ -75,13 +75,21 @@
               "type": "string"
             },
             "trustProxyHeaders": {
-              "description": "Trust identity headers (X-MCP-User / X-MCP-Role / X-MCP-Subject) from a proxy; needs mTLS or trustedProxyCIDRs as the trust boundary.",
-              "x-description-zh-CN": "信任代理传入的身份头（X-MCP-User / X-MCP-Role / X-MCP-Subject）；需要 mTLS 或 trustedProxyCIDRs 建立信任边界。",
+              "description": "Trust identity headers (X-MCP-User / X-MCP-Role / X-MCP-Subject) from a proxy; needs trustedProxyCIDRs or trustedProxyCertSubjects to tell proxies.",
+              "x-description-zh-CN": "信任代理传入的身份头（X-MCP-User / X-MCP-Role / X-MCP-Subject）；需要 trustedProxyCIDRs 或 trustedProxyCertSubjects 认定代理。",
               "type": "boolean"
             },
             "trustedProxyCIDRs": {
               "description": "Proxy address ranges allowed to send identity headers.",
               "x-description-zh-CN": "允许传入身份头的代理地址段。",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "trustedProxyCertSubjects": {
+              "description": "Under mTLS, the proxies' client certificates (leaf CN or DNS SAN, exact) allowed to send identity headers; other certificates sending them get 403.",
+              "x-description-zh-CN": "mTLS 下允许传入身份头的代理客户端证书（叶证书 CN 或 DNS SAN，精确匹配）；其它客户端证书带身份头返回 403。",
               "type": "array",
               "items": {
                 "type": "string"
@@ -397,13 +405,18 @@
           "type": "boolean"
         },
         "queryTimeout": {
-          "description": "Query timeout, also sent as the database statement timeout.",
-          "x-description-zh-CN": "查询超时，同时下发为数据库语句超时。",
+          "description": "Query timeout, 0 (none) or at least 100ms; the database statement timeout is set a tenth shorter (at most a second), so the database stops the statement first.",
+          "x-description-zh-CN": "查询超时，0（不限）或不小于 100ms；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。",
           "type": "string",
           "x-format": "duration",
           "x-minimum": "0",
           "default": "30s",
           "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
+        },
+        "requireNativeLimits": {
+          "description": "Strict mode. Refuse the configuration when a datasource's connection cannot stop statements at queryTimeout on the database side (the capability is not enforced), and fail its validation in the console; off, it only warns.",
+          "x-description-zh-CN": "严格模式：数据源的连接无法在数据库侧把语句限制在 queryTimeout 内（能力不是 enforced）时，拒绝加载该配置，控制台校验也报错；关闭时只告警。",
+          "type": "boolean"
         },
         "allowTemplates": {
           "description": "SQL templates that skip estimation; prefer fp:v2:\u003csha256\u003e fingerprints, and with several datasources write exact SQL as datasource:SQL. Safety checks still apply.",

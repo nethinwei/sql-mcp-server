@@ -2,13 +2,18 @@ package mcpserver
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -100,6 +105,48 @@ func TestTokenAuth(t *testing.T) {
 	}
 }
 
+// A body sent too slowly fails to read at the deadline; one read in time
+// lifts it, so the response may stream for longer.
+func TestLimitBodyReadDeadline(t *testing.T) {
+	t.Parallel()
+	const timeout = 100 * time.Millisecond
+	readErr := make(chan error, 1)
+	srv := httptest.NewServer(limitBody(1<<20, timeout, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, err := io.ReadAll(r.Body)
+		readErr <- err
+		if err != nil {
+			return
+		}
+		time.Sleep(3 * timeout) // a streamed response outlasting the deadline
+		_, _ = io.WriteString(w, "streamed")
+	})))
+	defer srv.Close()
+
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	_, _ = io.WriteString(conn, "POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\nslow")
+	select {
+	case err := <-readErr:
+		if err == nil {
+			t.Fatal("a body sent too slowly was read")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the read deadline did not apply")
+	}
+
+	res, err := http.Post(srv.URL+"/mcp", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if body, err := io.ReadAll(res.Body); err != nil || string(body) != "streamed" {
+		t.Fatalf("a response after the body was read: %q %v", body, err)
+	}
+}
+
 func TestLimitBodyBoundary(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -117,7 +164,7 @@ func TestLimitBodyBoundary(t *testing.T) {
 				_, readErr = io.ReadAll(r.Body)
 			})
 			req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(tc.body))
-			limitBody(8, next).ServeHTTP(httptest.NewRecorder(), req)
+			limitBody(8, 0, next).ServeHTTP(httptest.NewRecorder(), req)
 			if (readErr != nil) != tc.wantErr {
 				t.Fatalf("read error = %v, wantErr %v", readErr, tc.wantErr)
 			}
@@ -307,13 +354,13 @@ func TestWithRequestSubjectPreservesLargeInteger(t *testing.T) {
 	withRequestSubject(next).ServeHTTP(httptest.NewRecorder(), req)
 }
 
-func TestTrustedProxyOnly(t *testing.T) {
+func TestTrustedProxyAddress(t *testing.T) {
 	networks, err := parseTrustedProxyCIDRs([]string{"10.0.0.0/8"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
-	handler := trustedProxyOnly(networks, next)
+	handler := trustedProxy(networks, nil, false, next, next)
 	trusted := httptest.NewRequest(http.MethodPost, "/mcp", nil)
 	trusted.RemoteAddr = "10.2.3.4:1234"
 	rec := httptest.NewRecorder()
@@ -327,6 +374,60 @@ func TestTrustedProxyOnly(t *testing.T) {
 	handler.ServeHTTP(rec, untrusted)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("untrusted code = %d, want 403", rec.Code)
+	}
+}
+
+// Under mTLS only a certificate named in the trusted subjects (CN or DNS
+// SAN) is a proxy; any other certificate is a caller: it is served without
+// identity headers and refused with them (TM-005).
+func TestTrustedProxyCertificate(t *testing.T) {
+	t.Parallel()
+	networks, err := parseTrustedProxyCIDRs([]string{"10.0.0.0/8"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withCert := func(cn string, dns ...string) *tls.ConnectionState {
+		return &tls.ConnectionState{PeerCertificates: []*x509.Certificate{
+			{Subject: pkix.Name{CommonName: cn}, DNSNames: dns},
+		}}
+	}
+	cases := []struct {
+		name   string
+		mtls   bool
+		tls    *tls.ConnectionState
+		remote string
+		role   string
+		want   string // which handler served it, or "403"
+	}{
+		{"proxy by CN", true, withCert("gateway"), "192.0.2.1:1", "reader", "proxied"},
+		{"proxy by DNS SAN", true, withCert("x", "gw.internal"), "192.0.2.1:1", "reader", "proxied"},
+		{"proxy by address under mTLS", true, withCert("alice"), "10.1.1.1:1", "reader", "proxied"},
+		{"caller certificate without headers", true, withCert("alice"), "192.0.2.1:1", "", "direct"},
+		{"caller certificate with headers", true, withCert("alice"), "192.0.2.1:1", "reader", "403"},
+		{"caller certificate naming the proxy in a SAN it lacks", true, withCert("gateway.evil"), "192.0.2.1:1",
+			"reader", "403"},
+		{"no mTLS, untrusted address without headers", false, nil, "192.0.2.1:1", "", "403"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			served := "403"
+			mark := func(name string) http.Handler {
+				return http.HandlerFunc(func(http.ResponseWriter, *http.Request) { served = name })
+			}
+			handler := trustedProxy(networks, []string{"gateway", "gw.internal"}, tc.mtls, mark("proxied"),
+				mark("direct"))
+			req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+			req.RemoteAddr, req.TLS = tc.remote, tc.tls
+			if tc.role != "" {
+				req.Header.Set("X-MCP-Role", tc.role)
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if served != tc.want || (tc.want == "403" && rec.Code != http.StatusForbidden) {
+				t.Fatalf("served by %s (code %d), want %s", served, rec.Code, tc.want)
+			}
+		})
 	}
 }
 
@@ -348,7 +449,7 @@ func TestTrustedProxyRejectsForgedIdentityFromUntrustedSource(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			reached := false
 			next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true })
-			handler := trustedProxyOnly(networks, withRequestSubject(next))
+			handler := trustedProxy(networks, nil, false, withRequestSubject(next), next)
 			req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
 			req.RemoteAddr = "192.0.2.1:1234"
 			req.Header.Set("X-MCP-Role", tc.role)

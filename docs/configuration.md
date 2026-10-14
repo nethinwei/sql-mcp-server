@@ -163,11 +163,12 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `transport` | 字符串 | `"stdio"` | 可选 `stdio`、`http`；修改需重启 | 传输方式；CLI --transport 优先。 |
 | `addr` | 字符串 |  | 修改需重启 | HTTP 监听地址；CLI --addr 优先，两处都未设置时为 :8080。非 loopback 地址必须配置 token 或 mTLS。 |
 | `pathPrefix` | 字符串 |  | 格式 `^(/[A-Za-z0-9._~-]+)+$`；修改需重启 | 网关把服务挂在此路径前缀下并从请求中剥掉它（如 /sql-mcp-server）；控制台的页面、Cookie 与重定向都带上它，网关无需改写响应。修改需重启。 |
-| `publicURL` | 字符串 |  | 格式 `^https?://[^\s/?#]+(/[^\s?#]*)?$` | 客户端访问 MCP 端点的完整外部地址（经网关或反向代理时填写，如 https://gw.example.com/sql-mcp/mcp）；控制台据此生成客户端接入配置，未设置时用控制台所在域名加 /mcp。 |
+| `publicURL` | 字符串 |  | 格式 `^https?://[^\s/?#]+(/[^\s?#]*)?$` | 客户端访问 MCP 端点的完整外部地址（经网关或反向代理时填写，如 https://gw.example.com/sql-mcp/mcp）；控制台据此生成客户端接入配置，未设置时用控制台所在域名加 /mcp。为 https 时控制台会话 Cookie 带 Secure（代理终结 TLS 时）。 |
 | `role` | 字符串 |  |  | 没有用户身份的请求使用的默认角色；CLI --role 覆盖。 |
 | `auth.token` | 字符串 |  |  | 共享 bearer token，按字面读取（不做 ${ENV} 替换）。配置用户后各用户使用自己的 token。 |
-| `auth.trustProxyHeaders` | 布尔 |  |  | 信任代理传入的身份头（X-MCP-User / X-MCP-Role / X-MCP-Subject）；需要 mTLS 或 trustedProxyCIDRs 建立信任边界。 |
+| `auth.trustProxyHeaders` | 布尔 |  |  | 信任代理传入的身份头（X-MCP-User / X-MCP-Role / X-MCP-Subject）；需要 trustedProxyCIDRs 或 trustedProxyCertSubjects 认定代理。 |
 | `auth.trustedProxyCIDRs` | 字符串列表 |  |  | 允许传入身份头的代理地址段。 |
+| `auth.trustedProxyCertSubjects` | 字符串列表 |  |  | mTLS 下允许传入身份头的代理客户端证书（叶证书 CN 或 DNS SAN，精确匹配）；其它客户端证书带身份头返回 403。 |
 | `auth.tls.cert` | 字符串 |  |  | TLS 证书文件路径。 |
 | `auth.tls.key` | 字符串 |  |  | TLS 私钥文件路径。 |
 | `auth.tls.clientCA` | 字符串 |  |  | 设置后开启 mTLS，要求并校验客户端证书。 |
@@ -258,7 +259,8 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `requirePKForWrite` | 布尔 | `true` |  | 写操作必须带主键条件；不随 cost.enabled 关闭。 |
 | `requireKnownScan` | 布尔 | `true` |  | 无法判断扫描方式时拒绝；MySQL/OceanBase 的 EXPLAIN 失败即拒绝。 |
 | `requireFreshStats` | 布尔 |  |  | 统计信息过旧时拒绝。 |
-| `queryTimeout` | 时长 | `"30s"` | ≥ 0 | 查询超时，同时下发为数据库语句超时。 |
+| `queryTimeout` | 时长 | `"30s"` | ≥ 0 | 查询超时，0（不限）或不小于 100ms；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。 |
+| `requireNativeLimits` | 布尔 |  |  | 严格模式：数据源的连接无法在数据库侧把语句限制在 queryTimeout 内（能力不是 enforced）时，拒绝加载该配置，控制台校验也报错；关闭时只告警。 |
 | `allowTemplates` | 字符串列表 |  |  | 跳过估算的 SQL 模板：推荐 fp:v2:<sha256> 指纹；多数据源下精确 SQL 写成 datasource:SQL。不绕过安全检查。 |
 | `rejectTemplates` | 字符串列表 |  |  | 总是拒绝的 SQL 模板，写法同 allowTemplates。 |
 | `aqe.windowSize` | 整数 | `32` | ≥ 0 | 每个模板保留的反馈样本数。 |

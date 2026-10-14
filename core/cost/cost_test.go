@@ -108,6 +108,41 @@ func TestEnforceCapWrapsLimit(t *testing.T) {
 	}
 }
 
+// A select codegen rendered keeps its ORDER BY directly above the cap: its
+// LIMIT is tightened (or added) instead of the query being wrapped, whose
+// outer LIMIT would not keep the inner order (MySQL may drop it).
+func TestEnforceCapKeepsTheOrderOfRenderedSelects(t *testing.T) {
+	t.Parallel()
+	ec := cost.EnforceCap{HardRows: 100}
+	sorted := relalg.Sort{
+		Input:   relalg.Scan{Relation: relalg.RelationRef{Name: "t"}},
+		OrderBy: []relalg.OrderTerm{{Field: "id", Dir: "asc"}},
+	}
+	cases := []struct {
+		name string
+		expr relalg.Expr
+		want string // "" when not rewritten
+	}{
+		{"no limit", sorted, `SELECT * FROM "t" ORDER BY "id" ASC LIMIT 100`},
+		{"limit above the cap", relalg.Limit{Input: sorted, Count: 500, Offset: 20},
+			`SELECT * FROM "t" ORDER BY "id" ASC LIMIT 100 OFFSET 20`},
+		{"limit within the cap", relalg.Limit{Input: sorted, Count: 50}, ""},
+	}
+	for _, tc := range cases {
+		c, err := codegen.Renderer{Dialect: testdialect.Postgres{}}.Compile(tc.expr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d, _ := ec.Check(context.Background(), c)
+		switch {
+		case tc.want == "" && d.Rewritten != nil:
+			t.Fatalf("%s: rewritten to %q", tc.name, d.Rewritten.SQL)
+		case tc.want != "" && (d.Rewritten == nil || d.Rewritten.SQL != tc.want):
+			t.Fatalf("%s: got %+v, want %q", tc.name, d.Rewritten, tc.want)
+		}
+	}
+}
+
 func TestEnforceCapSkipsWrites(t *testing.T) {
 	t.Parallel()
 	ec := cost.EnforceCap{HardRows: 100}
@@ -313,8 +348,8 @@ func TestNewGateFromCapabilities(t *testing.T) {
 
 func TestNewGateFromCapabilitiesSQLiteSkipsEstimate(t *testing.T) {
 	t.Parallel()
-	// SQLite has no ExplainCost, so cost.Estimate must not be assembled.
-	caps := dialect.Capabilities{ExplainCost: false, ExplainAccurate: false}
+	// SQLite has no EXPLAIN cost, so cost.Estimate must not be assembled.
+	caps := dialect.Profile{}
 	g := cost.NewGateFromCapabilities(caps, nil, cost.Threshold{MaxRows: 100}, nil)
 	names := []string{}
 	for _, l := range g.Layers() {
@@ -322,6 +357,33 @@ func TestNewGateFromCapabilitiesSQLiteSkipsEstimate(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(names, ","), "estimate") {
 		t.Fatalf("SQLite should not assemble cost.Estimate layer: %v", names)
+	}
+}
+
+// The profile assembles the Estimate layer exactly as the former bools did:
+// with EXPLAIN, when the estimates are trustworthy or explain fail-closed is on.
+func TestNewGateFromCapabilitiesMatchesTheFormerBools(t *testing.T) {
+	t.Parallel()
+	ex := costtest.FakeExplainer{Plan: cost.Plan{ScanType: cost.ScanIndex, StatsFresh: true}}
+	for _, explain := range []bool{false, true} {
+		for _, accurate := range []dialect.Strength{dialect.Unsupported, dialect.BestEffort, dialect.Enforced} {
+			for _, failClosed := range []bool{false, true} {
+				caps := dialect.Profile{dialect.ExplainAccurate: {Strength: accurate}}
+				if explain {
+					caps[dialect.Explain] = dialect.Claim{Strength: dialect.Enforced}
+				}
+				g := cost.NewGateFromCapabilities(caps, ex, cost.Threshold{ExplainFailClosed: failClosed}, nil)
+				got := false
+				for _, l := range g.Layers() {
+					got = got || l.Name() == "estimate"
+				}
+				want := explain && (accurate == dialect.Enforced || failClosed)
+				if got != want {
+					t.Errorf("explain=%v accurate=%s failClosed=%v: estimate=%v, want %v",
+						explain, accurate, failClosed, got, want)
+				}
+			}
+		}
 	}
 }
 

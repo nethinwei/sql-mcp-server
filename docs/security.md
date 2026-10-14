@@ -29,10 +29,16 @@ token 时使用默认身份；都不命中返回 401。没有共享 token 时，
 过期时间，轮换通过修改 `tokenHash` 并热重载完成。
 
 `X-MCP-Role` 和 `X-MCP-Subject` 不是身份认证机制。只有
-`server.auth.trustProxyHeaders: true` 时才读取它们，并且必须同时配置 mTLS
-`clientCA` 或非空 `trustedProxyCIDRs`。CIDR 模式只接受列表内来源地址；可信网关
+`server.auth.trustProxyHeaders: true` 时才读取它们，而且只接受来自代理的请求：来源地址
+在 `trustedProxyCIDRs` 内，或者在 mTLS 下客户端叶证书的 CN / DNS SAN 列在
+`trustedProxyCertSubjects` 中。二者必须至少配置一项，单有 mTLS 不够：持有 clientCA
+签发的证书只说明是调用方，不说明是代理。mTLS 下，其他证书不带身份头时按普通调用方
+处理，带身份头则返回 HTTP 403；CIDR 模式下，不在列表内的来源一律返回 403。可信网关
 仍必须删除外部同名 header、完成认证并重新注入身份。畸形的
-`X-MCP-Subject` JSON 返回 HTTP 400。配置用户时，可信代理还可以发送
+`X-MCP-Subject` JSON 返回 HTTP 400。`X-MCP-Role` 只能是角色名，含 `:` 的主体键
+（如 `user:alice`）返回 HTTP 400；通过导出的 `WithSubject` 注入同类值的自定义 transport
+得到的是不持有任何授权的主体。用户身份只能由用户 token 或 `X-MCP-User` 建立。
+配置用户时，可信代理还可以发送
 `X-MCP-User`：它必须指向启用用户，且不能与 `X-MCP-Role` 同时出现；用户配置的
 `subject` 属性覆盖代理注入的同名属性。已用用户 token 认证的请求如果再携带任何
 代理身份 header，返回 HTTP 403。共享 bearer token 只验证共享 secret，不映射独立
@@ -102,11 +108,26 @@ identity ALWAYS）不可写，在发到数据库前拒绝。违反约束返回 `
 1. `StaticRule`：先应用 reject fingerprint；主键点查及 allow 只跳过 Estimate。
 2. `WriteGuard`、`CallGuard`、`AggregateGuard`：始终执行。
 3. `Estimate`：成本开启时三种方言都执行；MySQL/OceanBase 使用保守模式。
-4. `EnforceCap`：始终对 read/aggregate 外包确定性 `LIMIT maxRows`。
+4. `EnforceCap`：始终把 read/aggregate 的行数限制在 `maxRows`。由 codegen 生成的
+   select 直接收紧（或补上）紧跟在 ORDER BY 之后的 `LIMIT`，排序因此保持不变；其余只读
+   语句外包一层 `SELECT * FROM (...) AS sub LIMIT maxRows`。
 
 PostgreSQL 使用准确 Estimate；MySQL/OceanBase 默认在 EXPLAIN 失败、计划未知或
 全表扫描时拒绝。`queryTimeout` 同时通过 Go context 与 provider 连接级
 statement timeout 生效；无法装配 EXPLAIN 的 provider 在启动时失败。
+
+数据库侧是否真的把语句停在 `queryTimeout` 按连接判定（[Provider 能力](provider-compatibility.md#provider-能力)）：
+服务注入的会话设置被 DSN 覆盖、经 transaction pooler，或 MySQL 的写语句
+（`max_execution_time` 只作用于 SELECT，取消请求只关闭连接）时，Go context 只约束
+调用方的等待，语句可能在数据库里继续执行。直连 PostgreSQL 时，请求超时由驱动发送
+cancel request，语句仍在数据库侧终止；经 transaction pooler 时，cancel request 只有在
+pooler 转发时才生效（pgbouncer 会转发，但本项目未做测试），因此定级为 `best_effort`。
+`queryTimeout` 为 0（不限）或不小于 100ms。启动与热重载时，数据源依赖的语句超时（读、被
+授权的写与过程、开启时的 SQL 逃生通道）不是 `enforced` 即告警；
+`cost.requireNativeLimits: true` 时该配置不能加载（控制台校验在发布前按 DSN 同样判定）。
+注入的原生超时比 `queryTimeout` 少十分之一（至多 1 秒），使数据库通常先停住语句；数据库
+报告的语句超时统一归类为 `store.ErrStatementTimeout`：语句已回滚、结果确定，与其他数据库
+错误一样计入熔断。
 
 应用不能跨方言观测真实扫描行数，因此配置限制的是
 `maxEstimatedScannedRows`；返回行数绝不冒充扫描行数。数据库原生 timeout、

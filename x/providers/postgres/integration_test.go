@@ -23,7 +23,8 @@ import (
 	pgprov "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
 
-func setupPG(t testing.TB) (*pgprov.Provider, func()) {
+// startPG starts a PostgreSQL container and returns its DSN.
+func startPG(t testing.TB) (string, func()) {
 	t.Helper()
 	ctx := context.Background()
 	container, err := postgres.Run(ctx, "postgres:16-alpine",
@@ -39,6 +40,13 @@ func setupPG(t testing.TB) (*pgprov.Provider, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return dsn, func() { _ = container.Terminate(context.Background()) }
+}
+
+func setupPG(t testing.TB) (*pgprov.Provider, func()) {
+	t.Helper()
+	ctx := context.Background()
+	dsn, stop := startPG(t)
 	prov, err := pgprov.New(dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +57,7 @@ func setupPG(t testing.TB) (*pgprov.Provider, func()) {
 		`INSERT INTO users (email, tenant_id) VALUES ('alice@x.com', 7), ('bob@x.com', 8)`)
 	return prov, func() {
 		_ = prov.Close()
-		_ = container.Terminate(context.Background())
+		stop()
 	}
 }
 

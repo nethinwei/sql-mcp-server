@@ -73,7 +73,7 @@ func (r *mutationResolver) Rollback(ctx context.Context, input RollbackInput) (*
 	}
 	res, err := r.ops().Rollback(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, apiError(err)
 	}
 	return toRevision(res.Published), nil
 }
@@ -127,16 +127,15 @@ func (r *mutationResolver) UpdateAdminAccount(ctx context.Context, input AdminAc
 
 // SetAdminPassword is the resolver for the setAdminPassword field.
 func (r *mutationResolver) SetAdminPassword(ctx context.Context, input SetAdminPasswordInput) (*AdminAccount, error) {
-	// Any signed-in administrator may change their own password; changing
-	// another account's needs admin:accounts, like every account change.
+	// Any signed-in administrator may change their own password, giving the
+	// current one; changing another account's needs admin:accounts, like
+	// every account change (accounts.Service.SetPasswordAs).
 	p, ok := auth.PrincipalFrom(ctx)
 	if !ok {
 		return nil, auth.ErrUnauthorized
 	}
-	if input.Username != p.Username && !p.Has(auth.PermAccounts) {
-		return nil, fmt.Errorf("%w: %s required to change another account's password", auth.ErrForbidden, auth.PermAccounts)
-	}
-	a, err := r.Accounts.SetPassword(ctx, input.Username, input.Password)
+	a, err := r.Accounts.SetPasswordAs(ctx, p.Username, p.Has(auth.PermAccounts), input.Username,
+		kit.Deref(input.CurrentPassword), input.Password)
 	if err != nil {
 		return nil, err
 	}
@@ -239,6 +238,11 @@ func (r *queryResolver) TableComments(ctx context.Context, tables []TableRef) ([
 	if _, err := auth.Require(ctx, auth.PermRead); err != nil {
 		return nil, err
 	}
+	for _, table := range tables {
+		if _, err := auth.RequireDatasource(ctx, auth.PermRead, table.Datasource); err != nil {
+			return nil, err
+		}
+	}
 	cfg, err := r.App.SelectConfig(ctx, configapp.Against{})
 	if err != nil {
 		return nil, err
@@ -277,6 +281,14 @@ func (r *queryResolver) Capabilities(ctx context.Context) ([]EntityCapability, e
 	return toCapabilities(r.capabilities()), nil
 }
 
+// ProviderCapabilities is the resolver for the providerCapabilities field.
+func (r *queryResolver) ProviderCapabilities(ctx context.Context) (*ProviderCapabilities, error) {
+	if _, err := auth.Require(ctx, auth.PermRead); err != nil {
+		return nil, err
+	}
+	return r.providerCapabilities(), nil
+}
+
 // Diff is the resolver for the diff field.
 func (r *queryResolver) Diff(ctx context.Context, from string, to *string) (string, error) {
 	return r.App.Diff(ctx, from, workspaceOr(to))
@@ -294,7 +306,8 @@ func (r *queryResolver) Simulate(ctx context.Context, input SimulationInput) (*c
 
 // Visibility is the resolver for the visibility field.
 func (r *queryResolver) Visibility(ctx context.Context, input VisibilityInput) ([]EntityVisibility, error) {
-	if _, err := auth.Require(ctx, auth.PermRead); err != nil {
+	// What a user sees spans every datasource.
+	if _, err := auth.RequireUnlimited(ctx, auth.PermRead); err != nil {
 		return nil, err
 	}
 	cfg, err := r.App.SelectConfig(ctx, workspaceOr(input.Revision))
@@ -358,7 +371,7 @@ func (r *revisionResolver) Yaml(ctx context.Context, obj *Revision) (string, err
 	if err := rev.Verify(); err != nil {
 		return "", err
 	}
-	return string(rev.Payload), nil
+	return string(revisionops.Redacted(rev.Payload)), nil
 }
 
 // Mutation returns MutationResolver implementation.
