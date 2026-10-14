@@ -129,6 +129,56 @@ func TestExecuteSQLListedAndCalledPerUser(t *testing.T) {
 	}
 }
 
+// Behind a trusted proxy, X-MCP-Role naming alice's principal neither
+// connects nor reaches execute_sql; X-MCP-User names her (TM-010).
+func TestExecuteSQLRoleHeaderCannotImpersonateUser(t *testing.T) {
+	t.Parallel()
+	app, err := bootstrap.AssembleWithProvider(escapeConfig(t, true, true), &instantProvider{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = app.Close() })
+	handler, err := mcpserver.Handler(mcpserver.NewServer(app), mcpserver.HTTPConfig{
+		Addr: "127.0.0.1:0", HTTPAuth: mcpserver.HTTPAuth{
+			Users: app, TrustProxyHeaders: true, TrustedProxyCIDRs: []string{"127.0.0.1/32"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	connect := func(header, value string) (*mcp.ClientSession, context.Context, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		t.Cleanup(cancel)
+		client := &http.Client{Transport: headerTransport{header: header, value: value}}
+		t.Cleanup(client.CloseIdleConnections)
+		session, err := mcp.NewClient(&mcp.Implementation{Name: "escape-test"}, nil).
+			Connect(ctx, &mcp.StreamableClientTransport{Endpoint: server.URL + "/mcp", HTTPClient: client}, nil)
+		if err == nil {
+			t.Cleanup(func() { _ = session.Close() })
+		}
+		return session, ctx, err
+	}
+	if _, _, err := connect("X-MCP-Role", "user:alice"); err == nil {
+		t.Fatal("X-MCP-Role: user:alice must be refused")
+	}
+	alice, ctx, err := connect("X-MCP-User", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := callExecuteSQL(t, ctx, alice); res.IsError {
+		t.Fatalf("X-MCP-User alice: %+v", res.Content)
+	}
+}
+
+type headerTransport struct{ header, value string }
+
+func (t headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.Header.Set(t.header, t.value)
+	return http.DefaultTransport.RoundTrip(req)
+}
+
 // On stdio the process's default identity decides: a configured
 // server.user holding the permission sees and uses the tool, the role
 // identity never does.

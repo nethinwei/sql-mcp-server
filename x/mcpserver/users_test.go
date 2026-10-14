@@ -103,6 +103,10 @@ func TestWithProxyIdentity(t *testing.T) {
 		{"user with role", map[string]string{"X-MCP-User": "alice", "X-MCP-Role": "admin"},
 			http.StatusBadRequest, "", nil},
 		{"legacy role header", map[string]string{"X-MCP-Role": "Reader"}, http.StatusOK, "reader", nil},
+		{"role naming a user", map[string]string{"X-MCP-Role": "user:alice"}, http.StatusBadRequest, "", nil},
+		{"role naming a user, any case", map[string]string{
+			"X-MCP-Role": " User:Alice ", "X-MCP-Subject": `{"tenant_id":"t9"}`,
+		}, http.StatusBadRequest, "", nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -116,6 +120,38 @@ func TestWithProxyIdentity(t *testing.T) {
 				t.Fatalf("attrs = %v, want %v", got.attrs, tc.wantAttr)
 			}
 		})
+	}
+}
+
+// Without configured users the role header is all there is, and it still
+// cannot name a principal.
+func TestRoleHeaderCannotNameAPrincipal(t *testing.T) {
+	t.Parallel()
+	var got requestSubject
+	for _, role := range []string{"user:alice", "USER:alice", "x:y"} {
+		if code := serveWith(withProxyIdentity(nil, identityProbe(&got)), map[string]string{"X-MCP-Role": role}); code !=
+			http.StatusBadRequest {
+			t.Fatalf("X-MCP-Role %q: code=%d, want 400", role, code)
+		}
+	}
+}
+
+// A custom transport's WithSubject naming a user's principal is not that
+// user: it resolves to a principal holding no grant, with no configured
+// subject, and never to the user (TM-010).
+func TestWithSubjectCannotAssumeAUser(t *testing.T) {
+	t.Parallel()
+	app := &bootstrap.App{
+		DefaultRole: "reader", Users: map[string]bootstrap.UserIdentity{"alice": testUsers()["alice"]},
+	}
+	for _, role := range []string{"user:alice", " User:Alice "} {
+		got, subject := callerIdentity(WithSubject(t.Context(), role, map[string]any{"tenant_id": "t9"}), app)
+		if got != forgedPrincipal || subject != nil {
+			t.Fatalf("WithSubject(%q) = %q %v, want %q without subject", role, got, subject, forgedPrincipal)
+		}
+		if tc := app.ToolContextForSubject(got, subject); tc.User != "" {
+			t.Fatalf("WithSubject(%q) became user %q", role, tc.User)
+		}
 	}
 }
 

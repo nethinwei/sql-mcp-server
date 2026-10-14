@@ -242,16 +242,22 @@ Provider 适用范围使用以下口径：
 
 - **等级/状态**：critical / 认证链路、代理头与吊销已由 handler 与 runtime 测试验证。
 - **攻击**：伪造或猜测用户 token；在已认证用户请求上附加 `X-MCP-User`/
-  `X-MCP-Role`/`X-MCP-Subject` 冒充他人或改写租户；利用被删除/禁用用户的旧会话
+  `X-MCP-Role`/`X-MCP-Subject` 冒充他人或改写租户；在可信代理后用
+  `X-MCP-Role: user:<name>`（或自定义 transport 的 `WithSubject`）冒充用户，拿到其授权与
+  `sql:execute`，并绕过配置 subject 的覆盖；利用被删除/禁用用户的旧会话
   与在途事务继续访问。
 - **控制**：用户 token 只以 `sha256:` hash 保存，CLI 生成 256 bit 随机 token；
   配置用户后，无共享 token 且非 mTLS/可信代理通道时必须携带用户 token；带用户
   token 的请求出现任何代理身份头返回 403；`X-MCP-User` 必须指向启用用户且不能与
-  `X-MCP-Role` 同时出现；用户表跟随 snapshot，热重载删除或禁用用户后解除其会话
+  `X-MCP-Role` 同时出现；`X-MCP-Role` 含 `:`（主体键）返回 400，非用户入口注入的主体键
+  解析为不持有授权的主体，用户身份只由用户 token 与 `X-MCP-User` 建立（v0.1.15 修复，
+  此前可冒充）；用户表跟随 snapshot，热重载删除或禁用用户后解除其会话
   绑定并回滚在途事务；启用/关闭用户功能随重载切换（是否要求用户 token 跟随当前
   快照是否配置了用户），新认证在装配前准备好。
-- **现有证据**：`x/mcpserver/users_test.go` 的认证矩阵、代理头、身份冲突与会话
-  吊销测试；`x/bootstrap/bootstrap_access_test.go` 的吊销通知测试；
+- **现有证据**：`x/mcpserver/users_test.go` 的认证矩阵、代理头、身份冲突、
+  主体键拒绝（`TestRoleHeaderCannotNameAPrincipal`、`TestWithSubjectCannotAssumeAUser`）与会话
+  吊销测试；`x/mcpserver/execute_sql_test.go` 的
+  `TestExecuteSQLRoleHeaderCannotImpersonateUser`（真实中间件链）；`x/bootstrap/bootstrap_access_test.go` 的吊销通知测试；
   `core/config/config_access_test.go` 的 tokenHash 与名称校验测试。
 - **持续验证**：以上测试在默认单元测试中运行。
 - **剩余风险**：token 没有过期时间；hash 未加盐，依赖 token 本身的高熵，人工设置

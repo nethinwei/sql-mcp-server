@@ -32,7 +32,10 @@ token 时使用默认身份；都不命中返回 401。没有共享 token 时，
 `server.auth.trustProxyHeaders: true` 时才读取它们，并且必须同时配置 mTLS
 `clientCA` 或非空 `trustedProxyCIDRs`。CIDR 模式只接受列表内来源地址；可信网关
 仍必须删除外部同名 header、完成认证并重新注入身份。畸形的
-`X-MCP-Subject` JSON 返回 HTTP 400。配置用户时，可信代理还可以发送
+`X-MCP-Subject` JSON 返回 HTTP 400。`X-MCP-Role` 只能是角色名，含 `:` 的主体键
+（如 `user:alice`）返回 HTTP 400；通过导出的 `WithSubject` 注入同类值的自定义 transport
+得到的是不持有任何授权的主体。用户身份只能由用户 token 或 `X-MCP-User` 建立。
+配置用户时，可信代理还可以发送
 `X-MCP-User`：它必须指向启用用户，且不能与 `X-MCP-Role` 同时出现；用户配置的
 `subject` 属性覆盖代理注入的同名属性。已用用户 token 认证的请求如果再携带任何
 代理身份 header，返回 HTTP 403。共享 bearer token 只验证共享 secret，不映射独立

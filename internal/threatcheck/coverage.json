@@ -141,6 +141,9 @@
       {"file": "x/mcpserver/users_test.go", "name": "TestPrincipalAuth"},
       {"file": "x/mcpserver/users_test.go", "name": "TestWithProxyIdentity"},
       {"file": "x/mcpserver/users_test.go", "name": "TestBearerUserCannotBeOverriddenByProxyHeaders"},
+      {"file": "x/mcpserver/users_test.go", "name": "TestRoleHeaderCannotNameAPrincipal"},
+      {"file": "x/mcpserver/users_test.go", "name": "TestWithSubjectCannotAssumeAUser"},
+      {"file": "x/mcpserver/execute_sql_test.go", "name": "TestExecuteSQLRoleHeaderCannotImpersonateUser"},
       {"file": "x/mcpserver/users_test.go", "name": "TestRevokeSessionsDropsBindingsAndRollsBack"},
       {"file": "x/bootstrap/bootstrap_access_test.go", "name": "TestReloadReportsRevokedPrincipals"},
       {"file": "core/config/config_access_test.go", "name": "TestValidateAccessRejectsInvalidConfig"}

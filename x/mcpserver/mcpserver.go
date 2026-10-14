@@ -412,6 +412,9 @@ type requestSubject struct {
 // ServeHTTP derives it from request headers. Tool handlers read it to build a
 // role- and tenant-scoped context, so a single process is no longer pinned to
 // one role. Exported so custom transports can inject an authenticated subject.
+// role is a role, never a user's principal: a configured user is
+// authenticated by its token or X-MCP-User, and a role naming a principal
+// ("user:alice") holds no grant.
 func WithSubject(ctx context.Context, role string, attrs map[string]any) context.Context {
 	return context.WithValue(ctx, subjectCtxKey{}, requestSubject{role: rbac.NormalizeRole(role), attrs: attrs})
 }
@@ -433,11 +436,17 @@ func subjectFromContext(ctx context.Context, defaultRole string) (string, map[st
 // authenticated the caller; without it the headers are ignored and the default
 // role applies, so a raw client cannot forge identity by setting a header.
 //
-//	X-MCP-Role:    the caller's role
+//	X-MCP-Role:    the caller's role; a principal ("user:alice") is refused,
+//	               users are named by X-MCP-User
 //	X-MCP-Subject: optional JSON object of subject attributes (e.g. tenant_id)
 func withRequestSubject(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		role := r.Header.Get("X-MCP-Role")
+		if namesPrincipal(role) {
+			http.Error(w, "X-MCP-Role names a role, not a principal; name a user with X-MCP-User",
+				http.StatusBadRequest)
+			return
+		}
 		attrs, err := parseSubjectHeader(r.Header.Get("X-MCP-Subject"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
