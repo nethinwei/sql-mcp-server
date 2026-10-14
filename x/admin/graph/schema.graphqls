@@ -138,7 +138,10 @@ type Revision {
   settings, in the shape of EntityInput, RoleInput and UserInput.
   """
   sections: JSON!
-  "The normalized YAML payload."
+  """
+  The YAML payload in the current encoding, with its secrets (DSN passwords,
+  the HTTP token) redacted.
+  """
   yaml: String!
 }
 
@@ -672,4 +675,6 @@ input AdminAccountUpdate {
 input SetAdminPasswordInput {
   username: String!
   password: String!
+  "The account's current password: required to change one's own."
+  currentPassword: String
 }

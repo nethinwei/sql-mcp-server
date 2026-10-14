@@ -55,8 +55,11 @@ v0.1.11 交付；OIDC / OAuth2 登录于 2026-10-12 路线图复审降为 Later�
   前先保存本页尚未写回的编辑；
 - 会话保存在进程内存，默认 8 小时空闲过期；账号被禁用或删除后，该账号的会话
   在下一次请求时失效；
-- 登录失败按用户名计数，连续 5 次失败锁定 1 分钟；失败响应不区分"用户不存在"
-  与"密码错误"；
+- 登录失败按用户名计数，连续 5 次失败即锁定；锁定时长从 1 分钟起，连续锁定时逐次
+  翻倍，上限 1 小时；登录成功或 1 小时内没有失败后重新从 1 分钟算起。失败响应不区分
+  "用户不存在"与"密码错误"；
+- 改自己的密码必须提供当前密码（`currentPassword`），避免会话被盗后攻击者改密、把
+  账号主人锁在外面；改他人密码需要 `admin:accounts`，不需要对方的当前密码；
 - 登录做成可插拔的 `LoginProvider`，第二轮接入通用 OIDC 与通用 OAuth2。
 
 ## GraphQL 数据模型（结论）
@@ -83,7 +86,7 @@ type Query {
 type Revision {
   id: ID!  parent: ID  state: RevisionState!  contentHash: String!
   author: String!  comment: String!  createdAt: Time!  publishedAt: Time
-  config: Configuration!  yaml: String!
+  config: Configuration!  yaml: String!   # yaml 与 diff 一样脱敏 DSN 密码和 HTTP token
 }
 
 # entities/roles/users 与工作区项（Revision.sections、EntityInput 等）同一形状：
@@ -127,7 +130,7 @@ type Mutation {
   祖先，被丢弃的草稿同样跳过），否则返回 `extensions.code = CONFLICT` 与最新的 `published`，CLI、API、
   控制台一律如此——基于旧版本的草稿会整体覆盖期间别人的发布。`expectedPublished`
   另外校验调用方看到的已发布版本；检查与配置库发布之间被他人抢先同样报
-  `CONFLICT`。
+  `CONFLICT`。回滚期间被他人抢先发布时，同样返回带 `published` 的 `CONFLICT`。
 - `GET /admin/events`（server-sent events，需登录会话）在连接时与每次发布时推送
   已发布 revision（`event: published`，`{"id","author"}`），包括其他进程经同一
   配置库的发布；连接之后版本有变化（另一个管理员保存或丢弃了草稿；按配置库的

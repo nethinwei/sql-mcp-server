@@ -91,6 +91,8 @@ type Handler struct {
 	mux       *http.ServeMux
 	scans     *configapp.Scans
 	published *publishedFeed
+	// workspaces is nil when no store keeps workspaces.
+	workspaces *workspaceFeed
 }
 
 // New builds the admin handler.
@@ -99,6 +101,9 @@ func New(cfg Config) *Handler {
 		cfg: cfg, sessions: newSessions(cfg.Now), logins: newLoginGate(maxConcurrentLogins),
 		scans:     configapp.NewScans(scanjobs.Options{Bus: cfg.Bus}, cfg.Catalog),
 		published: newPublishedFeed(cfg.Bus, cfg.Store, eventPollInterval),
+	}
+	if cfg.Plans != nil {
+		h.workspaces = newWorkspaceFeed(cfg.Bus, h.workspaceVersion, eventPollInterval)
 	}
 	app := &configapp.Service{
 		Store: cfg.Store, Introspect: cfg.Introspect, Capabilities: cfg.Capabilities, Profiles: cfg.Profiles,

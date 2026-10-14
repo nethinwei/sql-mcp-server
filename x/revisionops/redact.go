@@ -14,6 +14,11 @@ const undecodable = "# this revision no longer decodes; its content is not shown
 // changedSecret marks a secret that differs from the other side's.
 const changedSecret = " (changed)"
 
+// Redacted returns payload in the current encoding with its secrets (DSN
+// passwords, the HTTP token) replaced, for showing a revision; a payload that
+// no longer decodes is not shown.
+func Redacted(payload []byte) []byte { return redacted(payload, nil) }
+
 // redacted returns payload in the current encoding with its secrets (DSN
 // passwords, the HTTP token) replaced; a secret that differs from other's
 // (the payload compared with) is marked changed, so a diff shows that it

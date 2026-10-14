@@ -160,13 +160,14 @@ sql-mcp-server admin set --username alice --disable
 sql-mcp-server admin set --username alice --permissions admin:*
 ```
 
-- 任何登录者都可以改自己的密码；改他人密码需要 `admin:accounts`。改密后该账号
-  已有的会话全部失效。
+- 任何登录者都可以改自己的密码，但需要输入当前密码；改他人密码需要
+  `admin:accounts`。改密后该账号已有的会话全部失效。
 - 系统始终保留至少一个启用且有 `admin:accounts` 的账号，控制台与 CLI 都不能
   禁用或降级最后一个；被锁在外面时用 `admin create` 新建账号，或
   `admin set --enable` 重新启用。
 - 会话保存在服务进程内存中，空闲 8 小时或登录满 24 小时后失效，服务重启后需要
-  重新登录。同一用户名连续 5 次登录失败锁定 1 分钟。
+  重新登录。同一用户名连续 5 次登录失败即锁定，锁定时长从 1 分钟起逐次翻倍，最长
+  1 小时。
 
 ## 安全建议
 

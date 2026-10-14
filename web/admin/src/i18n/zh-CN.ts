@@ -460,7 +460,7 @@ export default {
     me: '我', permissions: '权限', enabled: '启用', editPermissions: '修改权限', resetPassword: '重置密码',
     enabledMsg: '已启用', disabledMsg: '已禁用，该账号的会话立即失效',
     username: '账号', usernamePlaceholder: '小写字母、数字、. _ -', initialPassword: '初始密码',
-    passwordPlaceholder: '至少 12 个字符', created: '已创建 {name}', permissionsUpdated: '权限已更新',
+    passwordPlaceholder: '至少 12 个字符', currentPassword: '当前密码', newPassword: '新密码', created: '已创建 {name}', permissionsUpdated: '权限已更新',
     passwordUpdated: '密码已更新', ownPasswordUpdated: '密码已更新，请用新密码重新登录', editTitle: '修改权限 · {name}', passwordTitle: '重置密码 · {name}',
     perm: {
       'admin:read': '查看', 'admin:write': '编辑', 'admin:publish': '发布', 'admin:accounts': '账号管理', 'admin:*': '全部',

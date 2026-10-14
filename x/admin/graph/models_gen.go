@@ -360,6 +360,8 @@ type ServerStatus struct {
 type SetAdminPasswordInput struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+	// The account's current password: required to change one's own.
+	CurrentPassword *string `json:"currentPassword,omitempty"`
 }
 
 type SimulationInput struct {

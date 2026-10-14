@@ -288,3 +288,65 @@ func publishNext(t *testing.T, store revision.Store) int64 {
 	}
 	return p.ID
 }
+
+// Consoles of one administrator share one read of its workspace per
+// interval, each learning a change; the feed stops reading once nobody
+// listens.
+func TestWorkspaceFeedSharesReadsPerAdministrator(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	reads, version := map[string]int{}, int64(1)
+	feed := newWorkspaceFeed(nil, func(_ context.Context, username string) int64 {
+		mu.Lock()
+		defer mu.Unlock()
+		reads[username]++
+		return version
+	}, 5*time.Millisecond)
+	start := time.Now()
+	var chans []<-chan int64
+	var stops []func()
+	for range 5 {
+		ch, stop := feed.subscribe("root")
+		chans, stops = append(chans, ch), append(stops, stop)
+	}
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	version = 2 // a change elsewhere
+	mu.Unlock()
+	for i, ch := range chans {
+		deadline := time.After(3 * time.Second)
+		for got := int64(0); got != 2; {
+			select {
+			case got = <-ch:
+			case <-deadline:
+				t.Fatalf("console %d did not learn version 2", i)
+			}
+		}
+	}
+	for _, stop := range stops {
+		stop()
+	}
+	elapsed := time.Since(start)
+	mu.Lock()
+	// One read per tick in all (a ticker fires at most once an interval),
+	// not one per console.
+	if n, most := reads["root"], int(elapsed/(5*time.Millisecond))+1; n == 0 || n > most {
+		t.Errorf("%d reads in %v, at most %d", n, elapsed, most)
+	}
+	mu.Unlock()
+	feed.mu.Lock()
+	defer feed.mu.Unlock()
+	if len(feed.subs) != 0 || len(feed.last) != 0 || feed.cancel != nil {
+		t.Fatalf("after every console left: %d administrators, polling = %v", len(feed.subs), feed.cancel != nil)
+	}
+}
+
+// Without workspaces kept there is nothing to listen to.
+func TestNoWorkspaceFeed(t *testing.T) {
+	t.Parallel()
+	if ch, stop := (*workspaceFeed)(nil).subscribe("root"); ch != nil {
+		t.Fatal("a nil feed sends")
+	} else {
+		stop()
+	}
+}

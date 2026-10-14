@@ -86,9 +86,13 @@ function savePermissions() {
 
 const pwTarget = ref<string | null>(null)
 const pw = ref('')
+// Changing one's own password takes the current one.
+const currentPw = ref('')
+const ownPassword = computed(() => pwTarget.value === session.username)
 function openPassword(username: string) {
   pwTarget.value = username
   pw.value = ''
+  currentPw.value = ''
 }
 async function savePassword() {
   const u = pwTarget.value
@@ -101,7 +105,9 @@ async function savePassword() {
   }
   // A password change ends every session of the account, this one included.
   try {
-    await run(SetAdminPasswordMutation, { input: { username: u, password: pw.value } }, true)
+    await run(SetAdminPasswordMutation, {
+      input: { username: u, password: pw.value, currentPassword: currentPw.value },
+    }, true)
     message.success(t('admins.ownPasswordUpdated'))
     leave()
   } catch (e) {
@@ -162,11 +168,18 @@ async function savePassword() {
 
     <n-modal :show="pwTarget !== null" preset="card" :title="t('admins.passwordTitle', { name: pwTarget })" class="dialog"
       @update:show="(v: boolean) => !v && (pwTarget = null)">
-      <n-input v-model:value="pw" type="password" show-password-on="click" :placeholder="t('admins.passwordPlaceholder')" />
+      <n-form>
+        <n-form-item v-if="ownPassword" :label="t('admins.currentPassword')">
+          <n-input v-model:value="currentPw" type="password" show-password-on="click" />
+        </n-form-item>
+        <n-form-item :label="t('admins.newPassword')">
+          <n-input v-model:value="pw" type="password" show-password-on="click" :placeholder="t('admins.passwordPlaceholder')" />
+        </n-form-item>
+      </n-form>
       <template #footer>
         <n-space justify="end">
           <n-button @click="pwTarget = null">{{ t('common.cancel') }}</n-button>
-          <n-button type="primary" :disabled="pw.length < 12" @click="savePassword">{{ t('common.save') }}</n-button>
+          <n-button type="primary" :disabled="pw.length < 12 || (ownPassword && !currentPw)" @click="savePassword">{{ t('common.save') }}</n-button>
         </n-space>
       </template>
     </n-modal>

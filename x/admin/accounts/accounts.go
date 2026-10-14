@@ -132,6 +132,50 @@ func (s Service) Update(ctx context.Context, username string, p Patch) (Account,
 	})
 }
 
+// ErrWrongPassword: the current password given to change one's own is not
+// the account's.
+var ErrWrongPassword = errors.New("admin: the current password is not correct")
+
+// SetPasswordAs sets username's password on behalf of the signed-in account
+// by. An account changing its own gives its current password, so a stolen
+// session cannot lock the account's owner out; changing another account's
+// needs admin:accounts, which mayManage reports, and no current password.
+func (s Service) SetPasswordAs(
+	ctx context.Context, by string, mayManage bool, username, current, password string,
+) (Account, error) {
+	username = normalize(username)
+	if username != normalize(by) {
+		if !mayManage {
+			return Account{}, fmt.Errorf("%w: %s required to change another account's password",
+				auth.ErrForbidden, auth.PermAccounts)
+		}
+		return s.SetPassword(ctx, username, password)
+	}
+	if err := auth.ValidatePassword(password); err != nil {
+		return Account{}, err
+	}
+	own, err := s.Store.GetAdmin(ctx, username)
+	if err != nil {
+		return Account{}, err
+	}
+	if !auth.VerifyPassword(own.PasswordHash, current) {
+		return Account{}, ErrWrongPassword
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return Account{}, err
+	}
+	return s.mutate(ctx, username, func(all []Account, i int) (Account, error) {
+		// The password verified must still be the account's.
+		if i < 0 || all[i].PasswordHash != own.PasswordHash {
+			return Account{}, ErrWrongPassword
+		}
+		a := all[i]
+		a.PasswordHash = hash
+		return a, nil
+	})
+}
+
 // mutate changes one account (i is its index in all, or -1 when it does not
 // exist) and enforces the account-manager rule on the result.
 func (s Service) mutate(

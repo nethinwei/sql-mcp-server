@@ -135,6 +135,42 @@ func TestLoginFailuresLockOut(t *testing.T) {
 	}
 }
 
+// Lockouts in a row double, up to maxLoginLockout; a sign-in, or quiet for
+// maxLoginLockout, starts over.
+func TestLoginLockoutsInARowDouble(t *testing.T) {
+	f := newFixture(t)
+	lockOut := func() {
+		for i := 0; i < maxLoginFailures; i++ {
+			f.login(t, "wrong password!!")
+		}
+	}
+	for _, d := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute} {
+		lockOut()
+		f.now = f.now.Add(d - time.Second)
+		if rec, _, _ := f.login(t, "correct horse battery"); rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("a lockout of %v ended early: %d", d, rec.Code)
+		}
+		f.now = f.now.Add(2 * time.Second)
+	}
+	for _, d := range []time.Duration{8, 16, 32, 60, 60} { // minutes: 64 is capped
+		lockOut()
+		f.now = f.now.Add(d*time.Minute - time.Second)
+		if f.h.sessions.allowLogin("root") {
+			t.Fatalf("a lockout of %d minutes ended early", d)
+		}
+		f.now = f.now.Add(2 * time.Second)
+		if !f.h.sessions.allowLogin("root") {
+			t.Fatalf("a lockout outlasted %d minutes", d)
+		}
+	}
+	f.now = f.now.Add(maxLoginLockout + time.Second)
+	lockOut()
+	f.now = f.now.Add(loginLockout + time.Second)
+	if rec, _, _ := f.login(t, "correct horse battery"); rec.Code != http.StatusOK {
+		t.Fatalf("after quiet, a lockout must start over: %d", rec.Code)
+	}
+}
+
 func TestDisabledAccountLosesSessionAndCannotSignIn(t *testing.T) {
 	f := newFixture(t)
 	_, cookie, csrf := f.login(t, "correct horse battery")
@@ -160,8 +196,8 @@ func TestDisabledAccountLosesSessionAndCannotSignIn(t *testing.T) {
 func TestPasswordChangeEndsSessions(t *testing.T) {
 	f := newFixture(t)
 	_, cookie, csrf := f.login(t, "correct horse battery")
-	change := `{"query":"mutation { setAdminPassword(input: {username: \"root\", password: \"a brand new passphrase\"}) ` +
-		`{ username } }"}`
+	change := `{"query":"mutation { setAdminPassword(input: {username: \"root\", password: \"a brand new passphrase\", ` +
+		`currentPassword: \"correct horse battery\"}) { username } }"}`
 	headers := map[string]string{csrfHeader: csrf}
 	if rec := f.do(http.MethodPost, "/admin/graphql", change, headers, cookie); rec.Code != 200 ||
 		strings.Contains(rec.Body.String(), "errors") {

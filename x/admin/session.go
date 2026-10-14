@@ -14,7 +14,8 @@ const (
 	sessionAbsoluteTimeout = 24 * time.Hour
 	maxSessions            = 10000
 	maxLoginFailures       = 5
-	loginLockout           = time.Minute
+	loginLockout           = time.Minute // doubling with each lockout in a row
+	maxLoginLockout        = time.Hour
 	maxTrackedLogins       = 10000
 )
 
@@ -46,6 +47,9 @@ type sessions struct {
 type loginFailures struct {
 	count       int
 	lockedUntil time.Time
+	// lockouts counts the lockouts in a row, none ending in a sign-in nor
+	// followed by maxLoginLockout without failures.
+	lockouts int
 }
 
 func newSessions(now func() time.Time) *sessions {
@@ -132,7 +136,9 @@ func (s *sessions) allowLogin(username string) bool {
 	return !s.now().Before(s.failures[username].lockedUntil)
 }
 
-// recordLogin tracks failures; maxLoginFailures in a row lock the name.
+// recordLogin tracks failures; maxLoginFailures in a row lock the name, for
+// loginLockout doubled with each lockout in a row up to maxLoginLockout, so
+// a slow guesser waiting each lockout out is slowed down further.
 func (s *sessions) recordLogin(username string, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -148,10 +154,15 @@ func (s *sessions) recordLogin(username string, ok bool) {
 			}
 		}
 	}
+	now := s.now()
 	f := s.failures[username]
+	if now.After(f.lockedUntil.Add(maxLoginLockout)) {
+		f.lockouts = 0
+	}
 	f.count++
 	if f.count >= maxLoginFailures {
-		f.count, f.lockedUntil = 0, s.now().Add(loginLockout)
+		f.count, f.lockedUntil = 0, now.Add(min(loginLockout<<min(f.lockouts, 6), maxLoginLockout))
+		f.lockouts++
 	}
 	s.failures[username] = f
 }

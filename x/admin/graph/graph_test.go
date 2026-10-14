@@ -525,9 +525,6 @@ func TestAdminAccountsKeepAnAccountManager(t *testing.T) {
 	if !auth.VerifyPassword(h.passwordOf(t, "ops"), "another long password") {
 		t.Fatal("account manager could not reset a password")
 	}
-	// Any signed-in account changes its own password.
-	own := `mutation { setAdminPassword(input: {username: "root", password: "a fresh long password"}) { username } }`
-	mustPost(t, h.client([]string{}...), own, &resp)
 }
 
 func TestGenerateUserTokenMatchesHash(t *testing.T) {

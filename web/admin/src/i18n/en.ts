@@ -476,7 +476,7 @@ const en: typeof zh = {
     editPermissions: 'Edit permissions', resetPassword: 'Reset password',
     enabledMsg: 'Enabled', disabledMsg: 'Disabled; the account\'s sessions end immediately',
     username: 'Username', usernamePlaceholder: 'lower-case letters, digits, . _ -', initialPassword: 'Initial password',
-    passwordPlaceholder: 'At least 12 characters', created: 'Created {name}', permissionsUpdated: 'Permissions updated',
+    passwordPlaceholder: 'At least 12 characters', currentPassword: 'Current password', newPassword: 'New password', created: 'Created {name}', permissionsUpdated: 'Permissions updated',
     passwordUpdated: 'Password updated', ownPasswordUpdated: 'Password updated; sign in with the new password', editTitle: 'Edit permissions · {name}', passwordTitle: 'Reset password · {name}',
     perm: {
       'admin:read': 'View', 'admin:write': 'Edit', 'admin:publish': 'Publish', 'admin:accounts': 'Accounts', 'admin:*': 'All',

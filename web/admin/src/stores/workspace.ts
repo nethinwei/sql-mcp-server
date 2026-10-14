@@ -1,4 +1,7 @@
 import { defineStore } from 'pinia'
+// The server's merge rules, shared on purpose: the Go fixture is the one
+// source, locked by TestMergeSchemaFixture (regenerate it with
+// `go test ./x/admin/configapp -run TestMergeSchemaFixture -update`).
 import mergeSchema from '../../../../x/admin/configapp/testdata/merge_schema.json'
 import { EntityIndex, entityId } from '@/lib/entityRefs'
 import type {
