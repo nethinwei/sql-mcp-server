@@ -398,8 +398,8 @@ cost.requireFreshStats:
   zh-CN: 统计信息过旧时拒绝。
   en: Reject when table statistics are stale.
 cost.queryTimeout:
-  zh-CN: 查询超时；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。
-  en: Query timeout; the database statement timeout is set a tenth shorter (at most a second), so the database stops the statement first.
+  zh-CN: 查询超时，0（不限）或不小于 100ms；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。
+  en: Query timeout, 0 (none) or at least 100ms; the database statement timeout is set a tenth shorter (at most a second), so the database stops the statement first.
 cost.requireNativeLimits:
   zh-CN: 严格模式：数据源的连接无法在数据库侧把语句限制在 queryTimeout 内（能力不是 enforced）时，拒绝加载该配置，控制台校验也报错；关闭时只告警。
   en: Strict mode. Refuse the configuration when a datasource's connection cannot stop statements at queryTimeout on the database side (the capability is not enforced), and fail its validation in the console; off, it only warns.

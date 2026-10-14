@@ -38,14 +38,16 @@ func (o Options) OpenContext() context.Context {
 }
 
 // NativeTimeout is the statement timeout a provider sets on the database:
-// Timeout less a margin (a tenth, at most a second, at least a millisecond
-// left), so the database stops a slow statement, and reports it stopped,
-// before the request's own deadline cuts the connection and leaves a write's
-// outcome unknown. The request's deadline starts before planning, so this
-// makes the database usually, not always, the first to stop.
+// Timeout less a margin (a tenth, at most a second), so the database stops a
+// slow statement, and reports it stopped, before the request's own deadline
+// cuts the connection and leaves a write's outcome unknown. The request's
+// deadline starts before planning, so this makes the database usually, not
+// always, the first to stop. Configuration keeps Timeout at
+// config.MinQueryTimeout or more, which leaves the margin whole milliseconds;
+// a shorter Timeout given in code still gets at least a millisecond, as 0 is
+// no timeout at all on PostgreSQL.
 func (o Options) NativeTimeout() time.Duration {
-	native := o.Timeout - min(o.Timeout/10, time.Second)
-	return max(native, time.Millisecond)
+	return max(o.Timeout-min(o.Timeout/10, time.Second), time.Millisecond)
 }
 
 // PoolerTransaction is the transaction-mode pooler setting.

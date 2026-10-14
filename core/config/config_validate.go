@@ -5,6 +5,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/cost"
 )
@@ -156,9 +157,18 @@ func (c *Config) validateCostAndLimits() error {
 	return c.validateRuntimeLimits()
 }
 
+// MinQueryTimeout is the shortest cost.queryTimeout other than 0 (none): the
+// database's statement timeout, a tenth shorter, must still be shorter than
+// the request's and stay a whole number of milliseconds, 0 on PostgreSQL
+// being no timeout at all.
+const MinQueryTimeout = 100 * time.Millisecond
+
 func (c *Config) validateCostScores() error {
 	if c.Cost.SoftScore < c.Cost.HardScore {
 		return fmt.Errorf("config: cost softScore must be greater than or equal to hardScore")
+	}
+	if c.Cost.QueryTimeout > 0 && c.Cost.QueryTimeout < MinQueryTimeout {
+		return fmt.Errorf("config: cost.queryTimeout must be 0 (none) or at least %v", MinQueryTimeout)
 	}
 	return nil
 }

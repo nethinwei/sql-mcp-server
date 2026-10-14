@@ -119,8 +119,10 @@ statement timeout 生效；无法装配 EXPLAIN 的 provider 在启动时失败�
 数据库侧是否真的把语句停在 `queryTimeout` 按连接判定（[Provider 能力](provider-compatibility.md#provider-能力)）：
 服务注入的会话设置被 DSN 覆盖、经 transaction pooler，或 MySQL 的写语句
 （`max_execution_time` 只作用于 SELECT，取消请求只关闭连接）时，Go context 只约束
-调用方的等待，语句可能在数据库里继续执行。PostgreSQL 在请求超时时由驱动发送
-cancel request，仍在数据库侧终止。启动与热重载时，数据源依赖的语句超时（读、被
+调用方的等待，语句可能在数据库里继续执行。直连 PostgreSQL 时，请求超时由驱动发送
+cancel request，语句仍在数据库侧终止；经 transaction pooler 时，cancel request 只有在
+pooler 转发时才生效（pgbouncer 会转发，但本项目未做测试），因此定级为 `best_effort`。
+`queryTimeout` 为 0（不限）或不小于 100ms。启动与热重载时，数据源依赖的语句超时（读、被
 授权的写与过程、开启时的 SQL 逃生通道）不是 `enforced` 即告警；
 `cost.requireNativeLimits: true` 时该配置不能加载（控制台校验在发布前按 DSN 同样判定）。
 注入的原生超时比 `queryTimeout` 少十分之一（至多 1 秒），使数据库通常先停住语句；数据库

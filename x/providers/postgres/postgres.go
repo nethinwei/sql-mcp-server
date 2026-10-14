@@ -90,15 +90,18 @@ func Limits(dsn string, opts providerregistry.Options) (dialect.Profile, error) 
 // limits judges the timeouts against the DSN's own startup parameters. When
 // a request's deadline passes, pgx drops the connection and sends the server
 // a cancel request first, which stops the statement at cost.queryTimeout
-// whatever statement_timeout says; PostgreSQL refuses no unkeyed write by
+// whatever statement_timeout says. Behind a transaction pooler the injected
+// statement_timeout is not kept and the cancel request reaches the database
+// only if the pooler forwards it (pgbouncer does; this is not tested), so
+// the timeouts are best effort there. PostgreSQL refuses no unkeyed write by
 // itself.
 func limits(params map[string]string, pooler string) dialect.Profile {
 	timeout := dialect.Claim{Strength: dialect.Enforced, Evidence: dialect.DBVerified,
 		Reason: "statement_timeout just under cost.queryTimeout, and a cancel request at the request deadline"}
 	if pooler == providerregistry.PoolerTransaction {
-		timeout = dialect.Claim{Strength: dialect.Enforced, Evidence: dialect.Declared,
-			Reason: "a cancel request at the request deadline (the transaction pooler drops statement_timeout " +
-				"and must forward cancel requests, as pgbouncer does)"}
+		timeout = dialect.Claim{Strength: dialect.BestEffort, Evidence: dialect.Declared,
+			Reason: "statement_timeout is a session setting a transaction pooler does not keep; " +
+				"a cancel request at the request deadline stops the statement only if the pooler forwards it"}
 	} else if _, set := params["statement_timeout"]; set {
 		timeout = dialect.Claim{Strength: dialect.Enforced, Evidence: dialect.DBVerified,
 			Reason: "a cancel request at the request deadline (the DSN sets its own statement_timeout)"}

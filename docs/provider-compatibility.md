@@ -69,8 +69,8 @@
 | PostgreSQL | 默认 | `limit.unkeyedWrite` | `unsupported` | no database-side refusal; the gate's WriteGuard refuses unkeyed writes |
 | PostgreSQL | DSN 设置 `statement_timeout` | `limit.timeout.read` | `enforced` | a cancel request at the request deadline (the DSN sets its own statement_timeout) |
 | PostgreSQL | DSN 设置 `statement_timeout` | `limit.timeout.write` | `enforced` | a cancel request at the request deadline (the DSN sets its own statement_timeout) |
-| PostgreSQL | `pooler: transaction` | `limit.timeout.read` | `enforced` | a cancel request at the request deadline (the transaction pooler drops statement_timeout and must forward cancel requests, as pgbouncer does) |
-| PostgreSQL | `pooler: transaction` | `limit.timeout.write` | `enforced` | a cancel request at the request deadline (the transaction pooler drops statement_timeout and must forward cancel requests, as pgbouncer does) |
+| PostgreSQL | `pooler: transaction` | `limit.timeout.read` | `best_effort` | statement_timeout is a session setting a transaction pooler does not keep; a cancel request at the request deadline stops the statement only if the pooler forwards it |
+| PostgreSQL | `pooler: transaction` | `limit.timeout.write` | `best_effort` | statement_timeout is a session setting a transaction pooler does not keep; a cancel request at the request deadline stops the statement only if the pooler forwards it |
 | MySQL | 默认 | `limit.timeout.read` | `enforced` | max_execution_time just under cost.queryTimeout (SELECT only) |
 | MySQL | 默认 | `limit.timeout.write` | `unsupported` | max_execution_time stops SELECT only, and a cancelled request only closes the connection: bound writes on the database side (DBA) |
 | MySQL | 默认 | `limit.unkeyedWrite` | `enforced` | sql_safe_updates = 1 |

@@ -196,6 +196,30 @@ func TestPlannedLimitIssues(t *testing.T) {
 	}
 }
 
+// Behind a transaction pooler PostgreSQL's timeouts are best effort, so
+// cost.requireNativeLimits refuses the connection; a direct one passes.
+func TestPlannedLimitIssuesRefusePostgresBehindATransactionPooler(t *testing.T) {
+	t.Parallel()
+	app := &App{scanResolver: EnvFileResolver{}}
+	for pooler, want := range map[string]int{"": 0, providerregistry.PoolerTransaction: 1} {
+		cfg := &config.Config{Databases: map[string]config.DatabaseConfig{
+			"main": {Driver: "postgres", Connections: config.Connections{
+				"primary": {DSN: "postgres://u@h/db", Pooler: pooler},
+			}},
+		}}
+		cfg.ApplyDefaults()
+		issues := app.PlannedLimitIssues(cfg)
+		if len(issues) != want {
+			t.Fatalf("pooler %q: issues %v, want %d", pooler, issues, want)
+		}
+		for _, issue := range issues {
+			if issue.Claim.Strength != dialect.BestEffort || !strings.Contains(issue.Claim.Reason, "transaction pooler") {
+				t.Fatalf("pooler %q: %v", pooler, issue)
+			}
+		}
+	}
+}
+
 // A process logs its hard-limit warnings again only when they change.
 func TestHardLimitWarningsAreLoggedWhenTheyChange(t *testing.T) {
 	var s Shared

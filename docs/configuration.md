@@ -259,7 +259,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `requirePKForWrite` | 布尔 | `true` |  | 写操作必须带主键条件；不随 cost.enabled 关闭。 |
 | `requireKnownScan` | 布尔 | `true` |  | 无法判断扫描方式时拒绝；MySQL/OceanBase 的 EXPLAIN 失败即拒绝。 |
 | `requireFreshStats` | 布尔 |  |  | 统计信息过旧时拒绝。 |
-| `queryTimeout` | 时长 | `"30s"` | ≥ 0 | 查询超时；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。 |
+| `queryTimeout` | 时长 | `"30s"` | ≥ 0 | 查询超时，0（不限）或不小于 100ms；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。 |
 | `requireNativeLimits` | 布尔 |  |  | 严格模式：数据源的连接无法在数据库侧把语句限制在 queryTimeout 内（能力不是 enforced）时，拒绝加载该配置，控制台校验也报错；关闭时只告警。 |
 | `allowTemplates` | 字符串列表 |  |  | 跳过估算的 SQL 模板：推荐 fp:v2:<sha256> 指纹；多数据源下精确 SQL 写成 datasource:SQL。不绕过安全检查。 |
 | `rejectTemplates` | 字符串列表 |  |  | 总是拒绝的 SQL 模板，写法同 allowTemplates。 |

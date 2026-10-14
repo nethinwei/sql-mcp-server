@@ -254,6 +254,7 @@ func securityConstraintCases() []struct {
 		{"audit path missing", func(c *Config) { c.Audit.Enabled = true }},
 		{"negative io pool", func(c *Config) { c.RateLimit.IOPool = -1 }},
 		{"negative query timeout", func(c *Config) { c.Cost.QueryTimeout = -time.Second }},
+		{"query timeout below the minimum", func(c *Config) { c.Cost.QueryTimeout = time.Millisecond }},
 		{"negative cache timeout", func(c *Config) { c.Cache.TTL = -time.Second }},
 		{"tls cert without key", func(c *Config) { c.Server.Auth.TLS.Cert = "cert.pem" }},
 		{"tls key without cert", func(c *Config) { c.Server.Auth.TLS.Key = "key.pem" }},

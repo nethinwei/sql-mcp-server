@@ -9,17 +9,22 @@ import (
 )
 
 // The cancel request keeps both timeouts enforced however statement_timeout
-// is set; the reason says which mechanism holds them.
+// is set on a direct connection; the reason says which mechanism holds them.
+// Behind a transaction pooler they are best effort: the pooler drops
+// statement_timeout and may not forward the cancel request.
 func TestLimits(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name, dsn, reason string
 		opts              providerregistry.Options
+		want              dialect.Strength
 	}{
-		{"injected", "postgres://u@h/db", "statement_timeout just under cost.queryTimeout", providerregistry.Options{}},
-		{"DSN timeout", "postgres://u@h/db?statement_timeout=0", "the DSN sets", providerregistry.Options{}},
+		{"injected", "postgres://u@h/db", "statement_timeout just under cost.queryTimeout",
+			providerregistry.Options{}, dialect.Enforced},
+		{"DSN timeout", "postgres://u@h/db?statement_timeout=0", "the DSN sets", providerregistry.Options{},
+			dialect.Enforced},
 		{"pooler", "postgres://u@h/db", "transaction pooler",
-			providerregistry.Options{Pooler: providerregistry.PoolerTransaction}},
+			providerregistry.Options{Pooler: providerregistry.PoolerTransaction}, dialect.BestEffort},
 	}
 	for _, test := range tests {
 		p, err := Limits(test.dsn, test.opts)
@@ -28,7 +33,7 @@ func TestLimits(t *testing.T) {
 		}
 		for _, k := range []dialect.Key{dialect.TimeoutRead, dialect.TimeoutWrite} {
 			c := p.Claim(k)
-			if c.Strength != dialect.Enforced || !strings.Contains(c.Reason, test.reason) {
+			if c.Strength != test.want || !strings.Contains(c.Reason, test.reason) {
 				t.Errorf("%s: %s = %+v", test.name, k, c)
 			}
 		}

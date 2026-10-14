@@ -17,7 +17,7 @@
 
 | 场景 | 位置 | 实际效果 |
 |---|---|---|
-| PostgreSQL `pooler: transaction` | `x/providers/postgres/postgres.go` | 不设置 `statement_timeout`，原生超时消失（驱动的 cancel request 仍终止语句，见下） |
+| PostgreSQL `pooler: transaction` | `x/providers/postgres/postgres.go` | 不设置 `statement_timeout`，原生超时消失；驱动的 cancel request 只在 pooler 转发时生效（见下） |
 | DSN 自带 `statement_timeout` / `max_execution_time` / `ob_query_timeout` | 各 provider `Open` | 不再注入，`=0` 即关闭原生超时 |
 | DSN 自带 `sql_safe_updates=0` | `x/providers/mysql/adapter.go` | 无键写入的原生兜底关闭 |
 | MySQL 写语句 | MySQL 语义 | `max_execution_time` 只作用于只读 SELECT |
@@ -88,9 +88,11 @@ type Profile map[Key]Claim
 
 超时与无键写入按连接判定：
 
-- PostgreSQL：`statement_timeout` 由服务注入时读写均 `enforced`（原生）；transaction
-  pooler 或 DSN 覆盖（含 `0`）时原生超时失效，由 pgx 的 cancel request 提供核心层强制，
-  仍为 `enforced`，`Reason` 写明来源（pooler 须转发 cancel request，证据为“仅声明”）。
+- PostgreSQL：`statement_timeout` 由服务注入时，读写均为 `enforced`（原生）；DSN 覆盖
+  （含 `0`）时原生超时失效，由 pgx 的 cancel request 在数据库侧终止语句，仍为 `enforced`，
+  `Reason` 写明来源。transaction pooler 不保留 `statement_timeout`，cancel request 也只在
+  pooler 转发时才到达数据库（pgbouncer 会转发，但未测试），因此与 MySQL 同口径，定为
+  `best_effort`，`cost.requireNativeLimits` 下拒绝加载。
 - MySQL：`max_execution_time` 由服务注入时读 `enforced`、写 `unsupported`
   （MySQL 语义）；DSN 覆盖或 transaction pooler（会话变量不保证保留）时读降为
   `best_effort`。
