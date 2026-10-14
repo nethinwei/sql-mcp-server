@@ -89,3 +89,20 @@ func TestOwnPasswordNeedsTheCurrentOne(t *testing.T) {
 		t.Fatal("the own password was not changed")
 	}
 }
+
+// A write names an item of a known kind: an unknown kind, or settings under
+// another name, would be kept in the workspace yet never be configuration.
+func TestEditWorkspaceRefusesUnknownItems(t *testing.T) {
+	_, c := planningHarness(t)
+	var edited struct{ EditWorkspace workspaceState }
+	for _, item := range []map[string]any{
+		{"kind": "ghost", "key": "x", "value": map[string]any{"name": "x"}},
+		{"kind": "settings", "key": "other", "value": map[string]any{}},
+		{"kind": "ghost", "key": "x"}, // a removal too
+	} {
+		in := map[string]any{"items": []any{item}}
+		if err := c.Post(editMutation, &edited, client.Var("in", in)); err == nil {
+			t.Fatalf("%v was written", item)
+		}
+	}
+}

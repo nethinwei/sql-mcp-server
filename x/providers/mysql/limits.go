@@ -2,6 +2,7 @@ package mysql
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
@@ -60,18 +61,25 @@ func limits(params map[string]string, pooler, timeoutVariable string) dialect.Pr
 	return out
 }
 
+// unkeyedWrite judges sql_safe_updates: only a value the DSN plainly turns
+// on (1, ON) counts as on, as a value not understood here cannot be judged.
 func unkeyedWrite(params map[string]string, pooled bool) dialect.Claim {
-	value, set := params["sql_safe_updates"]
+	raw, set := params["sql_safe_updates"]
+	value := strings.ToLower(strings.Trim(raw, `'"`))
 	switch {
-	case set && (strings.Trim(value, `'"`) == "0" || strings.EqualFold(strings.Trim(value, `'"`), "off")):
+	case set && (value == "0" || value == "off"):
 		return dialect.Claim{Strength: dialect.Unsupported, Evidence: dialect.Declared,
 			Reason: "the DSN turns sql_safe_updates off; the gate's WriteGuard still refuses unkeyed writes"}
 	case pooled:
 		return dialect.Claim{Strength: dialect.BestEffort, Evidence: dialect.Declared,
 			Reason: "sql_safe_updates is a session setting a transaction pooler does not keep"}
-	case set:
+	case set && (value == "1" || value == "on"):
 		return dialect.Claim{Strength: dialect.Enforced, Evidence: dialect.Declared,
 			Reason: "the DSN sets sql_safe_updates"}
+	case set:
+		return dialect.Claim{Strength: dialect.BestEffort, Evidence: dialect.Declared,
+			Reason: "the DSN sets sql_safe_updates to " + strconv.Quote(raw) + ", which cannot be judged; " +
+				"the gate's WriteGuard still refuses unkeyed writes"}
 	}
 	return dialect.Claim{Strength: dialect.Enforced, Evidence: dialect.DBVerified, Reason: "sql_safe_updates = 1"}
 }

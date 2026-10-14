@@ -106,7 +106,9 @@ func (r *Service) SchemaScan(ctx context.Context, id string, cancel bool) (*Scan
 	if _, err := auth.RequireDatasource(ctx, auth.PermWrite, job.Label); err != nil {
 		return nil, err
 	}
-	job, _ = get(id)
+	if job, ok = get(id); !ok { // expired since
+		return nil, nil
+	}
 	return toScanJob(job), nil
 }
 

@@ -54,8 +54,8 @@
           "x-restart": true
         },
         "publicURL": {
-          "description": "The MCP endpoint as clients reach it, through any gateway or reverse proxy (for example https://gw.example.com/sql-mcp/mcp); the console builds client configuration with it, and uses the console's own origin plus /mcp when it is unset.",
-          "x-description-zh-CN": "客户端访问 MCP 端点的完整外部地址（经网关或反向代理时填写，如 https://gw.example.com/sql-mcp/mcp）；控制台据此生成客户端接入配置，未设置时用控制台所在域名加 /mcp。",
+          "description": "The MCP endpoint as clients reach it, through any gateway or reverse proxy (for example https://gw.example.com/sql-mcp/mcp); the console builds client configuration with it, and uses the console's own origin plus /mcp when it is unset. When it is https, the console's session cookie is Secure (a proxy terminating TLS).",
+          "x-description-zh-CN": "客户端访问 MCP 端点的完整外部地址（经网关或反向代理时填写，如 https://gw.example.com/sql-mcp/mcp）；控制台据此生成客户端接入配置，未设置时用控制台所在域名加 /mcp。为 https 时控制台会话 Cookie 带 Secure（代理终结 TLS 时）。",
           "type": "string",
           "pattern": "^https?://[^\\s/?#]+(/[^\\s?#]*)?$"
         },

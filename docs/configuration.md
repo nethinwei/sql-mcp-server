@@ -163,7 +163,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `transport` | 字符串 | `"stdio"` | 可选 `stdio`、`http`；修改需重启 | 传输方式；CLI --transport 优先。 |
 | `addr` | 字符串 |  | 修改需重启 | HTTP 监听地址；CLI --addr 优先，两处都未设置时为 :8080。非 loopback 地址必须配置 token 或 mTLS。 |
 | `pathPrefix` | 字符串 |  | 格式 `^(/[A-Za-z0-9._~-]+)+$`；修改需重启 | 网关把服务挂在此路径前缀下并从请求中剥掉它（如 /sql-mcp-server）；控制台的页面、Cookie 与重定向都带上它，网关无需改写响应。修改需重启。 |
-| `publicURL` | 字符串 |  | 格式 `^https?://[^\s/?#]+(/[^\s?#]*)?$` | 客户端访问 MCP 端点的完整外部地址（经网关或反向代理时填写，如 https://gw.example.com/sql-mcp/mcp）；控制台据此生成客户端接入配置，未设置时用控制台所在域名加 /mcp。 |
+| `publicURL` | 字符串 |  | 格式 `^https?://[^\s/?#]+(/[^\s?#]*)?$` | 客户端访问 MCP 端点的完整外部地址（经网关或反向代理时填写，如 https://gw.example.com/sql-mcp/mcp）；控制台据此生成客户端接入配置，未设置时用控制台所在域名加 /mcp。为 https 时控制台会话 Cookie 带 Secure（代理终结 TLS 时）。 |
 | `role` | 字符串 |  |  | 没有用户身份的请求使用的默认角色；CLI --role 覆盖。 |
 | `auth.token` | 字符串 |  |  | 共享 bearer token，按字面读取（不做 ${ENV} 替换）。配置用户后各用户使用自己的 token。 |
 | `auth.trustProxyHeaders` | 布尔 |  |  | 信任代理传入的身份头（X-MCP-User / X-MCP-Role / X-MCP-Subject）；需要 trustedProxyCIDRs 或 trustedProxyCertSubjects 认定代理。 |

@@ -31,6 +31,10 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   长时间占用连接。
 - 管理 API `tableComments` 按数据源检查调用方的作用域，`visibility` 要求调用方不受数据源
   限制（纵深防御：目前会话主体本来就不受限）。
+- `server.publicURL` 为 `https://` 时，控制台会话 Cookie 带 `Secure`（反向代理终结 TLS 的
+  部署此前不带）。
+- `editWorkspace` 拒绝未知的项类型（此前会写入工作区却永远不进入配置），并改为先鉴权再
+  校验输入。
 
 ### Added
 
@@ -99,6 +103,9 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 - `aggregate_records` 中重复给出的同一聚合返回 `INVALID_INPUT`（此前其中一列被静默覆盖）。
 - 回滚期间被他人抢先发布时，返回带 `published` 的 `CONFLICT`（此前是未映射的错误），
   控制台随即刷新修订列表。
+- MySQL/OceanBase DSN 中的 `sql_safe_updates` 只有 `1`/`ON` 判为 `enforced`，其他无法判定
+  的值为 `best_effort`（此前一律判为开启）。
+- 查询扫描任务时，任务恰好过期返回 null，不再返回空 ID 与空状态的任务。
 
 ### Breaking
 

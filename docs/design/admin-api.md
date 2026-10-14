@@ -46,7 +46,7 @@ v0.1.11 交付；OIDC / OAuth2 登录于 2026-10-12 路线图复审降为 Later�
 ## 会话与登录（结论）
 
 - `POST /admin/login`（JSON `{username, password}`）成功后下发
-  `smcp_admin` 会话 Cookie（HttpOnly、SameSite=Strict，TLS 下加 Secure），并在
+  `smcp_admin` 会话 Cookie（HttpOnly、SameSite=Strict；服务终止 TLS 或 `server.publicURL` 为 https 时加 Secure），并在
   响应体返回 `csrfToken`；`POST /admin/logout` 注销；
 - 所有 `/admin/graphql` 请求都必须带有效会话，并在 `X-CSRF-Token` 头中携带该
   会话的 CSRF token；

@@ -171,9 +171,9 @@ sql-mcp-server admin set --username alice --permissions admin:*
 
 ## 安全建议
 
-- 生产环境通过 HTTPS 访问控制台。服务自己终止 TLS（`server.auth.tls.cert`）时
-  会话 Cookie 带 `Secure` 标记；由反向代理终止 TLS 时，Cookie 不带该标记，代理
-  应只对外提供 HTTPS。
+- 生产环境通过 HTTPS 访问控制台。服务自己终止 TLS（`server.auth.tls.cert`）或
+  `server.publicURL` 为 `https://` 时，会话 Cookie 带 `Secure` 标记；由反向代理终止
+  TLS 时请设置 `publicURL`，代理应只对外提供 HTTPS。
 - 监听非 loopback 地址时，MCP 端必须配置认证（`users`、`server.auth.token` 或
   mTLS 客户端证书），否则服务拒绝启动。
 - store 中只保存 token hash 与密码占位符；数据库凭据通过环境变量或 secret 文件

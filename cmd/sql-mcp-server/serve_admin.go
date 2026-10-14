@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/config"
@@ -73,8 +74,15 @@ func (f serveAdminFlags) handler(
 			return nil
 		},
 		PathPrefix:   cfg.Server.PathPrefix,
-		SecureCookie: cfg.Server.Auth.TLS.Cert != "", Playground: *f.playground,
+		SecureCookie: secureCookie(cfg), Playground: *f.playground,
 	}), nil
+}
+
+// secureCookie reports whether browsers reach the console over HTTPS: the
+// server serves TLS, or a proxy terminating it is how clients reach it
+// (server.publicURL is https).
+func secureCookie(cfg *config.Config) bool {
+	return cfg.Server.Auth.TLS.Cert != "" || strings.HasPrefix(strings.ToLower(cfg.Server.PublicURL), "https://")
 }
 
 // runtimeStatus reports the served revision, the startup revision until the

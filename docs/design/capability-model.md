@@ -98,8 +98,8 @@ type Profile map[Key]Claim
   `best_effort`。
 - OceanBase：`ob_query_timeout` 作用于全部语句；服务注入时读写 `enforced`，DSN 覆盖
   或 transaction pooler 时 `best_effort`。
-- `sql_safe_updates`：服务注入时 `enforced`，DSN 覆盖为 `0` 时 `unsupported`，
-  transaction pooler 时 `best_effort`。
+- `sql_safe_updates`：服务注入或 DSN 设为 `1`/`ON` 时 `enforced`，DSN 设为 `0`/`OFF` 时
+  `unsupported`，DSN 设为其他无法判定的值或经 transaction pooler 时 `best_effort`。
 
 ## 判定位置
 
