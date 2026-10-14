@@ -108,6 +108,41 @@ func TestEnforceCapWrapsLimit(t *testing.T) {
 	}
 }
 
+// A select codegen rendered keeps its ORDER BY directly above the cap: its
+// LIMIT is tightened (or added) instead of the query being wrapped, whose
+// outer LIMIT would not keep the inner order (MySQL may drop it).
+func TestEnforceCapKeepsTheOrderOfRenderedSelects(t *testing.T) {
+	t.Parallel()
+	ec := cost.EnforceCap{HardRows: 100}
+	sorted := relalg.Sort{
+		Input:   relalg.Scan{Relation: relalg.RelationRef{Name: "t"}},
+		OrderBy: []relalg.OrderTerm{{Field: "id", Dir: "asc"}},
+	}
+	cases := []struct {
+		name string
+		expr relalg.Expr
+		want string // "" when not rewritten
+	}{
+		{"no limit", sorted, `SELECT * FROM "t" ORDER BY "id" ASC LIMIT 100`},
+		{"limit above the cap", relalg.Limit{Input: sorted, Count: 500, Offset: 20},
+			`SELECT * FROM "t" ORDER BY "id" ASC LIMIT 100 OFFSET 20`},
+		{"limit within the cap", relalg.Limit{Input: sorted, Count: 50}, ""},
+	}
+	for _, tc := range cases {
+		c, err := codegen.Renderer{Dialect: testdialect.Postgres{}}.Compile(tc.expr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d, _ := ec.Check(context.Background(), c)
+		switch {
+		case tc.want == "" && d.Rewritten != nil:
+			t.Fatalf("%s: rewritten to %q", tc.name, d.Rewritten.SQL)
+		case tc.want != "" && (d.Rewritten == nil || d.Rewritten.SQL != tc.want):
+			t.Fatalf("%s: got %+v, want %q", tc.name, d.Rewritten, tc.want)
+		}
+	}
+}
+
 func TestEnforceCapSkipsWrites(t *testing.T) {
 	t.Parallel()
 	ec := cost.EnforceCap{HardRows: 100}

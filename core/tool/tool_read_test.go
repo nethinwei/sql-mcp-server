@@ -592,6 +592,22 @@ func TestReadRejectsOffsetWithoutLimit(t *testing.T) {
 	}
 }
 
+// A negative limit would otherwise read past it as no limit at all,
+// dropping the offset and the page bound with it.
+func TestReadRejectsNegativeLimitOrOffset(t *testing.T) {
+	t.Parallel()
+	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	tc := Context{Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}, Role: "reader"}
+	for _, input := range []string{
+		`{"entity":"users","limit":-5,"offset":10}`, `{"entity":"users","limit":-1}`,
+		`{"entity":"users","limit":5,"offset":-1}`,
+	} {
+		if _, err := (ReadTool{}).Run(context.Background(), json.RawMessage(input), tc); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("%s: error = %v, want invalid input", input, err)
+		}
+	}
+}
+
 func TestReadCursorUsesIdentityKey(t *testing.T) {
 	t.Parallel()
 	base := entity.Entity{

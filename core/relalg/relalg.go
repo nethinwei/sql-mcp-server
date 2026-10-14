@@ -93,13 +93,6 @@ type SetItem struct {
 	Value any
 }
 
-// OnConflict configures insert-on-conflict behavior.
-type OnConflict struct {
-	Target    []string
-	DoNothing bool
-	Set       []SetItem
-}
-
 // Expr is a relational algebra expression (logical plan node). Sealed: external
 // packages cannot implement it.
 type Expr interface{ rel() }
@@ -147,18 +140,11 @@ type Distinct struct {
 	Input Expr
 }
 
-// Values is a literal relation: named columns and rows. Used for insert.
-type Values struct {
-	Columns []string
-	Tuples  []Tuple
-}
-
 // Insert is the relational assignment for create. Tuples supply the rows.
 type Insert struct {
-	Target   RelationRef
-	Columns  []string
-	Tuples   []Tuple
-	Conflict *OnConflict
+	Target  RelationRef
+	Columns []string
+	Tuples  []Tuple
 }
 
 // Update is the relational assignment for update, constrained by a predicate.
@@ -208,7 +194,6 @@ func (Aggregate) rel() {}
 func (Sort) rel()      {}
 func (Limit) rel()     {}
 func (Distinct) rel()  {}
-func (Values) rel()    {}
 func (Insert) rel()    {}
 func (Update) rel()    {}
 func (Delete) rel()    {}

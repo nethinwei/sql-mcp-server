@@ -159,9 +159,11 @@ func (e Estimate) evaluatePlan(
 	return Decision{Allow: true, Plan: &plan, Score: ptrScore(score)}, nil
 }
 
-// EnforceCap is the deterministic backstop: it wraps a read query in
-// SELECT * FROM (<q>) sub LIMIT hard_rows so the worst case is bounded,
-// independent of estimate correctness.
+// EnforceCap is the deterministic backstop bounding the rows of a read,
+// independent of estimate correctness: a select codegen rendered gets its
+// LIMIT tightened to hard_rows (or one added after ORDER BY, keeping the
+// order); any other read is wrapped in SELECT * FROM (<q>) sub LIMIT
+// hard_rows.
 type EnforceCap struct {
 	HardRows int64
 }
@@ -181,6 +183,12 @@ func (e EnforceCap) Check(_ context.Context, c codegen.Compiled) (Decision, erro
 		(c.Kind == "" && c.ReadOnly)
 	if !isRead {
 		return Decision{Allow: true}, nil
+	}
+	if capped, ok := codegen.CapRows(c, e.HardRows); ok {
+		if capped.SQL == c.SQL {
+			return Decision{Allow: true}, nil
+		}
+		return Decision{Allow: true, Rewritten: &capped}, nil
 	}
 	rewritten := c
 	rewritten.SQL = "SELECT * FROM (" + c.SQL + ") AS sub LIMIT " + strconv.FormatInt(e.HardRows, 10)

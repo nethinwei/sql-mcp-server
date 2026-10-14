@@ -35,6 +35,29 @@ type Compiled struct {
 	PrimaryKey     []string // primary-key columns, when supplied via WithPrimaryKey
 	ReadOnly       bool
 	AffectedTables []string // tables touched by a write (cache invalidation)
+	// capBase is the SQL of a rendered select before its LIMIT clause, the
+	// last clause, and capLimit/capOffset are that clause's (capLimit 0:
+	// none); see CapRows.
+	capBase   string
+	capLimit  int64
+	capOffset int64
+}
+
+// CapRows returns c reading at most n rows, when codegen rendered c as a
+// select: its LIMIT is tightened to n, or added after ORDER BY, so the cap
+// keeps the order a wrapping query would not guarantee. It reports false for
+// any other statement, or one whose SQL changed since, for the caller to cap
+// otherwise.
+func CapRows(c Compiled, n int64) (Compiled, bool) {
+	if c.capBase == "" || n < 1 || c.SQL != c.capBase+limitClause(c.capLimit, c.capOffset) {
+		return c, false
+	}
+	if c.capLimit >= 1 && c.capLimit <= n {
+		return c, true
+	}
+	c.capLimit = n
+	c.SQL = c.capBase + limitClause(n, c.capOffset)
+	return c, true
 }
 
 // CompileOption configures Compile.
@@ -102,6 +125,9 @@ func (r Renderer) Compile(e relalg.Expr, opts ...CompileOption) (Compiled, error
 		Args:           b.args,
 		ReadOnly:       b.readOnly,
 		AffectedTables: b.tables,
+		capBase:        b.capBase,
+		capLimit:       b.capLimit,
+		capOffset:      b.capOffset,
 	}
 	c.PrimaryKey = cfg.pkCols
 	keys := cfg.identityKeys
@@ -143,6 +169,9 @@ type builder struct {
 	tables           []string
 	returningCols    []string // appended to INSERT when the dialect supports RETURNING
 	maxINCardinality int
+	// capBase, capLimit and capOffset: see Compiled.
+	capBase             string
+	capLimit, capOffset int64
 }
 
 func (b *builder) placeholder() string {

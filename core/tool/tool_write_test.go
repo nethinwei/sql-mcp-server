@@ -193,6 +193,21 @@ func TestCreateToolUnauthorized(t *testing.T) {
 	}
 }
 
+func TestCreateToolRejectsEmptyValues(t *testing.T) {
+	t.Parallel()
+	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	tc := Context{
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+		Role:     "writer",
+		Dialect:  testdialect.Postgres{},
+	}
+	for _, input := range []string{`{"entity":"users"}`, `{"entity":"users","values":{}}`} {
+		if _, err := (CreateTool{}).Run(context.Background(), json.RawMessage(input), tc); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("%s: got %v, want invalid input", input, err)
+		}
+	}
+}
+
 func TestUpdateToolWriteGuardRejectsNonPK(t *testing.T) {
 	t.Parallel()
 	e := entity.Entity{

@@ -103,7 +103,8 @@ func compileAggregate(ctx context.Context, plan aggregatePlan, in aggregateInput
 // column differently, and PostgreSQL names two sums alike). A name that is
 // also a group-by field would hide one of the two columns. The names stay out
 // of the SQL, so its fingerprint (allowTemplates, rejectTemplates, feedback)
-// does not change.
+// does not change. An aggregate given twice would hide one of its columns
+// too.
 func aggregateCalls(aggregates []aggJSON, groupBy []string) ([]relalg.AggCall, []string, error) {
 	calls := make([]relalg.AggCall, 0, len(aggregates))
 	columns := append(make([]string, 0, len(groupBy)+len(aggregates)), groupBy...)
@@ -115,6 +116,9 @@ func aggregateCalls(aggregates []aggJSON, groupBy []string) ([]relalg.AggCall, [
 		name := aggregateColumn(a.Func, a.Field)
 		if slices.Contains(groupBy, name) {
 			return nil, nil, fmt.Errorf("%w: aggregate %q has the name of a group-by field", ErrInvalidInput, name)
+		}
+		if slices.Contains(columns[len(groupBy):], name) {
+			return nil, nil, fmt.Errorf("%w: aggregate %q is given twice", ErrInvalidInput, name)
 		}
 		calls = append(calls, relalg.AggCall{Func: f, Field: a.Field})
 		columns = append(columns, name)

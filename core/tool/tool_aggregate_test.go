@@ -51,7 +51,7 @@ func TestAggregateTool(t *testing.T) {
 // Every aggregate column is named the same on every database, by position,
 // so two aggregates of one function stay apart (PostgreSQL names both "sum")
 // and the SQL, which fingerprints match, keeps no alias. A name taken by a
-// group-by field is refused.
+// group-by field, or by another aggregate, is refused.
 func TestAggregateToolNamesItsColumns(t *testing.T) {
 	t.Parallel()
 	e := entity.Entity{
@@ -91,6 +91,12 @@ func TestAggregateToolNamesItsColumns(t *testing.T) {
 	})
 	if _, err := (AggregateTool{}).Run(context.Background(), clash, tc); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("an aggregate named as a group-by field: %v", err)
+	}
+	twice, _ := json.Marshal(aggregateInput{
+		Entity: "users", Aggregates: []aggJSON{{Func: "sum", Field: "salary"}, {Func: "sum", Field: "salary"}},
+	})
+	if _, err := (AggregateTool{}).Run(context.Background(), twice, tc); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("an aggregate given twice: %v", err)
 	}
 }
 

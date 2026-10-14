@@ -108,7 +108,9 @@ identity ALWAYS）不可写，在发到数据库前拒绝。违反约束返回 `
 1. `StaticRule`：先应用 reject fingerprint；主键点查及 allow 只跳过 Estimate。
 2. `WriteGuard`、`CallGuard`、`AggregateGuard`：始终执行。
 3. `Estimate`：成本开启时三种方言都执行；MySQL/OceanBase 使用保守模式。
-4. `EnforceCap`：始终对 read/aggregate 外包确定性 `LIMIT maxRows`。
+4. `EnforceCap`：始终把 read/aggregate 的行数限制在 `maxRows`。由 codegen 生成的
+   select 直接收紧（或补上）紧跟在 ORDER BY 之后的 `LIMIT`，排序因此保持不变；其余只读
+   语句外包一层 `SELECT * FROM (...) AS sub LIMIT maxRows`。
 
 PostgreSQL 使用准确 Estimate；MySQL/OceanBase 默认在 EXPLAIN 失败、计划未知或
 全表扫描时拒绝。`queryTimeout` 同时通过 Go context 与 provider 连接级
