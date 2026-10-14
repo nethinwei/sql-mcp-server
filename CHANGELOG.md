@@ -13,6 +13,25 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 升级步骤汇总见 [`docs/releases/v0.1.15.md`](docs/releases/v0.1.15.md#迁移)。
 
+### Security
+
+- 修复：配置了 `users` 且开启 `trustProxyHeaders` 时，可信代理后的调用方发送
+  `X-MCP-Role: user:<name>` 就能冒充该用户，获得其全部授权（包括 `sql:execute`）；这条
+  路径还不会用用户配置的 `subject` 覆盖头里的属性，`${subject.x}` 行策略取的是调用方自填
+  的值，审计与预算也记在被冒充用户名下。自引入用户身份起的各版本都受影响。现在
+  `X-MCP-Role` 含 `:` 时返回 400；自定义 transport 经 `WithSubject` 注入的同类值得到的是
+  不持有授权的主体。用户身份只能由用户 token 或 `X-MCP-User` 建立（TM-010）。
+- mTLS 下不再把每个持有 clientCA 签发证书的调用方都当作可信代理：新配置
+  `server.auth.trustedProxyCertSubjects`（叶证书 CN 或 DNS SAN，精确匹配）列出代理的证书。
+  其他证书带身份头返回 403，不带身份头时按普通调用方处理（TM-005）。
+- 管理 API `Revision.yaml` 与 diff 一样脱敏 DSN 密码和 HTTP token。
+- 改自己的管理员密码需要提供当前密码（`SetAdminPasswordInput.currentPassword`）。
+- 登录锁定时长在连续锁定时逐次翻倍（1 分钟起，上限 1 小时）。
+- HTTP 请求体须在 30 秒内读完（读完即解除该期限，流式响应不受影响），防止慢速发送
+  长时间占用连接。
+- 管理 API `tableComments` 按数据源检查调用方的作用域，`visibility` 要求调用方不受数据源
+  限制（纵深防御：目前会话主体本来就不受限）。
+
 ### Added
 
 - Provider 能力模型（`docs/design/capability-model.md`）：`core/dialect.Profile` 为每项能力
@@ -37,6 +56,12 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   语句超时与 `sql_safe_updates` 的真实数据库测试。
 - 管理 API 逐操作越权矩阵（每个查询与变更在 16 种权限组合下断言）、鉴权先于输入解析的
   测试与复杂度上限测试；威胁 TM-014。
+- `sql-mcp-server healthcheck [--url] [--timeout]`：容器健康检查用（镜像没有 shell 和
+  curl）；示例 compose 为 `mcp` 服务配置了它，`docker compose up --wait` 因此会等到服务
+  就绪才返回。
+- `examples/config.example.yaml` 补齐所有配置字段（roles/users、多连接与路由、
+  `execute_sql`、`requireNativeLimits`、`execution` 等）；`make docs-check` 检查示例覆盖
+  schema 的每个字段，并检查 Makefile 与 CI 中没有写死的 `RELEASE_VERSION`。
 
 ### Changed
 
@@ -48,6 +73,17 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   并报告结果确定。
 - 方案的范围统计、预览与应用都先鉴权再解析输入，工作区的 update/reset/合并草稿同样
   先鉴权再解析版本号。
+- PostgreSQL 经 transaction pooler 时，语句超时定为 `best_effort`（此前为 `enforced`）：
+  pooler 不保留 `statement_timeout`，cancel request 也只有在 pooler 转发时才生效，与 MySQL
+  同口径。
+- `EnforceCap` 对 codegen 生成的 select 直接收紧（或补上）`LIMIT`，不再外包子查询，
+  ORDER BY 因此在上限之下保持有效（此前外层 LIMIT 不保证内层顺序，keyset 分页可能跳行或
+  重复）。
+- 控制台 SSE 对同一管理员的多个连接每个周期只读一次工作区版本（此前每个连接每秒读
+  一次）。
+- `RELEASE_VERSION` 默认取 `server.json` 的版本（此前写死为 0.1.4，`make release-bump`
+  不带参数会把版本降回去），`release-bump` 必须显式给出新版本；CI 的 govulncheck 钉到
+  v1.8.0。
 
 ### Fixed
 
@@ -55,6 +91,14 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   命名为 `sum` 等，按列名转成行时互相覆盖、丢失结果；MySQL/OceanBase 的键为
   `COUNT(*)`、``SUM(`amount`)``，跨数据库不一致。现由执行器按位置命名，生成的 SQL 不变
   （`allowTemplates`、`rejectTemplates` 与估算反馈的指纹不受影响）。
+- `read_records` 的负数 `limit`/`offset` 此前绕过校验后被当作“不限”，连同 offset 一起被
+  丢弃；现返回 `INVALID_INPUT`。codegen 拒绝 `Count < 1` 或 `Offset < 0` 的 Limit 节点，
+  也拒绝没有列、没有元组或列数不齐的 insert（纵深防御）。
+- `create_record` 的 `values` 为空时返回 `INVALID_INPUT`（此前生成 `VALUES ()`，由数据库
+  报语法错误）。
+- `aggregate_records` 中重复给出的同一聚合返回 `INVALID_INPUT`（此前其中一列被静默覆盖）。
+- 回滚期间被他人抢先发布时，返回带 `published` 的 `CONFLICT`（此前是未映射的错误），
+  控制台随即刷新修订列表。
 
 ### Breaking
 
@@ -68,6 +112,14 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   `dialect.Capabilities` 结构体）；`provider.Provider` 新增 `Profile()`；
   `mysql.NewAdapter` 额外返回连接的限制；`cost.NewGateFromCapabilities` 接收
   `dialect.Profile`。
+- `trustProxyHeaders` 不能只靠 mTLS：须配置 `trustedProxyCIDRs` 或
+  `trustedProxyCertSubjects`，此前只配 `clientCA` 的配置会校验失败。
+- `X-MCP-Role` 不能是主体键（含 `:`，如 `user:alice`），否则返回 400；用户请改用
+  `X-MCP-User`。
+- 管理 API 改自己的密码必须提供 `currentPassword`。
+- `cost.queryTimeout` 须为 0（不限）或不小于 100ms。
+- `cost.requireNativeLimits: true` 时，经 transaction pooler 的 PostgreSQL 连接不能加载。
+- Go API：移除未使用的 `relalg.OnConflict`、`relalg.Values` 与 `relalg.Insert.Conflict`。
 
 ## 0.1.14 - 2026-10-11
 
