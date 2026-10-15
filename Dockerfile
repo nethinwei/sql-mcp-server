@@ -1,7 +1,10 @@
 # syntax=docker/dockerfile:1
 
 # The admin console (web/admin) is embedded into the binary with go:embed.
-FROM node:24-alpine AS web
+# Both build stages run on the build platform: the console is the same
+# static files for every platform and Go cross-compiles, so a multi-arch
+# build emulates nothing (Node under QEMU has crashed release builds).
+FROM --platform=$BUILDPLATFORM node:24-alpine AS web
 
 WORKDIR /src/web/admin
 RUN corepack enable
@@ -16,9 +19,10 @@ COPY core/config/schema.json /src/core/config/
 COPY core/config/testdata/rules.json core/config/testdata/entity_refs.json /src/core/config/testdata/
 RUN pnpm build
 
-FROM golang:1.26.9-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.9-alpine AS build
 
 ARG VERSION=dev
+ARG TARGETOS TARGETARCH
 WORKDIR /src
 
 COPY go.mod go.sum ./
@@ -29,7 +33,7 @@ COPY --from=web /src/x/admin/ui/dist/app x/admin/ui/dist/app
 # The config store's default location; owned by nonroot so a named volume
 # mounted there starts out writable.
 RUN mkdir -p /out/data
-RUN test -f x/admin/ui/dist/app/index.html && CGO_ENABLED=0 go build -trimpath \
+RUN test -f x/admin/ui/dist/app/index.html && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
     -ldflags="-s -w -X github.com/nethinwei/sql-mcp-server/version.value=${VERSION}" \
     -o /out/sql-mcp-server ./cmd/sql-mcp-server
 
