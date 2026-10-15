@@ -116,6 +116,8 @@ jobs:
     name: signed multi-arch image
     needs: artifacts
     runs-on: ubuntu-latest
+    # About 20 minutes; a hung build fails here instead of at the 6-hour limit.
+    timeout-minutes: 45
     permissions:
       contents: write
       id-token: write
