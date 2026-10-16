@@ -89,6 +89,8 @@ type Query {
   simulate(input: SimulationInput!): Simulation!
   "Every entity and applicable action for one principal, default projection."
   visibility(input: VisibilityInput!): [EntityVisibility!]!
+  "One page of `visibility`, filtered and counted on the server."
+  visibilityPage(input: VisibilityInput!, filter: VisibilityFilter, offset: Int = 0, limit: Int = 50): VisibilityPage!
   adminAccounts: [AdminAccount!]!
 }
 
@@ -537,6 +539,26 @@ input VisibilityInput {
   "A configured user name, or role:<name> to evaluate a role."
   user: String!
   subject: JSON
+}
+input VisibilityFilter {
+  "Matches entity IDs containing it, ignoring case."
+  search: String
+  "Only entities with an allowed or needs-fields action."
+  reachableOnly: Boolean
+}
+type VisibilityPage {
+  "Entities evaluated."
+  total: Int!
+  "Entities with an allowed action, or one whose fields are split across grants (needs fields)."
+  reachable: Int!
+  "Reachable entities without an allowed action."
+  needsFields: Int!
+  "Entities matching the filter."
+  matched: Int!
+  "Actions that apply to at least one entity."
+  actions: [Action!]!
+  "The page of matching entities, at most 200."
+  items: [EntityVisibility!]!
 }
 type EntityVisibility {
   entity: String!

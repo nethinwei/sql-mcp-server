@@ -95,14 +95,14 @@ const stats = computed(() => [
       <template #header-extra>
         <n-button text type="primary" @click="router.push({ name: 'revisions' })">{{ t('overview.allRevisions') }}</n-button>
       </template>
-      <n-list :show-divider="false">
+      <n-list :show-divider="false" class="revs">
         <n-list-item v-for="r in revisions.data.value?.revisions ?? []" :key="r.id">
           <div class="rev">
-            <n-space align="center" :size="8" :wrap="false" class="rev-main">
+            <div class="rev-main">
               <n-text strong>#{{ r.id }}</n-text>
               <n-tag size="small" :bordered="false" :type="stateType[r.state]">{{ t(`revisionState.${r.state}`) }}</n-tag>
-              <n-text depth="2" class="rev-comment">{{ r.comment || t('common.noDescription') }}</n-text>
-            </n-space>
+              <n-text depth="2" class="rev-comment" :title="r.comment">{{ r.comment || t('common.noDescription') }}</n-text>
+            </div>
             <n-text depth="3" class="rev-meta">{{ r.author }} · <n-time :time="new Date(r.createdAt)" type="relative" /></n-text>
           </div>
         </n-list-item>
@@ -114,8 +114,10 @@ const stats = computed(() => [
 <style scoped>
 .stat { cursor: pointer; }
 .fill { height: 100%; }
+.revs :deep(.n-list-item__main) { min-width: 0; }
 .rev { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.rev-main { min-width: 0; }
-.rev-comment { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rev-meta { font-size: 12px; white-space: nowrap; }
+.rev-main { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.rev-main > * { flex-shrink: 0; white-space: nowrap; }
+.rev-main > .rev-comment { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.rev-meta { font-size: 12px; white-space: nowrap; flex-shrink: 0; }
 </style>

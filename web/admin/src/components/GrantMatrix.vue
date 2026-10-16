@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
-  NButton, NCheckbox, NCheckboxGroup, NDivider, NGrid, NGi, NIcon, NInput, NModal, NRadio,
+  NButton, NCheckbox, NCheckboxGroup, NDivider, NGrid, NGi, NIcon, NInput, NModal, NPagination, NRadio,
   NRadioGroup, NSpace, NSwitch, NTag, NText, NTooltip,
 } from 'naive-ui'
 import { AddOutline, TrashOutline } from '@vicons/ionicons5'
@@ -40,37 +40,68 @@ interface Row {
   grant: GrantInput | null
   index: number // position in modelValue, -1 when ungranted
   sub: number // 0 for the first grant of an entity
-  // The namespace (datasource · schema) of the entities from this row on,
-  // shown once above them; set on the first row of each.
-  namespace?: string
+  // The namespace (datasource · schema) of the entity; empty when every
+  // entity shares one.
+  namespace: string
 }
 
 // Grants name entities by reference; they are matched by the entity it names.
 const entityIndex = computed(() => new EntityIndex(props.entities))
 const grantedId = (g: GrantInput) => entityIndex.value.idOf(g.entity)
 
-const rows = computed<Row[]>(() => {
+// The grants of each entity, by entity ID, with their position in modelValue.
+const grantsById = computed(() => {
+  const out = new Map<string, { g: GrantInput; index: number }[]>()
+  props.modelValue.forEach((g, index) => {
+    const id = grantedId(g)
+    if (id === undefined) return
+    const list = out.get(id)
+    if (list) list.push({ g, index })
+    else out.set(id, [{ g, index }])
+  })
+  return out
+})
+
+// The listed entities, each with its rows (one per grant).
+const listed = computed<Row[][]>(() => {
   const q = search.value.trim().toLowerCase()
-  const out: Row[] = []
+  const out: Row[][] = []
   const sorted = [...props.entities].sort((a, b) =>
     (a.datasource ?? '').localeCompare(b.datasource ?? '') || (a.schema ?? '').localeCompare(b.schema ?? '') ||
     a.name.localeCompare(b.name))
   const shown = sorted.filter((e) => !q || e.name.toLowerCase().includes(q) || (e.description ?? '').toLowerCase().includes(q))
   for (const group of byNamespace(shown)) {
-    const first = out.length
     for (const entity of group.items) {
       const id = entityId(entity)
-      const grants = props.modelValue.map((g, index) => ({ g, index })).filter(({ g }) => grantedId(g) === id)
+      const grants = grantsById.value.get(id) ?? []
       if (grants.length === 0) {
-        if (!onlyGranted.value) out.push({ entity, id, grant: null, index: -1, sub: 0 })
+        if (!onlyGranted.value) out.push([{ entity, id, grant: null, index: -1, sub: 0, namespace: group.namespace }])
         continue
       }
-      grants.forEach(({ g, index }, sub) => out.push({ entity, id, grant: g, index, sub }))
+      out.push(grants.map(({ g, index }, sub) => ({ entity, id, grant: g, index, sub, namespace: group.namespace })))
     }
-    if (group.namespace && out.length > first) out[first] = { ...out[first], namespace: group.namespace }
   }
   return out
 })
+const rows = computed(() => listed.value.flat())
+
+// Thousands of entities render slowly, so the matrix shows one page of them;
+// bulk toggles still act on every listed row.
+const page = ref(1)
+const pageSize = ref(50)
+watch([search, onlyGranted], () => { page.value = 1 })
+const pageCount = computed(() => Math.max(1, Math.ceil(listed.value.length / pageSize.value)))
+const current = computed(() => Math.min(page.value, pageCount.value))
+const pageRows = computed(() => {
+  const start = (current.value - 1) * pageSize.value
+  return listed.value.slice(start, start + pageSize.value).flat()
+})
+// Whether a namespace heading goes above the row: the first row of a page or
+// of a namespace.
+const headed = (i: number) => {
+  const ns = pageRows.value[i].namespace
+  return Boolean(ns) && (i === 0 || pageRows.value[i - 1].namespace !== ns)
+}
 
 const grantedCount = computed(() => new Set(props.modelValue.map(grantedId)).size)
 const refOf = (row: Row) => entityIndex.value.shortName(row.id)
@@ -125,7 +156,7 @@ function toggle(row: Row, action: Action, on: boolean) {
 function columnState(action: Action) {
   const entities = [...new Set(rows.value.filter((r) => grantable(r, action)).map((r) => r.id))]
   const on = entities.filter((id) =>
-    props.modelValue.some((g) => grantedId(g) === id && g.actions.includes(action))).length
+    (grantsById.value.get(id) ?? []).some(({ g }) => g.actions.includes(action))).length
   return { checked: entities.length > 0 && on === entities.length, partial: on > 0 && on < entities.length, any: entities.length > 0 }
 }
 function toggleColumn(action: Action, on: boolean) {
@@ -263,8 +294,8 @@ const editingWrites = computed(() =>
         </thead>
         <tbody>
           <tr v-if="rows.length === 0"><td :colspan="actions.length + 5" class="empty">{{ t('grants.noMatch') }}</td></tr>
-          <template v-for="row in rows" :key="row.id + row.index">
-          <tr v-if="row.namespace" class="namespace">
+          <template v-for="(row, i) in pageRows" :key="row.id + row.index">
+          <tr v-if="headed(i)" class="namespace">
             <td :colspan="actions.length + 5" class="mono">{{ row.namespace }}</td>
           </tr>
           <tr :class="{ granted: row.grant, sub: row.sub > 0 }">
@@ -328,6 +359,9 @@ const editingWrites = computed(() =>
         </tbody>
       </table>
     </div>
+    <n-pagination v-if="listed.length > 20" :page="current" :page-size="pageSize" :item-count="listed.length"
+      show-size-picker :page-sizes="[20, 50, 100, 200]" class="pager"
+      @update:page="(p: number) => (page = p)" @update:page-size="(n: number) => { pageSize = n; page = 1 }" />
 
     <n-modal :show="editorOpen" preset="card" class="editor" :mask-closable="false" :title="editorTitle"
       @update:show="(v: boolean) => (editorOpen = v)" @after-leave="editing = null">
@@ -418,6 +452,7 @@ tr.granted td.name .entity { font-weight: 600; }
 tr.namespace td { font-size: 12px; opacity: .7; background: rgba(128,128,128,.06); padding-top: 6px; padding-bottom: 6px; }
 .desc { font-size: 12px; opacity: .6; max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
 .rows-text { display: inline-block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.pager { margin-top: 10px; justify-content: flex-end; }
 .empty { text-align: center; opacity: .6; padding: 20px; }
 .divider { margin: 12px 0; }
 .field-filter { margin-bottom: 10px; }

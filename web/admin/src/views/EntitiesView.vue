@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, h, ref, watchEffect } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, h, ref, watch, watchEffect } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { NButton, NDataTable, NEmpty, NInput, NSelect, NSpace, NTag, NText, type DataTableColumns } from 'naive-ui'
 import { useWorkspace } from '@/stores/workspace'
@@ -12,8 +12,13 @@ import { entityId } from '@/lib/entityRefs'
 const { t } = useI18n()
 const ws = useWorkspace()
 const router = useRouter()
-const search = ref('')
-const datasource = ref<string | null>(null)
+// The search, filter and page are kept in the URL, so coming back from an
+// entity returns to where it was listed.
+const route = useRoute()
+const param = (v: unknown) => (typeof v === 'string' ? v : '')
+const pageSizes = [20, 50, 100, 200]
+const search = ref(param(route.query.q))
+const datasource = ref<string | null>(param(route.query.ds) || null)
 
 watchEffect(() => { void loadTableComments(ws.entities) })
 const description = (e: EntityInput) => e.description || tableComments(e)?.description || ''
@@ -23,12 +28,40 @@ const description = (e: EntityInput) => e.description || tableComments(e)?.descr
 type Row = EntityInput | { namespace: string }
 const isHeading = (r: Row): r is { namespace: string } => 'namespace' in r
 
-const rows = computed<Row[]>(() => {
+// Thousands of entities render slowly, so the table shows one page of them.
+const page = ref(Math.max(1, Number(param(route.query.page)) || 1))
+const size = Number(param(route.query.size))
+const pageSize = ref(pageSizes.includes(size) ? size : 50)
+watch([search, datasource], () => { page.value = 1 })
+watch([search, datasource, page, pageSize], () => void router.replace({ query: {
+  ...(search.value ? { q: search.value } : {}),
+  ...(datasource.value ? { ds: datasource.value } : {}),
+  ...(page.value > 1 ? { page: String(page.value) } : {}),
+  ...(pageSize.value !== 50 ? { size: String(pageSize.value) } : {}),
+} }))
+
+const shown = computed(() => {
   const q = search.value.trim().toLowerCase()
-  const shown = ws.entities.filter((e) =>
+  const matching = ws.entities.filter((e) =>
     (!datasource.value || (e.datasource ?? 'default') === datasource.value) &&
     (!q || e.name.toLowerCase().includes(q) || description(e).toLowerCase().includes(q)))
-  return byNamespace(shown).flatMap((g) => (g.namespace ? [{ namespace: g.namespace }, ...g.items] : g.items))
+  return byNamespace(matching).flatMap((g) => g.items.map((e) => ({ namespace: g.namespace, e })))
+})
+const pageCount = computed(() => Math.max(1, Math.ceil(shown.value.length / pageSize.value)))
+const current = computed(() => Math.min(page.value, pageCount.value))
+
+// A page starts with the heading of its first namespace, even when the
+// namespace began on an earlier page.
+const rows = computed<Row[]>(() => {
+  const out: Row[] = []
+  let last = ''
+  const start = (current.value - 1) * pageSize.value
+  for (const { namespace, e } of shown.value.slice(start, start + pageSize.value)) {
+    if (namespace && namespace !== last) out.push({ namespace })
+    last = namespace
+    out.push(e)
+  }
+  return out
 })
 
 const entityColumns = computed<DataTableColumns<EntityInput>>(() => [
@@ -84,7 +117,9 @@ const datasourceOptions = computed(() => ws.datasources.map((d) => ({ label: d.n
     <n-empty v-if="!ws.entities.length" :description="t('entities.empty')">
       <template #extra><n-button type="primary" @click="router.push({ name: 'datasources' })">{{ t('entities.goImport') }}</n-button></template>
     </n-empty>
-    <n-data-table v-else :columns="columns" :data="rows" size="small"
+    <n-data-table v-else remote :columns="columns" :data="rows" size="small"
+      :pagination="{ page: current, pageSize, itemCount: shown.length, showSizePicker: true, pageSizes,
+        onUpdatePage: (p: number) => (page = p), onUpdatePageSize: (s: number) => { pageSize = s; page = 1 } }"
       :row-key="(r: Row) => (isHeading(r) ? `ns:${r.namespace}` : entityId(r))"
       :row-props="(r: Row) => (isHeading(r) ? { class: 'heading' }
         : { class: 'clickable', onClick: () => router.push({ name: 'entity', params: { id: entityId(r) } }) })" />

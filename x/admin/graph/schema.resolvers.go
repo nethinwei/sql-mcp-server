@@ -321,6 +321,15 @@ func (r *queryResolver) Visibility(ctx context.Context, input VisibilityInput) (
 	return visibility(ctx, cfg, input.User, attrs)
 }
 
+// VisibilityPage is the resolver for the visibilityPage field.
+func (r *queryResolver) VisibilityPage(ctx context.Context, input VisibilityInput, filter *VisibilityFilter, offset *int, limit *int) (*VisibilityPage, error) {
+	all, err := r.Visibility(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	return visibilityPage(all, filter, kit.DerefInt(offset, 0), kit.DerefInt(limit, 50)), nil
+}
+
 // AdminAccounts is the resolver for the adminAccounts field.
 func (r *queryResolver) AdminAccounts(ctx context.Context) ([]AdminAccount, error) {
 	if _, err := auth.Require(ctx, auth.PermAccounts); err != nil {

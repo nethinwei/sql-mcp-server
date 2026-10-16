@@ -131,6 +131,7 @@ var requiredPermissions = map[string][]string{
 	"tableComments":        {auth.PermRead},
 	"validate":             {auth.PermRead},
 	"visibility":           {auth.PermRead},
+	"visibilityPage":       {auth.PermRead},
 	"workspace":            {auth.PermRead},
 	"workspaceLog":         {auth.PermRead},
 	// Edits of the caller's workspace, scans and plan templates.

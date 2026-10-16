@@ -24,9 +24,15 @@ const status = useStatus()
 const dialog = useDialog()
 const message = useMessage()
 const action = useWorkspaceAction()
-const list = useQuery({ query: RevisionsQuery, variables: { limit: 100 } })
+// Older revisions load a page at a time; the list is fetched whole with a
+// growing limit, so revisions created meanwhile never leave a gap.
+const pageSize = 50
+const limit = ref(pageSize)
+const list = useQuery({ query: RevisionsQuery, variables: computed(() => ({ limit: limit.value })) })
 const revisions = computed(() => list.data.value?.revisions ?? [])
-const published = computed(() => revisions.value.find((r) => r.state === 'PUBLISHED'))
+const more = computed(() => revisions.value.length >= limit.value)
+// The published revision may be older than the revisions listed.
+const published = computed(() => revisions.value.find((r) => r.state === 'PUBLISHED') ?? status.published)
 // ?id= opens a revision directly, e.g. a draft just saved at review.
 const route = useRoute()
 const draftActions = useDraftActions()
@@ -170,6 +176,8 @@ function loadIntoWorkspace(id: string) {
             </div>
           </n-timeline-item>
         </n-timeline>
+        <n-button v-if="more" block secondary size="small" :loading="list.fetching.value" @click="limit += pageSize">
+          {{ t('common.loadMore') }}</n-button>
       </n-card>
     </n-gi>
     <n-gi span="3 l:2">
