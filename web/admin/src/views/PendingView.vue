@@ -3,11 +3,12 @@ import { computed, h, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import {
-  NAlert, NButton, NCard, NDataTable, NEmpty, NGi, NGrid, NSpin, NStatistic, NSwitch, NTag, NText,
+  NAlert, NButton, NCard, NDataTable, NEmpty, NGi, NGrid, NSpin, NStatistic, NSwitch, NTag, NText, useMessage,
   type DataTableColumns,
 } from 'naive-ui'
 import { PendingQuery } from '@/api/ops'
 import { workspace } from '@/lib/workspaceSync'
+import { useWorkspace } from '@/stores/workspace'
 import type { PendingQuery as PendingResult } from '@/gql/graphql'
 import { can } from '@/api/session'
 import { loadPlan, type Plan } from '@/lib/plan'
@@ -23,6 +24,7 @@ import PendingStateControl from '@/components/plan/PendingStateControl.vue'
 // applied on its own.
 type Pending = PendingResult['pending']
 type DriftTable = Pending['driftTables'][number]
+type GoneTable = Pending['goneTables'][number]
 
 const { t } = useI18n()
 const router = useRouter()
@@ -49,8 +51,37 @@ onMounted(() => {
 const open = (s?: { status: string } | null) => !s || s.status === 'open'
 const plans = computed(() => (pending.value?.plans ?? []).filter((p) => showHandled.value || open(p.state)))
 const drift = computed(() => (pending.value?.driftTables ?? []).filter((d) => showHandled.value || open(d.state)))
-const handled = computed(() => [...(pending.value?.plans ?? []), ...(pending.value?.driftTables ?? [])]
-  .filter((x) => !open(x.state)).length)
+const gone = computed(() => (pending.value?.goneTables ?? []).filter((d) => showHandled.value || open(d.state)))
+const handled = computed(() => [
+  ...(pending.value?.plans ?? []), ...(pending.value?.driftTables ?? []), ...(pending.value?.goneTables ?? []),
+].filter((x) => !open(x.state)).length)
+
+// Entities whose tables are gone are removed from the workspace; the server
+// removes what names them as it takes the edit, which the next read writes.
+const ws = useWorkspace()
+const message = useMessage()
+const goneChecked = ref<string[]>([])
+async function removeGone() {
+  const ids = goneChecked.value.filter((id) => ws.entity(id))
+  for (const id of ids) ws.removeEntity(id)
+  goneChecked.value = []
+  message.success(t('overview.removedMissing', { n: ids.length }))
+  await load()
+}
+const goneColumns = computed<DataTableColumns<GoneTable>>(() => [
+  { type: 'selection' },
+  { title: t('entities.entity'), key: 'entity', render: (d) => h('span', { class: 'mono' }, ws.entityIndex.shortName(d.entity)) },
+  { title: t('datasources.table'), key: 'ref', render: (d) => h('span', { class: 'mono' }, d.ref) },
+  {
+    title: '', key: 'scanned', width: 110,
+    render: (d) => h(NTag, { size: 'small', bordered: false, type: d.scanned ? 'default' : 'warning' },
+      () => t(d.scanned ? 'pending.goneScanned' : 'pending.goneRuntime')),
+  },
+  {
+    title: '', key: 'state', width: 360,
+    render: (d) => h(PendingStateControl, { itemKey: d.key, state: d.state, onChanged: load }),
+  },
+])
 
 const plan = ref<Plan | null>(null)
 const previewing = ref(false)
@@ -72,7 +103,8 @@ const driftColumns = computed<DataTableColumns<DriftTable>>(() => [
     render: (d) => h(PendingStateControl, { itemKey: d.key, state: d.state, onChanged: load }),
   },
 ])
-const nothing = computed(() => pending.value && !plans.value.length && !drift.value.length && !pending.value.newTables &&
+const nothing = computed(() => pending.value && !plans.value.length && !drift.value.length && !gone.value.length &&
+  !pending.value.newTables &&
   !pending.value.unscannedSchemas && !pending.value.unlistedDatasources.length)
 </script>
 
@@ -128,6 +160,16 @@ const nothing = computed(() => pending.value && !plans.value.length && !drift.va
           </div>
         </template>
         <plan-report :report="p.report" />
+      </n-card>
+      <n-card v-if="gone.length" size="small" :title="t('pending.goneTables', { n: gone.length })">
+        <template #header-extra>
+          <n-button size="small" type="primary" :disabled="!goneChecked.length" @click="removeGone">
+            {{ t('pending.removeSelected', { n: goneChecked.length }) }}
+          </n-button>
+        </template>
+        <n-text depth="3" class="meta">{{ t('pending.goneHint') }}</n-text>
+        <n-data-table v-model:checked-row-keys="goneChecked" size="small" :columns="goneColumns" :data="gone"
+          :row-key="(d: GoneTable) => d.entity" :pagination="{ pageSize: 20 }" />
       </n-card>
       <n-card v-if="drift.length" size="small" :title="t('pending.driftTables', { n: drift.length })">
         <n-data-table size="small" :columns="driftColumns" :data="drift" :row-key="(d: DriftTable) => d.key"

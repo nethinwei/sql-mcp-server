@@ -95,23 +95,38 @@ func assertAuthorizedSchemaResource(t *testing.T, ctx context.Context, session *
 	if len(resources.Resources) != 1 || resources.Resources[0].URI != schemaResourceURI {
 		t.Fatalf("resources = %+v", resources.Resources)
 	}
-	result, err := session.ReadResource(ctx, &mcp.ReadResourceParams{URI: schemaResourceURI})
-	if err != nil {
-		t.Fatal(err)
+	templates, err := session.ListResourceTemplates(ctx, &mcp.ListResourceTemplatesParams{})
+	if err != nil || len(templates.ResourceTemplates) != 1 ||
+		templates.ResourceTemplates[0].URITemplate != schemaEntityTemplate {
+		t.Fatalf("templates = %+v, %v", templates, err)
 	}
-	if len(result.Contents) != 1 {
-		t.Fatalf("contents = %+v", result.Contents)
+	read := func(uri string) (string, error) {
+		result, err := session.ReadResource(ctx, &mcp.ReadResourceParams{URI: uri})
+		if err != nil {
+			return "", err
+		}
+		if len(result.Contents) != 1 || !json.Valid([]byte(result.Contents[0].Text)) {
+			t.Fatalf("contents = %+v", result.Contents)
+		}
+		return result.Contents[0].Text, nil
 	}
-	var schema map[string]any
-	if err := json.Unmarshal([]byte(result.Contents[0].Text), &schema); err != nil {
-		t.Fatal(err)
+	summary, err := read(schemaResourceURI)
+	if err != nil || !strings.Contains(summary, `"entities":1`) ||
+		!strings.Contains(summary, `"datasources":[{"entities":1,"name":"default"}]`) {
+		t.Fatalf("summary = %s, %v", summary, err)
 	}
-	text := result.Contents[0].Text
-	if !strings.Contains(text, `"orders"`) || !strings.Contains(text, `"id"`) {
-		t.Fatalf("authorized schema missing visible fields: %s", text)
+	text, err := read(schemaEntityPrefix + "orders")
+	if err != nil || !strings.Contains(text, `"orders"`) || !strings.Contains(text, `"id"`) {
+		t.Fatalf("authorized schema missing visible fields: %s, %v", text, err)
 	}
-	if strings.Contains(text, `"secret"`) || strings.Contains(text, `"admin_only"`) {
-		t.Fatalf("authorized schema leaked inaccessible metadata: %s", text)
+	if strings.Contains(summary+text, `"secret"`) || strings.Contains(summary+text, `"admin_only"`) {
+		t.Fatalf("authorized schema leaked inaccessible metadata: %s %s", summary, text)
+	}
+	// An entity the caller may not read is as absent as one that does not exist.
+	for _, ref := range []string{"admin_only", "missing"} {
+		if _, err := read(schemaEntityPrefix + ref); err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Fatalf("%s: err = %v", ref, err)
+		}
 	}
 }
 
@@ -131,7 +146,7 @@ func assertAuthorizedSchemaPrompts(t *testing.T, ctx context.Context, session *m
 		t.Fatal(err)
 	}
 	content, ok := prompt.Messages[0].Content.(*mcp.TextContent)
-	if !ok || !strings.Contains(content.Text, "authorized-schema") || !strings.Contains(content.Text, "find order 1") {
+	if !ok || !strings.Contains(content.Text, "describe_entities") || !strings.Contains(content.Text, "find order 1") {
 		t.Fatalf("prompt = %+v", prompt.Messages)
 	}
 }
@@ -176,7 +191,7 @@ func TestCustomProcedureThroughMCP(t *testing.T) {
 	defer session.Close()
 
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{
-		Name: tool.ProcedureToolName(procedure), Arguments: map[string]any{"tenant": "acme"},
+		Name: "procedure_refresh-cache", Arguments: map[string]any{"tenant": "acme"},
 	})
 	if err != nil || result.IsError {
 		t.Fatalf("custom procedure result = %+v, error = %v", result, err)
@@ -202,8 +217,8 @@ func TestAuthorizedSchemaListsSplitFieldScopes(t *testing.T) {
 		"reader": {"customers": {read("n", "id", "name"), read("p", "id", "phone")}},
 	}}
 	app := &bootstrap.App{Registry: registry, Authorizer: rbac.NewGrantAuthorizer(registry, policy)}
-	schema, err := authorizedSchema(context.Background(), app, "reader", nil)
-	if err != nil {
+	schema, ok, err := entitySchema(context.Background(), app, "reader", nil, "customers")
+	if err != nil || !ok {
 		t.Fatal(err)
 	}
 	data, _ := json.Marshal(schema)
@@ -240,8 +255,8 @@ func TestAuthorizedSchemaReportsFieldsPerAction(t *testing.T) {
 		grant("a2", entity.ActionAggregate, "id", "region"),
 	}}}}
 	app := &bootstrap.App{Registry: registry, Authorizer: rbac.NewGrantAuthorizer(registry, policy)}
-	schema, err := authorizedSchema(context.Background(), app, "analyst", nil)
-	if err != nil {
+	schema, ok, err := entitySchema(context.Background(), app, "analyst", nil, "orders")
+	if err != nil || !ok {
 		t.Fatal(err)
 	}
 	data, _ := json.Marshal(schema)
@@ -256,8 +271,67 @@ func TestAuthorizedSchemaReportsFieldsPerAction(t *testing.T) {
 			t.Fatalf("schema missing %s: %s", want, text)
 		}
 	}
-	entityFields := schema["entities"].([]map[string]any)[0]["fields"].([]map[string]any)
+	entityFields := schema["fields"].([]map[string]any)
 	if len(entityFields) != 3 {
 		t.Fatalf("top-level fields must cover every action: %v", entityFields)
 	}
+}
+
+// Results are structured, and their text is the same JSON: rows wrapped in
+// {"result": [...]}, one object as is. Tools describe their behavior.
+func TestToolsAreAnnotatedAndResultsStructured(t *testing.T) {
+	app := authorizedSchemaTestApp(t)
+	tools, err := tool.NewRegistry(tool.DefaultTools())
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.Tools, app.ToolFlags = tools, config.DefaultToolFlags()
+	session, ctx, cancel := connectMCPSession(t, app)
+	defer cancel()
+	defer session.Close()
+
+	list, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]*mcp.Tool{}
+	for _, listed := range list.Tools {
+		byName[listed.Name] = listed
+		a := listed.Annotations
+		if listed.Title == "" || a == nil || a.Title != listed.Title || a.OpenWorldHint == nil || *a.OpenWorldHint ||
+			listed.OutputSchema == nil {
+			t.Errorf("%s is not fully described: %+v", listed.Name, listed)
+		}
+		if !strings.Contains(string(mustJSON(t, listed.InputSchema)), `"additionalProperties":false`) {
+			t.Errorf("%s input schema admits unknown properties", listed.Name)
+		}
+	}
+	read, update := byName["read_records"].Annotations, byName["update_record"].Annotations
+	if !read.ReadOnlyHint || !read.IdempotentHint || read.DestructiveHint != nil ||
+		update.ReadOnlyHint || update.DestructiveHint == nil || !*update.DestructiveHint {
+		t.Fatalf("hints: read %+v, update %+v", read, update)
+	}
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "describe_entities", Arguments: map[string]any{}})
+	if err != nil || res.IsError {
+		t.Fatalf("describe: %v %+v", err, res)
+	}
+	text := res.Content[0].(*mcp.TextContent).Text
+	if string(mustJSON(t, res.StructuredContent)) != text || !strings.Contains(text, `"entities":[{`) {
+		t.Fatalf("structured %s, text %s", mustJSON(t, res.StructuredContent), text)
+	}
+	rows := toMCPResult(tool.Result{Content: []map[string]any{{"id": 1}}}, tool.Info{})
+	if string(mustJSON(t, rows.StructuredContent)) != `{"result":[{"id":1}]}` ||
+		rows.Content[0].(*mcp.TextContent).Text != `{"result":[{"id":1}]}` {
+		t.Fatalf("rows result = %+v", rows)
+	}
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

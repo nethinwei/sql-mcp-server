@@ -61,6 +61,7 @@ func (f serveAdminFlags) handler(
 			}
 			return nil
 		},
+		MissingTables: runtimeMissingTables(runtime),
 		Profiles: func() ([]bootstrap.ConnectionProfile, []bootstrap.LimitIssue) {
 			if app := runtime.Current(); app != nil {
 				return app.Profiles(), app.LimitIssues()
@@ -85,6 +86,17 @@ func secureCookie(cfg *config.Config) bool {
 	return cfg.Server.Auth.TLS.Cert != "" || strings.HasPrefix(strings.ToLower(cfg.Server.PublicURL), "https://")
 }
 
+// runtimeMissingTables reports the entities whose tables the served App found
+// missing.
+func runtimeMissingTables(runtime *bootstrap.Runtime) func() map[string]bool {
+	return func() map[string]bool {
+		if app := runtime.Current(); app != nil {
+			return app.MissingTables()
+		}
+		return nil
+	}
+}
+
 // runtimeStatus reports the served revision, the startup revision until the
 // store watcher tracks it, and what runs on the execution bus.
 func runtimeStatus(
@@ -98,6 +110,9 @@ func runtimeStatus(
 		}
 		if stale, ok := runtime.Stale(); ok {
 			st.Unapplied = &stale
+		}
+		if app := runtime.Current(); app != nil {
+			st.Unavailable, st.Unreachable = app.Unavailable, app.Unreachable
 		}
 		return st
 	}

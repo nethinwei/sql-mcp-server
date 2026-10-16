@@ -125,28 +125,36 @@ func (ev *evaluation) dropGrantField(id, field string) {
 }
 
 // qualifyReferences keeps the references of the base configuration naming
-// the entities they named once the plan added its own (configrefs.Retarget:
-// one the additions made ambiguous, or that now names an added entity, is
-// rewritten in its shortest unambiguous form), as console edits do, and
-// reports each rewrite.
+// the entities they named once the plan added and removed its own
+// (configrefs.Retarget: one the additions made ambiguous, or that now names
+// an added entity, is rewritten in its shortest unambiguous form, and one
+// naming a removed entity goes), as console edits do, and reports each
+// rewrite.
 func (ev *evaluation) qualifyReferences() {
-	if len(ev.added) == 0 {
+	if len(ev.added) == 0 && len(ev.removed) == 0 {
 		return
 	}
 	before, after := configrefs.NewIndex(ev.in.Base.Entities), configrefs.NewIndex(ev.cfg.Entities)
-	fix := func(owner, ref string) string {
-		out, _ := configrefs.Retarget(ref, before, after, nil) // a plan removes no entity
-		if out != ref {
+	moved := map[string]string{}
+	for _, id := range ev.removed {
+		moved[id] = ""
+	}
+	fix := func(owner, ref string) (string, bool) {
+		out, keep := configrefs.Retarget(ref, before, after, moved)
+		if keep && out != ref {
 			ev.except(Exception{Kind: ExceptionQualified, Entity: owner, Detail: ref + " → " + out})
 		}
-		return out
+		return out, keep
 	}
 	for _, p := range ev.principals() {
-		grants := slices.Clone(ev.grantsOf(p))
+		var grants []config.GrantConfig
 		changed := false
-		for i, g := range grants {
-			if ref := fix(p.String(), g.Entity); ref != g.Entity {
-				grants[i].Entity, changed = ref, true
+		for _, g := range ev.grantsOf(p) {
+			ref, keep := fix(p.String(), g.Entity)
+			changed = changed || !keep || ref != g.Entity
+			if keep {
+				g.Entity = ref
+				grants = append(grants, g)
 			}
 		}
 		if changed {
@@ -158,18 +166,24 @@ func (ev *evaluation) qualifyReferences() {
 	}
 }
 
-func (ev *evaluation) qualifyEntity(e *config.EntityConfig, fix func(owner, ref string) string) {
+func (ev *evaluation) qualifyEntity(e *config.EntityConfig, fix func(owner, ref string) (string, bool)) {
 	id := e.ID()
-	rels, affects := slices.Clone(e.Relationships), slices.Clone(e.Affects)
+	var rels []config.RelationshipConfig
+	var affects []string
 	changed := false
-	for i, r := range rels {
-		if ref := fix(id, r.Target); ref != r.Target {
-			rels[i].Target, changed = ref, true
+	for _, r := range e.Relationships {
+		ref, keep := fix(id, r.Target)
+		changed = changed || !keep || ref != r.Target
+		if keep {
+			r.Target = ref
+			rels = append(rels, r)
 		}
 	}
-	for i, a := range affects {
-		if ref := fix(id, a); ref != a {
-			affects[i], changed = ref, true
+	for _, a := range e.Affects {
+		ref, keep := fix(id, a)
+		changed = changed || !keep || ref != a
+		if keep {
+			affects = append(affects, ref)
 		}
 	}
 	if changed {
@@ -181,7 +195,8 @@ func (ev *evaluation) qualifyEntity(e *config.EntityConfig, fix func(owner, ref 
 // proposal puts the outcome together.
 func (ev *evaluation) proposal(rows []Row) Proposal {
 	out := Proposal{
-		Config: ev.cfg, Added: ev.added, Roles: map[string]config.RoleDefinition{}, Users: map[string]config.UserConfig{},
+		Config: ev.cfg, Added: ev.added, Removed: ev.removed,
+		Roles: map[string]config.RoleDefinition{}, Users: map[string]config.UserConfig{},
 		Report: ev.report,
 	}
 	for _, e := range ev.cfg.Entities {

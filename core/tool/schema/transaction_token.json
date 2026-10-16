@@ -7,5 +7,6 @@
     },
     "required": [
         "transaction"
-    ]
+    ],
+    "additionalProperties": false
 }

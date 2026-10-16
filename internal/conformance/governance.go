@@ -89,6 +89,7 @@ func RunGovernance(t *testing.T, prov provider.Provider, driver, schema, slow st
 		}, tool.CodeCostExceeded)
 	})
 	t.Run("statement-timeout", func(t *testing.T) { statementTimeout(t, timed, slow) })
+	t.Run("schema-change", func(t *testing.T) { runSchemaChange(t, prov, driver, schema) })
 }
 
 func run(t *testing.T, app *bootstrap.App, role string, tl tool.Tool, input map[string]any) (tool.Result, error) {

@@ -6,11 +6,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/nethinwei/sql-mcp-server/core/budget"
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
+	"github.com/nethinwei/sql-mcp-server/core/engine"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
+	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
 )
@@ -34,6 +38,7 @@ type Denial struct {
 const (
 	CodeUnauthorized        = "UNAUTHORIZED"
 	CodeEntityNotFound      = "ENTITY_NOT_FOUND"
+	CodeEntityUnavailable   = "ENTITY_UNAVAILABLE"
 	CodeInvalidInput        = "INVALID_INPUT"
 	CodeDMLToolsDisabled    = "DML_TOOLS_DISABLED"
 	CodeUnsafeWrite         = "UNSAFE_WRITE"
@@ -50,7 +55,26 @@ const (
 	CodeAmbiguousEntity     = "AMBIGUOUS_ENTITY"
 	CodeOutcomeUnknown      = "OUTCOME_UNKNOWN"
 	CodeAuditUnavailable    = "AUDIT_UNAVAILABLE"
+	CodeRateLimited         = "RATE_LIMITED"
+	// CodeOverloaded: the process is at capacity (calls in flight, request
+	// rate, execution slots); CodeDatasourceUnavailable: the datasource keeps
+	// failing and calls to it are held off for a while (circuit breaker).
+	CodeOverloaded            = "OVERLOADED"
+	CodeDatasourceUnavailable = "DATASOURCE_UNAVAILABLE"
 )
+
+// transient are the errors of a call held back by load or a failing
+// database: the caller retries later, with nothing to change.
+var transient = []struct {
+	errs []error
+	code string
+	hint string
+}{
+	{[]error{engine.ErrOverloaded, bus.ErrOverloaded, ratelimit.ErrRateLimited, engine.ErrClosed, bus.ErrClosed},
+		CodeOverloaded, "the server is at capacity: retry after a moment"},
+	{[]error{ratelimit.ErrCircuitOpen}, CodeDatasourceUnavailable,
+		"the datasource keeps failing and is held off: retry in a few seconds"},
+}
 
 var sentinelDenials = []struct {
 	err       error
@@ -59,6 +83,7 @@ var sentinelDenials = []struct {
 }{
 	{ErrUnauthorized, CodeUnauthorized, false},
 	{ErrEntityNotFound, CodeEntityNotFound, false},
+	{ErrEntityUnavailable, CodeEntityUnavailable, false},
 	{ErrInvalidInput, CodeInvalidInput, true},
 	{ErrDMLToolsDisabled, CodeDMLToolsDisabled, false},
 	{ErrUnsafeWrite, CodeUnsafeWrite, true},
@@ -72,11 +97,45 @@ var sentinelDenials = []struct {
 }
 
 // DenialFor maps a business-level error to the rejection contract. ok is
-// false for internal errors, which must not be reflected to clients.
+// false for internal errors, which must not be reflected to clients. A
+// statement whose failure rolled its transaction back says so in
+// constraints.transaction.
 func DenialFor(err error, decisionID string) (Denial, bool) {
+	d, ok := denialFor(err, decisionID)
+	var rolledBack *TransactionRolledBackError
+	if ok && errors.As(err, &rolledBack) {
+		constraints := map[string]any{"transaction": OutcomeRolledBack}
+		maps.Copy(constraints, d.Constraints)
+		d.Constraints = constraints
+		d.Hints = append(d.Hints, "the transaction was rolled back: begin a new one and redo its writes")
+	}
+	var changed *schemaChanged
+	if ok && errors.As(err, &changed) {
+		d.Hints = append(d.Hints, "the table changed in the database: describe the entity again, "+
+			"or ask an administrator to update its configuration")
+	}
+	return d, ok
+}
+
+func denialFor(err error, decisionID string) (Denial, bool) {
 	if d, ok := typedDenial(err); ok {
 		d.DecisionID = decisionID
 		return d, true
+	}
+	for _, t := range transient {
+		for _, e := range t.errs {
+			if errors.Is(err, e) {
+				return Denial{Code: t.code, Reason: e.Error(), Retryable: true, Hints: []string{t.hint},
+					DecisionID: decisionID}, true
+			}
+		}
+	}
+	if errors.Is(err, ErrCallerRateLimited) {
+		return Denial{
+			Code: CodeRateLimited, Reason: err.Error(), Retryable: true,
+			Hints:      []string{"retry after a moment, or make fewer calls at once"},
+			DecisionID: decisionID,
+		}, true
 	}
 	if errors.Is(err, budget.ErrExceeded) {
 		return Denial{

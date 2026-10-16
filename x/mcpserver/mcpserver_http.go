@@ -34,26 +34,43 @@ func applyHTTPDefaults(cfg *HTTPConfig) {
 		cfg.BodyReadTimeout = 30 * time.Second
 	}
 	if cfg.SessionTimeout <= 0 {
-		cfg.SessionTimeout = 5 * time.Minute
+		cfg.SessionTimeout = 30 * time.Minute // as config.ServerConfig.SessionTimeout defaults
 	}
 }
 
 // sessionHandler is /mcp before authentication: MCP sessions bound to the
-// identity that opened them, dropped when that identity is revoked.
+// identity that opened them, dropped when that identity is revoked, and
+// refused to cross-origin browser requests.
 func sessionHandler(s *mcp.Server, cfg HTTPConfig) http.Handler {
 	identities := newSessionIdentityStore()
 	eventStore := &sessionEventStore{
-		EventStore: mcp.NewMemoryEventStore(nil), onClosed: cfg.OnSessionClosed, identity: identities,
+		EventStore: newFairEventStore(eventStoreMaxBytes), onClosed: cfg.OnSessionClosed, identity: identities,
 	}
 	handler := http.Handler(mcp.NewStreamableHTTPHandler(
 		func(_ *http.Request) *mcp.Server { return s },
 		&mcp.StreamableHTTPOptions{EventStore: eventStore, SessionTimeout: cfg.SessionTimeout},
 	))
 	handler = bindSessionIdentity(identities, handler)
+	// A browser page of another origin must not drive the endpoint with the
+	// browser's credentials (client certificate, proxy session); clients
+	// that are not browsers send no Origin and are unaffected.
+	handler = http.NewCrossOriginProtection().Handler(handler)
 	if cfg.RevokedPrincipals != nil {
-		cfg.RevokedPrincipals(revokeSessions(identities, cfg.OnSessionClosed))
+		cfg.RevokedPrincipals(revokeSessions(identities, cfg.OnSessionClosed, closeSession(s)))
 	}
 	return handler
+}
+
+// closeSession closes the open session with the ID, which releases what the
+// transport holds for it; it then reports itself closed, which is idempotent.
+func closeSession(s *mcp.Server) func(string) {
+	return func(id string) {
+		for ss := range s.Sessions() {
+			if ss.ID() == id {
+				_ = ss.Close()
+			}
+		}
+	}
 }
 
 // authenticated wraps next with cfg's authentication: client certificates

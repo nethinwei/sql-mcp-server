@@ -93,6 +93,7 @@ type Store interface {
     Get(ctx, id int64) (Revision, error)
     List(ctx, limit int) ([]Revision, error)      // 摘要（不含 payload），新到旧
     Published(ctx) (Revision, error)              // 无发布时返回 ErrNoPublished
+    PublishedSummary(ctx) (Revision, error)       // 同上，不含 payload（轮询用）
     Publish(ctx, id, expectedCurrent int64, meta) (Revision, error)
     Rollback(ctx, expectedCurrent, target int64, meta) (Revision, error)
     ImportHistory(ctx, []Revision) error          // 仅空 store，供 migrate --history

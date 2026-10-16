@@ -45,8 +45,8 @@ class Session:
     def call(self, name, args):
         name = name if name in self.tools else next(t for t in self.tools if t.startswith(name))
         res = self.rpc("tools/call", {"name": name, "arguments": args})
-        body = res.get("structuredContent") or json.loads(res["content"][0]["text"])
-        if isinstance(body, dict) and "result" in body and not res.get("isError"):
+        body = res.get("structuredContent")  # rows are {"result": [...]}, other results one object
+        if "result" in body and not res.get("isError"):
             body = body["result"]
         return res.get("isError", False), body
 
@@ -99,7 +99,7 @@ def domain(title, d):
     s = session(who)
     err, body = s.call("create_record", {"entity": entity, "values": values})
     check("create with a database-generated key", not err, body)
-    new = body[0].get("lastInsertId") or body[0].get("id") if not err else None
+    new = body.get("lastInsertId") or body.get("id") if not err else None
     if new:
         err, body = s.call("read_records", {"entity": entity, "filter": [eq("id", new)]})
         check("reads after a write see it (the write connection)", not err and len(body) == 1, body)
@@ -113,7 +113,7 @@ def domain(title, d):
     err, body = s.call("begin_transaction", {"datasource": d["datasource"], "readOnly": False})
     check("begin a transaction", not err, body)
     if not err:
-        tx = body[0]["transaction"] if isinstance(body, list) else body["transaction"]
+        tx = body["transaction"]
         err, body = s.call("update_record", {"entity": entity, "transaction": tx, "filter": key, "set": change})
         check("write in the transaction", not err, body)
         err, body = s.call("commit_transaction", {"transaction": tx})
@@ -209,7 +209,7 @@ check("a name the caller can use twice is ambiguous and lists qualified candidat
       err and body.get("code") == "AMBIGUOUS_ENTITY" and
       sorted(body.get("constraints", {}).get("candidates", [])) == ["archive.orders", "sales.orders"], body)
 err, body = session("bi").call("describe_entities", {})
-listed = {e["name"]: e["id"] for e in body} if not err else {}
+listed = {e["name"]: e["id"] for e in body["entities"]} if not err else {}
 check("describe names each entity by its shortest unambiguous reference",
       listed.get("sales.orders") == "shop.sales.orders" and listed.get("archive.orders") == "shop.archive.orders" and
       listed.get("tenants") == "shop.crm.tenants", listed)

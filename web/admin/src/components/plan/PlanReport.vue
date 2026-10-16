@@ -42,6 +42,7 @@ function changeText(c: Change) {
     case 'mask': return t('plan.change.mask', { fields: c.fields, n, mask: t(`entity.masks.${c.mask}`, c.mask ?? '') })
     case 'syncAdd': return t('plan.change.syncAdd', { fields: c.fields, n })
     case 'syncRemove': return t('plan.change.syncRemove', { fields: c.fields, n })
+    case 'removeTable': return t('plan.change.removeTable', { n })
   }
   return c.kind
 }

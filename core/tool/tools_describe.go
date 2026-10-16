@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
@@ -18,22 +19,41 @@ type DescribeTool struct{}
 // Info implements Tool.
 func (DescribeTool) Info() Info {
 	return Info{
-		Name:        "describe_entities",
-		Action:      "describe",
-		Description: "List exposed entities and their fields",
+		Name:   "describe_entities",
+		Title:  "Describe entities",
+		Action: "describe",
+		Description: "Find the entities (tables and views) you may use and what you may do with them. " +
+			"Without entity it lists one page of entities: narrow it with search (matches name, ID or " +
+			"description) and datasource, and pass nextOffset as offset for the next page. With entity it " +
+			"returns that entity's fields (type, required, readOnly), identity keys and datasource. " +
+			"Use the names it returns in the other tools; never guess entity or field names.",
 		InputSchema: schemaDescribe,
-		ReadOnly:    true,
+		ReadOnly:    true, Idempotent: true, Object: true,
 	}
 }
 
 // Enabled implements Tool.
 func (DescribeTool) Enabled(f config.ToolFlags) bool { return f.DescribeEntities }
 
+// Listing bounds: a page holds describeDefaultLimit entities unless the
+// caller asks for up to describeMaxLimit, so thousands of entities never come
+// back in one result.
+const (
+	describeDefaultLimit = 100
+	describeMaxLimit     = 500
+)
+
+type describeInput struct {
+	Entity     string `json:"entity"`
+	Search     string `json:"search"`
+	Datasource string `json:"datasource"`
+	Offset     int    `json:"offset"`
+	Limit      int    `json:"limit"`
+}
+
 // Run implements Tool.
 func (DescribeTool) Run(ctx context.Context, input json.RawMessage, tc Context) (Result, error) {
-	var in struct {
-		Entity string `json:"entity"`
-	}
+	var in describeInput
 	if len(input) > 0 {
 		if err := decodeInput(input, &in); err != nil {
 			return Result{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
@@ -42,26 +62,42 @@ func (DescribeTool) Run(ctx context.Context, input json.RawMessage, tc Context) 
 	if in.Entity != "" {
 		return describeEntity(ctx, tc, in.Entity)
 	}
-	entities := tc.Registry.Entities()
-	visible := UsableBy(ctx, tc.Authorizer, tc.Role, tc.Subject)
-	out := make([]map[string]any, 0, len(entities))
-	for _, e := range entities {
-		if !e.MCP.DMLTools {
-			continue
-		}
-		_, allowed, err := describeFields(ctx, tc, e)
-		if err != nil {
-			return Result{}, err
-		}
-		if !allowed {
-			continue
-		}
-		out = append(out, map[string]any{
-			"name": entityName(tc, e, visible), "id": e.Name, "description": e.Description,
-			"datasource": e.DatasourceName(),
-		})
+	if in.Offset < 0 || in.Limit < 0 || in.Limit > describeMaxLimit {
+		return Result{}, fmt.Errorf("%w: offset must be >= 0 and limit between 1 and %d", ErrInvalidInput, describeMaxLimit)
 	}
-	return Result{Content: out}, nil
+	if in.Limit == 0 {
+		in.Limit = describeDefaultLimit
+	}
+	return Result{Content: []map[string]any{listEntities(ctx, tc, in)}}, nil
+}
+
+// listEntities is one page of the entities the caller may use whose name, ID
+// or description contains search (ignoring case) and that are in datasource.
+func listEntities(ctx context.Context, tc Context, in describeInput) map[string]any {
+	visible := UsableBy(ctx, tc.Authorizer, tc.Role, tc.Subject)
+	search := strings.ToLower(in.Search)
+	page := []map[string]any{}
+	total := 0
+	for _, e := range tc.Registry.Entities() {
+		if !e.MCP.DMLTools || (in.Datasource != "" && e.DatasourceName() != in.Datasource) || !visible(e) {
+			continue
+		}
+		name := entityName(tc, e, visible)
+		if search != "" && !strings.Contains(strings.ToLower(name+"\x00"+e.Name+"\x00"+e.Description), search) {
+			continue
+		}
+		if total >= in.Offset && len(page) < in.Limit {
+			page = append(page, map[string]any{
+				"name": name, "id": e.Name, "description": e.Description, "datasource": e.DatasourceName(),
+			})
+		}
+		total++
+	}
+	out := map[string]any{"entities": page, "total": total}
+	if next := in.Offset + len(page); next < total {
+		out["nextOffset"] = next
+	}
+	return out
 }
 
 // describeEntity lists the fields of one entity visible to the caller.

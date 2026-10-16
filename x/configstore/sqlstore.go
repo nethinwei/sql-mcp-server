@@ -229,6 +229,16 @@ func (s *SQLStore) Published(ctx context.Context) (revision.Revision, error) {
 	return s.published(ctx, s.db)
 }
 
+// PublishedSummary implements revision.Store.
+func (s *SQLStore) PublishedSummary(ctx context.Context) (revision.Revision, error) {
+	r, err := scanRevision(s.queryRow(ctx, s.db, "SELECT "+summaryColumns+" FROM smcp_revisions WHERE state = ?",
+		string(revision.StatePublished)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return revision.Revision{}, revision.ErrNoPublished
+	}
+	return r, err
+}
+
 func (s *SQLStore) published(ctx context.Context, q execer) (revision.Revision, error) {
 	r, err := scanRevision(s.queryRow(ctx, q, "SELECT "+revisionColumns+" FROM smcp_revisions WHERE state = ?",
 		string(revision.StatePublished)))

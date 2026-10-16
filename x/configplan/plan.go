@@ -89,12 +89,16 @@ type FieldRule struct {
 	Mask    string   `json:"mask,omitempty"`
 }
 
-// SyncRule adds fields for new columns and removes those of dropped ones.
+// SyncRule adds fields for new columns and removes those of dropped ones,
+// and removes the entities of dropped tables.
 type SyncRule struct {
 	Add    bool `json:"add,omitempty"`
 	Remove bool `json:"remove,omitempty"`
 	// HideNew excludes the fields it adds until they are reviewed.
 	HideNew bool `json:"hideNew,omitempty"`
+	// RemoveTables removes the entities whose tables are gone (see
+	// GoneTables), with the grants, relationships and affects naming them.
+	RemoveTables bool `json:"removeTables,omitempty"`
 }
 
 var grantable = []string{"read", "aggregate", "create", "update", "delete"}
@@ -132,7 +136,8 @@ func (p *Plan) Check() error {
 			errs = append(errs, checkGlob(pattern))
 		}
 	}
-	if !p.Import && len(p.Grants) == 0 && len(p.Fields) == 0 && (p.Sync == nil || !p.Sync.Add && !p.Sync.Remove) {
+	syncs := p.Sync != nil && (p.Sync.Add || p.Sync.Remove || p.Sync.RemoveTables)
+	if !p.Import && len(p.Grants) == 0 && len(p.Fields) == 0 && !syncs {
 		errs = append(errs, errors.New("plan: nothing to do: set import, grants, fields or sync"))
 	}
 	return errors.Join(errs...)

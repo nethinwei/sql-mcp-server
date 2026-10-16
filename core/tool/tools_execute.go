@@ -1,13 +1,13 @@
 package tool
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
@@ -20,8 +20,10 @@ type ExecuteTool struct{}
 
 func (ExecuteTool) Info() Info {
 	return Info{
-		Name: "execute_entity", Description: "Execute a stored procedure", InputSchema: schemaExecute,
-		Action: entity.ActionExecute.String(),
+		Name: "execute_entity", Title: "Execute stored procedure", InputSchema: schemaExecute,
+		Description: "Call a stored procedure entity with its parameters as args, returned as " +
+			"{\"result\": [rows]}. A procedure may change data.",
+		Action: entity.ActionExecute.String(), Destructive: true,
 	}
 }
 func (ExecuteTool) Enabled(f config.ToolFlags) bool { return f.ExecuteEntity }
@@ -39,26 +41,15 @@ func (ExecuteTool) Run(ctx context.Context, input json.RawMessage, tc Context) (
 // same implementation as execute_entity.
 type ProcedureTool struct {
 	Entity entity.Entity
+	// Name is the tool's name among the exposed procedures (see
+	// ProcedureTools); procedureToolBase when empty.
+	Name string
 }
 
-// ProcedureToolName returns a stable MCP-safe name for a procedure entity:
-// its local name, normalized, and a hash of its Name. The prefix separates
-// procedure tools from built-ins; the hash prevents normalization collisions
-// and tells same-named procedures of different namespaces apart.
-func ProcedureToolName(e entity.Entity) string {
-	if name, ok := procedureToolNames.Load(e.Name); ok {
-		return name.(string)
-	}
-	name := procedureToolName(e)
-	procedureToolNames.Store(e.Name, name)
-	return name
-}
-
-// procedureToolNames keeps each procedure's tool name, which depends on its
-// Name alone: every call and every audit line of a procedure asks for it.
-var procedureToolNames sync.Map
-
-func procedureToolName(e entity.Entity) string {
+// procedureToolBase is a procedure's readable MCP-safe tool name: procedure_
+// and its local name, with characters a tool name may not hold replaced. The
+// prefix separates procedure tools from the built-in ones.
+func procedureToolBase(e entity.Entity) string {
 	local := e.Local
 	if local == "" {
 		local = e.Name
@@ -76,17 +67,27 @@ func procedureToolName(e entity.Entity) string {
 	if base == "" {
 		base = "procedure"
 	}
-	sum := sha256.Sum256([]byte(e.Name))
-	return "procedure_" + base + "_" + hex.EncodeToString(sum[:4])
+	return "procedure_" + base[:min(len(base), 100)]
 }
 
 // ProcedureTools returns the procedures exposed as their own tools: trusted
-// procedures configured with a custom tool.
+// procedures configured with a custom tool. Each is named procedureToolBase;
+// procedures whose base names collide (same-named procedures of different
+// namespaces, or names that normalize alike) add a hash of their Name.
 func ProcedureTools(reg *entity.Registry) []ProcedureTool {
 	var out []ProcedureTool
+	bases := map[string]int{}
 	for _, e := range reg.Entities() {
 		if e.Kind == entity.KindProcedure && e.MCP.CustomTool && e.MCP.TrustedProcedure {
-			out = append(out, ProcedureTool{Entity: e})
+			t := ProcedureTool{Entity: e, Name: procedureToolBase(e)}
+			bases[t.Name]++
+			out = append(out, t)
+		}
+	}
+	for i, t := range out {
+		if bases[t.Name] > 1 {
+			sum := sha256.Sum256([]byte(t.Entity.Name))
+			out[i].Name += "_" + hex.EncodeToString(sum[:4])
 		}
 	}
 	return out
@@ -94,8 +95,11 @@ func ProcedureTools(reg *entity.Registry) []ProcedureTool {
 
 // FindProcedureTool returns the exposed procedure tool named name.
 func FindProcedureTool(reg *entity.Registry, name string) (ProcedureTool, bool) {
+	if !strings.HasPrefix(name, "procedure_") {
+		return ProcedureTool{}, false
+	}
 	for _, t := range ProcedureTools(reg) {
-		if ProcedureToolName(t.Entity) == name {
+		if t.Name == name {
 			return t, true
 		}
 	}
@@ -109,15 +113,19 @@ func (t ProcedureTool) Info() Info {
 		properties[param] = map[string]any{"description": "Stored procedure parameter"}
 	}
 	schema, _ := json.Marshal(map[string]any{
-		"type":       "object",
-		"properties": properties,
-		"required":   append([]string{}, t.Entity.Params...), // never null
+		"type":                 "object",
+		"properties":           properties,
+		"required":             append([]string{}, t.Entity.Params...), // never null
+		"additionalProperties": false,
 	})
 	return Info{
-		Name:        ProcedureToolName(t.Entity),
-		Action:      entity.ActionExecute.String(),
-		Description: "Execute stored procedure " + t.Entity.Name,
+		Name:   cmp.Or(t.Name, procedureToolBase(t.Entity)),
+		Action: entity.ActionExecute.String(),
+		Title:  "Execute " + t.Entity.Name,
+		Description: cmp.Or(t.Entity.Description, "Execute stored procedure "+t.Entity.Name) +
+			"; the procedure may change data. Returns {\"result\": [rows]}.",
 		InputSchema: schema,
+		Destructive: true,
 	}
 }
 

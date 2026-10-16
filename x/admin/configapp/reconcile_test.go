@@ -422,3 +422,22 @@ func TestReconcileSwappedRolesSwapLegacyAccess(t *testing.T) {
 		}
 	}
 }
+
+// The budget entries of a role renamed and of a user removed follow them: a
+// budget naming a user that is gone would fail validation.
+func TestReconcileBudgetsFollowRolesAndUsers(t *testing.T) {
+	before := items(t, nil,
+		[]string{`{"name":"analyst","grants":[]}`},
+		[]string{`{"name":"alice","roles":["analyst"],"grants":[]}`, `{"name":"bob","grants":[]}`})
+	before = before.With(settingsRef, decoded(t, `{"budget":{"roles":{"analyst":{"maxConcurrent":2}},
+		"users":{"alice":{"maxConcurrent":1},"bob":{"maxConcurrent":3}}},"cost":{"maxRows":10}}`))
+	after := written(t, before, map[workspace.Ref]string{
+		roleRef("analyst"): "", roleRef("bi"): `{"name":"bi","grants":[]}`, userRef("alice"): "",
+	})
+	out := mustReconcile(t, before, after, map[workspace.Ref]workspace.Ref{roleRef("bi"): roleRef("analyst")})
+	got, _ := json.Marshal(out.Get(settingsRef))
+	if string(got) != `{"budget":{"roles":{"bi":{"maxConcurrent":2}},"users":{"bob":{"maxConcurrent":3}}},`+
+		`"cost":{"maxRows":10}}` {
+		t.Fatalf("settings = %s", got)
+	}
+}

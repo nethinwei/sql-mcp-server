@@ -13,6 +13,9 @@ server:
   # Default user for calls without a user identity; wins over role. Must name
   # a configured, enabled user (see users below).
   user: ""
+  # An HTTP MCP session idle this long is closed; the client then opens a new
+  # one (its transactions and session budget do not carry over).
+  sessionTimeout: 30m
   # Behind a gateway serving this under a path it strips (e.g. /sql-mcp), and
   # the MCP endpoint as clients reach it; the console builds client
   # configuration from publicURL.
@@ -184,6 +187,7 @@ audit:
 
 transactions:
   ttl: 5m
+  idleTimeout: 1m # rolled back after this long without a statement
   maxOpen: 128
   beginTimeout: 5s
   commitTimeout: 30s
@@ -209,6 +213,24 @@ roles:
         rows: {op: eq, field: tenant_id, value: "${subject.tenant_id}"}
     # sql:execute@<datasource> admits execute_sql there.
     permissions: []
+    # Tighten the global limits for this role's calls (unset fields keep
+    # them); a user's own limits win over its roles'.
+    limits:
+      maxRows: 500
+      maxBytes: 1048576
+      queryTimeout: 5s
+      softScore: 40
+      hardScore: 20
+      rejectFullScan: true
+      rps: 5
+      maxInflight: 4
+      budget:
+        maxConcurrent: 2
+        maxExecution: 30s
+        maxEstimatedScannedRows: 1000000
+        maxReturnedRows: 10000
+        maxReturnedBytes: 10485760
+        maxSessionCost: 1000
 
 users:
   alice:
@@ -224,6 +246,11 @@ users:
         rows: {op: eq, field: tenant_id, value: "${subject.tenant_id}"}
     permissions: []
     disabled: false
+    # A user's own limits win over its roles', field by field.
+    limits:
+      {maxRows: 100, maxBytes: 262144, queryTimeout: 3s, softScore: 50, hardScore: 30, rejectFullScan: true,
+       rps: 1, maxInflight: 1, budget: {maxConcurrent: 1, maxExecution: 10s, maxEstimatedScannedRows: 100000,
+       maxReturnedRows: 1000, maxReturnedBytes: 1048576, maxSessionCost: 100}}
 
 entities:
   - name: users

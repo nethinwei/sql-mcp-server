@@ -326,6 +326,7 @@ type RoleInput struct {
 	Description *string      `json:"description,omitempty"`
 	Grants      []GrantInput `json:"grants,omitempty"`
 	Permissions []string     `json:"permissions,omitempty"`
+	Limits      any          `json:"limits,omitempty"`
 }
 
 type RollbackInput struct {
@@ -355,6 +356,10 @@ type ServerStatus struct {
 	Unapplied *UnappliedRevision `json:"unapplied,omitempty"`
 	// What the process runs on its execution bus; null when unknown.
 	Execution *ExecutionStatus `json:"execution,omitempty"`
+	// Entities of the served revision whose table or columns are missing from the database; tools refuse them.
+	UnavailableEntities []UnavailableEntity `json:"unavailableEntities"`
+	// Datasources whose schema the served revision could not read; their entities are unavailable until a reload reads it.
+	UnreachableDatasources []UnreachableDatasource `json:"unreachableDatasources"`
 }
 
 type SetAdminPasswordInput struct {
@@ -407,6 +412,19 @@ type UnappliedRevision struct {
 	Error           string `json:"error"`
 }
 
+type UnavailableEntity struct {
+	// The entity's ID.
+	Entity string `json:"entity"`
+	Reason string `json:"reason"`
+	// Its table is missing (removing the entity is the fix); false: columns are (syncing its fields is).
+	TableMissing bool `json:"tableMissing"`
+}
+
+type UnreachableDatasource struct {
+	Datasource string `json:"datasource"`
+	Error      string `json:"error"`
+}
+
 type UserInput struct {
 	Name        string       `json:"name"`
 	Description *string      `json:"description,omitempty"`
@@ -416,6 +434,7 @@ type UserInput struct {
 	Subject     any          `json:"subject,omitempty"`
 	Disabled    *bool        `json:"disabled,omitempty"`
 	TokenHash   *string      `json:"tokenHash,omitempty"`
+	Limits      any          `json:"limits,omitempty"`
 }
 
 type UserToken struct {

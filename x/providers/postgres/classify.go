@@ -23,13 +23,23 @@ var constraintKinds = map[string]string{
 // privilege, or a write on a hot standby or in a read-only transaction.
 var refusals = map[string]bool{"42501": true, "25006": true}
 
+// schemaChanges are SQLSTATEs of a statement naming a table or a column the
+// database does not have.
+var schemaChanges = map[string]error{"42P01": store.ErrMissingRelation, "42703": store.ErrMissingColumn}
+
+// stalePlan is the message of the feature_not_supported (0A000) error a
+// cached plan whose table changed its result columns gets.
+const stalePlan = "cached plan must not change result type"
+
 // queryCanceled is the SQLSTATE of a statement stopped by statement_timeout or
 // by the cancel request a cancelled request sends.
 const queryCanceled = "57014"
 
 // classify turns an integrity violation into a *store.ConstraintError, a
-// refusal into store.ErrPermissionDenied, and a cancelled statement into a
-// context.DeadlineExceeded, as the request's own deadline would have been.
+// refusal into store.ErrPermissionDenied, a cancelled statement into
+// store.ErrStatementTimeout, a missing table or column into
+// store.ErrMissingRelation or store.ErrMissingColumn, and a stale cached plan
+// into store.ErrStalePlan.
 func classify(err error) error {
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {
@@ -40,6 +50,12 @@ func classify(err error) error {
 	}
 	if refusals[pgErr.Code] {
 		return fmt.Errorf("%w: %w", store.ErrPermissionDenied, err)
+	}
+	if missing := schemaChanges[pgErr.Code]; missing != nil {
+		return fmt.Errorf("%w: %w", missing, err)
+	}
+	if pgErr.Code == "0A000" && strings.Contains(pgErr.Message, stalePlan) {
+		return fmt.Errorf("%w: %w", store.ErrStalePlan, err)
 	}
 	kind, ok := constraintKinds[pgErr.Code]
 	if !ok {

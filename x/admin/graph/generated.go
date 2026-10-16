@@ -341,6 +341,14 @@ type ComplexityRoot struct {
 		UpdateWorkspace     func(childComplexity int, to string) int
 	}
 
+	PendingGoneTable struct {
+		Entity  func(childComplexity int) int
+		Key     func(childComplexity int) int
+		Ref     func(childComplexity int) int
+		Scanned func(childComplexity int) int
+		State   func(childComplexity int) int
+	}
+
 	PendingPlan struct {
 		Key      func(childComplexity int) int
 		Report   func(childComplexity int) int
@@ -370,6 +378,7 @@ type ComplexityRoot struct {
 	PendingWork struct {
 		Drift               func(childComplexity int) int
 		DriftTables         func(childComplexity int) int
+		GoneTables          func(childComplexity int) int
 		NewTables           func(childComplexity int) int
 		Plans               func(childComplexity int) int
 		UnlistedDatasources func(childComplexity int) int
@@ -499,6 +508,7 @@ type ComplexityRoot struct {
 	Role struct {
 		Description func(childComplexity int) int
 		Grants      func(childComplexity int) int
+		Limits      func(childComplexity int) int
 		Name        func(childComplexity int) int
 		Permissions func(childComplexity int) int
 	}
@@ -565,10 +575,12 @@ type ComplexityRoot struct {
 	}
 
 	ServerStatus struct {
-		AppliedRevision func(childComplexity int) int
-		Execution       func(childComplexity int) int
-		Unapplied       func(childComplexity int) int
-		Watching        func(childComplexity int) int
+		AppliedRevision        func(childComplexity int) int
+		Execution              func(childComplexity int) int
+		Unapplied              func(childComplexity int) int
+		UnavailableEntities    func(childComplexity int) int
+		UnreachableDatasources func(childComplexity int) int
+		Watching               func(childComplexity int) int
 	}
 
 	Simulation struct {
@@ -610,6 +622,17 @@ type ComplexityRoot struct {
 		RestartRequired func(childComplexity int) int
 	}
 
+	UnavailableEntity struct {
+		Entity       func(childComplexity int) int
+		Reason       func(childComplexity int) int
+		TableMissing func(childComplexity int) int
+	}
+
+	UnreachableDatasource struct {
+		Datasource func(childComplexity int) int
+		Error      func(childComplexity int) int
+	}
+
 	UnscannedSchemas struct {
 		Datasource func(childComplexity int) int
 		Schemas    func(childComplexity int) int
@@ -619,6 +642,7 @@ type ComplexityRoot struct {
 		Description func(childComplexity int) int
 		Disabled    func(childComplexity int) int
 		Grants      func(childComplexity int) int
+		Limits      func(childComplexity int) int
 		Name        func(childComplexity int) int
 		Permissions func(childComplexity int) int
 		Roles       func(childComplexity int) int
@@ -2123,6 +2147,37 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.UpdateWorkspace(childComplexity, args["to"].(string)), true
 
+	case "PendingGoneTable.entity":
+		if e.ComplexityRoot.PendingGoneTable.Entity == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PendingGoneTable.Entity(childComplexity), true
+	case "PendingGoneTable.key":
+		if e.ComplexityRoot.PendingGoneTable.Key == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PendingGoneTable.Key(childComplexity), true
+	case "PendingGoneTable.ref":
+		if e.ComplexityRoot.PendingGoneTable.Ref == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PendingGoneTable.Ref(childComplexity), true
+	case "PendingGoneTable.scanned":
+		if e.ComplexityRoot.PendingGoneTable.Scanned == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PendingGoneTable.Scanned(childComplexity), true
+	case "PendingGoneTable.state":
+		if e.ComplexityRoot.PendingGoneTable.State == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PendingGoneTable.State(childComplexity), true
+
 	case "PendingPlan.key":
 		if e.ComplexityRoot.PendingPlan.Key == nil {
 			break
@@ -2240,6 +2295,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.PendingWork.DriftTables(childComplexity), true
+	case "PendingWork.goneTables":
+		if e.ComplexityRoot.PendingWork.GoneTables == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PendingWork.GoneTables(childComplexity), true
 	case "PendingWork.newTables":
 		if e.ComplexityRoot.PendingWork.NewTables == nil {
 			break
@@ -2938,6 +2999,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Role.Grants(childComplexity), true
+	case "Role.limits":
+		if e.ComplexityRoot.Role.Limits == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Role.Limits(childComplexity), true
 	case "Role.name":
 		if e.ComplexityRoot.Role.Name == nil {
 			break
@@ -3199,6 +3266,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ServerStatus.Unapplied(childComplexity), true
+	case "ServerStatus.unavailableEntities":
+		if e.ComplexityRoot.ServerStatus.UnavailableEntities == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServerStatus.UnavailableEntities(childComplexity), true
+	case "ServerStatus.unreachableDatasources":
+		if e.ComplexityRoot.ServerStatus.UnreachableDatasources == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServerStatus.UnreachableDatasources(childComplexity), true
 	case "ServerStatus.watching":
 		if e.ComplexityRoot.ServerStatus.Watching == nil {
 			break
@@ -3338,6 +3417,38 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.UnappliedRevision.RestartRequired(childComplexity), true
 
+	case "UnavailableEntity.entity":
+		if e.ComplexityRoot.UnavailableEntity.Entity == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UnavailableEntity.Entity(childComplexity), true
+	case "UnavailableEntity.reason":
+		if e.ComplexityRoot.UnavailableEntity.Reason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UnavailableEntity.Reason(childComplexity), true
+	case "UnavailableEntity.tableMissing":
+		if e.ComplexityRoot.UnavailableEntity.TableMissing == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UnavailableEntity.TableMissing(childComplexity), true
+
+	case "UnreachableDatasource.datasource":
+		if e.ComplexityRoot.UnreachableDatasource.Datasource == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UnreachableDatasource.Datasource(childComplexity), true
+	case "UnreachableDatasource.error":
+		if e.ComplexityRoot.UnreachableDatasource.Error == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UnreachableDatasource.Error(childComplexity), true
+
 	case "UnscannedSchemas.datasource":
 		if e.ComplexityRoot.UnscannedSchemas.Datasource == nil {
 			break
@@ -3369,6 +3480,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.User.Grants(childComplexity), true
+	case "User.limits":
+		if e.ComplexityRoot.User.Limits == nil {
+			break
+		}
+
+		return e.ComplexityRoot.User.Limits(childComplexity), true
 	case "User.name":
 		if e.ComplexityRoot.User.Name == nil {
 			break
@@ -4350,6 +4467,22 @@ func (ec *executionContext) childFields_McpTokenSecret(ctx context.Context, fiel
 	return nil, fmt.Errorf("no field named %q was found under type McpTokenSecret", field.Name)
 }
 
+func (ec *executionContext) childFields_PendingGoneTable(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "key":
+		return ec.fieldContext_PendingGoneTable_key(ctx, field)
+	case "ref":
+		return ec.fieldContext_PendingGoneTable_ref(ctx, field)
+	case "entity":
+		return ec.fieldContext_PendingGoneTable_entity(ctx, field)
+	case "scanned":
+		return ec.fieldContext_PendingGoneTable_scanned(ctx, field)
+	case "state":
+		return ec.fieldContext_PendingGoneTable_state(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type PendingGoneTable", field.Name)
+}
+
 func (ec *executionContext) childFields_PendingPlan(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "key":
@@ -4408,6 +4541,8 @@ func (ec *executionContext) childFields_PendingWork(ctx context.Context, field g
 		return ec.fieldContext_PendingWork_plans(ctx, field)
 	case "driftTables":
 		return ec.fieldContext_PendingWork_driftTables(ctx, field)
+	case "goneTables":
+		return ec.fieldContext_PendingWork_goneTables(ctx, field)
 	case "drift":
 		return ec.fieldContext_PendingWork_drift(ctx, field)
 	case "newTables":
@@ -4596,6 +4731,8 @@ func (ec *executionContext) childFields_Role(ctx context.Context, field graphql.
 		return ec.fieldContext_Role_grants(ctx, field)
 	case "permissions":
 		return ec.fieldContext_Role_permissions(ctx, field)
+	case "limits":
+		return ec.fieldContext_Role_limits(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Role", field.Name)
 }
@@ -4732,6 +4869,10 @@ func (ec *executionContext) childFields_ServerStatus(ctx context.Context, field 
 		return ec.fieldContext_ServerStatus_unapplied(ctx, field)
 	case "execution":
 		return ec.fieldContext_ServerStatus_execution(ctx, field)
+	case "unavailableEntities":
+		return ec.fieldContext_ServerStatus_unavailableEntities(ctx, field)
+	case "unreachableDatasources":
+		return ec.fieldContext_ServerStatus_unreachableDatasources(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ServerStatus", field.Name)
 }
@@ -4814,6 +4955,28 @@ func (ec *executionContext) childFields_UnappliedRevision(ctx context.Context, f
 	return nil, fmt.Errorf("no field named %q was found under type UnappliedRevision", field.Name)
 }
 
+func (ec *executionContext) childFields_UnavailableEntity(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "entity":
+		return ec.fieldContext_UnavailableEntity_entity(ctx, field)
+	case "reason":
+		return ec.fieldContext_UnavailableEntity_reason(ctx, field)
+	case "tableMissing":
+		return ec.fieldContext_UnavailableEntity_tableMissing(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UnavailableEntity", field.Name)
+}
+
+func (ec *executionContext) childFields_UnreachableDatasource(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "datasource":
+		return ec.fieldContext_UnreachableDatasource_datasource(ctx, field)
+	case "error":
+		return ec.fieldContext_UnreachableDatasource_error(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UnreachableDatasource", field.Name)
+}
+
 func (ec *executionContext) childFields_UnscannedSchemas(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "datasource":
@@ -4842,6 +5005,8 @@ func (ec *executionContext) childFields_User(ctx context.Context, field graphql.
 		return ec.fieldContext_User_disabled(ctx, field)
 	case "tokenHash":
 		return ec.fieldContext_User_tokenHash(ctx, field)
+	case "limits":
+		return ec.fieldContext_User_limits(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type User", field.Name)
 }
@@ -11194,6 +11359,130 @@ func (ec *executionContext) fieldContext_Mutation_retryScanBatch(ctx context.Con
 	return fc, nil
 }
 
+func (ec *executionContext) _PendingGoneTable_key(ctx context.Context, field graphql.CollectedField, obj *configapp.PendingGoneTable) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PendingGoneTable_key(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Key, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PendingGoneTable_key(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PendingGoneTable", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _PendingGoneTable_ref(ctx context.Context, field graphql.CollectedField, obj *configapp.PendingGoneTable) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PendingGoneTable_ref(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Ref, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PendingGoneTable_ref(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PendingGoneTable", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _PendingGoneTable_entity(ctx context.Context, field graphql.CollectedField, obj *configapp.PendingGoneTable) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PendingGoneTable_entity(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Entity, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PendingGoneTable_entity(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PendingGoneTable", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _PendingGoneTable_scanned(ctx context.Context, field graphql.CollectedField, obj *configapp.PendingGoneTable) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PendingGoneTable_scanned(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Scanned, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PendingGoneTable_scanned(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PendingGoneTable", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _PendingGoneTable_state(ctx context.Context, field graphql.CollectedField, obj *configapp.PendingGoneTable) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PendingGoneTable_state(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.State, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *configapp.PendingState) graphql.Marshaler {
+			return ec.marshalOPendingState2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐPendingState(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_PendingGoneTable_state(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PendingGoneTable",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_PendingState(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _PendingPlan_key(ctx context.Context, field graphql.CollectedField, obj *configapp.PendingPlan) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -11680,6 +11969,38 @@ func (ec *executionContext) fieldContext_PendingWork_driftTables(_ context.Conte
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_PendingTable(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PendingWork_goneTables(ctx context.Context, field graphql.CollectedField, obj *configapp.PendingWork) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PendingWork_goneTables(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.GoneTables, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []configapp.PendingGoneTable) graphql.Marshaler {
+			return ec.marshalNPendingGoneTable2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐPendingGoneTableᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PendingWork_goneTables(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PendingWork",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_PendingGoneTable(ctx, field)
 		},
 	}
 	return fc, nil
@@ -14699,6 +15020,29 @@ func (ec *executionContext) fieldContext_Role_permissions(_ context.Context, fie
 	return graphql.NewScalarFieldContext("Role", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _Role_limits(ctx context.Context, field graphql.CollectedField, obj *configapp.RoleItem) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Role_limits(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Limits, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v any) graphql.Marshaler {
+			return ec.marshalOJSON2interface(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Role_limits(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Role", field, false, false, errors.New("field of type JSON does not have child fields"))
+}
+
 func (ec *executionContext) _ScanBatch_id(ctx context.Context, field graphql.CollectedField, obj *configapp.ScanBatch) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -15705,6 +16049,70 @@ func (ec *executionContext) fieldContext_ServerStatus_execution(_ context.Contex
 	return fc, nil
 }
 
+func (ec *executionContext) _ServerStatus_unavailableEntities(ctx context.Context, field graphql.CollectedField, obj *ServerStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServerStatus_unavailableEntities(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.UnavailableEntities, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []UnavailableEntity) graphql.Marshaler {
+			return ec.marshalNUnavailableEntity2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐUnavailableEntityᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ServerStatus_unavailableEntities(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ServerStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnavailableEntity(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ServerStatus_unreachableDatasources(ctx context.Context, field graphql.CollectedField, obj *ServerStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ServerStatus_unreachableDatasources(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.UnreachableDatasources, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []UnreachableDatasource) graphql.Marshaler {
+			return ec.marshalNUnreachableDatasource2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐUnreachableDatasourceᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ServerStatus_unreachableDatasources(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ServerStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnreachableDatasource(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Simulation_allowed(ctx context.Context, field graphql.CollectedField, obj *configapp.Simulation) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -16197,6 +16605,121 @@ func (ec *executionContext) fieldContext_UnappliedRevision_error(_ context.Conte
 	return graphql.NewScalarFieldContext("UnappliedRevision", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _UnavailableEntity_entity(ctx context.Context, field graphql.CollectedField, obj *UnavailableEntity) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnavailableEntity_entity(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Entity, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnavailableEntity_entity(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnavailableEntity", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnavailableEntity_reason(ctx context.Context, field graphql.CollectedField, obj *UnavailableEntity) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnavailableEntity_reason(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Reason, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnavailableEntity_reason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnavailableEntity", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnavailableEntity_tableMissing(ctx context.Context, field graphql.CollectedField, obj *UnavailableEntity) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnavailableEntity_tableMissing(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TableMissing, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnavailableEntity_tableMissing(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnavailableEntity", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _UnreachableDatasource_datasource(ctx context.Context, field graphql.CollectedField, obj *UnreachableDatasource) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnreachableDatasource_datasource(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Datasource, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnreachableDatasource_datasource(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnreachableDatasource", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnreachableDatasource_error(ctx context.Context, field graphql.CollectedField, obj *UnreachableDatasource) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnreachableDatasource_error(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Error, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnreachableDatasource_error(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnreachableDatasource", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _UnscannedSchemas_datasource(ctx context.Context, field graphql.CollectedField, obj *configapp.UnscannedSchemas) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -16434,6 +16957,29 @@ func (ec *executionContext) _User_tokenHash(ctx context.Context, field graphql.C
 }
 func (ec *executionContext) fieldContext_User_tokenHash(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("User", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _User_limits(ctx context.Context, field graphql.CollectedField, obj *configapp.UserItem) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_User_limits(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Limits, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v any) graphql.Marshaler {
+			return ec.marshalOJSON2interface(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_User_limits(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("User", field, false, false, errors.New("field of type JSON does not have child fields"))
 }
 
 func (ec *executionContext) _UserToken_token(ctx context.Context, field graphql.CollectedField, obj *UserToken) (ret graphql.Marshaler) {
@@ -19463,7 +20009,7 @@ func (ec *executionContext) unmarshalInputRoleInput(ctx context.Context, obj any
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"name", "description", "grants", "permissions"}
+	fieldsInOrder := [...]string{"name", "description", "grants", "permissions", "limits"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -19498,6 +20044,13 @@ func (ec *executionContext) unmarshalInputRoleInput(ctx context.Context, obj any
 				return it, err
 			}
 			it.Permissions = data
+		case "limits":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("limits"))
+			data, err := ec.unmarshalOJSON2interface(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Limits = data
 		}
 	}
 	return it, nil
@@ -19759,7 +20312,7 @@ func (ec *executionContext) unmarshalInputUserInput(ctx context.Context, obj any
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"name", "description", "roles", "grants", "permissions", "subject", "disabled", "tokenHash"}
+	fieldsInOrder := [...]string{"name", "description", "roles", "grants", "permissions", "subject", "disabled", "tokenHash", "limits"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -19822,6 +20375,13 @@ func (ec *executionContext) unmarshalInputUserInput(ctx context.Context, obj any
 				return it, err
 			}
 			it.TokenHash = data
+		case "limits":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("limits"))
+			data, err := ec.unmarshalOJSON2interface(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Limits = data
 		}
 	}
 	return it, nil
@@ -22202,6 +22762,64 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 	return out
 }
 
+var pendingGoneTableImplementors = []string{"PendingGoneTable"}
+
+func (ec *executionContext) _PendingGoneTable(ctx context.Context, sel ast.SelectionSet, obj *configapp.PendingGoneTable) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, pendingGoneTableImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("PendingGoneTable")
+		case "key":
+			out.Values[i] = ec._PendingGoneTable_key(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "ref":
+			out.Values[i] = ec._PendingGoneTable_ref(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "entity":
+			out.Values[i] = ec._PendingGoneTable_entity(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "scanned":
+			out.Values[i] = ec._PendingGoneTable_scanned(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "state":
+			out.Values[i] = ec._PendingGoneTable_state(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var pendingPlanImplementors = []string{"PendingPlan"}
 
 func (ec *executionContext) _PendingPlan(ctx context.Context, sel ast.SelectionSet, obj *configapp.PendingPlan) graphql.Marshaler {
@@ -22405,6 +23023,11 @@ func (ec *executionContext) _PendingWork(ctx context.Context, sel ast.SelectionS
 			}
 		case "driftTables":
 			out.Values[i] = ec._PendingWork_driftTables(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "goneTables":
+			out.Values[i] = ec._PendingWork_goneTables(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -23960,6 +24583,11 @@ func (ec *executionContext) _Role(ctx context.Context, sel ast.SelectionSet, obj
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "limits":
+			out.Values[i] = ec._Role_limits(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -24462,6 +25090,16 @@ func (ec *executionContext) _ServerStatus(ctx context.Context, sel ast.Selection
 			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
+		case "unavailableEntities":
+			out.Values[i] = ec._ServerStatus_unavailableEntities(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "unreachableDatasources":
+			out.Values[i] = ec._ServerStatus_unreachableDatasources(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -24786,6 +25424,97 @@ func (ec *executionContext) _UnappliedRevision(ctx context.Context, sel ast.Sele
 	return out
 }
 
+var unavailableEntityImplementors = []string{"UnavailableEntity"}
+
+func (ec *executionContext) _UnavailableEntity(ctx context.Context, sel ast.SelectionSet, obj *UnavailableEntity) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, unavailableEntityImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UnavailableEntity")
+		case "entity":
+			out.Values[i] = ec._UnavailableEntity_entity(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "reason":
+			out.Values[i] = ec._UnavailableEntity_reason(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "tableMissing":
+			out.Values[i] = ec._UnavailableEntity_tableMissing(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var unreachableDatasourceImplementors = []string{"UnreachableDatasource"}
+
+func (ec *executionContext) _UnreachableDatasource(ctx context.Context, sel ast.SelectionSet, obj *UnreachableDatasource) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, unreachableDatasourceImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UnreachableDatasource")
+		case "datasource":
+			out.Values[i] = ec._UnreachableDatasource_datasource(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "error":
+			out.Values[i] = ec._UnreachableDatasource_error(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var unscannedSchemasImplementors = []string{"UnscannedSchemas"}
 
 func (ec *executionContext) _UnscannedSchemas(ctx context.Context, sel ast.SelectionSet, obj *configapp.UnscannedSchemas) graphql.Marshaler {
@@ -24878,6 +25607,11 @@ func (ec *executionContext) _User(ctx context.Context, sel ast.SelectionSet, obj
 			}
 		case "tokenHash":
 			out.Values[i] = ec._User_tokenHash(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "limits":
+			out.Values[i] = ec._User_limits(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
@@ -26583,6 +27317,26 @@ func (ec *executionContext) marshalNMcpTokenSecret2ᚖgithubᚗcomᚋnethinwei�
 	return ec._McpTokenSecret(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNPendingGoneTable2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐPendingGoneTable(ctx context.Context, sel ast.SelectionSet, v configapp.PendingGoneTable) graphql.Marshaler {
+	return ec._PendingGoneTable(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNPendingGoneTable2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐPendingGoneTableᚄ(ctx context.Context, sel ast.SelectionSet, v []configapp.PendingGoneTable) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNPendingGoneTable2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐPendingGoneTable(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
 func (ec *executionContext) marshalNPendingPlan2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐPendingPlan(ctx context.Context, sel ast.SelectionSet, v configapp.PendingPlan) graphql.Marshaler {
 	return ec._PendingPlan(ctx, sel, &v)
 }
@@ -27267,6 +28021,46 @@ func (ec *executionContext) marshalNTime2timeᚐTime(ctx context.Context, sel as
 		}
 	}
 	return res
+}
+
+func (ec *executionContext) marshalNUnavailableEntity2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐUnavailableEntity(ctx context.Context, sel ast.SelectionSet, v UnavailableEntity) graphql.Marshaler {
+	return ec._UnavailableEntity(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNUnavailableEntity2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐUnavailableEntityᚄ(ctx context.Context, sel ast.SelectionSet, v []UnavailableEntity) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNUnavailableEntity2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐUnavailableEntity(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNUnreachableDatasource2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐUnreachableDatasource(ctx context.Context, sel ast.SelectionSet, v UnreachableDatasource) graphql.Marshaler {
+	return ec._UnreachableDatasource(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNUnreachableDatasource2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐUnreachableDatasourceᚄ(ctx context.Context, sel ast.SelectionSet, v []UnreachableDatasource) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNUnreachableDatasource2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐUnreachableDatasource(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
 }
 
 func (ec *executionContext) marshalNUnscannedSchemas2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUnscannedSchemas(ctx context.Context, sel ast.SelectionSet, v configapp.UnscannedSchemas) graphql.Marshaler {

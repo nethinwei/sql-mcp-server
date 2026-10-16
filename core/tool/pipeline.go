@@ -29,7 +29,10 @@ import (
 // grant is a request's authorization.
 type grant struct{ rbac.Decision }
 
-// authorizeRequest authorizes req, refusing it unless allowed.
+// authorizeRequest authorizes req, refusing it unless allowed, then refuses
+// an entity the database cannot serve (see entity.Entity.Unavailable): only
+// after authorization, so that a caller without access cannot tell it apart
+// from any other entity it may not use (TM-002).
 func authorizeRequest(ctx context.Context, tc Context, req rbac.Request) (grant, error) {
 	dec, err := authorize(ctx, tc, req)
 	if err != nil {
@@ -37,6 +40,11 @@ func authorizeRequest(ctx context.Context, tc Context, req rbac.Request) (grant,
 	}
 	if !dec.Allowed {
 		return grant{}, denyUnauthorized(dec)
+	}
+	if tc.Registry != nil {
+		if res, ok := tc.Registry.Resolve(req.Entity); ok && res.Entity.Unavailable != "" {
+			return grant{}, fmt.Errorf("%w: %q: %s", ErrEntityUnavailable, req.Entity, res.Entity.Unavailable)
+		}
 	}
 	return grant{dec}, nil
 }
@@ -98,7 +106,7 @@ func estimateSQL(ctx context.Context, tc Context, route EscapeRoute, sql string,
 		tc.Hooks.FireCostGate(ctx, cost.Plan{ScanType: cost.ScanUnknown}, cost.Score{}, "hard")
 		return gated{}, &UnestimableError{Cause: err}
 	}
-	dec := cost.Estimate{Threshold: route.Threshold, FailClosed: true}.Evaluate(plan, nil)
+	dec := cost.Estimate{Threshold: route.Threshold.Tighten(tc.Tightening), FailClosed: true}.Evaluate(plan, nil)
 	if limit := tc.BudgetLimits.MaxEstimatedScannedRows; dec.Plan != nil && limit > 0 && dec.Plan.EstimatedRows > limit {
 		return gated{}, fmt.Errorf("%w: estimated scanned rows %d exceed limit %d",
 			budget.ErrExceeded, dec.Plan.EstimatedRows, limit)
@@ -180,7 +188,9 @@ func (st statement) queryRaw(ctx context.Context) (out rawRows, err error) {
 		return rawRows{}, err
 	}
 	defer func() { err = st.settle(ctx, err) }()
-	rows, err := st.tc.DB.QueryContext(ctx, st.sql.SQL, st.sql.Args...)
+	rows, err := retryStalePlan(st.tc, func() (store.Rows, error) {
+		return st.tc.DB.QueryContext(ctx, st.sql.SQL, st.sql.Args...)
+	})
 	if err != nil {
 		return rawRows{}, st.fail(err)
 	}
@@ -245,7 +255,9 @@ func (st statement) query(ctx context.Context) (out queried, err error) {
 		return queried{}, err
 	}
 	defer func() { err = st.settle(ctx, err) }()
-	rows, err := st.tc.DB.QueryContext(ctx, st.sql.SQL, st.sql.Args...)
+	rows, err := retryStalePlan(st.tc, func() (store.Rows, error) {
+		return st.tc.DB.QueryContext(ctx, st.sql.SQL, st.sql.Args...)
+	})
 	if err != nil {
 		return queried{}, st.fail(err)
 	}
@@ -278,7 +290,9 @@ func (st statement) exec(ctx context.Context) (store.Result, error) {
 	if err := st.admitted(); err != nil {
 		return store.Result{}, err
 	}
-	r, err := st.tc.DB.ExecContext(ctx, st.sql.SQL, st.sql.Args...)
+	r, err := retryStalePlan(st.tc, func() (store.Result, error) {
+		return st.tc.DB.ExecContext(ctx, st.sql.SQL, st.sql.Args...)
+	})
 	if err != nil {
 		err = st.fail(err)
 	}
@@ -299,10 +313,23 @@ func (st statement) present(row map[string]any) {
 	}
 }
 
-// fail classifies a database error of st.
+// fail classifies a database error of st. A statement failing inside an
+// explicit transaction ended it (see TransactionManager), which its error
+// tells.
 func (st statement) fail(err error) error {
+	out := st.classify(err)
+	if endedTransaction(err) {
+		return &TransactionRolledBackError{Err: out}
+	}
+	return out
+}
+
+func (st statement) classify(err error) error {
 	if st.raw {
 		return st.failRaw(err)
+	}
+	if changed := st.schemaChange(err); changed != nil {
+		return changed
 	}
 	if !st.write {
 		return WrapDBError(err)

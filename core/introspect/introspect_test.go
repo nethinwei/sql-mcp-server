@@ -29,6 +29,9 @@ func TestDetectDriftFieldLevel(t *testing.T) {
 	if !slices.Contains(d.Extra, "users.email") {
 		t.Fatalf("expected users.email in Extra, got %v", d.Extra)
 	}
+	if got := d.Absent["users"]; !slices.Equal(got, []string{"phone"}) {
+		t.Fatalf("absent columns of users = %v, want [phone]", got)
+	}
 }
 
 func TestDetectDriftMissingEntity(t *testing.T) {
@@ -37,13 +40,16 @@ func TestDetectDriftMissingEntity(t *testing.T) {
 	if !slices.Contains(d.Missing, "ghost") {
 		t.Fatalf("expected ghost in Missing, got %v", d.Missing)
 	}
+	if cols, ok := d.Absent["ghost"]; !ok || len(cols) != 0 {
+		t.Fatalf("absent = %v, want ghost with no columns (the table)", d.Absent)
+	}
 }
 
 func TestDetectDriftNoDrift(t *testing.T) {
 	t.Parallel()
 	e := []entity.Entity{{Name: "users", Attributes: []entity.Attribute{{Name: "id"}}}}
 	d := detectDrift(e, e)
-	if len(d.Missing) != 0 || len(d.Extra) != 0 {
+	if len(d.Missing) != 0 || len(d.Extra) != 0 || d.Absent != nil {
 		t.Fatalf("expected no drift, got %+v", d)
 	}
 }

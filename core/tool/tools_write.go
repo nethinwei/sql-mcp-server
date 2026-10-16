@@ -16,8 +16,10 @@ type CreateTool struct{}
 
 func (CreateTool) Info() Info {
 	return Info{
-		Name: "create_record", Description: "Create a record in an entity", InputSchema: schemaCreate,
-		Action: entity.ActionCreate.String(),
+		Name: "create_record", Title: "Create record", InputSchema: schemaCreate,
+		Description: "Insert one row into an entity, setting only fields you may write. Returns the new " +
+			"row's key and rowsAffected. Pass a transaction token to run it inside begin_transaction.",
+		Action: entity.ActionCreate.String(), Object: true,
 	}
 }
 func (CreateTool) Enabled(f config.ToolFlags) bool { return f.CreateRecord }
@@ -39,8 +41,11 @@ type UpdateTool struct{}
 
 func (UpdateTool) Info() Info {
 	return Info{
-		Name: "update_record", Description: "Update records in an entity", InputSchema: schemaUpdate,
-		Action: entity.ActionUpdate.String(),
+		Name: "update_record", Title: "Update records", InputSchema: schemaUpdate,
+		Description: "Set fields on the rows of an entity matching a filter (required; narrow it to the " +
+			"rows you mean, ideally by key). Returns rowsAffected. A write with no filter is refused with " +
+			"UNSAFE_WRITE, and one estimated to touch too many rows with COST_EXCEEDED.",
+		Action: entity.ActionUpdate.String(), Destructive: true, Idempotent: true, Object: true,
 	}
 }
 func (UpdateTool) Enabled(f config.ToolFlags) bool { return f.UpdateRecord }
@@ -62,8 +67,11 @@ type DeleteTool struct{}
 
 func (DeleteTool) Info() Info {
 	return Info{
-		Name: "delete_record", Description: "Delete records from an entity", InputSchema: schemaDelete,
-		Action: entity.ActionDelete.String(),
+		Name: "delete_record", Title: "Delete records", InputSchema: schemaDelete,
+		Description: "Delete the rows of an entity matching a filter (required; narrow it to the rows " +
+			"you mean, ideally by key). Returns rowsAffected. A delete with no filter is refused with " +
+			"UNSAFE_WRITE, and one estimated to touch too many rows with COST_EXCEEDED.",
+		Action: entity.ActionDelete.String(), Destructive: true, Idempotent: true, Object: true,
 	}
 }
 func (DeleteTool) Enabled(f config.ToolFlags) bool { return f.DeleteRecord }

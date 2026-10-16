@@ -24,6 +24,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/hook"
 	"github.com/nethinwei/sql-mcp-server/core/mask"
+	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
 	"github.com/nethinwei/sql-mcp-server/core/store"
@@ -34,6 +35,12 @@ import (
 var (
 	// ErrEntityNotFound is returned when the requested entity is unknown.
 	ErrEntityNotFound = errors.New("tool: entity not found")
+	// ErrEntityUnavailable is returned for an entity whose table or columns
+	// are missing from the database.
+	ErrEntityUnavailable = errors.New("tool: entity unavailable")
+	// ErrCallerRateLimited is returned past the caller's own rate or calls in
+	// flight (a role's or a user's limits).
+	ErrCallerRateLimited = errors.New("tool: the caller's request limit is reached")
 	// ErrUnauthorized is returned when the role lacks the action.
 	ErrUnauthorized = errors.New("tool: unauthorized")
 	// ErrInvalidInput is returned for malformed tool input.
@@ -78,10 +85,19 @@ func WrapDBError(err error) error {
 
 // Info is a tool's static metadata, mapped to an MCP tool definition.
 type Info struct {
-	Name        string
+	Name string
+	// Title is the human-readable name clients display.
+	Title       string
 	Description string
 	InputSchema json.RawMessage
+	// ReadOnly, Destructive and Idempotent are the MCP behavior hints: the
+	// tool changes nothing; a change may delete or overwrite data; repeating
+	// a call with the same input changes nothing more.
 	ReadOnly    bool
+	Destructive bool
+	Idempotent  bool
+	// Object says a call returns one object (Content[0]) rather than rows.
+	Object bool
 	// Action is the audited action; read, aggregate and execute also size the
 	// budget reservation.
 	Action string
@@ -132,6 +148,12 @@ type Services struct {
 	ResultMemory *ResultMemory
 	// Escapes are the datasources admitting the SQL escape hatch, by name.
 	Escapes map[string]EscapeRoute
+	// Callers bounds the rate and the calls in flight of each caller (by
+	// its principal key); nil bounds none.
+	Callers *ratelimit.Keyed
+	// Drift is raised when a statement finds the schema changed; nil drops
+	// it.
+	Drift *SchemaDrift
 }
 
 // Context is one call: who makes it, where it is routed, and the Services
@@ -180,6 +202,8 @@ type Limits struct {
 	// SQLEscapeEstimateRequired refuses SQL the escape hatch cannot
 	// estimate (cost.sqlEscape.estimate: required).
 	SQLEscapeEstimateRequired bool
+	// Tightening is the caller's own stricter cost gate.
+	Tightening cost.Tightening
 }
 
 // DataSource is the per-entity execution route: DB is the read connection;
@@ -258,7 +282,11 @@ func RunTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Re
 	err := refErr
 	_, ends := t.(endsTransaction)
 	if err == nil && !ends {
-		lease, ctx, tc, err = acquireToolBudget(ctx, info.Action, tc)
+		var release func()
+		if release, err = admitCaller(tc); err == nil {
+			defer release()
+			lease, ctx, tc, err = acquireToolBudget(ctx, info.Action, tc)
+		}
 	}
 	var res Result
 	tc, endMetering := meterCall(tc, info.ReadOnly)
@@ -272,7 +300,7 @@ func RunTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Re
 		} else {
 			res, err = invokeTool(ctx, t, input, tc)
 		}
-		res, err = finalizeToolResult(res, err, info.ReadOnly, tc, lease, start)
+		res, err = finalizeToolResult(res, schemaChangeOfCall(tc, name, input, err), info.ReadOnly, tc, lease, start)
 	}
 	if err != nil {
 		tc.Hooks.FireOnError(ctx, err)
@@ -620,7 +648,7 @@ func checkGateDetailed(
 	if tc.Gate == nil {
 		return compiled, nil, nil
 	}
-	dec, err := tc.Gate.Check(ctx, compiled)
+	dec, err := tc.Gate.Check(cost.WithTightening(ctx, tc.Tightening), compiled)
 	if err != nil {
 		tc.Hooks.FireCostGate(ctx, cost.Plan{}, cost.Score{}, "hard")
 		return compiled, nil, err

@@ -1,6 +1,7 @@
 {
   "tools": {
     "aggregate_records": {
+      "additionalProperties": false,
       "properties": {
         "aggregates": {
           "items": {
@@ -85,6 +86,7 @@
       "type": "object"
     },
     "begin_transaction": {
+      "additionalProperties": false,
       "properties": {
         "datasource": {
           "type": "string"
@@ -105,6 +107,7 @@
       "type": "object"
     },
     "create_record": {
+      "additionalProperties": false,
       "properties": {
         "entity": {
           "type": "string"
@@ -125,6 +128,7 @@
       "type": "object"
     },
     "delete_record": {
+      "additionalProperties": false,
       "properties": {
         "entity": {
           "type": "string"
@@ -176,15 +180,36 @@
       "type": "object"
     },
     "describe_entities": {
+      "additionalProperties": false,
       "properties": {
+        "datasource": {
+          "description": "When listing, keep entities of this datasource",
+          "type": "string"
+        },
         "entity": {
-          "description": "Entity name; omit to list all entities",
+          "description": "Entity to describe with its fields and keys; omit to list entities",
+          "type": "string"
+        },
+        "limit": {
+          "description": "When listing, entities per page (default 100)",
+          "maximum": 500,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "offset": {
+          "description": "When listing, entities to skip; pass the previous page's nextOffset",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "search": {
+          "description": "When listing, keep entities whose name, ID or description contains this text (case-insensitive)",
           "type": "string"
         }
       },
       "type": "object"
     },
     "execute_entity": {
+      "additionalProperties": false,
       "properties": {
         "args": {
           "description": "Procedure argument name to value map",
@@ -204,6 +229,7 @@
       "type": "object"
     },
     "execute_sql": {
+      "additionalProperties": false,
       "properties": {
         "args": {
           "description": "Positional parameters, in the dialect's placeholder style ($1 for PostgreSQL, ? for MySQL and OceanBase)",
@@ -235,6 +261,7 @@
       "type": "object"
     },
     "read_records": {
+      "additionalProperties": false,
       "dependentRequired": {
         "offset": [
           "limit"
@@ -317,6 +344,7 @@
       "type": "object"
     },
     "transaction_token": {
+      "additionalProperties": false,
       "properties": {
         "transaction": {
           "type": "string"
@@ -328,6 +356,7 @@
       "type": "object"
     },
     "update_record": {
+      "additionalProperties": false,
       "properties": {
         "entity": {
           "type": "string"
@@ -393,10 +422,14 @@
     "COST_EXCEEDED": true,
     "DATABASE_ERROR": false,
     "DATASOURCE_FORBIDDEN": false,
+    "DATASOURCE_UNAVAILABLE": true,
     "DML_TOOLS_DISABLED": false,
     "ENTITY_NOT_FOUND": false,
+    "ENTITY_UNAVAILABLE": false,
     "INVALID_INPUT": true,
     "OUTCOME_UNKNOWN": false,
+    "OVERLOADED": true,
+    "RATE_LIMITED": true,
     "TRANSACTION_CAPACITY": true,
     "TRANSACTION_NOT_FOUND": false,
     "TRANSACTION_SCOPE": false,

@@ -44,6 +44,8 @@ export const StatusQuery = graphql(`
   query Status {
     serverStatus {
       appliedRevision watching unapplied { id restartRequired error }
+      unavailableEntities { entity reason tableMissing }
+      unreachableDatasources { datasource error }
       execution {
         io { size used waiting } aux { size used waiting }
         lanes { name maxConcurrent maxQueue inflight queued rejected completed }
@@ -297,6 +299,7 @@ export const PendingQuery = graphql(`
       drift newTables unscannedSchemas unlistedDatasources
       plans { key template { ...PlanTemplateParts } report { ...PlanReportParts } state { ...PendingStateParts } }
       driftTables { key ref entity added missing state { ...PendingStateParts } }
+      goneTables { key ref entity scanned state { ...PendingStateParts } }
     }
   }
 `)

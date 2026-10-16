@@ -24,5 +24,6 @@
     "required": [
         "datasource",
         "sql"
-    ]
+    ],
+    "additionalProperties": false
 }

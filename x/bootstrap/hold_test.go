@@ -126,3 +126,23 @@ func setUser(name string, change func(*config.UserConfig)) func(*config.Config) 
 		c.Users[name] = u
 	}
 }
+
+// A reload that changes a user's subject ends the user's sessions, bound to
+// the subject that opened them; one that changes nothing else keeps them.
+func TestRevokedPrincipalsIncludeChangedSubjects(t *testing.T) {
+	t.Parallel()
+	app := func(subject map[string]any) *App {
+		return &App{Users: map[string]UserIdentity{
+			"alice": {Principal: "user:alice", Subject: subject},
+			"bob":   {Principal: "user:bob"},
+		}}
+	}
+	old := app(map[string]any{"tenant_id": 1})
+	if got := revokedPrincipals(old, app(map[string]any{"tenant_id": 1})); len(got) != 0 {
+		t.Fatalf("unchanged subject revoked %v", got)
+	}
+	got := revokedPrincipals(old, app(map[string]any{"tenant_id": 7}))
+	if !reflect.DeepEqual(got, []string{"user:alice"}) {
+		t.Fatalf("changed subject revoked %v", got)
+	}
+}

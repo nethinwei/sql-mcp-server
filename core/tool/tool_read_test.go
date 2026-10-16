@@ -323,6 +323,33 @@ func TestTransactionReadBypassesGlobalCache(t *testing.T) {
 	}
 }
 
+// An entity whose table is gone is refused before any SQL, with its own
+// code for an authorized caller; another caller still sees UNAUTHORIZED.
+func TestReadToolEntityUnavailable(t *testing.T) {
+	t.Parallel()
+	users := testUsersEntity()
+	users.Unavailable = "its table is missing from the database"
+	reg, _ := entity.NewRegistry([]entity.Entity{users})
+	tc := Context{
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+		Role:     "reader",
+		Dialect:  testdialect.Postgres{},
+	}
+	in, _ := json.Marshal(readInput{Entity: "users", Fields: []string{"id"}})
+	_, err := ReadTool{}.Run(context.Background(), in, tc)
+	if !errors.Is(err, ErrEntityUnavailable) {
+		t.Fatalf("got %v, want ErrEntityUnavailable", err)
+	}
+	if d, ok := DenialFor(err, "d"); !ok || d.Code != CodeEntityUnavailable || d.Retryable ||
+		!strings.Contains(d.Reason, "missing from the database") {
+		t.Fatalf("denial = %+v", d)
+	}
+	tc.Role = "writer"
+	if _, err := (ReadTool{}).Run(context.Background(), in, tc); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("an unauthorized caller got %v, want ErrUnauthorized", err)
+	}
+}
+
 func TestReadToolEntityNotFound(t *testing.T) {
 	t.Parallel()
 	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})

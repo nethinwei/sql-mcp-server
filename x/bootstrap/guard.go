@@ -72,14 +72,17 @@ func (h *health) enter() (done func(error), err error) {
 // countsAgainstHealth reports whether a call's outcome tells of the
 // database's health: success does, and a failure the database or the
 // connection reported, but not one the caller caused (a cancelled call, a
-// statement the database refused for its data or its privileges).
+// statement the database refused for its data, its privileges, or a schema
+// that changed under the configuration).
 func countsAgainstHealth(err error) bool {
 	var constraint *store.ConstraintError
 	switch {
 	case err == nil:
 		return true
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded),
-		errors.As(err, &constraint), errors.Is(err, store.ErrPermissionDenied):
+		errors.As(err, &constraint), errors.Is(err, store.ErrPermissionDenied),
+		errors.Is(err, store.ErrMissingRelation), errors.Is(err, store.ErrMissingColumn),
+		errors.Is(err, store.ErrStalePlan):
 		return false
 	}
 	return true

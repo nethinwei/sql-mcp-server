@@ -164,15 +164,18 @@ func withProxyIdentity(users UserDirectory, next http.Handler) http.Handler {
 
 // revokeSessions drops the identity binding of every session bound to one of
 // the principals, reports each session as closed so its transactions roll
-// back, and returns them. The dropped binding makes the session's next
-// request fail.
-func revokeSessions(store *sessionIdentityStore, onClosed func(string)) func([]string) []string {
+// back, closes it in the transport (closeOpen) and returns them. The dropped
+// binding makes the session's next request fail.
+func revokeSessions(store *sessionIdentityStore, onClosed, closeOpen func(string)) func([]string) []string {
 	return func(principals []string) []string {
 		sessions := store.sessionsFor(principals)
 		for _, session := range sessions {
 			store.close(session)
 			if onClosed != nil {
 				onClosed(session)
+			}
+			if closeOpen != nil {
+				closeOpen(session)
 			}
 		}
 		return sessions

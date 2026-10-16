@@ -101,7 +101,9 @@ A plan is
 schema and table glob patterns, search text and status (new, workspace, published); import adds
 zero-permission entities for new tables; grants grant actions (read, aggregate, create, update,
 delete) to role:<name> or user:<name>, optionally limited to fields and rows; fields hide (exclude)
-or mask columns matching patterns; sync adds and removes fields to match the columns. Exceptions of
+or mask columns matching patterns; sync adds and removes fields to match the columns, and with
+removeTables removes the entities whose tables are gone (scanned schemas without them, or found missing
+by the serving configuration) with the grants and relationships naming them. Exceptions of
 level block must be resolved and those of level confirm reported to the administrator.`
 
 type ctxKey int

@@ -82,6 +82,17 @@ func (m *MemoryStore) Published(_ context.Context) (Revision, error) {
 	return cloneRevision(r), nil
 }
 
+// PublishedSummary implements Store.
+func (m *MemoryStore) PublishedSummary(_ context.Context) (Revision, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.publishedLocked()
+	if !ok {
+		return Revision{}, ErrNoPublished
+	}
+	return r.Summary(), nil
+}
+
 func (m *MemoryStore) publishedLocked() (Revision, bool) {
 	for _, r := range m.revs {
 		if r.State == StatePublished {

@@ -207,9 +207,9 @@ func TestE2EHTTPSubjectTenantScoping(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("cross-tenant read failed: result=%+v error=%v", res, err)
 	}
-	var rows []map[string]any
+	var rows struct{ Result []map[string]any }
 	decodeTextContent(t, res, &rows)
-	if len(rows) != 0 {
+	if rows.Result == nil || len(rows.Result) != 0 {
 		t.Fatalf("cross-tenant read leaked rows: %+v", rows)
 	}
 }

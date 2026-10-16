@@ -88,8 +88,8 @@
   租户能读到；`ops-agent`、`ledger-agent` 同样只能读到租户 1 的运单与账户。
 - **脱敏**：邮箱、手机号显示为 `u***@example.com`、`100****7919` 形式，银行账号
   整体隐藏。示例中的号码都是虚构的，号段不会被真实分配。
-- **存储过程**：`support-agent` 调用 `procedure_close_ticket_*`，`ops-agent` 调用
-  `procedure_restock_*`，`ledger-agent` 调用 `procedure_post_entry_*`；过程声明了
+- **存储过程**：`support-agent` 调用 `procedure_close_ticket`，`ops-agent` 调用
+  `procedure_restock`，`ledger-agent` 调用 `procedure_post_entry`；过程声明了
   影响的实体，随后的读取不会命中旧缓存（记账过程经触发器更新余额也一样）。
 - **读写分离**：新建一条记录后立即读取，5 秒内本会话的读取走读写账号，能读到
   刚写的数据；之后回到只读账号。

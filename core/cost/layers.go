@@ -9,6 +9,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
 	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
+	"github.com/nethinwei/sql-mcp-server/core/store"
 )
 
 // StaticRule applies whitelist/blacklist checks without EXPLAIN. PK and allow
@@ -63,9 +64,9 @@ func (e Estimate) Check(ctx context.Context, c codegen.Compiled) (Decision, erro
 	if c.Kind != "" && c.Kind != codegen.KindRead && c.Kind != codegen.KindAggregate {
 		return Decision{Allow: true}, nil
 	}
-	th := e.Threshold
+	th := e.Threshold.Tighten(tighteningOf(ctx))
 	plan, err := e.explainPlan(ctx, c)
-	if unavailable(err) {
+	if unavailable(err) || schemaChanged(err) {
 		return Decision{}, err
 	}
 	plan = smallTable(plan, th)
@@ -99,6 +100,13 @@ func smallTable(plan Plan, th Threshold) Plan {
 // no estimate to judge, and the statement would be refused the same way.
 func unavailable(err error) bool {
 	return errors.Is(err, ratelimit.ErrCircuitOpen) || errors.Is(err, ratelimit.ErrRateLimited)
+}
+
+// schemaChanged reports an EXPLAIN naming a table or a column the database
+// no longer has: the statement cannot run, whatever its cost, and its caller
+// reports the entity unavailable rather than too costly.
+func schemaChanged(err error) bool {
+	return errors.Is(err, store.ErrMissingRelation) || errors.Is(err, store.ErrMissingColumn)
 }
 
 // Evaluate judges a plan the caller obtained itself (err being what its

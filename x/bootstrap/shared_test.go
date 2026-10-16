@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -293,8 +295,9 @@ func TestReconcileWaitsForTheBackgroundLane(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := reconcileAll(b, providers, nil)
-		done <- err
+		unreachable := map[string]error{}
+		reconcileAll(b, providers, nil, unreachable)
+		done <- errors.Join(slices.Collect(maps.Values(unreachable))...)
 	}()
 	deadline := time.Now().Add(2 * time.Second)
 	for lane.Stats().Queued == 0 && time.Now().Before(deadline) {

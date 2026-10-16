@@ -56,9 +56,11 @@ func NewAdapter(
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := db.PingContext(opts.OpenContext()); err != nil {
-		_ = db.Close()
-		return nil, nil, fmt.Errorf("mysql: ping failed: %w", err)
+	if !opts.Lazy {
+		if err := db.PingContext(opts.OpenContext()); err != nil {
+			_ = db.Close()
+			return nil, nil, fmt.Errorf("mysql: ping failed: %w", err)
+		}
 	}
 	return sqladapter.New(db, newTextRows, classify), caps, nil
 }

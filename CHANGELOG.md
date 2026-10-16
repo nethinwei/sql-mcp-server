@@ -9,6 +9,108 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+### Breaking
+
+- 工具结果的文本改为与新增的 `structuredContent` 相同的 JSON 对象：返回行的工具
+  （`read_records`、`aggregate_records`、`execute_entity`、`procedure_*`）为
+  `{"result": [行...]}`，此前文本是裸数组 `[行...]`；返回单个对象的工具（写入、事务、
+  `execute_sql`、`describe_entities`）直接给出该对象，此前包在单元素数组里。迁移：优先读
+  `structuredContent`；解析文本的客户端把 `rows = text` 改为 `rows = text["result"]`，单对象
+  结果去掉 `[0]`。
+- `describe_entities` 不带 `entity` 时改为分页：返回 `{"entities": [...], "total": n,
+  "nextOffset": m}`，默认每页 100 个、上限 500，可按 `search`（名称、ID、描述）与
+  `datasource` 过滤；此前一次返回全部实体（几千个实体时上百 KB）。迁移：遍历
+  `entities`，有 `nextOffset` 时用它作 `offset` 取下一页，或直接用 `search` 查找。
+- 资源 `sql-mcp://schema` 改为摘要（可读实体总数、按数据源计数、用法说明），实体详情移到
+  资源模板 `sql-mcp://schema/{entity}`；此前一次给出全部实体的字段与访问范围（几千个实体时
+  数 MB）。迁移：先用 `describe_entities` 找到实体，再读 `sql-mcp://schema/<实体>`。
+- 存储过程工具名改为可读的 `procedure_<过程名>`，只有规范化后重名的过程才追加
+  `_<8 位哈希>`；此前一律带哈希。迁移：按新名称调用（`tools/list` 可查），写死旧名的客户端与
+  评测脚本需要更新。
+- 工具输入 schema 顶层声明 `additionalProperties: false`（服务端此前已拒绝未知字段，行为
+  不变，只是让客户端提前知道）。
+- 显式事务中任何一条语句失败，事务立即回滚：该次拒绝带 `constraints.transaction:
+  "rolledBack"`，之后用该令牌得到 `TRANSACTION_NOT_FOUND`（`outcome: rolledBack`）。此前
+  MySQL/OceanBase 的事务在语句失败后继续可用；PostgreSQL 的事务则已作废却仍被持有，后续
+  每次调用（包括提交）都返回 `DATABASE_ERROR`，直到超时才释放锁和连接。迁移：在同一事务里
+  “失败后继续”的客户端需要重新开启事务并重做写入。
+- 新增 `transactions.idleTimeout`，默认 1 分钟：超过这么久没有执行语句的事务由服务端回滚
+  （`outcome: expired`）。此前事务可以空闲到 `transactions.ttl`（默认 5 分钟），期间一直持有
+  锁，卡住表结构变更以及排在其后的所有查询。迁移：需要更长思考时间的场景调大该值。
+
+### Added
+
+- 按调用者设置资源限制：角色与用户新增 `limits`（单次请求的 `maxRows`、`maxBytes`、
+  `queryTimeout`，成本闸门的 `softScore`、`hardScore`、`rejectFullScan`，按调用者跨会话计的
+  `rps`、`maxInflight`，以及会话预算 `budget`）。全局值是上限，只能收紧；用户设置的项优先于
+  其角色，多个角色时每项取最宽松的。超出 `rps` / `maxInflight` 返回新拒绝码
+  `RATE_LIMITED`（可重试）。控制台角色页与用户页新增“资源限制”卡片，会话预算可直接在这里
+  编辑。
+- 同步移除库中已删除的表：待处理页列出表已不存在的实体（所在库扫描时没有找到，或运行中的
+  服务发现缺表），可多选后从工作区移除；方案的同步规则新增 `removeTables`，配置 MCP 的方案
+  预览与明细给出移除数量和实体（`removed`）。移除时一并去掉指向它们的授权、关系与
+  `affects`。
+- `serve` 在未设置 `GOMEMLIMIT` 时按容器 cgroup 内存上限的 90% 设置 Go 运行时的软内存上限。
+- 配置存储接口新增 `PublishedSummary`（不含正文的已发布版本）。
+- `server.sessionTimeout`：HTTP MCP 会话的空闲超时，默认 30 分钟（此前固定 5 分钟且不可配置），
+  修改需重启。
+- 工具在 `tools/list` 中声明 `title`、`outputSchema` 与行为提示（`readOnlyHint`、
+  `destructiveHint`、`idempotentHint`，`openWorldHint: false`），描述写明用法、返回形状与
+  常见拒绝；服务端 `instructions` 说明先用 `describe_entities` 查找实体，以及如何按拒绝码
+  处理（重试、等待或放弃）。
+- 新拒绝码 `OVERLOADED`（服务过载、全局限流、正在关闭）与 `DATASOURCE_UNAVAILABLE`（数据源
+  熔断），均可重试并带提示；此前这两种情况是协议级错误，Agent 看不到机器码，分不清是否该重试。
+
+### Changed
+
+- 配置的表或字段在数据库中已不存在时，不再让整个 revision 加载失败：只有这些实体不可用，
+  其余配置照常加载与热重载，被改动的用户不再因此暂停。有权限的调用返回新拒绝码
+  `ENTITY_UNAVAILABLE`（不可重试，不生成 SQL；无权的调用方仍得到 `UNAUTHORIZED`），日志
+  告警 `entities unavailable`。管理 API `serverStatus.unavailableEntities` 列出它们，控制台
+  顶栏与总览“需要关注”展示并可一键从工作区移除。此前按时间生成、定期清理的快照表一旦被
+  删除，整份新配置都无法生效。
+- 读取不到结构的数据源（不可达、自省超时）不再让整个 revision 加载失败：它的实体全部不可用
+  （调用方只看到“数据源不可达”），其余配置照常加载；`--watch` 时按退避重新装配，数据源恢复
+  后自动可用。`serverStatus.unreachableDatasources` 列出它们。`serve` 打开连接时不再 ping
+  数据库（`providerregistry.Options.Lazy`）：启动时或新发布的 DSN 指向的库暂时不可达，服务照常
+  启动并降级该数据源，不再退出或整版失败；`validate` 等命令仍立即报告连接错误。
+- 加载失败的 revision 按退避重试（从轮询间隔起翻倍，最长 5 分钟），有新发布时立即尝试；此前
+  每次轮询都完整重建（重新解析配置并自省所有数据源），持续占用 CPU、内存与数据库。版本轮询
+  只读已发布版本的摘要，版本变化时才读正文。
+- 管理 API 的可见性、模拟、扫描等接口缓存解析后的配置（按版本号，或工作区的基础版本与修改
+  内容），不再每次请求都重新解析整份配置。
+
+### Fixed
+
+- 运行中删除实体用到的表或列后，调用返回不可重试、无说明的 `DATABASE_ERROR`，实体要等下次
+  发布或重载才被标记不可用。现在返回 `ENTITY_UNAVAILABLE`（说明缺表还是缺列），`--watch`
+  时服务随即重新装配当前 revision（按退避），这些实体出现在 `serverStatus` 与控制台“需要
+  关注”。PostgreSQL 修改列类型后缓存的语句计划失效（`cached plan must not change result
+  type`），事务外的调用自动重试一次，不再报错。成本闸门的 EXPLAIN 先碰到缺表缺列时，此前被当成
+  “无法估算 + 统计过旧”而返回误导性的 `COST_EXCEEDED`（提示 ANALYZE），现在同样返回
+  `ENTITY_UNAVAILABLE`。表或列不存在、语句计划失效也不再计入数据源健康度：此前一张被删的表
+  被反复调用，可能让熔断器把整个数据源挡住（`DATASOURCE_UNAVAILABLE`）。
+- PostgreSQL 判断统计信息是否过旧时只看手动 `ANALYZE` 的时间，忽略 autovacuum 的自动分析，
+  且只按表名不分 schema：几乎所有表都被当作“统计过旧”扣 15 分，带 LIMIT 的顺序扫描因此低于
+  软阈值被拒绝（`COST_EXCEEDED`，提示 ANALYZE），Agent 重试也无法通过。现在自动分析同样算
+  数，按 schema 判断，不超过 64 KiB 的小表（autovacuum 不会分析的规模）不扣分。小表
+  （`cost.fullScanMaxRows` 以内）的全表扫描因此按文档放行；此前它们多被这 15 分拖到软阈值
+  以下。
+- 用户的 `subject` 改变后，它已打开的 MCP 会话仍绑定旧身份，此后每次请求都得到 403；现在
+  `subject` 变化与删除一样吊销该用户的会话，客户端重新建立会话即可。
+- 吊销用户时只解除了会话绑定，传输层的会话要等空闲超时才关闭；现在立即关闭并释放其资源。
+- 用于断线续传的事件缓存（全局 10 MiB）按时间顺序淘汰所有会话的事件，一个会话的大结果会让
+  其他会话无法续传；现在优先淘汰占用最多的会话自己的旧事件。
+- `/mcp` 拒绝跨源的浏览器请求（`Origin` 与主机不符），防止其他网站借浏览器的客户端证书或代理
+  身份调用；不是浏览器的客户端不发送 `Origin`，不受影响。
+- MCP 会话空闲超时、服务重启或用户被吊销后，客户端用旧会话请求得到的是 403
+  `MCP session identity mismatch`，被当作权限错误而不会重连，表现为“用一阵就不能用”。现在
+  服务端已不持有的会话返回 404（MCP 协议规定的“会话已结束”），客户端自动重新建立会话；
+  身份不一致仍返回 403，被吊销的用户在重新认证时被拒绝。
+- 删除用户时，`budget.users` 中它的条目没有一并删除，之后发布因 `budget references unknown
+  user` 校验失败；角色改名后 `budget.roles` 仍按旧名，预算悄悄失效。现在两者随角色与用户的
+  改名、删除同步。
+
 ## 0.1.16 - 2026-10-16
 
 控制台的大规模可用性版本，无 breaking 变更；详见

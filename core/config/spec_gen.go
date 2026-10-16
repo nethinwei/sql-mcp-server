@@ -214,14 +214,15 @@ func (c Config) spec() Spec {
 
 // ServerSpec is a ServerConfig as written: a nil field was not.
 type ServerSpec struct {
-	Transport  *string      `yaml:"transport,omitempty" json:"transport,omitempty"`
-	Addr       *string      `yaml:"addr,omitempty" json:"addr,omitempty"`
-	PathPrefix *string      `yaml:"pathPrefix,omitempty" json:"pathPrefix,omitempty"`
-	PublicURL  *string      `yaml:"publicURL,omitempty" json:"publicURL,omitempty"`
-	Role       *string      `yaml:"role,omitempty" json:"role,omitempty"`
-	Auth       *AuthSpec    `yaml:"auth,omitempty" json:"auth,omitempty"`
-	Secrets    *SecretsSpec `yaml:"secrets,omitempty" json:"secrets,omitempty"`
-	User       *string      `yaml:"user,omitempty" json:"user,omitempty"`
+	Transport      *string        `yaml:"transport,omitempty" json:"transport,omitempty"`
+	Addr           *string        `yaml:"addr,omitempty" json:"addr,omitempty"`
+	PathPrefix     *string        `yaml:"pathPrefix,omitempty" json:"pathPrefix,omitempty"`
+	PublicURL      *string        `yaml:"publicURL,omitempty" json:"publicURL,omitempty"`
+	Role           *string        `yaml:"role,omitempty" json:"role,omitempty"`
+	Auth           *AuthSpec      `yaml:"auth,omitempty" json:"auth,omitempty"`
+	Secrets        *SecretsSpec   `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	User           *string        `yaml:"user,omitempty" json:"user,omitempty"`
+	SessionTimeout *time.Duration `yaml:"sessionTimeout,omitempty" json:"sessionTimeout,omitempty"`
 }
 
 func (s ServerSpec) config() ServerConfig {
@@ -249,6 +250,9 @@ func (s ServerSpec) config() ServerConfig {
 	}
 	if s.User != nil {
 		out.User = *s.User
+	}
+	if s.SessionTimeout != nil {
+		out.SessionTimeout = *s.SessionTimeout
 	}
 	return out
 }
@@ -285,6 +289,7 @@ func (c ServerConfig) spec() ServerSpec {
 		out.Secrets = &v
 	}
 	out.User = set(c.User)
+	out.SessionTimeout = set(c.SessionTimeout)
 	return out
 }
 
@@ -962,9 +967,10 @@ func (c RelationshipConfig) spec() RelationshipSpec {
 
 // RoleDefinitionSpec is a RoleDefinition as written: a nil field was not.
 type RoleDefinitionSpec struct {
-	Description *string         `yaml:"description,omitempty" json:"description,omitempty"`
-	Grants      List[GrantSpec] `yaml:"grants,omitempty" json:"grants,omitempty"`
-	Permissions List[string]    `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+	Description *string              `yaml:"description,omitempty" json:"description,omitempty"`
+	Grants      List[GrantSpec]      `yaml:"grants,omitempty" json:"grants,omitempty"`
+	Permissions List[string]         `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+	Limits      *PrincipalLimitsSpec `yaml:"limits,omitempty" json:"limits,omitempty"`
 }
 
 func (s RoleDefinitionSpec) config() RoleDefinition {
@@ -979,6 +985,9 @@ func (s RoleDefinitionSpec) config() RoleDefinition {
 		}
 	}
 	out.Permissions = []string(s.Permissions)
+	if s.Limits != nil {
+		out.Limits = s.Limits.config()
+	}
 	return out
 }
 
@@ -996,6 +1005,9 @@ func (s *RoleDefinitionSpec) canonical() {
 	if len(s.Permissions) == 0 {
 		s.Permissions = nil
 	}
+	if s.Limits != nil {
+		s.Limits.canonical()
+	}
 }
 
 func (c RoleDefinition) spec() RoleDefinitionSpec {
@@ -1008,6 +1020,9 @@ func (c RoleDefinition) spec() RoleDefinitionSpec {
 		}
 	}
 	out.Permissions = List[string](c.Permissions)
+	if v := c.Limits.spec(); !isZero(v) {
+		out.Limits = &v
+	}
 	return out
 }
 
@@ -1052,15 +1067,154 @@ func (c GrantConfig) spec() GrantSpec {
 	return out
 }
 
+// PrincipalLimitsSpec is a PrincipalLimits as written: a nil field was not.
+type PrincipalLimitsSpec struct {
+	MaxRows        *int64            `yaml:"maxRows,omitempty" json:"maxRows,omitempty"`
+	MaxBytes       *int64            `yaml:"maxBytes,omitempty" json:"maxBytes,omitempty"`
+	QueryTimeout   *time.Duration    `yaml:"queryTimeout,omitempty" json:"queryTimeout,omitempty"`
+	SoftScore      *int              `yaml:"softScore,omitempty" json:"softScore,omitempty"`
+	HardScore      *int              `yaml:"hardScore,omitempty" json:"hardScore,omitempty"`
+	RejectFullScan *bool             `yaml:"rejectFullScan,omitempty" json:"rejectFullScan,omitempty"`
+	RPS            *float64          `yaml:"rps,omitempty" json:"rps,omitempty"`
+	MaxInflight    *int              `yaml:"maxInflight,omitempty" json:"maxInflight,omitempty"`
+	Budget         *BudgetLimitsSpec `yaml:"budget,omitempty" json:"budget,omitempty"`
+}
+
+func (s PrincipalLimitsSpec) config() PrincipalLimits {
+	var out PrincipalLimits
+	if s.MaxRows != nil {
+		out.MaxRows = *s.MaxRows
+	}
+	if s.MaxBytes != nil {
+		out.MaxBytes = *s.MaxBytes
+	}
+	if s.QueryTimeout != nil {
+		out.QueryTimeout = *s.QueryTimeout
+	}
+	if s.SoftScore != nil {
+		out.SoftScore = *s.SoftScore
+	}
+	if s.HardScore != nil {
+		out.HardScore = *s.HardScore
+	}
+	if s.RejectFullScan != nil {
+		out.RejectFullScan = *s.RejectFullScan
+	}
+	if s.RPS != nil {
+		out.RPS = *s.RPS
+	}
+	if s.MaxInflight != nil {
+		out.MaxInflight = *s.MaxInflight
+	}
+	if s.Budget != nil {
+		out.Budget = s.Budget.config()
+	}
+	return out
+}
+
+func (s *PrincipalLimitsSpec) canonical() {
+	if s.MaxRows != nil && *s.MaxRows == *new(int64) {
+		s.MaxRows = nil
+	}
+	if s.MaxBytes != nil && *s.MaxBytes == *new(int64) {
+		s.MaxBytes = nil
+	}
+	if s.QueryTimeout != nil && *s.QueryTimeout == *new(time.Duration) {
+		s.QueryTimeout = nil
+	}
+	if s.SoftScore != nil && *s.SoftScore == *new(int) {
+		s.SoftScore = nil
+	}
+	if s.HardScore != nil && *s.HardScore == *new(int) {
+		s.HardScore = nil
+	}
+	if s.RejectFullScan != nil && *s.RejectFullScan == *new(bool) {
+		s.RejectFullScan = nil
+	}
+	if s.RPS != nil && *s.RPS == *new(float64) {
+		s.RPS = nil
+	}
+	if s.MaxInflight != nil && *s.MaxInflight == *new(int) {
+		s.MaxInflight = nil
+	}
+	if s.Budget != nil {
+		s.Budget.canonical()
+	}
+}
+
+func (c PrincipalLimits) spec() PrincipalLimitsSpec {
+	var out PrincipalLimitsSpec
+	out.MaxRows = set(c.MaxRows)
+	out.MaxBytes = set(c.MaxBytes)
+	out.QueryTimeout = set(c.QueryTimeout)
+	out.SoftScore = set(c.SoftScore)
+	out.HardScore = set(c.HardScore)
+	out.RejectFullScan = set(c.RejectFullScan)
+	out.RPS = set(c.RPS)
+	out.MaxInflight = set(c.MaxInflight)
+	if v := c.Budget.spec(); !isZero(v) {
+		out.Budget = &v
+	}
+	return out
+}
+
+// BudgetLimitsSpec is a BudgetLimits as written: a nil field was not.
+type BudgetLimitsSpec struct {
+	MaxConcurrent           *int           `yaml:"maxConcurrent,omitempty" json:"maxConcurrent,omitempty"`
+	MaxExecution            *time.Duration `yaml:"maxExecution,omitempty" json:"maxExecution,omitempty"`
+	MaxEstimatedScannedRows *int64         `yaml:"maxEstimatedScannedRows,omitempty" json:"maxEstimatedScannedRows,omitempty"`
+	MaxReturnedRows         *int64         `yaml:"maxReturnedRows,omitempty" json:"maxReturnedRows,omitempty"`
+	MaxReturnedBytes        *int64         `yaml:"maxReturnedBytes,omitempty" json:"maxReturnedBytes,omitempty"`
+	MaxSessionCost          *int64         `yaml:"maxSessionCost,omitempty" json:"maxSessionCost,omitempty"`
+}
+
+func (s BudgetLimitsSpec) config() BudgetLimits {
+	var out BudgetLimits
+	if s.MaxConcurrent != nil {
+		out.MaxConcurrent = *s.MaxConcurrent
+	}
+	if s.MaxExecution != nil {
+		out.MaxExecution = *s.MaxExecution
+	}
+	if s.MaxEstimatedScannedRows != nil {
+		out.MaxEstimatedScannedRows = *s.MaxEstimatedScannedRows
+	}
+	if s.MaxReturnedRows != nil {
+		out.MaxReturnedRows = *s.MaxReturnedRows
+	}
+	if s.MaxReturnedBytes != nil {
+		out.MaxReturnedBytes = *s.MaxReturnedBytes
+	}
+	if s.MaxSessionCost != nil {
+		out.MaxSessionCost = *s.MaxSessionCost
+	}
+	return out
+}
+
+func (s *BudgetLimitsSpec) canonical() {
+}
+
+func (c BudgetLimits) spec() BudgetLimitsSpec {
+	var out BudgetLimitsSpec
+	out.MaxConcurrent = set(c.MaxConcurrent)
+	out.MaxExecution = set(c.MaxExecution)
+	out.MaxEstimatedScannedRows = set(c.MaxEstimatedScannedRows)
+	out.MaxReturnedRows = set(c.MaxReturnedRows)
+	out.MaxReturnedBytes = set(c.MaxReturnedBytes)
+	out.MaxSessionCost = set(c.MaxSessionCost)
+	return out
+}
+
 // UserSpec is a UserConfig as written: a nil field was not.
 type UserSpec struct {
-	Description *string         `yaml:"description,omitempty" json:"description,omitempty"`
-	TokenHash   *string         `yaml:"tokenHash,omitempty" json:"tokenHash,omitempty"`
-	Roles       List[string]    `yaml:"roles,omitempty" json:"roles,omitempty"`
-	Subject     map[string]any  `yaml:"subject,omitempty" json:"subject,omitempty"`
-	Grants      List[GrantSpec] `yaml:"grants,omitempty" json:"grants,omitempty"`
-	Permissions List[string]    `yaml:"permissions,omitempty" json:"permissions,omitempty"`
-	Disabled    *bool           `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	Description *string              `yaml:"description,omitempty" json:"description,omitempty"`
+	TokenHash   *string              `yaml:"tokenHash,omitempty" json:"tokenHash,omitempty"`
+	Roles       List[string]         `yaml:"roles,omitempty" json:"roles,omitempty"`
+	Subject     map[string]any       `yaml:"subject,omitempty" json:"subject,omitempty"`
+	Grants      List[GrantSpec]      `yaml:"grants,omitempty" json:"grants,omitempty"`
+	Permissions List[string]         `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+	Disabled    *bool                `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	Limits      *PrincipalLimitsSpec `yaml:"limits,omitempty" json:"limits,omitempty"`
 }
 
 func (s UserSpec) config() UserConfig {
@@ -1082,6 +1236,9 @@ func (s UserSpec) config() UserConfig {
 	out.Permissions = []string(s.Permissions)
 	if s.Disabled != nil {
 		out.Disabled = *s.Disabled
+	}
+	if s.Limits != nil {
+		out.Limits = s.Limits.config()
 	}
 	return out
 }
@@ -1112,6 +1269,9 @@ func (s *UserSpec) canonical() {
 	if s.Disabled != nil && *s.Disabled == *new(bool) {
 		s.Disabled = nil
 	}
+	if s.Limits != nil {
+		s.Limits.canonical()
+	}
 }
 
 func (c UserConfig) spec() UserSpec {
@@ -1128,6 +1288,9 @@ func (c UserConfig) spec() UserSpec {
 	}
 	out.Permissions = List[string](c.Permissions)
 	out.Disabled = set(c.Disabled)
+	if v := c.Limits.spec(); !isZero(v) {
+		out.Limits = &v
+	}
 	return out
 }
 
@@ -1663,53 +1826,6 @@ func (c BudgetConfig) spec() BudgetSpec {
 	return out
 }
 
-// BudgetLimitsSpec is a BudgetLimits as written: a nil field was not.
-type BudgetLimitsSpec struct {
-	MaxConcurrent           *int           `yaml:"maxConcurrent,omitempty" json:"maxConcurrent,omitempty"`
-	MaxExecution            *time.Duration `yaml:"maxExecution,omitempty" json:"maxExecution,omitempty"`
-	MaxEstimatedScannedRows *int64         `yaml:"maxEstimatedScannedRows,omitempty" json:"maxEstimatedScannedRows,omitempty"`
-	MaxReturnedRows         *int64         `yaml:"maxReturnedRows,omitempty" json:"maxReturnedRows,omitempty"`
-	MaxReturnedBytes        *int64         `yaml:"maxReturnedBytes,omitempty" json:"maxReturnedBytes,omitempty"`
-	MaxSessionCost          *int64         `yaml:"maxSessionCost,omitempty" json:"maxSessionCost,omitempty"`
-}
-
-func (s BudgetLimitsSpec) config() BudgetLimits {
-	var out BudgetLimits
-	if s.MaxConcurrent != nil {
-		out.MaxConcurrent = *s.MaxConcurrent
-	}
-	if s.MaxExecution != nil {
-		out.MaxExecution = *s.MaxExecution
-	}
-	if s.MaxEstimatedScannedRows != nil {
-		out.MaxEstimatedScannedRows = *s.MaxEstimatedScannedRows
-	}
-	if s.MaxReturnedRows != nil {
-		out.MaxReturnedRows = *s.MaxReturnedRows
-	}
-	if s.MaxReturnedBytes != nil {
-		out.MaxReturnedBytes = *s.MaxReturnedBytes
-	}
-	if s.MaxSessionCost != nil {
-		out.MaxSessionCost = *s.MaxSessionCost
-	}
-	return out
-}
-
-func (s *BudgetLimitsSpec) canonical() {
-}
-
-func (c BudgetLimits) spec() BudgetLimitsSpec {
-	var out BudgetLimitsSpec
-	out.MaxConcurrent = set(c.MaxConcurrent)
-	out.MaxExecution = set(c.MaxExecution)
-	out.MaxEstimatedScannedRows = set(c.MaxEstimatedScannedRows)
-	out.MaxReturnedRows = set(c.MaxReturnedRows)
-	out.MaxReturnedBytes = set(c.MaxReturnedBytes)
-	out.MaxSessionCost = set(c.MaxSessionCost)
-	return out
-}
-
 // CacheSpec is a CacheConfig as written: a nil field was not.
 type CacheSpec struct {
 	Enabled         *bool          `yaml:"enabled,omitempty" json:"enabled,omitempty"`
@@ -1890,6 +2006,7 @@ func (c AuditConfig) spec() AuditSpec {
 // TransactionSpec is a TransactionConfig as written: a nil field was not.
 type TransactionSpec struct {
 	TTL                  *time.Duration `yaml:"ttl,omitempty" json:"ttl,omitempty"`
+	IdleTimeout          *time.Duration `yaml:"idleTimeout,omitempty" json:"idleTimeout,omitempty"`
 	MaxOpen              *int           `yaml:"maxOpen,omitempty" json:"maxOpen,omitempty"`
 	MaxOpenPerConnection *int           `yaml:"maxOpenPerConnection,omitempty" json:"maxOpenPerConnection,omitempty"`
 	BeginTimeout         *time.Duration `yaml:"beginTimeout,omitempty" json:"beginTimeout,omitempty"`
@@ -1901,6 +2018,9 @@ func (s TransactionSpec) config() TransactionConfig {
 	var out TransactionConfig
 	if s.TTL != nil {
 		out.TTL = *s.TTL
+	}
+	if s.IdleTimeout != nil {
+		out.IdleTimeout = *s.IdleTimeout
 	}
 	if s.MaxOpen != nil {
 		out.MaxOpen = *s.MaxOpen
@@ -1926,6 +2046,7 @@ func (s *TransactionSpec) canonical() {
 func (c TransactionConfig) spec() TransactionSpec {
 	var out TransactionSpec
 	out.TTL = set(c.TTL)
+	out.IdleTimeout = set(c.IdleTimeout)
 	out.MaxOpen = set(c.MaxOpen)
 	out.MaxOpenPerConnection = set(c.MaxOpenPerConnection)
 	out.BeginTimeout = set(c.BeginTimeout)

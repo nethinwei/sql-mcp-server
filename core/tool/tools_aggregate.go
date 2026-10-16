@@ -16,11 +16,14 @@ type AggregateTool struct{}
 
 func (AggregateTool) Info() Info {
 	return Info{
-		Name:        "aggregate_records",
-		Action:      entity.ActionAggregate.String(),
-		Description: "Aggregate records of an entity",
+		Name:   "aggregate_records",
+		Action: entity.ActionAggregate.String(),
+		Title:  "Aggregate records",
+		Description: "Count, sum, average, min or max the rows of one entity, optionally grouped, returned " +
+			"as {\"result\": [rows]}. Prefer it to reading rows when you need totals; filter narrowly, " +
+			"since the same cost gate as read_records applies.",
 		InputSchema: schemaAggregate,
-		ReadOnly:    true,
+		ReadOnly:    true, Idempotent: true,
 	}
 }
 func (AggregateTool) Enabled(f config.ToolFlags) bool { return f.AggregateRecords }

@@ -79,6 +79,7 @@ func parseCommand(args []string) (string, []string) {
 }
 
 func runServe(ctx context.Context, args []string) error {
+	applyContainerMemoryLimit()
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	configPath := fs.String("config", "config.yaml", "config file path")
 	storeFlag := fs.String("store", "", "configuration store <driver>:<dsn> instead of --config (env SQL_MCP_STORE)")
@@ -327,7 +328,7 @@ func serveTransport(
 		return mcpserver.ServeHTTP(ctx, srv, mcpserver.HTTPConfig{
 			Bus: runtime.Current().Bus(), Addr: addr, HTTPAuth: auth, OnSessionClosed: runtime.RollbackSession,
 			SnapshotReady: runtime.SnapshotReady, DatabaseReady: runtime.DatabasesReady,
-			Metrics: metrics, RevokedPrincipals: runtime.OnRevokedPrincipals,
+			Metrics: metrics, RevokedPrincipals: runtime.OnRevokedPrincipals, SessionTimeout: cfg.Server.SessionTimeout,
 			Admin: adminHandler, AuthChanges: auths.follow(runtime),
 			SnapshotStale: func() int64 {
 				if stale, ok := runtime.Stale(); ok {

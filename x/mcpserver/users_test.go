@@ -203,16 +203,16 @@ func TestRevokeSessionsDropsBindingsAndRollsBack(t *testing.T) {
 	store.bind("s2", sessionIdentity{role: "user:alice", subject: `{"tenant_id":"t1"}`})
 	store.bind("s3", sessionIdentity{role: "user:bob"})
 	var closed []string
-	returned := revokeSessions(store, func(s string) { closed = append(closed, s) })([]string{"user:alice"})
+	returned := revokeSessions(store, func(s string) { closed = append(closed, s) }, nil)([]string{"user:alice"})
 	slices.Sort(closed)
 	slices.Sort(returned)
 	if !slices.Equal(closed, []string{"s1", "s2"}) || !slices.Equal(returned, closed) {
 		t.Fatalf("closed sessions = %v", closed)
 	}
-	if store.matches("s1", sessionIdentity{role: "user:alice"}) {
+	if same(store.lookup("s1", sessionIdentity{role: "user:alice"})) {
 		t.Fatal("revoked session must no longer match")
 	}
-	if !store.matches("s3", sessionIdentity{role: "user:bob"}) {
+	if !same(store.lookup("s3", sessionIdentity{role: "user:bob"})) {
 		t.Fatal("other users' sessions must be kept")
 	}
 }

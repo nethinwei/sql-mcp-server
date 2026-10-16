@@ -38,7 +38,7 @@ func TestClassifyConstraintViolations(t *testing.T) {
 			t.Errorf("%s: %+v", name, ce)
 		}
 	}
-	other := &mysqldriver.MySQLError{Number: 1146, Message: "Table doesn't exist"}
+	other := &mysqldriver.MySQLError{Number: 1064, Message: "You have an error in your SQL syntax"}
 	if got := classify(other); got != error(other) {
 		t.Errorf("other errors must pass through: %v", got)
 	}
@@ -63,5 +63,15 @@ func TestClassifyLostConnections(t *testing.T) {
 	}
 	if err := classify(driver.ErrBadConn); errors.Is(err, store.ErrConnectionLost) {
 		t.Errorf("ErrBadConn = %v", err)
+	}
+}
+
+// A table or a column the database no longer has is a schema change.
+func TestClassifySchemaChanges(t *testing.T) {
+	t.Parallel()
+	for number, want := range map[uint16]error{1146: store.ErrMissingRelation, 1054: store.ErrMissingColumn} {
+		if err := classify(&mysqldriver.MySQLError{Number: number, Message: "gone"}); !errors.Is(err, want) {
+			t.Errorf("%d: %v", number, err)
+		}
 	}
 }

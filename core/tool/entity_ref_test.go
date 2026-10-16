@@ -42,6 +42,9 @@ func TestEntityReferencesResolveAmongUsableEntities(t *testing.T) {
 		input, _ := json.Marshal(map[string]string{"entity": ref})
 		res, err := RunTool(context.Background(), DescribeTool{}, input,
 			Context{Services: &Services{Registry: reg, Authorizer: authz}, Role: role})
+		if ref == "" && err == nil {
+			return listedEntities(res), nil
+		}
 		return res.Content, err
 	}
 

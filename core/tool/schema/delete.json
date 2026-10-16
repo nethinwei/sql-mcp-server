@@ -47,5 +47,6 @@
     "required": [
         "entity",
         "filter"
-    ]
+    ],
+    "additionalProperties": false
 }

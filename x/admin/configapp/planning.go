@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -37,6 +39,9 @@ type planContext struct {
 	fingerprint string
 	baseHash    string
 	publishedID int64
+	// missing are the entities whose tables the serving configuration found
+	// missing (see configplan.GoneTables).
+	missing map[string]bool
 }
 
 // planContext reads the draft (default: the published configuration) and
@@ -59,6 +64,7 @@ func (r *Service) planContext(ctx context.Context, draft *Draft) (planContext, e
 	}
 	pc := planContext{
 		base: published, spec: spec, payload: rev.Payload, baseID: rev.ID, published: published, publishedID: rev.ID,
+		missing: r.missingTables(),
 	}
 	if draft != nil {
 		d, err := r.BuildDraft(ctx, *draft)
@@ -145,6 +151,7 @@ func denied(caps bootstrap.EntityCapabilities) func(string, string) (string, boo
 func (r *Service) planInput(pc planContext, review bool) configplan.Input {
 	return configplan.Input{
 		Base: pc.base, Published: pc.published, Sources: pc.sources, Denied: denied(r.capabilities()), Review: review,
+		Missing: pc.missing,
 	}
 }
 
@@ -153,8 +160,8 @@ func (r *Service) planInput(pc planContext, review bool) configplan.Input {
 // same ID means the same outcome and report.
 func planID(pc planContext, p configplan.Plan, review bool) string {
 	data, _ := json.Marshal(p)
-	sum := sha256.Sum256(fmt.Appendf(nil, "%s\x00%d\x00%s\x00%s\x00%d\x00%t", data, pc.baseID, pc.baseHash,
-		pc.fingerprint, pc.publishedID, review))
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s\x00%d\x00%s\x00%s\x00%d\x00%t\x00%s", data, pc.baseID, pc.baseHash,
+		pc.fingerprint, pc.publishedID, review, strings.Join(slices.Sorted(maps.Keys(pc.missing)), ",")))
 	return hex.EncodeToString(sum[:12])
 }
 

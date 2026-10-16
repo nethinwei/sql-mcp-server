@@ -10,6 +10,7 @@ import { CloseOutline } from '@vicons/ionicons5'
 import GrantMatrix from '@/components/GrantMatrix.vue'
 import SecretOnce from '@/components/SecretOnce.vue'
 import VisibilityTable from '@/components/VisibilityTable.vue'
+import PrincipalLimits from '@/components/PrincipalLimits.vue'
 import { simulationRoute } from '@/lib/simulation'
 import { useWorkspace } from '@/stores/workspace'
 import { escapeDatasources, executableDatasources, sqlExecute, userPermissions } from '@/lib/systemPermissions'
@@ -192,6 +193,10 @@ onMounted(() => { if (route.query.token && editable.value && tokenState.value ==
       <n-text depth="3" class="hint executable">
         {{ executable.length ? t('systemPermissions.executable', { list: executable.join(', ') }) : t('systemPermissions.notExecutable') }}
       </n-text>
+    </n-card>
+
+    <n-card size="small" :title="t('limits.title')">
+      <principal-limits v-model="user.limits" kind="user" :name="user.name" :disabled="!editable" />
     </n-card>
 
     <n-card size="small" :title="t('visibility.userTitle')">

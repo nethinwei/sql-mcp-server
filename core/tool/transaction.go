@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/bus"
@@ -54,6 +55,13 @@ type transactionHandle struct {
 	cancel     context.CancelFunc
 	mu         sync.Mutex
 	closed     bool
+	// idle is the idle timeout (0: none); used is when a statement last
+	// started or ended (unix nanoseconds) and running the statements
+	// running; stopIdle stops the idle check (m.mu).
+	idle     time.Duration
+	used     atomic.Int64
+	running  atomic.Int32
+	stopIdle func() bool
 }
 
 // TransactionManager owns bounded, expiring explicit transaction handles.
@@ -68,6 +76,7 @@ type TransactionManager struct {
 	byConnection  map[store.TxBeginner]int
 	perConnection int
 	ttl           time.Duration
+	idle          time.Duration // the idle timeout of transactions begun from now on
 	maxOpen       int
 	closed        bool
 	bus           *bus.Bus // runs the expiry timers
@@ -102,6 +111,14 @@ func (m *TransactionManager) SetConnectionLimit(n int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.perConnection = n
+}
+
+// SetIdleTimeout rolls back the transactions begun from now on once no
+// statement used them for d (0: never).
+func (m *TransactionManager) SetIdleTimeout(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.idle = d
 }
 
 // UpdateLimits applies new limits: ttl to the transactions begun from now
@@ -235,6 +252,10 @@ func (m *TransactionManager) addHandle(scope, token string, handle *transactionH
 			m.expire(token, handle)
 		})
 	}
+	handle.touch()
+	if handle.idle = m.idle; handle.idle > 0 {
+		m.watchIdleLocked(token, handle, handle.idle)
+	}
 	return nil
 }
 
@@ -251,14 +272,7 @@ func (m *TransactionManager) removeLocked(token string, handle *transactionHandl
 
 // expire drops an expired handle and rolls it back.
 func (m *TransactionManager) expire(token string, handle *transactionHandle) {
-	m.mu.Lock()
-	if m.handles[token] != handle {
-		m.mu.Unlock()
-		return
-	}
-	rollback := m.endLocked(token, handle, OutcomeExpired)
-	m.mu.Unlock()
-	rollback()
+	m.end(token, handle, OutcomeExpired)
 }
 
 // endLocked drops a handle and records it as ending; m.mu is held. The
@@ -280,6 +294,9 @@ func (m *TransactionManager) endingLocked(token string, handle *transactionHandl
 	m.removeLocked(token, handle)
 	if handle.stopTimer != nil {
 		handle.stopTimer()
+	}
+	if handle.stopIdle != nil {
+		handle.stopIdle()
 	}
 	done := make(chan struct{})
 	m.ending[token] = done
@@ -353,7 +370,7 @@ func (m *TransactionManager) DB(
 	if err != nil {
 		return nil, err
 	}
-	return &transactionDB{handle: handle}, nil
+	return &transactionDB{handle: handle, fail: func() { m.end(token, handle, OutcomeRolledBack) }}, nil
 }
 
 // Validate verifies a token's transport and authorization identity without
@@ -504,7 +521,12 @@ func (m *TransactionManager) Close() {
 	}
 }
 
-type transactionDB struct{ handle *transactionHandle }
+// transactionDB runs statements in a transaction; one that fails ends it
+// (fail), and its error says so (statementFailed).
+type transactionDB struct {
+	handle *transactionHandle
+	fail   func()
+}
 
 func (d *transactionDB) QueryContext(ctx context.Context, query string, args ...any) (store.Rows, error) {
 	d.handle.mu.Lock()
@@ -512,34 +534,60 @@ func (d *transactionDB) QueryContext(ctx context.Context, query string, args ...
 		d.handle.mu.Unlock()
 		return nil, ErrTransactionNotFound
 	}
+	d.handle.statementStarted()
 	rows, err := d.handle.tx.QueryContext(ctx, query, args...)
 	if err != nil {
+		d.handle.statementEnded()
 		d.handle.mu.Unlock()
-		return nil, err
+		d.fail()
+		return nil, &statementFailed{err: err}
 	}
-	return &transactionRows{Rows: rows, unlock: d.handle.mu.Unlock}, nil
+	return &transactionRows{Rows: rows, db: d}, nil
 }
 
 func (d *transactionDB) ExecContext(ctx context.Context, query string, args ...any) (store.Result, error) {
 	d.handle.mu.Lock()
-	defer d.handle.mu.Unlock()
 	if d.handle.closed {
+		d.handle.mu.Unlock()
 		return store.Result{}, ErrTransactionNotFound
 	}
-	return d.handle.tx.ExecContext(ctx, query, args...)
+	d.handle.statementStarted()
+	r, err := d.handle.tx.ExecContext(ctx, query, args...)
+	d.handle.statementEnded()
+	d.handle.mu.Unlock()
+	if err != nil {
+		d.fail()
+		return r, &statementFailed{err: err}
+	}
+	return r, nil
 }
 
+// transactionRows hold the transaction until closed; a failure reading them
+// ends it once they are.
 type transactionRows struct {
 	store.Rows
+	db     *transactionDB
 	once   sync.Once
-	unlock func()
+	failed bool
 	err    error
+}
+
+func (r *transactionRows) Err() error {
+	if err := r.Rows.Err(); err != nil {
+		r.failed = true
+		return &statementFailed{err: err}
+	}
+	return nil
 }
 
 func (r *transactionRows) Close() error {
 	r.once.Do(func() {
 		r.err = r.Rows.Close()
-		r.unlock()
+		r.db.handle.statementEnded()
+		r.db.handle.mu.Unlock()
+		if r.failed || r.err != nil {
+			r.db.fail()
+		}
 	})
 	return r.err
 }

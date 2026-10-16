@@ -93,19 +93,21 @@ func compileGrants(owner string, grants []config.GrantConfig, refs config.Entity
 
 // userBudgets returns each enabled user's effective limits keyed by principal:
 // an explicit budget.users entry wins; otherwise every dimension takes the most
-// permissive value among the user's roles, where zero (unlimited) wins and a
-// role without a budget entry counts as unlimited.
+// permissive value among the user's roles (see roleBudgets), where zero
+// (unlimited) wins and a role without a budget counts as unlimited. The
+// fields the user's limits.budget sets win over either.
 func userBudgets(cfg *config.Config) map[string]config.BudgetLimits {
 	out := make(map[string]config.BudgetLimits, len(cfg.Users))
+	roles := roleBudgets(cfg)
 	for name, user := range cfg.Users {
 		if user.Disabled {
 			continue
 		}
-		if limits, ok := cfg.Budget.Users[name]; ok {
-			out[UserPrincipal(name)] = limits
-			continue
+		limits, ok := cfg.Budget.Users[name]
+		if !ok {
+			limits = mostPermissiveBudget(roles, user.Roles)
 		}
-		out[UserPrincipal(name)] = mostPermissiveBudget(cfg.Budget.Roles, user.Roles)
+		out[UserPrincipal(name)] = overBudget(limits, user.Limits.Budget)
 	}
 	return out
 }
@@ -134,7 +136,7 @@ func mostPermissiveBudget(roles map[string]config.BudgetLimits, names []string) 
 }
 
 // looser returns the more permissive of two limits, where zero is unlimited.
-func looser[T ~int | ~int64](a, b T) T {
+func looser[T ~int | ~int64 | ~float64](a, b T) T {
 	if a == 0 || b == 0 {
 		return 0
 	}

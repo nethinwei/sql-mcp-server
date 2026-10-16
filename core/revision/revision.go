@@ -104,6 +104,9 @@ type Store interface {
 	List(ctx context.Context, limit int) ([]Revision, error)
 	// Published returns the published revision, or ErrNoPublished.
 	Published(ctx context.Context) (Revision, error)
+	// PublishedSummary returns the published revision without its payload,
+	// or ErrNoPublished: what a poll needs to tell whether it changed.
+	PublishedSummary(ctx context.Context) (Revision, error)
 	// Publish publishes draft id. expectedCurrent is the caller's view of the
 	// published ID (0 for none); a mismatch fails with ErrConflict.
 	Publish(ctx context.Context, id, expectedCurrent int64, m Meta) (Revision, error)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -198,11 +199,14 @@ func (r *Runtime) reloadWith(build func() (*App, error)) error {
 	return nil
 }
 
-// revokedPrincipals lists users servable by old but no longer by next.
+// revokedPrincipals lists users servable by old but no longer by next, and
+// those whose subject next changes: an MCP session is bound to the subject
+// that opened it, so theirs must end for the client to open one under the
+// new subject (it gets "session not found", not a refusal).
 func revokedPrincipals(old, next *App) []string {
 	var out []string
 	for name, id := range old.Users {
-		if _, ok := next.Users[name]; !ok {
+		if now, ok := next.Users[name]; !ok || !reflect.DeepEqual(now.Subject, id.Subject) {
 			out = append(out, id.Principal)
 		}
 	}

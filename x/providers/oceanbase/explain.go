@@ -15,6 +15,9 @@ import (
 // obExplainer estimates a plan via EXPLAIN FORMAT=JSON.
 type obExplainer struct {
 	db *sql.DB
+	// classify classifies the errors of EXPLAIN as those of statements, so
+	// the gate tells a schema change from a plan it could not get.
+	classify func(error) error
 }
 
 // Explain implements cost.Explainer. OceanBase plan JSON varies by version; we
@@ -24,7 +27,7 @@ type obExplainer struct {
 func (e obExplainer) Explain(ctx context.Context, query string, args []any) (cost.Plan, error) {
 	rows, err := e.db.QueryContext(ctx, "EXPLAIN FORMAT=JSON "+query, args...)
 	if err != nil {
-		return cost.Plan{}, err
+		return cost.Plan{}, e.classify(err)
 	}
 	defer func() { _ = rows.Close() }()
 	// OceanBase returns the JSON plan across multiple rows; concatenate them.

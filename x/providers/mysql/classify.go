@@ -26,6 +26,10 @@ var refusals = map[uint16]bool{1142: true, 1143: true, 1044: true, 1370: true, 1
 // MySQL's max_execution_time and OceanBase's ob_query_timeout.
 var timeouts = map[uint16]bool{3024: true, 4012: true}
 
+// schemaChanges are the errors of a statement naming a table (1146) or a
+// column (1054) the database does not have; OceanBase reports the same.
+var schemaChanges = map[uint16]error{1146: store.ErrMissingRelation, 1054: store.ErrMissingColumn}
+
 // classify turns an integrity violation into a *store.ConstraintError, a
 // refusal into store.ErrPermissionDenied, a statement its server-side timeout
 // stopped into store.ErrStatementTimeout, and a connection the driver found broken in the middle of a
@@ -44,6 +48,9 @@ func classify(err error) error {
 	}
 	if refusals[myErr.Number] {
 		return fmt.Errorf("%w: %w", store.ErrPermissionDenied, err)
+	}
+	if missing := schemaChanges[myErr.Number]; missing != nil {
+		return fmt.Errorf("%w: %w", missing, err)
 	}
 	ce := &store.ConstraintError{Err: err}
 	switch myErr.Number {

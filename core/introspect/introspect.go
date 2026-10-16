@@ -152,6 +152,9 @@ type Drift struct {
 	Extra []string
 	// TypeChanged lists fields whose DB type differs from the config.
 	TypeChanged []string
+	// Absent maps each entity that cannot be served to the configured
+	// columns its table lacks; an empty list means the table is missing.
+	Absent map[string][]string
 }
 
 // Reconcile matches configured table and view entities to their tables in the
@@ -175,6 +178,7 @@ func Reconcile(configured []entity.Entity, c Catalog) ([]entity.Entity, Drift) {
 		de, ok := c.Lookup(ce.Schema, physical)
 		if !ok {
 			d.Missing = append(d.Missing, ce.Name)
+			d.absent(ce.Name, nil)
 			continue
 		}
 		out[i] = inherit(ce, de)
@@ -182,6 +186,7 @@ func Reconcile(configured []entity.Entity, c Catalog) ([]entity.Entity, Drift) {
 		for _, a := range ce.Attributes {
 			if _, ok := columns[a.Name]; !ok {
 				d.Missing = append(d.Missing, ce.Name+"."+a.Name)
+				d.absent(ce.Name, []string{a.Name})
 			}
 		}
 		fields := indexAttrs(ce.Attributes)
@@ -192,6 +197,14 @@ func Reconcile(configured []entity.Entity, c Catalog) ([]entity.Entity, Drift) {
 		}
 	}
 	return out, d
+}
+
+// absent records columns an entity's table lacks (none: the table).
+func (d *Drift) absent(name string, columns []string) {
+	if d.Absent == nil {
+		d.Absent = map[string][]string{}
+	}
+	d.Absent[name] = append(d.Absent[name], columns...)
 }
 
 // tableName is a discovered table's physical name.

@@ -12,6 +12,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
+	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
 )
 
@@ -626,9 +627,13 @@ func TestEstimateSmallTableFullScan(t *testing.T) {
 // not an estimate to judge: the hold-back is reported as such, never as a
 // cost denial.
 func TestEstimateReportsARefusedExplain(t *testing.T) {
-	est := cost.Estimate{Explainer: costtest.FakeExplainer{Err: ratelimit.ErrCircuitOpen}, FailClosed: true}
-	_, err := est.Check(context.Background(), codegen.Compiled{SQL: "SELECT * FROM t"})
-	if !errors.Is(err, ratelimit.ErrCircuitOpen) {
-		t.Fatalf("a refused EXPLAIN became %v", err)
+	// So is one naming a table or a column the database no longer has: the
+	// schema changed, which no rewrite of the query can help.
+	for _, refused := range []error{ratelimit.ErrCircuitOpen, store.ErrMissingColumn, store.ErrMissingRelation} {
+		est := cost.Estimate{Explainer: costtest.FakeExplainer{Err: refused}, FailClosed: true}
+		_, err := est.Check(context.Background(), codegen.Compiled{SQL: "SELECT * FROM t"})
+		if !errors.Is(err, refused) {
+			t.Fatalf("a refused EXPLAIN (%v) became %v", refused, err)
+		}
 	}
 }

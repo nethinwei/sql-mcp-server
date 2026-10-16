@@ -4,9 +4,10 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useQuery } from '@urql/vue'
 import {
-  NAlert, NButton, NCard, NGrid, NGi, NList, NListItem, NSpace, NStatistic, NTag, NText, NTime,
+  NAlert, NButton, NCard, NGrid, NGi, NList, NListItem, NSpace, NStatistic, NTag, NText, NTime, useMessage,
 } from 'naive-ui'
 import { useWorkspace } from '@/stores/workspace'
+import { useStatus } from '@/stores/status'
 import ExecutionCard from '@/components/ExecutionCard.vue'
 import { entityId } from '@/lib/entityRefs'
 import { RevisionsQuery } from '@/api/ops'
@@ -27,6 +28,21 @@ const unreachable = computed(() =>
     return a.roles.length === 0 && a.users.length === 0 && !e.legacyAccess
   }),
 )
+// Entities the running server cannot serve: their tables or fields are gone.
+// Those still in the workspace can be removed from it, to review and publish.
+const status = useStatus()
+const message = useMessage()
+const missing = computed(() => status.server?.unavailableEntities ?? [])
+const down = computed(() => status.server?.unreachableDatasources ?? [])
+// Only an entity whose table is gone is removed; one missing columns has its
+// fields synced instead (datasources page).
+const removable = computed(() => missing.value.filter((m) => m.tableMissing && ws.entity(m.entity)))
+const columnsMissing = computed(() => missing.value.filter((m) => !m.tableMissing).length)
+function removeMissing() {
+  const n = removable.value.length
+  for (const m of removable.value) ws.removeEntity(m.entity)
+  message.success(t('overview.removedMissing', { n }))
+}
 const usersWithoutToken = computed(() => ws.users.filter((u) => !u.disabled && !ws.hasToken(u)))
 const emptyRoles = computed(() => ws.roles.filter((r) => !ws.users.some((u) => (u.roles ?? []).includes(r.name))))
 const stats = computed(() => [
@@ -51,6 +67,21 @@ const stats = computed(() => [
       <n-gi span="3 l:2">
         <n-card :title="t('overview.attention')" size="small" class="fill">
           <n-space vertical :size="12">
+            <n-alert v-if="down.length" type="error" :title="t('overview.unreachableDsTitle', { count: down.length }, down.length)">
+              {{ t('overview.unreachableDsBody') }}
+              <div v-for="d in down" :key="d.datasource" class="mono">{{ d.datasource }}: {{ d.error }}</div>
+            </n-alert>
+            <n-alert v-if="missing.length" type="warning" :title="t('overview.missingTitle', { count: missing.length }, missing.length)">
+              {{ t('overview.missingBody') }}
+              <span class="mono">{{ missing.slice(0, 6).map((m) => ws.entityIndex.shortName(m.entity)).join(', ') }}</span>
+              <span v-if="missing.length > 6"> {{ t('overview.andMore') }}</span>
+              <div v-if="can('admin:write') && (removable.length || columnsMissing)" class="alert-actions">
+                <n-button v-if="removable.length" size="small" @click="removeMissing">
+                  {{ t('overview.removeMissing', { n: removable.length }) }}</n-button>
+                <n-button v-if="columnsMissing" size="small" @click="router.push({ name: 'datasources', query: { drift: '1' } })">
+                  {{ t('overview.syncColumns', { n: columnsMissing }) }}</n-button>
+              </div>
+            </n-alert>
             <n-alert v-if="unreachable.length" type="info" :title="t('overview.unreachableTitle', { count: unreachable.length }, unreachable.length)">
               {{ t('overview.unreachableBody') }}
               <span class="mono">{{ unreachable.slice(0, 6).map((e) => ws.entityIndex.shortName(entityId(e))).join(', ') }}</span>
@@ -71,7 +102,7 @@ const stats = computed(() => [
             <n-alert v-if="emptyRoles.length" type="default" :title="t('overview.emptyRolesTitle', { count: emptyRoles.length }, emptyRoles.length)">
               <span class="mono">{{ emptyRoles.map((r) => r.name).join(', ') }}</span>
             </n-alert>
-            <n-text v-if="!unreachable.length && !usersWithoutToken.length && !emptyRoles.length" depth="3">
+            <n-text v-if="!down.length && !missing.length && !unreachable.length && !usersWithoutToken.length && !emptyRoles.length" depth="3">
               {{ t('overview.allGood') }}
             </n-text>
           </n-space>

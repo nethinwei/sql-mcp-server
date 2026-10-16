@@ -23,6 +23,9 @@ type Input struct {
 	// Review reports every new table a grant covers, as a recurring
 	// template's proposal needs.
 	Review bool
+	// Missing are the entities whose tables the serving configuration found
+	// missing, by ID (see GoneTables).
+	Missing map[string]bool
 }
 
 // Proposal is the outcome of a plan.
@@ -31,8 +34,8 @@ type Proposal struct {
 	Config *config.Config
 	// Entities are the entities added or changed, in configuration order.
 	Entities []config.EntityConfig
-	// Added are the IDs of the entities added.
-	Added []string
+	// Added are the IDs of the entities added; Removed those removed.
+	Added, Removed []string
 	// Roles and Users are the principals added or changed.
 	Roles  map[string]config.RoleDefinition
 	Users  map[string]config.UserConfig
@@ -40,7 +43,9 @@ type Proposal struct {
 }
 
 // Empty reports a proposal that changes nothing.
-func (p Proposal) Empty() bool { return len(p.Entities) == 0 && len(p.Roles) == 0 && len(p.Users) == 0 }
+func (p Proposal) Empty() bool {
+	return len(p.Entities) == 0 && len(p.Removed) == 0 && len(p.Roles) == 0 && len(p.Users) == 0
+}
 
 // Report is what a reviewer reads before taking a proposal.
 type Report struct {
@@ -76,6 +81,8 @@ const (
 	ChangeMask       = "mask"
 	ChangeSyncAdd    = "syncAdd"
 	ChangeSyncRemove = "syncRemove"
+	// ChangeRemoveTable removes the entity of a table that is gone.
+	ChangeRemoveTable = "removeTable"
 )
 
 // Change summarizes one kind of change over the entities it applies to.
@@ -195,6 +202,9 @@ func Evaluate(in Input, p Plan) (Proposal, error) {
 		for _, t := range targets {
 			ev.sync(t)
 		}
+		if p.Sync.RemoveTables {
+			ev.removeGone(GoneTables(in.Sources, in.Base, p.Scope, in.Missing), exclude)
+		}
 	}
 	for _, t := range targets {
 		ev.applyFields(t)
@@ -208,11 +218,12 @@ func Evaluate(in Input, p Plan) (Proposal, error) {
 
 // evaluation is the state of one Evaluate.
 type evaluation struct {
-	in    Input
-	plan  Plan
-	cfg   *config.Config
-	index map[string]int // entity ID → position in cfg.Entities
-	added []string
+	in      Input
+	plan    Plan
+	cfg     *config.Config
+	index   map[string]int // entity ID → position in cfg.Entities
+	added   []string
+	removed []string
 	// imported maps the Ref of each table imported to its entity.
 	imported map[string]string
 	changed  map[string]bool

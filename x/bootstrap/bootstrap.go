@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -30,6 +32,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/mask"
 	coreprovider "github.com/nethinwei/sql-mcp-server/core/provider"
+	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
@@ -66,6 +69,19 @@ type App struct {
 	ToolFlags     config.ToolFlags
 	DefaultRole   string
 	DefaultUser   string
+	// Unavailable maps the ID of each entity whose table or columns are
+	// missing from the database (see entity.Entity.Unavailable) to why.
+	Unavailable map[string]string
+	// Unreachable maps each datasource whose schema could not be read to the
+	// error; its entities are unavailable until a reload reads it.
+	Unreachable map[string]string
+	// callers are each caller's limits (see callerLimits); keyed bounds
+	// their rates and calls in flight (the process's when shared).
+	callers map[string]config.PrincipalLimits
+	keyed   *ratelimit.Keyed
+	// Drift is raised when a call finds the schema of a datasource changed
+	// (the process's when shared): WatchStore assembles the revision again.
+	Drift *tool.SchemaDrift
 	// Users maps an enabled user name to its identity; UserTokens maps a
 	// tokenHash to the user name. Both follow the snapshot on reload.
 	Users        map[string]UserIdentity
@@ -122,11 +138,16 @@ func (a *App) Bus() *bus.Bus {
 // Config returns the configuration the App was assembled from.
 func (a *App) Config() *config.Config { return a.config }
 
-// ToolContext builds a per-request tool.Context for the given role.
+// ToolContext builds a per-request tool.Context for the given role (a
+// principal key), under its limits (see callerLimits).
 func (a *App) ToolContext(role string) tool.Context {
 	src := a.Sources[a.defaultSource]
+	s := a.Services()
+	if p, ok := a.callers[role]; ok {
+		s.Limits = toolLimitsFor(a.Limits, p)
+	}
 	return tool.Context{
-		Services: a.Services(), Role: role,
+		Services: s, Role: role,
 		DB: a.Provider, Dialect: src.Dialect, Gate: src.Gate, Analyze: src.Analyze,
 	}
 }
@@ -137,7 +158,8 @@ func (a *App) Services() *tool.Services {
 		Registry: a.Registry, Authorizer: a.Authorizer, Masker: a.Masker, Cache: a.Cache, Engine: a.Engine,
 		Auditor: a.Auditor, Hooks: a.Hooks, Limits: a.Limits, Feedback: a.Feedback, Sources: a.Sources,
 		Transactions: a.Transactions, Writes: a.Writes, ResultMemory: a.ResultMemory, TxBeginners: a.TxBeginners,
-		Generation: a.generation, WriteTargets: a.WriteTargets, Escapes: a.Escapes,
+		Generation: a.generation, WriteTargets: a.WriteTargets, Escapes: a.Escapes, Callers: a.keyed,
+		Drift: a.Drift,
 	}
 	if a.Budget != nil { // a nil *MemoryManager must stay a nil interface
 		s.Budget = a.Budget
@@ -362,13 +384,14 @@ func openConnection(
 	if err != nil {
 		return nil, err
 	}
-	return openDSN(ctx, cfg, driver, dsn, c.Pooler)
+	return openDSN(ctx, cfg, driver, dsn, c.Pooler, false)
 }
 
-// openDSN opens a connection to the resolved dsn.
-func openDSN(ctx context.Context, cfg *config.Config, driver, dsn, pooler string) (Provider, error) {
+// openDSN opens a connection to the resolved dsn; lazy opens it without
+// reaching the database (see providerregistry.Options.Lazy).
+func openDSN(ctx context.Context, cfg *config.Config, driver, dsn, pooler string, lazy bool) (Provider, error) {
 	return providerregistry.New(driver, dsn,
-		providerregistry.Options{Timeout: cfg.Cost.QueryTimeout, Pooler: pooler, Context: ctx})
+		providerregistry.Options{Timeout: cfg.Cost.QueryTimeout, Pooler: pooler, Context: ctx, Lazy: lazy})
 }
 
 // openConnections opens every connection of every database.
@@ -449,10 +472,12 @@ func configurePool(p Provider, maxOpen int, connMaxIdle, connMaxLifetime time.Du
 	}
 }
 
-// reconcileEntities matches entities to their tables in the live schema. It
-// fails fast if a configured entity or field is missing from the database
-// (extra DB columns are not fatal) and returns the entities with database
-// comments as their default descriptions.
+// reconcileEntities matches entities to their tables in the live schema and
+// returns them with database comments as their default descriptions. An
+// entity whose table or a configured column is missing from the database is
+// marked unavailable (tools refuse it) instead of failing the configuration:
+// a table dropped by its owners must not hold back every other change (extra
+// DB columns are not drift).
 func reconcileEntities(
 	ctx context.Context,
 	datasource string,
@@ -484,10 +509,42 @@ func reconcileEntities(
 	}
 	cat.FoldCase = physical.FoldCase
 	reconciled, drift := introspect.Reconcile(entities, cat)
-	if len(drift.Missing) > 0 {
-		return nil, fmt.Errorf("schema drift (configured but missing in DB): %v", drift.Missing)
-	}
+	markUnavailable(datasource, reconciled, drift.Absent)
 	return identifyRelations(reconciled, physical, &cat), nil
+}
+
+// TableMissing is why an entity whose table is missing from the database is
+// unavailable (see entity.Entity.Unavailable).
+const TableMissing = "its table is missing from the database"
+
+// MissingTables are the entities of the App whose tables are missing.
+func (a *App) MissingTables() map[string]bool {
+	out := map[string]bool{}
+	for id, why := range a.Unavailable {
+		if why == TableMissing {
+			out[id] = true
+		}
+	}
+	return out
+}
+
+// markUnavailable marks the entities whose table or columns are absent.
+func markUnavailable(datasource string, entities []entity.Entity, absent map[string][]string) {
+	if len(absent) == 0 {
+		return
+	}
+	for i := range entities {
+		columns, ok := absent[entities[i].Name]
+		switch {
+		case !ok:
+		case len(columns) == 0:
+			entities[i].Unavailable = TableMissing
+		default:
+			entities[i].Unavailable = "columns missing from the database: " + strings.Join(columns, ", ")
+		}
+	}
+	slog.Warn("entities unavailable: missing from the database (remove them or restore the tables)",
+		"datasource", datasource, "count", len(absent), "entities", slices.Sorted(maps.Keys(absent)))
 }
 
 var secretRe = regexp.MustCompile(`\$\{([^}]+)\}`)
@@ -588,16 +645,16 @@ func validateMaskRules(m *mask.RuleMasker, entities []entity.Entity) error {
 	return nil
 }
 
-func newBudgetManager(c config.BudgetConfig, principals map[string]config.BudgetLimits) *budget.MemoryManager {
-	return budget.New(budgetLimits(c, principals))
+func newBudgetManager(cfg *config.Config) *budget.MemoryManager {
+	return budget.New(budgetLimits(cfg))
 }
 
-// budgetLimits are the role (and user principal) and tenant limits c sets.
-func budgetLimits(c config.BudgetConfig, principals map[string]config.BudgetLimits) (
-	map[string]budget.Limits, map[string]budget.Limits,
-) {
-	roles := make(map[string]budget.Limits, len(c.Roles)+len(principals))
-	for name, limits := range c.Roles {
+// budgetLimits are the role (see roleBudgets), user principal (see
+// userBudgets) and tenant limits cfg sets.
+func budgetLimits(cfg *config.Config) (map[string]budget.Limits, map[string]budget.Limits) {
+	c, principals, byRole := cfg.Budget, userBudgets(cfg), roleBudgets(cfg)
+	roles := make(map[string]budget.Limits, len(byRole)+len(principals))
+	for name, limits := range byRole {
 		roles[name] = budget.Limits(limits)
 	}
 	for principal, limits := range principals {
