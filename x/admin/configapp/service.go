@@ -71,12 +71,17 @@ type Service struct {
 	// the serving configuration relies on that they do not enforce; nil
 	// reports none.
 	Profiles func() ([]bootstrap.ConnectionProfile, []bootstrap.LimitIssue)
+	// MissingTables reports the entities whose tables the serving
+	// configuration found missing; nil reports none.
+	MissingTables func() map[string]bool
 	// PlannedLimits judges a configuration not yet applied: the hard limits
 	// it would rely on that its connections would not enforce; nil judges
 	// none.
 	PlannedLimits func(*config.Config) []bootstrap.LimitIssue
 	// previews keeps recent plan previews.
 	previews previews
+	// configs keeps recently selected configurations parsed.
+	configs configs
 }
 
 // Draft is a configuration being edited: a base revision with sections
@@ -96,6 +101,13 @@ func (r *Service) now() time.Time {
 		return r.Scans.clock()
 	}
 	return time.Now()
+}
+
+func (r *Service) missingTables() map[string]bool {
+	if r.MissingTables == nil {
+		return nil
+	}
+	return r.MissingTables()
 }
 
 func (r *Service) capabilities() bootstrap.EntityCapabilities {
@@ -155,29 +167,28 @@ func (r *Service) BuildDraft(ctx context.Context, d Draft) (Built, error) {
 	return Built{Base: base, Spec: spec, Config: cfg, Payload: payload}, nil
 }
 
-// SelectConfig is the configuration against is.
+// SelectConfig is the configuration against is. It is kept parsed (see
+// configs) and shared: callers must not change it.
 func (r *Service) SelectConfig(ctx context.Context, against Against) (*config.Config, error) {
 	id := against.Revision
-	if draft, err := r.draftOf(ctx, Against{Workspace: against.Workspace && id == nil}); err != nil {
+	draft, err := r.draftOf(ctx, Against{Workspace: against.Workspace && id == nil})
+	if err != nil {
 		return nil, err
-	} else if draft != nil {
+	}
+	if draft == nil {
+		return r.revisionConfig(ctx, id)
+	}
+	key, err := draftKey(*draft)
+	if err != nil {
+		return nil, err
+	}
+	return r.configs.keep(key, func() (*config.Config, error) {
 		d, err := r.BuildDraft(ctx, *draft)
 		if err != nil {
 			return nil, err
 		}
 		return d.Config, nil
-	}
-	var rev revision.Revision
-	var err error
-	if id != nil {
-		rev, err = r.Revision(ctx, *id)
-	} else {
-		rev, err = r.Store.Published(ctx)
-	}
-	if err != nil {
-		return nil, err
-	}
-	return bootstrap.LoadRevision(rev)
+	})
 }
 
 // RestartChanges compares a configuration with the published one.

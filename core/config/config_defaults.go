@@ -31,6 +31,9 @@ func (c *Config) applyServerDefaults() {
 	if c.Server.Transport == "" {
 		c.Server.Transport = "stdio"
 	}
+	if c.Server.SessionTimeout == 0 {
+		c.Server.SessionTimeout = 30 * time.Minute
+	}
 }
 
 func (c *Config) applyDatabaseDefaults() {
@@ -203,6 +206,9 @@ func (c *Config) applyCacheDefaults() {
 func (c *Config) applyTransactionDefaults() {
 	if c.Transactions.TTL == 0 {
 		c.Transactions.TTL = 5 * time.Minute
+	}
+	if c.Transactions.IdleTimeout == 0 {
+		c.Transactions.IdleTimeout = time.Minute
 	}
 	if c.Transactions.MaxOpen == 0 {
 		c.Transactions.MaxOpen = 128

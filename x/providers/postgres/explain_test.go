@@ -70,7 +70,8 @@ func TestParsePGExplainUsesRiskiestNestedScanAndLargestRows(t *testing.T) {
 	t.Parallel()
 	raw := `[{"Plan":{"Node Type":"Nested Loop","Plan Rows":3,"Plans":[` +
 		`{"Node Type":"Index Scan","Relation Name":"small","Plan Rows":3},` +
-		`{"Node Type":"Sort","Plan Rows":250,"Plans":[{"Node Type":"Seq Scan","Relation Name":"large","Plan Rows":12000}]}` +
+		`{"Node Type":"Sort","Plan Rows":250,"Plans":[` +
+		`{"Node Type":"Seq Scan","Relation Name":"large","Schema":"bulk","Plan Rows":12000}]}` +
 		`]}}]`
 	p, root, err := parsePGExplain([]byte(raw))
 	if err != nil {
@@ -79,8 +80,8 @@ func TestParsePGExplainUsesRiskiestNestedScanAndLargestRows(t *testing.T) {
 	if p.ScanType != cost.ScanFull || p.EstimatedRows != 12000 || !p.HasSort {
 		t.Fatalf("plan = %+v", p)
 	}
-	if got := relationForScan(root, p.ScanType); got != "large" {
-		t.Fatalf("stats relation = %q, want large", got)
+	if got, ok := relationForScan(root, p.ScanType); !ok || got.RelationName != "large" || got.Schema != "bulk" {
+		t.Fatalf("stats relation = %+v, want bulk.large", got)
 	}
 }
 

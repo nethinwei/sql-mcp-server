@@ -13,7 +13,7 @@ import (
 // a default is left unset, as before it applied).
 func (p Proposal) Edit() configedit.Edit {
 	var edit configedit.Edit
-	if len(p.Entities) > 0 {
+	if len(p.Entities) > 0 || len(p.Removed) > 0 {
 		edit.Entities = slices.Clone(config.SpecOf(&config.Config{Entities: p.Config.Entities}).Entities)
 	}
 	if len(p.Roles) > 0 {

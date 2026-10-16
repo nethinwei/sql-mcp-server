@@ -35,6 +35,8 @@ export interface SyncRule {
   add?: boolean
   remove?: boolean
   hideNew?: boolean
+  /** Removes the entities whose tables are gone. */
+  removeTables?: boolean
 }
 
 export interface Plan {
@@ -69,7 +71,7 @@ export function filterOf(s: Scope): CatalogFilter {
 
 /** A plan without empty parts, as templates keep it. */
 export function cleanPlan(p: Plan): Plan {
-  const sync = p.sync && (p.sync.add || p.sync.remove) ? clean({ ...p.sync }) : undefined
+  const sync = p.sync && (p.sync.add || p.sync.remove || p.sync.removeTables) ? clean({ ...p.sync }) : undefined
   return clean({
     scope: clean({ ...p.scope, refs: nonEmpty(p.scope.refs) }) as Scope,
     import: p.import || undefined,
@@ -117,6 +119,6 @@ export function tasksOf(p: Plan): PlanTask[] {
   if (p.import) out.push('import')
   if (p.grants?.length) out.push('grant')
   if (p.fields?.length) out.push('fields')
-  if (p.sync?.add || p.sync?.remove) out.push('sync')
+  if (p.sync?.add || p.sync?.remove || p.sync?.removeTables) out.push('sync')
   return out
 }

@@ -161,6 +161,38 @@ type Threshold struct {
 	RejectTemplates           []string
 }
 
+// Tightening is a caller's own stricter gate (a role's or a user's limits):
+// a set score raises the threshold's, RejectFullScan adds to it. It never
+// loosens the gate.
+type Tightening struct {
+	SoftScore, HardScore int
+	RejectFullScan       bool
+}
+
+// Tighten is th as strict as t asks, never less strict than th.
+func (th Threshold) Tighten(t Tightening) Threshold {
+	th.SoftScore = max(th.SoftScore, t.SoftScore)
+	th.HardScore = max(th.HardScore, t.HardScore)
+	th.RejectFullScan = th.RejectFullScan || t.RejectFullScan
+	return th
+}
+
+type tighteningKey struct{}
+
+// WithTightening carries the caller's tightening to the gates a call checks
+// its statements with (see Estimate).
+func WithTightening(ctx context.Context, t Tightening) context.Context {
+	if t == (Tightening{}) {
+		return ctx
+	}
+	return context.WithValue(ctx, tighteningKey{}, t)
+}
+
+func tighteningOf(ctx context.Context) Tightening {
+	t, _ := ctx.Value(tighteningKey{}).(Tightening)
+	return t
+}
+
 // Decision is a layer's verdict. Bypass skips optional estimate layers only;
 // mandatory safety and enforcement layers continue to run.
 type Decision struct {

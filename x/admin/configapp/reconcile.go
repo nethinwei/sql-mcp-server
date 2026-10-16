@@ -21,19 +21,23 @@ import (
 //   - Fields removed from an entity leave the field lists of grants on it.
 //   - A renamed or removed role is renamed or removed where users and the
 //     entity-level (legacy) access name it.
+//   - The budget.roles and budget.users entries of a renamed or removed role
+//     or user follow it.
 //
 // It edits only those values of an item's JSON, so items keep their shape.
 func reconcile(before, after workspace.Snapshot, renames map[workspace.Ref]workspace.Ref) (
 	workspace.Snapshot, error,
 ) {
 	r := reconciliation{before: before, beforeAt: before.Index(), renames: renames, moved: map[string]string{},
-		roles: map[string]string{}}
+		roles: map[string]string{}, users: map[string]string{}}
 	for to, from := range renames {
 		switch {
 		case to.Kind == ItemEntity && from.Kind == ItemEntity:
 			r.moved[from.Key] = to.Key
 		case to.Kind == ItemRole && from.Kind == ItemRole:
 			r.roles[from.Key] = to.Key
+		case to.Kind == ItemUser && from.Kind == ItemUser:
+			r.users[from.Key] = to.Key
 		}
 	}
 	// An entity that a renamed one replaced is removed: what named it must
@@ -46,9 +50,12 @@ func reconcile(before, after workspace.Snapshot, renames map[workspace.Ref]works
 	}
 	afterAt := after.Index()
 	for _, it := range before {
-		if _, kept := afterAt[it.Ref]; it.Kind == ItemRole && !kept {
-			if _, renamed := r.roles[it.Key]; !renamed {
-				r.roles[it.Key] = "" // removed
+		if _, kept := afterAt[it.Ref]; kept {
+			continue
+		}
+		for kind, names := range map[string]map[string]string{ItemRole: r.roles, ItemUser: r.users} {
+			if _, renamed := names[it.Key]; it.Kind == kind && !renamed {
+				names[it.Key] = "" // removed
 			}
 		}
 	}
@@ -72,10 +79,10 @@ type reconciliation struct {
 	beforeAt map[workspace.Ref]int
 	renames  map[workspace.Ref]workspace.Ref
 	// moved maps renamed entities' IDs to their new ones and replaced ones
-	// to ""; roles maps renamed roles to their new names and removed ones to
-	// "".
+	// to ""; roles and users map renamed roles and users to their new names
+	// and removed ones to "".
 	moved               map[string]string
-	roles               map[string]string
+	roles, users        map[string]string
 	beforeIdx, afterIdx configrefs.Index
 }
 
@@ -110,8 +117,44 @@ func (r reconciliation) item(ref workspace.Ref, v map[string]any) bool {
 		changed = r.relationships(v, prev) || changed
 		changed = r.affects(v, prev) || changed
 		return r.legacyRoles(v) || changed
+	case ItemSettings:
+		return r.budgets(v)
 	}
 	return false
+}
+
+// budgets renames or removes the budget.roles and budget.users entries of
+// the roles and users renamed or removed: a budget naming a user that is
+// gone fails validation, and one naming a role that is gone applies to none.
+func (r reconciliation) budgets(v map[string]any) bool {
+	budget, ok := v["budget"].(map[string]any)
+	if !ok {
+		return false
+	}
+	changed := renameKeys(budget, "roles", r.roles)
+	return renameKeys(budget, "users", r.users) || changed
+}
+
+// renameKeys moves the entries of section[key] named in names to their new
+// names, or drops them for "". An entry the new name already has stays.
+func renameKeys(section map[string]any, key string, names map[string]string) bool {
+	byName, ok := section[key].(map[string]any)
+	if !ok {
+		return false
+	}
+	changed := false
+	for from, to := range names {
+		limits, ok := byName[from]
+		if !ok {
+			continue
+		}
+		delete(byName, from)
+		changed = true
+		if _, taken := byName[to]; to != "" && !taken {
+			byName[to] = limits
+		}
+	}
+	return changed
 }
 
 // retarget is what the existing reference ref becomes; keep is false when

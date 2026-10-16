@@ -20,6 +20,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/mask"
+	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
@@ -82,10 +83,11 @@ func (a *assembly) check() (err error) {
 		return err
 	}
 	b := sharedBus(a.shared)
-	if err := checkDefaultSchemas(b, a.cfg, a.connections); err != nil {
+	unreachable, err := checkDefaultSchemas(b, a.cfg, a.connections)
+	if err != nil {
 		return err
 	}
-	a.checked, err = checkAssembly(b, a.cfg, a.providers)
+	a.checked, err = checkAssembly(b, a.cfg, a.providers, unreachable)
 	return err
 }
 
@@ -126,6 +128,7 @@ func (a *assembly) release() {
 func (a *assembly) app() *App {
 	cfg, checked := a.cfg, a.checked
 	defaultName := defaultDatasource(a.providers)
+	entities := checked.registry.Entities()
 	app := &App{
 		Provider:      a.providers[defaultName],
 		Providers:     a.providers,
@@ -135,6 +138,8 @@ func (a *assembly) app() *App {
 		Escapes:       a.escapes,
 		defaultSource: defaultName,
 		Registry:      checked.registry,
+		Unavailable:   unavailableOf(entities, checked.unreachable),
+		Unreachable:   errorTexts(checked.unreachable),
 		Authorizer:    rbac.NewGrantAuthorizer(checked.registry, checked.policy),
 		Masker:        checked.masker,
 		Feedback:      a.feedback,
@@ -142,7 +147,7 @@ func (a *assembly) app() *App {
 		Tools:         checked.tools,
 		Auditor:       a.auditor,
 		Cache:         a.cache,
-		Budget:        newBudgetManager(cfg.Budget, userBudgets(cfg)),
+		Budget:        newBudgetManager(cfg),
 		Transactions:  tool.NewTransactionManager(cfg.Transactions.TTL, cfg.Transactions.MaxOpen),
 		Writes:        tool.NewWriteTracker(),
 		ResultMemory:  tool.NewResultMemory(cfg.RateLimit.MaxResultMemory),
@@ -152,21 +157,47 @@ func (a *assembly) app() *App {
 	}
 	applyAssembledAppConfig(app, cfg)
 	app.attachProcess(cfg, a.shared)
-	app.assessInBackground(cfg, a.connections, checked.registry.Entities())
+	app.assessInBackground(cfg, a.connections, entities)
 	return app
+}
+
+// unavailableOf maps the entities whose table or columns are missing to why;
+// those of unreachable datasources are not known to be missing.
+func unavailableOf(entities []entity.Entity, unreachable map[string]error) map[string]string {
+	out := map[string]string{}
+	for _, e := range entities {
+		if e.Unavailable != "" && unreachable[e.DataSource] == nil {
+			out[e.Name] = e.Unavailable
+		}
+	}
+	return out
+}
+
+func errorTexts(errs map[string]error) map[string]string {
+	out := make(map[string]string, len(errs))
+	for k, err := range errs {
+		out[k] = err.Error()
+	}
+	return out
 }
 
 // attachProcess gives the App the process's call state when it runs on
 // shared services: that state is the process's, not the configuration's
 // (see Shared). An App on its own keeps its own.
 func (a *App) attachProcess(cfg *config.Config, shared *Shared) {
+	a.callers = callerLimits(cfg)
 	if shared == nil {
 		a.Transactions.SetConnectionLimit(cfg.Transactions.MaxOpenPerConnection)
+		a.Transactions.SetIdleTimeout(cfg.Transactions.IdleTimeout)
+		a.Drift = &tool.SchemaDrift{}
+		a.keyed = ratelimit.NewKeyed()
+		a.keyed.Update(keyLimits(a.callers))
 		return
 	}
 	a.shared, a.generation = shared, shared.generation.Add(1)
 	a.Transactions, a.Budget, a.Writes, a.ResultMemory = shared.transactions, shared.budget, shared.writes,
 		shared.results
+	a.keyed, a.Drift = shared.callers, shared.drift
 }
 
 // sharedBus is the bus of shared services; nil without them.
@@ -194,15 +225,20 @@ func readConnections(cfg *config.Config, connections Connections) (map[string]Pr
 // checkDefaultSchemas requires the connections of a datasource to resolve
 // unqualified names to the same schema (accounts may have different
 // search_paths or default databases); otherwise its entities must name one.
-func checkDefaultSchemas(b *bus.Bus, cfg *config.Config, connections Connections) error {
+// It returns the datasources it could not reach, by the error.
+func checkDefaultSchemas(b *bus.Bus, cfg *config.Config, connections Connections) (map[string]error, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), introspectTimeout)
 	defer cancel()
-	return b.Lane(bus.Background).RunWaiting(ctx, func(ctx context.Context) error {
-		return compareDefaultSchemas(ctx, cfg, connections)
+	unreachable := map[string]error{}
+	err := b.Lane(bus.Background).RunWaiting(ctx, func(ctx context.Context) error {
+		return compareDefaultSchemas(ctx, cfg, connections, unreachable)
 	})
+	return unreachable, err
 }
 
-func compareDefaultSchemas(ctx context.Context, cfg *config.Config, connections Connections) error {
+func compareDefaultSchemas(
+	ctx context.Context, cfg *config.Config, connections Connections, unreachable map[string]error,
+) error {
 	for datasource, byName := range connections {
 		if !unqualifiedEntities(cfg, datasource) {
 			continue
@@ -215,9 +251,13 @@ func compareDefaultSchemas(ctx context.Context, cfg *config.Config, connections 
 			}
 			_, current, err := lister.Schemas(ctx)
 			if err != nil {
-				return fmt.Errorf("datasource %q connection %q: %w", datasource, connection, err)
+				unreachable[datasource] = fmt.Errorf("connection %q: %w", connection, err)
+				break
 			}
 			defaults[connection] = current
+		}
+		if unreachable[datasource] != nil {
+			continue
 		}
 		if len(slices.Compact(slices.Sorted(maps.Values(defaults)))) > 1 {
 			return fmt.Errorf("datasource %q: connections resolve unqualified names to different schemas %v; "+
@@ -240,9 +280,14 @@ type checkedAssembly struct {
 	policy   rbac.Policy
 	masker   mask.Masker
 	tools    *tool.Registry
+	// unreachable are the datasources whose schema could not be read, by the
+	// error; their entities are unavailable.
+	unreachable map[string]error
 }
 
-func checkAssembly(b *bus.Bus, cfg *config.Config, providers map[string]Provider) (checkedAssembly, error) {
+func checkAssembly(
+	b *bus.Bus, cfg *config.Config, providers map[string]Provider, unreachable map[string]error,
+) (checkedAssembly, error) {
 	if err := prepareAssembleProviders(cfg, providers); err != nil {
 		return checkedAssembly{}, err
 	}
@@ -250,7 +295,7 @@ func checkAssembly(b *bus.Bus, cfg *config.Config, providers map[string]Provider
 	if err != nil {
 		return checkedAssembly{}, err
 	}
-	entities, err := validateAssembleEntities(b, off.entities, providers)
+	entities, err := validateAssembleEntities(b, off.entities, providers, unreachable)
 	if err != nil {
 		return checkedAssembly{}, err
 	}
@@ -258,7 +303,9 @@ func checkAssembly(b *bus.Bus, cfg *config.Config, providers map[string]Provider
 	if err != nil {
 		return checkedAssembly{}, err
 	}
-	return checkedAssembly{registry: reg, policy: off.policy, masker: off.masker, tools: off.tools}, nil
+	return checkedAssembly{
+		registry: reg, policy: off.policy, masker: off.masker, tools: off.tools, unreachable: unreachable,
+	}, nil
 }
 
 // offlineChecked is what assembling a configuration builds before it reads
@@ -321,15 +368,12 @@ func prepareAssembleProviders(cfg *config.Config, providers map[string]Provider)
 // validateAssembleEntities checks entities against their datasources and
 // returns them with database comments as the default descriptions.
 func validateAssembleEntities(
-	b *bus.Bus, entities []entity.Entity, providers map[string]Provider,
+	b *bus.Bus, entities []entity.Entity, providers map[string]Provider, unreachable map[string]error,
 ) ([]entity.Entity, error) {
 	if err := validateEntityDatasources(entities, providers); err != nil {
 		return nil, err
 	}
-	entities, err := reconcileAll(b, providers, entities)
-	if err != nil {
-		return nil, err
-	}
+	entities = reconcileAll(b, providers, entities, unreachable)
 	return entities, checkUniqueRelations(entities)
 }
 
@@ -348,36 +392,46 @@ const introspectTimeout = time.Minute
 
 // reconcileAll reconciles each datasource's entities with its schema, the
 // datasources in parallel on b's Background lane, waiting for it however busy
-// it is (a startup or reload must not fail as busy); it reports the first
-// failure by datasource name.
-func reconcileAll(b *bus.Bus, providers map[string]Provider, entities []entity.Entity) ([]entity.Entity, error) {
+// it is (a startup or reload must not fail as busy). A datasource whose
+// schema cannot be read (unreachable, timed out) does not fail the
+// configuration: it is recorded in unreachable and its entities are
+// unavailable, as are those of the datasources already in it.
+func reconcileAll(
+	b *bus.Bus, providers map[string]Provider, entities []entity.Entity, unreachable map[string]error,
+) []entity.Entity {
 	ctx, cancel := context.WithTimeout(context.Background(), introspectTimeout)
 	defer cancel()
 	out := slices.Clone(entities)
-	errs := make(map[string]error, len(providers))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	byDatasource := map[string][]int{}
 	for i, e := range entities {
 		byDatasource[e.DataSource] = append(byDatasource[e.DataSource], i)
 	}
+	known := maps.Clone(unreachable) // the goroutines below add to unreachable
 	for name, prov := range providers {
 		at := byDatasource[name]
 		scoped := make([]entity.Entity, len(at))
 		for n, i := range at {
 			scoped[n] = entities[i]
 		}
+		down := known[name] != nil
 		b.Fork(&wg, "reconcile "+name, func(context.Context) {
 			var reconciled []entity.Entity
-			err := b.Lane(bus.Background).RunWaiting(ctx, func(ctx context.Context) (err error) {
-				reconciled, err = reconcileSafely(ctx, name, prov, scoped)
-				return err
-			})
+			var err error
+			if !down {
+				err = b.Lane(bus.Background).RunWaiting(ctx, func(ctx context.Context) (err error) {
+					reconciled, err = reconcileSafely(ctx, name, prov, scoped)
+					return err
+				})
+			}
+			if down || err != nil {
+				reconciled = unreachableEntities(name, scoped)
+			}
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
-				errs[name] = fmt.Errorf("datasource %q: %w", name, err)
-				return
+				unreachable[name] = err
 			}
 			for j, e := range reconciled {
 				out[at[j]] = e
@@ -385,10 +439,22 @@ func reconcileAll(b *bus.Bus, providers map[string]Provider, entities []entity.E
 		})
 	}
 	wg.Wait()
-	for _, name := range slices.Sorted(maps.Keys(errs)) {
-		return nil, errs[name]
+	for _, name := range slices.Sorted(maps.Keys(unreachable)) {
+		slog.Warn("datasource unreachable: its entities are unavailable until a reload reads its schema",
+			"datasource", name, "err", unreachable[name])
 	}
-	return out, nil
+	return out
+}
+
+// unreachableEntities marks the entities of a datasource whose schema could
+// not be read unavailable. Agents are told no more than that: the error may
+// name hosts.
+func unreachableEntities(datasource string, entities []entity.Entity) []entity.Entity {
+	out := slices.Clone(entities)
+	for i := range out {
+		out[i].Unavailable = "its datasource is unreachable"
+	}
+	return identifyRelations(out, introspect.Physical{Server: "datasource:" + datasource}, nil)
 }
 
 func newFeedbackStore(cfg *config.Config) cost.FeedbackStore {

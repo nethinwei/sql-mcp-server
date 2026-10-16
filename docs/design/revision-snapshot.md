@@ -30,7 +30,8 @@
 - revision payload 的兼容规则与配置契约一致：新增带默认值的字段兼容；删除、
   重命名或改义为 breaking，须提升 `version` 标记；
 - 数据面加载 revision 时执行与启动完全相同的链路（解码、默认值、静态校验、
-  secret 解析、drift 检查），不存在“控制面特有”的旁路加载；
+  secret 解析、drift 检查：缺失的表或字段让对应实体不可用），不存在“控制面特有”的
+  旁路加载；
 - 不认识的 `version` 或校验失败的 payload 必须拒绝加载（fail closed），不做
   尽力兼容。
 
@@ -38,7 +39,7 @@
 
 - **控制面不可用**：数据面 fail-static——继续以最后一次成功发布的 snapshot
   服务，不接受新发布；恢复后从持久化状态收敛，不依赖内存。
-- **snapshot 构建失败**（配置错误、secret 缺失、drift）：保留当前 snapshot，
+- **snapshot 构建失败**（配置错误、secret 缺失、数据库不可达）：保留当前 snapshot，
   记录失败原因；与现有 `Reload` 语义一致（失败不发布）。
 - **snapshot 不兼容**（版本不识别、hash 不匹配）：拒绝加载并显式暴露
   degraded 状态，而不是静默回退到内置默认值。

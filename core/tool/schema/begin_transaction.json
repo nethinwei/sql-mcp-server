@@ -16,5 +16,6 @@
         "readOnly": {
             "type": "boolean"
         }
-    }
+    },
+    "additionalProperties": false
 }

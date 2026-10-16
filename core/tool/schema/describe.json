@@ -3,7 +3,27 @@
     "properties": {
         "entity": {
             "type": "string",
-            "description": "Entity name; omit to list all entities"
+            "description": "Entity to describe with its fields and keys; omit to list entities"
+        },
+        "search": {
+            "type": "string",
+            "description": "When listing, keep entities whose name, ID or description contains this text (case-insensitive)"
+        },
+        "datasource": {
+            "type": "string",
+            "description": "When listing, keep entities of this datasource"
+        },
+        "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "When listing, entities to skip; pass the previous page's nextOffset"
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "When listing, entities per page (default 100)"
         }
-    }
+    },
+    "additionalProperties": false
 }

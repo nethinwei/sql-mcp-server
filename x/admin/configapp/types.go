@@ -150,6 +150,17 @@ type PendingTable struct {
 	State   *PendingState `json:"state,omitempty"`
 }
 
+// PendingGoneTable is a configured table or view whose table is gone.
+type PendingGoneTable struct {
+	Key    string `json:"key"`
+	Ref    string `json:"ref"`
+	Entity string `json:"entity"`
+	// Scanned: a scan of its schema missed it; otherwise only the serving
+	// configuration found it missing.
+	Scanned bool          `json:"scanned"`
+	State   *PendingState `json:"state,omitempty"`
+}
+
 type PendingWork struct {
 	// Recurring templates whose plan would change the configuration or has rules it cannot apply.
 	Plans []PendingPlan `json:"plans"`
@@ -160,10 +171,12 @@ type PendingWork struct {
 	UnscannedSchemas int            `json:"unscannedSchemas"`
 	// Datasources whose schemas were never listed: what they hold is unknown.
 	UnlistedDatasources []string `json:"unlistedDatasources"`
+	// Configured tables and views whose tables are gone.
+	GoneTables []PendingGoneTable `json:"goneTables"`
 }
 
 type PlanChange struct {
-	// import, createRole, grant, exclude, mask, syncAdd or syncRemove.
+	// import, createRole, grant, exclude, mask, syncAdd, syncRemove or removeTable.
 	Kind      string   `json:"kind"`
 	Principal *string  `json:"principal,omitempty"`
 	Actions   []string `json:"actions"`

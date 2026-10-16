@@ -122,7 +122,12 @@ watcher 轮询文件内容 hash。新配置必须完整通过加载、secret 解
 事务 manager、预算与写跟踪属于进程，新限制（预算、事务 `ttl`、`maxOpen` 与
 `maxOpenPerConnection`）在发布时应用：上限约束之后的 begin，新 `ttl` 用于之后开启
 的事务。
-已发布的 revision 能加载、校验但装配失败（数据库不可达、schema 漂移、需重启）
+配置的表或字段在数据库中已不存在（例如按时间生成、定期清理的快照表）时，revision
+照常装配，只有这些实体不可用：有权限的调用返回 `ENTITY_UNAVAILABLE`，日志告警
+“entities unavailable”，控制台顶栏的服务状态与总览“需要关注”列出它们，可一键从
+工作区移除后发布。
+
+已发布的 revision 能加载、校验但装配失败（数据库不可达、需重启等）
 时，它删除、禁用或改动了定义（角色、subject、token、授权、权限）的用户立即暂停：
 新旧配置都不再认证这些用户，其会话关闭、事务回滚，日志记录
 “users held until the published revision applies”；下一次成功重载解除暂停。
@@ -155,10 +160,12 @@ sql-mcp-server serve         --store sqlite:/var/lib/sql-mcp-server/config.db --
   前缀，可放在业务库中，但实体与 introspection 都不会触及它们。
 - `serve --store` 从当前 published revision 启动；没有发布时拒绝启动。
   `--config` 与 `--store` 不能同时使用。
-- `--watch` 在 store 模式下默认每 5s 轮询最新发布。应用失败（构建错误、需要
-  重启的变化、hash 不匹配、store 不可达）时继续用旧快照服务，
-  `/readyz/snapshot` 仍为 200 并带 `X-Snapshot-Stale: <revision id>`，同一失败只
-  记录一次日志。
+- `--watch` 在 store 模式下默认每 5s 轮询最新发布：每次只读已发布版本的摘要，
+  版本变化时才读正文。应用失败（构建错误、需要重启的变化、hash 不匹配、store 不可达）
+  时继续用旧快照服务，`/readyz/snapshot` 仍为 200 并带
+  `X-Snapshot-Stale: <revision id>`，同一失败只记录一次日志；同一个失败版本按退避
+  重试（从轮询间隔起每次翻倍，最长 5 分钟），有新发布时立即尝试。运行中的版本有
+  数据源不可达时，按同样的节奏重新装配，数据源恢复后自动转为可用。
 - `store publish` 与 `store rollback` 会把目标与**当前已发布的 revision**比较；
   包含需重启的变化时拒绝，除非加 `--restart-required`（运行中的实例标记 stale，
   重启后生效）。因此回滚到正在运行的旧配置时，也可能需要该参数。
@@ -194,6 +201,15 @@ Web 控制台，管理员账号用 `sql-mcp-server admin create|passwd|set|list`
 容器内监听非 loopback 地址时必须配置 MCP 认证（`users`、`server.auth.token`
 或 mTLS），否则服务拒绝启动。
 
+`serve` 打开数据库连接时不 ping：启动时某个库不可达，服务照常启动，该数据源的实体不可用
+（日志 `datasource unreachable`，`/readyz/db` 不就绪），恢复后由 `--watch` 的重新装配转为可用；
+没有 `--watch` 时需重启。
+
+未设置 `GOMEMLIMIT` 时，`serve` 读取容器的 cgroup 内存上限（v2 `memory.max` 或 v1
+`memory.limit_in_bytes`），把 Go 运行时的软内存上限设为它的 90%，日志记录
+`memory limit set from the container`；没有容器上限时不设置。需要其他比例时显式设置
+`GOMEMLIMIT`。
+
 ## 生命周期
 
 - SIGINT/SIGTERM 取消根 context；HTTP 最多用 15 秒优雅 shutdown。
@@ -201,7 +217,29 @@ Web 控制台，管理员账号用 `sql-mcp-server admin create|passwd|set|list`
   provider；drain 超时不会提前释放仍被执行使用的资源。`App.Close` 保留原有
   无 deadline 兼容行为。
 - HTTP MCP session 正常关闭时回滚该 session 的事务；无稳定 session ID 的
-  transport 依赖事务 TTL 和 App 关闭。
+  transport 依赖事务 TTL 和 App 关闭。session 空闲超过 `server.sessionTimeout`
+  （默认 30 分钟，修改需重启）即关闭；关闭、进程重启或用户被吊销后，客户端用旧
+  session 的请求得到 404，按 MCP 协议自动建立新 session。显式事务、会话预算计数与
+  读跟随写都属于 session，不会带到新 session。
+- 显式事务超过 `transactions.idleTimeout`（默认 1 分钟）没有执行语句即由服务端回滚，
+  总时长仍受 `transactions.ttl` 限制；事务中任何一条语句失败，事务立即回滚（PostgreSQL
+  在语句失败后本就拒绝该事务的后续语句），拒绝的 `constraints.transaction` 为
+  `rolledBack`。两者都及时释放事务持有的锁与连接。
+
+## 表结构变更
+
+服务运行中修改库表结构（DDL）时：
+
+- 事务读写过的表，其 DDL 要等该事务结束；PostgreSQL 中排队的 DDL 还会挡住之后对这张表
+  的所有查询。空闲超时让 Agent 思考期间不长期持锁，但迁移脚本仍应设置锁等待上限
+  （PostgreSQL `SET lock_timeout = '5s'`，MySQL `SET lock_wait_timeout = 5`），拿不到锁
+  就失败重试，而不是无限排队。
+- 新增表、新增列不影响现有配置。删除或改名实体用到的表或列后，调用这些实体返回
+  `ENTITY_UNAVAILABLE`（不再是 `DATABASE_ERROR`）；`--watch` 时服务随即重新装配当前
+  revision（按退避，最长 5 分钟一次），这些实体出现在 `serverStatus.unavailableEntities`
+  与控制台“需要关注”，其余实体不受影响。未加 `--watch` 时要等下次重载。
+- PostgreSQL 修改列类型后，连接上缓存的语句计划失效：事务外的调用自动重试一次；事务内
+  的调用使事务回滚。
 - 数据库连接上限与 `rateLimit.ioPool` 对齐，idle timeout 来自
   `connMaxIdleTime`。
 - 执行总线（见[架构 · 执行总线](architecture.md#执行总线)）在 Runtime 关闭后关闭：

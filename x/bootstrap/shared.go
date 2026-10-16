@@ -40,6 +40,8 @@ type Shared struct {
 	budget       *budget.MemoryManager
 	writes       *tool.WriteTracker
 	results      *tool.ResultMemory
+	callers      *ratelimit.Keyed // each caller's own rate and calls in flight
+	drift        *tool.SchemaDrift
 
 	mu        sync.Mutex
 	rateLimit *rateLimits            // applied to quota and to each connection's health
@@ -102,8 +104,10 @@ func NewSharedOn(b *bus.Bus) *Shared {
 		pools:        map[string]*sharedConnection{},
 		transactions: tool.NewTransactionManager(0, 0),
 		budget:       budget.New(nil, nil),
+		callers:      ratelimit.NewKeyed(),
 		writes:       tool.NewWriteTracker(),
 		results:      tool.NewResultMemory(0),
+		drift:        &tool.SchemaDrift{},
 	}
 	s.transactions.UseBus(b)
 	return s
@@ -174,7 +178,10 @@ func (s *Shared) acquire(cfg *config.Config, r SecretResolver) (Connections, gua
 			key := connectionKey(cfg, database.Driver, dsn, c.Pooler)
 			shared := s.pools[key]
 			if shared == nil {
-				p, err := openDSN(context.Background(), cfg, database.Driver, dsn, c.Pooler)
+				// A database down does not keep the process from serving the
+				// others: its schema cannot be read, and its entities are
+				// unavailable until it answers (see reconcileAll).
+				p, err := openDSN(context.Background(), cfg, database.Driver, dsn, c.Pooler, true)
 				if err != nil {
 					return fail(fmt.Errorf("database %q connection %q: %w", name, connection, err))
 				}
@@ -235,11 +242,13 @@ func (s *Shared) apply(app *App) {
 	}
 	s.mu.Unlock()
 	s.bus.Update(cfg.RateLimit.IOPool, laneLimits(cfg))
-	// Open transactions carry on under the new limits; ttl applies to those
-	// begun from now on.
+	// Open transactions carry on under the new limits; ttl and idleTimeout
+	// apply to those begun from now on.
 	s.transactions.UpdateLimits(cfg.Transactions.TTL, cfg.Transactions.MaxOpen)
 	s.transactions.SetConnectionLimit(cfg.Transactions.MaxOpenPerConnection)
-	s.budget.UpdateLimits(budgetLimits(cfg.Budget, userBudgets(cfg)))
+	s.transactions.SetIdleTimeout(cfg.Transactions.IdleTimeout)
+	s.budget.UpdateLimits(budgetLimits(cfg))
+	s.callers.Update(keyLimits(app.callers))
 	s.results.SetCapacity(cfg.RateLimit.MaxResultMemory)
 	if cfg.Cache.Enabled {
 		s.cache.UpdateLimits(cfg.Cache.TTL, cfg.Cache.MaxSize)

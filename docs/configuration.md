@@ -38,8 +38,12 @@ stdio 请求和走共享 token 的 HTTP 请求都使用默认身份：`server.us
 ## 数据源与实体
 
 DSN 中的 `${file:/path}` 必须是 `server.secrets.allowedRoots` 下的绝对路径，
-且符号链接不能逃逸允许根。启动自省会拒绝数据库中缺失的 table/view 或字段；
-额外的数据库列不报错，procedure 不参与 drift 检查。
+且符号链接不能逃逸允许根。启动与重载时自省各数据源：table/view 或已配置的字段在
+数据库中不存在的实体标记为不可用（工具对有权限的调用方返回 `ENTITY_UNAVAILABLE`，
+不生成 SQL），配置其余部分照常加载，日志告警 `entities unavailable`，控制台列出这些
+实体；额外的数据库列不报错，procedure 不参与 drift 检查。读取不到结构的数据源（不可达、
+自省超时）同样不阻塞配置：它的实体全部不可用（对调用方只说明“数据源不可达”），日志
+告警 `datasource unreachable`，`--watch` 时服务按退避重新装配，数据源恢复后自动可用。
 
 行过滤（`rowPolicies` 的一项、授权的 `rows`、`tenantPolicy`）写作
 `{op, field, value}` 或 `and`/`or` 组合，operator 与工具 filter 相同：`eq`、
@@ -110,10 +114,22 @@ PostgreSQL sampler 始终使用独立 read-only transaction 并 rollback，调�
 | 进程 | `rateLimit.maxInflight`、`rps`、`ioPool`、`maxResultMemory`、`transactions.maxOpen` | 进程内所有调用（跨配置重载） |
 | 数据库连接 | 熔断与自适应并发（`rateLimit.breaker*`、`minConcurrency`、`rttThreshold`）、`transactions.maxOpenPerConnection` | 每个连接各自 |
 | 租户 | `budget.tenants.<t>.maxConcurrent` | 该租户所有会话、所有主体的调用合计 |
-| 会话 | `budget.users` / `budget.roles` 的各项，经租户的其余各项逐字段收紧 | 一个主体在一个租户下的一个 MCP 会话 |
-| 调用 | `cost.*`（闸门与 `maxBytes`）、预算的 `maxExecution`、`maxReturnedRows`、`maxReturnedBytes`、`maxEstimatedScannedRows` | 单次工具调用，结果逐行计量 |
+| 调用者 | 角色与用户的 `limits.rps`、`limits.maxInflight` | 一个调用者（用户或角色）跨会话的全部调用 |
+| 会话 | `budget.users` / `budget.roles` 与 `limits.budget` 的各项，经租户的其余各项逐字段收紧 | 一个主体在一个租户下的一个 MCP 会话 |
+| 调用 | `cost.*`（闸门与 `maxBytes`）经调用者的 `limits` 收紧、预算的 `maxExecution`、`maxReturnedRows`、`maxReturnedBytes`、`maxEstimatedScannedRows` | 单次工具调用，结果逐行计量 |
 
-会话层的主体限额：用户配置了 `budget.users` 时用它，否则逐项取其各角色中最宽松的值。
+会话层的主体限额：用户配置了 `budget.users` 时用它，否则逐项取其各角色中最宽松的值
+（角色的 `limits.budget` 设置的项覆盖 `budget.roles` 的同名项）；用户的
+`limits.budget` 设置的项最后覆盖。
+
+调用者限制（`roles.<名>.limits`、`users.<名>.limits`）只能收紧全局：`maxRows`、
+`maxBytes`、`queryTimeout` 取与全局 `cost.*` 中更小者，`softScore`、`hardScore` 取更高
+（更严）者，`rejectFullScan` 任一开启即拒绝；未设置的项沿用全局值。用户设置的项优先于
+其角色；多个角色时每项取最宽松的值（任一角色未设置即沿用全局）。`rps` 与
+`maxInflight` 按调用者跨会话计数，超出时返回 `RATE_LIMITED`（可重试），进程级
+`rateLimit.*` 同时生效；计数状态跨配置重载保留。限制写在角色与用户自己的配置项上，
+随改名、删除一起变化；删除或改名角色、用户时，控制台同时改名或删除
+`budget.roles` / `budget.users` 中的对应条目。
 租户层只有 `maxConcurrent` 按租户聚合；其余各项逐字段收紧会话或调用层的限制。
 `maxSessionCost` 是一个会话的累计成本，不跨会话累加。预算状态在进程内存中，有界，
 会话关闭时清理，空闲 30 分钟后回收，重启后清零；多实例部署各自计数（见下文“部署
@@ -177,6 +193,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `secrets.allowedRoots` | 字符串列表 | `["/run/secrets","/var/run/secrets"]` |  | 允许读取 secret 文件的根目录（绝对路径）；符号链接不能逃逸这些目录。 |
 | `secrets` | 对象 |  |  | DSN 中 ${file:...} 占位符的读取限制。 |
 | `user` | 字符串 |  |  | 没有用户身份的请求使用的默认用户，优先于 role；CLI --user 覆盖。必须是已配置且未禁用的用户。 |
+| `sessionTimeout` | 时长 | `"30m"` | ≥ 0；修改需重启 | HTTP MCP 会话空闲多久后关闭。关闭时回滚会话内的显式事务、清空会话预算计数；之后客户端用旧会话请求得到 404 并自动建立新会话。修改需重启。 |
 
 ### `database`
 
@@ -258,7 +275,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `whitelistPKPoint` | 布尔 | `true` |  | 主键点查询跳过估算（仍受结果上限约束）。 |
 | `requirePKForWrite` | 布尔 | `true` |  | 写操作必须带主键条件；不随 cost.enabled 关闭。 |
 | `requireKnownScan` | 布尔 | `true` |  | 无法判断扫描方式时拒绝；MySQL/OceanBase 的 EXPLAIN 失败即拒绝。 |
-| `requireFreshStats` | 布尔 |  |  | 统计信息过旧时拒绝。 |
+| `requireFreshStats` | 布尔 |  |  | 统计信息过旧时拒绝（未开启时只在评分中扣 15 分）。PostgreSQL 中过旧指被扫描的表既没被 ANALYZE 也没被 autovacuum 分析过，且大于 64 KiB；MySQL、OceanBase 不判断。 |
 | `queryTimeout` | 时长 | `"30s"` | ≥ 0 | 查询超时，0（不限）或不小于 100ms；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。 |
 | `requireNativeLimits` | 布尔 |  |  | 严格模式：数据源的连接无法在数据库侧把语句限制在 queryTimeout 内（能力不是 enforced）时，拒绝加载该配置，控制台校验也报错；关闭时只告警。 |
 | `allowTemplates` | 字符串列表 |  |  | 跳过估算的 SQL 模板：推荐 fp:v2:<sha256> 指纹；多数据源下精确 SQL 写成 datasource:SQL。不绕过安全检查。 |
@@ -341,6 +358,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
 | `ttl` | 时长 | `"5m"` | ≥ 0 | 事务最长存活时间。 |
+| `idleTimeout` | 时长 | `"1m"` | ≥ 0 | 事务空闲超时：超过这么久没有执行语句的事务由服务端回滚，释放它持有的锁和连接；避免 Agent 思考期间长期持锁而卡住表结构变更（DDL）及排在其后的查询。 |
 | `maxOpen` | 整数 | `128` | ≥ 0 | 每个角色/subject 同时打开的事务上限。 |
 | `maxOpenPerConnection` | 整数 | `8` | ≥ 0 | 同一个数据库连接上同时打开的事务上限，所有角色合计；未设置时取 rateLimit.ioPool 的一半（至少 1），给普通查询留出连接池的另一半。 |
 | `beginTimeout` | 时长 | `"5s"` | ≥ 0 | 开启事务超时。 |
@@ -437,6 +455,16 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `description` | 字符串 |  |  | 角色说明。 |
 | `grants` | `grant` 列表 |  |  | 角色的授权项。 |
 | `permissions` | 字符串列表 |  |  | 系统权限。sql:execute@<datasource> 让角色的用户在该数据源（须已配置且声明 sqlEscape）使用 execute_sql；其他系统权限为后续版本预留，本版声明即校验失败。 |
+| `limits.maxRows` | 整数 |  | ≥ 0 | 单次请求最多返回的行数（全局 cost.maxRows）。 |
+| `limits.maxBytes` | 整数 |  | ≥ 0 | 单次请求最多返回的字节数（全局 cost.maxBytes）。 |
+| `limits.queryTimeout` | 时长 |  | ≥ 0 | 单次请求的查询超时（全局 cost.queryTimeout）。 |
+| `limits.softScore` | 整数 |  | 0–100 | 成本闸门软拒绝分数（全局 cost.softScore）；分数越高越严。 |
+| `limits.hardScore` | 整数 |  | 0–100 | 成本闸门硬拒绝分数（全局 cost.hardScore）；分数越高越严。 |
+| `limits.rejectFullScan` | 布尔 |  |  | 拒绝全表扫描（全局 cost.rejectFullScan 已开启时始终拒绝）。 |
+| `limits.rps` | 数字 |  | ≥ 0 | 每秒请求数上限，按调用者（用户或角色）跨会话计；超出时返回 RATE_LIMITED。进程级 rateLimit.rps 仍同时生效。 |
+| `limits.maxInflight` | 整数 |  | ≥ 0 | 同时进行的请求数上限，按调用者跨会话计；超出时返回 RATE_LIMITED。 |
+| `limits.budget` | `budgetLimits` |  |  | 会话预算（含义同 budget.*）；设置的项优先于 budget.roles 与 budget.users。 |
+| `limits` | 对象 |  |  | 角色的资源限制，收紧全局限制。未设置的项沿用全局值；设置的项只能更严（取两者中更严的值）。用户有多个角色时，每项取各角色中最宽松的值（任一角色未设置即不限）。 |
 
 ### 定义 `grant`
 
@@ -464,6 +492,16 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `grants` | `grant` 列表 |  |  | 只给这个用户的直授授权。 |
 | `permissions` | 字符串列表 |  |  | 只给这个用户的系统权限，与角色的 permissions 取并集；取值同角色的 permissions。 |
 | `disabled` | 布尔 |  |  | 禁用后无法认证，也不能作为 server.user；会话立即解除。 |
+| `limits.maxRows` | 整数 |  | ≥ 0 | 单次请求最多返回的行数（全局 cost.maxRows）。 |
+| `limits.maxBytes` | 整数 |  | ≥ 0 | 单次请求最多返回的字节数（全局 cost.maxBytes）。 |
+| `limits.queryTimeout` | 时长 |  | ≥ 0 | 单次请求的查询超时（全局 cost.queryTimeout）。 |
+| `limits.softScore` | 整数 |  | 0–100 | 成本闸门软拒绝分数（全局 cost.softScore）；分数越高越严。 |
+| `limits.hardScore` | 整数 |  | 0–100 | 成本闸门硬拒绝分数（全局 cost.hardScore）；分数越高越严。 |
+| `limits.rejectFullScan` | 布尔 |  |  | 拒绝全表扫描（全局 cost.rejectFullScan 已开启时始终拒绝）。 |
+| `limits.rps` | 数字 |  | ≥ 0 | 每秒请求数上限，按调用者（用户或角色）跨会话计；超出时返回 RATE_LIMITED。进程级 rateLimit.rps 仍同时生效。 |
+| `limits.maxInflight` | 整数 |  | ≥ 0 | 同时进行的请求数上限，按调用者跨会话计；超出时返回 RATE_LIMITED。 |
+| `limits.budget` | `budgetLimits` |  |  | 会话预算（含义同 budget.*）；设置的项优先于 budget.roles 与 budget.users。 |
+| `limits` | 对象 |  |  | 用户的资源限制，收紧全局限制。未设置的项沿用全局值；设置的项只能更严（取两者中更严的值）。设置的项优先于其各角色的设置。 |
 
 ### 定义 `budgetLimits`
 

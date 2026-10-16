@@ -20,13 +20,23 @@ const state = computed(() => {
       : { type: 'error' as const, label: t('runtime.failed', { id: server.unapplied.id }),
           hint: `${t('runtime.failedHint', { applied })} ${server.unapplied.error}` }
   }
+  const missing = server.unavailableEntities.length
+  const down = server.unreachableDatasources.length
   if (published && published !== applied) {
     return server.watching
       ? { type: 'info' as const, label: t('runtime.loading', { id: published }), hint: t('runtime.loadingHint') }
       : { type: 'warning' as const, label: t('runtime.notWatching', { id: published }), hint: t('runtime.notWatchingHint') }
   }
+  if (down) {
+    return { type: 'warning' as const, label: t('runtime.unreachableLabel', { id: applied, n: down }), hint: '' }
+  }
+  if (missing) {
+    return { type: 'warning' as const, label: t('runtime.degraded', { id: applied, n: missing }), hint: '' }
+  }
   return { type: 'success' as const, label: t('runtime.serving', { id: applied }), hint: '' }
 })
+const unavailable = computed(() => status.server?.unavailableEntities ?? [])
+const unreachable = computed(() => status.server?.unreachableDatasources ?? [])
 const publishedAt = computed(() =>
   status.published?.publishedAt ? new Date(status.published.publishedAt).toLocaleString(locale.value) : '')
 </script>
@@ -49,6 +59,19 @@ const publishedAt = computed(() =>
         <span>{{ status.server?.watching ? t('runtime.watchOn') : t('runtime.watchOff') }}</span>
       </div>
       <n-text v-if="state.hint" :type="state.type === 'success' ? 'default' : state.type" class="hint">{{ state.hint }}</n-text>
+      <template v-if="unreachable.length">
+        <div class="row"><n-text depth="3">{{ t('runtime.unreachable') }}</n-text><span>{{ unreachable.length }}</span></div>
+        <n-text type="warning" class="hint">{{ t('runtime.unreachableHint') }}
+          <div v-for="d in unreachable" :key="d.datasource"><span class="mono">{{ d.datasource }}</span>: {{ d.error }}</div>
+        </n-text>
+      </template>
+      <template v-if="unavailable.length">
+        <div class="row"><n-text depth="3">{{ t('runtime.unavailable') }}</n-text><span>{{ unavailable.length }}</span></div>
+        <n-text type="warning" class="hint">{{ t('runtime.unavailableHint') }}
+          <span class="mono">{{ unavailable.slice(0, 5).map((u) => u.entity).join(', ') }}</span>
+          <span v-if="unavailable.length > 5"> {{ t('overview.andMore') }}</span>
+        </n-text>
+      </template>
     </div>
   </n-popover>
 </template>

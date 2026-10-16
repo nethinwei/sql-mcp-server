@@ -18,9 +18,13 @@ type RollbackTransactionTool struct{}
 
 func (BeginTransactionTool) Info() Info {
 	return Info{
-		Name:        "begin_transaction",
-		Action:      "transaction",
-		Description: "Begin a bounded explicit transaction",
+		Name:   "begin_transaction",
+		Title:  "Begin transaction",
+		Action: "transaction",
+		Description: "Begin a transaction on one datasource and return its token. Pass the token as " +
+			"transaction to the record tools, then commit_transaction or rollback_transaction it; it is " +
+			"rolled back when its time limit passes or the session ends.",
+		Object:      true,
 		InputSchema: schemaBeginTransaction,
 	}
 }
@@ -170,8 +174,10 @@ func parseIsolation(value string) (store.IsolationLevel, error) {
 func (CommitTransactionTool) Info() Info {
 	return Info{
 		Name:        "commit_transaction",
+		Title:       "Commit transaction",
 		Action:      "transaction",
-		Description: "Commit an explicit transaction",
+		Description: "Commit the transaction a begin_transaction token names, making its writes permanent.",
+		Destructive: true, Object: true,
 		InputSchema: transactionTokenSchema,
 	}
 }
@@ -201,8 +207,10 @@ func (CommitTransactionTool) Run(ctx context.Context, input json.RawMessage, tc 
 func (RollbackTransactionTool) Info() Info {
 	return Info{
 		Name:        "rollback_transaction",
+		Title:       "Roll back transaction",
 		Action:      "transaction",
-		Description: "Rollback an explicit transaction",
+		Description: "Roll back the transaction a begin_transaction token names, discarding its writes.",
+		Idempotent:  true, Object: true,
 		InputSchema: transactionTokenSchema,
 	}
 }

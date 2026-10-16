@@ -60,6 +60,8 @@ type ServerConfig struct {
 	// User is the default user for requests without a user identity; it takes
 	// precedence over Role and may be overridden by the --user flag.
 	User string `yaml:"user,omitempty" json:"user,omitempty"`
+	// SessionTimeout closes an HTTP MCP session idle this long.
+	SessionTimeout time.Duration `yaml:"sessionTimeout" json:"sessionTimeout" schema:"min=0,restart"`
 }
 
 // SecretsConfig restricts ${file:...} expansion to explicitly trusted roots.
@@ -231,6 +233,27 @@ type RoleDefinition struct {
 	// the role's users to the SQL escape hatch of that datasource. No other
 	// permission is supported yet; any other value fails validation.
 	Permissions []string `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+	// Limits narrow the global limits for the role's calls.
+	Limits PrincipalLimits `yaml:"limits,omitempty" json:"limits,omitempty"`
+}
+
+// PrincipalLimits narrow the global limits for the calls of a role or a user.
+// A field left zero keeps the global value; a set one only tightens it (the
+// stricter of the two applies). A user's own fields win over its roles';
+// otherwise each is the most permissive of its roles' (a role leaving it
+// unset leaves it unset).
+type PrincipalLimits struct {
+	MaxRows        int64         `yaml:"maxRows,omitempty"        json:"maxRows,omitempty" schema:"min=0"`
+	MaxBytes       int64         `yaml:"maxBytes,omitempty"       json:"maxBytes,omitempty" schema:"min=0"`
+	QueryTimeout   time.Duration `yaml:"queryTimeout,omitempty"   json:"queryTimeout,omitempty" schema:"min=0"`
+	SoftScore      int           `yaml:"softScore,omitempty"      json:"softScore,omitempty" schema:"min=0,max=100"`
+	HardScore      int           `yaml:"hardScore,omitempty"      json:"hardScore,omitempty" schema:"min=0,max=100"`
+	RejectFullScan bool          `yaml:"rejectFullScan,omitempty" json:"rejectFullScan,omitempty"`
+	RPS            float64       `yaml:"rps,omitempty"            json:"rps,omitempty" schema:"min=0"`
+	MaxInflight    int           `yaml:"maxInflight,omitempty"    json:"maxInflight,omitempty" schema:"min=0"`
+	// Budget is the principal's session budget; a field set wins over
+	// budget.roles and budget.users.
+	Budget BudgetLimits `yaml:"budget,omitempty" json:"budget,omitempty"`
 }
 
 // GrantConfig is one entity permission. A nil Fields grants every visible
@@ -253,6 +276,9 @@ type UserConfig struct {
 	Grants      []GrantConfig  `yaml:"grants,omitempty"      json:"grants,omitempty"`
 	Permissions []string       `yaml:"permissions,omitempty" json:"permissions,omitempty"`
 	Disabled    bool           `yaml:"disabled,omitempty"    json:"disabled,omitempty"`
+	// Limits narrow the global limits for the user's calls; set fields win
+	// over its roles'.
+	Limits PrincipalLimits `yaml:"limits,omitempty" json:"limits,omitempty"`
 }
 
 // RelationshipConfig configures a same-data-source batch expansion.
@@ -321,8 +347,11 @@ type ToolFlags struct {
 
 // TransactionConfig bounds explicit transaction lifetime and cardinality.
 type TransactionConfig struct {
-	TTL     time.Duration `yaml:"ttl"             json:"ttl" schema:"min=0"`
-	MaxOpen int           `yaml:"maxOpen"         json:"maxOpen" schema:"min=0"`
+	TTL time.Duration `yaml:"ttl"             json:"ttl" schema:"min=0"`
+	// IdleTimeout rolls back a transaction no statement used for this long,
+	// releasing the locks and the connection it holds.
+	IdleTimeout time.Duration `yaml:"idleTimeout" json:"idleTimeout" schema:"min=0"`
+	MaxOpen     int           `yaml:"maxOpen"         json:"maxOpen" schema:"min=0"`
 	// MaxOpenPerConnection bounds the transactions holding one database
 	// connection at once, so they leave queries a share of its pool.
 	MaxOpenPerConnection int           `yaml:"maxOpenPerConnection" json:"maxOpenPerConnection" schema:"min=0"`

@@ -20,11 +20,15 @@ type ReadTool struct{}
 
 func (ReadTool) Info() Info {
 	return Info{
-		Name:        "read_records",
-		Action:      entity.ActionRead.String(),
-		Description: "Read records from an entity",
+		Name:   "read_records",
+		Title:  "Read records",
+		Action: entity.ActionRead.String(),
+		Description: "Read rows of one entity, returned as {\"result\": [rows]}. Select only the fields you " +
+			"need, filter as narrowly as you can and set a limit: queries estimated to scan or return too " +
+			"much are refused with COST_EXCEEDED and hints for narrowing them. Rows outside your row " +
+			"policy are never returned and masked fields come back masked.",
 		InputSchema: schemaRead,
-		ReadOnly:    true,
+		ReadOnly:    true, Idempotent: true,
 	}
 }
 func (ReadTool) Enabled(f config.ToolFlags) bool { return f.ReadRecords }

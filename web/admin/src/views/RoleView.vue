@@ -7,6 +7,7 @@ import {
 } from 'naive-ui'
 import GrantMatrix from '@/components/GrantMatrix.vue'
 import VisibilityTable from '@/components/VisibilityTable.vue'
+import PrincipalLimits from '@/components/PrincipalLimits.vue'
 import { simulationRoute } from '@/lib/simulation'
 import { useWorkspace } from '@/stores/workspace'
 import { nameError } from '@/lib/names'
@@ -110,6 +111,10 @@ function remove() {
       <n-select :value="role.permissions ?? []" multiple filterable :disabled="!editable || !escapeOptions.length"
         :options="escapeOptions" :placeholder="escapeOptions.length ? t('systemPermissions.placeholder') : t('systemPermissions.none')"
         @update:value="(v: string[]) => { if (role) role.permissions = v }" />
+    </n-card>
+
+    <n-card size="small" :title="t('limits.title')">
+      <principal-limits v-model="role.limits" kind="role" :name="role.name" :disabled="!editable" />
     </n-card>
 
     <n-card size="small" :title="t('visibility.title')">

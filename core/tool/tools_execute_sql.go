@@ -41,7 +41,10 @@ type ExecuteSQLTool struct{}
 
 // Info implements Tool.
 func (ExecuteSQLTool) Info() Info {
-	return Info{Name: executeSQLName, Description: executeSQLDescription, InputSchema: schemaExecuteSQL, Action: ActionSQL}
+	return Info{
+		Name: executeSQLName, Title: "Execute SQL", Description: executeSQLDescription,
+		InputSchema: schemaExecuteSQL, Action: ActionSQL, Destructive: true, Object: true,
+	}
 }
 
 // Enabled implements Tool: the hatch is registered by tools.executeSql only.

@@ -41,6 +41,10 @@ func New(db *sql.DB, rows RowsFunc, classify ClassifyFunc) *Pool {
 // DB returns the underlying pool, for pool configuration and native pings.
 func (d *Pool) DB() *sql.DB { return d.db }
 
+// Classify classifies a driver error of the pool's database, as its
+// statements' errors are.
+func (d *Pool) Classify(err error) error { return d.classify(err) }
+
 // Close closes the pool.
 func (d *Pool) Close() error { return d.db.Close() }
 

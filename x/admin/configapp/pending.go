@@ -72,7 +72,10 @@ func (r *Service) Pending(ctx context.Context, against Against) (*PendingWork, e
 	if err != nil {
 		return nil, err
 	}
-	out := &PendingWork{Plans: []PendingPlan{}, DriftTables: []PendingTable{}, UnlistedDatasources: []string{}}
+	out := &PendingWork{
+		Plans: []PendingPlan{}, DriftTables: []PendingTable{}, GoneTables: []PendingGoneTable{},
+		UnlistedDatasources: []string{},
+	}
 	var f CatalogFilter
 	if err := withinFilter(who, &f); err != nil {
 		return nil, err
@@ -87,7 +90,15 @@ func (r *Service) Pending(ctx context.Context, against Against) (*PendingWork, e
 				Added: kit.OrEmpty(row.Added), Missing: kit.OrEmpty(row.Missing), State: states[key]})
 		}
 	}
-	for _, schemas := range configplan.Unscanned(pc.sources, configplan.Scope{Datasources: f.Datasources}) {
+	scope := configplan.Scope{Datasources: f.Datasources}
+	for _, g := range configplan.GoneTables(pc.sources, pc.base, scope, pc.missing) {
+		if who.Allows(g.Datasource) {
+			key := "gone:" + g.Entity
+			out.GoneTables = append(out.GoneTables,
+				PendingGoneTable{Key: key, Ref: g.Ref, Entity: g.Entity, Scanned: g.Scanned, State: states[key]})
+		}
+	}
+	for _, schemas := range configplan.Unscanned(pc.sources, scope) {
 		out.UnscannedSchemas += len(schemas)
 	}
 	for _, src := range pc.sources {

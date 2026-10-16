@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/nethinwei/sql-mcp-server/core/budget"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
@@ -39,4 +40,14 @@ func budgetReservation(action string, tc Context) int64 {
 		return 1
 	}
 	return reserved
+}
+
+// admitCaller admits the call under its caller's own rate and calls in
+// flight (see Services.Callers); release ends it.
+func admitCaller(tc Context) (release func(), err error) {
+	release, err = tc.Callers.Acquire(tc.Role)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrCallerRateLimited, err)
+	}
+	return release, nil
 }

@@ -27,6 +27,9 @@ type Options struct {
 	// Context bounds opening the provider (its first connection); nil means
 	// no bound.
 	Context context.Context
+	// Lazy opens the provider without reaching the database, which its first
+	// use reaches: a database down when the provider opens does not fail it.
+	Lazy bool
 }
 
 // OpenContext is the context opening the provider runs under.

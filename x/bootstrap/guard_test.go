@@ -89,6 +89,13 @@ func TestCancelledCallsDoNotCount(t *testing.T) {
 		!countsAgainstHealth(nil) {
 		t.Fatal("classification")
 	}
+	// Nor does a schema that changed under the configuration: a table dropped
+	// must not take its datasource's other tables down with it.
+	for _, changed := range []error{store.ErrMissingRelation, store.ErrMissingColumn, store.ErrStalePlan} {
+		if countsAgainstHealth(fmt.Errorf("%w: gone", changed)) {
+			t.Fatalf("%v counts against health", changed)
+		}
+	}
 	// A statement the database stopped at its timeout counts: when the
 	// database slows down, timeouts are how it shows.
 	if !countsAgainstHealth(fmt.Errorf("%w: canceling statement", store.ErrStatementTimeout)) {

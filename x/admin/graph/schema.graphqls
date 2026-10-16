@@ -251,6 +251,8 @@ type Role {
   grants: [Grant!]!
   "System permissions: sql:execute@<datasource> admits the role's users to execute_sql on that datasource."
   permissions: [String!]!
+  "Limits tightening the global ones for the role's calls, as the configuration writes them (roles.<name>.limits); null when none."
+  limits: JSON
 }
 
 type Grant {
@@ -274,6 +276,8 @@ type User {
   disabled: Boolean
   "The sha256 hash of the user's bearer token (never the token); null when none."
   tokenHash: String
+  "Limits tightening the global ones for the user's calls (users.<name>.limits); null when none."
+  limits: JSON
 }
 
 type SchemaList {
@@ -496,6 +500,21 @@ type ServerStatus {
   unapplied: UnappliedRevision
   "What the process runs on its execution bus; null when unknown."
   execution: ExecutionStatus
+  "Entities of the served revision whose table or columns are missing from the database; tools refuse them."
+  unavailableEntities: [UnavailableEntity!]!
+  "Datasources whose schema the served revision could not read; their entities are unavailable until a reload reads it."
+  unreachableDatasources: [UnreachableDatasource!]!
+}
+type UnreachableDatasource {
+  datasource: String!
+  error: String!
+}
+type UnavailableEntity {
+  "The entity's ID."
+  entity: String!
+  reason: String!
+  "Its table is missing (removing the entity is the fix); false: columns are (syncing its fields is)."
+  tableMissing: Boolean!
 }
 type ExecutionStatus {
   "IO slots every lane draws on."
@@ -630,6 +649,7 @@ input RoleInput {
   description: String
   grants: [GrantInput!]
   permissions: [String!]
+  limits: JSON
 }
 
 input GrantInput {
@@ -650,6 +670,7 @@ input UserInput {
   subject: JSON
   disabled: Boolean
   tokenHash: String
+  limits: JSON
 }
 
 input SimulationInput {

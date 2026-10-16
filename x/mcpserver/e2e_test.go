@@ -130,6 +130,9 @@ func e2eTestConfig() *config.Config {
 		},
 	}
 	cfg.ApplyDefaults()
+	// The fixture's tables are tiny: the gate judges their full scans as
+	// those of the large tables they stand for.
+	cfg.Cost.FullScanMaxRows = 0
 	return cfg
 }
 
@@ -233,9 +236,9 @@ func assertE2ERLSAndRBAC(t *testing.T, ctx context.Context, session *mcp.ClientS
 	if err != nil || rls.IsError {
 		t.Fatalf("RLS read failed: result=%+v error=%v", rls, err)
 	}
-	var rows []map[string]any
+	var rows struct{ Result []map[string]any }
 	decodeTextContent(t, rls, &rows)
-	if len(rows) != 0 {
+	if rows.Result == nil || len(rows.Result) != 0 {
 		t.Fatalf("RLS leaked tenant 8 row: %+v", rows)
 	}
 	for name, arguments := range map[string]map[string]any{
@@ -276,12 +279,9 @@ func assertE2ETransactionLifecycle(t *testing.T, ctx context.Context, session *m
 	if err != nil || begin.IsError {
 		t.Fatalf("begin transaction failed: result=%+v error=%v", begin, err)
 	}
-	var transaction []map[string]any
+	var transaction map[string]any
 	decodeTextContent(t, begin, &transaction)
-	if len(transaction) != 1 {
-		t.Fatalf("unexpected transaction result: %+v", transaction)
-	}
-	token, _ := transaction[0]["transaction"].(string)
+	token, _ := transaction["transaction"].(string)
 	if token == "" {
 		t.Fatalf("missing transaction token: %+v", transaction)
 	}
@@ -313,7 +313,11 @@ func assertE2ESchemaResourceAndPrompts(t *testing.T, ctx context.Context, sessio
 	if err != nil || len(resources.Resources) != 1 {
 		t.Fatalf("schema resource list = %+v, error=%v", resources, err)
 	}
-	schema, err := session.ReadResource(ctx, &mcp.ReadResourceParams{URI: resources.Resources[0].URI})
+	summary, err := session.ReadResource(ctx, &mcp.ReadResourceParams{URI: resources.Resources[0].URI})
+	if err != nil || len(summary.Contents) != 1 || !strings.Contains(summary.Contents[0].Text, `"usage"`) {
+		t.Fatalf("schema summary = %+v, error=%v", summary, err)
+	}
+	schema, err := session.ReadResource(ctx, &mcp.ReadResourceParams{URI: "sql-mcp://schema/users"})
 	if err != nil || len(schema.Contents) != 1 {
 		t.Fatalf("authorized schema = %+v, error=%v", schema, err)
 	}
@@ -343,6 +347,9 @@ func decodeTextContent(t *testing.T, res *mcp.CallToolResult, target any) {
 		if text, ok := content.(*mcp.TextContent); ok {
 			if err := json.Unmarshal([]byte(text.Text), target); err != nil {
 				t.Fatalf("decode tool content %q: %v", text.Text, err)
+			}
+			if structured, _ := json.Marshal(res.StructuredContent); string(structured) != text.Text {
+				t.Fatalf("text %s differs from structured content %s", text.Text, structured)
 			}
 			return
 		}

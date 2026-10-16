@@ -278,6 +278,10 @@ type Entity struct {
 	// a materialized view or a foreign table): a write to any table of its
 	// datasource may change it.
 	Derived bool
+	// Unavailable says why the entity cannot be served: its table, or a
+	// configured column, is missing from the database (set at assembly).
+	// Empty when it can be; tools refuse it once the caller is authorized.
+	Unavailable string
 	// Relation identifies the physical relation (set at assembly, see
 	// RelationKey); at most one entity exposes a relation.
 	Relation string

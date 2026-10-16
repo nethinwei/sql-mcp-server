@@ -20,14 +20,11 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/nethinwei/sql-mcp-server/core/bus"
-	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
 	"github.com/nethinwei/sql-mcp-server/version"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 )
-
-const schemaResourceURI = "sql-mcp://schema"
 
 var errInternal = errors.New("sql-mcp-server: internal operation failed")
 
@@ -60,9 +57,7 @@ func newServerWithTools(acquire appAcquire) (*mcp.Server, *listedTools) {
 		panic(err)
 	}
 	s := mcp.NewServer(&mcp.Implementation{Name: "sql-mcp-server", Version: version.String()}, &mcp.ServerOptions{
-		Instructions: "SQL MCP server with defense-in-depth cost gate and RBAC. " +
-			"Tools are gated by role permissions and a multi-layer cost gate; " +
-			"unsafe writes and over-budget queries are rejected with rewrite hints.",
+		Instructions: serverInstructions,
 	})
 	tools := &listedTools{acquire: acquire, defs: map[string]string{}}
 	tools.sync(s, app)
@@ -72,6 +67,15 @@ func newServerWithTools(acquire appAcquire) (*mcp.Server, *listedTools) {
 	registerPrompts(s)
 	return s, tools
 }
+
+const serverInstructions = "Governed SQL access: you work with configured entities (tables, views " +
+	"and procedures), never with raw SQL, and only with the entities, fields and rows your role is granted. " +
+	"Start with describe_entities: search it by keyword to find entities, then describe one to learn its " +
+	"fields and keys; use only names it returns. Read with read_records or aggregate_records, selecting " +
+	"few fields, filtering narrowly and setting a limit. A refused call returns isError with a structured " +
+	"denial {code, reason, retryable, constraints, hints}: when retryable, follow the hints (narrow the " +
+	"filter, lower the limit, pick fields) and retry; RATE_LIMITED, OVERLOADED and DATASOURCE_UNAVAILABLE " +
+	"mean waiting before retrying; UNAUTHORIZED is final, so do not probe for other entities or fields."
 
 // listedTools are the tools a server lists, by name with their definition,
 // so that a new configuration's tools replace them.
@@ -123,16 +127,40 @@ func mcpTool(t tool.Tool) *mcp.Tool {
 		// still validated inside tool.Run.
 		schema = json.RawMessage(`{"type":"object"}`)
 	}
-	mt := &mcp.Tool{
-		Name:        info.Name,
-		Description: info.Description,
-		InputSchema: schema,
+	output := rowsOutputSchema
+	if info.Object {
+		output = objectOutputSchema
 	}
-	if info.ReadOnly {
-		mt.Annotations = &mcp.ToolAnnotations{ReadOnlyHint: true}
+	closedWorld := false
+	return &mcp.Tool{
+		Name:         info.Name,
+		Title:        info.Title,
+		Description:  info.Description,
+		InputSchema:  schema,
+		OutputSchema: output,
+		// Every tool works on the configured databases alone, a closed world.
+		Annotations: &mcp.ToolAnnotations{
+			Title: info.Title, ReadOnlyHint: info.ReadOnly, IdempotentHint: info.Idempotent,
+			DestructiveHint: destructiveHint(info), OpenWorldHint: &closedWorld,
+		},
 	}
-	return mt
 }
+
+// destructiveHint is unset for a read-only tool, where it does not apply.
+func destructiveHint(info tool.Info) *bool {
+	if info.ReadOnly {
+		return nil
+	}
+	return &info.Destructive
+}
+
+// A call's structured result, which its text repeats as JSON: rows are
+// {"result": [...]}, and a tool returning one object returns it as is.
+var (
+	rowsOutputSchema = json.RawMessage(`{"type":"object","properties":{"result":` +
+		`{"type":"array","items":{"type":"object"}}},"required":["result"]}`)
+	objectOutputSchema = json.RawMessage(`{"type":"object"}`)
+)
 
 func registerTool(s *mcp.Server, mt *mcp.Tool, t tool.Tool, acquire appAcquire) {
 	info := t.Info()
@@ -156,7 +184,7 @@ func registerTool(s *mcp.Server, mt *mcp.Tool, t tool.Tool, acquire appAcquire) 
 		if err != nil {
 			return toResult(err, tc.DecisionID)
 		}
-		return toMCPResult(res), nil
+		return toMCPResult(res, currentRegistered.Info()), nil
 	}
 	s.AddTool(mt, handler)
 }
@@ -174,201 +202,20 @@ func currentTool(app *bootstrap.App, name string) (tool.Tool, bool) {
 	return nil, false
 }
 
-func registerSchemaResource(s *mcp.Server, acquire appAcquire) {
-	resource := &mcp.Resource{
-		URI:         schemaResourceURI,
-		Name:        "authorized-schema",
-		Title:       "Authorized SQL schema",
-		Description: "Entities and fields visible to the authenticated role and subject",
-		MIMEType:    "application/json",
-	}
-	s.AddResource(resource, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
-		if req.Params.URI != schemaResourceURI {
-			return nil, mcp.ResourceNotFoundError(req.Params.URI)
-		}
-		app, release, err := acquire()
-		if err != nil {
-			return nil, err
-		}
-		defer release()
-		role, subject := callerIdentity(ctx, app)
-		payload, err := authorizedSchema(ctx, app, role, subject)
-		if err != nil {
-			return nil, err
-		}
-		data, err := json.Marshal(payload)
-		if err != nil {
-			return nil, err
-		}
-		return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{
-			URI: schemaResourceURI, MIMEType: "application/json", Text: string(data),
-		}}}, nil
-	})
-}
-
-func authorizedSchema(
-	ctx context.Context,
-	app *bootstrap.App,
-	role string,
-	subject map[string]any,
-) (map[string]any, error) {
-	entities := make([]map[string]any, 0)
-	usable := tool.UsableBy(ctx, app.Authorizer, role, subject)
-	for _, e := range app.Registry.Entities() {
-		entry, ok, err := authorizedEntity(ctx, app, e, role, subject)
-		if ok {
-			entry["name"] = app.Registry.ShortName(e, usable)
-		}
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			entities = append(entities, entry)
-		}
-	}
-	return map[string]any{"role": role, "entities": entities}, nil
-}
-
-func authorizedEntity(
-	ctx context.Context,
-	app *bootstrap.App,
-	e entity.Entity,
-	role string,
-	subject map[string]any,
-) (map[string]any, bool, error) {
-	if e.Kind == entity.KindProcedure || !e.MCP.DMLTools {
-		return nil, false, nil
-	}
-	// Read and aggregate grants may cover different fields, so each action
-	// reports its own fields and scopes; top-level fields describe them all.
-	actions := make([]string, 0, 2)
-	access := map[string]any{}
-	union := map[string]bool{}
-	for _, action := range []entity.Action{entity.ActionRead, entity.ActionAggregate} {
-		dec, err := app.Authorizer.Authorize(ctx, rbac.Request{
-			Role: role, Subject: subject, Entity: e.Name, Action: action,
-		})
-		if err != nil {
-			return nil, false, err
-		}
-		a := accessOf(e, dec)
-		if !a.allowed {
-			continue
-		}
-		actions = append(actions, action.String())
-		access[action.String()] = a.describe()
-		for _, f := range a.fields {
-			union[f] = true
-		}
-	}
-	if len(actions) == 0 {
-		return nil, false, nil
-	}
-	return map[string]any{
-		"name": e.Name, "id": e.Name, "description": e.Description, "datasource": e.DatasourceName(),
-		"fields":    authorizedEntityFields(e, e.OrderedNames(union)),
-		"keys":      tool.VisibleKeys(e, e.OrderedNames(union)),
-		"actions":   actions,
-		"access":    access,
-		"rowScoped": e.RowPolicies[role] != nil,
-	}, true, nil
-}
-
-// entityAccess is what a role may do with an entity's fields for one action.
-// scopes is set when the fields are split across grants with incompatible
-// field scopes, so the default projection is denied but explicit field
-// selections within one scope are allowed.
-type entityAccess struct {
-	allowed bool
-	fields  []string
-	scopes  [][]string
-}
-
-func accessOf(e entity.Entity, dec rbac.Decision) entityAccess {
-	if dec.Allowed {
-		return entityAccess{allowed: true, fields: dec.Fields}
-	}
-	if !dec.Reachable() {
-		return entityAccess{}
-	}
-	union := map[string]bool{}
-	scopes := dec.Scopes()
-	for _, scope := range scopes {
-		for _, f := range scope {
-			union[f] = true
-		}
-	}
-	return entityAccess{allowed: true, fields: e.OrderedNames(union), scopes: scopes}
-}
-
-// describe is the resource entry for one action. When the fields are split
-// across grants, a call must select fields explicitly, all within one scope.
-func (a entityAccess) describe() map[string]any {
-	out := map[string]any{"fields": a.fields}
-	if a.scopes != nil {
-		out["explicitFieldsRequired"] = true
-		out["fieldScopes"] = a.scopes
-	}
-	return out
-}
-
-func authorizedEntityFields(e entity.Entity, fieldNames []string) []map[string]any {
-	fields := make([]map[string]any, 0, len(fieldNames))
-	for _, name := range fieldNames {
-		if attr, ok := e.AttributeByName(name); ok {
-			fields = append(fields, map[string]any{
-				"name": attr.Name, "alias": attr.Alias, "type": attr.Domain.Type,
-				"description": attr.Description, "masked": attr.Mask != "",
-				"required": attr.Domain.Required(), "readOnly": !attr.Domain.Writable(),
-			})
-		}
-	}
-	return fields
-}
-
-func registerPrompts(s *mcp.Server) {
-	addPrompt := func(name, description, argument, text string) {
-		s.AddPrompt(&mcp.Prompt{
-			Name: name, Description: description,
-			Arguments: []*mcp.PromptArgument{{
-				Name: argument, Description: "User request or failed tool input", Required: true,
-			}},
-		}, func(_ context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
-			return &mcp.GetPromptResult{
-				Description: description,
-				Messages: []*mcp.PromptMessage{{
-					Role:    "user",
-					Content: &mcp.TextContent{Text: text + "\n\nRequest:\n" + req.Params.Arguments[argument]},
-				}},
-			}, nil
-		})
-	}
-	const (
-		safeReadPrompt = "Use the authorized-schema resource first. Call only read_records, " +
-			"select only fields listed in access.read (all within one access.read.fieldScopes entry when " +
-			"explicitFieldsRequired is set), " +
-			"add the narrowest supported filter, and set a conservative limit. " +
-			"Never invent entities or fields."
-		safeAggregatePrompt = "Use the authorized-schema resource first. Call only aggregate_records " +
-			"with fields listed in access.aggregate (within one of its fieldScopes when explicitFieldsRequired " +
-			"is set), a narrow filter, and the minimum grouping needed. " +
-			"Do not request raw rows or bypass row scope."
-		rewriteQueryPrompt = "Rewrite the failed MCP tool input without weakening authorization or cost controls. " +
-			"Preserve intent, narrow filters, reduce fields and limits, and follow returned cost-gate hints. " +
-			"Never switch datasources or use raw SQL."
-	)
-	addPrompt("safe_read", "Build a bounded, authorized read_records call", "request", safeReadPrompt)
-	addPrompt("safe_aggregate", "Build a bounded, authorized aggregate_records call", "request", safeAggregatePrompt)
-	addPrompt("rewrite_query", "Rewrite a rejected request using safety hints", "request", rewriteQueryPrompt)
-}
-
 func rawArgs(req *mcp.CallToolRequest) json.RawMessage {
 	return req.Params.Arguments
 }
 
-func toMCPResult(r tool.Result) *mcp.CallToolResult {
-	b, _ := json.Marshal(r.Content)
-	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(b)}}}
+func toMCPResult(r tool.Result, info tool.Info) *mcp.CallToolResult {
+	var structured any = map[string]any{"result": r.Content}
+	if info.Object && len(r.Content) == 1 {
+		structured = r.Content[0]
+	}
+	b, _ := json.Marshal(structured)
+	return &mcp.CallToolResult{
+		Content:           []mcp.Content{&mcp.TextContent{Text: string(b)}},
+		StructuredContent: json.RawMessage(b),
+	}
 }
 
 // toResult maps a core error to an MCP outcome. Business errors become

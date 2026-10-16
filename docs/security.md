@@ -42,13 +42,17 @@ token 时使用默认身份；都不命中返回 401。没有共享 token 时，
 `X-MCP-User`：它必须指向启用用户，且不能与 `X-MCP-Role` 同时出现；用户配置的
 `subject` 属性覆盖代理注入的同名属性。已用用户 token 认证的请求如果再携带任何
 代理身份 header，返回 HTTP 403。共享 bearer token 只验证共享 secret，不映射独立
-调用方。项目尚无 OAuth、CORS 策略或持久 session store。
+调用方。项目尚无 OAuth、CORS 策略或持久 session store；`/mcp` 拒绝跨源的浏览器请求
+（`Sec-Fetch-Site`/`Origin` 表明来自其他站点的非安全方法请求返回 HTTP 403），防止其他
+网站借浏览器自动携带的客户端证书或代理会话调用工具。
 
 streamable HTTP session 创建时会记录规范化后的 role/subject；后续所有携带
 `Mcp-Session-Id` 的 POST/GET/DELETE 必须使用同一身份，否则返回 HTTP 403。
 session 关闭时绑定会同步清理。该绑定防止可信代理后的调用方借已有 session
-切换身份，但不替代网关认证。热重载删除或禁用用户后，其 session 绑定被解除并
-回滚在途事务，后续请求被拒绝。
+切换身份，但不替代网关认证。热重载删除、禁用用户或改变其 `subject` 后，其 session
+绑定被解除、在途事务回滚，传输层的 session 随即关闭。对服务端已不持有的 session
+（空闲超过 `server.sessionTimeout`、进程重启、用户被吊销）的请求返回 HTTP 404，且不交给
+传输层；客户端按协议重新初始化，被吊销的用户在认证时被拒绝。
 
 ## 授权与数据隔离
 
@@ -69,7 +73,8 @@ session 关闭时绑定会同步清理。该绑定防止可信代理后的调用
   规则会在启动时失败。
 - `describe_entities` 按实体权限和字段 ACL 过滤；procedure 结果仅返回声明为
   visible 且获 `fieldACL.read` 许可的列，未声明列按 fail-closed 丢弃。
-- schema resource 按调用者的 read/aggregate 授权过滤，不返回 procedure。
+- schema resource（摘要 `sql-mcp://schema` 与单实体 `sql-mcp://schema/{entity}`）按调用者的
+  read/aggregate 授权过滤，不返回 procedure；无权的实体与不存在的实体一样返回资源未找到。
 
 行级策略不是数据库原生 RLS；保护依赖所有访问都经过本服务的工具执行路径。
 

@@ -48,12 +48,15 @@ func currentContract(t *testing.T) contractSnapshot {
 		tools[name] = decoded
 	}
 	codes := map[string]bool{
-		CodeCostExceeded:        true,
-		CodeBudgetExceeded:      true,
-		CodeAmbiguousEntity:     true,
-		CodeAmbiguousFieldScope: true,
-		CodeConstraintViolation: true,
-		CodeOutcomeUnknown:      false,
+		CodeCostExceeded:          true,
+		CodeBudgetExceeded:        true,
+		CodeRateLimited:           true,
+		CodeOverloaded:            true,
+		CodeDatasourceUnavailable: true,
+		CodeAmbiguousEntity:       true,
+		CodeAmbiguousFieldScope:   true,
+		CodeConstraintViolation:   true,
+		CodeOutcomeUnknown:        false,
 	}
 	for _, m := range sentinelDenials {
 		codes[m.code] = m.retryable

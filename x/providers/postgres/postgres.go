@@ -67,11 +67,15 @@ func Open(dsn string, opts providerregistry.Options) (*Provider, error) {
 		cfg.RuntimeParams["statement_timeout"] = strconv.FormatInt(opts.NativeTimeout().Milliseconds(), 10)
 	}
 	db := stdlib.OpenDB(*cfg)
-	if err := db.PingContext(opts.OpenContext()); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("%w: %v", ErrPing, err)
+	if !opts.Lazy {
+		if err := db.PingContext(opts.OpenContext()); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("%w: %v", ErrPing, err)
+		}
 	}
-	p := &Provider{Base: sqladapter.NewBase(sqladapter.New(db, nil, classify), Dialect{}, pgExplainer{db: db},
+
+	explainer := pgExplainer{db: db, classify: classify}
+	p := &Provider{Base: sqladapter.NewBase(sqladapter.New(db, nil, classify), Dialect{}, explainer,
 		pgIntrospector{db: db}).WithLimits(caps)}
 	p.analyzeTx = p
 	return p, nil

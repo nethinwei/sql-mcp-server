@@ -187,7 +187,7 @@ func TestSessionEventStoreReportsDisconnect(t *testing.T) {
 	if closed != "session-1" {
 		t.Fatalf("closed session = %q", closed)
 	}
-	if identities.matches("session-1", sessionIdentity{role: "reader"}) {
+	if same(identities.lookup("session-1", sessionIdentity{role: "reader"})) {
 		t.Fatal("closed session identity was not removed")
 	}
 }
@@ -279,7 +279,7 @@ func TestBindSessionIdentityConcurrentAccess(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if !store.matches("session-1", identity) {
+			if !same(store.lookup("session-1", identity)) {
 				t.Error("concurrent identity lookup failed")
 			}
 		}()
@@ -569,7 +569,7 @@ func TestNewServerRegistersProcedureCustomTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := tool.ProcedureToolName(e)
+	want := "procedure_refresh-cache"
 	for _, registered := range list.Tools {
 		if registered.Name == want {
 			return
@@ -598,3 +598,6 @@ func TestSnapshotReadinessMarksStaleRevision(t *testing.T) {
 			rec.Code, rec.Header().Get("X-Snapshot-Stale"))
 	}
 }
+
+// same is whether a session is bound to the identity looked up.
+func same(_, same bool) bool { return same }

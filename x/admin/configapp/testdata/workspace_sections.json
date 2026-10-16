@@ -164,6 +164,20 @@
           ]
         }
       ],
+      "limits": {
+        "budget": {
+          "maxConcurrent": 2,
+          "maxSessionCost": 100
+        },
+        "hardScore": 20,
+        "maxBytes": 1048576,
+        "maxInflight": 3,
+        "maxRows": 200,
+        "queryTimeout": "5s",
+        "rejectFullScan": true,
+        "rps": 2.5,
+        "softScore": 40
+      },
       "name": "analyst",
       "permissions": [
         "sql:execute@shop"
@@ -214,6 +228,12 @@
           "writeFields": []
         }
       ],
+      "limits": {
+        "budget": {
+          "maxExecution": "2s"
+        },
+        "maxRows": 50
+      },
       "name": "alice",
       "permissions": [
         "sql:execute@shop"

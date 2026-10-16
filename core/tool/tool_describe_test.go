@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -40,7 +41,7 @@ func TestDescribeToolFiltersUnauthorizedEntitiesAndFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Content) != 1 || list.Content[0]["name"] != "users" {
+	if got := listedEntities(list); len(got) != 1 || got[0]["name"] != "users" {
 		t.Fatalf("entity list leaked unauthorized entity: %#v", list.Content)
 	}
 	detail, err := DescribeTool{}.Run(context.Background(), json.RawMessage(`{"entity":"users"}`), tc)
@@ -77,7 +78,7 @@ func TestDescribeToolListsSplitFieldScopes(t *testing.T) {
 	}}
 	tc := Context{Services: &Services{Registry: reg, Authorizer: rbac.NewGrantAuthorizer(reg, policy)}, Role: "reader"}
 	list, err := DescribeTool{}.Run(context.Background(), json.RawMessage(`{}`), tc)
-	if err != nil || len(list.Content) != 1 || list.Content[0]["name"] != "users" {
+	if got := listedEntities(list); err != nil || len(got) != 1 || got[0]["name"] != "users" {
 		t.Fatalf("list = %#v, %v", list.Content, err)
 	}
 	detail, err := DescribeTool{}.Run(context.Background(), json.RawMessage(`{"entity":"users"}`), tc)
@@ -90,6 +91,68 @@ func TestDescribeToolListsSplitFieldScopes(t *testing.T) {
 	}
 	if strings.Join(names, ",") != "id,name,phone" {
 		t.Fatalf("fields = %v", names)
+	}
+}
+
+// listedEntities is the page of entities a listing returned.
+func listedEntities(res Result) []map[string]any {
+	if len(res.Content) != 1 {
+		return nil
+	}
+	page, _ := res.Content[0]["entities"].([]map[string]any)
+	return page
+}
+
+// A listing is paged and can be narrowed by text and datasource, so a
+// deployment with thousands of entities never returns them all at once.
+func TestDescribeListPagesAndFilters(t *testing.T) {
+	t.Parallel()
+	var entities []entity.Entity
+	for i := range 250 {
+		e := testUsersEntity()
+		e.Name, e.Source = fmt.Sprintf("t%03d", i), fmt.Sprintf("t%03d", i)
+		if i%50 == 0 {
+			e.Description = "Order Ledger"
+		}
+		if i >= 200 {
+			e.DataSource = "other"
+		}
+		entities = append(entities, e)
+	}
+	reg, err := entity.NewRegistry(entities)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc := Context{Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}, Role: "reader"}
+	list := func(input string) map[string]any {
+		t.Helper()
+		res, err := DescribeTool{}.Run(context.Background(), json.RawMessage(input), tc)
+		if err != nil {
+			t.Fatalf("%s: %v", input, err)
+		}
+		return res.Content[0]
+	}
+	page := list(`{}`)
+	if len(page["entities"].([]map[string]any)) != 100 || page["total"] != 250 || page["nextOffset"] != 100 {
+		t.Fatalf("first page: total=%v next=%v", page["total"], page["nextOffset"])
+	}
+	page = list(`{"offset":200,"limit":500}`)
+	if got := page["entities"].([]map[string]any); len(got) != 50 || got[0]["id"] != "t200" || page["nextOffset"] != nil {
+		t.Fatalf("last page: %v", page)
+	}
+	page = list(`{"search":"order ledger"}`)
+	if page["total"] != 5 {
+		t.Fatalf("search: %v", page)
+	}
+	page = list(`{"search":"T24","datasource":"other"}`)
+	if got := page["entities"].([]map[string]any); page["total"] != 10 || got[0]["id"] != "t240" {
+		t.Fatalf("datasource and search: %v", page)
+	}
+	for _, input := range []string{`{"limit":501}`, `{"offset":-1}`, `{"limit":1.5}`} {
+		_, err := DescribeTool{}.Run(context.Background(), json.RawMessage(input), tc)
+		if !errors.Is(err, ErrInvalidInput) {
+			t.Errorf("%s: err = %v", input, err)
+		}
 	}
 }
 

@@ -38,7 +38,7 @@ function setTasks(next: PlanTask[]) {
   if (!on('fields')) p.fields = []
   else if (!p.fields?.length) p.fields = [{ columns: [], mask: 'phone' }]
   if (!on('sync')) p.sync = {}
-  else if (!p.sync?.add && !p.sync?.remove) p.sync = { add: true }
+  else if (!p.sync?.add && !p.sync?.remove && !p.sync?.removeTables) p.sync = { add: true }
   tasks.value = next
 }
 
@@ -220,6 +220,9 @@ watch([() => JSON.stringify(cleanPlan(plan.value).scope), () => ws.contextKey], 
         <n-space :size="16">
           <n-checkbox :checked="!!sync.add" @update:checked="(v: boolean) => (sync = { ...sync, add: v })">{{ t('plan.form.syncAdd') }}</n-checkbox>
           <n-checkbox :checked="!!sync.remove" @update:checked="(v: boolean) => (sync = { ...sync, remove: v })">{{ t('plan.form.syncRemove') }}</n-checkbox>
+          <n-checkbox :checked="!!sync.removeTables" @update:checked="(v: boolean) => (sync = { ...sync, removeTables: v })">
+            {{ t('plan.form.syncRemoveTables') }}
+          </n-checkbox>
           <n-checkbox :checked="!!sync.hideNew" :disabled="!sync.add" @update:checked="(v: boolean) => (sync = { ...sync, hideNew: v })">
             {{ t('datasources.syncHideNew') }}
           </n-checkbox>

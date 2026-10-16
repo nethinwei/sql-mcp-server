@@ -99,6 +99,9 @@ func testCreateGetList(t *testing.T, s revision.Store) {
 	if _, err := s.Published(ctx); !errors.Is(err, revision.ErrNoPublished) {
 		t.Fatalf("Published on fresh store err = %v", err)
 	}
+	if _, err := s.PublishedSummary(ctx); !errors.Is(err, revision.ErrNoPublished) {
+		t.Fatalf("PublishedSummary on fresh store err = %v", err)
+	}
 }
 
 func testPublishLifecycle(t *testing.T, s revision.Store) {
@@ -116,6 +119,10 @@ func testPublishLifecycle(t *testing.T, s revision.Store) {
 	cur, err := s.Published(ctx)
 	if err != nil || cur.ID != b.ID || string(cur.Payload) != "b\n" {
 		t.Fatalf("Published = %+v, %v", cur, err)
+	}
+	head, err := s.PublishedSummary(ctx)
+	if err != nil || head.ID != b.ID || head.ContentHash != cur.ContentHash || head.Payload != nil {
+		t.Fatalf("PublishedSummary = %+v, %v", head, err)
 	}
 	if _, err := s.Publish(ctx, a.ID, b.ID, revision.Meta{}); !errors.Is(err, revision.ErrInvalidState) {
 		t.Fatalf("republishing a superseded revision err = %v", err)

@@ -10,7 +10,8 @@
 
 1. **Tool input schema**：`tools/list` 暴露的每个工具的 JSON Schema，源文件
    为 `core/tool/schema/*.json`（procedure 自定义工具的 schema 由 entity
-   参数派生，遵循相同规则）；
+   参数派生，遵循相同规则）；顶层均为 `additionalProperties: false`，未知字段
+   一律 `INVALID_INPUT`；
 2. **机器可读拒绝（Denial）**：业务级拒绝在 `CallToolResult` 中以
    `IsError: true` 返回，`structuredContent` 携带以下对象：
 
@@ -44,6 +45,16 @@
    - `DATASOURCE_FORBIDDEN`（不可重试）：动作路由到的数据源连接没有对应的数据库权限
      （包括连接到只读服务器），授权本身允许；需要管理员补权限或调整路由，修改请求无法
      绕过；
+   - `ENTITY_UNAVAILABLE`（不可重试）：实体的表或已配置的字段在数据库中已不存在（装配时
+     发现，或运行中语句报表/列不存在时，v0.1.17 起），调用未
+     生成 SQL；`reason` 说明缺失的是表还是哪些列。只在授权通过后返回，无权的调用方
+     仍得到 `UNAUTHORIZED`（TM-002）；需要管理员移除该实体或恢复表；
+   - `RATE_LIMITED`（retryable）：调用者（用户或角色）自己的 `limits.rps` 或
+     `limits.maxInflight` 已用满；稍后重试或减少并发；
+   - `OVERLOADED`（retryable）：服务整体过载（执行队列已满、全局限流、正在关闭），
+     与调用方无关；稍后重试。v0.1.17 前它是协议级错误，客户端看不到机器码；
+   - `DATASOURCE_UNAVAILABLE`（retryable）：调用路由到的数据源连续失败，熔断器暂时
+     拒绝新请求；等熔断恢复后重试，修改请求无济于事。v0.1.17 前同为协议级错误；
    - `AUDIT_UNAVAILABLE`（不可重试）：`execute_sql` 的审计记录无法写入，调用未执行或结果
      已被扣下（`exec` 的效果可能已发生，按 `OUTCOME_UNKNOWN` 的口径确认）；
    - `DATABASE_ERROR` / `DATASOURCE_FORBIDDEN` 对 `execute_sql` 的**例外**：`reason` 携带
@@ -54,7 +65,11 @@
      相关读缓存已按“已写入”失效；
    - `TRANSACTION_NOT_FOUND`：令牌对应的事务若在最近 10 分钟内结束，且请求来自同一会话
      与身份，`constraints.outcome` 给出结束方式：`committed`、`rolledBack`、`expired`
-     或 `unknown`（提交结果未知）；其他调用方只得到不带 `constraints` 的未找到；
+     或 `unknown`（提交结果未知）；其他调用方只得到不带 `constraints` 的未找到。`expired`
+     包括超过 `transactions.ttl` 与空闲超过 `transactions.idleTimeout`；
+   - `constraints.transaction`（v0.1.17 起）：事务内的语句失败时事务立即回滚，该次拒绝
+     （任一 `code`）带 `"transaction": "rolledBack"` 与提示；之后用该令牌得到
+     `TRANSACTION_NOT_FOUND`（`outcome` 为 `rolledBack`），需重新开启事务并重做写入；
    - `constraints`：可选的机器可读限制（估算行数、生效上限等）；
    - `hints`：修复建议，只能收紧或等价改写请求，不得扩权；
    - `decisionId`：贯穿 MCP 响应、审计事件（`DecisionID` 字段）与 trace
@@ -109,6 +124,38 @@
 与某个分组字段同名的聚合被拒绝（`INVALID_INPUT`）。此前列名取数据库自己的命名
 （PostgreSQL 为 `count`/`sum`，同函数的多个聚合会互相覆盖；MySQL/OceanBase 为
 `COUNT(*)`/``SUM(`amount`)``）。
+
+## 工具结果
+
+成功结果（v0.1.17 起）同时给出 `structuredContent` 与一个文本块，文本就是
+`structuredContent` 的 JSON，两者内容一致；`tools/list` 为每个工具声明
+`outputSchema`：
+
+- 返回行的工具（`read_records`、`aggregate_records`、`execute_entity`、
+  `procedure_*`）：`{"result": [行, ...]}`；
+- 返回单个对象的工具直接给出该对象：`describe_entities`、`create_record`、
+  `update_record`、`delete_record`、`begin_transaction`、`commit_transaction`、
+  `rollback_transaction`、`execute_sql`。
+
+`describe_entities` 不带 `entity` 时分页列出实体：
+`{"entities": [{name, id, description, datasource}], "total": n, "nextOffset": m}`；
+`search`（名称、ID、描述的子串，不区分大小写）与 `datasource` 过滤，`limit` 默认
+100、上限 500，`nextOffset` 只在还有下一页时出现，原样作为 `offset` 传回。带
+`entity` 时返回该实体的对象（`fields`、`keys` 等）。
+
+资源 `sql-mcp://schema` 是摘要：`{role, entities, datasources: [{name, entities}],
+usage}`；单个实体的字段、键与按动作的访问范围在资源模板
+`sql-mcp://schema/{entity}`（`entity` 接受与工具相同的引用写法；调用方不能用的实体
+与不存在的实体一样返回资源未找到）。
+
+每个工具带 `title` 与行为提示 `annotations`：`readOnlyHint`（describe、read、
+aggregate）、`destructiveHint`（update、delete、commit、execute、procedure、
+`execute_sql`）、`idempotentHint`（describe、read、aggregate、update、delete、
+rollback），`openWorldHint` 一律为 `false`（只访问已配置的数据库）。提示仅供客户端
+参考，授权仍由服务端执行。
+
+存储过程工具名为 `procedure_<过程名>`（不允许的字符替换为 `_`）；只有规范化后
+同名的过程（不同命名空间的同名过程等）才追加 `_<规范 ID 的 8 位哈希>` 区分。
 
 `execute_sql` 的输出不是行列表而是一个对象：`query` 模式为
 `{"columns": [...], "rows": [[...]], "rowCount": n, "truncated": bool}`（行按位置给出，

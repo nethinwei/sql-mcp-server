@@ -10,7 +10,10 @@ import (
 	"testing"
 
 	"github.com/nethinwei/sql-mcp-server/core/budget"
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
+	"github.com/nethinwei/sql-mcp-server/core/engine"
+	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 )
 
@@ -187,5 +190,42 @@ func TestDenialForAmbiguousFieldScope(t *testing.T) {
 	}
 	if !reflect.DeepEqual(d.Constraints["fieldScopes"], scopes) || len(d.Hints) == 0 {
 		t.Fatalf("denial must carry field scopes and a hint: %+v", d)
+	}
+}
+
+// A call past its caller's own limits is refused as RATE_LIMITED, which a
+// later call may pass.
+func TestCallerRateLimitDenial(t *testing.T) {
+	t.Parallel()
+	k := ratelimit.NewKeyed()
+	k.Update(map[string]ratelimit.KeyLimits{"user:bot": {MaxInflight: 1}})
+	tc := Context{Services: &Services{Callers: k}, Role: "user:bot"}
+	release, err := admitCaller(tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	_, err = admitCaller(tc)
+	d, ok := DenialFor(err, "d")
+	if !ok || d.Code != CodeRateLimited || !d.Retryable || !errors.Is(err, ratelimit.ErrKeyInflight) {
+		t.Fatalf("denial = %+v, %v", d, err)
+	}
+}
+
+// Load and a failing datasource are reported as denials to retry, not as
+// internal errors the agent cannot tell apart from a fault.
+func TestTransientDenials(t *testing.T) {
+	t.Parallel()
+	cases := map[error]string{
+		fmt.Errorf("submit: %w", engine.ErrOverloaded): CodeOverloaded,
+		bus.ErrOverloaded:        CodeOverloaded,
+		ratelimit.ErrRateLimited: CodeOverloaded,
+		fmt.Errorf("explain: %w", ratelimit.ErrCircuitOpen): CodeDatasourceUnavailable,
+	}
+	for err, code := range cases {
+		d, ok := DenialFor(err, "d")
+		if !ok || d.Code != code || !d.Retryable || len(d.Hints) == 0 {
+			t.Errorf("%v: denial = %+v, %v; want %s", err, d, ok, code)
+		}
 	}
 }

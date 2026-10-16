@@ -8,6 +8,12 @@ import (
 
 // The MCP session's identity: a session is bound to the identity that
 // created it, and only that identity may use it (see bindSessionIdentity).
+//
+// A request on a session the store does not hold gets 404, as the protocol
+// has it for a session the server ended: the session expired, the process
+// restarted, or its user was revoked. The client then initializes a new
+// session, which authentication refuses a revoked user. Only a request on a
+// session bound to another identity gets 403.
 
 type sessionIdentityStore struct {
 	mu       sync.RWMutex
@@ -31,11 +37,12 @@ func (s *sessionIdentityStore) bind(sessionID string, identity sessionIdentity) 
 	return true
 }
 
-func (s *sessionIdentityStore) matches(sessionID string, identity sessionIdentity) bool {
+// lookup reports whether sessionID is bound, and to identity.
+func (s *sessionIdentityStore) lookup(sessionID string, identity sessionIdentity) (known, same bool) {
 	s.mu.RLock()
 	existing, ok := s.sessions[sessionID]
 	s.mu.RUnlock()
-	return ok && existing == identity
+	return ok, ok && existing == identity
 }
 
 func (s *sessionIdentityStore) close(sessionID string) {
@@ -55,7 +62,16 @@ func bindSessionIdentity(store *sessionIdentityStore, next http.Handler) http.Ha
 		sessionID := strings.TrimSpace(r.Header.Get(sessionIDHeader))
 		switch r.Method {
 		case http.MethodPost, http.MethodGet, http.MethodDelete:
-			if sessionID != "" && !store.matches(sessionID, identity) {
+			if sessionID == "" {
+				break
+			}
+			// Never handed on: a revoked session may still be open in the
+			// transport, and must not serve.
+			switch known, same := store.lookup(sessionID, identity); {
+			case !known:
+				http.Error(w, "session not found", http.StatusNotFound)
+				return
+			case !same:
 				http.Error(w, "MCP session identity mismatch", http.StatusForbidden)
 				return
 			}

@@ -59,6 +59,16 @@ roles:
         fields: {read: [id], write: [customer_id]}
         rows: {or: [{field: customer_id, op: gt, value: 10}, {field: id, op: is_null}]}
     permissions: ["sql:execute@shop"]
+    limits:
+      maxRows: 200
+      maxBytes: 1048576
+      queryTimeout: 5s
+      softScore: 40
+      hardScore: 20
+      rejectFullScan: true
+      rps: 2.5
+      maxInflight: 3
+      budget: {maxConcurrent: 2, maxSessionCost: 100}
 users:
   alice:
     description: BI agent
@@ -70,6 +80,7 @@ users:
         actions: [execute]
     permissions: ["sql:execute@shop"]
     disabled: true
+    limits: {maxRows: 50, budget: {maxExecution: 2s}}
 cost:
   maxRows: 500
   allowTemplates: ["shop:CALL refresh(?)"]

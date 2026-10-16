@@ -374,7 +374,7 @@ type PlanObjects {
 }
 
 type PlanChange {
-  "import, createRole, grant, exclude, mask, syncAdd or syncRemove."
+  "import, createRole, grant, exclude, mask, syncAdd, syncRemove or removeTable."
   kind: String!
   principal: String
   actions: [String!]!
@@ -430,11 +430,22 @@ type PendingWork {
   plans: [PendingPlan!]!
   "Tables whose fields differ from their columns."
   driftTables: [PendingTable!]!
+  "Configured tables and views whose tables are gone: a scan of their schema missed them, or the serving configuration found them missing."
+  goneTables: [PendingGoneTable!]!
   drift: Int!
   newTables: Int!
   unscannedSchemas: Int!
   "Datasources whose schemas were never listed: what they hold is unknown."
   unlistedDatasources: [String!]!
+}
+
+type PendingGoneTable {
+  key: String!
+  ref: String!
+  entity: String!
+  "A scan of its schema missed it; false: only the serving configuration found it missing."
+  scanned: Boolean!
+  state: PendingState
 }
 
 type PendingPlan {

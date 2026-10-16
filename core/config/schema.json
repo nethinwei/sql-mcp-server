@@ -146,6 +146,16 @@
           "description": "Default user for requests without a user identity; wins over role, and the CLI --user flag overrides it. Must be a configured, enabled user.",
           "x-description-zh-CN": "没有用户身份的请求使用的默认用户，优先于 role；CLI --user 覆盖。必须是已配置且未禁用的用户。",
           "type": "string"
+        },
+        "sessionTimeout": {
+          "description": "How long an idle HTTP MCP session lives. Closing it rolls back its explicit transactions and clears its session budget; a client then using it gets 404 and opens a new session. Changing it needs a restart.",
+          "x-description-zh-CN": "HTTP MCP 会话空闲多久后关闭。关闭时回滚会话内的显式事务、清空会话预算计数；之后客户端用旧会话请求得到 404 并自动建立新会话。修改需重启。",
+          "type": "string",
+          "x-format": "duration",
+          "x-minimum": "0",
+          "default": "30m",
+          "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$",
+          "x-restart": true
         }
       },
       "additionalProperties": false
@@ -400,8 +410,8 @@
           "default": true
         },
         "requireFreshStats": {
-          "description": "Reject when table statistics are stale.",
-          "x-description-zh-CN": "统计信息过旧时拒绝。",
+          "description": "Reject when table statistics are stale (otherwise they only lower the score by 15). On PostgreSQL a scanned table is stale when neither ANALYZE nor autovacuum analyzed it and it is larger than 64 KiB; MySQL and OceanBase do not tell.",
+          "x-description-zh-CN": "统计信息过旧时拒绝（未开启时只在评分中扣 15 分）。PostgreSQL 中过旧指被扫描的表既没被 ANALYZE 也没被 autovacuum 分析过，且大于 64 KiB；MySQL、OceanBase 不判断。",
           "type": "boolean"
         },
         "queryTimeout": {
@@ -753,6 +763,15 @@
           "x-format": "duration",
           "x-minimum": "0",
           "default": "5m",
+          "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
+        },
+        "idleTimeout": {
+          "description": "Idle timeout of a transaction; one that runs no statement for this long is rolled back by the server, releasing the locks and the connection it holds, so an agent thinking between calls does not hold up schema changes (DDL) and the queries queued behind them.",
+          "x-description-zh-CN": "事务空闲超时：超过这么久没有执行语句的事务由服务端回滚，释放它持有的锁和连接；避免 Agent 思考期间长期持锁而卡住表结构变更（DDL）及排在其后的查询。",
+          "type": "string",
+          "x-format": "duration",
+          "x-minimum": "0",
+          "default": "1m",
           "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
         },
         "maxOpen": {
@@ -1318,6 +1337,70 @@
           "items": {
             "type": "string"
           }
+        },
+        "limits": {
+          "description": "Resource limits of the role, tightening the global ones. An unset field keeps the global value; a set one can only tighten it (the stricter of the two applies). With several roles, each field is the most permissive of the user's roles (a role leaving it unset leaves it unset).",
+          "x-description-zh-CN": "角色的资源限制，收紧全局限制。未设置的项沿用全局值；设置的项只能更严（取两者中更严的值）。用户有多个角色时，每项取各角色中最宽松的值（任一角色未设置即不限）。",
+          "type": "object",
+          "properties": {
+            "maxRows": {
+              "description": "Rows a call returns at most (global cost.maxRows).",
+              "x-description-zh-CN": "单次请求最多返回的行数（全局 cost.maxRows）。",
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxBytes": {
+              "description": "Bytes a call returns at most (global cost.maxBytes).",
+              "x-description-zh-CN": "单次请求最多返回的字节数（全局 cost.maxBytes）。",
+              "type": "integer",
+              "minimum": 0
+            },
+            "queryTimeout": {
+              "description": "Query timeout of a call (global cost.queryTimeout).",
+              "x-description-zh-CN": "单次请求的查询超时（全局 cost.queryTimeout）。",
+              "type": "string",
+              "x-format": "duration",
+              "x-minimum": "0",
+              "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
+            },
+            "softScore": {
+              "description": "The cost gate's soft rejection score (global cost.softScore); higher is stricter.",
+              "x-description-zh-CN": "成本闸门软拒绝分数（全局 cost.softScore）；分数越高越严。",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "hardScore": {
+              "description": "The cost gate's hard rejection score (global cost.hardScore); higher is stricter.",
+              "x-description-zh-CN": "成本闸门硬拒绝分数（全局 cost.hardScore）；分数越高越严。",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "rejectFullScan": {
+              "description": "Reject full scans (always rejected when the global cost.rejectFullScan is on).",
+              "x-description-zh-CN": "拒绝全表扫描（全局 cost.rejectFullScan 已开启时始终拒绝）。",
+              "type": "boolean"
+            },
+            "rps": {
+              "description": "Requests per second, per caller (user or role) across its sessions; past it a call is refused with RATE_LIMITED. The process-wide rateLimit.rps still applies.",
+              "x-description-zh-CN": "每秒请求数上限，按调用者（用户或角色）跨会话计；超出时返回 RATE_LIMITED。进程级 rateLimit.rps 仍同时生效。",
+              "type": "number",
+              "minimum": 0
+            },
+            "maxInflight": {
+              "description": "Requests in flight at once, per caller across its sessions; past it a call is refused with RATE_LIMITED.",
+              "x-description-zh-CN": "同时进行的请求数上限，按调用者跨会话计；超出时返回 RATE_LIMITED。",
+              "type": "integer",
+              "minimum": 0
+            },
+            "budget": {
+              "$ref": "#/$defs/budgetLimits",
+              "description": "Session budget (as budget.*); a field set wins over budget.roles and budget.users.",
+              "x-description-zh-CN": "会话预算（含义同 budget.*）；设置的项优先于 budget.roles 与 budget.users。"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -1436,6 +1519,70 @@
           "description": "A disabled user cannot authenticate or be server.user; its sessions end immediately.",
           "x-description-zh-CN": "禁用后无法认证，也不能作为 server.user；会话立即解除。",
           "type": "boolean"
+        },
+        "limits": {
+          "description": "Resource limits of the user, tightening the global ones. An unset field keeps the global value; a set one can only tighten it (the stricter of the two applies). A field set wins over the user's roles.",
+          "x-description-zh-CN": "用户的资源限制，收紧全局限制。未设置的项沿用全局值；设置的项只能更严（取两者中更严的值）。设置的项优先于其各角色的设置。",
+          "type": "object",
+          "properties": {
+            "maxRows": {
+              "description": "Rows a call returns at most (global cost.maxRows).",
+              "x-description-zh-CN": "单次请求最多返回的行数（全局 cost.maxRows）。",
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxBytes": {
+              "description": "Bytes a call returns at most (global cost.maxBytes).",
+              "x-description-zh-CN": "单次请求最多返回的字节数（全局 cost.maxBytes）。",
+              "type": "integer",
+              "minimum": 0
+            },
+            "queryTimeout": {
+              "description": "Query timeout of a call (global cost.queryTimeout).",
+              "x-description-zh-CN": "单次请求的查询超时（全局 cost.queryTimeout）。",
+              "type": "string",
+              "x-format": "duration",
+              "x-minimum": "0",
+              "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
+            },
+            "softScore": {
+              "description": "The cost gate's soft rejection score (global cost.softScore); higher is stricter.",
+              "x-description-zh-CN": "成本闸门软拒绝分数（全局 cost.softScore）；分数越高越严。",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "hardScore": {
+              "description": "The cost gate's hard rejection score (global cost.hardScore); higher is stricter.",
+              "x-description-zh-CN": "成本闸门硬拒绝分数（全局 cost.hardScore）；分数越高越严。",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "rejectFullScan": {
+              "description": "Reject full scans (always rejected when the global cost.rejectFullScan is on).",
+              "x-description-zh-CN": "拒绝全表扫描（全局 cost.rejectFullScan 已开启时始终拒绝）。",
+              "type": "boolean"
+            },
+            "rps": {
+              "description": "Requests per second, per caller (user or role) across its sessions; past it a call is refused with RATE_LIMITED. The process-wide rateLimit.rps still applies.",
+              "x-description-zh-CN": "每秒请求数上限，按调用者（用户或角色）跨会话计；超出时返回 RATE_LIMITED。进程级 rateLimit.rps 仍同时生效。",
+              "type": "number",
+              "minimum": 0
+            },
+            "maxInflight": {
+              "description": "Requests in flight at once, per caller across its sessions; past it a call is refused with RATE_LIMITED.",
+              "x-description-zh-CN": "同时进行的请求数上限，按调用者跨会话计；超出时返回 RATE_LIMITED。",
+              "type": "integer",
+              "minimum": 0
+            },
+            "budget": {
+              "$ref": "#/$defs/budgetLimits",
+              "description": "Session budget (as budget.*); a field set wins over budget.roles and budget.users.",
+              "x-description-zh-CN": "会话预算（含义同 budget.*）；设置的项优先于 budget.roles 与 budget.users。"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

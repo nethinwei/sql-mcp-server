@@ -30,6 +30,7 @@ type (
 	PendingState       = configapp.PendingState
 	PendingStateInput  = configapp.PendingStateInput
 	PendingTable       = configapp.PendingTable
+	PendingGoneTable   = configapp.PendingGoneTable
 	PendingWork        = configapp.PendingWork
 	PlanChange         = configapp.PlanChange
 	PlanException      = configapp.PlanException

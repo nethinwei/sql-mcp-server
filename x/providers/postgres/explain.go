@@ -22,16 +22,20 @@ var ErrAnalyzeRequiresReadOnly = errors.New("postgres: EXPLAIN ANALYZE requires 
 // pgExplainer estimates a plan by running EXPLAIN (FORMAT JSON).
 type pgExplainer struct {
 	db *sql.DB
+	// classify classifies the errors of EXPLAIN as those of statements, so
+	// the gate tells a schema change from a plan it could not get.
+	classify func(error) error
 }
 
 // Explain implements cost.Explainer. It wraps the query in EXPLAIN and parses
 // the JSON plan, walking the plan tree to detect sorts, temporary/hash nodes,
-// and partition pruning. Statistics freshness is probed from
-// pg_stat_user_tables.last_analyze. Any parse failure degrades to ScanUnknown.
+// and partition pruning. Statistics freshness is probed for the scanned
+// table (see statsFresh); VERBOSE names its schema. Any parse failure
+// degrades to ScanUnknown.
 func (e pgExplainer) Explain(ctx context.Context, query string, args []any) (cost.Plan, error) {
-	rows, err := e.db.QueryContext(ctx, "EXPLAIN (FORMAT JSON) "+query, args...)
+	rows, err := e.db.QueryContext(ctx, "EXPLAIN (FORMAT JSON, VERBOSE) "+query, args...)
 	if err != nil {
-		return cost.Plan{}, err
+		return cost.Plan{}, e.classify(err)
 	}
 	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
@@ -45,8 +49,8 @@ func (e pgExplainer) Explain(ctx context.Context, query string, args []any) (cos
 	if err != nil {
 		return p, err
 	}
-	if relation := relationForScan(root, p.ScanType); relation != "" {
-		p.StatsFresh = e.statsFresh(ctx, relation)
+	if scanned, ok := relationForScan(root, p.ScanType); ok {
+		p.StatsFresh = e.statsFresh(ctx, scanned.Schema, scanned.RelationName)
 	}
 	if p.ScanType == cost.ScanFull {
 		if relations, ok := fullScanRelations(root, nil); ok {
@@ -101,23 +105,39 @@ func (e pgExplainer) tableRows(ctx context.Context, relations []string) (int64, 
 	return rows, true
 }
 
-// statsFresh reports whether the relation has been analyzed at least once.
-func (e pgExplainer) statsFresh(ctx context.Context, rel string) bool {
-	var last sql.NullTime
-	err := e.db.QueryRowContext(ctx,
-		`SELECT last_analyze FROM pg_stat_user_tables WHERE relname=$1 LIMIT 1`, rel).Scan(&last)
-	if err != nil {
-		// Probe failure (including sql.ErrNoRows for a table absent from the
-		// stats view): be permissive rather than blocking queries because the
-		// stats view is inaccessible or the table was never analyzed-tracked.
+// statsFreshSQL tells whether the planner's statistics of a table can be
+// trusted: it was analyzed, by ANALYZE or by autovacuum, or it is so small
+// (at most smallTablePages pages) that an estimate cannot be far off.
+// Autovacuum never analyzes a table of fewer rows than its threshold, so a
+// small table may well have never been. Every table of the name counts when
+// the schema is not known.
+const statsFreshSQL = `SELECT bool_and(coalesce(s.last_analyze, s.last_autoanalyze) IS NOT NULL
+  OR pg_relation_size(c.oid) <= $3 * current_setting('block_size')::bigint)
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+LEFT JOIN pg_stat_all_tables s ON s.relid = c.oid
+WHERE c.relname = $1 AND ($2 = '' OR n.nspname = $2) AND c.relkind IN ('r', 'm')`
+
+// smallTablePages is the size, in pages, up to which a table's statistics
+// do not matter (64 KiB with the default 8 KiB pages).
+const smallTablePages = 8
+
+// statsFresh reports whether the statistics of the table schema.rel are
+// fresh (see statsFreshSQL).
+func (e pgExplainer) statsFresh(ctx context.Context, schema, rel string) bool {
+	var fresh sql.NullBool
+	if err := e.db.QueryRowContext(ctx, statsFreshSQL, rel, schema, smallTablePages).Scan(&fresh); err != nil ||
+		!fresh.Valid {
+		// A probe that fails or finds no such table (a view, a foreign
+		// table) is permissive rather than blocking queries.
 		return true
 	}
-	return last.Valid
+	return fresh.Bool
 }
 
 type pgPlanNode struct {
 	NodeType        string       `json:"Node Type"`
 	RelationName    string       `json:"Relation Name"`
+	Schema          string       `json:"Schema"` // with VERBOSE
 	TotalCost       float64      `json:"Total Cost"`
 	PlanRows        int64        `json:"Plan Rows"`
 	ActualRows      int64        `json:"Actual Rows"`
@@ -259,16 +279,16 @@ func walkPlan(n pgPlanNode, p *cost.Plan) {
 	}
 }
 
-func relationForScan(node pgPlanNode, scan cost.ScanType) string {
+func relationForScan(node pgPlanNode, scan cost.ScanType) (pgPlanNode, bool) {
 	if pgScanType(node.NodeType) == scan && node.RelationName != "" {
-		return node.RelationName
+		return node, true
 	}
 	for _, child := range node.Plans {
-		if relation := relationForScan(child, scan); relation != "" {
-			return relation
+		if scanned, ok := relationForScan(child, scan); ok {
+			return scanned, true
 		}
 	}
-	return ""
+	return pgPlanNode{}, false
 }
 
 func pgScanType(node string) cost.ScanType {

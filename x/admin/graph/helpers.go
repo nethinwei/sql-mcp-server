@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 
 	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
+	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
 	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 	"github.com/nethinwei/sql-mcp-server/x/workspaceops"
@@ -65,7 +68,18 @@ func serverStatus(status func() RuntimeState) *ServerStatus {
 		return &ServerStatus{}
 	}
 	st := status()
-	out := &ServerStatus{Watching: st.Watching}
+	out := &ServerStatus{
+		Watching: st.Watching, UnavailableEntities: []UnavailableEntity{}, UnreachableDatasources: []UnreachableDatasource{},
+	}
+	for _, id := range slices.Sorted(maps.Keys(st.Unavailable)) {
+		why := st.Unavailable[id]
+		out.UnavailableEntities = append(out.UnavailableEntities,
+			UnavailableEntity{Entity: id, Reason: why, TableMissing: why == bootstrap.TableMissing})
+	}
+	for _, name := range slices.Sorted(maps.Keys(st.Unreachable)) {
+		out.UnreachableDatasources = append(out.UnreachableDatasources,
+			UnreachableDatasource{Datasource: name, Error: st.Unreachable[name]})
+	}
 	if st.Applied > 0 {
 		id := strconv.FormatInt(st.Applied, 10)
 		out.AppliedRevision = &id

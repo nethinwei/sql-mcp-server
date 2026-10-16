@@ -159,7 +159,7 @@ func TestProcedureToolRunsWhenDMLDisabled(t *testing.T) {
 		Dialect:  testdialect.Postgres{},
 	}
 	pt := ProcedureTool{Entity: e}
-	if pt.Info().Name != ProcedureToolName(e) || strings.Contains(pt.Info().Name, "execute_entity") {
+	if pt.Info().Name != "procedure_refresh-cache" {
 		t.Fatalf("unstable or conflicting tool name %q", pt.Info().Name)
 	}
 	res, err := pt.Run(context.Background(), json.RawMessage(`{"tenant":"acme"}`), tc)
@@ -411,5 +411,39 @@ func TestProcedureToolSchemaRequiresEmptyListWithoutParams(t *testing.T) {
 	}
 	if schema.Required == nil || len(schema.Required) != 0 {
 		t.Fatalf("required = %v (%s), want []", schema.Required, info.InputSchema)
+	}
+}
+
+// Procedure tools are named after the procedure; only procedures whose names
+// collide tell themselves apart by a hash of their full name.
+func TestProcedureToolNames(t *testing.T) {
+	t.Parallel()
+	procedure := func(name, local string) entity.Entity {
+		return entity.Entity{Name: name, Local: local, Kind: entity.KindProcedure,
+			MCP: entity.MCPFlags{CustomTool: true, TrustedProcedure: true}}
+	}
+	reg, err := entity.NewRegistry([]entity.Entity{
+		procedure("shop.close_day", "close_day"), procedure("ledger.close_day", "close_day"),
+		procedure("shop.refresh", "refresh"), procedure("shop.post entry", "post entry"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]string{}
+	for _, pt := range ProcedureTools(reg) {
+		names[pt.Entity.Name] = pt.Info().Name
+		if found, ok := FindProcedureTool(reg, pt.Info().Name); !ok || found.Entity.Name != pt.Entity.Name {
+			t.Fatalf("%s does not find %s", pt.Info().Name, pt.Entity.Name)
+		}
+	}
+	if names["shop.refresh"] != "procedure_refresh" || names["shop.post entry"] != "procedure_post_entry" {
+		t.Fatalf("readable names = %v", names)
+	}
+	shop, ledger := names["shop.close_day"], names["ledger.close_day"]
+	if shop == ledger || !strings.HasPrefix(shop, "procedure_close_day_") || len(shop) != len("procedure_close_day_")+8 {
+		t.Fatalf("colliding names = %q, %q", shop, ledger)
+	}
+	if _, ok := FindProcedureTool(reg, "procedure_close_day"); ok {
+		t.Fatal("an ambiguous base name must not find a procedure")
 	}
 }

@@ -24,7 +24,7 @@ type planIn struct {
 
 type detailsIn struct {
 	PlanID  string `json:"planId"           jsonschema:"the planId plan_preview returned"`
-	Section string `json:"section"          jsonschema:"changes, changeEntities, exceptions, added, entities or objects"`
+	Section string `json:"section"          jsonschema:"changes|changeEntities|exceptions|added|removed|entities|objects"`
 	Change  int    `json:"change,omitempty" jsonschema:"for changeEntities: the index of the change, as changes lists it"`
 	Kind    string `json:"kind,omitempty"   jsonschema:"only changes or exceptions of this kind"`
 	Level   string `json:"level,omitempty"  jsonschema:"only exceptions of this level: block, confirm or info"`
@@ -64,6 +64,7 @@ type previewSummary struct {
 	Matched    int                `json:"matched"`
 	Excluded   int                `json:"excluded"`
 	Added      int                `json:"added"`
+	Removed    int                `json:"removed"`
 	Changed    int                `json:"changed"`
 	Changes    []changeSummary    `json:"changes"`
 	Exceptions []exceptionSummary `json:"exceptions"`
@@ -81,6 +82,7 @@ func summarize(p *configapp.Preview) previewSummary {
 	r := p.Report
 	out := previewSummary{
 		PlanID: p.PlanID, Matched: r.Matched, Excluded: r.Excluded, Added: len(p.Proposal.Added),
+		Removed:    len(p.Proposal.Removed),
 		Changed:    len(p.Proposal.Entities) - len(p.Proposal.Added) + len(p.Proposal.Roles) + len(p.Proposal.Users),
 		Validation: p.Validation, Changes: changes(r, ""), Exceptions: []exceptionSummary{},
 	}
@@ -156,12 +158,14 @@ func details(p *configapp.Preview, in detailsIn) (any, error) {
 		return page(items, in.Offset, in.Limit), nil
 	case "added":
 		return page(p.Proposal.Added, in.Offset, in.Limit), nil
+	case "removed":
+		return page(kit.OrEmpty(p.Proposal.Removed), in.Offset, in.Limit), nil
 	case "entities":
 		return page(p.Proposal.Entities, in.Offset, in.Limit), nil
 	case "objects":
 		return page(r.Objects, in.Offset, in.Limit), nil
 	}
-	return nil, errors.New("section is changes, changeEntities, exceptions, added, entities or objects")
+	return nil, errors.New("section is changes, changeEntities, exceptions, added, removed, entities or objects")
 }
 
 func registerPlans(s *mcp.Server, app Service) {
@@ -177,7 +181,8 @@ func registerPlans(s *mcp.Server, app Service) {
 		})
 	add(s, tool("plan_details", "One section of a preview, a page at a time, read from what plan_preview "+
 		"evaluated (by its planId): changes (with how many entities each covers), changeEntities (the entity IDs "+
-		"of one change, by index), exceptions (with their IDs), added (entity IDs), entities (whole, as changed) or "+
+		"of one change, by index), exceptions (with their IDs), added and removed (entity IDs), entities (whole, "+
+		"as changed) or "+
 		"objects (counts by schema).", true),
 		func(ctx context.Context, in detailsIn) (any, error) {
 			p, err := app.Previewed(ctx, in.PlanID)

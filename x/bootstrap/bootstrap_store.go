@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
+	"github.com/nethinwei/sql-mcp-server/core/tool"
 	"github.com/nethinwei/sql-mcp-server/x/configyaml"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 )
@@ -192,11 +194,23 @@ func (r *Runtime) ReloadWith(build func() (*App, error)) error {
 	return r.reloadWith(build)
 }
 
+// maxRetryDelay bounds the wait before a revision that failed to apply is
+// tried again.
+const maxRetryDelay = 5 * time.Minute
+
 // WatchStore polls store for a newly published revision and reloads it with
-// build. current is the revision the runtime already serves. Failures keep
-// the current snapshot (fail-static) and are recorded in Stale; a later
-// successful reload clears it. The users a revision that loads but fails to
-// apply changes are held meanwhile (see holdChanged).
+// build. current is the revision the runtime already serves. A poll reads
+// only the published revision's summary; its payload is read when it
+// changed. Failures keep the current snapshot (fail-static) and are recorded
+// in Stale; a later successful reload clears it. A failed revision is tried
+// again after a delay doubling from interval up to maxRetryDelay, as
+// assembling reads every datasource's schema; a newly published revision is
+// tried at once. While datasources of the served revision are unreachable
+// (see App.Unreachable), or once a call found the schema of one changed (see
+// App.Drift), it is assembled again on the same schedule, so their entities
+// come back once the databases answer, and the entities a schema change
+// broke are reported unavailable. The users a revision that
+// loads but fails to apply changes are held meanwhile (see holdChanged).
 func (r *Runtime) WatchStore(
 	ctx context.Context,
 	store revision.Store,
@@ -207,26 +221,95 @@ func (r *Runtime) WatchStore(
 ) error {
 	report := reporter(onError)
 	r.applied.Store(current)
+	base := cmp.Or(interval, 5*time.Second)
+	retry, recheck := retryBackoff{base: base}, retryBackoff{base: base}
 	return poll(ctx, interval, 5*time.Second, func() {
-		rev, err := store.Published(ctx)
+		head, err := store.PublishedSummary(ctx)
 		if err != nil {
 			report(fmt.Errorf("store poll: %w", err))
 			return
 		}
-		if rev.ID == current {
+		now := time.Now()
+		again := head.ID == current
+		if again && (!r.degraded() || !recheck.due(current, now)) || !again && !retry.due(head.ID, now) {
 			return
 		}
-		err = rev.Verify()
-		if err == nil {
-			err = r.reloadWith(func() (*App, error) { return build(rev) })
+		drifted := again && r.drift().Take()
+		rev, err := r.reloadPublished(ctx, store, build)
+		switch {
+		case err != nil && again:
+			if drifted {
+				r.drift().Report()
+			}
+			recheck.failed(current, now)
+			report(fmt.Errorf("reassemble revision %d: %w", current, err))
+		case err != nil:
+			retry.failed(head.ID, now)
+			r.markStale(head.ID, err, report)
+			if rev.ID == head.ID {
+				r.holdLoaded(LoadRevision(rev))
+			}
+		default:
+			r.stale.Store(nil)
+			current = rev.ID
+			r.applied.Store(current)
+			if r.degraded() || drifted {
+				// A schema change found again soon is checked after a
+				// growing delay, not at every poll.
+				recheck.failed(current, now)
+			}
 		}
-		if err != nil {
-			r.markStale(rev.ID, err, report)
-			r.holdLoaded(LoadRevision(rev))
-			return
-		}
-		r.stale.Store(nil)
-		current = rev.ID
-		r.applied.Store(current)
 	})
+}
+
+// reloadPublished reloads the published revision with build.
+func (r *Runtime) reloadPublished(
+	ctx context.Context, store revision.Store, build func(revision.Revision) (*App, error),
+) (revision.Revision, error) {
+	rev, err := store.Published(ctx)
+	if err == nil {
+		err = rev.Verify()
+	}
+	if err == nil {
+		err = r.reloadWith(func() (*App, error) { return build(rev) })
+	}
+	return rev, err
+}
+
+// degraded reports whether datasources of the served App are unreachable,
+// or a call found the schema of one changed.
+func (r *Runtime) degraded() bool {
+	app := r.Current()
+	return app != nil && (len(app.Unreachable) > 0 || app.Drift.Pending())
+}
+
+// drift is the served App's schema drift signal.
+func (r *Runtime) drift() *tool.SchemaDrift {
+	if app := r.Current(); app != nil {
+		return app.Drift
+	}
+	return nil
+}
+
+// retryBackoff spaces the attempts at a revision that keeps failing.
+type retryBackoff struct {
+	base    time.Duration
+	failing int64 // the revision that failed last; 0 for none
+	delay   time.Duration
+	at      time.Time // when failing is tried next
+}
+
+// due reports whether revision id is to be tried at now.
+func (b *retryBackoff) due(id int64, now time.Time) bool {
+	return id != b.failing || !now.Before(b.at)
+}
+
+// failed records that revision id failed at now.
+func (b *retryBackoff) failed(id int64, now time.Time) {
+	if id != b.failing {
+		b.failing, b.delay = id, b.base
+	} else {
+		b.delay = min(b.delay*2, maxRetryDelay)
+	}
+	b.at = now.Add(b.delay)
 }

@@ -16,6 +16,12 @@ type RuntimeState struct {
 	Unapplied *bootstrap.StaleState
 	// Execution is a snapshot of the execution bus; nil when unknown.
 	Execution *bus.Stats
+	// Unavailable maps the served entities whose tables or columns are
+	// missing to why.
+	Unavailable map[string]string
+	// Unreachable maps the datasources whose schema could not be read to the
+	// error.
+	Unreachable map[string]string
 }
 
 // Resolver is the root resolver. It holds no per-request state: the

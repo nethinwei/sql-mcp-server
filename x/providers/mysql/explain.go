@@ -13,6 +13,9 @@ import (
 // mysqlExplainer estimates a plan via EXPLAIN FORMAT=JSON.
 type mysqlExplainer struct {
 	db *sql.DB
+	// classify classifies the errors of EXPLAIN as those of statements, so
+	// the gate tells a schema change from a plan it could not get.
+	classify func(error) error
 }
 
 // Explain implements cost.Explainer. MySQL estimates are less trustworthy, so
@@ -21,7 +24,7 @@ type mysqlExplainer struct {
 func (e mysqlExplainer) Explain(ctx context.Context, query string, args []any) (cost.Plan, error) {
 	rows, err := e.db.QueryContext(ctx, "EXPLAIN FORMAT=JSON "+query, args...)
 	if err != nil {
-		return cost.Plan{}, err
+		return cost.Plan{}, e.classify(err)
 	}
 	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
