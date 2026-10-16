@@ -24,6 +24,8 @@ cost:
   maxRows: 100
   maxBytes: 1048576
   rejectFullScan: true
+  # The sample tables are tiny; judge their full scans as those of real tables.
+  fullScanMaxRows: 0
   whitelistPKPoint: true
   requireKnownScan: true
   queryTimeout: 5s
