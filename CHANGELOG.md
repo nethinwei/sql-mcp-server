@@ -9,6 +9,11 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+## 0.1.17 - 2026-10-16
+
+生产稳定性与 MCP 协议对齐版本，**有 breaking 变更**；升级步骤见
+[`docs/releases/v0.1.17.md`](docs/releases/v0.1.17.md#迁移)。
+
 ### Breaking
 
 - 工具结果的文本改为与新增的 `structuredContent` 相同的 JSON 对象：返回行的工具

@@ -1,7 +1,7 @@
 # 发布说明索引
 
-当前 GA 为 `v0.1.16`（[发布说明](v0.1.16.md)、
-[GitHub Release](https://github.com/nethinwei/sql-mcp-server/releases/tag/v0.1.16)）。
+当前 GA 为 `v0.1.17`（[发布说明](v0.1.17.md)、
+[GitHub Release](https://github.com/nethinwei/sql-mcp-server/releases/tag/v0.1.17)）。
 
 本目录中的发布说明描述各版本发布时点的能力、迁移和证据状态。当前运行时行为以
 [配置参考](../configuration.md)、[安全模型](../security.md)和
@@ -10,6 +10,11 @@
 
 ## 版本
 
+- [`v0.1.17`](v0.1.17.md)（2026-10-16）：生产稳定性与 MCP 协议对齐——缺表缺列、数据源
+  不可达与运行中表结构变更按实体降级，失败版本退避重试，事务失败即回滚并有空闲超时，
+  按角色/用户的资源限制，PostgreSQL 统计新鲜度修复；工具结构化输出与注解、
+  `describe_entities` 分页、schema 资源模板、会话 404 自动重连；**有 breaking**（结果
+  文本格式、实体列表分页、schema 资源、过程工具名、事务语义）；
 - [`v0.1.16`](v0.1.16.md)（2026-10-16）：控制台在数千实体下按页加载——实体列表、授权
   矩阵、可见性预览分页，新增管理 API `visibilityPage`；版本历史加载更多、审核摘要折叠；
   镜像构建不再经 QEMU 模拟；无 breaking；

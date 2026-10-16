@@ -1,7 +1,7 @@
 # Roadmap
 
-当前稳定基线为 `v0.1.16`。已发布能力以
-[发布说明](releases/v0.1.16.md)、[CHANGELOG](../CHANGELOG.md)、
+当前稳定基线为 `v0.1.17`。已发布能力以
+[发布说明](releases/v0.1.17.md)、[CHANGELOG](../CHANGELOG.md)、
 [配置参考](configuration.md)和[安全模型](security.md)为准。
 
 本文件只给出未发布成果的顺序和门禁：
@@ -48,13 +48,17 @@
 ## Committed
 
 `v0.1.15` 交付 Provider Capability Model 后，按 [Next 1](#next-1--evidence-backed-sqlite)
-的既定条件，Evidence-Backed SQLite 获得版本承诺（预期 `v0.1.17`；`v0.1.16` 为控制台大规模
-可用性版本）：先写设计文档并评审，
+的既定条件，Evidence-Backed SQLite 获得版本承诺（预期 `v0.1.18`；`v0.1.16` 为控制台大规模
+可用性版本，`v0.1.17` 为生产稳定性与 MCP 协议版本）：先写设计文档并评审，
 范围与退出验收以 [Provider Roadmap](provider-roadmap.md) 为唯一事实源。SQLite 同时承担
 把 DSN 密钥解析移入 provider 的收尾（见能力模型设计）。
 
 ### 已交付
 
+- `v0.1.17`：生产稳定性——缺表缺列与数据源不可达按实体降级、失败版本退避、表结构运行中
+  变更的识别与重新装配、事务失败即回滚与空闲超时、按角色/用户的资源限制；MCP 协议对齐——
+  结构化输出、工具注解、`describe_entities` 分页与 schema 资源模板、会话 404 自动重连
+  （[发布说明](releases/v0.1.17.md)）；
 - `v0.1.16`：控制台在数千实体下按页加载——实体列表、授权矩阵、可见性预览分页与管理 API
   `visibilityPage`；版本历史加载更多、审核摘要折叠；镜像构建不再经 QEMU 模拟
   （[发布说明](releases/v0.1.16.md)）；
@@ -90,7 +94,7 @@
   外部实测与前端供应链核实，见[管理面 5](#管理面-5--admin-console-ui)；OIDC / 通用
   OAuth2 登录经 2026-10-12 复审降为 [Later](#later)，不再是本判据的一部分；
 - [x] Provider capability model 交付（`v0.1.15`）；
-- [ ] Evidence-Backed SQLite 交付（`Next 1`，预期 `v0.1.17`）并通过
+- [ ] Evidence-Backed SQLite 交付（`Next 1`，预期 `v0.1.18`）并通过
   conformance + workload 差分验收；
 - [ ] dogfooding：至少一套真实或脱敏的支付中台工作负载经 `EVAL_DSN`
   模式运行并输出问题清单（v0.1.9 发布复审移交本 Milestone 的必要判据，
@@ -246,7 +250,7 @@ model（`v0.1.15` 已交付）为前置工程。
 **进入条件已确立**（`v0.1.9` 发布复审）：架构验证 + 采用目标——SQLite 是
 新 capability model 的首个新增 Provider 消费者，验证"弱成本证明、核心层
 兜底"的执行模型，同时是产生真实采用证据的最低门槛入口。capability model
-已交付，本阶段获得版本承诺（预期 `v0.1.17`，见 [Committed](#committed)）。SQLite 驱动已随管理面 3 的
+已交付，本阶段获得版本承诺（预期 `v0.1.18`，见 [Committed](#committed)）。SQLite 驱动已随管理面 3 的
 配置存储引入，Provider 复用同一驱动。
 
 阶段结果：一个受现有 IR 和统一 engine 约束的窄 SQLite Provider，通过
