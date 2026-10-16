@@ -2,9 +2,12 @@
 import { computed, h, ref, watch, watchEffect } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { NButton, NDataTable, NEmpty, NInput, NSelect, NSpace, NTag, NText, type DataTableColumns } from 'naive-ui'
+import {
+  NButton, NDataTable, NEmpty, NInput, NSelect, NSpace, NTag, NText, useDialog, useMessage, type DataTableColumns,
+} from 'naive-ui'
 import { useWorkspace } from '@/stores/workspace'
 import type { EntityInput } from '@/gql/schema'
+import { can } from '@/api/session'
 import { loadTableComments, tableComments } from '@/lib/tableComments'
 import { byNamespace, sourceIfRenamed } from '@/lib/names'
 import { entityId } from '@/lib/entityRefs'
@@ -93,13 +96,63 @@ const entityColumns = computed<DataTableColumns<EntityInput>>(() => [
     },
   },
 ])
-const columns = computed<DataTableColumns<Row>>(() => entityColumns.value.map((c, i) => ({
-  ...c,
-  colSpan: (r: Row) => (isHeading(r) ? (i === 0 ? entityColumns.value.length : 0) : 1),
-  render: (r: Row, index: number) => (isHeading(r)
-    ? (i === 0 ? h(NText, { depth: 2, class: 'mono namespace' }, () => r.namespace) : null)
-    : (c as { render: (e: EntityInput, index: number) => unknown }).render(r, index)),
-})) as DataTableColumns<Row>)
+const columns = computed<DataTableColumns<Row>>(() => [
+  ...(editable.value ? [{ type: 'selection' as const, disabled: (r: Row) => isHeading(r) }] : []),
+  ...entityColumns.value.map((c, i) => ({
+    ...c,
+    colSpan: (r: Row) => (isHeading(r) ? (i === 0 ? entityColumns.value.length : 0) : 1),
+    render: (r: Row, index: number) => (isHeading(r)
+      ? (i === 0 ? h(NText, { depth: 2, class: 'mono namespace' }, () => r.namespace) : null)
+      : (c as { render: (e: EntityInput, index: number) => unknown }).render(r, index)),
+  })),
+] as DataTableColumns<Row>)
+
+// Entities are deleted in bulk: those checked (on any page), or every one the
+// search and datasource match. The server removes the grants on them, the
+// relationships to them and their place in procedures' affects.
+const editable = computed(() => can('admin:write'))
+const checked = ref<string[]>([])
+watch([search, datasource], () => { checked.value = [] })
+const filtered = computed(() => Boolean(search.value.trim() || datasource.value))
+const dialog = useDialog()
+const message = useMessage()
+
+/** The roles and users whose grants name one of ids. */
+function grantHolders(ids: Set<string>): string[] {
+  const names = (list: { name: string; grants?: { entity: string }[] | null }[], label: (n: string) => string) =>
+    list.filter((x) => (x.grants ?? []).some((g) => ids.has(ws.entityIndex.idOf(g.entity) ?? g.entity)))
+      .map((x) => label(x.name))
+  return [
+    ...names(ws.roles, (n) => `${t('entity.accessRole')} ${n}`),
+    ...names(ws.users, (n) => `${t('entity.accessUser')} ${n}`),
+  ]
+}
+
+function removeAll(ids: string[]) {
+  if (!ids.length) return
+  const holders = grantHolders(new Set(ids))
+  const list = holders.length > 10 ? t('entities.andMore', { list: holders.slice(0, 10).join(', '), n: holders.length })
+    : holders.join(', ')
+  dialog.warning({
+    title: t('entities.deleteTitle', { n: ids.length }),
+    content: holders.length ? t('entity.deleteAffects', { list }) : t('entities.deleteNoAccess'),
+    positiveText: t('common.delete'),
+    negativeText: t('common.cancel'),
+    onPositiveClick: () => {
+      ws.removeEntities(ids)
+      checked.value = []
+      message.success(t('entities.deleted', { n: ids.length }))
+    },
+  })
+}
+const removeChecked = () => removeAll(checked.value.filter((id) => ws.entity(id)))
+const removeMatching = () => removeAll(shown.value.map(({ e }) => entityId(e)))
+
+// A row opens its entity, except a click on its checkbox, which selects it.
+function openEntity(ev: MouseEvent, e: EntityInput) {
+  if ((ev.target as HTMLElement | null)?.closest('.n-data-table-td--selection')) return
+  void router.push({ name: 'entity', params: { id: entityId(e) } })
+}
 
 const datasourceOptions = computed(() => ws.datasources.map((d) => ({ label: d.name, value: d.name })))
 </script>
@@ -112,7 +165,15 @@ const datasourceOptions = computed(() => ws.datasources.map((d) => ({ label: d.n
         <n-select v-model:value="datasource" :options="datasourceOptions" clearable :placeholder="t('entities.allDatasources')"
           size="small" class="ds" />
       </n-space>
-      <n-button size="small" @click="router.push({ name: 'datasources' })">{{ t('entities.importFromDb') }}</n-button>
+      <n-space :wrap="false">
+        <template v-if="editable">
+          <n-button v-if="checked.length" size="small" type="error" secondary @click="removeChecked">
+            {{ t('entities.deleteChecked', { n: checked.length }) }}</n-button>
+          <n-button v-if="filtered && shown.length" size="small" type="error" secondary @click="removeMatching">
+            {{ t('entities.deleteMatching', { n: shown.length }) }}</n-button>
+        </template>
+        <n-button size="small" @click="router.push({ name: 'datasources' })">{{ t('entities.importFromDb') }}</n-button>
+      </n-space>
     </div>
     <n-empty v-if="!ws.entities.length" :description="t('entities.empty')">
       <template #extra><n-button type="primary" @click="router.push({ name: 'datasources' })">{{ t('entities.goImport') }}</n-button></template>
@@ -121,8 +182,9 @@ const datasourceOptions = computed(() => ws.datasources.map((d) => ({ label: d.n
       :pagination="{ page: current, pageSize, itemCount: shown.length, showSizePicker: true, pageSizes,
         onUpdatePage: (p: number) => (page = p), onUpdatePageSize: (s: number) => { pageSize = s; page = 1 } }"
       :row-key="(r: Row) => (isHeading(r) ? `ns:${r.namespace}` : entityId(r))"
+      :checked-row-keys="checked" @update:checked-row-keys="(keys: (string | number)[]) => (checked = keys.map(String))"
       :row-props="(r: Row) => (isHeading(r) ? { class: 'heading' }
-        : { class: 'clickable', onClick: () => router.push({ name: 'entity', params: { id: entityId(r) } }) })" />
+        : { class: 'clickable', onClick: (ev: MouseEvent) => openEntity(ev, r) })" />
   </n-space>
 </template>
 

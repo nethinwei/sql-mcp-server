@@ -622,8 +622,14 @@ export const useWorkspace = defineStore('workspace', {
      * relationships to it and its place in procedures' affects.
      */
     removeEntity(id: string) {
-      this.entities = this.entities.filter((e) => entityId(e) !== id)
-      delete this.renamed[itemRef('entity', id)]
+      this.removeEntities([id])
+    },
+
+    /** Removes entities at once (see removeEntity). */
+    removeEntities(ids: string[]) {
+      const gone = new Set(ids)
+      this.entities = this.entities.filter((e) => !gone.has(entityId(e)))
+      for (const id of ids) delete this.renamed[itemRef('entity', id)]
     },
 
     /**

@@ -262,6 +262,9 @@ const en: typeof zh = {
     description: 'Description', datasource: 'Datasource', fields: 'Fields',
     whoCanAccess: 'Who can access',
     procedure: 'procedure', userTag: 'user {name}', legacyTag: 'entity-level roles', nobody: 'Nobody',
+    deleteChecked: 'Delete selected ({n})', deleteMatching: 'Delete all {n} matching',
+    deleteTitle: 'Delete {n} entities from the workspace?', deleteNoAccess: 'No role or user has access to them.',
+    andMore: '{list} and others ({n} in all)', deleted: 'Deleted {n} entities from your workspace; review and publish to apply',
   },
   entity: {
     renameTitle: 'Rename entity', name: 'Name', renameHint: 'Grants and relationships of other entities follow; the table it reads stays the same.',

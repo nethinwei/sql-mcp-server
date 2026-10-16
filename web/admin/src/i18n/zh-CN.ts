@@ -252,6 +252,9 @@ export default {
     search: '搜索实体', allDatasources: '全部数据源', importFromDb: '从数据库导入', empty: '还没有实体：从数据库导入表开始',
     goImport: '去导入', entity: '实体', description: '说明', datasource: '数据源', fields: '字段', whoCanAccess: '谁能访问',
     procedure: '存储过程', userTag: '用户 {name}', legacyTag: '实体内角色', nobody: '无人可访问',
+    deleteChecked: '删除所选（{n}）', deleteMatching: '删除全部匹配的 {n} 个',
+    deleteTitle: '从工作区删除 {n} 个实体？', deleteNoAccess: '没有角色或用户被授权访问它们。',
+    andMore: '{list} 等 {n} 个', deleted: '已从工作区删除 {n} 个实体，审核后发布即可生效',
   },
   entity: {
     renameTitle: '重命名实体', name: '名称', renameHint: '授权与其他实体的关系会一起更新，读取的表不变。',
