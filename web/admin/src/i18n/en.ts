@@ -7,6 +7,7 @@ const en: typeof zh = {
     cancel: 'Cancel', confirm: 'OK', save: 'Save', delete: 'Delete', add: 'Add', create: 'Create', remove: 'Remove',
     rename: 'Rename', restore: 'Revert', search: 'Search', none: 'None', noDescription: '(no description)',
     required: 'Required', listSep: ', ', copy: 'Copy', copied: 'Copied', yes: 'Yes', no: 'No', loading: 'Loading', all: 'All',
+    loadMore: 'Load more', showMore: 'Show {n} more', showLess: 'Show less',
   },
   prefs: {
     theme: 'Theme', themeAuto: 'System', themeLight: 'Light', themeDark: 'Dark',

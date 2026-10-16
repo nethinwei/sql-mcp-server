@@ -470,6 +470,7 @@ type ComplexityRoot struct {
 		TableComments        func(childComplexity int, tables []TableRef) int
 		Validate             func(childComplexity int, revision *string) int
 		Visibility           func(childComplexity int, input VisibilityInput) int
+		VisibilityPage       func(childComplexity int, input VisibilityInput, filter *VisibilityFilter, offset *int, limit *int) int
 		Workspace            func(childComplexity int) int
 		WorkspaceLog         func(childComplexity int, limit *int) int
 	}
@@ -638,6 +639,15 @@ type ComplexityRoot struct {
 		Warnings        func(childComplexity int) int
 	}
 
+	VisibilityPage struct {
+		Actions     func(childComplexity int) int
+		Items       func(childComplexity int) int
+		Matched     func(childComplexity int) int
+		NeedsFields func(childComplexity int) int
+		Reachable   func(childComplexity int) int
+		Total       func(childComplexity int) int
+	}
+
 	Workspace struct {
 		Base       func(childComplexity int) int
 		Checkpoint func(childComplexity int) int
@@ -733,6 +743,7 @@ type QueryResolver interface {
 	Diff(ctx context.Context, from string, to *string) (string, error)
 	Simulate(ctx context.Context, input SimulationInput) (*configapp.Simulation, error)
 	Visibility(ctx context.Context, input VisibilityInput) ([]EntityVisibility, error)
+	VisibilityPage(ctx context.Context, input VisibilityInput, filter *VisibilityFilter, offset *int, limit *int) (*VisibilityPage, error)
 	AdminAccounts(ctx context.Context) ([]AdminAccount, error)
 	Catalog(ctx context.Context, input CatalogInput) (*configapp.CatalogPage, error)
 	CatalogRefs(ctx context.Context, filter configapp.CatalogFilter) ([]string, error)
@@ -2794,6 +2805,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.Visibility(childComplexity, args["input"].(VisibilityInput)), true
+	case "Query.visibilityPage":
+		if e.ComplexityRoot.Query.VisibilityPage == nil {
+			break
+		}
+
+		args, err := ec.field_Query_visibilityPage_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.VisibilityPage(childComplexity, args["input"].(VisibilityInput), args["filter"].(*VisibilityFilter), args["offset"].(*int), args["limit"].(*int)), true
 	case "Query.workspace":
 		if e.ComplexityRoot.Query.Workspace == nil {
 			break
@@ -3422,6 +3444,43 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Validation.Warnings(childComplexity), true
 
+	case "VisibilityPage.actions":
+		if e.ComplexityRoot.VisibilityPage.Actions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VisibilityPage.Actions(childComplexity), true
+	case "VisibilityPage.items":
+		if e.ComplexityRoot.VisibilityPage.Items == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VisibilityPage.Items(childComplexity), true
+	case "VisibilityPage.matched":
+		if e.ComplexityRoot.VisibilityPage.Matched == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VisibilityPage.Matched(childComplexity), true
+	case "VisibilityPage.needsFields":
+		if e.ComplexityRoot.VisibilityPage.NeedsFields == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VisibilityPage.NeedsFields(childComplexity), true
+	case "VisibilityPage.reachable":
+		if e.ComplexityRoot.VisibilityPage.Reachable == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VisibilityPage.Reachable(childComplexity), true
+	case "VisibilityPage.total":
+		if e.ComplexityRoot.VisibilityPage.Total == nil {
+			break
+		}
+
+		return e.ComplexityRoot.VisibilityPage.Total(childComplexity), true
+
 	case "Workspace.base":
 		if e.ComplexityRoot.Workspace.Base == nil {
 			break
@@ -3644,6 +3703,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputSimulationInput,
 		ec.unmarshalInputTableRef,
 		ec.unmarshalInputUserInput,
+		ec.unmarshalInputVisibilityFilter,
 		ec.unmarshalInputVisibilityInput,
 		ec.unmarshalInputWorkspaceEditInput,
 		ec.unmarshalInputWorkspaceItemInput,
@@ -4812,6 +4872,24 @@ func (ec *executionContext) childFields_Validation(ctx context.Context, field gr
 	return nil, fmt.Errorf("no field named %q was found under type Validation", field.Name)
 }
 
+func (ec *executionContext) childFields_VisibilityPage(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "total":
+		return ec.fieldContext_VisibilityPage_total(ctx, field)
+	case "reachable":
+		return ec.fieldContext_VisibilityPage_reachable(ctx, field)
+	case "needsFields":
+		return ec.fieldContext_VisibilityPage_needsFields(ctx, field)
+	case "matched":
+		return ec.fieldContext_VisibilityPage_matched(ctx, field)
+	case "actions":
+		return ec.fieldContext_VisibilityPage_actions(ctx, field)
+	case "items":
+		return ec.fieldContext_VisibilityPage_items(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type VisibilityPage", field.Name)
+}
+
 func (ec *executionContext) childFields_Workspace(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "base":
@@ -5673,6 +5751,44 @@ func (ec *executionContext) field_Query_validate_args(ctx context.Context, rawAr
 		return nil, err
 	}
 	args["revision"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_visibilityPage_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (VisibilityInput, error) {
+			return ec.unmarshalNVisibilityInput2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐVisibilityInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "filter",
+		func(ctx context.Context, v any) (*VisibilityFilter, error) {
+			return ec.unmarshalOVisibilityFilter2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐVisibilityFilter(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["filter"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "offset",
+		func(ctx context.Context, v any) (*int, error) {
+			return ec.unmarshalOInt2ᚖint(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["offset"] = arg2
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "limit",
+		func(ctx context.Context, v any) (*int, error) {
+			return ec.unmarshalOInt2ᚖint(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["limit"] = arg3
 	return args, nil
 }
 
@@ -13326,6 +13442,50 @@ func (ec *executionContext) fieldContext_Query_visibility(ctx context.Context, f
 	return fc, nil
 }
 
+func (ec *executionContext) _Query_visibilityPage(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_visibilityPage(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().VisibilityPage(ctx, fc.Args["input"].(VisibilityInput), fc.Args["filter"].(*VisibilityFilter), fc.Args["offset"].(*int), fc.Args["limit"].(*int))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *VisibilityPage) graphql.Marshaler {
+			return ec.marshalNVisibilityPage2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐVisibilityPage(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_visibilityPage(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_VisibilityPage(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_visibilityPage_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query_adminAccounts(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -16437,6 +16597,153 @@ func (ec *executionContext) fieldContext_Validation_warnings(_ context.Context, 
 	return graphql.NewScalarFieldContext("Validation", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _VisibilityPage_total(ctx context.Context, field graphql.CollectedField, obj *VisibilityPage) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_VisibilityPage_total(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Total, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_VisibilityPage_total(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("VisibilityPage", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _VisibilityPage_reachable(ctx context.Context, field graphql.CollectedField, obj *VisibilityPage) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_VisibilityPage_reachable(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Reachable, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_VisibilityPage_reachable(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("VisibilityPage", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _VisibilityPage_needsFields(ctx context.Context, field graphql.CollectedField, obj *VisibilityPage) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_VisibilityPage_needsFields(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.NeedsFields, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_VisibilityPage_needsFields(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("VisibilityPage", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _VisibilityPage_matched(ctx context.Context, field graphql.CollectedField, obj *VisibilityPage) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_VisibilityPage_matched(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Matched, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_VisibilityPage_matched(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("VisibilityPage", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _VisibilityPage_actions(ctx context.Context, field graphql.CollectedField, obj *VisibilityPage) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_VisibilityPage_actions(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Actions, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNAction2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_VisibilityPage_actions(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("VisibilityPage", field, false, false, errors.New("field of type Action does not have child fields"))
+}
+
+func (ec *executionContext) _VisibilityPage_items(ctx context.Context, field graphql.CollectedField, obj *VisibilityPage) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_VisibilityPage_items(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Items, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []EntityVisibility) graphql.Marshaler {
+			return ec.marshalNEntityVisibility2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐEntityVisibilityᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_VisibilityPage_items(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "VisibilityPage",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_EntityVisibility(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Workspace_base(ctx context.Context, field graphql.CollectedField, obj *configapp.Workspace) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -19515,6 +19822,43 @@ func (ec *executionContext) unmarshalInputUserInput(ctx context.Context, obj any
 				return it, err
 			}
 			it.TokenHash = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputVisibilityFilter(ctx context.Context, obj any) (VisibilityFilter, error) {
+	var it VisibilityFilter
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"search", "reachableOnly"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "search":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("search"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Search = data
+		case "reachableOnly":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("reachableOnly"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ReachableOnly = data
 		}
 	}
 	return it, nil
@@ -22913,6 +23257,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "visibilityPage":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_visibilityPage(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "adminAccounts":
 			field := field
 
@@ -24613,6 +24979,69 @@ func (ec *executionContext) _Validation(ctx context.Context, sel ast.SelectionSe
 			}
 		case "warnings":
 			out.Values[i] = ec._Validation_warnings(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var visibilityPageImplementors = []string{"VisibilityPage"}
+
+func (ec *executionContext) _VisibilityPage(ctx context.Context, sel ast.SelectionSet, obj *VisibilityPage) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, visibilityPageImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("VisibilityPage")
+		case "total":
+			out.Values[i] = ec._VisibilityPage_total(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "reachable":
+			out.Values[i] = ec._VisibilityPage_reachable(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "needsFields":
+			out.Values[i] = ec._VisibilityPage_needsFields(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "matched":
+			out.Values[i] = ec._VisibilityPage_matched(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "actions":
+			out.Values[i] = ec._VisibilityPage_actions(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "items":
+			out.Values[i] = ec._VisibilityPage_items(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -26905,6 +27334,16 @@ func (ec *executionContext) unmarshalNVisibilityInput2githubᚗcomᚋnethinwei�
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
+func (ec *executionContext) marshalNVisibilityPage2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐVisibilityPage(ctx context.Context, sel ast.SelectionSet, v *VisibilityPage) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._VisibilityPage(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNWorkspace2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐWorkspace(ctx context.Context, sel ast.SelectionSet, v *configapp.Workspace) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -27512,6 +27951,14 @@ func (ec *executionContext) marshalOUnappliedRevision2ᚖgithubᚗcomᚋnethinwe
 		return graphql.Null
 	}
 	return ec._UnappliedRevision(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOVisibilityFilter2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋgraphᚐVisibilityFilter(ctx context.Context, v any) (*VisibilityFilter, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputVisibilityFilter(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalOWorkspace2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐWorkspace(ctx context.Context, sel ast.SelectionSet, v *configapp.Workspace) graphql.Marshaler {

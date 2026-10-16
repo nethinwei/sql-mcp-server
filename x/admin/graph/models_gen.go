@@ -423,12 +423,34 @@ type UserToken struct {
 	TokenHash string `json:"tokenHash"`
 }
 
+type VisibilityFilter struct {
+	// Matches entity IDs containing it, ignoring case.
+	Search *string `json:"search,omitempty"`
+	// Only entities with an allowed or needs-fields action.
+	ReachableOnly *bool `json:"reachableOnly,omitempty"`
+}
+
 type VisibilityInput struct {
 	// Default: the signed-in administrator's workspace.
 	Revision *string `json:"revision,omitempty"`
 	// A configured user name, or role:<name> to evaluate a role.
 	User    string `json:"user"`
 	Subject any    `json:"subject,omitempty"`
+}
+
+type VisibilityPage struct {
+	// Entities evaluated.
+	Total int `json:"total"`
+	// Entities with an allowed action, or one whose fields are split across grants (needs fields).
+	Reachable int `json:"reachable"`
+	// Reachable entities without an allowed action.
+	NeedsFields int `json:"needsFields"`
+	// Entities matching the filter.
+	Matched int `json:"matched"`
+	// Actions that apply to at least one entity.
+	Actions []string `json:"actions"`
+	// The page of matching entities, at most 200.
+	Items []EntityVisibility `json:"items"`
 }
 
 type CapabilityEvidence string

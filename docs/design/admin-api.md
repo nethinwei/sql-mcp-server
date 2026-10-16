@@ -80,6 +80,7 @@ type Query {
   diff(from: ID!, to: ID): String!             # to 省略：调用者的工作区
   simulate(input: SimulationInput!): Simulation!
   visibility(input: VisibilityInput!): [EntityVisibility!]!  # 一次返回全部实体 × 适用动作
+  visibilityPage(input: VisibilityInput!, filter: VisibilityFilter, offset: Int, limit: Int): VisibilityPage!
   adminAccounts: [AdminAccount!]!
 }
 
@@ -155,8 +156,10 @@ type Mutation {
   不能提交；相对已发布的冲突在之后的发布等于我的值时自动关闭；
 - `serverStatus` 报告进程实际运行的 revision 与未应用的发布（需重启或加载失败），
   控制台顶栏据此显示运行状态；
-- visibility 用同一个离线授权器批量评估某个主体对全部实体、适用动作的默认投影结果，供
-  角色/用户页实时预览与模拟总览使用，避免逐格发起 simulate；
+- visibility 用同一个离线授权器批量评估某个主体对全部实体、适用动作的默认投影结果，
+  避免逐格发起 simulate；控制台（角色/用户页实时预览、模拟总览）用 visibilityPage：服务端
+  仍评估全部实体并给出总数、可访问数与需选择字段数，按实体 ID 关键字与“只看可访问”筛选后
+  只返回一页（每页至多 200 个），数千实体时不必每次编辑都传输全部实体 × 动作；
 - 参数较多的操作统一使用单个 input 对象（实现时调整，便于前端组装，也避免
   生成的 resolver 签名过长）；
 - 空值与配置编码一致地省略：可选文本（实体的 schema/description、字段的

@@ -151,11 +151,11 @@ export const SimulateQuery = graphql(`
   }
 `)
 
-export const VisibilityQuery = graphql(`
-  query Visibility($input: VisibilityInput!) {
-    visibility(input: $input) {
-      entity
-      actions { action result { allowed reason fields rowFilter grants fieldScopes } }
+export const VisibilityPageQuery = graphql(`
+  query VisibilityPage($input: VisibilityInput!, $filter: VisibilityFilter, $offset: Int, $limit: Int) {
+    visibilityPage(input: $input, filter: $filter, offset: $offset, limit: $limit) {
+      total reachable needsFields matched actions
+      items { entity actions { action result { allowed reason fields rowFilter grants fieldScopes } } }
     }
   }
 `)

@@ -7,6 +7,7 @@ export default {
     cancel: '取消', confirm: '确定', save: '保存', delete: '删除', add: '添加', create: '创建', remove: '删除',
     rename: '重命名', restore: '还原', search: '搜索', none: '无', noDescription: '（无说明）', required: '必填',
     listSep: '、', copy: '复制', copied: '已复制', yes: '是', no: '否', loading: '加载中', all: '全部',
+    loadMore: '加载更多', showMore: '展开其余 {n} 个', showLess: '收起',
   },
   prefs: {
     theme: '主题', themeAuto: '跟随系统', themeLight: '明色', themeDark: '暗色',

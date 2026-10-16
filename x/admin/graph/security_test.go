@@ -44,6 +44,11 @@ func TestDatasourceScopeOfReads(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), auth.ErrOutOfScope.Error()) {
 		t.Fatalf("visibility for a limited principal: %v", err)
 	}
+	var page struct{ VisibilityPage struct{ Total int } }
+	err = c.Post(`query { visibilityPage(input: {user: "alice"}) { total } }`, &page)
+	if err == nil || !strings.Contains(err.Error(), auth.ErrOutOfScope.Error()) {
+		t.Fatalf("visibility page for a limited principal: %v", err)
+	}
 }
 
 // A revision's YAML is shown with its secrets redacted, as its diff is.

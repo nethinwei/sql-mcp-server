@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { NButton, NSpace, NTable, NTag, NText } from 'naive-ui'
 import { isEmpty, sqlAction, type Access, type Summary } from '@/lib/changeSummary'
 import { simulationRoute } from '@/lib/simulation'
+import MoreToggle from './MoreToggle.vue'
 
 // What a change does to people and data, before the YAML diff: access gained
 // and lost per user, rescoped actions, boundary changes to verify by
@@ -17,6 +18,16 @@ const simulate = (user: string) => router.push(simulationRoute({ who: user, sour
 const empty = computed(() => isEmpty(props.summary))
 const label = (a: Access) =>
   a.action === sqlAction ? `sql:execute@${a.entity}` : `${a.entity} · ${t(`grants.actions.${a.action}`)}`
+
+// A list can run to thousands (importing or granting thousands of tables): it
+// shows its first items until expanded.
+const cap = 30
+const expanded = ref<Record<string, boolean>>({})
+const shown = <T>(key: string, list: T[]) => (expanded.value[key] ? list : list.slice(0, cap))
+const entities = computed(() => [
+  ...props.summary.entitiesAdded.map((e) => ({ e, added: true })),
+  ...props.summary.entitiesRemoved.map((e) => ({ e, added: false })),
+])
 </script>
 
 <template>
@@ -40,10 +51,20 @@ const label = (a: Access) =>
                 {{ u.user }}
               </n-button>
             </td>
-            <td><n-tag v-for="a in u.gained" :key="label(a)" size="small" type="success" :bordered="false" class="tag">+ {{ label(a) }}</n-tag></td>
-            <td><n-tag v-for="a in u.lost" :key="label(a)" size="small" type="error" :bordered="false" class="tag">− {{ label(a) }}</n-tag></td>
             <td>
-              <n-tag v-for="a in u.rescoped" :key="label(a)" size="small" type="warning" :bordered="false" class="tag">{{ label(a) }}</n-tag>
+              <n-tag v-for="a in shown(`${u.user}+`, u.gained)" :key="label(a)" size="small" type="success" :bordered="false"
+                class="tag">+ {{ label(a) }}</n-tag>
+              <more-toggle v-model="expanded[`${u.user}+`]" :count="u.gained.length" :cap="cap" />
+            </td>
+            <td>
+              <n-tag v-for="a in shown(`${u.user}-`, u.lost)" :key="label(a)" size="small" type="error" :bordered="false"
+                class="tag">− {{ label(a) }}</n-tag>
+              <more-toggle v-model="expanded[`${u.user}-`]" :count="u.lost.length" :cap="cap" />
+            </td>
+            <td>
+              <n-tag v-for="a in shown(`${u.user}~`, u.rescoped)" :key="label(a)" size="small" type="warning" :bordered="false"
+                class="tag">{{ label(a) }}</n-tag>
+              <more-toggle v-model="expanded[`${u.user}~`]" :count="u.rescoped.length" :cap="cap" />
               <n-tag v-if="u.subjectChanged" size="small" type="warning" :bordered="false" class="tag pickable"
                 @click="simulate(u.user)">{{ t('review.subjectChanged') }}</n-tag>
             </td>
@@ -65,19 +86,21 @@ const label = (a: Access) =>
     <div v-if="summary.entitiesAdded.length || summary.entitiesRemoved.length">
       <n-text strong>{{ t('review.entitiesTitle') }}</n-text>
       <div class="line">
-        <n-tag v-for="e in summary.entitiesAdded" :key="e" size="small" type="success" :bordered="false" class="tag">+ {{ e }}</n-tag>
-        <n-tag v-for="e in summary.entitiesRemoved" :key="e" size="small" type="error" :bordered="false" class="tag">− {{ e }}</n-tag>
+        <n-tag v-for="x in shown('entities', entities)" :key="(x.added ? '+' : '-') + x.e" size="small"
+          :type="x.added ? 'success' : 'error'" :bordered="false" class="tag">{{ x.added ? '+' : '−' }} {{ x.e }}</n-tag>
+        <more-toggle v-model="expanded.entities" :count="entities.length" :cap="cap" />
       </div>
     </div>
     <div v-if="summary.fields.length">
       <n-text strong>{{ t('review.fieldsTitle') }}</n-text>
-      <div v-for="f in summary.fields" :key="f.entity" class="line">
+      <div v-for="f in shown('fields', summary.fields)" :key="f.entity" class="line">
         <span class="mono entity">{{ f.entity }}</span>
         <n-tag v-for="n in f.shown" :key="'s' + n" size="small" type="success" :bordered="false" class="tag">{{ t('review.shown') }} {{ n }}</n-tag>
         <n-tag v-for="n in f.hidden" :key="'h' + n" size="small" :bordered="false" class="tag">{{ t('review.hidden') }} {{ n }}</n-tag>
         <n-tag v-for="n in f.masked" :key="'m' + n" size="small" type="info" :bordered="false" class="tag">{{ t('review.masked') }} {{ n }}</n-tag>
         <n-tag v-for="n in f.unmasked" :key="'u' + n" size="small" type="warning" :bordered="false" class="tag">{{ t('review.unmasked') }} {{ n }}</n-tag>
       </div>
+      <more-toggle v-model="expanded.fields" :count="summary.fields.length" :cap="cap" />
     </div>
     <n-text depth="3" class="hint">{{ t('review.summaryHint') }}</n-text>
   </n-space>
