@@ -50,7 +50,11 @@ func evalAggregate(db DB, n relalg.Aggregate) (relation, error) {
 func aggregateCols(n relalg.Aggregate) []string {
 	cols := append([]string(nil), n.GroupBy...)
 	for _, a := range n.Aggregates {
-		cols = append(cols, string(a.Func))
+		if a.Name != "" {
+			cols = append(cols, a.Name)
+		} else {
+			cols = append(cols, string(a.Func))
+		}
 	}
 	return cols
 }

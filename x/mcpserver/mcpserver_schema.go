@@ -179,6 +179,7 @@ func authorizedEntity(
 		"name": e.Name, "id": e.Name, "description": e.Description, "datasource": e.DatasourceName(),
 		"fields":    authorizedEntityFields(e, e.OrderedNames(union)),
 		"keys":      tool.VisibleKeys(e, e.OrderedNames(union)),
+		"indexes":   tool.VisibleIndexes(e, e.OrderedNames(union)),
 		"actions":   actions,
 		"access":    access,
 		"rowScoped": e.RowPolicies[role] != nil,

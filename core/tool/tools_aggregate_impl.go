@@ -1,9 +1,11 @@
 package tool
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
@@ -83,13 +85,18 @@ func compileAggregate(ctx context.Context, plan aggregatePlan, in aggregateInput
 	if err != nil {
 		return statement{}, err
 	}
-	expr = relalg.Aggregate{Input: expr, GroupBy: in.GroupBy, Aggregates: calls}
+	expr, err = aggregateShape(res, in, relalg.Aggregate{Input: expr, GroupBy: in.GroupBy, Aggregates: calls},
+		columns, tc.MaxFilterConditions)
+	if err != nil {
+		return statement{}, err
+	}
 	compiled, err := compile(tc, res.Entity, expr)
 	if err != nil {
 		return statement{}, err
 	}
 	sql, err := gateSQL(ctx, tc, compiled)
 	if err != nil {
+		err = withIndexHints(ctx, tc, res.Entity, err)
 		return statement{}, err
 	}
 	st := newStatement(tc, res, plan.grant, sql)
@@ -113,24 +120,89 @@ func aggregateCalls(aggregates []aggJSON, groupBy []string) ([]relalg.AggCall, [
 		if !f.Valid() {
 			return nil, nil, fmt.Errorf("%w: aggregate func %q", ErrInvalidInput, a.Func)
 		}
-		name := aggregateColumn(a.Func, a.Field)
+		if a.Distinct && (a.Func != string(relalg.AggCount) || a.Field == "") {
+			return nil, nil, fmt.Errorf("%w: distinct counts a field: {func: count, field, distinct: true}",
+				ErrInvalidInput)
+		}
+		name := aggregateColumn(a)
 		if slices.Contains(groupBy, name) {
 			return nil, nil, fmt.Errorf("%w: aggregate %q has the name of a group-by field", ErrInvalidInput, name)
 		}
 		if slices.Contains(columns[len(groupBy):], name) {
 			return nil, nil, fmt.Errorf("%w: aggregate %q is given twice", ErrInvalidInput, name)
 		}
-		calls = append(calls, relalg.AggCall{Func: f, Field: a.Field})
+		calls = append(calls, relalg.AggCall{Func: f, Field: a.Field, Distinct: a.Distinct, Name: name})
 		columns = append(columns, name)
 	}
 	return calls, columns, nil
 }
 
-// aggregateColumn is the result column of aggregate fn over field: "count"
-// for count(*), "<fn>_<field>" otherwise.
-func aggregateColumn(fn, field string) string {
-	if field == "" {
-		return fn
+// aggregateColumn is the result column of aggregate a: "count" for
+// count(*), "count_distinct_<field>" for a distinct count,
+// "<fn>_<field>" otherwise.
+func aggregateColumn(a aggJSON) string {
+	switch {
+	case a.Field == "":
+		return a.Func
+	case a.Distinct:
+		return a.Func + "_distinct_" + a.Field
 	}
-	return fn + "_" + field
+	return a.Func + "_" + a.Field
+}
+
+// aggregateShape adds to agg what in asks of its groups: the having filter,
+// the order and the limit. Both name the result's columns (columns): the
+// group-by fields and the aggregates' names.
+func aggregateShape(res entity.Resolved, in aggregateInput, agg relalg.Aggregate, columns []string, maxConds int) (
+	relalg.Expr, error,
+) {
+	var expr relalg.Expr = agg
+	having, err := filterToPredicate(in.Having, maxConds)
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range filterFields(in.Having) {
+		if !slices.Contains(columns, f) {
+			return nil, fmt.Errorf("%w: having names %q, not a group-by field or an aggregate (%s)",
+				ErrInvalidInput, f, strings.Join(columns, ", "))
+		}
+	}
+	if having != nil {
+		expr = relalg.Having{Input: agg, Predicate: having}
+	}
+	if len(in.OrderBy) > maxOrderTerms {
+		return nil, fmt.Errorf("%w: orderBy names at most %d fields", ErrInvalidInput, maxOrderTerms)
+	}
+	var terms []relalg.OrderTerm
+	for _, t := range in.OrderBy {
+		dir := strings.ToLower(cmp.Or(t.Dir, "asc"))
+		if dir != "asc" && dir != "desc" || !slices.Contains(columns, t.Field) {
+			return nil, fmt.Errorf("%w: orderBy {%s %s}: a group-by field or an aggregate (%s), asc or desc",
+				ErrInvalidInput, t.Field, t.Dir, strings.Join(columns, ", "))
+		}
+		terms = append(terms, relalg.OrderTerm{Field: t.Field, Dir: dir, Nullable: resultNullable(res, agg, t.Field)})
+	}
+	if len(terms) > 0 {
+		expr = relalg.Sort{Input: expr, OrderBy: terms}
+	}
+	if in.Limit < 0 {
+		return nil, fmt.Errorf("%w: limit cannot be negative", ErrInvalidInput)
+	}
+	if in.Limit > 0 {
+		expr = relalg.Limit{Input: expr, Count: in.Limit}
+	}
+	return expr, nil
+}
+
+// resultNullable reports whether the aggregate's result column name may be
+// NULL: a nullable group-by field, or an aggregate other than a count (it
+// is NULL over a group of NULLs).
+func resultNullable(res entity.Resolved, agg relalg.Aggregate, name string) bool {
+	for _, a := range agg.Aggregates {
+		if a.Name == name {
+			return a.Func != relalg.AggCount
+		}
+	}
+	attr, ok := res.Entity.AttributeByName(name)
+	return !ok || attr.Domain.Nullable
 }

@@ -9,14 +9,41 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+### Breaking
+
+- 成本闸门新增扫描量硬上限 `cost.maxScannedRows`，**默认 100000**：语句预计读取的行数
+  （EXPLAIN 中最大的行数估计；全表扫描取表的行数）超过它即拒绝（`COST_EXCEEDED`，
+  `constraints` 带 `estimatedScannedRows`、`maxScannedRows`，`hints` 给出数字与可用于过滤的
+  索引字段），不论是否用到索引。此前闸门只按访问方式计分，按索引范围读取上千万行的
+  聚合（得 70 分）会被放行。read、aggregate 与 `execute_sql` 都受约束；角色或用户的
+  `limits.maxScannedRows` 只能收紧。迁移：确实需要更大扫描的部署把全局值调高（0 为不限），
+  或只给相应角色放宽；Agent 收到拒绝后应缩小时间范围或分批。
+- 安全分的行数扣分改为按量级（>1 万 −15、>10 万 −25、>100 万 −35、>1000 万 −45），
+  此前超过 1 万一律只扣 15 分；大范围读取更容易触发软拒绝。
+
 ### Added
 
+- `read_records` 支持 `orderBy`（升降序、最多 8 项，末尾自动补键使顺序确定，NULL 排最后，
+  脱敏字段不能排序），带 `limit` 时结果给出 `nextCursor`，原样传回即取下一页；
+  `distinct` 对所选字段去重。
+- `aggregate_records` 支持 `having`、`orderBy`（分组字段或 `sum_amount` 这样的聚合列）与
+  `limit`（Top-N），以及去重计数 `{"func":"count","field":"x","distinct":true}`
+  （列名 `count_distinct_x`）。
+- 过滤条件可组合：`{"any": [...]}`（OR）、`{"all": [...]}`（AND）、`{"not": {...}}`，最多嵌套
+  4 层；read、aggregate、update、delete 通用。
+- `describe_entities`（及资源 `sql-mcp://schema/{entity}`）给出调用方可用于过滤的索引
+  `indexes`；运行时从数据库目录带上索引，不增加查询。
+- `execute_sql` 可执行 `SHOW`、`DESCRIBE <表>`：`query` 模式下的单条元数据语句不做 EXPLAIN 估算，
+  只受硬上限约束（新配置 `cost.sqlEscape.metadata`，默认 `allow`，设 `refuse` 恢复旧行为）；
+  `DESCRIBE ANALYZE` 等 EXPLAIN 用法照常估算。
 - 控制台实体列表支持批量删除：勾选（可跨页）后“删除所选”，或在有搜索/数据源筛选时“删除全部
   匹配的 N 个”；确认框列出授权会被一并删除的角色与用户。指向这些实体的授权、关系与过程的
   `affects` 照旧由服务端一并移除。此前只能在实体详情页逐个删除。
 
 ### Changed
 
+- 成本拒绝的 `constraints` 现在如实给出 `maxRows`、`maxBytes`（此前判定时的阈值没有传到
+  拒绝结果里，这两项从未出现）。
 - 几千个实体规模下的性能（基准 3000 实体×20 字段、50 角色、200 用户）：
   - 控制台自动保存只往返改动项：`Workspace.items(since)` 按写入记录返回某版本之后改动的
     项，控制台只替换这些项（换基础修订等情况返回全部）。一次编辑的应答从 3.2 MB 降到约

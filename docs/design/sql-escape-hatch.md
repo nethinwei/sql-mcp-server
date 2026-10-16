@@ -258,6 +258,13 @@ RunTool（hook、预算、engine、审计）
   `SET`、`SHOW`、多语句等）即视为不可估算——`estimate: required` 时拒绝
   （`COST_EXCEEDED`，reason 说明估算不可用），`skip` 时跳过。这正是路线图
   “估算失败时默认拒绝，可显式配置为只保留硬上限”。
+- 唯一的例外是元数据语句（`cost.sqlEscape.metadata: allow`，默认）：`query` 模式下的
+  单条 `SHOW`、`DESCRIBE <表>`、`DESC <表>` 不做 EXPLAIN，只受硬上限约束。识别只看去掉
+  空白与注释后的开头关键字、以及除末尾外不含 `;`，不是 SQL 解析；识别不出的照常估算。
+  `DESCRIBE`/`DESC` 在 MySQL/OceanBase 也是 `EXPLAIN` 的同义词，`DESCRIBE ANALYZE`
+  会执行语句，所以后面紧跟 `ANALYZE`、`FORMAT`、`SELECT` 等 EXPLAIN 关键字时不算元数据
+  语句。理由：排障最常用的看表、看索引在默认配置下全部被拒，而 `skip` 会对所有语句
+  关闭估算，代价过大；元数据语句只读系统目录，硬上限已足够。
 - 估算用的 EXPLAIN 在逃生通道连接上执行（而不是 read 连接）：EXPLAIN 本身需要对象
   权限，用同一账号才能反映真实可见性，也避免 read 账号看见 ops 账号的对象。
 - 估算结果写入审计事件 `cost` 字段（结构仍不属于定版契约）。
@@ -422,7 +429,7 @@ RunTool（hook、预算、engine、审计）
 | 4 | 单数据源时 `datasource` 可否省略 | **必填** | 作用对象永远显式；单库部署每次多写一个字段 |
 | 5 | 路线图“管理面 4 预期 v0.1.14”的过期文案 | **只修文案**：改为“已交付（v0.1.11），OIDC / OAuth2 待排期”，OIDC 不入本版 | v0.1.14 范围与 Committed 段一致；OIDC 继续没有版本承诺 |
 | 6 | 控制台范围 | **角色 / 用户表单加系统权限多选，模拟页加一行** | 零手写 YAML 即可授权；数据源的 `sqlEscape` 声明仍走 YAML 并需重启，控制台只显示 |
-| 7 | `cost.sqlEscape.estimate` 默认值 | **`required`**：EXPLAIN 失败即拒绝 | 与路线图一致、默认 fail closed；DDL / `SET` / `SHOW` 在默认配置下被拒，运维场景须显式改 `skip` |
+| 7 | `cost.sqlEscape.estimate` 默认值 | **`required`**：EXPLAIN 失败即拒绝 | 与路线图一致、默认 fail closed；DDL / `SET` 在默认配置下被拒，运维场景须显式改 `skip`；`SHOW`/`DESCRIBE` 后来由 `cost.sqlEscape.metadata`（默认 allow）放行，见“估算” |
 
 决议 3 与初稿推荐不同，已回写到“工具契约”“文档与契约变更”与测试清单。
 

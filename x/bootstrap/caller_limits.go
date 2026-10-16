@@ -43,6 +43,7 @@ func mostPermissiveLimits(roles map[string]config.RoleDefinition, names []string
 		l := roles[name].Limits
 		merged.MaxRows = looser(merged.MaxRows, l.MaxRows)
 		merged.MaxBytes = looser(merged.MaxBytes, l.MaxBytes)
+		merged.MaxScannedRows = looser(merged.MaxScannedRows, l.MaxScannedRows)
 		merged.QueryTimeout = looser(merged.QueryTimeout, l.QueryTimeout)
 		merged.MaxInflight = looser(merged.MaxInflight, l.MaxInflight)
 		merged.RPS = looser(merged.RPS, l.RPS)
@@ -67,6 +68,7 @@ func lowerScore(a, b int) int {
 func overLimits(base, own config.PrincipalLimits) config.PrincipalLimits {
 	base.MaxRows = cmpOr(own.MaxRows, base.MaxRows)
 	base.MaxBytes = cmpOr(own.MaxBytes, base.MaxBytes)
+	base.MaxScannedRows = cmpOr(own.MaxScannedRows, base.MaxScannedRows)
 	base.QueryTimeout = cmpOr(own.QueryTimeout, base.QueryTimeout)
 	base.SoftScore = cmpOr(own.SoftScore, base.SoftScore)
 	base.HardScore = cmpOr(own.HardScore, base.HardScore)
@@ -90,7 +92,8 @@ func toolLimitsFor(global tool.Limits, p config.PrincipalLimits) tool.Limits {
 	global.MaxRows = stricter(global.MaxRows, p.MaxRows)
 	global.MaxReturnedBytes = stricter(global.MaxReturnedBytes, p.MaxBytes)
 	global.Timeout = stricter(global.Timeout, p.QueryTimeout)
-	global.Tightening = cost.Tightening{SoftScore: p.SoftScore, HardScore: p.HardScore, RejectFullScan: p.RejectFullScan}
+	global.Tightening = cost.Tightening{SoftScore: p.SoftScore, HardScore: p.HardScore, RejectFullScan: p.RejectFullScan,
+		MaxScannedRows: p.MaxScannedRows}
 	return global
 }
 

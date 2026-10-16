@@ -62,6 +62,7 @@ roles:
     limits:
       maxRows: 200
       maxBytes: 1048576
+      maxScannedRows: 50000
       queryTimeout: 5s
       softScore: 40
       hardScore: 20
@@ -83,6 +84,7 @@ users:
     limits: {maxRows: 50, budget: {maxExecution: 2s}}
 cost:
   maxRows: 500
+  maxScannedRows: 2000000
   allowTemplates: ["shop:CALL refresh(?)"]
 budget:
   users:

@@ -125,6 +125,36 @@
 （PostgreSQL 为 `count`/`sum`，同函数的多个聚合会互相覆盖；MySQL/OceanBase 为
 `COUNT(*)`/``SUM(`amount`)``）。
 
+去重计数（`{"func": "count", "field": "x", "distinct": true}`）的列名为
+`count_distinct_<field>`。`having`（与 `filter` 同形）、`orderBy` 与 `limit` 作用于分组结果，
+字段写分组字段或上面的聚合列名（如 `{"field": "sum_amount", "dir": "desc"}`）。
+
+## 查询参数
+
+- **过滤组合**：`filter` 的每一项是一个条件 `{field, op, value}`，或一个组：
+  `{"any": [...]}`（其一成立，OR）、`{"all": [...]}`（全部成立，AND）、`{"not": {...}}`；
+  顶层各项全部成立。组最多嵌套 4 层，条件总数（计入组内）受 `cost.maxFilterConditions`
+  约束。read、aggregate、update、delete 通用；含 OR/NOT 的写入不会被当作主键点写。
+- **排序与分页**（`read_records`）：`orderBy: [{field, dir}]`（`asc` 默认，最多 8 项），
+  末尾自动补上实体的键使顺序确定；脱敏字段不能排序。NULL 一律排在最后（可空字段）。
+  带 `limit` 且本页取满时，结果在 `result` 旁给出 `nextCursor`，下一页与相同的
+  `orderBy` 一起原样作为 `cursor` 传回（可空字段同样可以分页，游标里的 NULL 按“排最后”
+  处理）；调用方读不到键时顺序不确定、不分页（用 `offset`）。不带 `orderBy` 的 `cursor`
+  仍是“最后一行的主键值”。
+- **去重**（`read_records`）：`distinct: true` 对 `fields` 去重；需要 `fields`，不能与
+  `expand`、`cursor` 同用；排序字段须在 `fields` 中，NULL 的位置按数据库默认。
+- **索引**：`describe_entities` 带 `entity` 时给出 `indexes`：
+  `[{name, fields, method, unique, partial}]`，`fields` 是索引从首列起连续的、调用方可见
+  且未脱敏的列（列前缀计为该列），第一列就不可见的索引不列出；`unique` 只在全部列都
+  列出时为真；部分索引只标 `partial`，不给条件；表达式索引不列出。资源
+  `sql-mcp://schema/{entity}` 同样给出。
+- **成本拒绝**（`COST_EXCEEDED`）：`constraints` 带 `estimatedScannedRows`（预计读取
+  行数）与 `maxScannedRows`（生效上限，见 `cost.maxScannedRows`）；read/aggregate 的
+  `hints` 首条列出可用于过滤的索引字段。
+- **`execute_sql` 元数据语句**：`query` 模式下单条 `SHOW`、`DESCRIBE <表>`、`DESC <表>`
+  不做 EXPLAIN 估算（`cost.sqlEscape.metadata: allow`，默认），只受硬上限约束；
+  `DESCRIBE ANALYZE`、`DESC SELECT` 等 EXPLAIN 用法照常估算。
+
 ## 工具结果
 
 成功结果（v0.1.17 起）同时给出 `structuredContent` 与一个文本块，文本就是
@@ -132,7 +162,7 @@
 `outputSchema`：
 
 - 返回行的工具（`read_records`、`aggregate_records`、`execute_entity`、
-  `procedure_*`）：`{"result": [行, ...]}`；
+  `procedure_*`）：`{"result": [行, ...]}`；有序读取还有下一页时另带 `nextCursor`；
 - 返回单个对象的工具直接给出该对象：`describe_entities`、`create_record`、
   `update_record`、`delete_record`、`begin_transaction`、`commit_transaction`、
   `rollback_transaction`、`execute_sql`。

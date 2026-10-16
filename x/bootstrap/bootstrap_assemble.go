@@ -695,6 +695,7 @@ func applyAssembledAppConfig(app *App, cfg *config.Config) {
 		TransactionCommitTimeout:   cfg.Transactions.CommitTimeout,
 		TransactionRollbackTimeout: cfg.Transactions.RollbackTimeout,
 		SQLEscapeEstimateRequired:  cfg.Cost.SQLEscape.EstimateRequired(),
+		SQLEscapeMetadata:          cfg.Cost.SQLEscape.MetadataAllowed(),
 	}
 }
 

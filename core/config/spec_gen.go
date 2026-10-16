@@ -1071,6 +1071,7 @@ func (c GrantConfig) spec() GrantSpec {
 type PrincipalLimitsSpec struct {
 	MaxRows        *int64            `yaml:"maxRows,omitempty" json:"maxRows,omitempty"`
 	MaxBytes       *int64            `yaml:"maxBytes,omitempty" json:"maxBytes,omitempty"`
+	MaxScannedRows *int64            `yaml:"maxScannedRows,omitempty" json:"maxScannedRows,omitempty"`
 	QueryTimeout   *time.Duration    `yaml:"queryTimeout,omitempty" json:"queryTimeout,omitempty"`
 	SoftScore      *int              `yaml:"softScore,omitempty" json:"softScore,omitempty"`
 	HardScore      *int              `yaml:"hardScore,omitempty" json:"hardScore,omitempty"`
@@ -1087,6 +1088,9 @@ func (s PrincipalLimitsSpec) config() PrincipalLimits {
 	}
 	if s.MaxBytes != nil {
 		out.MaxBytes = *s.MaxBytes
+	}
+	if s.MaxScannedRows != nil {
+		out.MaxScannedRows = *s.MaxScannedRows
 	}
 	if s.QueryTimeout != nil {
 		out.QueryTimeout = *s.QueryTimeout
@@ -1119,6 +1123,9 @@ func (s *PrincipalLimitsSpec) canonical() {
 	if s.MaxBytes != nil && *s.MaxBytes == *new(int64) {
 		s.MaxBytes = nil
 	}
+	if s.MaxScannedRows != nil && *s.MaxScannedRows == *new(int64) {
+		s.MaxScannedRows = nil
+	}
 	if s.QueryTimeout != nil && *s.QueryTimeout == *new(time.Duration) {
 		s.QueryTimeout = nil
 	}
@@ -1146,6 +1153,7 @@ func (c PrincipalLimits) spec() PrincipalLimitsSpec {
 	var out PrincipalLimitsSpec
 	out.MaxRows = set(c.MaxRows)
 	out.MaxBytes = set(c.MaxBytes)
+	out.MaxScannedRows = set(c.MaxScannedRows)
 	out.QueryTimeout = set(c.QueryTimeout)
 	out.SoftScore = set(c.SoftScore)
 	out.HardScore = set(c.HardScore)
@@ -1396,6 +1404,7 @@ type CostSpec struct {
 	HardScore           *int               `yaml:"hardScore,omitempty" json:"hardScore,omitempty"`
 	MaxRows             *int64             `yaml:"maxRows,omitempty" json:"maxRows,omitempty"`
 	MaxBytes            *int64             `yaml:"maxBytes,omitempty" json:"maxBytes,omitempty"`
+	MaxScannedRows      *int64             `yaml:"maxScannedRows,omitempty" json:"maxScannedRows,omitempty"`
 	MaxINListSize       *int               `yaml:"maxINListSize,omitempty" json:"maxINListSize,omitempty"`
 	MaxFilterConditions *int               `yaml:"maxFilterConditions,omitempty" json:"maxFilterConditions,omitempty"`
 	MaxGroupByFields    *int               `yaml:"maxGroupByFields,omitempty" json:"maxGroupByFields,omitempty"`
@@ -1448,6 +1457,12 @@ func (s CostSpec) config() CostConfig {
 	}
 	if s.MaxBytes != nil {
 		out.present["maxBytes"] = true
+	}
+	if s.MaxScannedRows != nil {
+		out.MaxScannedRows = *s.MaxScannedRows
+	}
+	if s.MaxScannedRows != nil {
+		out.present["maxScannedRows"] = true
 	}
 	if s.MaxINListSize != nil {
 		out.MaxINListSize = *s.MaxINListSize
@@ -1581,6 +1596,9 @@ func (c CostConfig) spec() CostSpec {
 	}
 	if c.present["maxBytes"] || c.MaxBytes != *new(int64) {
 		out.MaxBytes = ptr(c.MaxBytes)
+	}
+	if c.present["maxScannedRows"] || c.MaxScannedRows != *new(int64) {
+		out.MaxScannedRows = ptr(c.MaxScannedRows)
 	}
 	if c.present["maxINListSize"] || c.MaxINListSize != *new(int) {
 		out.MaxINListSize = ptr(c.MaxINListSize)
@@ -1736,12 +1754,16 @@ func (c AQEConfig) spec() AQESpec {
 // SQLEscapeCostSpec is a SQLEscapeCostConfig as written: a nil field was not.
 type SQLEscapeCostSpec struct {
 	Estimate *string `yaml:"estimate,omitempty" json:"estimate,omitempty"`
+	Metadata *string `yaml:"metadata,omitempty" json:"metadata,omitempty"`
 }
 
 func (s SQLEscapeCostSpec) config() SQLEscapeCostConfig {
 	var out SQLEscapeCostConfig
 	if s.Estimate != nil {
 		out.Estimate = *s.Estimate
+	}
+	if s.Metadata != nil {
+		out.Metadata = *s.Metadata
 	}
 	return out
 }
@@ -1752,6 +1774,7 @@ func (s *SQLEscapeCostSpec) canonical() {
 func (c SQLEscapeCostConfig) spec() SQLEscapeCostSpec {
 	var out SQLEscapeCostSpec
 	out.Estimate = set(c.Estimate)
+	out.Metadata = set(c.Metadata)
 	return out
 }
 

@@ -173,6 +173,7 @@
         "maxBytes": 1048576,
         "maxInflight": 3,
         "maxRows": 200,
+        "maxScannedRows": 50000,
         "queryTimeout": "5s",
         "rejectFullScan": true,
         "rps": 2.5,
@@ -196,7 +197,8 @@
       "allowTemplates": [
         "shop:CALL refresh(?)"
       ],
-      "maxRows": 500
+      "maxRows": 500,
+      "maxScannedRows": 2000000
     },
     "execution": {
       "admin": {

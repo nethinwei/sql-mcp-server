@@ -172,6 +172,19 @@ type builder struct {
 	// capBase, capLimit and capOffset: see Compiled.
 	capBase             string
 	capLimit, capOffset int64
+	// outputs, while HAVING and ORDER BY of an aggregate are rendered, are
+	// the aggregate calls by Name (see relalg.AggCall), rendered in place of
+	// the name.
+	outputs map[string]string
+}
+
+// column is how a condition or an order term refers to name: an aggregate's
+// call where it names one, else the quoted column.
+func (b *builder) column(name string) string {
+	if expr, ok := b.outputs[name]; ok {
+		return expr
+	}
+	return b.qident(name)
 }
 
 func (b *builder) placeholder() string {

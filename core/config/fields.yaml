@@ -266,6 +266,9 @@ defs.role.limits.maxRows:
 defs.role.limits.maxBytes:
   zh-CN: 单次请求最多返回的字节数（全局 cost.maxBytes）。
   en: Bytes a call returns at most (global cost.maxBytes).
+defs.role.limits.maxScannedRows:
+  zh-CN: 单次请求的语句最多预计读取的行数（全局 cost.maxScannedRows）。
+  en: Rows a call's statement may be estimated to read at most (global cost.maxScannedRows).
 defs.role.limits.queryTimeout:
   zh-CN: 单次请求的查询超时（全局 cost.queryTimeout）。
   en: Query timeout of a call (global cost.queryTimeout).
@@ -345,6 +348,9 @@ defs.user.limits.maxRows:
 defs.user.limits.maxBytes:
   zh-CN: 单次请求最多返回的字节数（全局 cost.maxBytes）。
   en: Bytes a call returns at most (global cost.maxBytes).
+defs.user.limits.maxScannedRows:
+  zh-CN: 单次请求的语句最多预计读取的行数（全局 cost.maxScannedRows）。
+  en: Rows a call's statement may be estimated to read at most (global cost.maxScannedRows).
 defs.user.limits.queryTimeout:
   zh-CN: 单次请求的查询超时（全局 cost.queryTimeout）。
   en: Query timeout of a call (global cost.queryTimeout).
@@ -424,6 +430,9 @@ cost.maxRows:
 cost.maxBytes:
   zh-CN: 单次响应的字节上限。
   en: Response size cap in bytes.
+cost.maxScannedRows:
+  zh-CN: 语句预计读取的行数超过它即拒绝，不论是否用到索引；0 表示不限。读取行数取 EXPLAIN 中最大的行数估计（MySQL rows_examined_per_scan，PostgreSQL 与 OceanBase 各节点的行数），全表扫描时取表的行数。角色或用户的 limits.maxScannedRows 只能收紧；与预算 maxEstimatedScannedRows 同时生效。
+  en: Refuse a statement estimated to read more rows than this, whatever its access path; 0 is unlimited. The rows read are the largest row estimate of the EXPLAIN (MySQL rows_examined_per_scan, PostgreSQL and OceanBase each node's rows), and a full scan's table size. A role's or user's limits.maxScannedRows only tightens it; the budget's maxEstimatedScannedRows applies as well.
 cost.maxINListSize:
   zh-CN: IN 列表最多元素数，关系展开也按它分批。
   en: Maximum IN-list size; relationship expansion batches by it.
@@ -505,6 +514,9 @@ cost.sqlEscape:
 cost.sqlEscape.estimate:
   zh-CN: required（默认）：每条语句先 EXPLAIN，无法估算（DDL、SET、SHOW 等）或超出阈值即拒绝；skip：不估算，只保留硬上限。
   en: 'required (the default): every statement is EXPLAINed first and refused when it cannot be estimated (DDL, SET, SHOW) or exceeds the thresholds; skip: no estimate, the hard limits alone.'
+cost.sqlEscape.metadata:
+  zh-CN: allow（默认）：query 模式下的单条 SHOW、DESCRIBE、DESC 语句不做 EXPLAIN 估算，只受硬上限约束（按语句开头识别，不解析 SQL）；refuse：与其他无法估算的语句一样，在 estimate 为 required 时拒绝。
+  en: 'allow (the default): a single SHOW, DESCRIBE or DESC statement in query mode runs without an EXPLAIN estimate, under the hard limits alone (recognized by how it begins; SQL is not parsed); refuse: refused like any statement EXPLAIN cannot estimate while estimate is required.'
 
 budget:
   title: {zh-CN: '预算', en: 'Budgets'}

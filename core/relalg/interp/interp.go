@@ -86,6 +86,13 @@ func eval(db DB, e relalg.Expr) (relation, error) {
 		return evalLimit(db, n)
 	case relalg.Distinct:
 		return evalDistinct(db, n)
+	case relalg.Having:
+		if _, ok := n.Input.(relalg.Aggregate); !ok {
+			return relation{}, fmt.Errorf("%w: HAVING over %T", ErrUnsupported, n.Input)
+		}
+		// The aggregate's output columns are its group-by fields and its
+		// calls' names: a HAVING filters them as a σ does.
+		return evalSelect(db, relalg.Select(n))
 	default:
 		return relation{}, fmt.Errorf("%w: %T", ErrUnsupported, e)
 	}
@@ -143,9 +150,8 @@ func evalProject(db DB, n relalg.Project) (relation, error) {
 	return out, nil
 }
 
-// evalSort orders rows by the terms. NULL placement is provider-defined per
-// the spec; the interpreter canonically puts NULL first ascending and last
-// descending, and the equivalence corpus avoids NULL sort keys. Rows equal
+// evalSort orders rows by the terms, NULLs last whatever the direction (the
+// IR's semantics; codegen places them so for nullable terms). Rows equal
 // under all terms keep no guaranteed relative order (stable here).
 func evalSort(db DB, n relalg.Sort) (relation, error) {
 	in, err := eval(db, n.Input)
@@ -164,7 +170,11 @@ func evalSort(db DB, n relalg.Sort) (relation, error) {
 	var sortErr error
 	sort.SliceStable(rows, func(a, b int) bool {
 		for i, t := range n.OrderBy {
-			c, err := compareForSort(rows[a][idx[i]], rows[b][idx[i]])
+			x, y := rows[a][idx[i]], rows[b][idx[i]]
+			if (x == nil) != (y == nil) {
+				return y == nil // NULLs last
+			}
+			c, err := compareForSort(x, y)
 			if err != nil && sortErr == nil {
 				sortErr = err
 			}

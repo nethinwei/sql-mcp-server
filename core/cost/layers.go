@@ -74,9 +74,10 @@ func (e Estimate) Check(ctx context.Context, c codegen.Compiled) (Decision, erro
 	deny := func(soft bool) (Decision, error) {
 		return Decision{
 			Allow: false, Soft: soft,
-			Plan:  &plan,
-			Score: ptrScore(score),
-			Hints: Hints(plan, th),
+			Plan:      &plan,
+			Score:     ptrScore(score),
+			Hints:     Hints(plan, th),
+			Threshold: th,
 		}, nil
 	}
 	return e.evaluatePlan(plan, err, score, th, deny)
@@ -120,7 +121,8 @@ func (e Estimate) Evaluate(plan Plan, err error) Decision {
 	plan = smallTable(plan, th)
 	score := ScorePlan(plan)
 	dec, _ := e.evaluatePlan(plan, err, score, th, func(soft bool) (Decision, error) {
-		return Decision{Allow: false, Soft: soft, Plan: &plan, Score: ptrScore(score), Hints: Hints(plan, th)}, nil
+		return Decision{Allow: false, Soft: soft, Plan: &plan, Score: ptrScore(score), Hints: Hints(plan, th),
+			Threshold: th}, nil
 	})
 	return dec
 }
@@ -150,6 +152,9 @@ func (e Estimate) evaluatePlan(
 		return deny(false)
 	}
 	if plan.ScanType == ScanFull && th.RejectFullScan {
+		return deny(false)
+	}
+	if th.MaxScannedRows > 0 && plan.ScannedRows() > th.MaxScannedRows {
 		return deny(false)
 	}
 	if plan.ScanType == ScanUnknown && th.RequireKnownScan {

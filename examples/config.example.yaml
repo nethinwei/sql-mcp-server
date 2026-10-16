@@ -99,6 +99,7 @@ cost:
   hardScore: 40 # [hard, soft) is a soft reject; below hard is hard reject
   maxRows: 10000 # deterministic outer LIMIT for read-only SQL
   maxBytes: 16777216 # hard response-size cap
+  maxScannedRows: 100000 # refuse statements estimated to read more rows (0 = unlimited)
   maxINListSize: 256
   maxFilterConditions: 32
   maxGroupByFields: 8
@@ -117,6 +118,7 @@ cost:
   fullScanMaxRows: 1000 # full scans of tables this small are not rejected
   sqlEscape:
     estimate: required # required | skip: EXPLAIN execute_sql statements first
+    metadata: allow # allow | refuse: SHOW/DESCRIBE <table> without an estimate
   # Prefer datasource-scoped fp:v2:<sha256> values from reviewed generated SQL.
   allowTemplates: []
   rejectTemplates: []
@@ -218,6 +220,7 @@ roles:
     limits:
       maxRows: 500
       maxBytes: 1048576
+      maxScannedRows: 50000
       queryTimeout: 5s
       softScore: 40
       hardScore: 20
@@ -248,7 +251,7 @@ users:
     disabled: false
     # A user's own limits win over its roles', field by field.
     limits:
-      {maxRows: 100, maxBytes: 262144, queryTimeout: 3s, softScore: 50, hardScore: 30, rejectFullScan: true,
+      {maxRows: 100, maxBytes: 262144, maxScannedRows: 20000, queryTimeout: 3s, softScore: 50, hardScore: 30, rejectFullScan: true,
        rps: 1, maxInflight: 1, budget: {maxConcurrent: 1, maxExecution: 10s, maxEstimatedScannedRows: 100000,
        maxReturnedRows: 1000, maxReturnedBytes: 1048576, maxSessionCost: 100}}
 

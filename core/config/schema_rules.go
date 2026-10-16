@@ -51,6 +51,7 @@ var enums = map[string][]string{
 	"connectionRole":    {"primary", "replica"},
 	"pooler":            {"transaction"},
 	"sqlEscapeEstimate": {SQLEscapeEstimateRequired, SQLEscapeEstimateSkip},
+	"sqlEscapeMetadata": {SQLEscapeMetadataAllow, SQLEscapeMetadataRefuse},
 	// Mask rules are the masker's; an unknown one would fail every startup.
 	"maskRule": mask.BuiltinRules(),
 }

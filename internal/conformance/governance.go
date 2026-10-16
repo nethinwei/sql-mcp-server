@@ -71,6 +71,12 @@ func RunGovernance(t *testing.T, prov provider.Provider, driver, schema, slow st
 	gated := assemble(t, prov, driver, schema, true)
 	t.Run("governed-read", func(t *testing.T) { governedRead(t, app) })
 	t.Run("adversarial-filter", func(t *testing.T) { adversarialFilter(t, app) })
+	t.Run("ordered-pages", func(t *testing.T) { orderedPages(t, app) })
+	t.Run("masked-order-refusal", func(t *testing.T) {
+		refused(t, app, "analyst", tool.ReadTool{}, map[string]any{
+			"entity": "conf", "orderBy": []map[string]any{{"field": "name"}},
+		}, tool.CodeInvalidInput)
+	})
 	t.Run("governed-aggregate", func(t *testing.T) { governedAggregate(t, app) })
 	t.Run("full-scan-refusal", func(t *testing.T) {
 		refused(t, gated, "scanner", tool.ReadTool{}, map[string]any{
@@ -135,11 +141,15 @@ func governedRead(t *testing.T, app *bootstrap.App) {
 	}
 }
 
-// adversarialFilter: a caller's filter narrows the policy, never widens it.
+// adversarialFilter: a caller's filter narrows the policy, never widens it,
+// an OR or a NOT of it included.
 func adversarialFilter(t *testing.T, app *bootstrap.App) {
 	for _, filter := range []map[string]any{
 		{"field": "cat", "op": "eq", "value": "b"},
 		{"field": "cat", "op": "ne", "value": governedCategory},
+		{"all": []map[string]any{{"field": "cat", "op": "eq", "value": "b"},
+			{"any": []map[string]any{{"field": "val", "op": "is_null"}, {"field": "val", "op": "is_not_null"}}}}},
+		{"not": map[string]any{"field": "cat", "op": "eq", "value": governedCategory}},
 	} {
 		res, err := run(t, app, "analyst", tool.ReadTool{}, map[string]any{
 			"entity": "conf", "fields": []string{"id"}, "filter": []map[string]any{filter},
@@ -147,6 +157,43 @@ func adversarialFilter(t *testing.T, app *bootstrap.App) {
 		if err != nil || len(res.Content) != 0 {
 			t.Fatalf("filter %v weakened the row policy: %v %v", filter, res.Content, err)
 		}
+	}
+}
+
+// orderedPages: an ordered read paged by nextCursor (val nullable, NULLs
+// last, then the key) gives the policy's rows in the interpreter's order.
+func orderedPages(t *testing.T, app *bootstrap.App) {
+	var got [][]any
+	input := map[string]any{"entity": "conf", "fields": []string{"id", "val"}, "limit": 2,
+		"orderBy": []map[string]any{{"field": "val", "dir": "desc"}}}
+	for pages := 0; ; pages++ {
+		res, err := run(t, app, "analyst", tool.ReadTool{}, input)
+		if err != nil || pages > 20 {
+			t.Fatalf("page %d: %v", pages, err)
+		}
+		for _, row := range res.Content {
+			got = append(got, []any{row["id"], row["val"]})
+		}
+		if res.NextCursor == nil {
+			break
+		}
+		input["cursor"] = res.NextCursor
+	}
+	want, err := interp.Eval(Fixture(), relalg.Project{
+		Input: relalg.Sort{
+			Input: relalg.Select{
+				Input:     relalg.Scan{Relation: relalg.RelationRef{Name: TableName}},
+				Predicate: relalg.Condition{Field: "cat", Op: relalg.OpEq, Value: governedCategory},
+			},
+			OrderBy: []relalg.OrderTerm{{Field: "val", Dir: "desc", Nullable: true}, {Field: "id", Dir: "asc"}},
+		},
+		Items: []relalg.ProjectItem{{Field: "id"}, {Field: "val"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := compareRows(want.Rows, got, true); err != nil {
+		t.Fatal(err)
 	}
 }
 
