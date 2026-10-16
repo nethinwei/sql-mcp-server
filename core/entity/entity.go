@@ -439,6 +439,7 @@ func (e Entity) OrderedNames(set map[string]bool) []string {
 
 // Resolved is a request-time view of an entity with field projection applied
 // (excluded attributes removed). RBAC further restricts Attributes per role.
+// Attributes is the registry's: read it, never write to it.
 type Resolved struct {
 	Entity     Entity
 	Attributes []Attribute

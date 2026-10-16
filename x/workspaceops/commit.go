@@ -31,7 +31,7 @@ func (s Service) MergeDraft(ctx context.Context, username, by string, draft int6
 	}
 	snaps := map[int64]workspace.Snapshot{}
 	for _, rev := range []revision.Revision{d, published} {
-		if snaps[rev.ID], err = s.Codec.Items(rev); err != nil {
+		if snaps[rev.ID], err = s.itemsOf(rev); err != nil {
 			return State{}, err
 		}
 	}
@@ -196,7 +196,7 @@ func (s Service) Commit(ctx context.Context, username, by string, req CommitRequ
 func (s Service) moveAfterCommit(ctx context.Context, username, by string, snap workspace.Workspace,
 	published revision.Revision, committed []workspace.Ref,
 ) error {
-	next, err := s.Codec.Items(published)
+	next, err := s.itemsOf(published)
 	if err != nil {
 		return err
 	}

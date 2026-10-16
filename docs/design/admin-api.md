@@ -138,7 +138,8 @@ type Mutation {
   变更序号判断，丢弃较早的草稿也算）时推送 `event: revisions`（`{"sequence"}`），控制台据此刷新草稿列表（`drafts`，每份带服务端
   沿父链求得的基准版本）；登录管理员的工作区被写入（另一个控制台、Agent 的
   `plan_apply`）时推送 `event: workspace`（`{"version"}`）。工作区每人一份，在服务端，
-  所有版本操作都是服务端操作：`workspace`、`workspaceLog` 读取；`editWorkspace` 按项
+  所有版本操作都是服务端操作：`workspace`、`workspaceLog` 读取（`Workspace.items(since)`
+  只返回某版本之后改动的项，见 versioning.md“控制台”；`sections` 仍返回全部）；`editWorkspace` 按项
   写入，每项带写入者读到的值，期间别处写过则三方合并（同一处改得不同成为冲突，不丢
   任何一方）；`applyPlan` 把预览过的方案写进工作区（与配置 MCP 的 `plan_apply` 同一段
   逻辑，绑定实际影响）；`updateWorkspace`、`resetWorkspace`、`mergeDraft`、

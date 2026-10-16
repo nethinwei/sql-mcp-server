@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
@@ -26,6 +27,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/configedit"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
 	"github.com/nethinwei/sql-mcp-server/x/revisionops"
+	"github.com/nethinwei/sql-mcp-server/x/workspaceops"
 )
 
 // PlanStore keeps plan templates, the administrators' tokens for the
@@ -82,6 +84,11 @@ type Service struct {
 	previews previews
 	// configs keeps recently selected configurations parsed.
 	configs configs
+	// items keeps the items of recently read revisions.
+	items workspaceops.ItemsCache
+	// specs keeps recently read revisions' configurations (see RevisionSpec).
+	specs     *lru[keptSpec]
+	specsOnce sync.Once
 }
 
 // Draft is a configuration being edited: a base revision with sections

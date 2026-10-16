@@ -78,7 +78,7 @@ func listEntities(ctx context.Context, tc Context, in describeInput) map[string]
 	search := strings.ToLower(in.Search)
 	page := []map[string]any{}
 	total := 0
-	for _, e := range tc.Registry.Entities() {
+	for e := range tc.Registry.All() {
 		if !e.MCP.DMLTools || (in.Datasource != "" && e.DatasourceName() != in.Datasource) || !visible(e) {
 			continue
 		}

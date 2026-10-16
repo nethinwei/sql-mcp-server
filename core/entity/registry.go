@@ -3,6 +3,8 @@ package entity
 import (
 	"errors"
 	"fmt"
+	"iter"
+	"slices"
 )
 
 // ErrDuplicateEntity is returned by NewRegistry when two entities share a name.
@@ -18,6 +20,9 @@ type Registry struct {
 	byName   map[string]Entity
 	byRef    map[string][]string // reference -> names, in registration order
 	entities []Entity
+	// visible holds each entity's attributes that are not excluded, computed
+	// once: every authorization resolves its entity.
+	visible map[string][]Attribute
 }
 
 // NewRegistry builds a Registry from entities, rejecting empty names and
@@ -27,6 +32,7 @@ func NewRegistry(entities []Entity) (*Registry, error) {
 		byName:   make(map[string]Entity, len(entities)),
 		byRef:    make(map[string][]string, len(entities)),
 		entities: make([]Entity, 0, len(entities)),
+		visible:  make(map[string][]Attribute, len(entities)),
 	}
 	for _, e := range entities {
 		if e.Name == "" {
@@ -40,6 +46,13 @@ func NewRegistry(entities []Entity) (*Registry, error) {
 			r.byRef[ref] = append(r.byRef[ref], e.Name)
 		}
 		r.entities = append(r.entities, e)
+		attrs := make([]Attribute, 0, len(e.Attributes))
+		for _, a := range e.Attributes {
+			if !a.Excluded {
+				attrs = append(attrs, a)
+			}
+		}
+		r.visible[e.Name] = slices.Clip(attrs)
 	}
 	return r, nil
 }
@@ -53,13 +66,7 @@ func (r *Registry) Resolve(ref string) (Resolved, bool) {
 		return Resolved{}, false
 	}
 	e := matches[0]
-	attrs := make([]Attribute, 0, len(e.Attributes))
-	for _, a := range e.Attributes {
-		if !a.Excluded {
-			attrs = append(attrs, a)
-		}
-	}
-	return Resolved{Entity: e, Attributes: attrs}, true
+	return Resolved{Entity: e, Attributes: r.visible[e.Name]}, true
 }
 
 // Entities returns all registered entities.
@@ -67,6 +74,18 @@ func (r *Registry) Entities() []Entity {
 	out := make([]Entity, len(r.entities))
 	copy(out, r.entities)
 	return out
+}
+
+// All yields the entities in registration order without copying them, for
+// the paths that walk every entity per request.
+func (r *Registry) All() iter.Seq[Entity] {
+	return func(yield func(Entity) bool) {
+		for _, e := range r.entities {
+			if !yield(e) {
+				return
+			}
+		}
+	}
 }
 
 // Match returns the entities ref may name: the entity whose Name it is, else

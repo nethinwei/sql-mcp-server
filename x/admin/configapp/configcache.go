@@ -105,3 +105,22 @@ func (r *Service) revisionConfig(ctx context.Context, id *string) (*config.Confi
 		return bootstrap.LoadRevision(rev)
 	})
 }
+
+// keptSpec is a revision's configuration as written and in effect.
+type keptSpec struct {
+	spec *config.Spec
+	cfg  *config.Config
+	err  error
+}
+
+// RevisionSpec is rev's configuration as written and in effect, parsed once
+// per revision (a revision never changes; parsing a large one takes a large
+// part of a second). Both are shared: callers only read them.
+func (r *Service) RevisionSpec(rev revision.Revision) (*config.Spec, *config.Config, error) {
+	r.specsOnce.Do(func() { r.specs = newLRU[keptSpec](configsKept) })
+	k := r.specs.get(strconv.FormatInt(rev.ID, 10), func() (keptSpec, int) {
+		spec, cfg, err := bootstrap.LoadRevisionSpec(rev)
+		return keptSpec{spec: spec, cfg: cfg, err: err}, 1
+	})
+	return k.spec, k.cfg, k.err
+}

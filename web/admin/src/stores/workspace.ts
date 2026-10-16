@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { computed, isReactive, markRaw, toRaw, type ComputedRef } from 'vue'
 // The server's merge rules, shared on purpose: the Go fixture is the one
 // source, locked by TestMergeSchemaFixture (regenerate it with
 // `go test ./x/admin/configapp -run TestMergeSchemaFixture -update`).
@@ -194,12 +195,27 @@ export function canonical(value: unknown): string {
   return JSON.stringify(normalize(value) ?? null)
 }
 
-/** The canonical JSON of sections, item by item. */
+// The canonical JSON of each item of the store, kept until the item changes:
+// change detection compares every item after each edit, and an edit changes
+// one. A computed tracks what it read, so an item edited in place is
+// computed again, and only it.
+const kept = new WeakMap<object, ComputedRef<string>>()
+
+/** canonical(value), kept for an item of the store (a reactive one). */
+function itemCanonical(value: unknown): string {
+  if (typeof value !== 'object' || value === null || !isReactive(value)) return canonical(value)
+  let c = kept.get(toRaw(value))
+  if (!c) {
+    c = computed(() => canonical(value))
+    kept.set(toRaw(value), c)
+  }
+  return c.value
+}
+
+/** A key of the content of sections: equal when their items are. */
 function canonicalSections(s: Sections): string {
-  return JSON.stringify({
-    entities: s.entities.map((e) => normalize(e)), roles: s.roles.map((r) => normalize(r)),
-    users: s.users.map((u) => normalize(u)), settings: normalize(s.settings),
-  })
+  const list = (items: unknown[]) => items.map(itemCanonical).join(',')
+  return `[${list(s.entities)}]\u0000[${list(s.roles)}]\u0000[${list(s.users)}]\u0000${itemCanonical(s.settings)}`
 }
 
 /** How a change names an item: an entity by its ID, others by name. */
@@ -219,17 +235,62 @@ function itemsOf(s: Sections): Map<string, { kind: Change['kind']; key: string; 
   return out
 }
 
+/** An item as the server answers it (see Workspace.items). */
+interface ServerItem {
+  kind: string
+  key: string
+  value?: unknown
+}
+
+const settingsRef = itemRef('settings', 'settings')
+
+/** The items the server answered, by itemRef; settings unset when it has none. */
+function itemsOfList(list: ServerItem[]): Map<string, { kind: Change['kind']; key: string; value: unknown }> {
+  const out = new Map<string, { kind: Change['kind']; key: string; value: unknown }>()
+  for (const it of list) out.set(itemRef(it.kind, it.key), { kind: it.kind as Change['kind'], key: it.key, value: it.value })
+  if (!out.has(settingsRef)) out.set(settingsRef, { kind: 'settings', key: 'settings', value: {} })
+  return out
+}
+
+/** Items by name, the first of a name (a rename may name two alike while edited). */
+function byName<T extends { name: string }>(items: T[]): Map<string, T> {
+  const out = new Map<string, T>()
+  for (const it of items) if (!out.has(it.name)) out.set(it.name, it)
+  return out
+}
+
 /** The sections of a document. */
 function pickSections(d: Sections): Sections {
   return { entities: d.entities ?? [], roles: d.roles ?? [], users: d.users ?? [], settings: d.settings ?? {} }
 }
 
 function byKey<T extends { name: string }>(kind: Change['kind'], items: T[]): Map<string, string> {
-  return new Map(items.map((i) => [keyOf(kind, i), canonical(i)]))
+  return new Map(items.map((i) => [keyOf(kind, i), itemCanonical(i)]))
 }
 
-function diffNamed<T extends { name: string }>(kind: Change['kind'], base: T[], now: T[]): Change[] {
-  const before = byKey(kind, base)
+/** The baseline as compared: its sections, and each item's canonical JSON by kind and key. */
+interface Baseline {
+  json: string
+  sections: Sections
+  items: Record<'entity' | 'role' | 'user', Map<string, string>>
+}
+
+// The baseline last compared against: parsed once, not on every edit.
+let lastBaseline: Baseline | null = null
+
+function baselineOf(json: string): Baseline {
+  if (lastBaseline?.json !== json) {
+    const sections = JSON.parse(json) as Sections
+    lastBaseline = { json, sections, items: {
+      entity: byKey('entity', sections.entities), role: byKey('role', sections.roles), user: byKey('user', sections.users),
+    } }
+  }
+  return lastBaseline
+}
+
+function diffNamed<T extends { name: string }>(kind: Change['kind'], base: T[] | Map<string, string>, now: T[]):
+  Change[] {
+  const before = base instanceof Map ? base : byKey(kind, base)
   const after = byKey(kind, now)
   const out: Change[] = []
   for (const [name, json] of after) {
@@ -244,13 +305,15 @@ function diffNamed<T extends { name: string }>(kind: Change['kind'], base: T[], 
 export const itemsChanged = (before: Sections, after: Sections) => changesBetween(before, after).length
 
 /** Item changes from base to now. */
-function changesBetween(base: Sections, now: Sections): Change[] {
+function changesBetween(base: Sections | Baseline, now: Sections): Change[] {
+  const items = 'json' in base ? base.items : null
+  const sections = 'json' in base ? base.sections : base
   const out = [
-    ...diffNamed('entity', base.entities, now.entities),
-    ...diffNamed('role', base.roles, now.roles),
-    ...diffNamed('user', base.users, now.users),
+    ...diffNamed('entity', items?.entity ?? sections.entities, now.entities),
+    ...diffNamed('role', items?.role ?? sections.roles, now.roles),
+    ...diffNamed('user', items?.user ?? sections.users, now.users),
   ]
-  if (JSON.stringify(base.settings) !== JSON.stringify(now.settings)) {
+  if (JSON.stringify(sections.settings) !== JSON.stringify(now.settings)) {
     out.push({ kind: 'settings', name: 'settings', type: 'modified' })
   }
   return out
@@ -324,7 +387,7 @@ export const useWorkspace = defineStore('workspace', {
   getters: {
     changes(state): Change[] {
       if (!state.baseline) return []
-      return changesBetween(JSON.parse(state.baseline) as Sections, sections(state))
+      return changesBetween(baselineOf(state.baseline), sections(state))
     },
     dirty(): boolean {
       return this.changes.length > 0
@@ -353,15 +416,33 @@ export const useWorkspace = defineStore('workspace', {
     entity(): (id: string) => EntityInput | undefined {
       return (id) => this.entityIndex.get(id)
     },
-    role: (state) => (name: string) => state.roles.find((r) => r.name === name),
-    user: (state) => (name: string) => state.users.find((u) => u.name === name),
+    roleIndex: (state) => byName(state.roles),
+    userIndex: (state) => byName(state.users),
+    role(): (name: string) => RoleInput | undefined {
+      return (name) => this.roleIndex.get(name)
+    },
+    user(): (name: string) => UserInput | undefined {
+      return (name) => this.userIndex.get(name)
+    },
+    /** The roles and users holding a grant on each entity, by its ID, in their order. */
+    grantHolders(state): Map<string, { roles: string[]; users: string[] }> {
+      const out = new Map<string, { roles: string[]; users: string[] }>()
+      const add = (list: { name: string; grants?: GrantInput[] | null }[], side: 'roles' | 'users') => {
+        for (const holder of list) {
+          for (const id of new Set((holder.grants ?? []).map((g) => this.entityIndex.idOf(g.entity)))) {
+            if (id === undefined) continue
+            if (!out.has(id)) out.set(id, { roles: [], users: [] })
+            out.get(id)![side].push(holder.name)
+          }
+        }
+      }
+      add(state.roles, 'roles')
+      add(state.users, 'users')
+      return out
+    },
     /** Roles and users holding a grant on the entity with an ID. */
-    accessTo(state): (entity: string) => { roles: string[]; users: string[] } {
-      const on = (entity: string) => (g: GrantInput) => this.entityIndex.idOf(g.entity) === entity
-      return (entity) => ({
-        roles: state.roles.filter((r) => (r.grants ?? []).some(on(entity))).map((r) => r.name),
-        users: state.users.filter((u) => (u.grants ?? []).some(on(entity))).map((u) => u.name),
-      })
+    accessTo(): (entity: string) => { roles: string[]; users: string[] } {
+      return (entity) => this.grantHolders.get(entity) ?? { roles: [], users: [] }
     },
     hasToken: () => (user: UserInput) => Boolean(user.tokenHash),
   },
@@ -392,20 +473,58 @@ export const useWorkspace = defineStore('workspace', {
      * revision, when it builds on another than this one): an item edited
      * here and not written yet stays as edited (it is written with the value
      * it was edited from, and the server merges); every other item becomes
-     * the server's.
+     * the server's. An answer of the items changed since the copy (not
+     * complete) touches only those.
      */
     take(w: WorkspacePartsFragment, baseData?: WorkspaceResult) {
+      if (w.items.complete) this.takeAll(w, baseData)
+      else if (this.copy && !baseData) this.takeChanged(w.items.items)
+      else throw new Error('the items changed since a version were answered for a workspace not held at it')
+      Object.assign(this, { version: w.version, conflicts: w.conflicts, notes: w.notes, taken: w.taken,
+        checkpoint: w.checkpoint ?? null })
+    },
+
+    /** take for the items changed since the copy, each replaced where it is. */
+    takeChanged(changed: ServerItem[]) {
+      const copy = this.copy!
+      const lists = { entity: this.entities, role: this.roles, user: this.users }
+      const indexes: Partial<Record<keyof typeof lists, Map<string, number>>> = {}
+      const at = (kind: keyof typeof lists) =>
+        (indexes[kind] ??= new Map(lists[kind].map((x, i) => [keyOf(kind, x), i])))
+      const gone = { entity: new Set<number>(), role: new Set<number>(), user: new Set<number>() }
+      for (const it of changed) {
+        const ref = itemRef(it.kind, it.key)
+        const kind = it.kind as Change['kind']
+        const i = kind === 'settings' ? undefined : at(kind).get(it.key)
+        const mine = kind === 'settings' ? this.settings : i === undefined ? undefined : lists[kind][i]
+        // Edited here and not written yet: stays as edited (see take).
+        if (itemCanonical(mine) !== (copy.values[ref] ?? canonical(undefined))) continue
+        const value = it.value ?? undefined
+        setCopy(copy, ref, value)
+        const own = value === undefined ? undefined : JSON.parse(JSON.stringify(value))
+        if (kind === 'settings') this.settings = own ?? {}
+        else if (i !== undefined && own) lists[kind].splice(i, 1, own)
+        else if (i !== undefined) gone[kind].add(i)
+        else if (own) lists[kind].push(own)
+      }
+      if (gone.entity.size) this.entities = this.entities.filter((_, i) => !gone.entity.has(i))
+      if (gone.role.size) this.roles = this.roles.filter((_, i) => !gone.role.has(i))
+      if (gone.user.size) this.users = this.users.filter((_, i) => !gone.user.has(i))
+    },
+
+    /** take for every item of the workspace. */
+    takeAll(w: WorkspacePartsFragment, baseData?: WorkspaceResult) {
       const was = this.copy
       const pending = new Map<string, { kind: Change['kind']; key: string; value: unknown } | undefined>()
       if (was) {
         const mine = itemsOf(sections(this.$state))
         for (const ref of new Set([...mine.keys(), ...Object.keys(was.values)])) {
           const it = mine.get(ref)
-          if (canonical(it?.value) !== (was.values[ref] ?? canonical(undefined))) pending.set(ref, it)
+          if (itemCanonical(it?.value) !== (was.values[ref] ?? canonical(undefined))) pending.set(ref, it)
         }
       }
       if (baseData) this.apply(baseData, w.base)
-      const server = itemsOf(w.sections as Sections)
+      const server = itemsOfList(w.items.items)
       const copy: Copy = { values: {}, raw: {} }
       for (const [ref, it] of server) setCopy(copy, ref, it.value)
       const next: Sections = { entities: [], roles: [], users: [], settings: {} }
@@ -425,8 +544,9 @@ export const useWorkspace = defineStore('workspace', {
         setCopy(copy, ref, was?.values[ref] === undefined ? undefined : was.raw[ref])
       }
       this.$patch((st) => Object.assign(st, JSON.parse(JSON.stringify(next)) as Sections))
-      Object.assign(this, { copy, version: w.version, conflicts: w.conflicts, notes: w.notes, taken: w.taken,
-        checkpoint: w.checkpoint ?? null })
+      // Not reactive: nothing renders it, and as many objects again as the
+      // items would be watched for nothing.
+      this.copy = markRaw(copy)
     },
 
     /**
@@ -440,7 +560,7 @@ export const useWorkspace = defineStore('workspace', {
       const out = []
       for (const ref of new Set([...mine.keys(), ...Object.keys(copy.values)])) {
         const m = mine.get(ref)
-        if (canonical(m?.value) === (copy.values[ref] ?? canonical(undefined))) continue
+        if (itemCanonical(m?.value) === (copy.values[ref] ?? canonical(undefined))) continue
         const [kind, key] = ref.split('\u0000') as [string, string]
         // A copy: the item may be edited again while it is being written.
         const value = m ? JSON.parse(JSON.stringify(m.value)) : null

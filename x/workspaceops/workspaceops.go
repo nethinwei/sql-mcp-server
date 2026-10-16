@@ -55,6 +55,8 @@ type Service struct {
 	History   History
 	// Reconcile, when set, runs on every write, in the same version.
 	Reconcile Reconciler
+	// Cache, when set, keeps the items of revisions read.
+	Cache *ItemsCache
 }
 
 // Errors returned by the operations.
@@ -124,11 +126,24 @@ func (s Service) load(ctx context.Context, username string) (workspace.Workspace
 
 // items is revision id's configuration as items.
 func (s Service) items(ctx context.Context, id int64) (workspace.Snapshot, error) {
+	if s.Cache != nil {
+		if items, ok := s.Cache.get(id); ok {
+			return items, nil
+		}
+	}
 	rev, err := s.Revisions.Get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	return s.Codec.Items(rev)
+	return s.itemsOf(rev)
+}
+
+// itemsOf is rev's configuration as items, kept in the cache.
+func (s Service) itemsOf(rev revision.Revision) (workspace.Snapshot, error) {
+	if s.Cache == nil {
+		return s.Codec.Items(rev)
+	}
+	return s.Cache.Items(rev.ID, func() (workspace.Snapshot, error) { return s.Codec.Items(rev) })
 }
 
 // change is what an operation does to a workspace it read: it edits w (and

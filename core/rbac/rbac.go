@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
@@ -139,6 +140,35 @@ type GrantAuthorizer struct {
 	// entity compiled into one grant per role, by entity name and role:
 	// compiled once, as the registry and the policy never change.
 	entityGrants map[string]map[string]Grant
+	// usable memoizes Usable by role and entity: it depends on neither the
+	// request's fields nor its subject, and entity discovery asks it of
+	// every entity on every listing.
+	usable sync.Map
+}
+
+type usableKey struct{ role, entity string }
+
+// Usable reports whether role can use the entity named for some action, as
+// entity discovery has it (see Decision.Reachable): every action of its
+// kind is authorized without fields until one is reachable. The subject only
+// fills in row filters, so it does not change the answer.
+func (a *GrantAuthorizer) Usable(role, name string) bool {
+	key := usableKey{NormalizeRole(role), name}
+	if ok, seen := a.usable.Load(key); seen {
+		return ok.(bool)
+	}
+	ok := false
+	if e, found := a.registry.Resolve(name); found {
+		for _, action := range entity.ActionsFor(e.Entity.Kind) {
+			dec, err := a.Authorize(context.Background(), Request{Role: role, Entity: name, Action: action})
+			if err == nil && dec.Reachable() {
+				ok = true
+				break
+			}
+		}
+	}
+	a.usable.Store(key, ok)
+	return ok
 }
 
 // NewGrantAuthorizer returns an Authorizer for the registry and policy.

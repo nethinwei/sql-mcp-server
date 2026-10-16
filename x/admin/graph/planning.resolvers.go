@@ -230,3 +230,18 @@ func (r *queryResolver) McpTokens(ctx context.Context) ([]configapp.McpToken, er
 func (r *queryResolver) ScanBatches(ctx context.Context, datasource string) ([]configapp.ScanBatch, error) {
 	return r.App.ScanBatches(ctx, datasource)
 }
+
+// Sections is the resolver for the sections field.
+func (r *workspaceResolver) Sections(ctx context.Context, obj *configapp.Workspace) (any, error) {
+	return obj.Sections()
+}
+
+// Items is the resolver for the items field.
+func (r *workspaceResolver) Items(ctx context.Context, obj *configapp.Workspace, since *int) (*configapp.WorkspaceItems, error) {
+	return r.App.WorkspaceItems(ctx, obj, since)
+}
+
+// Workspace returns WorkspaceResolver implementation.
+func (r *Resolver) Workspace() WorkspaceResolver { return &workspaceResolver{r} }
+
+type workspaceResolver struct{ *Resolver }

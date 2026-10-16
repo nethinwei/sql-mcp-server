@@ -89,7 +89,7 @@ func schemaSummary(
 ) (map[string]any, error) {
 	counts := map[string]int{}
 	total := 0
-	for _, e := range app.Registry.Entities() {
+	for e := range app.Registry.All() {
 		_, _, ok, err := entityActions(ctx, app, e, role, subject)
 		if err != nil {
 			return nil, err

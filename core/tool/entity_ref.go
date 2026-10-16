@@ -100,6 +100,9 @@ func UsableBy(
 	if authz == nil {
 		return func(entity.Entity) bool { return true }
 	}
+	if u, ok := authz.(interface{ Usable(role, name string) bool }); ok {
+		return func(e entity.Entity) bool { return u.Usable(role, e.Name) }
+	}
 	known := map[string]bool{}
 	return func(e entity.Entity) bool {
 		if ok, seen := known[e.Name]; seen {

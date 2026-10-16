@@ -18,7 +18,6 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
-	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/revisionops"
 )
 
@@ -352,9 +351,12 @@ func (r *revisionResolver) Config(ctx context.Context, obj *Revision) (*Configur
 	if err != nil {
 		return nil, err
 	}
-	spec, cfg, err := bootstrap.LoadRevisionSpec(rev)
+	spec, cfg, err := r.App.RevisionSpec(rev)
 	if err != nil {
 		return nil, err
+	}
+	if onlyDatasources(ctx) {
+		return &Configuration{Datasources: toDatasources(cfg)}, nil
 	}
 	return toConfiguration(spec, cfg)
 }
@@ -365,10 +367,7 @@ func (r *revisionResolver) Sections(ctx context.Context, obj *Revision) (any, er
 	if err != nil {
 		return nil, err
 	}
-	if _, err := bootstrap.LoadRevision(rev); err != nil {
-		return nil, err
-	}
-	return configapp.SectionsOfPayload(rev.Payload)
+	return r.App.RevisionSections(rev)
 }
 
 // Yaml is the resolver for the yaml field.
