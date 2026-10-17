@@ -1,7 +1,7 @@
 # 发布说明索引
 
-当前 GA 为 `v0.1.18`（[发布说明](v0.1.18.md)、
-[GitHub Release](https://github.com/nethinwei/sql-mcp-server/releases/tag/v0.1.18)）。
+当前 GA 为 `v0.1.19`（[发布说明](v0.1.19.md)、
+[GitHub Release](https://github.com/nethinwei/sql-mcp-server/releases/tag/v0.1.19)）。
 
 本目录中的发布说明描述各版本发布时点的能力、迁移和证据状态。当前运行时行为以
 [配置参考](../configuration.md)、[安全模型](../security.md)和
@@ -10,6 +10,8 @@
 
 ## 版本
 
+- [`v0.1.19`](v0.1.19.md)（2026-10-17）：v0.1.18 的修复版本——成本闸门拒绝的语句不再先报
+  预算超限，`validate` 按配置的 secret 根目录读取密钥；quickstart 冒烟移到发布之前；无 breaking；
 - [`v0.1.18`](v0.1.18.md)（2026-10-17）：查询表达力与成本治理——扫描量硬上限（默认 10 万行）
   与按量级计分，`read_records` 排序与 `nextCursor`、OR/NOT 过滤组合、`having` 与去重、
   沿已声明关系过滤/排序/分组与 `exists`，`describe_entities` 给出索引，`execute_sql` 可执行

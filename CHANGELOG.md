@@ -9,6 +9,11 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+## 0.1.19 - 2026-10-17
+
+v0.1.18 的修复版本，无 breaking 变更；说明见
+[`docs/releases/v0.1.19.md`](docs/releases/v0.1.19.md)。
+
 ### Changed
 
 - `validate` 按配置的 `server.secrets.allowedRoots` 读取 `${file:}` 密钥，与 `serve` 一致；此前它只认
@@ -17,6 +22,8 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   返回（`COST_EXCEEDED`，带缩小范围与索引提示）；此前先报 `BUDGET_EXCEEDED`，提示等待预算重置，对
   全表扫描这类语句并无帮助。v0.1.18 起全表扫描按表的行数计入预算，这一顺序问题因此更常出现
   （quickstart 示例的冒烟检查即因此失败）。闸门放行的语句仍受预算约束。
+- 发布流程：quickstart 冒烟改在发布任何产物之前，用本次构建的镜像运行，PR CI 也运行它
+  （`make quickstart-check`）；`make release-preflight` 覆盖 PR CI 与 tag 流水线的全部检查。
 
 ## 0.1.18 - 2026-10-17
 
