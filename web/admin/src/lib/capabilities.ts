@@ -24,3 +24,12 @@ export function capabilityOf(index: CapabilityIndex, entity: string, action: Act
 }
 
 export const denied = (c: Capability | undefined) => c?.privilege === 'DENIED'
+
+/** Whether action applies to an entity: EXECUTE to procedures, the others to the rest. */
+export function applicable(kind: string | null | undefined, action: Action) {
+  return (action === 'EXECUTE') === (kind === 'procedure')
+}
+
+/** Whether action may be newly granted on entity id: it applies and its connection is not denied it. */
+export const grantable = (index: CapabilityIndex, id: string, kind: string | null | undefined, action: Action) =>
+  applicable(kind, action) && !denied(capabilityOf(index, id, action))

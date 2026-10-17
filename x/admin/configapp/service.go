@@ -82,7 +82,8 @@ type Service struct {
 	PlannedLimits func(*config.Config) []bootstrap.LimitIssue
 	// previews keeps recent plan previews.
 	previews previews
-	// configs keeps recently selected configurations parsed.
+	// configs keeps recently built workspace configurations (revisions'
+	// are specs').
 	configs configs
 	// items keeps the items of recently read revisions.
 	items workspaceops.ItemsCache
@@ -200,14 +201,10 @@ func (r *Service) SelectConfig(ctx context.Context, against Against) (*config.Co
 
 // RestartChanges compares a configuration with the published one.
 func (r *Service) RestartChanges(ctx context.Context, next *config.Config) ([]string, error) {
-	current, err := r.Store.Published(ctx)
+	cur, err := r.revisionConfig(ctx, nil)
 	if errors.Is(err, revision.ErrNoPublished) {
 		return []string{}, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	cur, err := bootstrap.LoadRevision(current)
 	if err != nil {
 		return nil, err
 	}

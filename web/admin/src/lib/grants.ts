@@ -1,6 +1,18 @@
 import type { Action } from '@/gql/graphql'
-import type { GrantInput } from '@/gql/schema'
 import type { EntityIndex } from './entityRefs'
+import type { EntityInput, GrantInput } from '@/gql/schema'
+
+/** A row of the grant matrix: one grant of an entity, or none. */
+export interface GrantRow {
+  entity: EntityInput
+  id: string // the entity's ID
+  grant: GrantInput | null
+  index: number // position in the grants, -1 when ungranted
+  sub: number // 0 for the first grant of an entity
+  // The namespace (datasource · schema) of the entity; empty when every
+  // entity shares one.
+  namespace: string
+}
 
 /**
  * Grants or revokes one action on every named entity. Granting extends an

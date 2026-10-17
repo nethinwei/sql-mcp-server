@@ -67,6 +67,13 @@ describe.skipIf(!process.env.PERF)('workspace of 3000 entities', () => {
     void ws.contextKey
   })
 
+  time('a grant toggled on a role, then what the console reads after it', () => {
+    const r = ws.roles[i++ % 50]
+    r.grants = [...(r.grants ?? []), { entity: `s${i % 10}.t${i % 3000}`, actions: ['READ'] }] as typeof r.grants
+    void ws.changes.length
+    void ws.contextKey
+  })
+
   time('who can access each entity (overview, entity list)', () => {
     let n = 0
     for (const e of ws.entities) n += ws.accessTo(entityId(e)).roles.length

@@ -236,13 +236,19 @@ func readableFields(ctx context.Context, tc Context, e entity.Entity) []string {
 		if err != nil || !dec.Reachable() {
 			continue
 		}
-		for _, scope := range append(dec.Scopes(), dec.Fields) {
-			for _, f := range scope {
-				if a, ok := e.AttributeByName(f); ok {
-					fields[a.Name] = true
-				}
+		addReadable(e, dec, fields)
+	}
+	return e.OrderedNames(fields)
+}
+
+// addReadable adds the fields a read or aggregate decision projects to
+// fields: what every grant reads, or the field sets a selection may use.
+func addReadable(e entity.Entity, dec rbac.Decision, fields map[string]bool) {
+	for _, scope := range append(dec.Scopes(), dec.Fields) {
+		for _, f := range scope {
+			if a, ok := e.AttributeByName(f); ok {
+				fields[a.Name] = true
 			}
 		}
 	}
-	return e.OrderedNames(fields)
 }

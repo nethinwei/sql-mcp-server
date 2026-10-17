@@ -214,9 +214,12 @@ function itemCanonical(value: unknown): string {
 
 /** A key of the content of sections: equal when their items are. */
 function canonicalSections(s: Sections): string {
-  const list = (items: unknown[]) => items.map(itemCanonical).join(',')
-  return `[${list(s.entities)}]\u0000[${list(s.roles)}]\u0000[${list(s.users)}]\u0000${itemCanonical(s.settings)}`
+  return joinKeys(listKey(s.entities), listKey(s.roles), listKey(s.users), itemCanonical(s.settings))
 }
+
+const listKey = (items: unknown[]) => items.map(itemCanonical).join(',')
+const joinKeys = (entities: string, roles: string, users: string, settings: string) =>
+  `[${entities}]\u0000[${roles}]\u0000[${users}]\u0000${settings}`
 
 /** How a change names an item: an entity by its ID, others by name. */
 function keyOf(kind: Change['kind'], item: { name: string }): string {
@@ -305,18 +308,17 @@ function diffNamed<T extends { name: string }>(kind: Change['kind'], base: T[] |
 export const itemsChanged = (before: Sections, after: Sections) => changesBetween(before, after).length
 
 /** Item changes from base to now. */
-function changesBetween(base: Sections | Baseline, now: Sections): Change[] {
-  const items = 'json' in base ? base.items : null
-  const sections = 'json' in base ? base.sections : base
-  const out = [
-    ...diffNamed('entity', items?.entity ?? sections.entities, now.entities),
-    ...diffNamed('role', items?.role ?? sections.roles, now.roles),
-    ...diffNamed('user', items?.user ?? sections.users, now.users),
+function changesBetween(base: Sections, now: Sections): Change[] {
+  return [
+    ...diffNamed('entity', base.entities, now.entities),
+    ...diffNamed('role', base.roles, now.roles),
+    ...diffNamed('user', base.users, now.users),
+    ...settingsChange(base.settings, now.settings),
   ]
-  if (JSON.stringify(sections.settings) !== JSON.stringify(now.settings)) {
-    out.push({ kind: 'settings', name: 'settings', type: 'modified' })
-  }
-  return out
+}
+
+function settingsChange(base: Sections['settings'], now: Sections['settings']): Change[] {
+  return JSON.stringify(base) === JSON.stringify(now) ? [] : [{ kind: 'settings', name: 'settings', type: 'modified' }]
 }
 
 /**
@@ -385,17 +387,30 @@ export const useWorkspace = defineStore('workspace', {
   }),
 
   getters: {
-    changes(state): Change[] {
-      if (!state.baseline) return []
-      return changesBetween(baselineOf(state.baseline), sections(state))
+    // Changes and the content key are kept by section: an edit recomputes
+    // only its own (a grant toggled does not go over thousands of entities).
+    changes(): Change[] {
+      return [...this.entityChanges, ...this.roleChanges, ...this.userChanges, ...this.settingsChanges]
     },
+    entityChanges: (state): Change[] =>
+      state.baseline ? diffNamed('entity', baselineOf(state.baseline).items.entity, state.entities) : [],
+    roleChanges: (state): Change[] =>
+      state.baseline ? diffNamed('role', baselineOf(state.baseline).items.role, state.roles) : [],
+    userChanges: (state): Change[] =>
+      state.baseline ? diffNamed('user', baselineOf(state.baseline).items.user, state.users) : [],
+    settingsChanges: (state): Change[] =>
+      state.baseline ? settingsChange(baselineOf(state.baseline).sections.settings, state.settings) : [],
     dirty(): boolean {
       return this.changes.length > 0
     },
     /** A key of the current content, as snapshot() records it. */
-    content(state): string {
-      return canonicalSections(sections(state))
+    content(): string {
+      return joinKeys(this.entitiesKey, this.rolesKey, this.usersKey, this.settingsKey)
     },
+    entitiesKey: (state): string => listKey(state.entities),
+    rolesKey: (state): string => listKey(state.roles),
+    usersKey: (state): string => listKey(state.users),
+    settingsKey: (state): string => itemCanonical(state.settings),
     /** The draft saved from the workspace while nothing changed since, or null. */
     savedDraftId(state): string | null {
       return this.dirty ? state.checkpoint : null

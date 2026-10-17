@@ -74,6 +74,19 @@ func (r *Service) RevisionSections(id int64, load func() (revision.Revision, err
 	return rawSections(items)
 }
 
+// Warm reads the published revision's items and configuration into the
+// caches, which the first console to load after a start would otherwise
+// wait for (a large part of a second for thousands of entities).
+func (r *Service) Warm(ctx context.Context) {
+	rev, err := r.Store.Published(ctx)
+	if err != nil {
+		return
+	}
+	load := func() (revision.Revision, error) { return rev, nil }
+	_, _ = r.items.Items(rev.ID, func() (workspace.Snapshot, error) { return codec{r}.Items(rev) })
+	_, _, _ = r.RevisionSpec(rev.ID, load)
+}
+
 // Sections are the workspace's items as the console's sections.
 func (w *Workspace) Sections() (any, error) {
 	return rawSections(w.items)
