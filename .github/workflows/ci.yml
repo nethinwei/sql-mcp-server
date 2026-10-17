@@ -143,6 +143,19 @@ jobs:
       - name: stdio and streamable HTTP protocol smoke
         run: make smoke-protocol
 
+  quickstart:
+    name: quickstart (image from this commit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.9"
+          cache: true
+      - name: build the image and run the allow and deny smoke
+        run: make quickstart-check
+
   modelscope:
     name: modelscope local listing
     runs-on: ubuntu-latest

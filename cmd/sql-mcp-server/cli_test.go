@@ -147,6 +147,36 @@ func TestExportRoundTripsThroughValidate(t *testing.T) {
 	}
 }
 
+// validate reads ${file:} secrets from the roots the configuration allows,
+// as serve does, not only from the default /run/secrets.
+func TestValidateCommandUsesConfiguredSecretRoots(t *testing.T) {
+	dir := t.TempDir()
+	secrets := filepath.Join(dir, "secrets")
+	if err := os.Mkdir(secrets, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(secrets, "dsn"), []byte("postgres://localhost/test"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	write := func(root string) string {
+		path := filepath.Join(dir, "config.yaml")
+		config := "server:\n  secrets:\n    allowedRoots: [" + root + "]\n" +
+			"database:\n  driver: postgres\n  dsn: ${file:" + filepath.Join(secrets, "dsn") + "}\nentities: []\n"
+		if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	var out bytes.Buffer
+	if err := runCLI(context.Background(), []string{"validate", "--config", write(secrets)}, &out); err != nil {
+		t.Fatalf("a secret under an allowed root: %v", err)
+	}
+	outside := write(filepath.Join(dir, "other"))
+	if err := runCLI(context.Background(), []string{"validate", "--config", outside}, &out); err == nil {
+		t.Fatal("validate should reject a secret outside the allowed roots")
+	}
+}
+
 func TestValidateCommandResolvesSecrets(t *testing.T) {
 	t.Setenv("CLI_TEST_DSN", "postgres://localhost/test")
 	path := filepath.Join(t.TempDir(), "config.yaml")
