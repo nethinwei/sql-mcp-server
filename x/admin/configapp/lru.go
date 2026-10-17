@@ -33,7 +33,7 @@ func newLRU[V any](budget int) *lru[V] {
 }
 
 // get returns the value of key, building it (with its weight) when it is
-// not kept.
+// not kept; a negative weight is not kept (a build that failed).
 func (c *lru[V]) get(key string, build func() (V, int)) V {
 	c.mu.Lock()
 	for i, e := range c.entries {
@@ -62,7 +62,9 @@ func (c *lru[V]) get(key string, build func() (V, int)) V {
 		close(call.done)
 	}()
 	call.value, weight = build()
-	weight = max(weight, 1)
+	if weight >= 0 {
+		weight = max(weight, 1)
+	}
 	return call.value
 }
 

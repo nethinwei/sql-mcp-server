@@ -92,16 +92,23 @@ func compileAggregate(ctx context.Context, plan aggregatePlan, in aggregateInput
 	if plan.full != nil {
 		expr = relalg.Select{Input: expr, Predicate: plan.full}
 	}
-	groupBy := make([]string, len(in.GroupBy))
-	for i, g := range in.GroupBy {
-		groupBy[i] = plan.rel.field(g)
-	}
-	calls, columns, err := aggregateCalls(in.Aggregates, groupBy)
+	// The result's columns are named as the request names them; the IR
+	// groups by the columns they are (an alias's, a related field's).
+	calls, columns, err := aggregateCalls(in.Aggregates, in.GroupBy)
 	if err != nil {
 		return statement{}, err
 	}
+	toIR := related{rename: map[string]string{}}
+	groupBy := make([]string, len(in.GroupBy))
+	for i, g := range in.GroupBy {
+		groupBy[i] = plan.rel.field(columnOf(res.Entity, g))
+		toIR.rename[g] = groupBy[i]
+	}
+	for i := range calls {
+		calls[i].Field = columnOf(res.Entity, calls[i].Field)
+	}
 	expr, err = aggregateShape(res, in, relalg.Aggregate{Input: expr, GroupBy: groupBy, Aggregates: calls},
-		columns, plan.rel, tc.MaxFilterConditions)
+		columns, toIR, tc.MaxFilterConditions)
 	if err != nil {
 		return statement{}, err
 	}
@@ -168,7 +175,7 @@ func aggregateColumn(a aggJSON) string {
 // aggregateShape adds to agg what in asks of its groups: the having filter,
 // the order and the limit. Both name the result's columns (columns): the
 // group-by fields and the aggregates' names.
-func aggregateShape(res entity.Resolved, in aggregateInput, agg relalg.Aggregate, columns []string, rel related,
+func aggregateShape(res entity.Resolved, in aggregateInput, agg relalg.Aggregate, columns []string, toIR related,
 	maxConds int,
 ) (relalg.Expr, error) {
 	var expr relalg.Expr = agg
@@ -179,7 +186,6 @@ func aggregateShape(res entity.Resolved, in aggregateInput, agg relalg.Aggregate
 	if relalg.HasExists(having) {
 		return nil, fmt.Errorf("%w: having filters the groups; exists goes in filter", ErrInvalidInput)
 	}
-	having = rel.renamed(having)
 	for _, f := range conditionFields(having) {
 		if !slices.Contains(columns, f) {
 			return nil, fmt.Errorf("%w: having names %q, not a group-by field or an aggregate (%s)",
@@ -187,20 +193,20 @@ func aggregateShape(res entity.Resolved, in aggregateInput, agg relalg.Aggregate
 		}
 	}
 	if having != nil {
-		expr = relalg.Having{Input: agg, Predicate: having}
+		expr = relalg.Having{Input: agg, Predicate: toIR.renamed(having)}
 	}
 	if len(in.OrderBy) > maxOrderTerms {
 		return nil, fmt.Errorf("%w: orderBy names at most %d fields", ErrInvalidInput, maxOrderTerms)
 	}
 	var terms []relalg.OrderTerm
 	for _, t := range in.OrderBy {
-		t.Field = rel.field(t.Field)
 		dir := strings.ToLower(cmp.Or(t.Dir, "asc"))
 		if dir != "asc" && dir != "desc" || !slices.Contains(columns, t.Field) {
 			return nil, fmt.Errorf("%w: orderBy {%s %s}: a group-by field or an aggregate (%s), asc or desc",
 				ErrInvalidInput, t.Field, t.Dir, strings.Join(columns, ", "))
 		}
-		terms = append(terms, relalg.OrderTerm{Field: t.Field, Dir: dir, Nullable: resultNullable(res, agg, t.Field)})
+		field := toIR.field(t.Field)
+		terms = append(terms, relalg.OrderTerm{Field: field, Dir: dir, Nullable: resultNullable(res, agg, field)})
 	}
 	if len(terms) > 0 {
 		expr = relalg.Sort{Input: expr, OrderBy: terms}

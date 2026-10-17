@@ -57,10 +57,17 @@ func toWorkspace(st workspaceops.State) (*Workspace, error) {
 	return out, nil
 }
 
-// RevisionSections are rev's configuration as the console's sections (the
-// workspace's items), decoded once per revision.
-func (r *Service) RevisionSections(rev revision.Revision) (any, error) {
-	items, err := r.items.Items(rev.ID, func() (workspace.Snapshot, error) { return codec{r}.Items(rev) })
+// RevisionSections are revision id's configuration as the console's
+// sections (the workspace's items), decoded once per revision: load reads
+// the revision when they are not kept.
+func (r *Service) RevisionSections(id int64, load func() (revision.Revision, error)) (any, error) {
+	items, err := r.items.Items(id, func() (workspace.Snapshot, error) {
+		rev, err := load()
+		if err != nil {
+			return nil, err
+		}
+		return codec{r}.Items(rev)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -96,6 +103,10 @@ func (r *Service) WorkspaceItems(ctx context.Context, w *Workspace, since *int) 
 	return out, nil
 }
 
+// maxDeltaWrites bounds the writes a delta is read from; a console further
+// behind reads the workspace whole.
+const maxDeltaWrites = 200
+
 // changedSince are the items the writes after version since, up to version,
 // changed; false when one of them is not in the log or does not list them.
 func (r *Service) changedSince(ctx context.Context, username string, since, version int) (
@@ -103,6 +114,9 @@ func (r *Service) changedSince(ctx context.Context, username string, since, vers
 ) {
 	if since == version {
 		return nil, true, nil
+	}
+	if version-since > maxDeltaWrites {
+		return nil, false, nil // reading that many writes costs more than every item
 	}
 	ops, err := r.workspaces()
 	if err != nil {

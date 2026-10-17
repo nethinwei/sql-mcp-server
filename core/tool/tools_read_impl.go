@@ -174,7 +174,7 @@ func orderRead(ctx context.Context, tc Context, res entity.Resolved, in readInpu
 	req.ReadFields = append(slices.Clone(req.ReadFields), order.keyFields...)
 	if order.pageable && len(in.Fields) > 0 {
 		for _, f := range order.fields() {
-			if !slices.Contains(req.Fields, f) {
+			if !slices.ContainsFunc(req.Fields, func(x string) bool { return columnOf(res.Entity, x) == f }) {
 				req.Fields = append(slices.Clone(req.Fields), f)
 			}
 		}
@@ -274,7 +274,7 @@ func buildReadExpression(res entity.Resolved, in readInput, plan readPlan) relal
 		expr = relalg.Sort{Input: expr, OrderBy: order}
 	}
 	if len(plan.grant.Fields) > 0 {
-		expr = relalg.Project{Input: expr, Items: relalg.ProjectFields(plan.grant.Fields)}
+		expr = relalg.Project{Input: expr, Items: projectItems(res.Entity, plan.grant.Fields)}
 	}
 	if in.Distinct {
 		expr = relalg.Distinct{Input: expr}

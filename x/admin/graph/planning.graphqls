@@ -509,8 +509,10 @@ type Workspace {
   """
   Its items: those changed since version since (a console holding the
   workspace at that version takes in only them), or all of them (complete)
-  when since is null or what changed since cannot be told (it moved onto
-  another revision since, for one).
+  when since is null or what changed since cannot be told (an update, reset
+  or commit since). A client holding another base than the one answered
+  (taking a draft in may move the workspace onto the published revision)
+  reads it again whole.
   """
   items(since: Int): WorkspaceItems!
   "The conflicts to resolve before committing."

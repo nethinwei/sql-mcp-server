@@ -31,7 +31,8 @@ func governanceConfig(driver, schema string, gated bool) *config.Config {
 		Entities: []config.EntityConfig{{
 			Name: "conf", Source: TableName, Schema: schema, Kind: "table", PrimaryKey: []string{"id"},
 			Fields: []config.FieldConfig{
-				{Name: "id"}, {Name: "cat"}, {Name: "val"}, {Name: "price"}, {Name: "name", Mask: "secret"},
+				{Name: "id"}, {Name: "cat"}, {Name: "val", Alias: "amount"}, {Name: "price"},
+				{Name: "name", Mask: "secret"},
 			},
 			Relationships: []config.RelationshipConfig{
 				{Name: "category", Target: "conf_cat", Cardinality: "belongs-to", JoinOn: map[string]string{"cat": "cat"}},
@@ -83,6 +84,7 @@ func RunGovernance(t *testing.T, prov provider.Provider, driver, schema, slow st
 	t.Run("adversarial-filter", func(t *testing.T) { adversarialFilter(t, app) })
 	t.Run("ordered-pages", func(t *testing.T) { orderedPages(t, app) })
 	t.Run("related-row-policy", func(t *testing.T) { relatedRowPolicy(t, app) })
+	t.Run("field-alias", func(t *testing.T) { fieldAlias(t, app) })
 	t.Run("masked-order-refusal", func(t *testing.T) {
 		refused(t, app, "analyst", tool.ReadTool{}, map[string]any{
 			"entity": "conf", "orderBy": []map[string]any{{"field": "name"}},
@@ -242,6 +244,40 @@ func relatedRowPolicy(t *testing.T, app *bootstrap.App) {
 		if err := compareRows(want.Rows, got, false); err != nil {
 			t.Fatalf("%s: %v", label, err)
 		}
+	}
+}
+
+// fieldAlias: a field named by its alias (val as amount) is its column when
+// selected, filtered and ordered by, and comes back by the alias.
+func fieldAlias(t *testing.T, app *bootstrap.App) {
+	res, err := run(t, app, "scanner", tool.ReadTool{}, map[string]any{
+		"entity": "conf", "fields": []string{"id", "amount"},
+		"filter":  []map[string]any{{"field": "amount", "op": "gt", "value": 0}},
+		"orderBy": []map[string]any{{"field": "amount", "dir": "desc"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := interp.Eval(Fixture(), relalg.Project{Items: relalg.ProjectFields([]string{"id", "val"}),
+		Input: relalg.Sort{
+			Input: relalg.Select{
+				Input:     relalg.Scan{Relation: relalg.RelationRef{Name: TableName}},
+				Predicate: relalg.Condition{Field: "val", Op: relalg.OpGt, Value: int64(0)},
+			},
+			OrderBy: []relalg.OrderTerm{{Field: "val", Dir: "desc", Nullable: true}, {Field: "id", Dir: "asc"}},
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([][]any, len(res.Content))
+	for i, row := range res.Content {
+		if _, ok := row["val"]; ok {
+			t.Fatalf("the field came back by its column, not its alias: %v", row)
+		}
+		got[i] = []any{row["id"], row["amount"]}
+	}
+	if err := compareRows(want.Rows, got, true); err != nil {
+		t.Fatal(err)
 	}
 }
 

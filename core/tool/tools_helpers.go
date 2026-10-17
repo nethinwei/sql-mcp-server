@@ -64,6 +64,7 @@ func planEntity(
 	if action != entity.ActionRead && action != entity.ActionAggregate && relalg.HasExists(pred) {
 		return entityPlan{}, nil, fmt.Errorf("%w: exists filters reads and aggregates only", ErrInvalidInput)
 	}
+	pred = columnsPredicate(res.Entity, pred)
 	return entityPlan{res: res, tc: tc}, pred, nil
 }
 

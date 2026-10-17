@@ -82,7 +82,11 @@ func orderTerm(res entity.Resolved, in readInput, t orderJSON, rel related) (rel
 	if dir != "asc" && dir != "desc" {
 		return relalg.OrderTerm{}, false, fmt.Errorf("%w: orderBy dir %q: want asc or desc", ErrInvalidInput, t.Dir)
 	}
-	if _, _, ok := pathOf(res.Entity, t.Field); ok && !in.Distinct {
+	if _, _, ok := pathOf(res.Entity, t.Field); ok {
+		if in.Distinct {
+			return relalg.OrderTerm{}, false, fmt.Errorf("%w: a distinct read orders by fields it selects; %q is "+
+				"related", ErrInvalidInput, t.Field)
+		}
 		return relalg.OrderTerm{Field: rel.field(t.Field), Dir: dir, Nullable: true}, true, nil
 	}
 	if err := validateFields(res, t.Field); err != nil {
@@ -134,8 +138,8 @@ func readsKey(ctx context.Context, tc Context, req rbac.Request, o readOrder) bo
 // lesser) ones and NULL, and after NULL nothing.
 func orderCursor(o readOrder, cursor map[string]any) (relalg.Predicate, error) {
 	if !o.pageable {
-		return nil, fmt.Errorf("%w: this order does not page by cursor (no key the caller reads): use offset",
-			ErrInvalidInput)
+		return nil, fmt.Errorf("%w: this order does not page by cursor (it orders by a related field, or the "+
+			"caller reads no key): use offset", ErrInvalidInput)
 	}
 	wrong := fmt.Errorf("%w: the cursor names the ordered fields (%s): pass nextCursor as it is",
 		ErrInvalidInput, strings.Join(o.fields(), ", "))

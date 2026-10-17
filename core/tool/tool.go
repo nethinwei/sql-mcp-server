@@ -635,9 +635,9 @@ func checkGateDetailed(
 	plan, score := dec.Estimate()
 	maxEstimated := tc.BudgetLimits.MaxEstimatedScannedRows
 	if dec.Plan != nil && maxEstimated > 0 &&
-		dec.Plan.EstimatedRows > maxEstimated {
+		dec.Plan.ScannedRows() > maxEstimated {
 		return compiled, dec.Plan, fmt.Errorf("%w: estimated scanned rows %d exceed limit %d",
-			budget.ErrExceeded, dec.Plan.EstimatedRows, maxEstimated)
+			budget.ErrExceeded, dec.Plan.ScannedRows(), maxEstimated)
 	}
 	verdict := "allow"
 	if dec.Soft {
@@ -659,7 +659,11 @@ func maskRow(m mask.Masker, attrs []entity.Attribute, row map[string]any) {
 	rules := make(map[string]string, len(attrs))
 	for _, a := range attrs {
 		if a.Mask != "" {
+			// A field projected by its alias comes back by it (see projectItems).
 			rules[a.Name] = a.Mask
+			if a.Alias != "" {
+				rules[a.Alias] = a.Mask
+			}
 		}
 	}
 	for f, v := range row {
@@ -726,7 +730,7 @@ func validateFields(res entity.Resolved, fields ...string) error {
 func validateUnmaskedFields(res entity.Resolved, fields ...string) error {
 	for _, f := range fields {
 		for _, a := range res.Attributes {
-			if (a.Name == f || a.Alias == f) && a.Mask != "" {
+			if (a.Name == f || a.Alias != "" && a.Alias == f) && a.Mask != "" {
 				return fmt.Errorf("%w: unknown or inaccessible field %q", ErrInvalidInput, f)
 			}
 		}

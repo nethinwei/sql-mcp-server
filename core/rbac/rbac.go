@@ -515,7 +515,8 @@ func fieldAllowed(field string, allowed map[string]bool, visible []entity.Attrib
 		return true
 	}
 	for _, a := range visible {
-		if (a.Name == field || a.Alias == field) && (allowed[a.Name] || a.Alias != "" && allowed[a.Alias]) {
+		if (a.Name == field || a.Alias != "" && a.Alias == field) &&
+			(allowed[a.Name] || a.Alias != "" && allowed[a.Alias]) {
 			return true
 		}
 	}

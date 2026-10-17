@@ -44,7 +44,7 @@ func (s Service) MergeDraft(ctx context.Context, username, by string, draft int6
 		if slices.Contains(w.Taken, draft) {
 			return nil, workspace.LogEntry{Op: "merge", Note: "#" + idOf(draft)}, nil
 		}
-		onto := snaps[published.ID]
+		onto, before := snaps[published.ID], w.Items
 		if w.Base != published.ID {
 			s.moveOnto(w, base, w.Items, onto, published.ID)
 		}
@@ -59,7 +59,8 @@ func (s Service) MergeDraft(ctx context.Context, username, by string, draft int6
 		if d.Comment != "" {
 			w.Notes = append(w.Notes, workspace.Note{Source: "draft", By: idOf(draft), Text: d.Comment})
 		}
-		entry := workspace.LogEntry{Op: "merge", Items: s.Schema.Changes(local, now), Note: "#" + idOf(draft)}
+		// What moving onto the published revision changed is the merge's too.
+		entry := workspace.LogEntry{Op: "merge", Items: s.Schema.Changes(before, now), Note: "#" + idOf(draft)}
 		return onto, entry, nil
 	})
 }

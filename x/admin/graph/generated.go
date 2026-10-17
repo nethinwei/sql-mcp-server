@@ -27327,11 +27327,11 @@ func (ec *executionContext) marshalNDraftRevision2ᚕgithubᚗcomᚋnethinweiᚋ
 	return ret
 }
 
-func (ec *executionContext) marshalNEntity2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItem(ctx context.Context, sel ast.SelectionSet, v configapp.EntityItem) graphql.Marshaler {
+func (ec *executionContext) marshalNEntity2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItem(ctx context.Context, sel ast.SelectionSet, v Entity) graphql.Marshaler {
 	return ec._Entity(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNEntity2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItemᚄ(ctx context.Context, sel ast.SelectionSet, v []configapp.EntityItem) graphql.Marshaler {
+func (ec *executionContext) marshalNEntity2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItemᚄ(ctx context.Context, sel ast.SelectionSet, v []Entity) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
@@ -28060,11 +28060,11 @@ func (ec *executionContext) marshalNRevisionState2githubᚗcomᚋnethinweiᚋsql
 	return v
 }
 
-func (ec *executionContext) marshalNRole2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItem(ctx context.Context, sel ast.SelectionSet, v configapp.RoleItem) graphql.Marshaler {
+func (ec *executionContext) marshalNRole2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItem(ctx context.Context, sel ast.SelectionSet, v Role) graphql.Marshaler {
 	return ec._Role(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNRole2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItemᚄ(ctx context.Context, sel ast.SelectionSet, v []configapp.RoleItem) graphql.Marshaler {
+func (ec *executionContext) marshalNRole2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItemᚄ(ctx context.Context, sel ast.SelectionSet, v []Role) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
@@ -28511,11 +28511,11 @@ func (ec *executionContext) marshalNUnscannedSchemas2ᚕgithubᚗcomᚋnethinwei
 	return ret
 }
 
-func (ec *executionContext) marshalNUser2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItem(ctx context.Context, sel ast.SelectionSet, v configapp.UserItem) graphql.Marshaler {
+func (ec *executionContext) marshalNUser2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItem(ctx context.Context, sel ast.SelectionSet, v User) graphql.Marshaler {
 	return ec._User(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNUser2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItemᚄ(ctx context.Context, sel ast.SelectionSet, v []configapp.UserItem) graphql.Marshaler {
+func (ec *executionContext) marshalNUser2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItemᚄ(ctx context.Context, sel ast.SelectionSet, v []User) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]

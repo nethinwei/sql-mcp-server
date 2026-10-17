@@ -418,6 +418,9 @@ func (e Entity) CursorKey() []string {
 // AttributeByName returns the attribute with the given logical name and a
 // found flag. It matches Name or Alias.
 func (e Entity) AttributeByName(name string) (Attribute, bool) {
+	if name == "" { // no attribute is unnamed, and an unset alias names none
+		return Attribute{}, false
+	}
 	for _, a := range e.Attributes {
 		if a.Name == name || a.Alias == name {
 			return a, true

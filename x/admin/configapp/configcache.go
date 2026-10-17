@@ -113,14 +113,25 @@ type keptSpec struct {
 	err  error
 }
 
-// RevisionSpec is rev's configuration as written and in effect, parsed once
-// per revision (a revision never changes; parsing a large one takes a large
-// part of a second). Both are shared: callers only read them.
-func (r *Service) RevisionSpec(rev revision.Revision) (*config.Spec, *config.Config, error) {
+// RevisionSpec is revision id's configuration as written and in effect,
+// parsed once per revision (a revision never changes; parsing a large one
+// takes a large part of a second): load reads the revision when it is not
+// kept, and a revision that could not be read is not kept. Both are shared:
+// callers only read them.
+func (r *Service) RevisionSpec(id int64, load func() (revision.Revision, error)) (*config.Spec, *config.Config, error) {
 	r.specsOnce.Do(func() { r.specs = newLRU[keptSpec](configsKept) })
-	k := r.specs.get(strconv.FormatInt(rev.ID, 10), func() (keptSpec, int) {
+	var loadErr error
+	k := r.specs.get(strconv.FormatInt(id, 10), func() (keptSpec, int) {
+		rev, err := load()
+		if err != nil {
+			loadErr = err
+			return keptSpec{err: err}, -1
+		}
 		spec, cfg, err := bootstrap.LoadRevisionSpec(rev)
 		return keptSpec{spec: spec, cfg: cfg, err: err}, 1
 	})
+	if loadErr != nil {
+		return nil, nil, loadErr
+	}
 	return k.spec, k.cfg, k.err
 }

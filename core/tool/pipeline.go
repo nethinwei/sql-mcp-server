@@ -110,9 +110,10 @@ func estimateSQL(ctx context.Context, tc Context, route EscapeRoute, sql string,
 		return gated{}, &UnestimableError{Cause: err}
 	}
 	dec := cost.Estimate{Threshold: route.Threshold.Tighten(tc.Tightening), FailClosed: true}.Evaluate(plan, nil)
-	if limit := tc.BudgetLimits.MaxEstimatedScannedRows; dec.Plan != nil && limit > 0 && dec.Plan.EstimatedRows > limit {
+	if limit := tc.BudgetLimits.MaxEstimatedScannedRows; dec.Plan != nil && limit > 0 &&
+		dec.Plan.ScannedRows() > limit {
 		return gated{}, fmt.Errorf("%w: estimated scanned rows %d exceed limit %d",
-			budget.ErrExceeded, dec.Plan.EstimatedRows, limit)
+			budget.ErrExceeded, dec.Plan.ScannedRows(), limit)
 	}
 	verdict := "allow"
 	if !dec.Allow {
@@ -134,7 +135,7 @@ func (g gated) estimatedRows() int64 {
 	if g.plan == nil {
 		return 0
 	}
-	return g.plan.EstimatedRows
+	return g.plan.ScannedRows()
 }
 
 // statement is one database statement, ready to run.

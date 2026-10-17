@@ -41,3 +41,20 @@ func TestLRU(t *testing.T) {
 		t.Fatalf("an entry past the budget alone: %d, %d entries", v, len(c.entries))
 	}
 }
+
+// A build with a negative weight (one that failed) is not kept: the next
+// get builds again.
+func TestLRUKeepsNoFailedBuild(t *testing.T) {
+	c := newLRU[int](10)
+	builds := 0
+	failing := func() (int, int) { builds++; return 0, -1 }
+	c.get("k", failing)
+	c.get("k", failing)
+	if builds != 2 {
+		t.Fatalf("builds = %d, want 2", builds)
+	}
+	c.get("k", func() (int, int) { builds++; return 7, 0 })
+	if v := c.get("k", failing); v != 7 || builds != 3 {
+		t.Fatalf("value %d after %d builds: an empty build (weight 0) is kept", v, builds)
+	}
+}

@@ -200,7 +200,7 @@ func resolveExists(ctx context.Context, tc Context, res entity.Resolved, p relal
 			join := relationJoin(r)
 			locals = append(locals, join.local...)
 			return relalg.Exists{Relation: target.Entity.Ref(), On: joinPairs(join),
-				Predicate: andPreds(pp.Predicate, g.RowFilter)}, nil
+				Predicate: andPreds(columnsPredicate(target.Entity, pp.Predicate), g.RowFilter)}, nil
 		case relalg.And:
 			preds, err := walkAll(pp.Preds, walk)
 			return relalg.And{Preds: preds}, err
