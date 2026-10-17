@@ -9,6 +9,15 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+### Changed
+
+- `validate` 按配置的 `server.secrets.allowedRoots` 读取 `${file:}` 密钥，与 `serve` 一致；此前它只认
+  默认的 `/run/secrets` 与 `/var/run/secrets`，密钥放在其他已允许目录时误报“outside allowed roots”。
+- 成本闸门拒绝的语句即使同时超出调用方的扫描行数预算（`maxEstimatedScannedRows`），也按成本拒绝
+  返回（`COST_EXCEEDED`，带缩小范围与索引提示）；此前先报 `BUDGET_EXCEEDED`，提示等待预算重置，对
+  全表扫描这类语句并无帮助。v0.1.18 起全表扫描按表的行数计入预算，这一顺序问题因此更常出现
+  （quickstart 示例的冒烟检查即因此失败）。闸门放行的语句仍受预算约束。
+
 ## 0.1.18 - 2026-10-17
 
 查询表达力与成本治理版本，**有 breaking 变更**（默认扫描上限）；升级步骤见

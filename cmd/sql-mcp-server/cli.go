@@ -492,7 +492,8 @@ func runValidate(args []string, stdout io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if err := bootstrap.ValidateFile(*path, bootstrap.EnvFileResolver{}); err != nil {
+	// A nil resolver reads secrets from the roots the configuration allows.
+	if err := bootstrap.ValidateFile(*path, nil); err != nil {
 		return err
 	}
 	_, err := fmt.Fprintln(stdout, "valid")

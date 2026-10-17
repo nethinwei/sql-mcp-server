@@ -110,11 +110,6 @@ func estimateSQL(ctx context.Context, tc Context, route EscapeRoute, sql string,
 		return gated{}, &UnestimableError{Cause: err}
 	}
 	dec := cost.Estimate{Threshold: route.Threshold.Tighten(tc.Tightening), FailClosed: true}.Evaluate(plan, nil)
-	if limit := tc.BudgetLimits.MaxEstimatedScannedRows; dec.Plan != nil && limit > 0 &&
-		dec.Plan.ScannedRows() > limit {
-		return gated{}, fmt.Errorf("%w: estimated scanned rows %d exceed limit %d",
-			budget.ErrExceeded, dec.Plan.ScannedRows(), limit)
-	}
 	verdict := "allow"
 	if !dec.Allow {
 		verdict = "hard"
@@ -127,7 +122,21 @@ func estimateSQL(ctx context.Context, tc Context, route EscapeRoute, sql string,
 	if !dec.Allow {
 		return gated{}, toExceededError(dec)
 	}
+	if err := checkScannedBudget(tc, dec.Plan); err != nil {
+		return gated{}, err
+	}
 	return gated{Compiled: compiled, plan: dec.Plan}, nil
+}
+
+// checkScannedBudget holds a plan the cost gate allowed to the caller's
+// scanned-row budget. It comes after the gate's verdict: a plan the gate
+// refuses is refused as too costly, which tells how to narrow it, where
+// waiting for the budget to reset never helps.
+func checkScannedBudget(tc Context, plan *cost.Plan) error {
+	if limit := tc.BudgetLimits.MaxEstimatedScannedRows; plan != nil && limit > 0 && plan.ScannedRows() > limit {
+		return fmt.Errorf("%w: estimated scanned rows %d exceed limit %d", budget.ErrExceeded, plan.ScannedRows(), limit)
+	}
+	return nil
 }
 
 // estimatedRows is the rows the gate estimated the statement scans.

@@ -633,12 +633,6 @@ func checkGateDetailed(
 		return compiled, nil, err
 	}
 	plan, score := dec.Estimate()
-	maxEstimated := tc.BudgetLimits.MaxEstimatedScannedRows
-	if dec.Plan != nil && maxEstimated > 0 &&
-		dec.Plan.ScannedRows() > maxEstimated {
-		return compiled, dec.Plan, fmt.Errorf("%w: estimated scanned rows %d exceed limit %d",
-			budget.ErrExceeded, dec.Plan.ScannedRows(), maxEstimated)
-	}
 	verdict := "allow"
 	if dec.Soft {
 		verdict = "soft"
@@ -648,6 +642,9 @@ func checkGateDetailed(
 	tc.Hooks.FireCostGate(ctx, plan, score, verdict)
 	if !dec.Allow {
 		return compiled, dec.Plan, toExceededError(dec)
+	}
+	if err := checkScannedBudget(tc, dec.Plan); err != nil {
+		return compiled, dec.Plan, err
 	}
 	if dec.Rewritten != nil {
 		compiled = *dec.Rewritten
