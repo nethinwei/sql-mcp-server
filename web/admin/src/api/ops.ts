@@ -349,33 +349,38 @@ export const RetryScanBatchMutation = graphql(`
   mutation RetryScanBatch($id: ID!) { retryScanBatch(id: $id) { ...ScanBatchParts } }
 `)
 
+// The workspace as the console takes it in: the items changed since the
+// version it holds ($since), or all of them (null).
 export const WorkspaceStateQuery = graphql(`
-  query WorkspaceState { workspace { ...WorkspaceParts } }
+  query WorkspaceState($since: Int) { workspace { ...WorkspaceParts } }
   fragment WorkspaceParts on Workspace {
-    base version sections updatedBy taken checkpoint
+    base version updatedBy taken checkpoint
+    items(since: $since) { complete items { kind key value } }
     conflicts { id kind key path mine mineGone theirs theirsGone source fromId fromBy }
     notes { source by text }
   }
 `)
 
 export const EditWorkspaceMutation = graphql(`
-  mutation EditWorkspace($input: WorkspaceEditInput!) { editWorkspace(input: $input) { ...WorkspaceParts } }
+  mutation EditWorkspace($input: WorkspaceEditInput!, $since: Int) {
+    editWorkspace(input: $input) { ...WorkspaceParts }
+  }
 `)
 
 export const UpdateWorkspaceMutation = graphql(`
-  mutation UpdateWorkspace($to: ID!) { updateWorkspace(to: $to) { ...WorkspaceParts } }
+  mutation UpdateWorkspace($to: ID!, $since: Int) { updateWorkspace(to: $to) { ...WorkspaceParts } }
 `)
 
 export const ResetWorkspaceMutation = graphql(`
-  mutation ResetWorkspace($to: ID!) { resetWorkspace(to: $to) { ...WorkspaceParts } }
+  mutation ResetWorkspace($to: ID!, $since: Int) { resetWorkspace(to: $to) { ...WorkspaceParts } }
 `)
 
 export const MergeDraftMutation = graphql(`
-  mutation MergeDraft($id: ID!) { mergeDraft(id: $id) { ...WorkspaceParts } }
+  mutation MergeDraft($id: ID!, $since: Int) { mergeDraft(id: $id) { ...WorkspaceParts } }
 `)
 
 export const ResolveConflictMutation = graphql(`
-  mutation ResolveConflict($id: String!, $theirs: Boolean!) {
+  mutation ResolveConflict($id: String!, $theirs: Boolean!, $since: Int) {
     resolveConflict(id: $id, theirs: $theirs) { ...WorkspaceParts }
   }
 `)

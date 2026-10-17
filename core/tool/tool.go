@@ -113,6 +113,9 @@ type Result struct {
 	Counted              bool
 	ReturnedBytes        int64
 	EstimatedScannedRows int64
+	// NextCursor, when set, is the cursor of the next page of an ordered
+	// read (see read_records orderBy).
+	NextCursor map[string]any
 	// Grants lists covering grant IDs for audit; it is not sent to clients.
 	Grants []string
 }
@@ -202,6 +205,9 @@ type Limits struct {
 	// SQLEscapeEstimateRequired refuses SQL the escape hatch cannot
 	// estimate (cost.sqlEscape.estimate: required).
 	SQLEscapeEstimateRequired bool
+	// SQLEscapeMetadata runs metadata statements (SHOW, DESCRIBE) in query
+	// mode without an estimate (cost.sqlEscape.metadata: allow).
+	SQLEscapeMetadata bool
 	// Tightening is the caller's own stricter cost gate.
 	Tightening cost.Tightening
 }
@@ -452,33 +458,6 @@ func errString(err error) string {
 
 // ---- helpers ----
 
-// filterToPredicate validates a filter (at most maxConds conditions when
-// positive) and converts it to a conjunction.
-func filterToPredicate(conds []condJSON, maxConds int) (relalg.Predicate, error) {
-	if maxConds > 0 && len(conds) > maxConds {
-		return nil, fmt.Errorf("%w: too many filter conditions", ErrInvalidInput)
-	}
-	if len(conds) == 0 {
-		return nil, nil
-	}
-	var preds []relalg.Predicate
-	for _, c := range conds {
-		op := relalg.Op(c.Op)
-		if !op.Valid() {
-			return nil, fmt.Errorf("%w: operator %q", ErrInvalidInput, c.Op)
-		}
-		value, err := normalizeJSONValue(c.Value)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrInvalidInput, err)
-		}
-		preds = append(preds, relalg.Condition{Field: c.Field, Op: op, Value: value})
-	}
-	if len(preds) == 1 {
-		return preds[0], nil
-	}
-	return relalg.And{Preds: preds}, nil
-}
-
 func decodeInput(data json.RawMessage, target any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
@@ -595,7 +574,7 @@ func keysetAfter(pks []string, cursor map[string]any) (relalg.Predicate, []strin
 
 func toExceededError(d cost.Decision) error {
 	p, s := d.Estimate()
-	return &cost.ExceededError{Plan: p, Score: s, Hints: d.Hints, Soft: d.Soft}
+	return &cost.ExceededError{Plan: p, Score: s, Threshold: d.Threshold, Hints: d.Hints, Soft: d.Soft}
 }
 
 func authorize(ctx context.Context, tc Context, req rbac.Request) (rbac.Decision, error) {
@@ -656,9 +635,9 @@ func checkGateDetailed(
 	plan, score := dec.Estimate()
 	maxEstimated := tc.BudgetLimits.MaxEstimatedScannedRows
 	if dec.Plan != nil && maxEstimated > 0 &&
-		dec.Plan.EstimatedRows > maxEstimated {
+		dec.Plan.ScannedRows() > maxEstimated {
 		return compiled, dec.Plan, fmt.Errorf("%w: estimated scanned rows %d exceed limit %d",
-			budget.ErrExceeded, dec.Plan.EstimatedRows, maxEstimated)
+			budget.ErrExceeded, dec.Plan.ScannedRows(), maxEstimated)
 	}
 	verdict := "allow"
 	if dec.Soft {
@@ -680,7 +659,11 @@ func maskRow(m mask.Masker, attrs []entity.Attribute, row map[string]any) {
 	rules := make(map[string]string, len(attrs))
 	for _, a := range attrs {
 		if a.Mask != "" {
+			// A field projected by its alias comes back by it (see projectItems).
 			rules[a.Name] = a.Mask
+			if a.Alias != "" {
+				rules[a.Alias] = a.Mask
+			}
 		}
 	}
 	for f, v := range row {
@@ -717,15 +700,6 @@ func sortedKeys(m map[string]any) []string {
 	return keys
 }
 
-// filterFields extracts the field names referenced by a filter.
-func filterFields(conds []condJSON) []string {
-	out := make([]string, 0, len(conds))
-	for _, c := range conds {
-		out = append(out, c.Field)
-	}
-	return out
-}
-
 // validateFields rejects any field name that is not a visible attribute of the
 // entity (by name or alias). This closes a side channel where a filter, GROUP
 // BY, or write could reference an excluded/hidden column — e.g. filtering on a
@@ -756,7 +730,7 @@ func validateFields(res entity.Resolved, fields ...string) error {
 func validateUnmaskedFields(res entity.Resolved, fields ...string) error {
 	for _, f := range fields {
 		for _, a := range res.Attributes {
-			if (a.Name == f || a.Alias == f) && a.Mask != "" {
+			if (a.Name == f || a.Alias != "" && a.Alias == f) && a.Mask != "" {
 				return fmt.Errorf("%w: unknown or inaccessible field %q", ErrInvalidInput, f)
 			}
 		}

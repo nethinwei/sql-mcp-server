@@ -1,11 +1,77 @@
 {
   "tools": {
     "aggregate_records": {
+      "$defs": {
+        "filter": {
+          "additionalProperties": false,
+          "description": "A condition on one field (relationship.field for a related row's field), or a group of them: any (one holds), all (every one holds) or not; or exists: a relationship some target row of which matches its filter. Groups nest at most 4 deep.",
+          "properties": {
+            "all": {
+              "items": {
+                "$ref": "#/$defs/filter"
+              },
+              "maxItems": 32,
+              "minItems": 1,
+              "type": "array"
+            },
+            "any": {
+              "items": {
+                "$ref": "#/$defs/filter"
+              },
+              "maxItems": 32,
+              "minItems": 1,
+              "type": "array"
+            },
+            "exists": {
+              "description": "A relationship; with filter on the target's fields",
+              "type": "string"
+            },
+            "field": {
+              "type": "string"
+            },
+            "filter": {
+              "items": {
+                "$ref": "#/$defs/filter"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "not": {
+              "$ref": "#/$defs/filter"
+            },
+            "op": {
+              "enum": [
+                "eq",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "in",
+                "not_in",
+                "like",
+                "is_null",
+                "is_not_null"
+              ],
+              "type": "string"
+            },
+            "value": {
+              "description": "Value (array for in/not_in; omitted for is_null/is_not_null)"
+            }
+          },
+          "type": "object"
+        }
+      },
       "additionalProperties": false,
       "properties": {
         "aggregates": {
+          "description": "Result columns: count for count(*), \u003cfunc\u003e_\u003cfield\u003e otherwise",
           "items": {
             "properties": {
+              "distinct": {
+                "description": "Count distinct values (count with a field only); the column is count_distinct_\u003cfield\u003e",
+                "type": "boolean"
+              },
               "field": {
                 "description": "Omit for count(*)",
                 "type": "string"
@@ -33,43 +99,55 @@
           "type": "string"
         },
         "filter": {
+          "description": "Conditions that all hold",
           "items": {
-            "properties": {
-              "field": {
-                "type": "string"
-              },
-              "op": {
-                "enum": [
-                  "eq",
-                  "ne",
-                  "gt",
-                  "gte",
-                  "lt",
-                  "lte",
-                  "in",
-                  "not_in",
-                  "like",
-                  "is_null",
-                  "is_not_null"
-                ],
-                "type": "string"
-              },
-              "value": {
-                "description": "Value (array for in/not_in; omitted for is_null/is_not_null)"
-              }
-            },
-            "required": [
-              "field",
-              "op"
-            ],
-            "type": "object"
+            "$ref": "#/$defs/filter"
           },
           "maxItems": 32,
           "type": "array"
         },
         "groupBy": {
+          "description": "Fields to group by; relationship.field groups by a related row's field",
           "items": {
             "type": "string"
+          },
+          "maxItems": 8,
+          "type": "array"
+        },
+        "having": {
+          "description": "Conditions on the groups, naming group-by fields or aggregate columns (e.g. sum_amount)",
+          "items": {
+            "$ref": "#/$defs/filter"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "limit": {
+          "description": "At most this many groups (top N with orderBy)",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "orderBy": {
+          "description": "Sort the groups by group-by fields or aggregate columns (e.g. sum_amount desc)",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "dir": {
+                "default": "asc",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "type": "string"
+              },
+              "field": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "field"
+            ],
+            "type": "object"
           },
           "maxItems": 8,
           "type": "array"
@@ -128,42 +206,65 @@
       "type": "object"
     },
     "delete_record": {
+      "$defs": {
+        "filter": {
+          "additionalProperties": false,
+          "description": "A condition on one field, or a group of them: any (one holds), all (every one holds) or not. Groups nest at most 4 deep.",
+          "properties": {
+            "all": {
+              "items": {
+                "$ref": "#/$defs/filter"
+              },
+              "maxItems": 32,
+              "minItems": 1,
+              "type": "array"
+            },
+            "any": {
+              "items": {
+                "$ref": "#/$defs/filter"
+              },
+              "maxItems": 32,
+              "minItems": 1,
+              "type": "array"
+            },
+            "field": {
+              "type": "string"
+            },
+            "not": {
+              "$ref": "#/$defs/filter"
+            },
+            "op": {
+              "enum": [
+                "eq",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "in",
+                "not_in",
+                "like",
+                "is_null",
+                "is_not_null"
+              ],
+              "type": "string"
+            },
+            "value": {
+              "description": "Value (array for in/not_in; omitted for is_null/is_not_null)"
+            }
+          },
+          "type": "object"
+        }
+      },
       "additionalProperties": false,
       "properties": {
         "entity": {
           "type": "string"
         },
         "filter": {
+          "description": "Conditions that all hold",
           "items": {
-            "properties": {
-              "field": {
-                "type": "string"
-              },
-              "op": {
-                "enum": [
-                  "eq",
-                  "ne",
-                  "gt",
-                  "gte",
-                  "lt",
-                  "lte",
-                  "in",
-                  "not_in",
-                  "like",
-                  "is_null",
-                  "is_not_null"
-                ],
-                "type": "string"
-              },
-              "value": {
-                "description": "Value (array for in/not_in; omitted for is_null/is_not_null)"
-              }
-            },
-            "required": [
-              "field",
-              "op"
-            ],
-            "type": "object"
+            "$ref": "#/$defs/filter"
           },
           "maxItems": 32,
           "type": "array"
@@ -261,6 +362,67 @@
       "type": "object"
     },
     "read_records": {
+      "$defs": {
+        "filter": {
+          "additionalProperties": false,
+          "description": "A condition on one field (relationship.field for a related row's field), or a group of them: any (one holds), all (every one holds) or not; or exists: a relationship some target row of which matches its filter. Groups nest at most 4 deep.",
+          "properties": {
+            "all": {
+              "items": {
+                "$ref": "#/$defs/filter"
+              },
+              "maxItems": 32,
+              "minItems": 1,
+              "type": "array"
+            },
+            "any": {
+              "items": {
+                "$ref": "#/$defs/filter"
+              },
+              "maxItems": 32,
+              "minItems": 1,
+              "type": "array"
+            },
+            "exists": {
+              "description": "A relationship; with filter on the target's fields",
+              "type": "string"
+            },
+            "field": {
+              "type": "string"
+            },
+            "filter": {
+              "items": {
+                "$ref": "#/$defs/filter"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "not": {
+              "$ref": "#/$defs/filter"
+            },
+            "op": {
+              "enum": [
+                "eq",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "in",
+                "not_in",
+                "like",
+                "is_null",
+                "is_not_null"
+              ],
+              "type": "string"
+            },
+            "value": {
+              "description": "Value (array for in/not_in; omitted for is_null/is_not_null)"
+            }
+          },
+          "type": "object"
+        }
+      },
       "additionalProperties": false,
       "dependentRequired": {
         "offset": [
@@ -269,8 +431,12 @@
       },
       "properties": {
         "cursor": {
-          "description": "Keyset pagination: last row's primary-key column values to resume after",
+          "description": "Keyset pagination: nextCursor of the previous page (with orderBy), or the last row's primary-key values",
           "type": "object"
+        },
+        "distinct": {
+          "description": "Drop duplicate rows of the selected fields (needs fields; no expand or cursor)",
+          "type": "boolean"
         },
         "entity": {
           "type": "string"
@@ -291,36 +457,9 @@
           "type": "array"
         },
         "filter": {
+          "description": "Conditions that all hold",
           "items": {
-            "properties": {
-              "field": {
-                "type": "string"
-              },
-              "op": {
-                "enum": [
-                  "eq",
-                  "ne",
-                  "gt",
-                  "gte",
-                  "lt",
-                  "lte",
-                  "in",
-                  "not_in",
-                  "like",
-                  "is_null",
-                  "is_not_null"
-                ],
-                "type": "string"
-              },
-              "value": {
-                "description": "Value (array for in/not_in; omitted for is_null/is_not_null)"
-              }
-            },
-            "required": [
-              "field",
-              "op"
-            ],
-            "type": "object"
+            "$ref": "#/$defs/filter"
           },
           "maxItems": 32,
           "type": "array"
@@ -332,6 +471,31 @@
         "offset": {
           "minimum": 0,
           "type": "integer"
+        },
+        "orderBy": {
+          "description": "Sort order; ties are broken by the entity's key. With a limit, the result carries nextCursor while more rows follow: pass it back as cursor, with the same orderBy, for the next page. Masked fields cannot be ordered by. A related row's field (relationship.field) can be ordered by, without nextCursor.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "dir": {
+                "default": "asc",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "type": "string"
+              },
+              "field": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "field"
+            ],
+            "type": "object"
+          },
+          "maxItems": 8,
+          "type": "array"
         },
         "transaction": {
           "description": "Token returned by begin_transaction",
@@ -356,42 +520,65 @@
       "type": "object"
     },
     "update_record": {
+      "$defs": {
+        "filter": {
+          "additionalProperties": false,
+          "description": "A condition on one field, or a group of them: any (one holds), all (every one holds) or not. Groups nest at most 4 deep.",
+          "properties": {
+            "all": {
+              "items": {
+                "$ref": "#/$defs/filter"
+              },
+              "maxItems": 32,
+              "minItems": 1,
+              "type": "array"
+            },
+            "any": {
+              "items": {
+                "$ref": "#/$defs/filter"
+              },
+              "maxItems": 32,
+              "minItems": 1,
+              "type": "array"
+            },
+            "field": {
+              "type": "string"
+            },
+            "not": {
+              "$ref": "#/$defs/filter"
+            },
+            "op": {
+              "enum": [
+                "eq",
+                "ne",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "in",
+                "not_in",
+                "like",
+                "is_null",
+                "is_not_null"
+              ],
+              "type": "string"
+            },
+            "value": {
+              "description": "Value (array for in/not_in; omitted for is_null/is_not_null)"
+            }
+          },
+          "type": "object"
+        }
+      },
       "additionalProperties": false,
       "properties": {
         "entity": {
           "type": "string"
         },
         "filter": {
+          "description": "Conditions that all hold",
           "items": {
-            "properties": {
-              "field": {
-                "type": "string"
-              },
-              "op": {
-                "enum": [
-                  "eq",
-                  "ne",
-                  "gt",
-                  "gte",
-                  "lt",
-                  "lte",
-                  "in",
-                  "not_in",
-                  "like",
-                  "is_null",
-                  "is_not_null"
-                ],
-                "type": "string"
-              },
-              "value": {
-                "description": "Value (array for in/not_in; omitted for is_null/is_not_null)"
-              }
-            },
-            "required": [
-              "field",
-              "op"
-            ],
-            "type": "object"
+            "$ref": "#/$defs/filter"
           },
           "maxItems": 32,
           "type": "array"

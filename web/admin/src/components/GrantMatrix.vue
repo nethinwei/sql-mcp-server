@@ -2,16 +2,16 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
-  NButton, NCheckbox, NCheckboxGroup, NDivider, NGrid, NGi, NIcon, NInput, NModal, NPagination, NRadio,
-  NRadioGroup, NSpace, NSwitch, NTag, NText, NTooltip,
+  NButton, NCheckbox, NCheckboxGroup, NDivider, NGrid, NGi, NInput, NModal, NPagination, NRadio,
+  NRadioGroup, NSpace, NSwitch, NText, NTooltip,
 } from 'naive-ui'
-import { AddOutline, TrashOutline } from '@vicons/ionicons5'
 import FilterBuilder from './FilterBuilder.vue'
-import { describeFilter, type Filter } from '@/lib/filter'
-import { setActionOn } from '@/lib/grants'
-import { byNamespace, sourceIfRenamed } from '@/lib/names'
+import GrantMatrixRow from './GrantMatrixRow.vue'
+import { type Filter } from '@/lib/filter'
+import { setActionOn, type GrantRow as Row } from '@/lib/grants'
+import { byNamespace } from '@/lib/names'
 import { EntityIndex, entityId } from '@/lib/entityRefs'
-import { capabilityOf, denied, indexCapabilities, type CapabilityIndex } from '@/lib/capabilities'
+import { grantable as grantableOn, indexCapabilities, type CapabilityIndex } from '@/lib/capabilities'
 import { run } from '@/api/client'
 import { CapabilitiesQuery } from '@/api/ops'
 import type { Action } from '@/gql/graphql'
@@ -34,17 +34,6 @@ const search = ref('')
 // Only granted entities by default; a role or user without grants lists them all.
 const onlyGranted = ref(props.modelValue.length > 0)
 
-interface Row {
-  entity: EntityInput
-  id: string // the entity's ID
-  grant: GrantInput | null
-  index: number // position in modelValue, -1 when ungranted
-  sub: number // 0 for the first grant of an entity
-  // The namespace (datasource · schema) of the entity; empty when every
-  // entity shares one.
-  namespace: string
-}
-
 // Grants name entities by reference; they are matched by the entity it names.
 const entityIndex = computed(() => new EntityIndex(props.entities))
 const grantedId = (g: GrantInput) => entityIndex.value.idOf(g.entity)
@@ -62,25 +51,46 @@ const grantsById = computed(() => {
   return out
 })
 
-// The listed entities, each with its rows (one per grant).
-const listed = computed<Row[][]>(() => {
-  const q = search.value.trim().toLowerCase()
-  const out: Row[][] = []
+// The entities in order with their ID and namespace, kept while the
+// entities stay: toggling a grant does not sort them again.
+const ordered = computed(() => {
   const sorted = [...props.entities].sort((a, b) =>
     (a.datasource ?? '').localeCompare(b.datasource ?? '') || (a.schema ?? '').localeCompare(b.schema ?? '') ||
     a.name.localeCompare(b.name))
-  const shown = sorted.filter((e) => !q || e.name.toLowerCase().includes(q) || (e.description ?? '').toLowerCase().includes(q))
-  for (const group of byNamespace(shown)) {
-    for (const entity of group.items) {
-      const id = entityId(entity)
-      const grants = grantsById.value.get(id) ?? []
-      if (grants.length === 0) {
-        if (!onlyGranted.value) out.push([{ entity, id, grant: null, index: -1, sub: 0, namespace: group.namespace }])
-        continue
-      }
-      out.push(grants.map(({ g, index }, sub) => ({ entity, id, grant: g, index, sub, namespace: group.namespace })))
-    }
+  return byNamespace(sorted).flatMap((group) =>
+    group.items.map((entity) => ({ entity, id: entityId(entity), namespace: group.namespace })))
+})
+const shown = computed(() => {
+  const q = search.value.trim().toLowerCase()
+  if (!q) return ordered.value
+  return ordered.value.filter(({ entity: e }) =>
+    e.name.toLowerCase().includes(q) || (e.description ?? '').toLowerCase().includes(q))
+})
+
+// The listed entities, each with its rows (one per grant). A row that did
+// not change is the same object as before, so its GrantMatrixRow is not
+// rendered again.
+let kept = new Map<string, Row>()
+const listed = computed<Row[][]>(() => {
+  const out: Row[][] = []
+  const next = new Map<string, Row>()
+  const row = (r: Row) => {
+    const key = `${r.id}\u0000${r.sub}`
+    const was = kept.get(key)
+    const same = was && was.entity === r.entity && was.grant === r.grant && was.index === r.index &&
+      was.namespace === r.namespace
+    next.set(key, same ? was : r)
+    return same ? was : r
   }
+  for (const { entity, id, namespace } of shown.value) {
+    const grants = grantsById.value.get(id) ?? []
+    if (grants.length === 0) {
+      if (!onlyGranted.value) out.push([row({ entity, id, grant: null, index: -1, sub: 0, namespace })])
+      continue
+    }
+    out.push(grants.map(({ g, index }, sub) => row({ entity, id, grant: g, index, sub, namespace })))
+  }
+  kept = next
   return out
 })
 const rows = computed(() => listed.value.flat())
@@ -103,19 +113,17 @@ const headed = (i: number) => {
   return Boolean(ns) && (i === 0 || pageRows.value[i - 1].namespace !== ns)
 }
 
-const grantedCount = computed(() => new Set(props.modelValue.map(grantedId)).size)
+const grantedCount = computed(() => grantsById.value.size)
 const refOf = (row: Row) => entityIndex.value.shortName(row.id)
 
+// Emits the grants with mutate applied to a copy of the list; mutate
+// replaces a grant it changes (edit(list, i)) rather than changing it.
 function emitWith(mutate: (list: GrantInput[]) => void) {
-  const list = props.modelValue.map((g) => ({ ...g, actions: [...g.actions] }))
+  const list = [...props.modelValue]
   mutate(list)
   emit('update:modelValue', list)
 }
-
-function applicable(row: Row, action: Action) {
-  const isProcedure = row.entity.kind === 'procedure'
-  return action === 'EXECUTE' ? isProcedure : !isProcedure
-}
+const edit = (list: GrantInput[], i: number) => (list[i] = { ...list[i] })
 
 // What the routed datasource connections may do, as the running service read
 // it. Denied cells cannot be newly granted; existing grants stay removable.
@@ -127,17 +135,7 @@ onMounted(async () => {
     // Without a report every cell stays editable; the database decides.
   }
 })
-const cap = (row: Row, action: Action) => capabilityOf(caps.value, row.id, action)
-const grantable = (row: Row, action: Action) => applicable(row, action) && !denied(cap(row, action))
-
-function capabilityHint(row: Row, action: Action) {
-  const c = cap(row, action)
-  if (!c) return ''
-  if (c.privilege === 'DENIED') return t('grants.capDenied', { connection: c.connection, reason: c.reason ?? '' })
-  if (c.privilege === 'UNKNOWN') return t('grants.capUnknown', { connection: c.connection })
-  if (c.columns?.length) return t('grants.capColumns', { connection: c.connection, columns: c.columns.join(', ') })
-  return ''
-}
+const grantable = (row: Row, action: Action) => grantableOn(caps.value, row.id, row.entity.kind, action)
 
 function toggle(row: Row, action: Action, on: boolean) {
   emitWith((list) => {
@@ -145,7 +143,7 @@ function toggle(row: Row, action: Action, on: boolean) {
       if (on) list.push({ entity: refOf(row), actions: [action] })
       return
     }
-    const g = list[row.index]
+    const g = edit(list, row.index)
     g.actions = on ? [...g.actions, action] : g.actions.filter((a) => a !== action)
     if (g.actions.length === 0) list.splice(row.index, 1)
   })
@@ -153,28 +151,27 @@ function toggle(row: Row, action: Action, on: boolean) {
 
 // Bulk toggles act on the rows currently listed, so searching first narrows
 // them, e.g. search "order" and grant read on every match.
-function columnState(action: Action) {
-  const entities = [...new Set(rows.value.filter((r) => grantable(r, action)).map((r) => r.id))]
+const columnEntities = (action: Action) => [...new Set(rows.value.filter((r) => grantable(r, action)).map((r) => r.id))]
+// Each column's state, once per change rather than per checkbox prop read.
+const columnStates = computed(() => new Map(actions.map((action) => {
+  const entities = columnEntities(action)
   const on = entities.filter((id) =>
     (grantsById.value.get(id) ?? []).some(({ g }) => g.actions.includes(action))).length
-  return { checked: entities.length > 0 && on === entities.length, partial: on > 0 && on < entities.length, any: entities.length > 0 }
-}
+  return [action, { checked: entities.length > 0 && on === entities.length, partial: on > 0 && on < entities.length,
+    any: entities.length > 0 }]
+})))
+const columnState = (action: Action) => columnStates.value.get(action)!
 function toggleColumn(action: Action, on: boolean) {
-  const entities = [...new Set(rows.value.filter((r) => grantable(r, action)).map((r) => r.id))]
-  emit('update:modelValue', setActionOn(props.modelValue, entities, action, on, entityIndex.value))
+  emit('update:modelValue', setActionOn(props.modelValue, columnEntities(action), action, on, entityIndex.value))
 }
 const rowActions = (row: Row) => actions.filter((a) => grantable(row, a))
-function rowState(row: Row) {
-  const n = rowActions(row).filter((a) => row.grant?.actions.includes(a)).length
-  return { checked: n > 0 && n === rowActions(row).length, partial: n > 0 && n < rowActions(row).length }
-}
 function toggleRow(row: Row, on: boolean) {
   emitWith((list) => {
     if (!on) {
       if (row.grant) list.splice(row.index, 1)
       return
     }
-    if (row.grant) list[row.index].actions = rowActions(row)
+    if (row.grant) edit(list, row.index).actions = rowActions(row)
     else list.push({ entity: refOf(row), actions: rowActions(row) })
   })
 }
@@ -187,13 +184,6 @@ function removeGrant(row: Row) {
 }
 
 const fieldNames = (e: EntityInput) => (e.fields ?? []).filter((f) => !f.exclude).map((f) => f.name)
-
-function fieldsLabel(row: Row) {
-  if (!row.grant?.fieldsRestricted) return t('grants.allFields')
-  const writes = row.grant.actions.some((a) => a === 'CREATE' || a === 'UPDATE')
-  return t('grants.readCount', { n: row.grant.readFields?.length ?? 0, total: fieldNames(row.entity).length }) +
-    (writes ? t('grants.writeCount', { n: row.grant.writeFields?.length ?? 0 }) : '')
-}
 
 // Field and row scope editors share one modal. `editing` keeps its content
 // until the close animation ends so the dialog does not blank out.
@@ -222,7 +212,7 @@ function saveEditor() {
   const e = editing.value
   if (!e) return
   emitWith((list) => {
-    const g = list[e.row.index]
+    const g = edit(list, e.row.index)
     if (e.mode === 'fields') {
       g.fieldsRestricted = draftRestricted.value
       g.readFields = draftRestricted.value ? draftRead.value : []
@@ -298,63 +288,8 @@ const editingWrites = computed(() =>
           <tr v-if="headed(i)" class="namespace">
             <td :colspan="actions.length + 5" class="mono">{{ row.namespace }}</td>
           </tr>
-          <tr :class="{ granted: row.grant, sub: row.sub > 0 }">
-            <td class="name">
-              <template v-if="row.sub === 0">
-                <router-link :to="{ name: 'entity', params: { id: row.id } }" class="entity mono">
-                  {{ row.entity.name }}
-                </router-link>
-                <span v-if="sourceIfRenamed(row.entity)" class="loc mono">← {{ sourceIfRenamed(row.entity) }}</span>
-                <div v-if="row.entity.description" class="desc" :title="row.entity.description">
-                  {{ row.entity.description }}
-                </div>
-              </template>
-              <n-tag v-else size="tiny" :bordered="false">{{ t('grants.another', { n: row.sub + 1 }) }}</n-tag>
-            </td>
-            <td class="act all">
-              <n-checkbox :disabled="readonly" :checked="rowState(row).checked" :indeterminate="rowState(row).partial"
-                :aria-label="t('grants.allRow')" :title="t('grants.allRow')"
-                @update:checked="(on: boolean) => toggleRow(row, on)" />
-            </td>
-            <td v-for="a in actions" :key="a" class="act"
-              :class="{ denied: applicable(row, a) && !grantable(row, a), unknown: cap(row, a)?.privilege === 'UNKNOWN' }">
-              <n-tooltip v-if="applicable(row, a)" :disabled="!capabilityHint(row, a)">
-                <template #trigger>
-                  <n-checkbox :checked="row.grant?.actions.includes(a) ?? false"
-                    :disabled="readonly || (!grantable(row, a) && !row.grant?.actions.includes(a))"
-                    @update:checked="(on: boolean) => toggle(row, a, on)" />
-                </template>
-                {{ capabilityHint(row, a) }}
-              </n-tooltip>
-            </td>
-            <td class="scope">
-              <n-button v-if="row.grant" size="tiny" :type="row.grant.fieldsRestricted ? 'info' : 'default'"
-                secondary :disabled="readonly" @click="openFields(row)">
-                {{ fieldsLabel(row) }}
-              </n-button>
-            </td>
-            <td class="scope">
-              <n-button v-if="row.grant" size="tiny" :type="row.grant.rows ? 'info' : 'default'" secondary
-                :disabled="readonly" :title="describeFilter(row.grant.rows as Filter)" @click="openRows(row)">
-                <span class="rows-text">{{ describeFilter(row.grant.rows as Filter) }}</span>
-              </n-button>
-            </td>
-            <td class="ops">
-              <n-space v-if="row.grant && !readonly" :size="2" :wrap="false">
-                <n-tooltip>
-                  <template #trigger>
-                    <n-button size="tiny" quaternary circle :aria-label="t('grants.addAnother')" @click="addGrant(row)">
-                      <template #icon><n-icon><add-outline /></n-icon></template>
-                    </n-button>
-                  </template>
-                  {{ t('grants.addAnother') }}
-                </n-tooltip>
-                <n-button size="tiny" quaternary circle type="error" :aria-label="t('common.remove')" @click="removeGrant(row)">
-                  <template #icon><n-icon><trash-outline /></n-icon></template>
-                </n-button>
-              </n-space>
-            </td>
-          </tr>
+          <grant-matrix-row :row="row" :caps="caps" :readonly="readonly" @toggle="toggle" @toggle-row="toggleRow"
+            @fields="openFields" @rows="openRows" @add="addGrant" @remove="removeGrant" />
           </template>
         </tbody>
       </table>
@@ -435,23 +370,15 @@ const editingWrites = computed(() =>
 .matrix { overflow-x: auto; border: 1px solid rgba(128,128,128,.25); border-radius: 6px; }
 table { border-collapse: collapse; width: 100%; font-size: 13px; }
 th, td { padding: 8px 10px; border-bottom: 1px solid rgba(128,128,128,.16); text-align: left; vertical-align: middle; }
-tbody tr:last-child td { border-bottom: none; }
+tbody tr:last-child :deep(td) { border-bottom: none; }
 th { font-weight: 500; opacity: .75; white-space: nowrap; }
 .act { text-align: center; width: 56px; }
-td.act.denied { background: rgba(208, 48, 80, .08); }
-td.act.unknown { background: rgba(240, 160, 32, .08); }
 .act.all { border-right: 1px solid rgba(128,128,128,.16); }
 .col-toggle { margin-top: 4px; }
 .name { min-width: 200px; }
 .scope { white-space: nowrap; }
 .ops { width: 70px; }
-tr.granted td.name .entity { font-weight: 600; }
-.entity { color: inherit; text-decoration: none; }
-.entity:hover { color: #2f6fed; }
-.loc { font-size: 11px; opacity: .55; margin-left: 6px; }
 tr.namespace td { font-size: 12px; opacity: .7; background: rgba(128,128,128,.06); padding-top: 6px; padding-bottom: 6px; }
-.desc { font-size: 12px; opacity: .6; max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
-.rows-text { display: inline-block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .pager { margin-top: 10px; justify-content: flex-end; }
 .empty { text-align: center; opacity: .6; padding: 20px; }
 .divider { margin: 12px 0; }

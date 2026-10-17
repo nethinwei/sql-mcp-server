@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/revision"
@@ -18,6 +19,8 @@ type SQLStore struct {
 	db      *sql.DB
 	dialect dialect
 	now     func() time.Time
+	// workspaces keeps the workspaces last read or written, by username.
+	workspaces sync.Map
 }
 
 func defaultNow() time.Time { return time.Now() }

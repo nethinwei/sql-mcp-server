@@ -1,9 +1,12 @@
 package graph
 
 import (
+	"context"
 	"maps"
 	"slices"
 	"sort"
+
+	"github.com/99designs/gqlgen/graphql"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/internal/kit"
@@ -32,6 +35,18 @@ func toConfiguration(spec *config.Spec, cfg *config.Config) (*Configuration, err
 	return &Configuration{
 		Datasources: toDatasources(cfg), Entities: s.Entities, Roles: s.Roles, Users: s.Users, Settings: s.Settings,
 	}, nil
+}
+
+// onlyDatasources reports that a configuration is read for its datasources
+// alone (as the console does with every revision it loads): the other
+// sections of a large one take long to convert.
+func onlyDatasources(ctx context.Context) bool {
+	for _, f := range graphql.CollectAllFields(ctx) {
+		if f != "datasources" && f != "__typename" {
+			return false
+		}
+	}
+	return true
 }
 
 func toDatasources(cfg *config.Config) []Datasource {

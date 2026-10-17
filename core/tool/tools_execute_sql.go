@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/nethinwei/sql-mcp-server/core/audit"
 	"github.com/nethinwei/sql-mcp-server/core/config"
@@ -112,7 +113,7 @@ func (ExecuteSQLTool) Run(ctx context.Context, input json.RawMessage, tc Context
 	}
 	trace.connection = route.Connection
 	tc.DB, tc.Dialect, tc.DataSource = route.DB, route.Dialect, in.Datasource
-	sql, err := estimateSQL(ctx, tc, route, in.SQL, in.Args)
+	sql, err := estimateSQL(ctx, tc, route, in.SQL, in.Args, in.Mode == "query")
 	if err != nil {
 		return Result{}, err
 	}
@@ -170,6 +171,78 @@ func escapeTraceOf(ctx context.Context) *escapeTrace {
 func (t *escapeTrace) fill(ev *audit.Event, phase string) {
 	ev.Phase, ev.Datasource, ev.Connection, ev.SQL = phase, t.datasource, t.connection, t.sql
 	ev.RowsAffected, ev.Cost = t.rowsAffected, t.plan
+}
+
+// isMetadataStatement reports a single SHOW, DESCRIBE or DESC statement,
+// which EXPLAIN cannot estimate and which reads the catalog alone (see
+// cost.sqlEscape.metadata). It recognizes how the statement begins, after
+// whitespace and comments, and that no other statement follows; it does not
+// parse SQL, and anything it does not recognize is estimated as before.
+func isMetadataStatement(sql string) bool {
+	rest := skipSpaceAndComments(sql)
+	word := rest
+	if i := strings.IndexFunc(rest, func(r rune) bool { return !unicode.IsLetter(r) }); i >= 0 {
+		word = rest[:i]
+	}
+	keyword := strings.ToUpper(word)
+	if keyword != "SHOW" && keyword != "DESCRIBE" && keyword != "DESC" {
+		return false
+	}
+	if len(word) == len(rest) || !unicode.IsSpace(rune(rest[len(word)])) {
+		return false
+	}
+	body := strings.TrimRight(strings.TrimSpace(rest), "; \t\r\n")
+	if strings.Contains(body, ";") {
+		return false
+	}
+	// DESCRIBE and DESC are also EXPLAIN on MySQL and OceanBase, and
+	// DESCRIBE ANALYZE runs the statement: only DESCRIBE <table> is one.
+	return keyword == "SHOW" || describesTable(skipSpaceAndComments(rest[len(word):]))
+}
+
+// explainWords are what may follow DESCRIBE when it is EXPLAIN.
+var explainWords = map[string]bool{
+	"ANALYZE": true, "FORMAT": true, "EXTENDED": true, "PARTITIONS": true, "FOR": true, "SELECT": true,
+	"TABLE": true, "WITH": true, "INSERT": true, "UPDATE": true, "DELETE": true, "REPLACE": true, "VALUES": true,
+}
+
+// describesTable reports that what follows DESCRIBE names a table: it
+// begins with a (possibly quoted) name that is not an EXPLAIN keyword.
+func describesTable(rest string) bool {
+	if rest == "" {
+		return false
+	}
+	if rest[0] == '`' || rest[0] == '"' {
+		return true
+	}
+	end := strings.IndexFunc(rest, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' })
+	if end < 0 {
+		end = len(rest)
+	}
+	return end > 0 && !explainWords[strings.ToUpper(rest[:end])]
+}
+
+// skipSpaceAndComments drops leading whitespace and --, # and /* */ comments.
+func skipSpaceAndComments(s string) string {
+	for {
+		s = strings.TrimLeftFunc(s, unicode.IsSpace)
+		switch {
+		case strings.HasPrefix(s, "--"), strings.HasPrefix(s, "#"):
+			i := strings.IndexByte(s, '\n')
+			if i < 0 {
+				return ""
+			}
+			s = s[i+1:]
+		case strings.HasPrefix(s, "/*"):
+			i := strings.Index(s, "*/")
+			if i < 0 {
+				return ""
+			}
+			s = s[i+2:]
+		default:
+			return s
+		}
+	}
 }
 
 // UnestimableError is a statement the escape hatch could not estimate: the

@@ -6,6 +6,8 @@ package configapp
 
 import (
 	"time"
+
+	"github.com/nethinwei/sql-mcp-server/core/workspace"
 )
 
 type CatalogCounts struct {
@@ -375,10 +377,8 @@ const (
 // their unpublished work, written by them (in any console) and their agents.
 type Workspace struct {
 	// The revision it builds on.
-	Base    string `json:"base"`
-	Version int    `json:"version"`
-	// The console's sections (entities, roles, users, settings).
-	Sections  any                 `json:"sections"`
+	Base      string              `json:"base"`
+	Version   int                 `json:"version"`
 	Conflicts []WorkspaceConflict `json:"conflicts"`
 	// Where changes came from: plans agents applied, drafts taken in.
 	Notes []WorkspaceNote `json:"notes"`
@@ -389,6 +389,24 @@ type Workspace struct {
 	UpdatedAt  *time.Time `json:"updatedAt,omitempty"`
 	// The administrator, or agent:<token name>.
 	UpdatedBy string `json:"updatedBy"`
+	// Its items and whose it is, read as asked (see Sections and
+	// Service.WorkspaceItems): a large workspace is encoded only when read.
+	items    workspace.Snapshot
+	username string
+}
+
+// WorkspaceItems are items of a workspace: all of them (Complete), or those
+// changed since a version (an item removed has a nil Value).
+type WorkspaceItems struct {
+	Complete bool            `json:"complete"`
+	Items    []WorkspaceItem `json:"items"`
+}
+
+// WorkspaceItem is an item of a workspace.
+type WorkspaceItem struct {
+	Kind  string `json:"kind"`
+	Key   string `json:"key"`
+	Value any    `json:"value"`
 }
 
 // WorkspaceRef names an item: entity (by ID), role or user (by name), or

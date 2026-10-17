@@ -98,6 +98,14 @@ depguard 规则 `versioning-generic` 禁止它导入 `core/config`、`x/configed
 的值为原值写下一次。其他操作（update、reset、合并草稿、解决冲突、检查点、提交）先写出
 本地修改，再调用服务端，读回结果。控制台不做合并，不算冲突。
 
+读回是增量的：每次请求带上控制台持有的版本（`Workspace.items(since)`），服务端按写入
+记录（`smcp_workspace_log`）只返回此后改动的项（删除的项值为 null），控制台只替换这些
+项；未持有版本、记录不连续，或期间有 update、reset、提交（换了基础修订，记录的是相对
+基础的改动）时返回全部项（`complete`）。edit、apply、merge、resolve、checkpoint 的
+记录列出它改动的每一项（含引用维护连带改的），由 `TestWorkspaceItemsSinceAVersion`
+（随机操作序列后任一旧版本 + 增量 = 当前全部）锁定。几千个实体时一次自动保存的应答
+从整份工作区（数 MB）降到改动项。
+
 配置 ⇄ 项的编码只在服务端（`x/admin/configapp/items.go`，见
 [编辑语义](editing.md)），控制台从 `Revision.sections` 读取修订的项；形状由
 `x/admin/configapp/testdata/workspace_sections.json` 锁定。

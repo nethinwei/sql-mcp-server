@@ -110,10 +110,10 @@ func New(cfg Config) *Handler {
 	}
 	app := &configapp.Service{
 		Store: cfg.Store, Introspect: cfg.Introspect, Capabilities: cfg.Capabilities, Profiles: cfg.Profiles,
-		MissingTables: cfg.MissingTables,
-		PlannedLimits: cfg.PlannedLimits, Scans: h.scans, Plans: cfg.Plans,
+		MissingTables: cfg.MissingTables, PlannedLimits: cfg.PlannedLimits, Scans: h.scans, Plans: cfg.Plans,
 	}
 	app.WatchScanBatches()
+	cfg.Bus.Go("warm console caches", app.Warm)
 	resolver := &graph.Resolver{App: app, Accounts: accounts.Service{Store: cfg.Accounts}, Status: cfg.Status}
 	srv := handler.New(graph.NewExecutableSchema(graph.Config{Resolvers: resolver}))
 	srv.AddTransport(transport.POST{})

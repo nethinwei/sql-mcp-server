@@ -198,6 +198,7 @@ func TestCostGateEndToEnd(t *testing.T) {
 		},
 	}
 	cfg.ApplyDefaults()
+	cfg.Cost.FullScanMaxRows = 0 // the fixture table is small: no small-table exemption
 
 	app, err := bootstrap.AssembleWithProvider(cfg, prov)
 	if err != nil {

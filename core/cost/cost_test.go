@@ -589,7 +589,7 @@ func TestChainGateSoftDenyUsesFinalCompiledAfterRewrite(t *testing.T) {
 	}
 }
 
-// A full scan of a small table is a sequential scan; of a large one, of one
+// A full scan of a small table scores as an index scan; of a large one, of one
 // whose size is unknown, or with the allowance off, it is rejected. The size
 // is the table's: a filter that outputs one row of a large table still reads
 // all of them.

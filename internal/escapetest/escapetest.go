@@ -27,6 +27,7 @@ func Run(t *testing.T, driver string, prov bootstrap.Provider, table, probe stri
 	auditPath := t.TempDir() + "/audit.jsonl"
 	tc := assemble(t, driver, prov, auditPath, config.SQLEscapeEstimateRequired)
 	estimated(t, ctx, tc, table)
+	metadata(t, ctx, tc, driver, table)
 	ddl := map[string]any{"sql": "CREATE TABLE " + probe + " (id int)", "mode": "exec"}
 	_, err := call(ctx, tc, ddl)
 	var unestimable *tool.UnestimableError
@@ -81,6 +82,33 @@ func estimated(t *testing.T, ctx context.Context, tc tool.Context, table string)
 	cleanup := map[string]any{"sql": "DELETE FROM " + table + " WHERE id = 1000", "mode": "exec"}
 	if res = run(t, ctx, tc, cleanup); res["rowsAffected"] != int64(1) {
 		t.Fatalf("delete = %v", res)
+	}
+}
+
+// metadata runs SHOW and DESCRIBE statements, which EXPLAIN cannot
+// estimate: they run under the hard limits alone (cost.sqlEscape.metadata
+// allows them by default), while DESCRIBE used as EXPLAIN ANALYZE, which
+// would run the statement, is estimated and refused.
+func metadata(t *testing.T, ctx context.Context, tc tool.Context, driver, table string) {
+	t.Helper()
+	statements := []string{"SHOW search_path"}
+	if driver != "postgres" {
+		show := "SHOW TABLES" // of the connection's database, or of the table's when it names one
+		if i := strings.LastIndex(table, "."); i > 0 {
+			show += " FROM " + table[:i]
+		}
+		statements = []string{show, "SHOW INDEX FROM " + table, "DESCRIBE " + table}
+	}
+	for _, sql := range statements {
+		if res := run(t, ctx, tc, map[string]any{"sql": sql}); res["rowCount"] == 0 {
+			t.Fatalf("%s returned no rows: %v", sql, res)
+		}
+	}
+	if driver != "postgres" {
+		_, err := call(ctx, tc, map[string]any{"sql": "DESCRIBE ANALYZE SELECT * FROM " + table})
+		if !errors.Is(err, cost.ErrCostExceeded) {
+			t.Fatalf("DESCRIBE ANALYZE must be estimated (and refused): %v", err)
+		}
 	}
 }
 

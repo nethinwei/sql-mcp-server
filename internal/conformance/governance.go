@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,8 +31,15 @@ func governanceConfig(driver, schema string, gated bool) *config.Config {
 		Entities: []config.EntityConfig{{
 			Name: "conf", Source: TableName, Schema: schema, Kind: "table", PrimaryKey: []string{"id"},
 			Fields: []config.FieldConfig{
-				{Name: "id"}, {Name: "cat"}, {Name: "val"}, {Name: "price"}, {Name: "name", Mask: "secret"},
+				{Name: "id"}, {Name: "cat"}, {Name: "val", Alias: "amount"}, {Name: "price"},
+				{Name: "name", Mask: "secret"},
 			},
+			Relationships: []config.RelationshipConfig{
+				{Name: "category", Target: "conf_cat", Cardinality: "belongs-to", JoinOn: map[string]string{"cat": "cat"}},
+			},
+		}, {
+			Name: "conf_cat", Source: CategoryTable, Schema: schema, Kind: "table", PrimaryKey: []string{"cat"},
+			Fields: []config.FieldConfig{{Name: "cat"}, {Name: "label"}, {Name: "tier"}},
 		}},
 		Roles: map[string]config.RoleDefinition{
 			"analyst": {Grants: []config.GrantConfig{{
@@ -39,8 +47,11 @@ func governanceConfig(driver, schema string, gated bool) *config.Config {
 				Fields: &config.FieldACLConfig{Read: []string{"id", "cat", "val", "name"}},
 				Rows:   config.FilterConfig{"op": "eq", "field": "cat", "value": governedCategory},
 			}}},
-			"scanner": {Grants: []config.GrantConfig{{Entity: "conf", Actions: []string{"read"}}}},
-			"writer":  {Grants: []config.GrantConfig{{Entity: "conf", Actions: []string{"read", "update"}}}},
+			// The scanner sees every row, and the categories with a tier.
+			"scanner": {Grants: []config.GrantConfig{{Entity: "conf", Actions: []string{"read"}}, {
+				Entity: "conf_cat", Actions: []string{"read"}, Rows: config.FilterConfig{"op": "is_not_null", "field": "tier"},
+			}}},
+			"writer": {Grants: []config.GrantConfig{{Entity: "conf", Actions: []string{"read", "update"}}}},
 		},
 		Tools: config.DefaultToolFlags(),
 		Cost:  config.CostConfig{Enabled: new(gated), RejectFullScan: gated, MaxRows: 10000},
@@ -71,6 +82,14 @@ func RunGovernance(t *testing.T, prov provider.Provider, driver, schema, slow st
 	gated := assemble(t, prov, driver, schema, true)
 	t.Run("governed-read", func(t *testing.T) { governedRead(t, app) })
 	t.Run("adversarial-filter", func(t *testing.T) { adversarialFilter(t, app) })
+	t.Run("ordered-pages", func(t *testing.T) { orderedPages(t, app) })
+	t.Run("related-row-policy", func(t *testing.T) { relatedRowPolicy(t, app) })
+	t.Run("field-alias", func(t *testing.T) { fieldAlias(t, app) })
+	t.Run("masked-order-refusal", func(t *testing.T) {
+		refused(t, app, "analyst", tool.ReadTool{}, map[string]any{
+			"entity": "conf", "orderBy": []map[string]any{{"field": "name"}},
+		}, tool.CodeInvalidInput)
+	})
 	t.Run("governed-aggregate", func(t *testing.T) { governedAggregate(t, app) })
 	t.Run("full-scan-refusal", func(t *testing.T) {
 		refused(t, gated, "scanner", tool.ReadTool{}, map[string]any{
@@ -135,11 +154,15 @@ func governedRead(t *testing.T, app *bootstrap.App) {
 	}
 }
 
-// adversarialFilter: a caller's filter narrows the policy, never widens it.
+// adversarialFilter: a caller's filter narrows the policy, never widens it,
+// an OR or a NOT of it included.
 func adversarialFilter(t *testing.T, app *bootstrap.App) {
 	for _, filter := range []map[string]any{
 		{"field": "cat", "op": "eq", "value": "b"},
 		{"field": "cat", "op": "ne", "value": governedCategory},
+		{"all": []map[string]any{{"field": "cat", "op": "eq", "value": "b"},
+			{"any": []map[string]any{{"field": "val", "op": "is_null"}, {"field": "val", "op": "is_not_null"}}}}},
+		{"not": map[string]any{"field": "cat", "op": "eq", "value": governedCategory}},
 	} {
 		res, err := run(t, app, "analyst", tool.ReadTool{}, map[string]any{
 			"entity": "conf", "fields": []string{"id"}, "filter": []map[string]any{filter},
@@ -147,6 +170,114 @@ func adversarialFilter(t *testing.T, app *bootstrap.App) {
 		if err != nil || len(res.Content) != 0 {
 			t.Fatalf("filter %v weakened the row policy: %v %v", filter, res.Content, err)
 		}
+	}
+}
+
+// orderedPages: an ordered read paged by nextCursor (val nullable, NULLs
+// last, then the key) gives the policy's rows in the interpreter's order.
+func orderedPages(t *testing.T, app *bootstrap.App) {
+	var got [][]any
+	input := map[string]any{"entity": "conf", "fields": []string{"id", "val"}, "limit": 2,
+		"orderBy": []map[string]any{{"field": "val", "dir": "desc"}}}
+	for pages := 0; ; pages++ {
+		res, err := run(t, app, "analyst", tool.ReadTool{}, input)
+		if err != nil || pages > 20 {
+			t.Fatalf("page %d: %v", pages, err)
+		}
+		for _, row := range res.Content {
+			got = append(got, []any{row["id"], row["val"]})
+		}
+		if res.NextCursor == nil {
+			break
+		}
+		input["cursor"] = res.NextCursor
+	}
+	want, err := interp.Eval(Fixture(), relalg.Project{
+		Input: relalg.Sort{
+			Input: relalg.Select{
+				Input:     relalg.Scan{Relation: relalg.RelationRef{Name: TableName}},
+				Predicate: relalg.Condition{Field: "cat", Op: relalg.OpEq, Value: governedCategory},
+			},
+			OrderBy: []relalg.OrderTerm{{Field: "val", Dir: "desc", Nullable: true}, {Field: "id", Dir: "asc"}},
+		},
+		Items: []relalg.ProjectItem{{Field: "id"}, {Field: "val"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := compareRows(want.Rows, got, true); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// relatedRowPolicy: a filter across a relationship sees the related rows
+// the caller may read only (category b has no tier): joined, its rows match
+// no label; by exists, no row finds it.
+func relatedRowPolicy(t *testing.T, app *bootstrap.App) {
+	for label, input := range map[string]map[string]any{
+		"apple":  {"filter": []map[string]any{{"field": "category.label", "op": "eq", "value": "apple"}}},
+		"banana": {"filter": []map[string]any{{"field": "category.label", "op": "eq", "value": "banana"}}},
+		"exists banana": {"filter": []map[string]any{{"exists": "category",
+			"filter": []map[string]any{{"field": "label", "op": "eq", "value": "banana"}}}}},
+	} {
+		input["entity"], input["fields"] = "conf", []string{"id"}
+		res, err := run(t, app, "scanner", tool.ReadTool{}, input)
+		if err != nil {
+			t.Fatal(label, err)
+		}
+		want, err := interp.Eval(Fixture(), relalg.Project{Items: relalg.ProjectFields([]string{"id"}),
+			Input: relalg.Select{
+				Input: relalg.Join{Input: relalg.Scan{Relation: relalg.RelationRef{Name: TableName}},
+					Right: relalg.RelationRef{Name: CategoryTable}, Alias: "category",
+					On:             []relalg.JoinPair{{Left: "cat", Right: "cat"}},
+					RightPredicate: relalg.Condition{Field: "tier", Op: relalg.OpIsNotNull}},
+				Predicate: relalg.Condition{Field: "category.label", Op: relalg.OpEq,
+					Value: strings.TrimPrefix(label, "exists ")},
+			}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := make([][]any, len(res.Content))
+		for i, row := range res.Content {
+			got[i] = []any{row["id"]}
+		}
+		if err := compareRows(want.Rows, got, false); err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+	}
+}
+
+// fieldAlias: a field named by its alias (val as amount) is its column when
+// selected, filtered and ordered by, and comes back by the alias.
+func fieldAlias(t *testing.T, app *bootstrap.App) {
+	res, err := run(t, app, "scanner", tool.ReadTool{}, map[string]any{
+		"entity": "conf", "fields": []string{"id", "amount"},
+		"filter":  []map[string]any{{"field": "amount", "op": "gt", "value": 0}},
+		"orderBy": []map[string]any{{"field": "amount", "dir": "desc"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := interp.Eval(Fixture(), relalg.Project{Items: relalg.ProjectFields([]string{"id", "val"}),
+		Input: relalg.Sort{
+			Input: relalg.Select{
+				Input:     relalg.Scan{Relation: relalg.RelationRef{Name: TableName}},
+				Predicate: relalg.Condition{Field: "val", Op: relalg.OpGt, Value: int64(0)},
+			},
+			OrderBy: []relalg.OrderTerm{{Field: "val", Dir: "desc", Nullable: true}, {Field: "id", Dir: "asc"}},
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([][]any, len(res.Content))
+	for i, row := range res.Content {
+		if _, ok := row["val"]; ok {
+			t.Fatalf("the field came back by its column, not its alias: %v", row)
+		}
+		got[i] = []any{row["id"], row["amount"]}
+	}
+	if err := compareRows(want.Rows, got, true); err != nil {
+		t.Fatal(err)
 	}
 }
 

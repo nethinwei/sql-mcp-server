@@ -27,6 +27,15 @@ const retryDelays = [2000, 5000, 15000, 30000]
 let active: ReturnType<typeof createSync> | null = null
 
 /**
+ * The version of the workspace this console holds, to be answered only the
+ * items changed since; null (every item) before it holds one.
+ */
+const since = () => {
+  const ws = useWorkspace()
+  return ws.copy ? ws.version : null
+}
+
+/**
  * Runs op (a request on the server workspace) for the administrator signed
  * in now: none is made, and WorkspaceSwitched thrown, once another signed in.
  */
@@ -70,14 +79,14 @@ export const workspace = {
     return useWorkspace().basePublished === to
   },
   /** Moves the workspace onto revision to, re-applying what was changed in it. */
-  update: (to: string) => operation(async () => (await run(UpdateWorkspaceMutation, { to }, true)).updateWorkspace),
+  update: (to: string) => operation(async () => (await run(UpdateWorkspaceMutation, { to, since: since() }, true)).updateWorkspace),
   /** Makes the workspace revision to as it is, dropping what was changed in it. */
-  reset: (to: string) => operation(async () => (await run(ResetWorkspaceMutation, { to }, true)).resetWorkspace),
+  reset: (to: string) => operation(async () => (await run(ResetWorkspaceMutation, { to, since: since() }, true)).resetWorkspace),
   /** Takes draft id into the workspace. */
-  mergeDraft: (id: string) => operation(async () => (await run(MergeDraftMutation, { id }, true)).mergeDraft),
+  mergeDraft: (id: string) => operation(async () => (await run(MergeDraftMutation, { id, since: since() }, true)).mergeDraft),
   /** Resolves a conflict: theirs takes the other side's value. */
   resolve: (id: string, theirs: boolean) =>
-    operation(async () => (await run(ResolveConflictMutation, { id, theirs }, true)).resolveConflict),
+    operation(async () => (await run(ResolveConflictMutation, { id, theirs, since: since() }, true)).resolveConflict),
   /** Saves the workspace as a draft to share; returns its ID. */
   checkpoint: async (comment: string | null) => {
     const at = currentLifetime()
@@ -147,6 +156,12 @@ function createSync() {
 
   /** Takes in the workspace as the server answered it, telling of what an agent wrote. */
   async function takeIn(w: WorkspacePartsFragment) {
+    if (!w.items.complete && (!ws.copy || w.base !== ws.baseId)) {
+      // Changed since a version this console no longer holds: read it whole.
+      const { workspace } = await run(WorkspaceStateQuery, { since: null })
+      if (!workspace || !live()) return
+      w = workspace
+    }
     const baseData = w.base !== ws.baseId ? await run(WorkspaceQuery, { id: w.base }) : undefined
     if (!live()) return
     const was = ws.copy ? { version: ws.version, notes: ws.notes } : null
@@ -160,7 +175,7 @@ function createSync() {
   function pull(): Promise<boolean> {
     return serially(async () => {
       if (!live()) return true
-      const { workspace: w } = await run(WorkspaceStateQuery, {})
+      const { workspace: w } = await run(WorkspaceStateQuery, { since: since() })
       if (!live()) return true
       if (!w) return false
       await takeIn(w)
@@ -177,7 +192,7 @@ function createSync() {
       saveState.value = 'saving'
       const items = ws.unsavedItems()
       try {
-        const { editWorkspace } = await run(EditWorkspaceMutation, { input: { items } }, true)
+        const { editWorkspace } = await run(EditWorkspaceMutation, { input: { items }, since: since() }, true)
         if (!live()) return
         ws.wrote(items)
         await takeIn(editWorkspace)

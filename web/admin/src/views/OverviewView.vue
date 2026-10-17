@@ -40,7 +40,7 @@ const removable = computed(() => missing.value.filter((m) => m.tableMissing && w
 const columnsMissing = computed(() => missing.value.filter((m) => !m.tableMissing).length)
 function removeMissing() {
   const n = removable.value.length
-  for (const m of removable.value) ws.removeEntity(m.entity)
+  ws.removeEntities(removable.value.map((m) => m.entity))
   message.success(t('overview.removedMissing', { n }))
 }
 const usersWithoutToken = computed(() => ws.users.filter((u) => !u.disabled && !ws.hasToken(u)))

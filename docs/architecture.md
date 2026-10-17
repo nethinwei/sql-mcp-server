@@ -34,9 +34,11 @@ MCP client
 方言渲染为参数化 SQL；值通过 placeholder 绑定，标识符只能来自已解析的配置
 和实体元数据。
 
-当前支持读取、投影、过滤、聚合、排序/keyset、limit、insert、update、
-delete 和 procedure call。关系展开不是通用 SQL join：它只支持同一数据源，
-每个关系必须恰好一个 `joinOn` 对，并以一次批量 `IN` 查询展开；不支持嵌套展开。
+当前支持读取、投影、过滤（AND/OR/NOT）、聚合（含 HAVING、去重计数）、排序/keyset、
+limit、insert、update、delete 和 procedure call。跨关系的过滤、排序与分组沿已声明的关系
+进行（对一关系以目标的键 `LEFT JOIN`，任意关系可用 `EXISTS` 过滤，单跳、同一数据源，
+目标的授权与行策略照常生效），不是任意 join。关系展开（`expand`）另行实现：每个关系必须
+恰好一个 `joinOn` 对，并以一次批量 `IN` 查询展开；不支持嵌套展开。
 
 ## 执行编排
 

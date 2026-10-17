@@ -55,6 +55,14 @@ func ValidatePredicateWithMaxINCardinality(p Predicate, maxIN int) error {
 			return fmt.Errorf("%w: nil NOT operand", ErrInvalidPredicate)
 		}
 		return ValidatePredicateWithMaxINCardinality(pp.P, maxIN)
+	case Exists:
+		if pp.Relation.Name == "" || len(pp.On) == 0 {
+			return fmt.Errorf("%w: EXISTS needs a relation and a join", ErrInvalidPredicate)
+		}
+		if HasExists(pp.Predicate) {
+			return fmt.Errorf("%w: EXISTS does not nest", ErrInvalidPredicate)
+		}
+		return ValidatePredicateWithMaxINCardinality(pp.Predicate, maxIN)
 	default:
 		return fmt.Errorf("%w: %T", ErrUnknownPredicate, p)
 	}
@@ -96,4 +104,27 @@ func validatePredicateList(name string, predicates []Predicate, maxIN int) error
 		}
 	}
 	return nil
+}
+
+// HasExists reports an EXISTS anywhere in p.
+func HasExists(p Predicate) bool {
+	switch pp := p.(type) {
+	case Exists:
+		return true
+	case And:
+		for _, q := range pp.Preds {
+			if HasExists(q) {
+				return true
+			}
+		}
+	case Or:
+		for _, q := range pp.Preds {
+			if HasExists(q) {
+				return true
+			}
+		}
+	case Not:
+		return HasExists(pp.P)
+	}
+	return false
 }

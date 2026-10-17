@@ -89,7 +89,7 @@ func schemaSummary(
 ) (map[string]any, error) {
 	counts := map[string]int{}
 	total := 0
-	for _, e := range app.Registry.Entities() {
+	for e := range app.Registry.All() {
 		_, _, ok, err := entityActions(ctx, app, e, role, subject)
 		if err != nil {
 			return nil, err
@@ -179,6 +179,7 @@ func authorizedEntity(
 		"name": e.Name, "id": e.Name, "description": e.Description, "datasource": e.DatasourceName(),
 		"fields":    authorizedEntityFields(e, e.OrderedNames(union)),
 		"keys":      tool.VisibleKeys(e, e.OrderedNames(union)),
+		"indexes":   tool.VisibleIndexes(e, e.OrderedNames(union)),
 		"actions":   actions,
 		"access":    access,
 		"rowScoped": e.RowPolicies[role] != nil,

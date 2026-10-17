@@ -31,17 +31,13 @@ func (r *Service) workspaces() (workspaceops.Service, error) {
 		return workspaceops.Service{}, err
 	}
 	return workspaceops.Service{Store: store, Codec: codec{r}, Schema: Schema, Revisions: r.Store,
-		History: r.Ops(), Reconcile: reconcile}, nil
+		History: r.Ops(), Reconcile: reconcile, Cache: &r.items}, nil
 }
 
 func toWorkspace(st workspaceops.State) (*Workspace, error) {
-	sections, err := rawSections(st.Workspace.Items)
-	if err != nil {
-		return nil, err
-	}
 	w := st.Workspace
 	out := &Workspace{Base: strconv.FormatInt(w.Base, 10), Version: int(w.Version), UpdatedBy: w.UpdatedBy,
-		Sections: sections, Conflicts: []WorkspaceConflict{}, Notes: []WorkspaceNote{}}
+		Conflicts: []WorkspaceConflict{}, Notes: []WorkspaceNote{}, items: w.Items, username: w.Username}
 	if !w.UpdatedAt.IsZero() {
 		out.UpdatedAt = &w.UpdatedAt
 	}
@@ -59,6 +55,133 @@ func toWorkspace(st workspaceops.State) (*Workspace, error) {
 		out.Checkpoint = kit.Optional(strconv.FormatInt(w.Checkpoint, 10))
 	}
 	return out, nil
+}
+
+// RevisionSections are revision id's configuration as the console's
+// sections (the workspace's items), decoded once per revision: load reads
+// the revision when they are not kept.
+func (r *Service) RevisionSections(id int64, load func() (revision.Revision, error)) (any, error) {
+	items, err := r.items.Items(id, func() (workspace.Snapshot, error) {
+		rev, err := load()
+		if err != nil {
+			return nil, err
+		}
+		return codec{r}.Items(rev)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return rawSections(items)
+}
+
+// Warm reads the published revision's items and configuration into the
+// caches, which the first console to load after a start would otherwise
+// wait for (a large part of a second for thousands of entities).
+func (r *Service) Warm(ctx context.Context) {
+	rev, err := r.Store.Published(ctx)
+	if err != nil {
+		return
+	}
+	load := func() (revision.Revision, error) { return rev, nil }
+	_, _ = r.items.Items(rev.ID, func() (workspace.Snapshot, error) { return codec{r}.Items(rev) })
+	_, _, _ = r.RevisionSpec(rev.ID, load)
+}
+
+// Sections are the workspace's items as the console's sections.
+func (w *Workspace) Sections() (any, error) {
+	return rawSections(w.items)
+}
+
+// deltaOps are the operations whose log entry lists every item they changed;
+// the others (update, reset, commit) move the workspace onto another
+// revision, and list what it changed from its base.
+var deltaOps = map[string]bool{"edit": true, "apply": true, "merge": true, "resolve": true, "checkpoint": true}
+
+// WorkspaceItems are w's items changed since version since, as its log
+// tells them, or all of them when since is nil or the log cannot tell.
+func (r *Service) WorkspaceItems(ctx context.Context, w *Workspace, since *int) (*WorkspaceItems, error) {
+	if since != nil && *since >= 0 && *since <= w.Version && w.username != "" {
+		refs, ok, err := r.changedSince(ctx, w.username, *since, w.Version)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return &WorkspaceItems{Items: itemsAt(w.items, refs)}, nil
+		}
+	}
+	out := &WorkspaceItems{Complete: true, Items: make([]WorkspaceItem, 0, len(w.items))}
+	for _, it := range w.items {
+		out.Items = append(out.Items, WorkspaceItem{Kind: it.Kind, Key: it.Key, Value: it.Value})
+	}
+	return out, nil
+}
+
+// maxDeltaWrites bounds the writes a delta is read from; a console further
+// behind reads the workspace whole.
+const maxDeltaWrites = 200
+
+// changedSince are the items the writes after version since, up to version,
+// changed; false when one of them is not in the log or does not list them.
+func (r *Service) changedSince(ctx context.Context, username string, since, version int) (
+	[]workspace.Ref, bool, error,
+) {
+	if since == version {
+		return nil, true, nil
+	}
+	if version-since > maxDeltaWrites {
+		return nil, false, nil // reading that many writes costs more than every item
+	}
+	ops, err := r.workspaces()
+	if err != nil {
+		return nil, false, err
+	}
+	// Newest first; writes after version (made meanwhile) come first.
+	log, err := ops.Log(ctx, username, version-since+16)
+	if err != nil {
+		return nil, false, err
+	}
+	var refs []workspace.Ref
+	seen, next := map[workspace.Ref]bool{}, version
+	for _, e := range log {
+		if e.Version > int64(version) {
+			continue
+		}
+		if e.Version != int64(next) || !deltaOps[e.Op] {
+			return nil, false, nil
+		}
+		for _, ref := range e.Items {
+			if !seen[ref] {
+				seen[ref] = true
+				refs = append(refs, ref)
+			}
+		}
+		if next--; next == since {
+			return refs, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+// itemsAt are the items refs name in s, in s's order, then those s no
+// longer holds (removed: nil values).
+func itemsAt(s workspace.Snapshot, refs []workspace.Ref) []WorkspaceItem {
+	want := make(map[workspace.Ref]bool, len(refs))
+	for _, ref := range refs {
+		want[ref] = true
+	}
+	out := make([]WorkspaceItem, 0, len(refs))
+	for _, it := range s {
+		if want[it.Ref] {
+			out = append(out, WorkspaceItem{Kind: it.Kind, Key: it.Key, Value: it.Value})
+			delete(want, it.Ref)
+		}
+	}
+	for _, ref := range refs {
+		if want[ref] {
+			out = append(out, WorkspaceItem{Kind: ref.Kind, Key: ref.Key})
+		}
+	}
+	return out
 }
 
 func toConflict(c workspace.Open) WorkspaceConflict {
@@ -451,9 +574,17 @@ func (r *Service) changes(pc planContext, payload []byte) (workspace.Snapshot, s
 	}
 	var changed workspace.Snapshot
 	var effect []string
+	beforeAt, afterAt := before.Index(), after.Index()
+	get := func(s workspace.Snapshot, at map[workspace.Ref]int, ref workspace.Ref) any {
+		if i, ok := at[ref]; ok {
+			return s[i].Value
+		}
+		return workspace.Missing
+	}
 	for _, ref := range Schema.Changes(before, after) {
-		changed = append(changed, workspace.Item{Ref: ref, Value: after.Get(ref)})
-		for _, c := range Schema.Diff(before.Get(ref), after.Get(ref)) {
+		now := get(after, afterAt, ref)
+		changed = append(changed, workspace.Item{Ref: ref, Value: now})
+		for _, c := range Schema.Diff(get(before, beforeAt, ref), now) {
 			effect = append(effect, ref.Kind+"\x00"+ref.Key+"\x00"+c.Path.String()+"\x00"+Schema.Canonical(c.Value))
 		}
 	}
@@ -464,8 +595,13 @@ func (r *Service) changes(pc planContext, payload []byte) (workspace.Snapshot, s
 // writes are the writes of p's changes into a workspace holding current.
 func (p *Preview) writes(current workspace.Snapshot) []workspaceops.Write {
 	out := make([]workspaceops.Write, 0, len(p.changed))
+	at := current.Index()
 	for _, it := range p.changed {
-		out = append(out, workspaceops.Write{Ref: it.Ref, Value: it.Value, Previous: current.Get(it.Ref)})
+		previous := workspace.Missing
+		if i, ok := at[it.Ref]; ok {
+			previous = current[i].Value
+		}
+		out = append(out, workspaceops.Write{Ref: it.Ref, Value: it.Value, Previous: previous})
 	}
 	return out
 }

@@ -24,9 +24,12 @@ func (ReadTool) Info() Info {
 		Title:  "Read records",
 		Action: entity.ActionRead.String(),
 		Description: "Read rows of one entity, returned as {\"result\": [rows]}. Select only the fields you " +
-			"need, filter as narrowly as you can and set a limit: queries estimated to scan or return too " +
-			"much are refused with COST_EXCEEDED and hints for narrowing them. Rows outside your row " +
-			"policy are never returned and masked fields come back masked.",
+			"need, filter as narrowly as you can (conditions combine with any/all/not; relationship.field " +
+			"filters by a related row, exists by related rows) and set a limit: " +
+			"queries estimated to scan or return too much are refused with COST_EXCEEDED and hints for " +
+			"narrowing them (describe_entities lists the indexed fields). orderBy sorts; with a limit the " +
+			"result carries nextCursor while more rows follow, to pass back as cursor. Rows outside your " +
+			"row policy are never returned and masked fields come back masked.",
 		InputSchema: schemaRead,
 		ReadOnly:    true, Idempotent: true,
 	}

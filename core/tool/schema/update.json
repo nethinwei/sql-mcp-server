@@ -12,36 +12,9 @@
             "type": "array",
             "maxItems": 32,
             "items": {
-                "type": "object",
-                "properties": {
-                    "field": {
-                        "type": "string"
-                    },
-                    "op": {
-                        "type": "string",
-                        "enum": [
-                            "eq",
-                            "ne",
-                            "gt",
-                            "gte",
-                            "lt",
-                            "lte",
-                            "in",
-                            "not_in",
-                            "like",
-                            "is_null",
-                            "is_not_null"
-                        ]
-                    },
-                    "value": {
-                        "description": "Value (array for in/not_in; omitted for is_null/is_not_null)"
-                    }
-                },
-                "required": [
-                    "field",
-                    "op"
-                ]
-            }
+                "$ref": "#/$defs/filter"
+            },
+            "description": "Conditions that all hold"
         },
         "set": {
             "type": "object",
@@ -53,5 +26,55 @@
         "filter",
         "set"
     ],
-    "additionalProperties": false
+    "additionalProperties": false,
+    "$defs": {
+        "filter": {
+            "description": "A condition on one field, or a group of them: any (one holds), all (every one holds) or not. Groups nest at most 4 deep.",
+            "type": "object",
+            "properties": {
+                "field": {
+                    "type": "string"
+                },
+                "op": {
+                    "type": "string",
+                    "enum": [
+                        "eq",
+                        "ne",
+                        "gt",
+                        "gte",
+                        "lt",
+                        "lte",
+                        "in",
+                        "not_in",
+                        "like",
+                        "is_null",
+                        "is_not_null"
+                    ]
+                },
+                "value": {
+                    "description": "Value (array for in/not_in; omitted for is_null/is_not_null)"
+                },
+                "any": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 32,
+                    "items": {
+                        "$ref": "#/$defs/filter"
+                    }
+                },
+                "all": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 32,
+                    "items": {
+                        "$ref": "#/$defs/filter"
+                    }
+                },
+                "not": {
+                    "$ref": "#/$defs/filter"
+                }
+            },
+            "additionalProperties": false
+        }
+    }
 }

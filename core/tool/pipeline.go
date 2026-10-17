@@ -96,9 +96,12 @@ func authorizeSQL(tc Context, datasource string) (grant, EscapeRoute, error) {
 // EXPLAIN cannot estimate refused. There is no estimate when the
 // configuration skips it or has no EXPLAIN (cost.enabled: false); the hard
 // limits apply either way.
-func estimateSQL(ctx context.Context, tc Context, route EscapeRoute, sql string, args []any) (gated, error) {
+func estimateSQL(ctx context.Context, tc Context, route EscapeRoute, sql string, args []any, query bool) (
+	gated, error,
+) {
 	compiled := codegen.Compiled{SQL: sql, Args: args}
-	if !tc.SQLEscapeEstimateRequired || route.Explainer == nil {
+	if !tc.SQLEscapeEstimateRequired || route.Explainer == nil ||
+		query && tc.SQLEscapeMetadata && isMetadataStatement(sql) {
 		return gated{Compiled: compiled}, nil
 	}
 	plan, err := route.Explainer.Explain(ctx, sql, args)
@@ -107,9 +110,10 @@ func estimateSQL(ctx context.Context, tc Context, route EscapeRoute, sql string,
 		return gated{}, &UnestimableError{Cause: err}
 	}
 	dec := cost.Estimate{Threshold: route.Threshold.Tighten(tc.Tightening), FailClosed: true}.Evaluate(plan, nil)
-	if limit := tc.BudgetLimits.MaxEstimatedScannedRows; dec.Plan != nil && limit > 0 && dec.Plan.EstimatedRows > limit {
+	if limit := tc.BudgetLimits.MaxEstimatedScannedRows; dec.Plan != nil && limit > 0 &&
+		dec.Plan.ScannedRows() > limit {
 		return gated{}, fmt.Errorf("%w: estimated scanned rows %d exceed limit %d",
-			budget.ErrExceeded, dec.Plan.EstimatedRows, limit)
+			budget.ErrExceeded, dec.Plan.ScannedRows(), limit)
 	}
 	verdict := "allow"
 	if !dec.Allow {
@@ -131,7 +135,7 @@ func (g gated) estimatedRows() int64 {
 	if g.plan == nil {
 		return 0
 	}
-	return g.plan.EstimatedRows
+	return g.plan.ScannedRows()
 }
 
 // statement is one database statement, ready to run.

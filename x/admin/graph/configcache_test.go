@@ -44,3 +44,25 @@ func TestSelectedConfigurationIsKeptAndLeftUnchanged(t *testing.T) {
 		t.Fatal("the kept configuration was parsed again or changed by what read it")
 	}
 }
+
+// A revision's configuration read for its datasources alone (as the console
+// reads every revision it loads) skips the other sections, and gives the
+// datasources it gives with them.
+func TestRevisionConfigDatasourcesAlone(t *testing.T) {
+	c := newHarness(t).client(auth.PermAll)
+	type datasources struct {
+		Revision struct {
+			Config struct {
+				Datasources []struct{ Name, Driver, Dsn string }
+				Entities    []struct{ Name string }
+			}
+		}
+	}
+	var alone, all datasources
+	mustPost(t, c, `{ revision(id: "1") { config { datasources { name driver dsn } } } }`, &alone)
+	mustPost(t, c, `{ revision(id: "1") { config { datasources { name driver dsn } entities { name } } } }`, &all)
+	if len(alone.Revision.Config.Datasources) != 1 || len(all.Revision.Config.Entities) != 1 ||
+		!reflect.DeepEqual(alone.Revision.Config.Datasources, all.Revision.Config.Datasources) {
+		t.Fatalf("alone = %+v, with the entities = %+v", alone, all)
+	}
+}

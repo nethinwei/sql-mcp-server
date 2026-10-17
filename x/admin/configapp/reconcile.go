@@ -48,16 +48,10 @@ func reconcile(before, after workspace.Snapshot, renames map[workspace.Ref]works
 			r.moved[to.Key] = ""
 		}
 	}
-	afterAt := after.Index()
-	for _, it := range before {
-		if _, kept := afterAt[it.Ref]; kept {
-			continue
-		}
-		for kind, names := range map[string]map[string]string{ItemRole: r.roles, ItemUser: r.users} {
-			if _, renamed := names[it.Key]; it.Kind == kind && !renamed {
-				names[it.Key] = "" // removed
-			}
-		}
+	r.removed(after)
+	if len(r.moved) == 0 && len(r.roles) == 0 && len(r.users) == 0 && sameEntities(before, after) {
+		// Every reference names what it named: only removed fields remain.
+		return r.pruneFields(after), nil
 	}
 	r.beforeIdx, r.afterIdx = configrefs.NewIndex(entitiesOf(before)), configrefs.NewIndex(entitiesOf(after))
 	changed := map[workspace.Ref]any{}
@@ -72,6 +66,21 @@ func reconcile(before, after workspace.Snapshot, renames map[workspace.Ref]works
 		}
 	}
 	return r.pruneFields(after.Apply(changed, nil)), nil
+}
+
+// removed records the roles and users the write removed (not renamed).
+func (r reconciliation) removed(after workspace.Snapshot) {
+	afterAt := after.Index()
+	for _, it := range r.before {
+		if _, kept := afterAt[it.Ref]; kept {
+			continue
+		}
+		for kind, names := range map[string]map[string]string{ItemRole: r.roles, ItemUser: r.users} {
+			if _, renamed := names[it.Key]; it.Kind == kind && !renamed {
+				names[it.Key] = "" // removed
+			}
+		}
+	}
 }
 
 type reconciliation struct {
@@ -336,7 +345,7 @@ func (r reconciliation) pruneFields(out workspace.Snapshot) workspace.Snapshot {
 		}
 		v, ok := object(it.Value)
 		prev := r.previous(it.Ref)
-		if !ok || prev == nil {
+		if !ok || prev == nil || workspace.Identical(v, prev) {
 			continue
 		}
 		now := fieldNames(v)
@@ -349,6 +358,8 @@ func (r reconciliation) pruneFields(out workspace.Snapshot) workspace.Snapshot {
 	if len(removed) == 0 {
 		return out
 	}
+	// Reconciling keeps every entity's ID: out resolves references as after.
+	idx := configrefs.NewIndex(entitiesOf(out))
 	pruned := map[workspace.Ref]any{}
 	for _, it := range out {
 		if it.Kind != ItemRole && it.Kind != ItemUser {
@@ -359,21 +370,21 @@ func (r reconciliation) pruneFields(out workspace.Snapshot) workspace.Snapshot {
 			continue
 		}
 		next := cloneJSON(v).(map[string]any)
-		if r.pruneGrants(next, removed) {
+		if pruneGrants(idx, next, removed) {
 			pruned[it.Ref] = next
 		}
 	}
 	return out.Apply(pruned, nil)
 }
 
-func (r reconciliation) pruneGrants(v map[string]any, removed map[string][]any) bool {
+func pruneGrants(idx configrefs.Index, v map[string]any, removed map[string][]any) bool {
 	changed := false
 	for _, g := range listAt(v, "grants") {
 		grant, ok := g.(map[string]any)
 		if !ok {
 			continue
 		}
-		id, ok := r.afterIdx.IDOf(text(grant, "entity"))
+		id, ok := idx.IDOf(text(grant, "entity"))
 		if !ok || removed[id] == nil {
 			continue
 		}
@@ -392,6 +403,22 @@ func (r reconciliation) pruneGrants(v map[string]any, removed map[string][]any) 
 }
 
 // entitiesOf are the entities of items, by name, datasource and schema.
+// sameEntities reports whether a and b hold the same entities (by ID): a
+// reference then resolves alike in both.
+func sameEntities(a, b workspace.Snapshot) bool {
+	ids := func(s workspace.Snapshot) []string {
+		var out []string
+		for _, it := range s {
+			if it.Kind == ItemEntity {
+				out = append(out, it.Key)
+			}
+		}
+		slices.Sort(out)
+		return out
+	}
+	return slices.Equal(ids(a), ids(b))
+}
+
 func entitiesOf(items workspace.Snapshot) []config.EntityConfig {
 	var out []config.EntityConfig
 	for _, it := range items {

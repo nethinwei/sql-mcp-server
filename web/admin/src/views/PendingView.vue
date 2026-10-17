@@ -63,7 +63,7 @@ const message = useMessage()
 const goneChecked = ref<string[]>([])
 async function removeGone() {
   const ids = goneChecked.value.filter((id) => ws.entity(id))
-  for (const id of ids) ws.removeEntity(id)
+  ws.removeEntities(ids)
   goneChecked.value = []
   message.success(t('overview.removedMissing', { n: ids.length }))
   await load()

@@ -171,3 +171,15 @@ func TestShortNameAmongVisibleEntities(t *testing.T) {
 		t.Errorf("short name among shop entities = %q, want tenants", got)
 	}
 }
+
+// No attribute answers to an empty name, though an unset alias is empty:
+// count(*) names no field.
+func TestAttributeByNameEmpty(t *testing.T) {
+	e := Entity{Attributes: []Attribute{{Name: "id"}, {Name: "created_at", Alias: "createdAt"}}}
+	if a, ok := e.AttributeByName(""); ok {
+		t.Fatalf("an empty name found %+v", a)
+	}
+	if a, ok := e.AttributeByName("createdAt"); !ok || a.Name != "created_at" {
+		t.Fatalf("by alias: %+v %v", a, ok)
+	}
+}

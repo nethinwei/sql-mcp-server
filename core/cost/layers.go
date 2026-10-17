@@ -74,23 +74,25 @@ func (e Estimate) Check(ctx context.Context, c codegen.Compiled) (Decision, erro
 	deny := func(soft bool) (Decision, error) {
 		return Decision{
 			Allow: false, Soft: soft,
-			Plan:  &plan,
-			Score: ptrScore(score),
-			Hints: Hints(plan, th),
+			Plan:      &plan,
+			Score:     ptrScore(score),
+			Hints:     Hints(plan, th),
+			Threshold: th,
 		}, nil
 	}
 	return e.evaluatePlan(plan, err, score, th, deny)
 }
 
 // smallTable treats a full scan of tables of at most th.FullScanMaxRows rows
-// as a sequential scan: reading a lookup table whole is cheap, and rejecting
-// it would refuse queries on every small table. The size is the tables',
-// never the estimated output: a filter on a large table may output one row
-// after reading all of them.
+// as an index scan: reading a lookup table whole is cheap, and rejecting it
+// would refuse queries on every small table, or joining one (the plan keeps
+// its worst scan, and every full scan in it is of a small table). The size
+// is the tables', never the estimated output: a filter on a large table may
+// output one row after reading all of them.
 func smallTable(plan Plan, th Threshold) Plan {
 	if plan.ScanType == ScanFull && th.FullScanMaxRows > 0 && plan.TableSized &&
 		plan.TableRows <= th.FullScanMaxRows {
-		plan.ScanType = ScanSeq
+		plan.ScanType = ScanIndex
 	}
 	return plan
 }
@@ -120,7 +122,8 @@ func (e Estimate) Evaluate(plan Plan, err error) Decision {
 	plan = smallTable(plan, th)
 	score := ScorePlan(plan)
 	dec, _ := e.evaluatePlan(plan, err, score, th, func(soft bool) (Decision, error) {
-		return Decision{Allow: false, Soft: soft, Plan: &plan, Score: ptrScore(score), Hints: Hints(plan, th)}, nil
+		return Decision{Allow: false, Soft: soft, Plan: &plan, Score: ptrScore(score), Hints: Hints(plan, th),
+			Threshold: th}, nil
 	})
 	return dec
 }
@@ -150,6 +153,9 @@ func (e Estimate) evaluatePlan(
 		return deny(false)
 	}
 	if plan.ScanType == ScanFull && th.RejectFullScan {
+		return deny(false)
+	}
+	if th.MaxScannedRows > 0 && plan.ScannedRows() > th.MaxScannedRows {
 		return deny(false)
 	}
 	if plan.ScanType == ScanUnknown && th.RequireKnownScan {

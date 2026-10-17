@@ -506,6 +506,15 @@ type Workspace {
   version: Int!
   "The console's sections (entities, roles, users, settings)."
   sections: JSON!
+  """
+  Its items: those changed since version since (a console holding the
+  workspace at that version takes in only them), or all of them (complete)
+  when since is null or what changed since cannot be told (an update, reset
+  or commit since). A client holding another base than the one answered
+  (taking a draft in may move the workspace onto the published revision)
+  reads it again whole.
+  """
+  items(since: Int): WorkspaceItems!
   "The conflicts to resolve before committing."
   conflicts: [WorkspaceConflict!]!
   "Where changes came from: plans agents applied, drafts taken in."
@@ -517,6 +526,21 @@ type Workspace {
   updatedAt: Time
   "The administrator, or agent:<token name>."
   updatedBy: String!
+}
+
+"Items of a workspace: all of them (complete), or those changed since a version."
+type WorkspaceItems {
+  complete: Boolean!
+  "In the workspace's order. Changed since: a null value is an item removed."
+  items: [WorkspaceItem!]!
+}
+
+type WorkspaceItem {
+  "entity, role, user or settings."
+  kind: String!
+  "An entity's ID, a role's or a user's name, or settings."
+  key: String!
+  value: JSON
 }
 
 "A value the workspace and another side changed differently."

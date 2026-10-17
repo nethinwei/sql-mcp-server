@@ -17,12 +17,11 @@ import (
 // configsKept bounds the configurations SelectConfig keeps parsed.
 const configsKept = 8
 
-// configs keeps recently selected configurations parsed. Parsing a large
-// revision, and building a workspace onto one, takes a large part of a
-// second; the console asks for the same configuration on every page. A
-// revision never changes, so its configuration is kept by ID; a workspace
-// by its base and the hash of its edit. The configurations kept are shared:
-// SelectConfig's callers only read them.
+// configs keeps recently built workspace configurations, by their base and
+// the hash of their edit: building a workspace onto a large revision takes
+// a large part of a second, and the console asks for the same configuration
+// on every page (a revision's own is kept by RevisionSpec). The
+// configurations kept are shared: SelectConfig's callers only read them.
 type configs struct {
 	mu  sync.Mutex
 	all []keptConfig // most recently used last
@@ -79,29 +78,52 @@ func draftKey(d Draft) (string, error) {
 }
 
 // revisionConfig is the configuration of revision id, or of the published
-// one when id is nil; the published one is looked up without its payload.
+// one when id is nil (looked up without its payload); see RevisionSpec.
 func (r *Service) revisionConfig(ctx context.Context, id *string) (*config.Config, error) {
-	var key string
+	var rev int64
 	if id != nil {
-		key = "rev:" + *id
+		n, err := ParseID(*id)
+		if err != nil {
+			return nil, err
+		}
+		rev = n
 	} else {
 		head, err := r.Store.PublishedSummary(ctx)
 		if err != nil {
 			return nil, err
 		}
-		key = "rev:" + strconv.FormatInt(head.ID, 10)
+		rev = head.ID
 	}
-	return r.configs.keep(key, func() (*config.Config, error) {
-		var rev revision.Revision
-		var err error
-		if id != nil {
-			rev, err = r.Revision(ctx, *id)
-		} else {
-			rev, err = r.Store.Published(ctx)
-		}
+	_, cfg, err := r.RevisionSpec(rev, func() (revision.Revision, error) { return r.Store.Get(ctx, rev) })
+	return cfg, err
+}
+
+// keptSpec is a revision's configuration as written and in effect.
+type keptSpec struct {
+	spec *config.Spec
+	cfg  *config.Config
+	err  error
+}
+
+// RevisionSpec is revision id's configuration as written and in effect,
+// parsed once per revision (a revision never changes; parsing a large one
+// takes a large part of a second): load reads the revision when it is not
+// kept, and a revision that could not be read is not kept. Both are shared:
+// callers only read them.
+func (r *Service) RevisionSpec(id int64, load func() (revision.Revision, error)) (*config.Spec, *config.Config, error) {
+	r.specsOnce.Do(func() { r.specs = newLRU[keptSpec](configsKept) })
+	var loadErr error
+	k := r.specs.get(strconv.FormatInt(id, 10), func() (keptSpec, int) {
+		rev, err := load()
 		if err != nil {
-			return nil, err
+			loadErr = err
+			return keptSpec{err: err}, -1
 		}
-		return bootstrap.LoadRevision(rev)
+		spec, cfg, err := bootstrap.LoadRevisionSpec(rev)
+		return keptSpec{spec: spec, cfg: cfg, err: err}, 1
 	})
+	if loadErr != nil {
+		return nil, nil, loadErr
+	}
+	return k.spec, k.cfg, k.err
 }

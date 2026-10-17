@@ -99,8 +99,8 @@ func ScorePlan(p Plan) Score {
 		v -= 15
 		factors = append(factors, "stale statistics")
 	}
-	if p.EstimatedRows > 10000 {
-		v -= 15
+	if penalty := rowPenalty(p.EstimatedRows); penalty > 0 {
+		v -= penalty
 		factors = append(factors, "high row estimate")
 	}
 	if v < 0 {
@@ -110,6 +110,32 @@ func ScorePlan(p Plan) Score {
 		v = 100
 	}
 	return Score{Value: v, Factors: factors}
+}
+
+// rowPenalty grows with the order of magnitude of the rows a plan reads: an
+// index range over ten million rows is no cheaper for using an index.
+func rowPenalty(rows int64) int {
+	switch {
+	case rows > 10_000_000:
+		return 45
+	case rows > 1_000_000:
+		return 35
+	case rows > 100_000:
+		return 25
+	case rows > 10_000:
+		return 15
+	}
+	return 0
+}
+
+// ScannedRows is how many rows the plan reads: its largest row estimate, or
+// the table a full scan reads whole when that is larger (a filter may output
+// one row after reading all of them).
+func (p Plan) ScannedRows() int64 {
+	if p.ScanType == ScanFull && p.TableSized {
+		return max(p.EstimatedRows, p.TableRows)
+	}
+	return p.EstimatedRows
 }
 
 // Explainer estimates a plan for one query. Implementations live in x/providers
@@ -139,12 +165,15 @@ type AnalyzeConfig struct {
 
 // Threshold configures the gate. SoftScore/HardScore are 0-100 cutoffs.
 type Threshold struct {
-	Datasource     string
-	DialectName    string
-	SoftScore      int
-	HardScore      int
-	MaxRows        int64
-	MaxBytes       int64
+	Datasource  string
+	DialectName string
+	SoftScore   int
+	HardScore   int
+	MaxRows     int64
+	MaxBytes    int64
+	// MaxScannedRows refuses a plan reading more rows than this (see
+	// Plan.ScannedRows), whatever its access path; 0 is unlimited.
+	MaxScannedRows int64
 	RejectFullScan bool
 	// FullScanMaxRows: a full scan of tables of no more than this many rows
 	// (Plan.TableRows, when sized) is a small table's, scored and admitted as
@@ -167,6 +196,7 @@ type Threshold struct {
 type Tightening struct {
 	SoftScore, HardScore int
 	RejectFullScan       bool
+	MaxScannedRows       int64
 }
 
 // Tighten is th as strict as t asks, never less strict than th.
@@ -174,6 +204,9 @@ func (th Threshold) Tighten(t Tightening) Threshold {
 	th.SoftScore = max(th.SoftScore, t.SoftScore)
 	th.HardScore = max(th.HardScore, t.HardScore)
 	th.RejectFullScan = th.RejectFullScan || t.RejectFullScan
+	if t.MaxScannedRows > 0 && (th.MaxScannedRows <= 0 || t.MaxScannedRows < th.MaxScannedRows) {
+		th.MaxScannedRows = t.MaxScannedRows
+	}
 	return th
 }
 
@@ -203,6 +236,8 @@ type Decision struct {
 	Score     *Score
 	Hints     []string
 	Rewritten *codegen.Compiled
+	// Threshold is the one a refusal was judged by, to report its limits.
+	Threshold Threshold
 }
 
 // Estimate is the plan and score the decision carries, zero when it has none.
@@ -400,6 +435,11 @@ func (e *ExceededError) Unwrap() error { return ErrCostExceeded }
 // Hints produces table-driven rewrite suggestions for a rejected plan.
 func Hints(p Plan, th Threshold) []string {
 	var h []string
+	if scanned := p.ScannedRows(); th.MaxScannedRows > 0 && scanned > th.MaxScannedRows {
+		h = append(h, fmt.Sprintf("estimated to read %d rows, over the limit of %d: narrow the filter "+
+			"(a shorter time range, a more selective condition) or split the work into smaller ranges",
+			scanned, th.MaxScannedRows))
+	}
 	if p.ScanType == ScanFull {
 		h = append(h, "add a filter on an indexed column or add LIMIT")
 	}

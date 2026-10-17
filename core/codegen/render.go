@@ -2,6 +2,7 @@ package codegen
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -12,7 +13,7 @@ import (
 func (b *builder) render(e relalg.Expr) error {
 	switch n := e.(type) {
 	case relalg.Scan, relalg.Select, relalg.Project, relalg.Sort,
-		relalg.Limit, relalg.Distinct, relalg.Aggregate:
+		relalg.Limit, relalg.Distinct, relalg.Aggregate, relalg.Having, relalg.Join:
 		b.readOnly = true
 		return b.renderSelect(n)
 	case relalg.Insert:
@@ -31,11 +32,14 @@ func (b *builder) render(e relalg.Expr) error {
 // selectCtx accumulates the flattened parts of a linear read chain.
 type selectCtx struct {
 	from       string
+	scanAlias  string
+	joins      []relalg.Join
 	wherePreds []relalg.Predicate
 	cols       []relalg.ProjectItem
 	order      []relalg.OrderTerm
 	groupBy    []string
 	aggregates []relalg.AggCall
+	having     relalg.Predicate
 	limit      int64
 	offset     int64
 	hasLimit   bool
@@ -45,10 +49,7 @@ type selectCtx struct {
 func (b *builder) flatten(e relalg.Expr, ctx *selectCtx) error {
 	switch n := e.(type) {
 	case relalg.Scan:
-		ctx.from = b.qtable(n.Relation)
-		if n.Alias != "" {
-			ctx.from += " AS " + b.qident(n.Alias)
-		}
+		ctx.from, ctx.scanAlias = b.qtable(n.Relation), n.Alias
 		b.noteTable(n.Relation.Name)
 	case relalg.Select:
 		if err := b.flatten(n.Input, ctx); err != nil {
@@ -72,9 +73,7 @@ func (b *builder) flatten(e relalg.Expr, ctx *selectCtx) error {
 		if err := b.flatten(n.Input, ctx); err != nil {
 			return err
 		}
-		ctx.limit = n.Count
-		ctx.offset = n.Offset
-		ctx.hasLimit = true
+		ctx.limit, ctx.offset, ctx.hasLimit = n.Count, n.Offset, true
 	case relalg.Distinct:
 		if err := b.flatten(n.Input, ctx); err != nil {
 			return err
@@ -86,9 +85,24 @@ func (b *builder) flatten(e relalg.Expr, ctx *selectCtx) error {
 		}
 		ctx.groupBy = n.GroupBy
 		ctx.aggregates = n.Aggregates
+	case relalg.Having:
+		return b.flattenHaving(n, ctx)
+	case relalg.Join:
+		return b.flattenJoin(n, ctx)
 	default:
 		return fmt.Errorf("%w: %T", ErrUnsupportedExpr, e)
 	}
+	return nil
+}
+
+func (b *builder) flattenHaving(n relalg.Having, ctx *selectCtx) error {
+	if _, ok := n.Input.(relalg.Aggregate); !ok || n.Predicate == nil {
+		return fmt.Errorf("%w: HAVING needs an aggregate and a predicate", ErrUnsupportedExpr)
+	}
+	if err := b.flatten(n.Input, ctx); err != nil {
+		return err
+	}
+	ctx.having = n.Predicate
 	return nil
 }
 
@@ -97,21 +111,31 @@ func (b *builder) renderSelect(e relalg.Expr) error {
 	if err := b.flatten(e, ctx); err != nil {
 		return err
 	}
-	for _, p := range ctx.wherePreds {
+	for _, p := range append(slices.Clone(ctx.wherePreds), ctx.having) {
 		if err := b.validate(p); err != nil {
 			return err
 		}
 	}
+	b.qualify(ctx)
 	if err := b.writeSelectClause(ctx); err != nil {
 		return err
 	}
-	b.sql.WriteString(" FROM ")
-	b.sql.WriteString(ctx.from)
+	if err := b.writeFromClause(ctx); err != nil {
+		return err
+	}
 	if err := b.writeWhereClause(ctx); err != nil {
 		return err
 	}
 	b.writeGroupByClause(ctx)
-	b.writeOrderByClause(ctx)
+	if err := b.withOutputs(ctx, func() error {
+		if err := b.writeHavingClause(ctx); err != nil {
+			return err
+		}
+		b.writeOrderByClause(ctx)
+		return nil
+	}); err != nil {
+		return err
+	}
 	b.capBase = b.sql.String()
 	if ctx.hasLimit {
 		b.capLimit, b.capOffset = ctx.limit, ctx.offset
@@ -134,6 +158,8 @@ func (b *builder) writeSelectClause(ctx *selectCtx) error {
 		b.sql.WriteString(cols)
 	case len(ctx.cols) > 0:
 		b.sql.WriteString(b.renderCols(ctx.cols))
+	case len(ctx.joins) > 0:
+		b.sql.WriteString(b.qident(b.root) + ".*") // the read's own columns
 	default:
 		b.sql.WriteString("*")
 	}
@@ -159,9 +185,40 @@ func (b *builder) writeGroupByClause(ctx *selectCtx) {
 		return
 	}
 	b.sql.WriteString(" GROUP BY ")
-	b.sql.WriteString(b.renderFieldList(ctx.groupBy))
+	b.sql.WriteString(b.renderColumns(ctx.groupBy))
 }
 
+// withOutputs renders fn with the aggregate's named calls in scope (see
+// builder.outputs).
+func (b *builder) withOutputs(ctx *selectCtx, fn func() error) error {
+	if len(ctx.aggregates) == 0 {
+		return fn()
+	}
+	b.outputs = map[string]string{}
+	for _, a := range ctx.aggregates {
+		if a.Name == "" {
+			continue
+		}
+		expr, err := b.aggregateCall(a)
+		if err != nil {
+			return err
+		}
+		b.outputs[a.Name] = expr
+	}
+	defer func() { b.outputs = nil }()
+	return fn()
+}
+
+func (b *builder) writeHavingClause(ctx *selectCtx) error {
+	if ctx.having == nil {
+		return nil
+	}
+	b.sql.WriteString(" HAVING ")
+	return b.renderPredicate(ctx.having)
+}
+
+// writeOrderByClause orders by the terms; a nullable term first orders its
+// NULLs last, the same on every database (they default differently).
 func (b *builder) writeOrderByClause(ctx *selectCtx) {
 	if len(ctx.order) == 0 {
 		return
@@ -171,7 +228,11 @@ func (b *builder) writeOrderByClause(ctx *selectCtx) {
 		if i > 0 {
 			b.sql.WriteString(", ")
 		}
-		b.sql.WriteString(b.qident(t.Field))
+		col := b.column(t.Field)
+		if t.Nullable {
+			b.sql.WriteString("CASE WHEN " + col + " IS NULL THEN 1 ELSE 0 END, ")
+		}
+		b.sql.WriteString(col)
 		if strings.EqualFold(t.Dir, "desc") {
 			b.sql.WriteString(" DESC")
 		} else {
@@ -205,7 +266,7 @@ func limitClause(limit, offset int64) string {
 func (b *builder) renderCols(items []relalg.ProjectItem) string {
 	parts := make([]string, len(items))
 	for i, it := range items {
-		s := b.qident(it.Field)
+		s := b.col(it.Field)
 		if it.Alias != "" {
 			s += " AS " + b.qident(it.Alias)
 		}
@@ -225,25 +286,34 @@ func (b *builder) renderFieldList(fields []string) string {
 func (b *builder) renderAggregateCols(ctx *selectCtx) (string, error) {
 	var parts []string
 	for _, g := range ctx.groupBy {
-		parts = append(parts, b.qident(g))
+		parts = append(parts, b.col(g))
 	}
 	for _, a := range ctx.aggregates {
-		// Defense in depth: the aggregate function is whitelisted here even
-		// though tool and MCP schema also validate it — a raw function name
-		// must never be interpolated into SQL unchecked.
-		if !a.Func.Valid() {
-			return "", fmt.Errorf("%w: %q", relalg.ErrInvalidAggFunc, a.Func)
+		call, err := b.aggregateCall(a)
+		if err != nil {
+			return "", err
 		}
-		field := "*"
-		if a.Field != "" {
-			field = b.qident(a.Field)
-		}
-		if a.Distinct {
-			field = "DISTINCT " + field
-		}
-		parts = append(parts, strings.ToUpper(string(a.Func))+"("+field+")")
+		parts = append(parts, call)
 	}
 	return strings.Join(parts, ", "), nil
+}
+
+// aggregateCall renders one aggregate call.
+func (b *builder) aggregateCall(a relalg.AggCall) (string, error) {
+	// Defense in depth: the aggregate function is whitelisted here even
+	// though tool and MCP schema also validate it — a raw function name
+	// must never be interpolated into SQL unchecked.
+	if !a.Func.Valid() {
+		return "", fmt.Errorf("%w: %q", relalg.ErrInvalidAggFunc, a.Func)
+	}
+	field := "*"
+	if a.Field != "" {
+		field = b.col(a.Field)
+	}
+	if a.Distinct {
+		field = "DISTINCT " + field
+	}
+	return strings.ToUpper(string(a.Func)) + "(" + field + ")", nil
 }
 
 // validate checks a predicate once, before it is rendered: every operator is
@@ -270,6 +340,8 @@ func (b *builder) renderPredicate(p relalg.Predicate) error {
 		}
 		b.sql.WriteString(")")
 		return nil
+	case relalg.Exists:
+		return b.renderExists(pp)
 	case relalg.Or:
 		b.sql.WriteString("(")
 		for i, q := range pp.Preds {
@@ -291,7 +363,7 @@ func (b *builder) renderPredicate(p relalg.Predicate) error {
 }
 
 func (b *builder) renderCondition(c relalg.Condition) error {
-	b.sql.WriteString(b.qident(c.Field))
+	b.sql.WriteString(b.column(c.Field))
 	switch c.Op {
 	case relalg.OpIsNull:
 		b.sql.WriteString(" IS NULL")

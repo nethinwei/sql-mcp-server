@@ -36,6 +36,9 @@ func prepareInsert(ctx context.Context, tc Context, in createInput) (statement, 
 	if err := validateWritable(res, keys...); err != nil {
 		return statement{}, err
 	}
+	if err := distinctColumns(res.Entity, keys); err != nil {
+		return statement{}, err
+	}
 	g, err := authorizeRequest(ctx, tc, rbac.Request{
 		Role: tc.Role, Subject: tc.Subject, Entity: in.Entity, Action: entity.ActionCreate,
 		WriteFields: keys,
@@ -50,7 +53,7 @@ func prepareInsert(ctx context.Context, tc Context, in createInput) (statement, 
 	compiled, err := compile(
 		tc,
 		res.Entity,
-		relalg.Insert{Target: res.Entity.Ref(), Columns: keys, Tuples: []relalg.Tuple{tup}},
+		relalg.Insert{Target: res.Entity.Ref(), Columns: columnsOf(res.Entity, keys), Tuples: []relalg.Tuple{tup}},
 	)
 	if err != nil {
 		return statement{}, err
@@ -135,6 +138,9 @@ func prepareUpdate(ctx context.Context, tc Context, in updateInput) (statement, 
 	if err := validateUnmaskedFields(plan.res, filterFields(in.Filter)...); err != nil {
 		return statement{}, err
 	}
+	if err := distinctColumns(plan.res.Entity, sortedKeys(in.Set)); err != nil {
+		return statement{}, err
+	}
 	if err := validateWritable(plan.res, sortedKeys(in.Set)...); err != nil {
 		return statement{}, err
 	}
@@ -154,7 +160,7 @@ func prepareUpdate(ctx context.Context, tc Context, in updateInput) (statement, 
 	}
 	setItems := make([]relalg.SetItem, 0, len(in.Set))
 	for _, k := range sortedKeys(in.Set) {
-		setItems = append(setItems, relalg.SetItem{Field: k, Value: in.Set[k]})
+		setItems = append(setItems, relalg.SetItem{Field: columnOf(plan.res.Entity, k), Value: in.Set[k]})
 	}
 	compiled, err := compile(
 		plan.tc,

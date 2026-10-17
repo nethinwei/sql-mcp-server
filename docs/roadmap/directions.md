@@ -143,7 +143,11 @@ SQL 入口是管理面 2 定义的内置 `execute_sql`，扩展点不得调用�
 
 ## L12. Governed Query Expressiveness
 
-在不引入任意 SQL 的前提下扩大统一 IR 可表达的声明式查询集合。候选池按
+在不引入任意 SQL 的前提下扩大统一 IR 可表达的声明式查询集合。
+
+已落地（未发布版本，由现网反馈触发）：排序与 Top-N（`Sort` 可引用聚合输出、NULL 一律置后）、
+`Having` 与去重计数、OR/NOT 过滤组合，以及沿已声明关系的受控 join（单跳：对一关系以目标的键
+`LEFT JOIN`，任意关系可用 `EXISTS` 过滤）；它们按下文门禁进入 interp 与 conformance 语料。候选池按
 "Agent 任务覆盖率 / 实现风险"排序，而不是按 SQL 语法完整性排序：
 
 1. 沿显式授权关系的受控 join；

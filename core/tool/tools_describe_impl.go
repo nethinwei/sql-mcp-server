@@ -23,15 +23,7 @@ func describeFields(ctx context.Context, tc Context, e entity.Entity) ([]string,
 		}
 		allowedEntity = true
 		if action == entity.ActionRead || action == entity.ActionAggregate {
-			// The decision carries the readable projection: what every grant
-			// reads, or the field sets a selection may use.
-			for _, scope := range append(dec.Scopes(), dec.Fields) {
-				for _, f := range scope {
-					if a, ok := e.AttributeByName(f); ok {
-						fields[a.Name] = true
-					}
-				}
-			}
+			addReadable(e, dec, fields)
 			continue
 		}
 		if err := collectDescribeFields(ctx, tc, e, action, fields); err != nil {

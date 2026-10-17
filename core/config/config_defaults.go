@@ -72,6 +72,9 @@ func (c *Config) applyCostDefaults() {
 	if !c.Cost.present["maxRows"] && c.Cost.MaxRows == 0 {
 		c.Cost.MaxRows = 10000
 	}
+	if !c.Cost.present["maxScannedRows"] && c.Cost.MaxScannedRows == 0 {
+		c.Cost.MaxScannedRows = 100000
+	}
 	if !c.Cost.present["maxBytes"] && c.Cost.MaxBytes == 0 {
 		c.Cost.MaxBytes = 16 << 20
 	}
@@ -99,6 +102,9 @@ func (c *Config) applyCostDefaults() {
 	}
 	if c.Cost.SQLEscape.Estimate == "" {
 		c.Cost.SQLEscape.Estimate = SQLEscapeEstimateRequired
+	}
+	if c.Cost.SQLEscape.Metadata == "" {
+		c.Cost.SQLEscape.Metadata = SQLEscapeMetadataAllow
 	}
 }
 

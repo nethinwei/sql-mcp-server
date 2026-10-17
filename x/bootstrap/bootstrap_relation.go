@@ -45,6 +45,7 @@ func identifyRelations(
 				schema = found.Schema
 				entities[i].Kind, entities[i].Derived = found.Kind, found.Derived
 				entities[i].Keys = databaseKeys(e, found)
+				entities[i].Indexes = slices.Clone(found.Indexes)
 				entities[i].SideEffects = found.SideEffects
 				entities[i].Cascades = slices.Clone(found.Cascades)
 				for j, c := range entities[i].Cascades {

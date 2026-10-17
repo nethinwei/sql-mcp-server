@@ -245,6 +245,7 @@ type RoleDefinition struct {
 type PrincipalLimits struct {
 	MaxRows        int64         `yaml:"maxRows,omitempty"        json:"maxRows,omitempty" schema:"min=0"`
 	MaxBytes       int64         `yaml:"maxBytes,omitempty"       json:"maxBytes,omitempty" schema:"min=0"`
+	MaxScannedRows int64         `yaml:"maxScannedRows,omitempty" json:"maxScannedRows,omitempty" schema:"min=0"`
 	QueryTimeout   time.Duration `yaml:"queryTimeout,omitempty"   json:"queryTimeout,omitempty" schema:"min=0"`
 	SoftScore      int           `yaml:"softScore,omitempty"      json:"softScore,omitempty" schema:"min=0,max=100"`
 	HardScore      int           `yaml:"hardScore,omitempty"      json:"hardScore,omitempty" schema:"min=0,max=100"`
@@ -383,6 +384,7 @@ type CostConfig struct {
 	HardScore           int                 `yaml:"hardScore"                   json:"hardScore" schema:"min=0,max=100"`
 	MaxRows             int64               `yaml:"maxRows"                     json:"maxRows" schema:"min=1"`
 	MaxBytes            int64               `yaml:"maxBytes"                    json:"maxBytes" schema:"min=1"`
+	MaxScannedRows      int64               `yaml:"maxScannedRows"              json:"maxScannedRows" schema:"min=0"`
 	MaxINListSize       int                 `yaml:"maxINListSize"               json:"maxINListSize" schema:"min=1"`
 	MaxFilterConditions int                 `yaml:"maxFilterConditions"         json:"maxFilterConditions" schema:"min=1"`
 	MaxGroupByFields    int                 `yaml:"maxGroupByFields"            json:"maxGroupByFields" schema:"min=1"`
@@ -425,7 +427,21 @@ type SQLEscapeCostConfig struct {
 	// Estimate is required (the default: a statement EXPLAIN cannot estimate
 	// is refused) or skip (no estimate, the hard limits alone).
 	Estimate string `yaml:"estimate" json:"estimate" schema:"enum=@sqlEscapeEstimate"`
+	// Metadata is allow (the default: SHOW and DESCRIBE statements, which
+	// EXPLAIN cannot estimate, run under the hard limits alone) or refuse
+	// (they are refused as any statement EXPLAIN cannot estimate).
+	Metadata string `yaml:"metadata" json:"metadata" schema:"enum=@sqlEscapeMetadata"`
 }
+
+// MetadataAllowed reports whether the escape hatch runs metadata statements
+// without an estimate.
+func (c SQLEscapeCostConfig) MetadataAllowed() bool { return c.Metadata != SQLEscapeMetadataRefuse }
+
+// Values of SQLEscapeCostConfig.Metadata.
+const (
+	SQLEscapeMetadataAllow  = "allow"
+	SQLEscapeMetadataRefuse = "refuse"
+)
 
 // EstimateRequired reports whether the escape hatch refuses statements it
 // cannot estimate.
@@ -471,6 +487,7 @@ func (c CostConfig) Threshold() cost.Threshold {
 		HardScore:                 c.HardScore,
 		MaxRows:                   c.MaxRows,
 		MaxBytes:                  c.MaxBytes,
+		MaxScannedRows:            c.MaxScannedRows,
 		RejectFullScan:            c.RejectFullScan,
 		FullScanMaxRows:           c.FullScanMaxRows,
 		WhitelistPKPoint:          c.WhitelistPKPoint,

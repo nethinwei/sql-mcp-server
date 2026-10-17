@@ -3,9 +3,10 @@ import { computed, h, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuery } from '@urql/vue'
 import {
-  NButton, NCard, NCheckbox, NCheckboxGroup, NDataTable, NForm, NFormItem, NInput, NModal, NSpace, NSwitch,
+  NButton, NCard, NDataTable, NForm, NFormItem, NInput, NModal, NSpace, NSwitch,
   NTag, NText, useMessage, type DataTableColumns,
 } from 'naive-ui'
+import AdminPermissions from '@/components/AdminPermissions.vue'
 import { run } from '@/api/client'
 import {
   AdminAccountsQuery, CreateAdminAccountMutation, SetAdminPasswordMutation, UpdateAdminAccountMutation,
@@ -21,8 +22,7 @@ const accounts = useQuery({ query: AdminAccountsQuery, variables: {} })
 const refresh = () => accounts.executeQuery({ requestPolicy: 'network-only' })
 
 const permissions = ['admin:read', 'admin:write', 'admin:publish', 'admin:accounts', 'admin:*']
-const permissionOptions = computed(() =>
-  permissions.map((p) => ({ value: p, label: t(`admins.perm.${p}`), hint: t(`admins.permHint.${p}`) })))
+const permissionOptions = computed(() => permissions.map((p) => ({ value: p, label: t(`admins.perm.${p}`) })))
 
 async function act(fn: () => Promise<unknown>, done: string) {
   try {
@@ -132,13 +132,7 @@ async function savePassword() {
         <n-form-item :label="t('admins.username')"><n-input v-model:value="form.username" :placeholder="t('admins.usernamePlaceholder')" /></n-form-item>
         <n-form-item :label="t('admins.initialPassword')"><n-input v-model:value="form.password" type="password" show-password-on="click" :placeholder="t('admins.passwordPlaceholder')" /></n-form-item>
         <n-form-item :label="t('admins.permissions')">
-          <n-checkbox-group v-model:value="form.permissions">
-            <n-space vertical :size="4">
-              <n-checkbox v-for="o in permissionOptions" :key="o.value" :value="o.value">
-                {{ o.label }} <n-text depth="3" style="font-size: 12px">{{ o.hint }}</n-text>
-              </n-checkbox>
-            </n-space>
-          </n-checkbox-group>
+          <admin-permissions v-model="form.permissions" />
         </n-form-item>
       </n-form>
       <template #footer>
@@ -151,13 +145,7 @@ async function savePassword() {
 
     <n-modal :show="permTarget !== null" preset="card" :title="t('admins.editTitle', { name: permTarget?.username })" class="dialog"
       @update:show="(v: boolean) => !v && (permTarget = null)">
-      <n-checkbox-group v-model:value="permDraft">
-        <n-space vertical :size="4">
-          <n-checkbox v-for="o in permissionOptions" :key="o.value" :value="o.value">
-            {{ o.label }} <n-text depth="3" style="font-size: 12px">{{ o.hint }}</n-text>
-          </n-checkbox>
-        </n-space>
-      </n-checkbox-group>
+      <admin-permissions v-model="permDraft" />
       <template #footer>
         <n-space justify="end">
           <n-button @click="permTarget = null">{{ t('common.cancel') }}</n-button>

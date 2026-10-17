@@ -25,8 +25,9 @@ vi.mock('@/api/client', () => ({
 let answerBase = '1'
 
 function answer(): WorkspacePartsFragment {
-  return { base: answerBase, version: 1, sections: { entities: [], roles: [{ name: 'analyst' }], users: [], settings: {} },
-    updatedBy: 'root', taken: [], checkpoint: null, conflicts: [], notes: [] }
+  return { base: answerBase, version: 1, items: { complete: true, items: [
+    { kind: 'role', key: 'analyst', value: { name: 'analyst' } }, { kind: 'settings', key: 'settings', value: {} },
+  ] }, updatedBy: 'root', taken: [], checkpoint: null, conflicts: [], notes: [] }
 }
 
 const { useWorkspaceSync, workspace } = await import('./workspaceSync')

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/nethinwei/sql-mcp-server/core/workspace"
 )
@@ -25,9 +26,45 @@ type review struct {
 	CheckpointAt int64                `json:"checkpointAt,omitempty"`
 }
 
-// Workspace implements workspace.Store.
+// keptWorkspace is a workspace as last read or written, at its version and
+// write time (a workspace is never removed, so the two name its content).
+type keptWorkspace struct {
+	version, updated int64
+	w                workspace.Workspace
+}
+
+// Workspace implements workspace.Store. A large workspace takes long to
+// decode and every operation reads it: the one last read or written is
+// kept, and returned while the stored one is still at its version.
 func (s *SQLStore) Workspace(ctx context.Context, username string) (workspace.Workspace, bool, error) {
-	return s.workspace(ctx, s.db, username)
+	if v, ok := s.workspaces.Load(username); ok {
+		k := v.(keptWorkspace)
+		var version, updated int64
+		err := s.queryRow(ctx, s.db, "SELECT version, updated_us FROM smcp_workspaces WHERE username = ?", username).
+			Scan(&version, &updated)
+		if err == nil && version == k.version && updated == k.updated {
+			return k.copy(), true, nil
+		}
+	}
+	w, ok, err := s.workspace(ctx, s.db, username)
+	if ok && err == nil {
+		s.keep(w)
+	}
+	return w, ok, err
+}
+
+func (s *SQLStore) keep(w workspace.Workspace) {
+	s.workspaces.Store(w.Username, keptWorkspace{version: w.Version, updated: toMicros(w.UpdatedAt), w: w})
+}
+
+// copy is the kept workspace for a caller to edit: its items are shared
+// (values are never written to), its lists clipped so that appending to
+// them does not write into the kept ones.
+func (k keptWorkspace) copy() workspace.Workspace {
+	w := k.w
+	w.Items, w.Conflicts, w.Notes, w.Taken = slices.Clip(w.Items), slices.Clip(w.Conflicts), slices.Clip(w.Notes),
+		slices.Clip(w.Taken)
+	return w
 }
 
 func (s *SQLStore) workspace(ctx context.Context, q execer, username string) (workspace.Workspace, bool, error) {
@@ -71,11 +108,14 @@ func (s *SQLStore) PutWorkspace(
 	}
 	w.UpdatedAt = s.timestamp()
 	err = s.locked(ctx, func(tx *sql.Tx) error {
-		current, ok, err := s.workspace(ctx, tx, w.Username)
-		if err != nil {
+		// Only the version is compared: the items are not decoded again.
+		var current int64
+		err := s.queryRow(ctx, tx, "SELECT version FROM smcp_workspaces WHERE username = ?", w.Username).Scan(&current)
+		ok := err == nil
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		if current.Version != expected {
+		if current != expected {
 			return workspace.ErrChanged
 		}
 		w.Version = expected + 1
@@ -98,7 +138,8 @@ func (s *SQLStore) PutWorkspace(
 		}
 		return workspace.Workspace{}, fmt.Errorf("configstore: write workspace: %w", err)
 	}
-	return w, nil
+	s.keep(w)
+	return keptWorkspace{w: w}.copy(), nil
 }
 
 func encodeWorkspace(w workspace.Workspace) (string, string, error) {

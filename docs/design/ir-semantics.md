@@ -45,13 +45,27 @@ Provider differential conformance suite（`internal/conformance`）的唯一
 | `Select` | bag → bag | 保留谓词为 `TRUE` 的行，重复保留 |
 | `Project` | bag → bag | 按 items 取列/改名；不去重；引用不存在的列是编译期错误 |
 | `Aggregate` | bag → bag | 见下节 |
-| `Sort` | bag → 序列 | 按 OrderTerm 依次比较；`asc`/`desc`；排序键相等的行之间顺序不作保证（需要确定序时必须补唯一键） |
+| `Sort` | bag → 序列 | 按 OrderTerm 依次比较；`asc`/`desc`；`NULL` 不论方向都排在最后；排序键相等的行之间顺序不作保证（需要确定序时必须补唯一键）。在 `Aggregate`/`Having` 之上时，OrderTerm 可以写分组字段或聚合的 `Name` |
+| `Join` | bag → bag | 左外连接：每行接上 `Right` 中与 `On`（左列 = 右列，NULL 不相等）匹配且 `RightPredicate` 为 `TRUE` 的那一行，没有则接 NULL；`On` 必须是右侧的键（最多匹配一行，否则为错误）。右侧的列在其上的算子中写作 `Alias.column`，但不属于读取的输出：没有 `Project`/`Aggregate` 时输出只含左侧的列 |
+| `Having` | 聚合结果 → bag | 输入必须是 `Aggregate`；保留谓词为 `TRUE` 的组，谓词中的字段是分组字段或 `AggCall.Name`（同 `Select` 的三值逻辑） |
 | `Limit` | 序列 → 序列 | 先 offset 后 count；无前置 `Sort` 时选中哪些行不作保证 |
 | `Distinct` | bag → bag | 整行去重；`NULL` 与 `NULL` 视为相同（distinct 语义，非 `=` 语义） |
 
+谓词 `Exists`：当 `Relation` 中存在与当前行按 `On` 匹配（NULL 不相等）且 `Predicate`
+为 `TRUE` 的行时为 `TRUE`，否则为 `FALSE`（不会是 `UNKNOWN`）；`Predicate` 写的是
+`Relation` 自己的列；不嵌套。codegen 在有 `Join` 或 `Exists` 时给主表起别名（`_`），所有列
+带限定；`Exists` 渲染为 `EXISTS (SELECT 1 FROM … AS xN WHERE …)`。
+
+`NULL` 排在最后的实现：codegen 对标记 `Nullable` 的排序项先按
+`CASE WHEN x IS NULL THEN 1 ELSE 0 END` 排序（三库一致）；未标记的项按数据库默认渲染，
+由调用方保证该列不含 `NULL`（工具层按列的可空性标记），以免妨碍用索引排序。
+
 ## 聚合语义
 
-- `count(*)` 计行数；`count(field)` 计 `field` 非 `NULL` 的行数；
+- `count(*)` 计行数；`count(field)` 计 `field` 非 `NULL` 的行数；`Distinct` 的调用（只用于
+  `count(field)`）对非 `NULL` 值去重后计数；
+- 聚合调用的 `Name` 是它在 `Sort`/`Having` 中被引用的输出名；SQL 中不起别名，引用处直接
+  渲染该聚合调用（三库通用）；
 - `sum`/`avg`/`min`/`max` 忽略 `NULL` 输入值；
 - **无 groupBy 的空输入**：恒返回一行——`count → 0`，`sum/avg/min/max →
   NULL`；
@@ -82,7 +96,6 @@ conformance 等价 corpus 回避以下点；触碰它们的行为差异不算失
 
 | 行为 | PostgreSQL | MySQL / OceanBase | corpus 处理 |
 | --- | --- | --- | --- |
-| `Sort` 中 `NULL` 的位置 | ASC 时 NULL 在后 | ASC 时 NULL 在前 | 有序比较只用非 NULL 且唯一的排序键；含 NULL 排序键的 case 用 bag 比较 |
 | `like`/字符串比较的大小写 | 大小写敏感 | 默认 collation（`utf8mb4_0900_ai_ci` 等）大小写不敏感 | corpus 字符串全小写且互不为大小写变体 |
 | `avg` 的小数精度 | numeric 高精度 | 默认 4 位小数（`div_precision_increment`） | corpus 只包含 ≤2 位小数可精确终止的平均值 |
 | 聚合结果列名 | `count`/`sum`… | `count(*)`/`sum(x)`… | 一律按列位置比较 |

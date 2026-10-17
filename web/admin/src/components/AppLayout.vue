@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, h, onBeforeUnmount, onMounted, ref, type Component } from 'vue'
+import { computed, h, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
@@ -117,7 +117,10 @@ async function poll() {
 // what is written there is read here (see lib/workspaceSync).
 const sync = useWorkspaceSync()
 const { sources: conflictSources } = useConflictSources()
-ws.$subscribe(() => sync.schedulePush())
+// Its content key, not a deep watch of the store: that walks every item of a
+// large workspace on each keystroke, while the key recomputes only the item
+// edited (see stores/workspace canonicalSections).
+watch(() => ws.content, () => sync.schedulePush())
 
 const outdated = computed(() =>
   status.publishedId !== null && ws.basePublished !== null && status.publishedId !== ws.basePublished)

@@ -206,12 +206,24 @@ func (s Schema) Canonical(v any) string { return s.comparer().canonicalAt("", v)
 
 // Same reports whether two items mean the same, regardless of key order or
 // unset values.
-func (s Schema) Same(a, b any) bool { return s.Canonical(a) == s.Canonical(b) }
+func (s Schema) Same(a, b any) bool { return Identical(a, b) || s.Canonical(a) == s.Canonical(b) }
+
+// Identical reports whether a and b are one map or list (values are never
+// written to once built, so they mean the same): an item a write left alone
+// compares without encoding it.
+func Identical(a, b any) bool {
+	ka, okA := memoKeyOf("", a)
+	kb, okB := memoKeyOf("", b)
+	return okA && okB && ka == kb
+}
 
 // sameAt compares two values at path.
 func (c *comparer) sameAt(path Path, a, b any) bool {
 	if n := len(path); n > 0 && (path[n-1].Element != "" || path[n-1].Field == "") {
 		return c.sameElements(path, a, b)
+	}
+	if Identical(a, b) {
+		return true
 	}
 	p := path.Pattern()
 	return c.canonicalAt(p, a) == c.canonicalAt(p, b)

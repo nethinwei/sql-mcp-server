@@ -18,8 +18,18 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/relalg/interp"
 )
 
-// TableName is the single fixture relation.
-const TableName = "conf_t"
+// TableName is the main fixture relation; CategoryTable holds its
+// categories: conf_t.cat names one (or none: NULL, or a missing one).
+const (
+	TableName     = "conf_t"
+	CategoryTable = "conf_c"
+)
+
+// categoryRows are conf_c's (cat, label, tier): category b has no tier and
+// z no row of conf_t; conf_t's NULL categories match none.
+func categoryRows() [][]any {
+	return [][]any{{"a", "apple", int64(1)}, {"b", "banana", nil}, {"z", "zebra", int64(3)}}
+}
 
 // fixtureRow keeps the fixture in one typed place so the interpreter table
 // and the SQL INSERT are generated from identical values. price is a decimal
@@ -66,7 +76,13 @@ func Fixture() interp.DB {
 		}
 		table.Rows = append(table.Rows, []any{r.id, r.cat, r.val, price, r.name})
 	}
-	return interp.DB{TableName: table}
+	return interp.DB{TableName: table, CategoryTable: interp.Table{Cols: []string{"cat", "label", "tier"},
+		Rows: categoryRows()}}
+}
+
+// categories returns the category Scan node for the given schema.
+func categories(schema string) relalg.RelationRef {
+	return relalg.RelationRef{Schema: schema, Name: CategoryTable}
 }
 
 // Qualified returns the schema-qualified table name ("schema.conf_t"), or
@@ -101,7 +117,18 @@ func SetupStatements(dialectName, schema string) []string {
 		stmts = append(stmts, "CREATE TABLE "+qualified+
 			" (id int PRIMARY KEY, cat varchar(16), val int, price decimal(10,2), name varchar(32))")
 	}
-	return append(stmts, insertStatement(qualified))
+	stmts = append(stmts, insertStatement(qualified))
+	cats := CategoryTable
+	if schema != "" {
+		cats = schema + "." + CategoryTable
+	}
+	stmts = append(stmts, "DROP TABLE IF EXISTS "+cats,
+		"CREATE TABLE "+cats+" (cat varchar(16) PRIMARY KEY, label varchar(32) NOT NULL, tier integer)")
+	var tuples []string
+	for _, r := range categoryRows() {
+		tuples = append(tuples, fmt.Sprintf("(%s, %s, %s)", sqlLiteral(r[0]), sqlLiteral(r[1]), sqlLiteral(r[2])))
+	}
+	return append(stmts, "INSERT INTO "+cats+" (cat, label, tier) VALUES "+strings.Join(tuples, ", "))
 }
 
 // insertStatement renders one multi-row INSERT from the fixture. All values

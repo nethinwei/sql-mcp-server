@@ -51,6 +51,8 @@ type (
 	UnscannedSchemas   = configapp.UnscannedSchemas
 	Validation         = configapp.Validation
 	Workspace          = configapp.Workspace
+	WorkspaceItems     = configapp.WorkspaceItems
+	WorkspaceItem      = configapp.WorkspaceItem
 	WorkspaceConflict  = configapp.WorkspaceConflict
 	WorkspaceNote      = configapp.WorkspaceNote
 	WorkspaceRef       = configapp.WorkspaceRef

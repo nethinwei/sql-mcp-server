@@ -42,6 +42,12 @@ models:
   TableStatus:
     model:
       - github.com/99designs/gqlgen/graphql.String
+  Workspace:
+    fields:
+      sections:
+        resolver: true
+      items:
+        resolver: true
   Revision:
     model:
       - github.com/nethinwei/sql-mcp-server/x/admin/graph.Revision

@@ -22,6 +22,8 @@ type readPlan struct {
 	projectionFields []string
 	full             relalg.Predicate
 	keysetCols       []string // ORDER BY for keyset pagination
+	order            readOrder
+	rel              related
 	grant            grant
 }
 
@@ -41,7 +43,10 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 	if plan.tc.Cache != nil {
 		stamp = plan.tc.Cache.Stamp(cacheKey.Database)
 	}
-	if cached, err, ok := readCacheHit(ctx, plan.tc, in, cacheKey); ok {
+	// A read across relationships is not cached: writes to their targets
+	// would not invalidate it.
+	cacheable := len(plan.rel.joins) == 0 && !relalg.HasExists(plan.full)
+	if cached, err, ok := readCacheHit(ctx, plan.tc, in, cacheKey); ok && cacheable {
 		return cached, err
 	}
 	st.keep = expandJoinColumns(plan.res.Entity, in.Expand)
@@ -53,11 +58,16 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 		return Result{}, err
 	}
 	trimExpandedJoinFields(plan.res.Entity, in, got.rows)
+	next := nextCursor(plan.order, plan.res, in, got.rows)
+	trimOrderFields(plan.order, plan.res, in, got.rows)
 	recordReadFeedback(ctx, plan.tc, in.Entity, st.sql.Compiled, planTemplate, st.sql.plan,
 		int64(len(got.rows)), time.Since(start))
-	storeReadCache(ctx, plan.tc, in, cacheKey, stamp, got.rows)
+	if next == nil && cacheable {
+		storeReadCache(ctx, plan.tc, in, cacheKey, stamp, got.rows)
+	}
 	returned, _ := plan.tc.results.counted()
-	return Result{Content: got.rows, ReturnedRows: returned, EstimatedScannedRows: st.sql.estimatedRows()}, nil
+	return Result{Content: got.rows, ReturnedRows: returned, EstimatedScannedRows: st.sql.estimatedRows(),
+		NextCursor: next}, nil
 }
 
 func prepareReadPlan(ctx context.Context, tc Context, in readInput) (readPlan, error) {
@@ -70,28 +80,119 @@ func prepareReadPlan(ctx context.Context, tc Context, in readInput) (readPlan, e
 	if err != nil {
 		return readPlan{}, err
 	}
-	if err := validateFields(res, readFields...); err != nil {
-		return readPlan{}, err
+	if _, related := splitPaths(res.Entity, in.Fields); len(related) > 0 {
+		return readPlan{}, fmt.Errorf("%w: fields are the entity's own (%s is related): read related rows with "+
+			"expand", ErrInvalidInput, related[0])
 	}
-	predicateFields := append(filterFields(in.Filter), sortedKeys(in.Cursor)...)
-	if err := validateUnmaskedFields(res, predicateFields...); err != nil {
-		return readPlan{}, err
-	}
-	g, err := authorizeRequest(ctx, tc, rbac.Request{
-		Role: tc.Role, Subject: tc.Subject, Entity: in.Entity, Action: entity.ActionRead,
-		Fields: projectionFields, ReadFields: readFields, Predicate: pred,
-	})
+	readFields, paths := splitPaths(res.Entity, readFields)
+	_, orderPaths := splitPaths(res.Entity, orderFieldNames(in.OrderBy))
+	rel, pred, locals, err := relate(ctx, tc, res, pred, append(paths, orderPaths...))
 	if err != nil {
 		return readPlan{}, err
 	}
-	keyset, keysetCols, err := cursorPredicate(res.Entity, in.Cursor)
+	readFields = append(readFields, locals...)
+	if err := validateFields(res, readFields...); err != nil {
+		return readPlan{}, err
+	}
+	predicateFields, _ := splitPaths(res.Entity, append(filterFields(in.Filter), sortedKeys(in.Cursor)...))
+	if err := validateUnmaskedFields(res, predicateFields...); err != nil {
+		return readPlan{}, err
+	}
+	req := rbac.Request{
+		Role: tc.Role, Subject: tc.Subject, Entity: in.Entity, Action: entity.ActionRead,
+		Fields: projectionFields, ReadFields: readFields, Predicate: pred,
+	}
+	order, req, err := orderRead(ctx, tc, res, in, req, rel)
+	if err != nil {
+		return readPlan{}, err
+	}
+	g, err := authorizeRequest(ctx, tc, req)
+	if err != nil {
+		return readPlan{}, err
+	}
+	keyset, keysetCols, err := readCursor(res.Entity, order, in)
 	if err != nil {
 		return readPlan{}, err
 	}
 	return readPlan{
-		entityPlan: ep, projectionFields: projectionFields,
+		entityPlan: ep, projectionFields: req.Fields, order: order, rel: rel,
 		full: andPreds(andPreds(pred, g.RowFilter), keyset), keysetCols: keysetCols, grant: g,
 	}, nil
+}
+
+// relate plans what a request names across res's relationships (paths, and
+// pred's exists groups): the joins, pred as the IR writes it, and the
+// columns of res the relationships read.
+func relate(ctx context.Context, tc Context, res entity.Resolved, pred relalg.Predicate, paths []string) (
+	related, relalg.Predicate, []string, error,
+) {
+	rel, err := planJoins(ctx, tc, res, paths)
+	if err != nil {
+		return related{}, nil, nil, err
+	}
+	pred, locals, err := resolveExists(ctx, tc, res, rel.renamed(pred))
+	if err != nil {
+		return related{}, nil, nil, err
+	}
+	return rel, pred, append(rel.locals, locals...), nil
+}
+
+func orderFieldNames(terms []orderJSON) []string {
+	out := make([]string, len(terms))
+	for i, t := range terms {
+		out[i] = t.Field
+	}
+	return out
+}
+
+// orderRead plans in's orderBy and distinct on res and adds to req what they
+// read: the ordered fields, and the ones nextCursor is built of, which the
+// projection then carries too.
+func orderRead(ctx context.Context, tc Context, res entity.Resolved, in readInput, req rbac.Request, rel related) (
+	readOrder, rbac.Request, error,
+) {
+	if in.Distinct && (len(in.Fields) == 0 || len(in.Expand) > 0 || len(in.Cursor) > 0) {
+		return readOrder{}, req, fmt.Errorf("%w: distinct needs fields, and takes no expand or cursor",
+			ErrInvalidInput)
+	}
+	order, err := planReadOrder(res, in, rel)
+	if err != nil {
+		return readOrder{}, req, err
+	}
+	// What the request reads stays read (and authorized) whatever the key's
+	// fate: the fields asked for are added to it, the key's only when the
+	// caller may read them.
+	own, _ := splitPaths(res.Entity, order.fields()) // related fields are authorized on the target
+	for _, f := range own {
+		if !slices.Contains(order.keyFields, f) {
+			req.ReadFields = append(slices.Clone(req.ReadFields), f)
+		}
+	}
+	if !readsKey(ctx, tc, req, order) {
+		order = order.withoutKey()
+	}
+	req.ReadFields = append(slices.Clone(req.ReadFields), order.keyFields...)
+	if order.pageable && len(in.Fields) > 0 {
+		for _, f := range order.fields() {
+			if !slices.ContainsFunc(req.Fields, func(x string) bool { return columnOf(res.Entity, x) == f }) {
+				req.Fields = append(slices.Clone(req.Fields), f)
+			}
+		}
+	}
+	return order, req, nil
+}
+
+// readCursor resumes a read after in.Cursor: by its order when it names
+// one, else on the entity's cursor key.
+func readCursor(e entity.Entity, order readOrder, in readInput) (relalg.Predicate, []string, error) {
+	if len(in.OrderBy) == 0 {
+		return cursorPredicate(e, in.Cursor)
+	}
+	if len(in.Cursor) == 0 {
+		return nil, nil, nil
+	}
+	p, err := orderCursor(order, in.Cursor)
+	return p, nil, err
 }
 
 // cursorPredicate resumes keyset pagination after cursor on the entity's
@@ -145,6 +246,7 @@ func compileReadQuery(ctx context.Context, plan readPlan, in readInput) (stateme
 	planTemplate := cost.Fingerprint(tc.DataSource, tc.Dialect.Name(), compiled)
 	sql, err := gateSQL(ctx, tc, compiled)
 	if err != nil {
+		err = withIndexHints(ctx, tc, res.Entity, err)
 		return statement{}, "", cache.Key{}, err
 	}
 	key := cache.Key{
@@ -157,12 +259,14 @@ func compileReadQuery(ctx context.Context, plan readPlan, in readInput) (stateme
 }
 
 func buildReadExpression(res entity.Resolved, in readInput, plan readPlan) relalg.Expr {
-	scan := relalg.Scan{Relation: res.Entity.Ref()}
-	var expr relalg.Expr = scan
+	expr := plan.rel.wrap(relalg.Scan{Relation: res.Entity.Ref()})
 	if plan.full != nil {
-		expr = relalg.Select{Input: scan, Predicate: plan.full}
+		expr = relalg.Select{Input: expr, Predicate: plan.full}
 	}
-	if len(plan.keysetCols) > 0 {
+	switch {
+	case len(plan.order.terms) > 0:
+		expr = relalg.Sort{Input: expr, OrderBy: plan.order.terms}
+	case len(plan.keysetCols) > 0:
 		order := make([]relalg.OrderTerm, len(plan.keysetCols))
 		for i, c := range plan.keysetCols {
 			order[i] = relalg.OrderTerm{Field: c, Dir: "asc"}
@@ -170,7 +274,10 @@ func buildReadExpression(res entity.Resolved, in readInput, plan readPlan) relal
 		expr = relalg.Sort{Input: expr, OrderBy: order}
 	}
 	if len(plan.grant.Fields) > 0 {
-		expr = relalg.Project{Input: expr, Items: relalg.ProjectFields(plan.grant.Fields)}
+		expr = relalg.Project{Input: expr, Items: projectItems(res.Entity, plan.grant.Fields)}
+	}
+	if in.Distinct {
+		expr = relalg.Distinct{Input: expr}
 	}
 	if in.Limit > 0 {
 		expr = relalg.Limit{Input: expr, Count: in.Limit, Offset: in.Offset}

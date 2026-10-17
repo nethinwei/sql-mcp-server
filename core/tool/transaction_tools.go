@@ -131,7 +131,7 @@ func transactionPermissions(ctx context.Context, tc Context, datasource string) 
 		return false, false, nil
 	}
 	canRead, canWrite := false, false
-	for _, e := range tc.Registry.Entities() {
+	for e := range tc.Registry.All() {
 		if e.DatasourceName() != datasource {
 			continue
 		}

@@ -418,6 +418,9 @@ func (e Entity) CursorKey() []string {
 // AttributeByName returns the attribute with the given logical name and a
 // found flag. It matches Name or Alias.
 func (e Entity) AttributeByName(name string) (Attribute, bool) {
+	if name == "" { // no attribute is unnamed, and an unset alias names none
+		return Attribute{}, false
+	}
 	for _, a := range e.Attributes {
 		if a.Name == name || a.Alias == name {
 			return a, true
@@ -439,6 +442,7 @@ func (e Entity) OrderedNames(set map[string]bool) []string {
 
 // Resolved is a request-time view of an entity with field projection applied
 // (excluded attributes removed). RBAC further restricts Attributes per role.
+// Attributes is the registry's: read it, never write to it.
 type Resolved struct {
 	Entity     Entity
 	Attributes []Attribute

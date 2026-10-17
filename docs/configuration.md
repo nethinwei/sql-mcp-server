@@ -264,6 +264,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `hardScore` | 整数 | `40` | 0–100 | 安全分低于它时直接拒绝。 |
 | `maxRows` | 整数 | `10000` | ≥ 1 | 读取 SQL 的外层 LIMIT。 |
 | `maxBytes` | 整数 | `16777216` | ≥ 1 | 单次响应的字节上限。 |
+| `maxScannedRows` | 整数 | `100000` | ≥ 0 | 语句预计读取的行数超过它即拒绝，不论是否用到索引；0 表示不限。读取行数取 EXPLAIN 中最大的行数估计（MySQL rows_examined_per_scan，PostgreSQL 与 OceanBase 各节点的行数），全表扫描时取表的行数。角色或用户的 limits.maxScannedRows 只能收紧；与预算 maxEstimatedScannedRows 同时生效。 |
 | `maxINListSize` | 整数 | `256` | ≥ 1 | IN 列表最多元素数，关系展开也按它分批。 |
 | `maxFilterConditions` | 整数 | `32` | ≥ 1 | 一次请求最多过滤条件数。 |
 | `maxGroupByFields` | 整数 | `8` | ≥ 1 | 最多分组字段数。 |
@@ -271,7 +272,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `maxExpand` | 整数 | `8` | ≥ 1 | 最多展开的关系数。 |
 | `maxProcedureRows` | 整数 | `1000` | ≥ 1 | 存储过程结果行数上限。 |
 | `rejectFullScan` | 布尔 | `true` |  | 拒绝全表扫描（表本身不超过 fullScanMaxRows 行的小表除外）。 |
-| `fullScanMaxRows` | 整数 | `1000` | ≥ 0 | 被全表扫描的表本身不超过此行数时（配置表、维表），按普通顺序扫描评分、不被 rejectFullScan 拒绝。按表的规模判断而不是计划的输出行数（PostgreSQL 取 pg_class 统计、MySQL 取 rows_examined_per_scan、OceanBase 取 EXPLAIN EXTENDED 的 table_rows），任何一张全表扫描的表得不到行数时都不豁免；0 表示全表扫描一律按全表扫描处理。 |
+| `fullScanMaxRows` | 整数 | `1000` | ≥ 0 | 被全表扫描的表本身不超过此行数时（配置表、维表，包括被连接的），按索引扫描评分、不被 rejectFullScan 拒绝。按表的规模判断而不是计划的输出行数（PostgreSQL 取 pg_class 统计、MySQL 取 rows_examined_per_scan、OceanBase 取 EXPLAIN EXTENDED 的 table_rows），任何一张全表扫描的表得不到行数时都不豁免；0 表示全表扫描一律按全表扫描处理。 |
 | `whitelistPKPoint` | 布尔 | `true` |  | 主键点查询跳过估算（仍受结果上限约束）。 |
 | `requirePKForWrite` | 布尔 | `true` |  | 写操作必须带主键条件；不随 cost.enabled 关闭。 |
 | `requireKnownScan` | 布尔 | `true` |  | 无法判断扫描方式时拒绝；MySQL/OceanBase 的 EXPLAIN 失败即拒绝。 |
@@ -290,6 +291,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `aqe.maxFingerprints` | 整数 | `4096` | ≥ 1 | 全局最多跟踪的模板数。 |
 | `aqe` | 对象 |  |  | 基于实际执行反馈的自适应估算与可选的 EXPLAIN ANALYZE 采样。 |
 | `sqlEscape.estimate` | 字符串 | `"required"` | 可选 `required`、`skip` | required（默认）：每条语句先 EXPLAIN，无法估算（DDL、SET、SHOW 等）或超出阈值即拒绝；skip：不估算，只保留硬上限。 |
+| `sqlEscape.metadata` | 字符串 | `"allow"` | 可选 `allow`、`refuse` | allow（默认）：query 模式下的单条 SHOW、DESCRIBE、DESC 语句不做 EXPLAIN 估算，只受硬上限约束（按语句开头识别，不解析 SQL）；refuse：与其他无法估算的语句一样，在 estimate 为 required 时拒绝。 |
 | `sqlEscape` | 对象 |  |  | execute_sql 的估算策略。超时、行数与字节上限、并发与预算是不可关闭的硬上限，这里只决定 EXPLAIN 估算。 |
 
 ### `budget`：预算
@@ -457,6 +459,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `permissions` | 字符串列表 |  |  | 系统权限。sql:execute@<datasource> 让角色的用户在该数据源（须已配置且声明 sqlEscape）使用 execute_sql；其他系统权限为后续版本预留，本版声明即校验失败。 |
 | `limits.maxRows` | 整数 |  | ≥ 0 | 单次请求最多返回的行数（全局 cost.maxRows）。 |
 | `limits.maxBytes` | 整数 |  | ≥ 0 | 单次请求最多返回的字节数（全局 cost.maxBytes）。 |
+| `limits.maxScannedRows` | 整数 |  | ≥ 0 | 单次请求的语句最多预计读取的行数（全局 cost.maxScannedRows）。 |
 | `limits.queryTimeout` | 时长 |  | ≥ 0 | 单次请求的查询超时（全局 cost.queryTimeout）。 |
 | `limits.softScore` | 整数 |  | 0–100 | 成本闸门软拒绝分数（全局 cost.softScore）；分数越高越严。 |
 | `limits.hardScore` | 整数 |  | 0–100 | 成本闸门硬拒绝分数（全局 cost.hardScore）；分数越高越严。 |
@@ -494,6 +497,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `disabled` | 布尔 |  |  | 禁用后无法认证，也不能作为 server.user；会话立即解除。 |
 | `limits.maxRows` | 整数 |  | ≥ 0 | 单次请求最多返回的行数（全局 cost.maxRows）。 |
 | `limits.maxBytes` | 整数 |  | ≥ 0 | 单次请求最多返回的字节数（全局 cost.maxBytes）。 |
+| `limits.maxScannedRows` | 整数 |  | ≥ 0 | 单次请求的语句最多预计读取的行数（全局 cost.maxScannedRows）。 |
 | `limits.queryTimeout` | 时长 |  | ≥ 0 | 单次请求的查询超时（全局 cost.queryTimeout）。 |
 | `limits.softScore` | 整数 |  | 0–100 | 成本闸门软拒绝分数（全局 cost.softScore）；分数越高越严。 |
 | `limits.hardScore` | 整数 |  | 0–100 | 成本闸门硬拒绝分数（全局 cost.hardScore）；分数越高越严。 |

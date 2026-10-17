@@ -120,6 +120,14 @@ describe('workspace', () => {
     expect(ws.user('alice')!.grants!.map((g) => g.entity)).toEqual(['orders'])
   })
 
+  it('removes entities in bulk, each an item of its own', () => {
+    const ws = seeded()
+    const ids = ws.entities.map((e) => `${e.datasource ?? 'default'}.${e.name}`)
+    ws.removeEntities(ids)
+    expect(ws.entities).toEqual([])
+    expect(ws.changes.filter((c) => c.kind === 'entity' && c.type === 'removed').length).toBe(ids.length)
+  })
+
   it('manages role membership on the users', () => {
     const ws = seeded()
     ws.setRoleMembers('analyst', [])

@@ -76,12 +76,20 @@ type AggCall struct {
 	Func     AggFunc
 	Field    string
 	Distinct bool
+	// Name is the output column the call is known by above the γ node: a
+	// τ or a Having names it (or a group-by field). The SQL never aliases
+	// it: the call itself is rendered where it is named.
+	Name string
 }
 
 // OrderTerm is one column in a τ node. Dir is "asc" or "desc".
 type OrderTerm struct {
 	Field string
 	Dir   string
+	// Nullable marks a field that may hold NULL. NULLs sort last whatever
+	// the direction; a term not nullable is rendered without placing them
+	// (the database's default), which keeps an index usable for the order.
+	Nullable bool
 }
 
 // Tuple is a literal row of values, used in insert and IN-lists.
@@ -135,6 +143,33 @@ type Limit struct {
 	Offset int64
 }
 
+// JoinPair is one equality of a join: a column of the left side and one of
+// the right.
+type JoinPair struct {
+	Left, Right string
+}
+
+// Join extends each row of its input with the row of Right that matches On
+// and RightPredicate, or with NULLs when none does: a left outer join of a
+// relation matching at most one row (On names a key of Right). Right's
+// columns are named Alias.column above it; RightPredicate (Right's row
+// policy) names them unqualified.
+type Join struct {
+	Input          Expr
+	Right          RelationRef
+	Alias          string
+	On             []JoinPair
+	RightPredicate Predicate
+}
+
+// Having keeps the groups of an aggregate whose predicate is TRUE. Its
+// conditions name the aggregate's output: a group-by field or an AggCall's
+// Name.
+type Having struct {
+	Input     Expr
+	Predicate Predicate
+}
+
 // Distinct applies δ (deduplication) to its input.
 type Distinct struct {
 	Input Expr
@@ -182,6 +217,10 @@ func Input(e Expr) (Expr, bool) {
 		return n.Input, true
 	case Distinct:
 		return n.Input, true
+	case Having:
+		return n.Input, true
+	case Join:
+		return n.Input, true
 	}
 	return nil, false
 }
@@ -194,6 +233,8 @@ func (Aggregate) rel() {}
 func (Sort) rel()      {}
 func (Limit) rel()     {}
 func (Distinct) rel()  {}
+func (Having) rel()    {}
+func (Join) rel()      {}
 func (Insert) rel()    {}
 func (Update) rel()    {}
 func (Delete) rel()    {}
@@ -220,7 +261,17 @@ type Or struct{ Preds []Predicate }
 type Not struct{ P Predicate }
 
 // Marker methods seal the Predicate interface.
+// Exists holds when a row of Relation matches the row it is evaluated on
+// (On: the row's Left column equals Relation's Right one) and Predicate,
+// which names Relation's columns unqualified.
+type Exists struct {
+	Relation  RelationRef
+	On        []JoinPair
+	Predicate Predicate
+}
+
 func (Condition) pred() {}
+func (Exists) pred()    {}
 func (And) pred()       {}
 func (Or) pred()        {}
 func (Not) pred()       {}

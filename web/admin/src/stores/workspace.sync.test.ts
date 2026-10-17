@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { useWorkspace, type Sections } from './workspace'
+import { useWorkspace } from './workspace'
 import type { WorkspacePartsFragment, WorkspaceQuery } from '@/gql/graphql'
 import type { RoleInput } from '@/gql/schema'
 
@@ -20,11 +20,28 @@ function revision(id: string, roles: RoleInput[]): WorkspaceQuery {
   } as unknown as WorkspaceQuery
 }
 
-/** The workspace as the server answers it. */
+type Item = WorkspacePartsFragment['items']['items'][number]
+
+/** The workspace as the server answers it, every item. */
 function answer(version: number, roles: RoleInput[], extra: Partial<WorkspacePartsFragment> = {}): WorkspacePartsFragment {
-  const sections: Sections = { entities: [], roles, users: [], settings: {} }
-  return { base: '1', version, sections, updatedBy: 'root', taken: [], checkpoint: null, conflicts: [], notes: [], ...extra }
+  const items: Item[] = [...roles.map((r) => ({ kind: 'role', key: r.name, value: r })),
+    { kind: 'settings', key: 'settings', value: {} }]
+  return { base: '1', version, items: { complete: true, items }, updatedBy: 'root', taken: [], checkpoint: null,
+    conflicts: [], notes: [], ...extra }
 }
+
+/** The workspace as the server answers it, the roles changed since (null: removed). */
+function changed(version: number, roles: Record<string, RoleInput | null>): WorkspacePartsFragment {
+  const items = Object.entries(roles).map(([key, value]) => ({ kind: 'role', key, value }))
+  return { ...answer(version, []), items: { complete: false, items } }
+}
+
+/** An answer of every role, or of those changed since the copy. */
+const answers = [
+  { name: 'every item', of: (version: number, roles: RoleInput[]) => answer(version, roles) },
+  { name: 'items changed', of: (version: number, roles: RoleInput[]) =>
+    changed(version, Object.fromEntries(roles.map((r) => [r.name, r]))) },
+]
 
 const analyst = { name: 'analyst', grants: [] }
 
@@ -116,35 +133,52 @@ describe('the workspace kept on the server', () => {
     ])
   })
 
-  it('takes in what changed there, keeping what is unsent here', () => {
+  it.each(answers)('takes in what changed there, keeping what is unsent here ($name)', (a) => {
     const ws = read()
     ws.upsertRole({ name: 'mine' })
-    ws.take(answer(2, [{ ...analyst, description: 'agent' }]))
+    ws.take(a.of(2, [{ ...analyst, description: 'agent' }]))
     expect(ws.role('analyst')!.description).toBe('agent')
     expect(ws.role('mine')).toBeDefined()
     expect(ws.unsavedItems().map((p) => p.key)).toEqual(['mine'])
   })
 
-  it('keeps an unsent edit of an item changed there, still measured from what it was edited from', () => {
-    const ws = read()
-    ws.role('analyst')!.description = 'mine'
-    ws.take(answer(2, [{ ...analyst, description: 'agent' }]))
-    expect(ws.role('analyst')!.description).toBe('mine')
-    expect(ws.unsavedItems()).toEqual([
-      { kind: 'role', key: 'analyst', value: { ...analyst, description: 'mine' }, previous: analyst },
-    ])
-  })
+  it.each(answers)('keeps an unsent edit of an item changed there, measured from what it was edited from ($name)',
+    (a) => {
+      const ws = read()
+      ws.role('analyst')!.description = 'mine'
+      ws.take(a.of(2, [{ ...analyst, description: 'agent' }]))
+      expect(ws.role('analyst')!.description).toBe('mine')
+      expect(ws.unsavedItems()).toEqual([
+        { kind: 'role', key: 'analyst', value: { ...analyst, description: 'mine' }, previous: analyst },
+      ])
+    })
 
-  it('keeps an edit made while its item was being written', () => {
+  it.each(answers)('keeps an edit made while its item was being written ($name)', (a) => {
     const ws = read()
     ws.role('analyst')!.description = 'first'
     const items = ws.unsavedItems()
     ws.role('analyst')!.description = 'second' // while the write is in flight
     ws.wrote(items)
-    ws.take(answer(2, [{ ...analyst, description: 'first' }]))
+    ws.take(a.of(2, [{ ...analyst, description: 'first' }]))
     expect(ws.role('analyst')!.description).toBe('second')
     expect(ws.unsavedItems()).toEqual([{ kind: 'role', key: 'analyst', value: { ...analyst, description: 'second' },
       previous: { ...analyst, description: 'first' } }])
+  })
+
+  it('takes in items added and removed there, leaving the others as they are', () => {
+    const ws = read()
+    ws.take(changed(2, { support: { name: 'support' }, helper: { name: 'helper' } }))
+    const kept = ws.role('analyst')
+    ws.take(changed(3, { support: null, helper: { name: 'helper', description: 'h' } }))
+    expect(ws.roles.map((r) => r.name)).toEqual(['analyst', 'helper'])
+    expect(ws.role('helper')!.description).toBe('h')
+    expect(ws.role('analyst')).toBe(kept)
+    expect(ws.version).toBe(3)
+    expect(ws.unsavedItems()).toEqual([])
+  })
+
+  it('refuses the items changed since a version for a workspace not held at one', () => {
+    expect(() => useWorkspace().take(changed(2, { support: { name: 'support' } }))).toThrow()
   })
 
   it('shows the conflicts, notes and drafts the server keeps', () => {

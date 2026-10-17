@@ -336,6 +336,13 @@
           "default": 16777216,
           "minimum": 1
         },
+        "maxScannedRows": {
+          "description": "Refuse a statement estimated to read more rows than this, whatever its access path; 0 is unlimited. The rows read are the largest row estimate of the EXPLAIN (MySQL rows_examined_per_scan, PostgreSQL and OceanBase each node's rows), and a full scan's table size. A role's or user's limits.maxScannedRows only tightens it; the budget's maxEstimatedScannedRows applies as well.",
+          "x-description-zh-CN": "语句预计读取的行数超过它即拒绝，不论是否用到索引；0 表示不限。读取行数取 EXPLAIN 中最大的行数估计（MySQL rows_examined_per_scan，PostgreSQL 与 OceanBase 各节点的行数），全表扫描时取表的行数。角色或用户的 limits.maxScannedRows 只能收紧；与预算 maxEstimatedScannedRows 同时生效。",
+          "type": "integer",
+          "default": 100000,
+          "minimum": 0
+        },
         "maxINListSize": {
           "description": "Maximum IN-list size; relationship expansion batches by it.",
           "x-description-zh-CN": "IN 列表最多元素数，关系展开也按它分批。",
@@ -385,8 +392,8 @@
           "default": true
         },
         "fullScanMaxRows": {
-          "description": "A full scan of tables of no more than this many rows (lookup and dimension tables) scores as an ordinary sequential scan and is not rejected by rejectFullScan. The size is the table's, not the plan's output (PostgreSQL pg_class statistics, MySQL rows_examined_per_scan, OceanBase EXPLAIN EXTENDED table_rows); without it nothing is exempted. 0 treats every full scan as one.",
-          "x-description-zh-CN": "被全表扫描的表本身不超过此行数时（配置表、维表），按普通顺序扫描评分、不被 rejectFullScan 拒绝。按表的规模判断而不是计划的输出行数（PostgreSQL 取 pg_class 统计、MySQL 取 rows_examined_per_scan、OceanBase 取 EXPLAIN EXTENDED 的 table_rows），任何一张全表扫描的表得不到行数时都不豁免；0 表示全表扫描一律按全表扫描处理。",
+          "description": "A full scan of tables of no more than this many rows (lookup and dimension tables, joined ones included) scores as an index scan and is not rejected by rejectFullScan. The size is the table's, not the plan's output (PostgreSQL pg_class statistics, MySQL rows_examined_per_scan, OceanBase EXPLAIN EXTENDED table_rows); without it nothing is exempted. 0 treats every full scan as one.",
+          "x-description-zh-CN": "被全表扫描的表本身不超过此行数时（配置表、维表，包括被连接的），按索引扫描评分、不被 rejectFullScan 拒绝。按表的规模判断而不是计划的输出行数（PostgreSQL 取 pg_class 统计、MySQL 取 rows_examined_per_scan、OceanBase 取 EXPLAIN EXTENDED 的 table_rows），任何一张全表扫描的表得不到行数时都不豁免；0 表示全表扫描一律按全表扫描处理。",
           "type": "integer",
           "default": 1000,
           "minimum": 0
@@ -521,6 +528,16 @@
               "enum": [
                 "required",
                 "skip"
+              ]
+            },
+            "metadata": {
+              "description": "allow (the default): a single SHOW, DESCRIBE or DESC statement in query mode runs without an EXPLAIN estimate, under the hard limits alone (recognized by how it begins; SQL is not parsed); refuse: refused like any statement EXPLAIN cannot estimate while estimate is required.",
+              "x-description-zh-CN": "allow（默认）：query 模式下的单条 SHOW、DESCRIBE、DESC 语句不做 EXPLAIN 估算，只受硬上限约束（按语句开头识别，不解析 SQL）；refuse：与其他无法估算的语句一样，在 estimate 为 required 时拒绝。",
+              "type": "string",
+              "default": "allow",
+              "enum": [
+                "allow",
+                "refuse"
               ]
             }
           },
@@ -1355,6 +1372,12 @@
               "type": "integer",
               "minimum": 0
             },
+            "maxScannedRows": {
+              "description": "Rows a call's statement may be estimated to read at most (global cost.maxScannedRows).",
+              "x-description-zh-CN": "单次请求的语句最多预计读取的行数（全局 cost.maxScannedRows）。",
+              "type": "integer",
+              "minimum": 0
+            },
             "queryTimeout": {
               "description": "Query timeout of a call (global cost.queryTimeout).",
               "x-description-zh-CN": "单次请求的查询超时（全局 cost.queryTimeout）。",
@@ -1534,6 +1557,12 @@
             "maxBytes": {
               "description": "Bytes a call returns at most (global cost.maxBytes).",
               "x-description-zh-CN": "单次请求最多返回的字节数（全局 cost.maxBytes）。",
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxScannedRows": {
+              "description": "Rows a call's statement may be estimated to read at most (global cost.maxScannedRows).",
+              "x-description-zh-CN": "单次请求的语句最多预计读取的行数（全局 cost.maxScannedRows）。",
               "type": "integer",
               "minimum": 0
             },
