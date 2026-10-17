@@ -1,7 +1,7 @@
 # 发布说明索引
 
-当前 GA 为 `v0.1.17`（[发布说明](v0.1.17.md)、
-[GitHub Release](https://github.com/nethinwei/sql-mcp-server/releases/tag/v0.1.17)）。
+当前 GA 为 `v0.1.18`（[发布说明](v0.1.18.md)、
+[GitHub Release](https://github.com/nethinwei/sql-mcp-server/releases/tag/v0.1.18)）。
 
 本目录中的发布说明描述各版本发布时点的能力、迁移和证据状态。当前运行时行为以
 [配置参考](../configuration.md)、[安全模型](../security.md)和
@@ -10,6 +10,11 @@
 
 ## 版本
 
+- [`v0.1.18`](v0.1.18.md)（2026-10-17）：查询表达力与成本治理——扫描量硬上限（默认 10 万行）
+  与按量级计分，`read_records` 排序与 `nextCursor`、OR/NOT 过滤组合、`having` 与去重、
+  沿已声明关系过滤/排序/分组与 `exists`，`describe_entities` 给出索引，`execute_sql` 可执行
+  `SHOW`/`DESCRIBE`；修复字段别名；控制台在数千实体下的编辑、保存与首次载入提速；
+  **有 breaking**（默认扫描上限、行数扣分分级）；
 - [`v0.1.17`](v0.1.17.md)（2026-10-16）：生产稳定性与 MCP 协议对齐——缺表缺列、数据源
   不可达与运行中表结构变更按实体降级，失败版本退避重试，事务失败即回滚并有空闲超时，
   按角色/用户的资源限制，PostgreSQL 统计新鲜度修复；工具结构化输出与注解、
