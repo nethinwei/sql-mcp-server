@@ -19,6 +19,7 @@ VERSION ?= dev
 # one explicitly.
 RELEASE_VERSION ?= $(shell $(PYTHON) -c 'import json; print(json.load(open("server.json"))["version"])')
 RELEASE_IMAGE ?= sql-mcp-server:release-preflight
+QUICKSTART_IMAGE ?= sql-mcp-server:quickstart-check
 VERSION_PACKAGE := github.com/nethinwei/sql-mcp-server/version.value
 LDFLAGS ?= -X $(VERSION_PACKAGE)=$(VERSION)
 BINARY := sql-mcp-server$(shell $(GO) env GOEXE)
@@ -28,7 +29,7 @@ CORE_PACKAGES := ./core/...
 .PHONY: fmt web fmt-check vet build test test-fuzz-smoke test-integration test-e2e lint coverage \
 	coverage-check govulncheck workflow-check release-check release-quality \
 	release-snapshot release-metadata-check release-image-check release-preflight-fast \
-	release-preflight release-bump modelscope-check smoke-protocol bench bench-integration bench-overhead eval-pilot \
+	release-preflight release-bump quickstart-check modelscope-check smoke-protocol bench bench-integration bench-overhead eval-pilot \
 	eval-workload fixtures-v4 eval-diagnostic eval-coverage docs-check ci ci-local ci-full tidy web-check
 
 # Format all Go sources in place (gofmt + 120-column line shortening).
@@ -86,6 +87,13 @@ release-image-check:
 	scripts/release/verify-image-label.sh $(RELEASE_IMAGE)
 	$(SYFT) $(RELEASE_IMAGE) --output spdx-json=dist/image.spdx.json
 	SQL_MCP_IMAGE=$(RELEASE_IMAGE) scripts/release/quickstart.sh
+
+# The quickstart allow/deny smoke against an image built from this checkout
+# (Docker required): in CI and before a release publishes anything, so a
+# regression is caught before the published-image check after the push.
+quickstart-check:
+	docker build -t $(QUICKSTART_IMAGE) .
+	SQL_MCP_IMAGE=$(QUICKSTART_IMAGE) scripts/release/quickstart.sh
 
 modelscope-check: build
 	MODELSCOPE_BINARY=./$(BINARY) $(GO) run ./internal/modelscopesmoke
@@ -145,6 +153,8 @@ release-preflight-fast:
 
 release-preflight:
 	$(MAKE) ci-full
+	$(MAKE) web web-check
+	$(MAKE) smoke-protocol
 	$(MAKE) release-preflight-fast
 
 # Unit tests, including fuzz seed corpus replay (no docker).

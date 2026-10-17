@@ -66,9 +66,23 @@ jobs:
           cache: true
       - run: make modelscope-check
 
+  # The quickstart smoke on an image built from the tag, before anything is
+  # published: the published-image check below runs only after the push.
+  prepublish-quickstart:
+    name: quickstart before publishing
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.9"
+          cache: true
+      - run: make quickstart-check
+
   artifacts:
     name: signed release artifacts
-    needs: [quality, integration, e2e, modelscope]
+    needs: [quality, integration, e2e, modelscope, prepublish-quickstart]
     runs-on: ubuntu-latest
     permissions:
       contents: write

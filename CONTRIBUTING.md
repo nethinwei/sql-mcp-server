@@ -46,7 +46,7 @@ OpenTelemetry、YAML 等外部适配应位于 `x/` 或入口包，依赖方向�
   metadata 和 quickstart 镜像；
 - `release-preflight-fast` 编排 workflow、归档、Registry metadata、镜像、
   quickstart 和 ModelScope 门禁；`release-preflight` 在此之前额外执行
-  `ci-full`。
+  `ci-full`、控制台检查与协议 smoke，覆盖 PR CI 与 tag workflow 的全部检查。
 
 具体阈值、依赖和 CI 对应关系见 [`docs/testing.md`](docs/testing.md)。
 
@@ -117,8 +117,10 @@ race tests、核心 coverage 门槛和 `govulncheck`。命令失败必须修复�
   固定版本引用（`server.json`、示例镜像 tag、README/发布索引的当前 GA 行；
   smoke 客户端版本经 `version.String()` 注入，无需手改）；CHANGELOG、发布
   说明与 roadmap 滚动仍为人工编辑；
-- 创建 RC/GA tag 前：
-  `make release-preflight RELEASE_VERSION=x.y.z`。
+- 创建 RC/GA tag 前，在要打 tag 的提交上：
+  `make release-preflight RELEASE_VERSION=x.y.z`，全部通过才打 tag；`make ci-full`
+  不能代替它（不含镜像 quickstart、归档与 Registry 检查，v0.1.18 即因此在发布后
+  才发现 quickstart 失败）。
 
 Docker、固定版本工具和无法在本地模拟的 OIDC 发布步骤见
 [`docs/testing.md`](docs/testing.md)。

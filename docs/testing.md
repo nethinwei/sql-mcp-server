@@ -53,7 +53,7 @@ snapshot 会生成 6 个目标归档、SHA-256 checksum 和归档 SBOM，但跳�
 # 快速门禁：workflow、归档、Registry、镜像、quickstart、ModelScope stdio
 make release-preflight-fast RELEASE_VERSION=x.y.z
 
-# 完整门禁：额外运行 lint、govulncheck、三库 integration 和 MCP e2e
+# 完整门禁：额外运行 lint、govulncheck、三库 integration、MCP e2e、控制台与协议 smoke
 make release-preflight RELEASE_VERSION=x.y.z
 ```
 
@@ -220,14 +220,18 @@ PostgreSQL/MySQL/OceanBase 或 MCP e2e 已在当前机器执行。
 - `protocol-smoke`：stdio 与 streamable HTTP 双传输协议 smoke（真实
   PostgreSQL、initialize、tools/list、allow/deny、健康/就绪/metrics 端点），
   本地经 `make smoke-protocol` 复现；
+- `quickstart`：用本次提交构建镜像，经 Compose 与 streamable HTTP 运行
+  quickstart allow/deny smoke（`internal/quickstartsmoke`），本地经
+  `make quickstart-check` 复现；
 - `modelscope`：根目录 manifest、真实 PostgreSQL、stdio、mask、row policy 和
   allow/deny smoke；
 - `govulncheck`；
 - `release-config`：GoReleaser snapshot、6 个目标归档、checksum 和 SBOM；
 - `registry-metadata`：`server.json` 版本一致性与官方 publisher 校验。
 
-tag workflow 会重新运行 release quality、三库 integration 和 MCP e2e，然后发布
-签名二进制、GHCR 多架构镜像、quickstart smoke 与 Registry metadata。发布流程
+tag workflow 会重新运行 release quality、三库 integration、MCP e2e，并用 tag
+构建的镜像运行 quickstart smoke；全部通过后才发布签名二进制与 GHCR 多架构镜像，
+再对已发布镜像运行 quickstart smoke，最后发布 Registry metadata。发布流程
 见 [运行与运维](operations.md)。
 
 ## 编写测试
