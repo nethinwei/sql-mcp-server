@@ -143,6 +143,25 @@ type Limit struct {
 	Offset int64
 }
 
+// JoinPair is one equality of a join: a column of the left side and one of
+// the right.
+type JoinPair struct {
+	Left, Right string
+}
+
+// Join extends each row of its input with the row of Right that matches On
+// and RightPredicate, or with NULLs when none does: a left outer join of a
+// relation matching at most one row (On names a key of Right). Right's
+// columns are named Alias.column above it; RightPredicate (Right's row
+// policy) names them unqualified.
+type Join struct {
+	Input          Expr
+	Right          RelationRef
+	Alias          string
+	On             []JoinPair
+	RightPredicate Predicate
+}
+
 // Having keeps the groups of an aggregate whose predicate is TRUE. Its
 // conditions name the aggregate's output: a group-by field or an AggCall's
 // Name.
@@ -200,6 +219,8 @@ func Input(e Expr) (Expr, bool) {
 		return n.Input, true
 	case Having:
 		return n.Input, true
+	case Join:
+		return n.Input, true
 	}
 	return nil, false
 }
@@ -213,6 +234,7 @@ func (Sort) rel()      {}
 func (Limit) rel()     {}
 func (Distinct) rel()  {}
 func (Having) rel()    {}
+func (Join) rel()      {}
 func (Insert) rel()    {}
 func (Update) rel()    {}
 func (Delete) rel()    {}
@@ -239,7 +261,17 @@ type Or struct{ Preds []Predicate }
 type Not struct{ P Predicate }
 
 // Marker methods seal the Predicate interface.
+// Exists holds when a row of Relation matches the row it is evaluated on
+// (On: the row's Left column equals Relation's Right one) and Predicate,
+// which names Relation's columns unqualified.
+type Exists struct {
+	Relation  RelationRef
+	On        []JoinPair
+	Predicate Predicate
+}
+
 func (Condition) pred() {}
+func (Exists) pred()    {}
 func (And) pred()       {}
 func (Or) pred()        {}
 func (Not) pred()       {}

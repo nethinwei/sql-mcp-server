@@ -255,6 +255,10 @@ func parsePGExplain(b []byte) (cost.Plan, pgPlanNode, error) {
 	return p, root, nil
 }
 
+// tempRows is the size from which a hashed or materialized input counts as
+// a temporary table.
+const tempRows = 10_000
+
 // walkPlan recurses the plan tree, retaining the riskiest concrete scan and
 // the largest row estimate rather than classifying only a wrapper root node.
 func walkPlan(n pgPlanNode, p *cost.Plan) {
@@ -268,8 +272,10 @@ func walkPlan(n pgPlanNode, p *cost.Plan) {
 	switch n.NodeType {
 	case "Sort":
 		p.HasSort = true
-	case "Materialize", "Hash", "Hash Join", "Merge Join":
-		p.HasTempTable = true
+	case "Materialize", "Hash":
+		// A hash or materialized input held in memory; that of a small
+		// relation (a lookup table joined) costs nothing worth scoring.
+		p.HasTempTable = p.HasTempTable || n.PlanRows > tempRows
 	}
 	if n.SubplansRemoved > 0 {
 		p.PartitionPruned = true

@@ -455,8 +455,8 @@ cost.rejectFullScan:
   zh-CN: 拒绝全表扫描（表本身不超过 fullScanMaxRows 行的小表除外）。
   en: Reject full table scans (except of small tables, see fullScanMaxRows).
 cost.fullScanMaxRows:
-  zh-CN: 被全表扫描的表本身不超过此行数时（配置表、维表），按普通顺序扫描评分、不被 rejectFullScan 拒绝。按表的规模判断而不是计划的输出行数（PostgreSQL 取 pg_class 统计、MySQL 取 rows_examined_per_scan、OceanBase 取 EXPLAIN EXTENDED 的 table_rows），任何一张全表扫描的表得不到行数时都不豁免；0 表示全表扫描一律按全表扫描处理。
-  en: A full scan of tables of no more than this many rows (lookup and dimension tables) scores as an ordinary sequential scan and is not rejected by rejectFullScan. The size is the table's, not the plan's output (PostgreSQL pg_class statistics, MySQL rows_examined_per_scan, OceanBase EXPLAIN EXTENDED table_rows); without it nothing is exempted. 0 treats every full scan as one.
+  zh-CN: 被全表扫描的表本身不超过此行数时（配置表、维表，包括被连接的），按索引扫描评分、不被 rejectFullScan 拒绝。按表的规模判断而不是计划的输出行数（PostgreSQL 取 pg_class 统计、MySQL 取 rows_examined_per_scan、OceanBase 取 EXPLAIN EXTENDED 的 table_rows），任何一张全表扫描的表得不到行数时都不豁免；0 表示全表扫描一律按全表扫描处理。
+  en: A full scan of tables of no more than this many rows (lookup and dimension tables, joined ones included) scores as an index scan and is not rejected by rejectFullScan. The size is the table's, not the plan's output (PostgreSQL pg_class statistics, MySQL rows_examined_per_scan, OceanBase EXPLAIN EXTENDED table_rows); without it nothing is exempted. 0 treats every full scan as one.
 cost.whitelistPKPoint:
   zh-CN: 主键点查询跳过估算（仍受结果上限约束）。
   en: Primary-key point reads skip estimation (result caps still apply).

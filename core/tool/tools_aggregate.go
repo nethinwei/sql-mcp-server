@@ -20,7 +20,8 @@ func (AggregateTool) Info() Info {
 		Action: entity.ActionAggregate.String(),
 		Title:  "Aggregate records",
 		Description: "Count (also distinct), sum, average, min or max the rows of one entity, optionally " +
-			"grouped, returned as {\"result\": [rows]}; having filters the groups and orderBy with limit " +
+			"grouped (relationship.field groups by a related row's field), returned as {\"result\": [rows]}; " +
+			"having filters the groups and orderBy with limit " +
 			"keeps the top N (both name group-by fields or aggregate columns such as sum_amount). Prefer it " +
 			"to reading rows when you need totals; filter narrowly, since the same cost gate as read_records " +
 			"applies.",

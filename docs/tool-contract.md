@@ -141,6 +141,14 @@
   `orderBy` 一起原样作为 `cursor` 传回（可空字段同样可以分页，游标里的 NULL 按“排最后”
   处理）；调用方读不到键时顺序不确定、不分页（用 `offset`）。不带 `orderBy` 的 `cursor`
   仍是“最后一行的主键值”。
+- **跨关系**（`read_records`、`aggregate_records`）：`关系名.字段` 可用于 `filter`、
+  `orderBy`、`groupBy`（及 `having` 中的该分组列），关系须指向一行（`one`、`one-to-one`、
+  `belongs-to`）且连接列是目标实体的键；目标以左连接取得，调用方看不到或不存在的目标行
+  表现为 NULL。`{"exists": "关系名", "filter": [...]}` 按任意关系过滤（目标中有满足条件的
+  行），可放在 `not` 中；不嵌套。调用方必须能读目标中用到的字段，目标的行策略照常生效，
+  脱敏字段不能用；关系的连接列按本实体字段授权；目标须在同一数据源。`fields` 不能写
+  关联字段（读取关联行用 `expand`），聚合不能聚合关联字段，按关联字段排序时不给
+  `nextCursor`，写操作的 `filter` 不能用 `exists` 或关联字段。跨关系的读取不进结果缓存。
 - **去重**（`read_records`）：`distinct: true` 对 `fields` 去重；需要 `fields`，不能与
   `expand`、`cursor` 同用；排序字段须在 `fields` 中，NULL 的位置按数据库默认。
 - **索引**：`describe_entities` 带 `entity` 时给出 `indexes`：

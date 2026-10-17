@@ -51,19 +51,26 @@ func filterPredicates(conds []condJSON, depth int, n *int) ([]relalg.Predicate, 
 func filterPredicate(c condJSON, depth int, n *int) (relalg.Predicate, error) {
 	forms := 0
 	for _, set := range []bool{c.Field != "" || c.Op != "" || c.Value != nil, c.Any != nil, c.All != nil,
-		c.Not != nil} {
+		c.Not != nil, c.Exists != ""} {
 		if set {
 			forms++
 		}
 	}
-	if forms != 1 {
-		return nil, fmt.Errorf("%w: a filter entry is one condition (field, op, value) or one of any, all, not",
-			ErrInvalidInput)
+	if forms != 1 || c.Filter != nil && c.Exists == "" {
+		return nil, fmt.Errorf("%w: a filter entry is one condition (field, op, value) or one of any, all, not, "+
+			"exists (with its filter)", ErrInvalidInput)
 	}
-	if (c.Any != nil || c.All != nil || c.Not != nil) && depth >= maxFilterDepth {
+	if (c.Any != nil || c.All != nil || c.Not != nil || c.Exists != "") && depth >= maxFilterDepth {
 		return nil, fmt.Errorf("%w: filter groups nest at most %d deep", ErrInvalidInput, maxFilterDepth)
 	}
 	switch {
+	case c.Exists != "":
+		// Resolved on the relationship's target (see resolveExists).
+		preds, err := filterPredicates(c.Filter, depth+1, n)
+		if err != nil {
+			return nil, err
+		}
+		return relalg.Exists{Relation: relalg.RelationRef{Name: c.Exists}, Predicate: conjunction(preds)}, nil
 	case c.Not != nil:
 		p, err := filterPredicate(*c.Not, depth+1, n)
 		if err != nil {
@@ -92,6 +99,7 @@ func filterFields(conds []condJSON) []string {
 	var walk func(c condJSON)
 	walk = func(c condJSON) {
 		switch {
+		case c.Exists != "": // the target's fields (see resolveExists)
 		case c.Not != nil:
 			walk(*c.Not)
 		case c.Any != nil || c.All != nil:

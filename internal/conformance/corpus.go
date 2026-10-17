@@ -59,6 +59,7 @@ func fixedCases(schema string) []Case {
 	}
 	cases = append(cases, shapeCases(schema)...)
 	cases = append(cases, orderCases(schema)...)
+	cases = append(cases, joinCases(schema)...)
 	return append(cases, aggregateCases(schema)...)
 }
 
@@ -236,5 +237,40 @@ func genLeaf(rng *rand.Rand) relalg.Predicate {
 	default:
 		patterns := []string{"a%", "%a", "%et%", "_eta", "mu"}
 		return cond("name", relalg.OpLike, patterns[rng.Intn(len(patterns))])
+	}
+}
+
+// joinCases join conf_t to its category (a left join on conf_c's key: no
+// match, a NULL category included, extends with NULLs) and filter either
+// table by the other's rows existing.
+func joinCases(schema string) []Case {
+	on := []relalg.JoinPair{{Left: "cat", Right: "cat"}}
+	joined := relalg.Join{Input: scan(schema), Right: categories(schema), Alias: "category", On: on}
+	tiered := joined
+	tiered.RightPredicate = relalg.Condition{Field: "tier", Op: relalg.OpIsNotNull}
+	byId := []relalg.OrderTerm{{Field: "id", Dir: "asc"}}
+	cats := relalg.Scan{Relation: categories(schema)}
+	return []Case{
+		{Name: "join-filter", Expr: relalg.Select{Input: joined, Predicate: cond("category.label", relalg.OpEq, "apple")}},
+		{Name: "join-null-no-match", Expr: relalg.Select{Input: joined,
+			Predicate: relalg.Condition{Field: "category.tier", Op: relalg.OpIsNull}}},
+		{Name: "join-right-predicate", Expr: relalg.Select{Input: tiered,
+			Predicate: relalg.Condition{Field: "category.label", Op: relalg.OpIsNull}}},
+		{Name: "join-project", Expr: relalg.Project{Input: relalg.Select{Input: joined,
+			Predicate: cond("category.tier", relalg.OpGte, int64(1))}, Items: relalg.ProjectFields([]string{"id", "val"})}},
+		{Name: "join-group-by", Expr: relalg.Aggregate{Input: joined, GroupBy: []string{"category.label"},
+			Aggregates: []relalg.AggCall{{Func: relalg.AggCount, Name: "count"}, {Func: relalg.AggSum, Field: "val",
+				Name: "sum_val"}}}},
+		{Name: "join-order", Ordered: true, Expr: relalg.Sort{Input: joined, OrderBy: append([]relalg.OrderTerm{
+			{Field: "category.tier", Dir: "desc", Nullable: true}}, byId...)}},
+		{Name: "exists-rows", Expr: relalg.Select{Input: cats, Predicate: relalg.Exists{
+			Relation: relalg.RelationRef{Schema: schema, Name: TableName}, On: on,
+			Predicate: cond("val", relalg.OpGt, int64(8))}}},
+		{Name: "not-exists-rows", Expr: relalg.Select{Input: cats, Predicate: relalg.Not{P: relalg.Exists{
+			Relation: relalg.RelationRef{Schema: schema, Name: TableName}, On: on}}}},
+		{Name: "exists-category", Expr: relalg.Select{Input: scan(schema), Predicate: relalg.And{Preds: []relalg.Predicate{
+			cond("val", relalg.OpGte, int64(0)),
+			relalg.Exists{Relation: categories(schema), On: on, Predicate: cond("tier", relalg.OpGte, int64(1))},
+		}}}},
 	}
 }

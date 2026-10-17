@@ -1,14 +1,17 @@
 package tool
 
 // condJSON is one filter condition, or a group of them: any (OR), all (AND)
-// or not.
+// or not; or exists, a relationship some target row of which matches
+// Filter.
 type condJSON struct {
-	Field string     `json:"field"`
-	Op    string     `json:"op"`
-	Value any        `json:"value"`
-	Any   []condJSON `json:"any,omitempty"`
-	All   []condJSON `json:"all,omitempty"`
-	Not   *condJSON  `json:"not,omitempty"`
+	Field  string     `json:"field"`
+	Op     string     `json:"op"`
+	Value  any        `json:"value"`
+	Any    []condJSON `json:"any,omitempty"`
+	All    []condJSON `json:"all,omitempty"`
+	Not    *condJSON  `json:"not,omitempty"`
+	Exists string     `json:"exists,omitempty"`
+	Filter []condJSON `json:"filter,omitempty"`
 }
 
 type aggJSON struct {

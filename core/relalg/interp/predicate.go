@@ -38,6 +38,8 @@ func evalPredicate(rel relation, row []any, p relalg.Predicate) (tri, error) {
 		return evalAnd(rel, row, pp.Preds)
 	case relalg.Or:
 		return evalOr(rel, row, pp.Preds)
+	case relalg.Exists:
+		return evalExists(rel, row, pp)
 	case relalg.Not:
 		v, err := evalPredicate(rel, row, pp.P)
 		if err != nil {

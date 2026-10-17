@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -85,12 +86,19 @@ func TestParsePGExplainUsesRiskiestNestedScanAndLargestRows(t *testing.T) {
 	}
 }
 
+// A hash join builds a temporary table of its hashed input when that is
+// large; hashing a lookup table of a few rows counts as none.
 func TestParsePGExplainHashJoinTempTable(t *testing.T) {
 	t.Parallel()
-	raw := `[{"Plan":{"Node Type":"Hash Join","Plans":[{"Node Type":"Seq Scan"}]}}]`
-	p, _, _ := parsePGExplain([]byte(raw))
-	if !p.HasTempTable {
-		t.Error("expected HasTempTable for Hash Join")
+	join := func(hashed int) string {
+		return `[{"Plan":{"Node Type":"Hash Join","Plans":[{"Node Type":"Index Scan","Plan Rows":50},` +
+			`{"Node Type":"Hash","Plan Rows":` + strconv.Itoa(hashed) + `,"Plans":[{"Node Type":"Seq Scan"}]}]}}]`
+	}
+	if p, _, _ := parsePGExplain([]byte(join(50_000))); !p.HasTempTable {
+		t.Error("a large hashed input is a temporary table")
+	}
+	if p, _, _ := parsePGExplain([]byte(join(3))); p.HasTempTable {
+		t.Error("a hashed lookup table of 3 rows is no temporary table")
 	}
 }
 

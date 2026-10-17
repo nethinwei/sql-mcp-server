@@ -37,7 +37,7 @@ func (o readOrder) fields() []string {
 // planReadOrder checks and resolves in.OrderBy on res: each field visible
 // and unmasked (an order would reveal a masked value), named once, asc or
 // desc. A distinct read orders by fields it selects only, and ends in no key.
-func planReadOrder(res entity.Resolved, in readInput) (readOrder, error) {
+func planReadOrder(res entity.Resolved, in readInput, rel related) (readOrder, error) {
 	if len(in.OrderBy) == 0 {
 		return readOrder{}, nil
 	}
@@ -45,32 +45,19 @@ func planReadOrder(res entity.Resolved, in readInput) (readOrder, error) {
 		return readOrder{}, fmt.Errorf("%w: orderBy names at most %d fields", ErrInvalidInput, maxOrderTerms)
 	}
 	var o readOrder
+	across := false
 	for _, t := range in.OrderBy {
-		dir := strings.ToLower(t.Dir)
-		if dir == "" {
-			dir = "asc"
-		}
-		if dir != "asc" && dir != "desc" {
-			return readOrder{}, fmt.Errorf("%w: orderBy dir %q: want asc or desc", ErrInvalidInput, t.Dir)
-		}
-		if err := validateFields(res, t.Field); err != nil {
+		term, related, err := orderTerm(res, in, t, rel)
+		if err != nil {
 			return readOrder{}, err
 		}
-		if err := validateUnmaskedFields(res, t.Field); err != nil {
-			return readOrder{}, err
-		}
-		a, _ := res.Entity.AttributeByName(t.Field)
-		if slices.Contains(o.fields(), a.Name) {
+		if slices.Contains(o.fields(), term.Field) {
+			if related {
+				continue
+			}
 			return readOrder{}, fmt.Errorf("%w: orderBy names %q twice", ErrInvalidInput, t.Field)
 		}
-		if in.Distinct && !slices.ContainsFunc(in.Fields, func(f string) bool { return f == a.Name || f == a.Alias }) {
-			return readOrder{}, fmt.Errorf("%w: a distinct read orders by fields it selects; %q is not one",
-				ErrInvalidInput, t.Field)
-		}
-		// A distinct read orders by its select list alone (PostgreSQL), so
-		// NULLs keep the database's place there.
-		nullable := a.Domain.Nullable && !in.Distinct
-		o.terms = append(o.terms, relalg.OrderTerm{Field: a.Name, Dir: dir, Nullable: nullable})
+		o.terms, across = append(o.terms, term), across || related
 	}
 	if key := res.Entity.CursorKey(); !in.Distinct && key != nil && !hasMaskedField(res, key) {
 		for _, c := range key {
@@ -79,9 +66,39 @@ func planReadOrder(res entity.Resolved, in readInput) (readOrder, error) {
 				o.keyFields = append(o.keyFields, c)
 			}
 		}
-		o.pageable = true
+		o.pageable = !across
 	}
 	return o, nil
+}
+
+// orderTerm is the term t asks of res: a field of its own, visible and
+// unmasked (an order would reveal a masked value), or a related field
+// (related; checked by planJoins), NULL where there is no related row.
+func orderTerm(res entity.Resolved, in readInput, t orderJSON, rel related) (relalg.OrderTerm, bool, error) {
+	dir := strings.ToLower(t.Dir)
+	if dir == "" {
+		dir = "asc"
+	}
+	if dir != "asc" && dir != "desc" {
+		return relalg.OrderTerm{}, false, fmt.Errorf("%w: orderBy dir %q: want asc or desc", ErrInvalidInput, t.Dir)
+	}
+	if _, _, ok := pathOf(res.Entity, t.Field); ok && !in.Distinct {
+		return relalg.OrderTerm{Field: rel.field(t.Field), Dir: dir, Nullable: true}, true, nil
+	}
+	if err := validateFields(res, t.Field); err != nil {
+		return relalg.OrderTerm{}, false, err
+	}
+	if err := validateUnmaskedFields(res, t.Field); err != nil {
+		return relalg.OrderTerm{}, false, err
+	}
+	a, _ := res.Entity.AttributeByName(t.Field)
+	if in.Distinct && !slices.ContainsFunc(in.Fields, func(f string) bool { return f == a.Name || f == a.Alias }) {
+		return relalg.OrderTerm{}, false, fmt.Errorf("%w: a distinct read orders by fields it selects; %q is not one",
+			ErrInvalidInput, t.Field)
+	}
+	// A distinct read orders by its select list alone (PostgreSQL), so NULLs
+	// keep the database's place there.
+	return relalg.OrderTerm{Field: a.Name, Dir: dir, Nullable: a.Domain.Nullable && !in.Distinct}, false, nil
 }
 
 func hasMaskedField(res entity.Resolved, fields []string) bool {

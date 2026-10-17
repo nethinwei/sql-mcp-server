@@ -37,6 +37,7 @@ func runAggregate(ctx context.Context, tc Context, in aggregateInput) (Result, e
 type aggregatePlan struct {
 	entityPlan
 	full  relalg.Predicate
+	rel   related
 	grant grant
 }
 
@@ -46,7 +47,18 @@ func prepareAggregate(ctx context.Context, tc Context, in aggregateInput) (aggre
 		return aggregatePlan{}, err
 	}
 	res, tc := ep.res, ep.tc
-	aggFields := aggregateFieldNames(in)
+	aggFields, paths := splitPaths(res.Entity, aggregateFieldNames(in))
+	for _, a := range in.Aggregates {
+		if _, _, ok := pathOf(res.Entity, a.Field); ok {
+			return aggregatePlan{}, fmt.Errorf("%w: aggregates are of the entity's own fields; group by %q instead",
+				ErrInvalidInput, a.Field)
+		}
+	}
+	rel, pred, locals, err := relate(ctx, tc, res, pred, paths)
+	if err != nil {
+		return aggregatePlan{}, err
+	}
+	aggFields = append(aggFields, locals...)
 	if err := validateFields(res, aggFields...); err != nil {
 		return aggregatePlan{}, err
 	}
@@ -60,7 +72,7 @@ func prepareAggregate(ctx context.Context, tc Context, in aggregateInput) (aggre
 	if err != nil {
 		return aggregatePlan{}, err
 	}
-	return aggregatePlan{entityPlan: ep, full: andPreds(pred, g.RowFilter), grant: g}, nil
+	return aggregatePlan{entityPlan: ep, full: andPreds(pred, g.RowFilter), rel: rel, grant: g}, nil
 }
 
 func aggregateFieldNames(in aggregateInput) []string {
@@ -76,17 +88,20 @@ func aggregateFieldNames(in aggregateInput) []string {
 
 func compileAggregate(ctx context.Context, plan aggregatePlan, in aggregateInput) (statement, error) {
 	tc, res := plan.tc, plan.res
-	scan := relalg.Scan{Relation: res.Entity.Ref()}
-	var expr relalg.Expr = scan
+	expr := plan.rel.wrap(relalg.Scan{Relation: res.Entity.Ref()})
 	if plan.full != nil {
-		expr = relalg.Select{Input: scan, Predicate: plan.full}
+		expr = relalg.Select{Input: expr, Predicate: plan.full}
 	}
-	calls, columns, err := aggregateCalls(in.Aggregates, in.GroupBy)
+	groupBy := make([]string, len(in.GroupBy))
+	for i, g := range in.GroupBy {
+		groupBy[i] = plan.rel.field(g)
+	}
+	calls, columns, err := aggregateCalls(in.Aggregates, groupBy)
 	if err != nil {
 		return statement{}, err
 	}
-	expr, err = aggregateShape(res, in, relalg.Aggregate{Input: expr, GroupBy: in.GroupBy, Aggregates: calls},
-		columns, tc.MaxFilterConditions)
+	expr, err = aggregateShape(res, in, relalg.Aggregate{Input: expr, GroupBy: groupBy, Aggregates: calls},
+		columns, plan.rel, tc.MaxFilterConditions)
 	if err != nil {
 		return statement{}, err
 	}
@@ -153,15 +168,19 @@ func aggregateColumn(a aggJSON) string {
 // aggregateShape adds to agg what in asks of its groups: the having filter,
 // the order and the limit. Both name the result's columns (columns): the
 // group-by fields and the aggregates' names.
-func aggregateShape(res entity.Resolved, in aggregateInput, agg relalg.Aggregate, columns []string, maxConds int) (
-	relalg.Expr, error,
-) {
+func aggregateShape(res entity.Resolved, in aggregateInput, agg relalg.Aggregate, columns []string, rel related,
+	maxConds int,
+) (relalg.Expr, error) {
 	var expr relalg.Expr = agg
 	having, err := filterToPredicate(in.Having, maxConds)
 	if err != nil {
 		return nil, err
 	}
-	for _, f := range filterFields(in.Having) {
+	if relalg.HasExists(having) {
+		return nil, fmt.Errorf("%w: having filters the groups; exists goes in filter", ErrInvalidInput)
+	}
+	having = rel.renamed(having)
+	for _, f := range conditionFields(having) {
 		if !slices.Contains(columns, f) {
 			return nil, fmt.Errorf("%w: having names %q, not a group-by field or an aggregate (%s)",
 				ErrInvalidInput, f, strings.Join(columns, ", "))
@@ -175,6 +194,7 @@ func aggregateShape(res entity.Resolved, in aggregateInput, agg relalg.Aggregate
 	}
 	var terms []relalg.OrderTerm
 	for _, t := range in.OrderBy {
+		t.Field = rel.field(t.Field)
 		dir := strings.ToLower(cmp.Or(t.Dir, "asc"))
 		if dir != "asc" && dir != "desc" || !slices.Contains(columns, t.Field) {
 			return nil, fmt.Errorf("%w: orderBy {%s %s}: a group-by field or an aggregate (%s), asc or desc",

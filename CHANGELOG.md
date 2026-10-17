@@ -23,6 +23,14 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ### Added
 
+- 跨关系查询：`关系名.字段` 可用于 read/aggregate 的过滤、排序与分组（对一关系，以目标的键
+  左连接；目标的行策略在连接条件中生效，看不到的目标行表现为 NULL），
+  `{"exists": "关系名", "filter": [...]}` 按任意关系的关联行过滤（可放在 `not` 中）。调用方须能
+  读目标中用到的字段，脱敏字段不能用，目标须在同一数据源；写操作不接受。IR 新增 `Join` 与
+  `Exists`，三库一致性与治理语料覆盖。
+  为此调整计分：小表（`fullScanMaxRows` 以内）的全表扫描按索引扫描计分（此前按顺序扫描，
+  连接一张维表就会拉低整条计划）；PostgreSQL 只把输入超过 1 万行的 Hash/Materialize 算作
+  临时表（此前任何 Hash Join、Merge Join 都扣分）。
 - `read_records` 支持 `orderBy`（升降序、最多 8 项，末尾自动补键使顺序确定，NULL 排最后，
   脱敏字段不能排序），带 `limit` 时结果给出 `nextCursor`，原样传回即取下一页；
   `distinct` 对所选字段去重。

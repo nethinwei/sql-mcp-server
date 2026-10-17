@@ -13,7 +13,7 @@ import (
 func (b *builder) render(e relalg.Expr) error {
 	switch n := e.(type) {
 	case relalg.Scan, relalg.Select, relalg.Project, relalg.Sort,
-		relalg.Limit, relalg.Distinct, relalg.Aggregate, relalg.Having:
+		relalg.Limit, relalg.Distinct, relalg.Aggregate, relalg.Having, relalg.Join:
 		b.readOnly = true
 		return b.renderSelect(n)
 	case relalg.Insert:
@@ -32,6 +32,8 @@ func (b *builder) render(e relalg.Expr) error {
 // selectCtx accumulates the flattened parts of a linear read chain.
 type selectCtx struct {
 	from       string
+	scanAlias  string
+	joins      []relalg.Join
 	wherePreds []relalg.Predicate
 	cols       []relalg.ProjectItem
 	order      []relalg.OrderTerm
@@ -47,10 +49,7 @@ type selectCtx struct {
 func (b *builder) flatten(e relalg.Expr, ctx *selectCtx) error {
 	switch n := e.(type) {
 	case relalg.Scan:
-		ctx.from = b.qtable(n.Relation)
-		if n.Alias != "" {
-			ctx.from += " AS " + b.qident(n.Alias)
-		}
+		ctx.from, ctx.scanAlias = b.qtable(n.Relation), n.Alias
 		b.noteTable(n.Relation.Name)
 	case relalg.Select:
 		if err := b.flatten(n.Input, ctx); err != nil {
@@ -88,6 +87,8 @@ func (b *builder) flatten(e relalg.Expr, ctx *selectCtx) error {
 		ctx.aggregates = n.Aggregates
 	case relalg.Having:
 		return b.flattenHaving(n, ctx)
+	case relalg.Join:
+		return b.flattenJoin(n, ctx)
 	default:
 		return fmt.Errorf("%w: %T", ErrUnsupportedExpr, e)
 	}
@@ -115,11 +116,13 @@ func (b *builder) renderSelect(e relalg.Expr) error {
 			return err
 		}
 	}
+	b.qualify(ctx)
 	if err := b.writeSelectClause(ctx); err != nil {
 		return err
 	}
-	b.sql.WriteString(" FROM ")
-	b.sql.WriteString(ctx.from)
+	if err := b.writeFromClause(ctx); err != nil {
+		return err
+	}
 	if err := b.writeWhereClause(ctx); err != nil {
 		return err
 	}
@@ -155,6 +158,8 @@ func (b *builder) writeSelectClause(ctx *selectCtx) error {
 		b.sql.WriteString(cols)
 	case len(ctx.cols) > 0:
 		b.sql.WriteString(b.renderCols(ctx.cols))
+	case len(ctx.joins) > 0:
+		b.sql.WriteString(b.qident(b.root) + ".*") // the read's own columns
 	default:
 		b.sql.WriteString("*")
 	}
@@ -180,7 +185,7 @@ func (b *builder) writeGroupByClause(ctx *selectCtx) {
 		return
 	}
 	b.sql.WriteString(" GROUP BY ")
-	b.sql.WriteString(b.renderFieldList(ctx.groupBy))
+	b.sql.WriteString(b.renderColumns(ctx.groupBy))
 }
 
 // withOutputs renders fn with the aggregate's named calls in scope (see
@@ -261,7 +266,7 @@ func limitClause(limit, offset int64) string {
 func (b *builder) renderCols(items []relalg.ProjectItem) string {
 	parts := make([]string, len(items))
 	for i, it := range items {
-		s := b.qident(it.Field)
+		s := b.col(it.Field)
 		if it.Alias != "" {
 			s += " AS " + b.qident(it.Alias)
 		}
@@ -281,7 +286,7 @@ func (b *builder) renderFieldList(fields []string) string {
 func (b *builder) renderAggregateCols(ctx *selectCtx) (string, error) {
 	var parts []string
 	for _, g := range ctx.groupBy {
-		parts = append(parts, b.qident(g))
+		parts = append(parts, b.col(g))
 	}
 	for _, a := range ctx.aggregates {
 		call, err := b.aggregateCall(a)
@@ -303,7 +308,7 @@ func (b *builder) aggregateCall(a relalg.AggCall) (string, error) {
 	}
 	field := "*"
 	if a.Field != "" {
-		field = b.qident(a.Field)
+		field = b.col(a.Field)
 	}
 	if a.Distinct {
 		field = "DISTINCT " + field
@@ -335,6 +340,8 @@ func (b *builder) renderPredicate(p relalg.Predicate) error {
 		}
 		b.sql.WriteString(")")
 		return nil
+	case relalg.Exists:
+		return b.renderExists(pp)
 	case relalg.Or:
 		b.sql.WriteString("(")
 		for i, q := range pp.Preds {

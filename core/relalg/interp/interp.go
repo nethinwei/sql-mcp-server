@@ -49,12 +49,31 @@ func Eval(db DB, e relalg.Expr) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	return Result(r), nil
+	r = r.visible()
+	return Result{Cols: r.Cols, Rows: r.Rows}, nil
 }
 
 type relation struct {
 	Cols []string
 	Rows [][]any
+	// db is the database a predicate on the rows evaluates EXISTS against.
+	db DB
+	// hidden is how many of the last columns a join added: operators above
+	// it name them (alias.column), but they are not the read's output.
+	hidden int
+}
+
+// visible is r without the columns joins added.
+func (r relation) visible() relation {
+	if r.hidden == 0 {
+		return r
+	}
+	n := len(r.Cols) - r.hidden
+	out := relation{Cols: r.Cols[:n], Rows: make([][]any, len(r.Rows))}
+	for i, row := range r.Rows {
+		out.Rows[i] = row[:n]
+	}
+	return out
 }
 
 func (r relation) colIndex(name string) (int, error) {
@@ -73,7 +92,7 @@ func eval(db DB, e relalg.Expr) (relation, error) {
 		if !ok {
 			return relation{}, fmt.Errorf("%w: %q", ErrUnknownRelation, n.Relation.Name)
 		}
-		return relation(t), nil
+		return relation{Cols: t.Cols, Rows: t.Rows}, nil
 	case relalg.Select:
 		return evalSelect(db, n)
 	case relalg.Project:
@@ -86,6 +105,8 @@ func eval(db DB, e relalg.Expr) (relation, error) {
 		return evalLimit(db, n)
 	case relalg.Distinct:
 		return evalDistinct(db, n)
+	case relalg.Join:
+		return evalJoin(db, n)
 	case relalg.Having:
 		if _, ok := n.Input.(relalg.Aggregate); !ok {
 			return relation{}, fmt.Errorf("%w: HAVING over %T", ErrUnsupported, n.Input)
@@ -108,7 +129,8 @@ func evalSelect(db DB, n relalg.Select) (relation, error) {
 	if err := relalg.ValidatePredicate(n.Predicate); err != nil {
 		return relation{}, err
 	}
-	out := relation{Cols: in.Cols}
+	in.db = db
+	out := relation{Cols: in.Cols, hidden: in.hidden}
 	for _, row := range in.Rows {
 		v, err := evalPredicate(in, row, n.Predicate)
 		if err != nil {
@@ -190,7 +212,7 @@ func evalSort(db DB, n relalg.Sort) (relation, error) {
 	if sortErr != nil {
 		return relation{}, sortErr
 	}
-	return relation{Cols: in.Cols, Rows: rows}, nil
+	return relation{Cols: in.Cols, Rows: rows, hidden: in.hidden}, nil
 }
 
 func evalLimit(db DB, n relalg.Limit) (relation, error) {
@@ -209,7 +231,7 @@ func evalLimit(db DB, n relalg.Limit) (relation, error) {
 	if n.Count < 0 || end > int64(len(in.Rows)) {
 		end = int64(len(in.Rows))
 	}
-	return relation{Cols: in.Cols, Rows: in.Rows[start:end]}, nil
+	return relation{Cols: in.Cols, Rows: in.Rows[start:end], hidden: in.hidden}, nil
 }
 
 // evalDistinct deduplicates whole rows. NULLs compare equal to each other
@@ -219,6 +241,7 @@ func evalDistinct(db DB, n relalg.Distinct) (relation, error) {
 	if err != nil {
 		return relation{}, err
 	}
+	in = in.visible() // SELECT DISTINCT of the read's own columns
 	seen := map[string]bool{}
 	out := relation{Cols: in.Cols}
 	for _, row := range in.Rows {

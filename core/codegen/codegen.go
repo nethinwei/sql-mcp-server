@@ -176,13 +176,37 @@ type builder struct {
 	// the aggregate calls by Name (see relalg.AggCall), rendered in place of
 	// the name.
 	outputs map[string]string
+	// root qualifies the columns of a read with joins or EXISTS (the alias
+	// of its relation); joins are the aliases its joins name their columns
+	// by (alias.column); scope, inside an EXISTS, is the alias of the
+	// relation it reads, which its columns are of.
+	root   string
+	joins  map[string]bool
+	scope  string
+	exists int
 }
 
 // column is how a condition or an order term refers to name: an aggregate's
-// call where it names one, else the quoted column.
+// call where it names one, else the column (see col).
 func (b *builder) column(name string) string {
-	if expr, ok := b.outputs[name]; ok {
+	if expr, ok := b.outputs[name]; ok && b.scope == "" {
 		return expr
+	}
+	return b.col(name)
+}
+
+// col is the quoted column name refers to: of the EXISTS being rendered, of
+// a join (alias.column), or of the read's own relation, qualified when the
+// read joins or nests another.
+func (b *builder) col(name string) string {
+	if b.scope != "" {
+		return b.qident(b.scope) + "." + b.qident(name)
+	}
+	if alias, column, ok := strings.Cut(name, "."); ok && b.joins[alias] {
+		return b.qident(alias) + "." + b.qident(column)
+	}
+	if b.root != "" {
+		return b.qident(b.root) + "." + b.qident(name)
 	}
 	return b.qident(name)
 }
