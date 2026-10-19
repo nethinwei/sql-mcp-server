@@ -135,7 +135,7 @@ func TestPGCapabilitiesAndRefusedWrites(t *testing.T) {
 	notes := capabilities["default.notes"]
 	if notes[entity.ActionRead].Privilege != introspect.PrivilegeGranted ||
 		notes[entity.ActionCreate].Privilege != introspect.PrivilegeDenied ||
-		!strings.Contains(notes[entity.ActionCreate].Reason, "read-only") {
+		!strings.Contains(notes[entity.ActionCreate].Reason.Text, "read-only") {
 		t.Fatalf("notes capabilities = %+v", notes)
 	}
 	if read := capabilities["default.salaries"][entity.ActionRead]; read.Privilege != introspect.PrivilegeGranted ||

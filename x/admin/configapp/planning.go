@@ -14,8 +14,8 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	"github.com/nethinwei/sql-mcp-server/core/reason"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
-	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/configedit"
@@ -135,12 +135,12 @@ func DecodePlan(v any) (configplan.Plan, error) {
 }
 
 // denied reports the entity actions the serving connections cannot run.
-func denied(caps bootstrap.EntityCapabilities) func(string, string) (string, bool) {
-	return func(id, action string) (string, bool) {
+func denied(caps bootstrap.EntityCapabilities) func(string, string) (reason.Reason, bool) {
+	return func(id, action string) (reason.Reason, bool) {
 		a, known := entity.ParseAction(strings.ToLower(action))
 		c, ok := caps[id][a]
 		if !known || !ok || c.Privilege != introspect.PrivilegeDenied {
-			return "", false
+			return reason.Reason{}, false
 		}
 		return c.Reason, true
 	}
@@ -175,7 +175,7 @@ func (r *Service) evaluate(ctx context.Context, pc planContext, p configplan.Pla
 	_, cfg, payload, err := configedit.ApplySpec(pc.spec, proposal.Edit())
 	if err != nil {
 		msg := err.Error()
-		out.Validation = &Validation{Error: &msg, RestartRequired: []string{}, Warnings: []string{}}
+		out.Validation = &Validation{Error: &msg, RestartRequired: []string{}, Warnings: []string{}, Notices: []Reason{}}
 		return out, nil
 	}
 	changes, err := r.RestartChanges(ctx, cfg)
@@ -183,8 +183,9 @@ func (r *Service) evaluate(ctx context.Context, pc planContext, p configplan.Pla
 		return nil, err
 	}
 	hash := revision.Hash(payload)
-	out.Validation = &Validation{Ok: true, ContentHash: &hash, RestartRequired: changes,
-		Warnings: kit.OrEmpty(bootstrap.CapabilityWarnings(cfg, r.capabilities()))}
+	list, warnings := notices(bootstrap.CapabilityWarnings(cfg, r.capabilities()))
+	out.Validation = &Validation{Ok: true, ContentHash: &hash, RestartRequired: changes, Warnings: warnings,
+		Notices: list}
 	out.changed, out.effect, err = r.changes(pc, payload)
 	return out, err
 }

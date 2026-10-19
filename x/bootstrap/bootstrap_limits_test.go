@@ -9,12 +9,13 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
+	"github.com/nethinwei/sql-mcp-server/core/reason"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 )
 
 var (
 	enforced = dialect.Claim{Strength: dialect.Enforced}
-	degraded = dialect.Claim{Strength: dialect.BestEffort, Reason: "the DSN sets it"}
+	degraded = dialect.Claim{Strength: dialect.BestEffort, Reason: reason.Reason{Text: "the DSN sets it"}}
 )
 
 // limitedConnection is a connection whose timeouts are the given claims.
@@ -41,7 +42,7 @@ func limitsConfig(actions ...string) *config.Config {
 func issueKeys(issues []LimitIssue) []string {
 	out := make([]string, len(issues))
 	for i, issue := range issues {
-		out[i] = issue.Connection + " " + string(issue.Key) + " " + issue.Use
+		out[i] = issue.Connection + " " + string(issue.Key) + " " + issue.Use.Text
 	}
 	return out
 }
@@ -178,7 +179,7 @@ func TestPlannedLimitIssues(t *testing.T) {
 		cfg.ApplyDefaults()
 		var out []string
 		for _, issue := range app.PlannedLimitIssues(cfg) {
-			out = append(out, string(issue.Key)+" "+issue.Claim.Reason)
+			out = append(out, string(issue.Key)+" "+issue.Claim.Reason.Text)
 		}
 		return out
 	}
@@ -215,7 +216,7 @@ func TestPlannedLimitIssuesRefusePostgresBehindATransactionPooler(t *testing.T) 
 			t.Fatalf("pooler %q: issues %v, want %d", pooler, issues, want)
 		}
 		for _, issue := range issues {
-			if issue.Claim.Strength != dialect.BestEffort || !strings.Contains(issue.Claim.Reason, "transaction pooler") {
+			if issue.Claim.Strength != dialect.BestEffort || !strings.Contains(issue.Claim.Reason.Text, "transaction pooler") {
 				t.Fatalf("pooler %q: %v", pooler, issue)
 			}
 		}

@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
+	"github.com/nethinwei/sql-mcp-server/core/reason"
 )
 
 // Dialect is the MySQL dialect. EXPLAIN estimates are less reliable than
@@ -19,11 +20,12 @@ func (Dialect) Placeholder(_ int) string { return "?" }
 func (Dialect) Capabilities() dialect.Profile {
 	return dialect.Profile{
 		dialect.Returning: {Strength: dialect.Unsupported, Evidence: dialect.CoreVerified,
-			Reason: "no RETURNING: exec + last insert id"},
-		dialect.Explain: {Strength: dialect.Enforced, Evidence: dialect.DBVerified, Reason: "EXPLAIN FORMAT=JSON"},
+			Reason: reason.New(reason.ReturningLastInsertID)},
+		dialect.Explain: {Strength: dialect.Enforced, Evidence: dialect.DBVerified,
+			Reason: reason.New(reason.ExplainMySQLJSON)},
 		dialect.ExplainAccurate: {Strength: dialect.BestEffort, Evidence: dialect.DBVerified,
-			Reason: "estimates are coarse: the gate scores them only with explain fail-closed"},
+			Reason: reason.New(reason.ExplainCoarse)},
 		dialect.ExplainAnalyze: {Strength: dialect.Unsupported, Evidence: dialect.CoreVerified,
-			Reason: "no EXPLAIN ANALYZE sampling"},
+			Reason: reason.New(reason.ExplainNoAnalyze)},
 	}
 }

@@ -19,6 +19,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	"github.com/nethinwei/sql-mcp-server/core/reason"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/core/workspace"
 	"github.com/nethinwei/sql-mcp-server/internal/kit"
@@ -274,7 +275,7 @@ func (r *Service) Validate(ctx context.Context, against Against) (*Validation, e
 	d, err := r.draftOf(ctx, against)
 	if errors.Is(err, ErrWorkspaceContent) {
 		msg := err.Error()
-		return &Validation{Error: &msg, RestartRequired: []string{}, Warnings: []string{}}, nil
+		return &Validation{Error: &msg, RestartRequired: []string{}, Warnings: []string{}, Notices: []Reason{}}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -289,27 +290,29 @@ func (r *Service) Validate(ctx context.Context, against Against) (*Validation, e
 	built, err := r.BuildDraft(ctx, *d)
 	if err != nil {
 		msg := err.Error()
-		return &Validation{Error: &msg, RestartRequired: []string{}, Warnings: []string{}}, nil
+		return &Validation{Error: &msg, RestartRequired: []string{}, Warnings: []string{}, Notices: []Reason{}}, nil
 	}
 	changes, err := r.RestartChanges(ctx, built.Config)
 	if err != nil {
 		return nil, err
 	}
-	warnings := bootstrap.CapabilityWarnings(built.Config, r.capabilities())
-	var issues []string
+	granted := bootstrap.CapabilityWarnings(built.Config, r.capabilities())
+	var issues []reason.Reason
 	if r.PlannedLimits != nil {
 		for _, issue := range r.PlannedLimits(built.Config) {
-			issues = append(issues, "hard limit not enforced on the database side: "+issue.String())
+			issues = append(issues, issue.Notice())
 		}
 	}
 	if built.Config.Cost.RequireNativeLimits && len(issues) > 0 {
 		// The serving process would refuse to apply it (cost.requireNativeLimits).
-		msg := bootstrap.ErrNativeLimits.Error() + ":\n" + strings.Join(issues, "\n")
-		return &Validation{Error: &msg, RestartRequired: changes, Warnings: kit.OrEmpty(warnings)}, nil
+		_, texts := notices(issues)
+		msg := bootstrap.ErrNativeLimits.Error() + ":\n" + strings.Join(texts, "\n")
+		list, warnings := notices(granted)
+		return &Validation{Error: &msg, RestartRequired: changes, Warnings: warnings, Notices: list}, nil
 	}
 	hash := revision.Hash(built.Payload)
-	return &Validation{Ok: true, ContentHash: &hash, RestartRequired: changes,
-		Warnings: kit.OrEmpty(append(warnings, issues...))}, nil
+	list, warnings := notices(append(granted, issues...))
+	return &Validation{Ok: true, ContentHash: &hash, RestartRequired: changes, Warnings: warnings, Notices: list}, nil
 }
 
 func hasDatasource(cfg *config.Config, name string) bool {

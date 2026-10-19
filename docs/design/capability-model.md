@@ -62,7 +62,7 @@ type Evidence string // "db_verified" | "core_verified" | "declared" | "external
 type Claim struct {
     Strength Strength
     Evidence Evidence
-    Reason   string // 降级或依赖外部配置时的原因，进入告警与报告
+    Reason   reason.Reason // 提供方式或降级原因，进入告警与报告（见“原因”）
 }
 
 type Key string
@@ -100,6 +100,28 @@ type Profile map[Key]Claim
   或 transaction pooler 时 `best_effort`。
 - `sql_safe_updates`：服务注入或 DSN 设为 `1`/`ON` 时 `enforced`，DSN 设为 `0`/`OFF` 时
   `unsupported`，DSN 设为其他无法判定的值或经 transaction pooler 时 `best_effort`。
+
+### 原因（`core/reason`，v0.1.20 起）
+
+能力的原因、连接权限的原因、限制所依赖的工作（读、写、过程、逃生通道）以及发布前判定的
+提示，都是 `reason.Reason{Code, Params, Parts, Text}`：
+
+- `Code` 是稳定的编码（如 `timeout.mysqlMaxExecutionTimeSelectOnly`、`privilege.missing`），
+  全部登记在 `core/reason/codes.go`，每个编码有一个带 `{占位符}` 的英文模板；
+- `Params` 是占位符的取值（变量名、权限名、驱动错误原文等）；`Parts` 是由另一个原因填充的
+  占位符（如判定提示中的 `{cause}`、`{use}`、`{strength}`），不再嵌套；
+- `Text` 是填好的英文原文，日志、CLI、MCP、兼容矩阵与 GraphQL 原有的 `reason`/`use`/
+  `warnings` 字段照旧输出它。
+
+管理 API 另以 `reasonDetail`、`useDetail`、`Validation.notices`、`PlanException.reasonDetail`
+返回结构化的原因；控制台按 `reasons.<code>` 经 vue-i18n 显示 zh-CN/en，部分先各自翻译再填入，
+未知编码回退 `Text`。`core/reason/testdata/codes.json` 是编码与英文模板的清单
+（`go test ./core/reason -run TestCodesFixture -update` 重新生成），控制台测试据此核对每个编码
+在 zh-CN 与 en 中都有文案、且占位符一致。
+
+新增一个原因：在 `codes.go` 加常量与英文模板，在产生它的地方用 `reason.New`（或带部分的
+`reason.Compose`），重新生成清单，再在 `web/admin/src/i18n` 的 zh-CN 与 en 中加
+`reasons.<code>`；漏掉任一步测试即失败。
 
 ## 判定位置
 

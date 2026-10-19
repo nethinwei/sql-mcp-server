@@ -11,6 +11,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
+	"github.com/nethinwei/sql-mcp-server/core/reason"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 )
 
@@ -24,7 +25,14 @@ type LimitIssue struct {
 	Claim      dialect.Claim
 	// Use is the work relying on it: reads, writes, procedures or the SQL
 	// escape hatch.
-	Use string
+	Use reason.Reason
+}
+
+// Notice is the issue as validating a configuration reports it.
+func (i LimitIssue) Notice() reason.Reason {
+	return reason.Compose(reason.LimitNotEnforced,
+		map[string]reason.Reason{"use": i.Use, "strength": i.Claim.Strength.Reason(), "cause": i.Claim.Reason},
+		"datasource", i.Datasource, "connection", i.Connection, "key", string(i.Key))
 }
 
 func (i LimitIssue) String() string {
@@ -83,7 +91,8 @@ func limitIssues(
 ) []LimitIssue {
 	writes, procedures := writingDatasources(cfg)
 	var out []LimitIssue
-	need := func(datasource, connection string, key dialect.Key, use string) {
+	need := func(datasource, connection string, key dialect.Key, code reason.Code) {
+		use := reason.New(code)
 		p, ok := profileOf(datasource, connection)
 		if !ok {
 			return
@@ -94,19 +103,19 @@ func limitIssues(
 	}
 	for name, database := range cfg.Databases {
 		route := database.Route()
-		need(name, route.Read, dialect.TimeoutRead, "reads")
+		need(name, route.Read, dialect.TimeoutRead, reason.UseReads)
 		if writes[name] {
-			need(name, route.Write, dialect.TimeoutWrite, "writes")
+			need(name, route.Write, dialect.TimeoutWrite, reason.UseWrites)
 			if route.Write != route.Read && (database.ReadAfterWrite > 0 || cfg.Tools.BeginTransaction) {
-				need(name, route.Write, dialect.TimeoutRead, "reads after writes and in transactions")
+				need(name, route.Write, dialect.TimeoutRead, reason.UseReadsAfterWrite)
 			}
 		}
 		if procedures[name] {
-			need(name, route.Execute, dialect.TimeoutWrite, "procedures")
+			need(name, route.Execute, dialect.TimeoutWrite, reason.UseProcedures)
 		}
 		if cfg.Tools.ExecuteSQL && database.SQLEscape.Connection != "" {
-			need(name, database.SQLEscape.Connection, dialect.TimeoutRead, "the SQL escape hatch")
-			need(name, database.SQLEscape.Connection, dialect.TimeoutWrite, "the SQL escape hatch")
+			need(name, database.SQLEscape.Connection, dialect.TimeoutRead, reason.UseSQLEscape)
+			need(name, database.SQLEscape.Connection, dialect.TimeoutWrite, reason.UseSQLEscape)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
@@ -202,7 +211,7 @@ func (a *App) PlannedLimitIssues(cfg *config.Config) []LimitIssue {
 		profile, err := plannedLimits(a.scanResolver, database.Driver, c, cfg.Cost.QueryTimeout)
 		if err != nil {
 			unknown := dialect.Claim{Strength: dialect.Unsupported, Evidence: dialect.Declared,
-				Reason: "cannot be judged before it is applied: " + err.Error()}
+				Reason: reason.New(reason.LimitUnjudged, "error", err.Error())}
 			return dialect.Profile{dialect.TimeoutRead: unknown, dialect.TimeoutWrite: unknown}, true
 		}
 		return profile, true

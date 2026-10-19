@@ -52,8 +52,10 @@ type CapabilityClaim struct {
 	Key      string             `json:"key"`
 	Strength CapabilityStrength `json:"strength"`
 	Evidence CapabilityEvidence `json:"evidence"`
-	// How it is provided, or why it is degraded.
+	// How it is provided, or why it is degraded, as English text.
 	Reason *string `json:"reason,omitempty"`
+	// The reason as an explanation the console translates.
+	ReasonDetail *configapp.Reason `json:"reasonDetail,omitempty"`
 }
 
 type CatalogInput struct {
@@ -123,7 +125,10 @@ type EntityCapability struct {
 	Connection string `json:"connection"`
 	// Columns granted at column level when the table-level privilege is not.
 	Columns []string `json:"columns,omitempty"`
-	Reason  *string  `json:"reason,omitempty"`
+	// Why the connection cannot run it, as English text.
+	Reason *string `json:"reason,omitempty"`
+	// The reason as an explanation the console translates.
+	ReasonDetail *configapp.Reason `json:"reasonDetail,omitempty"`
 }
 
 type EntityInput struct {
@@ -265,10 +270,14 @@ type LimitIssue struct {
 	Datasource string `json:"datasource"`
 	Connection string `json:"connection"`
 	Key        string `json:"key"`
-	// The work relying on it: reads, writes, procedures or the SQL escape hatch.
-	Use      string             `json:"use"`
-	Strength CapabilityStrength `json:"strength"`
-	Reason   *string            `json:"reason,omitempty"`
+	// The work relying on it: reads, writes, procedures or the SQL escape hatch (English text).
+	Use string `json:"use"`
+	// The work relying on it as an explanation the console translates.
+	UseDetail *configapp.Reason  `json:"useDetail"`
+	Strength  CapabilityStrength `json:"strength"`
+	Reason    *string            `json:"reason,omitempty"`
+	// The reason as an explanation the console translates.
+	ReasonDetail *configapp.Reason `json:"reasonDetail,omitempty"`
 }
 
 type Mutation struct {

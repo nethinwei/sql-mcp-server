@@ -8,6 +8,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	"github.com/nethinwei/sql-mcp-server/core/reason"
 )
 
 func TestTableCapability(t *testing.T) {
@@ -47,12 +48,14 @@ func TestCapabilityWarnings(t *testing.T) {
 		}}},
 	}
 	caps := EntityCapabilities{"default.orders": {
-		entity.ActionRead:   {Privilege: introspect.PrivilegeGranted, Connection: "ro"},
-		entity.ActionUpdate: {Privilege: introspect.PrivilegeDenied, Connection: "ro", Reason: "read-only"},
+		entity.ActionRead: {Privilege: introspect.PrivilegeGranted, Connection: "ro"},
+		entity.ActionUpdate: {Privilege: introspect.PrivilegeDenied, Connection: "ro",
+			Reason: reason.New(reason.PrivilegeReadOnlyServer)},
 		entity.ActionDelete: {Privilege: introspect.PrivilegeDenied, Connection: "ro"},
 	}}
 	warnings := CapabilityWarnings(cfg, caps)
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "update") || !strings.Contains(warnings[0], `"ro"`) {
+	if len(warnings) != 1 || !strings.Contains(warnings[0].Text, "update") || warnings[0].Params["connection"] != "ro" ||
+		warnings[0].Parts["cause"].Code != reason.PrivilegeReadOnlyServer {
 		t.Fatalf("warnings = %v, want only the granted update", warnings)
 	}
 }

@@ -48,7 +48,7 @@ func TestLimits(t *testing.T) {
 			t.Errorf("%s: read/write/unkeyed = %v, want %v", test.name, got, want)
 		}
 		for _, k := range []dialect.Key{dialect.TimeoutRead, dialect.TimeoutWrite, dialect.UnkeyedWrite} {
-			if p.Claim(k).Reason == "" {
+			if p.Claim(k).Reason.Text == "" {
 				t.Errorf("%s: %s has no reason", test.name, k)
 			}
 		}

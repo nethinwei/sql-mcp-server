@@ -12,6 +12,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/provider"
+	"github.com/nethinwei/sql-mcp-server/core/reason"
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 	"github.com/nethinwei/sql-mcp-server/x/providers/sqladapter"
@@ -101,20 +102,19 @@ func Limits(dsn string, opts providerregistry.Options) (dialect.Profile, error) 
 // itself.
 func limits(params map[string]string, pooler string) dialect.Profile {
 	timeout := dialect.Claim{Strength: dialect.Enforced, Evidence: dialect.DBVerified,
-		Reason: "statement_timeout just under cost.queryTimeout, and a cancel request at the request deadline"}
+		Reason: reason.New(reason.PostgresTimeout)}
 	if pooler == providerregistry.PoolerTransaction {
 		timeout = dialect.Claim{Strength: dialect.BestEffort, Evidence: dialect.Declared,
-			Reason: "statement_timeout is a session setting a transaction pooler does not keep; " +
-				"a cancel request at the request deadline stops the statement only if the pooler forwards it"}
+			Reason: reason.New(reason.PostgresTimeoutPooled)}
 	} else if _, set := params["statement_timeout"]; set {
 		timeout = dialect.Claim{Strength: dialect.Enforced, Evidence: dialect.DBVerified,
-			Reason: "a cancel request at the request deadline (the DSN sets its own statement_timeout)"}
+			Reason: reason.New(reason.PostgresCancelOnly)}
 	}
 	return dialect.Profile{
 		dialect.TimeoutRead:  timeout,
 		dialect.TimeoutWrite: timeout,
 		dialect.UnkeyedWrite: {Strength: dialect.Unsupported, Evidence: dialect.Declared,
-			Reason: "no database-side refusal; the gate's WriteGuard refuses unkeyed writes"},
+			Reason: reason.New(reason.UnkeyedGateOnly)},
 	}
 }
 

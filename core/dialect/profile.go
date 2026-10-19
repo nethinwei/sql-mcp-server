@@ -1,5 +1,7 @@
 package dialect
 
+import "github.com/nethinwei/sql-mcp-server/core/reason"
+
 // Strength is how firmly the server guarantees a capability.
 type Strength string
 
@@ -11,6 +13,14 @@ const (
 	// Enforced: an assembled, tested mechanism that does not silently degrade.
 	Enforced Strength = "enforced"
 )
+
+// Reason is the strength as an explanation the console translates.
+func (s Strength) Reason() reason.Reason {
+	code := map[Strength]reason.Code{
+		Enforced: reason.StrengthEnforced, BestEffort: reason.StrengthBestEffort, Unsupported: reason.StrengthUnsupported,
+	}[s]
+	return reason.New(code)
+}
 
 // Evidence is what backs a claim.
 type Evidence string
@@ -59,7 +69,7 @@ type Claim struct {
 	Strength Strength
 	Evidence Evidence
 	// Reason says how it is provided or why it is degraded.
-	Reason string
+	Reason reason.Reason
 }
 
 // Profile holds the claims of a dialect or connection. A missing key is

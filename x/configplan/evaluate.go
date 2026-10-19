@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/reason"
 )
 
 // Input is what a plan is evaluated against.
@@ -19,7 +20,7 @@ type Input struct {
 	Sources   []Source
 	// Denied reports an entity action the serving connections cannot run,
 	// with why; nil reports none.
-	Denied func(entity, action string) (reason string, denied bool)
+	Denied func(entity, action string) (why reason.Reason, denied bool)
 	// Review reports every new table a grant covers, as a recurring
 	// template's proposal needs.
 	Review bool
@@ -185,6 +186,9 @@ type Exception struct {
 	Entity string
 	// Detail names what the exception is about: a name, an action, a field.
 	Detail string
+	// Reason explains it, when the server does (an action denied): the
+	// console translates it, Detail is its English text.
+	Reason reason.Reason
 }
 
 // Evaluate applies p to in.Base. It does not validate the result: the

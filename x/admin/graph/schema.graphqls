@@ -429,8 +429,33 @@ type Validation {
   contentHash: String
   "Changes against the published revision that need a restart."
   restartRequired: [String!]!
-  "Grants the routed datasource connections cannot run (they do not block publishing)."
+  "Grants the routed datasource connections cannot run (they do not block publishing), as English text."
   warnings: [String!]!
+  "The warnings as explanations the console translates, in the same order."
+  notices: [Reason!]!
+}
+
+"""
+An explanation the server gives an administrator: a stable code the console
+translates (core/reason lists them), the values of its template's
+placeholders, the explanations some placeholders name, and its English text
+(what logs, the CLI and MCP show).
+"""
+type Reason {
+  code: String!
+  "Placeholder values by name."
+  params: JSON!
+  "Explanations named by placeholders (the cause, the work affected); each translates by its own code."
+  parts: [ReasonPart!]!
+  text: String!
+}
+
+"An explanation a placeholder of another names."
+type ReasonPart {
+  name: String!
+  code: String!
+  params: JSON!
+  text: String!
 }
 
 enum Privilege {
@@ -447,7 +472,10 @@ type EntityCapability {
   connection: String!
   "Columns granted at column level when the table-level privilege is not."
   columns: [String!]
+  "Why the connection cannot run it, as English text."
   reason: String
+  "The reason as an explanation the console translates."
+  reasonDetail: Reason
 }
 
 enum CapabilityStrength {
@@ -468,8 +496,10 @@ type CapabilityClaim {
   key: String!
   strength: CapabilityStrength!
   evidence: CapabilityEvidence!
-  "How it is provided, or why it is degraded."
+  "How it is provided, or why it is degraded, as English text."
   reason: String
+  "The reason as an explanation the console translates."
+  reasonDetail: Reason
 }
 
 type ConnectionCapabilities {
@@ -483,10 +513,14 @@ type LimitIssue {
   datasource: String!
   connection: String!
   key: String!
-  "The work relying on it: reads, writes, procedures or the SQL escape hatch."
+  "The work relying on it: reads, writes, procedures or the SQL escape hatch (English text)."
   use: String!
+  "The work relying on it as an explanation the console translates."
+  useDetail: Reason!
   strength: CapabilityStrength!
   reason: String
+  "The reason as an explanation the console translates."
+  reasonDetail: Reason
 }
 
 type ProviderCapabilities {

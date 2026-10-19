@@ -408,6 +408,8 @@ type PlanException {
   ref: String
   entity: String
   detail: String
+  "The server's explanation of detail, when it gives one, for the console to translate."
+  reasonDetail: Reason
 }
 
 type UnscannedSchemas {

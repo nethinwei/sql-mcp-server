@@ -12,6 +12,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	"github.com/nethinwei/sql-mcp-server/core/reason"
 )
 
 // Capability says whether the connection an entity action routes to may run
@@ -23,7 +24,7 @@ type Capability struct {
 	// Columns lists the columns granted at column level when the table-level
 	// privilege is not granted.
 	Columns []string
-	Reason  string
+	Reason  reason.Reason
 }
 
 // EntityCapabilities are capabilities by entity and action.
@@ -49,7 +50,7 @@ func (a *App) assessInBackground(cfg *config.Config, connections Connections, en
 		}
 		a.capabilities.Store(&capabilities)
 		for _, warning := range CapabilityWarnings(cfg, capabilities) {
-			slog.Warn("grant exceeds the datasource connection's privileges", "detail", warning)
+			slog.Warn("grant exceeds the datasource connection's privileges", "detail", warning.Text)
 		}
 	})
 	if !started { // the bus is closed: the capabilities stay unknown
@@ -209,20 +210,20 @@ func assessAction(ctx context.Context, c *connectionInspector, e entity.Entity, 
 	}
 	writes := action != entity.ActionRead && action != entity.ActionAggregate
 	if writes && action != entity.ActionExecute && c.isReadOnly(ctx) {
-		capability.Privilege, capability.Reason = introspect.PrivilegeDenied, "the server is read-only"
+		capability.Privilege, capability.Reason = introspect.PrivilegeDenied, reason.New(reason.PrivilegeReadOnlyServer)
 		return capability
 	}
 	if action == entity.ActionExecute {
 		p, err := c.inspect.ProcedurePrivilege(ctx, e.Schema, e.Source)
 		capability.Privilege = p
 		if err != nil {
-			capability.Reason = err.Error()
+			capability.Reason = reason.New(reason.PrivilegeUncheckable, "error", err.Error())
 		}
 		return capability
 	}
 	tp, err := c.table(e.Schema, e.Source)
 	if err != nil {
-		capability.Reason = err.Error()
+		capability.Reason = reason.New(reason.PrivilegeUncheckable, "error", err.Error())
 		return capability
 	}
 	return tableCapability(capability, tp, action)
@@ -245,12 +246,13 @@ func tableCapability(c Capability, tp introspect.TablePrivileges, action entity.
 		c.Privilege, c.Columns = introspect.PrivilegeGranted, tp.Columns[kind]
 	}
 	if c.Privilege == introspect.PrivilegeDenied {
-		c.Reason = fmt.Sprintf("the account lacks the %s privilege", privilegeName(action))
+		c.Reason = reason.New(reason.PrivilegeMissing, "privilege", privilegeName(action))
 	}
 	filters := action == entity.ActionUpdate || action == entity.ActionDelete
 	if filters && c.Privilege != introspect.PrivilegeDenied && tp.Select == introspect.PrivilegeDenied &&
 		len(tp.Columns["select"]) == 0 {
-		c.Privilege, c.Reason = introspect.PrivilegeDenied, "a filtered "+privilegeName(action)+" also needs SELECT"
+		c.Privilege, c.Reason = introspect.PrivilegeDenied,
+			reason.New(reason.PrivilegeFilterNeedsSelect, "privilege", privilegeName(action))
 	}
 	return c
 }
@@ -264,18 +266,18 @@ func privilegeName(action entity.Action) string {
 
 // CapabilityWarnings lists actions cfg grants that the routed connection
 // cannot run, in a stable order.
-func CapabilityWarnings(cfg *config.Config, capabilities EntityCapabilities) []string {
-	var out []string
+func CapabilityWarnings(cfg *config.Config, capabilities EntityCapabilities) []reason.Reason {
+	var out []reason.Reason
 	for entityName, actions := range grantedActions(cfg) {
 		for _, action := range actions {
 			c, ok := capabilities[entityName][action]
 			if ok && c.Privilege == introspect.PrivilegeDenied {
-				out = append(out, fmt.Sprintf("entity %q: %s is granted, but connection %q cannot run it (%s)",
-					entityName, action, c.Connection, c.Reason))
+				out = append(out, reason.Compose(reason.CapabilityDenied, map[string]reason.Reason{"cause": c.Reason},
+					"entity", entityName, "action", action.String(), "connection", c.Connection))
 			}
 		}
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].Text < out[j].Text })
 	return out
 }
 
