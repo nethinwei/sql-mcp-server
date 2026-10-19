@@ -45,3 +45,27 @@ func TestWithRowColumnsGathersEveryRowScope(t *testing.T) {
 		t.Fatalf("RowColumns = %v", got)
 	}
 }
+
+// What an App found missing separates gone tables, missing fields and the
+// row-scope columns that are not fields.
+func TestAppMissingSeparatesFieldsFromRowColumns(t *testing.T) {
+	entities := []entity.Entity{
+		{Name: "default.orders", Attributes: []entity.Attribute{{Name: "id"}, {Name: "note"}}},
+		{Name: "default.gone"},
+		{Name: "default.fine"},
+	}
+	markUnavailable("default", entities, map[string][]string{
+		"default.orders": {"note", "tenant_id"}, "default.gone": nil,
+	})
+	reg, err := entity.NewRegistry(entities)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &App{Registry: reg, Unavailable: unavailableOf(reg.Entities(), nil)}
+	got := app.Missing()
+	if !got.Tables["default.gone"] || len(got.Tables) != 1 ||
+		!slices.Equal(got.Fields["default.orders"], []string{"note"}) ||
+		!slices.Equal(got.RowColumns["default.orders"], []string{"tenant_id"}) {
+		t.Fatalf("missing = %+v", got)
+	}
+}

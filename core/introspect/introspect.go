@@ -150,8 +150,6 @@ type Drift struct {
 	Missing []string
 	// Extra lists DB columns not present in the config.
 	Extra []string
-	// TypeChanged lists fields whose DB type differs from the config.
-	TypeChanged []string
 	// Absent maps each entity that cannot be served to the configured
 	// columns its table lacks; an empty list means the table is missing.
 	Absent map[string][]string

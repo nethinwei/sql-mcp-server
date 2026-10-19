@@ -73,9 +73,10 @@ type Service struct {
 	// the serving configuration relies on that they do not enforce; nil
 	// reports none.
 	Profiles func() ([]bootstrap.ConnectionProfile, []bootstrap.LimitIssue)
-	// MissingTables reports the entities whose tables the serving
-	// configuration found missing; nil reports none.
-	MissingTables func() map[string]bool
+	// Missing reports what the serving configuration found missing from the
+	// databases (gone tables, missing fields and row-scope columns); nil
+	// reports nothing.
+	Missing func() bootstrap.Missing
 	// PlannedLimits judges a configuration not yet applied: the hard limits
 	// it would rely on that its connections would not enforce; nil judges
 	// none.
@@ -111,11 +112,11 @@ func (r *Service) now() time.Time {
 	return time.Now()
 }
 
-func (r *Service) missingTables() map[string]bool {
-	if r.MissingTables == nil {
-		return nil
+func (r *Service) missing() bootstrap.Missing {
+	if r.Missing == nil {
+		return bootstrap.Missing{}
 	}
-	return r.MissingTables()
+	return r.Missing()
 }
 
 func (r *Service) capabilities() bootstrap.EntityCapabilities {

@@ -30,7 +30,7 @@ func toPlanPreview(p *configapp.Preview) (*PlanPreview, error) {
 	proposal := p.Proposal
 	out := &PlanPreview{
 		PlanID: p.PlanID, Report: p.Report, Entities: make([]Entity, 0, len(proposal.Entities)),
-		Added: kit.OrEmpty(proposal.Added), Validation: p.Validation,
+		Added: kit.OrEmpty(proposal.Added), Removed: kit.OrEmpty(proposal.Removed), Validation: p.Validation,
 	}
 	for _, e := range proposal.Entities {
 		out.Entities = append(out.Entities, configapp.EntityItemOf(e))

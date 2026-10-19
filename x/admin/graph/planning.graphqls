@@ -346,6 +346,8 @@ type PlanPreview {
   entities: [Entity!]!
   "IDs of the entities added."
   added: [String!]!
+  "IDs of the entities removed (their tables are gone)."
+  removed: [String!]!
   "Roles and users added or changed, whole."
   roles: [Role!]!
   users: [User!]!

@@ -283,6 +283,8 @@ type PlanPreview struct {
 	Entities []configapp.EntityItem `json:"entities"`
 	// IDs of the entities added.
 	Added []string `json:"added"`
+	// IDs of the entities removed (their tables are gone).
+	Removed []string `json:"removed"`
 	// Roles and users added or changed, whole.
 	Roles []configapp.RoleItem `json:"roles"`
 	Users []configapp.UserItem `json:"users"`

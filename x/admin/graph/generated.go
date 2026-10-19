@@ -418,6 +418,7 @@ type ComplexityRoot struct {
 		Added      func(childComplexity int) int
 		Entities   func(childComplexity int) int
 		PlanID     func(childComplexity int) int
+		Removed    func(childComplexity int) int
 		Report     func(childComplexity int) int
 		Roles      func(childComplexity int) int
 		Users      func(childComplexity int) int
@@ -2480,6 +2481,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.PlanPreview.PlanID(childComplexity), true
+	case "PlanPreview.removed":
+		if e.ComplexityRoot.PlanPreview.Removed == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlanPreview.Removed(childComplexity), true
 	case "PlanPreview.report":
 		if e.ComplexityRoot.PlanPreview.Report == nil {
 			break
@@ -4695,6 +4702,8 @@ func (ec *executionContext) childFields_PlanPreview(ctx context.Context, field g
 		return ec.fieldContext_PlanPreview_entities(ctx, field)
 	case "added":
 		return ec.fieldContext_PlanPreview_added(ctx, field)
+	case "removed":
+		return ec.fieldContext_PlanPreview_removed(ctx, field)
 	case "roles":
 		return ec.fieldContext_PlanPreview_roles(ctx, field)
 	case "users":
@@ -12758,6 +12767,29 @@ func (ec *executionContext) _PlanPreview_added(ctx context.Context, field graphq
 	)
 }
 func (ec *executionContext) fieldContext_PlanPreview_added(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PlanPreview", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _PlanPreview_removed(ctx context.Context, field graphql.CollectedField, obj *PlanPreview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PlanPreview_removed(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Removed, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PlanPreview_removed(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("PlanPreview", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
@@ -23639,6 +23671,11 @@ func (ec *executionContext) _PlanPreview(ctx context.Context, sel ast.SelectionS
 			}
 		case "added":
 			out.Values[i] = ec._PlanPreview_added(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "removed":
+			out.Values[i] = ec._PlanPreview_removed(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}

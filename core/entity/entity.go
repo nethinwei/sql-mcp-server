@@ -282,6 +282,9 @@ type Entity struct {
 	// configured column, is missing from the database (set at assembly).
 	// Empty when it can be; tools refuse it once the caller is authorized.
 	Unavailable string
+	// Absent are the columns missing from its table when Unavailable says
+	// columns are (fields, or columns its row scopes test).
+	Absent []string
 	// Relation identifies the physical relation (set at assembly, see
 	// RelationKey); at most one entity exposes a relation.
 	Relation string

@@ -91,7 +91,7 @@ func (r *Service) Pending(ctx context.Context, against Against) (*PendingWork, e
 		}
 	}
 	scope := configplan.Scope{Datasources: f.Datasources}
-	for _, g := range configplan.GoneTables(pc.sources, pc.base, scope, pc.missing) {
+	for _, g := range configplan.GoneTables(pc.sources, pc.base, scope, pc.missing.Tables) {
 		if who.Allows(g.Datasource) {
 			key := "gone:" + g.Entity
 			out.GoneTables = append(out.GoneTables,
