@@ -102,8 +102,11 @@ func insertWithExec(ctx context.Context, st statement, inserted map[string]any) 
 }
 
 // insertedKey reports the identity key of a row inserted without RETURNING:
-// its values in the inserted row (by column), and the auto-increment column
-// from the driver's last insert id.
+// its values in the inserted row (by column), but for the auto-increment
+// column the driver's last insert id when it has one. That is the value the
+// row was stored under: generated when the row gave none, NULL or 0, and
+// the row's own otherwise (0 too, under NO_AUTO_VALUE_ON_ZERO, reported as
+// no id).
 func insertedKey(e entity.Entity, values map[string]any, lastInsertID int64) map[string]any {
 	row := map[string]any{}
 	keys := e.IdentityKeys(true, false)
@@ -111,10 +114,10 @@ func insertedKey(e entity.Entity, values map[string]any, lastInsertID int64) map
 		return row
 	}
 	for _, column := range keys[0] {
-		if v, ok := values[column]; ok {
-			row[column] = v
-		} else if a, ok := e.AttributeByName(column); ok && a.Domain.AutoIncrement && lastInsertID != 0 {
+		if a, ok := e.AttributeByName(column); ok && a.Domain.AutoIncrement && lastInsertID != 0 {
 			row[column] = lastInsertID
+		} else if v, ok := values[column]; ok {
+			row[column] = v
 		}
 	}
 	return row

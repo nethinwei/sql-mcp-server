@@ -17,6 +17,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
 	"github.com/nethinwei/sql-mcp-server/internal/escapetest"
+	"github.com/nethinwei/sql-mcp-server/internal/insertkeytest"
 	"github.com/nethinwei/sql-mcp-server/internal/numbertest"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
@@ -462,4 +463,11 @@ func TestMySQLNumbers(t *testing.T) {
 	prov, cleanup := setupMySQL(t)
 	defer cleanup()
 	numbertest.Run(t, "mysql", prov, "")
+}
+
+// The key create_record reports on mysql: see internal/insertkeytest.
+func TestMySQLInsertedKey(t *testing.T) {
+	prov, cleanup := setupMySQL(t)
+	defer cleanup()
+	insertkeytest.Run(t, "mysql", prov, "")
 }

@@ -359,19 +359,28 @@ func TestWritesRejectGeneratedColumns(t *testing.T) {
 
 // Without RETURNING the key reported is the inserted row's, by column: one
 // the caller wrote by its alias, and one the row scope pinned (a hidden
-// tenant column the caller left out).
+// tenant column the caller left out). An auto-increment key is the driver's
+// last insert id when it has one, which the database generated for a NULL or
+// 0 (internal/insertkeytest checks this against MySQL and OceanBase).
 func TestInsertWithoutReturningReportsAliasedAndPinnedKeys(t *testing.T) {
 	t.Parallel()
+	auto := entity.Entity{
+		Attributes: []entity.Attribute{
+			{Name: "id", Alias: "key", Domain: entity.Domain{AutoIncrement: true, Default: true}}, {Name: "sku"},
+		},
+		Keys: []entity.Key{{Name: "PRIMARY", Columns: []string{"id"}, Primary: true}},
+	}
 	for name, c := range map[string]struct {
-		e      entity.Entity
-		values string
-		want   map[string]any
+		e        entity.Entity
+		values   string
+		insertID int64
+		want     map[string]any
 	}{
 		"aliased": {
 			e: entity.Entity{Attributes: []entity.Attribute{{Name: "code", Alias: "key"}, {Name: "sku"}},
 				Keys: []entity.Key{{Name: "PRIMARY", Columns: []string{"code"}, Primary: true}}},
-			values: `{"key":"A-1","sku":"a"}`,
-			want:   map[string]any{"code": "A-1"},
+			values: `{"key":"A-1","sku":"a"}`, insertID: 42,
+			want: map[string]any{"code": "A-1"},
 		},
 		"pinned": {
 			e: entity.Entity{
@@ -381,32 +390,45 @@ func TestInsertWithoutReturningReportsAliasedAndPinnedKeys(t *testing.T) {
 				Keys:         []entity.Key{{Name: "PRIMARY", Columns: []string{"tenant_id", "id"}, Primary: true}},
 				TenantPolicy: relalg.Condition{Field: "tenant_id", Op: relalg.OpEq, Value: int64(7)},
 			},
-			values: `{"sku":"a"}`,
-			want:   map[string]any{"tenant_id": int64(7), "id": int64(42)},
+			values: `{"sku":"a"}`, insertID: 42,
+			want: map[string]any{"tenant_id": int64(7), "id": int64(42)},
 		},
+		"auto written NULL": {e: auto, values: `{"key":null,"sku":"a"}`, insertID: 42, want: map[string]any{"id": int64(42)}},
+		"auto written 0":    {e: auto, values: `{"key":0,"sku":"a"}`, insertID: 42, want: map[string]any{"id": int64(42)}},
+		// NO_AUTO_VALUE_ON_ZERO: the 0 is stored, and the driver reports no id.
+		"auto 0 stored": {e: auto, values: `{"key":0,"sku":"a"}`, want: map[string]any{"id": int64(0)}},
 	} {
-		e := c.e
-		e.Name, e.Source, e.MCP = "lines", "lines", entity.MCPFlags{DMLTools: true}
-		e.Role = entity.RoleAccess{entity.ActionCreate: {"w"}}
-		reg, _ := entity.NewRegistry([]entity.Entity{e})
-		db := &storetest.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
-			return store.Result{LastInsertID: 42, RowsAffected: 1}, nil
-		}}
-		tc := Context{
-			Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
-			Role:     "w", DB: db, Dialect: testdialect.MySQL{},
-		}
-		res, err := CreateTool{}.Run(context.Background(),
-			json.RawMessage(`{"entity":"lines","values":`+c.values+`}`), tc)
+		row, err := createWithoutReturning(c.e, c.values, c.insertID)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 		for column, v := range c.want {
-			if got := res.Content[0][column]; got != v {
-				t.Errorf("%s: row = %v, want %s = %v", name, res.Content[0], column, v)
+			if got := row[column]; got != v {
+				t.Errorf("%s: row = %v, want %s = %v", name, row, column, v)
 			}
 		}
 	}
+}
+
+// createWithoutReturning creates a row of e (named lines) with values on a
+// database without RETURNING whose driver reports insertID, and returns what
+// create_record reports.
+func createWithoutReturning(e entity.Entity, values string, insertID int64) (map[string]any, error) {
+	e.Name, e.Source, e.MCP = "lines", "lines", entity.MCPFlags{DMLTools: true}
+	e.Role = entity.RoleAccess{entity.ActionCreate: {"w"}}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	db := &storetest.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
+		return store.Result{LastInsertID: insertID, RowsAffected: 1}, nil
+	}}
+	tc := Context{
+		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+		Role:     "w", DB: db, Dialect: testdialect.MySQL{},
+	}
+	res, err := CreateTool{}.Run(context.Background(), json.RawMessage(`{"entity":"lines","values":`+values+`}`), tc)
+	if err != nil {
+		return nil, err
+	}
+	return res.Content[0], nil
 }
 
 func TestInsertWithoutReturningReportsTheRowKey(t *testing.T) {
