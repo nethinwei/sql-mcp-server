@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"container/list"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -38,9 +39,14 @@ type session struct {
 // sessions is the in-memory session table. Sessions do not survive a restart
 // and are not shared between instances.
 type sessions struct {
-	mu       sync.Mutex
-	byID     map[string]*session
-	failures map[string]loginFailures
+	mu   sync.Mutex
+	byID map[string]*session
+	// failures tracks at most maxTrackedLogins names, in byLast from the
+	// least recent failure; names it cannot track share overflow, so a
+	// flood of names neither grows it nor evicts a lockout still in force.
+	failures map[string]*loginFailures
+	byLast   *list.List
+	overflow loginFailures
 	now      func() time.Time
 }
 
@@ -50,13 +56,23 @@ type loginFailures struct {
 	// lockouts counts the lockouts in a row, none ending in a sign-in nor
 	// followed by maxLoginLockout without failures.
 	lockouts int
+	last     time.Time
+	elem     *list.Element
+}
+
+// quiet reports whether f no longer affects sign-ins: maxLoginLockout has
+// passed since its last failure and since its lockout ended.
+func (f *loginFailures) quiet(now time.Time) bool {
+	return now.After(f.last.Add(maxLoginLockout)) && now.After(f.lockedUntil.Add(maxLoginLockout))
 }
 
 func newSessions(now func() time.Time) *sessions {
 	if now == nil {
 		now = time.Now
 	}
-	return &sessions{byID: map[string]*session{}, failures: map[string]loginFailures{}, now: now}
+	return &sessions{
+		byID: map[string]*session{}, failures: map[string]*loginFailures{}, byLast: list.New(), now: now,
+	}
 }
 
 func randomToken() (string, error) {
@@ -133,7 +149,7 @@ func (s *sessions) delete(id string) {
 func (s *sessions) allowLogin(username string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return !s.now().Before(s.failures[username].lockedUntil)
+	return !s.now().Before(s.failuresOf(username, false).lockedUntil)
 }
 
 // recordLogin tracks failures; maxLoginFailures in a row lock the name, for
@@ -143,19 +159,14 @@ func (s *sessions) recordLogin(username string, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if ok {
-		delete(s.failures, username)
+		if f, tracked := s.failures[username]; tracked {
+			s.byLast.Remove(f.elem)
+			delete(s.failures, username)
+		}
 		return
 	}
-	if _, tracked := s.failures[username]; !tracked && len(s.failures) >= maxTrackedLogins {
-		now := s.now()
-		for k, f := range s.failures {
-			if now.After(f.lockedUntil) {
-				delete(s.failures, k)
-			}
-		}
-	}
 	now := s.now()
-	f := s.failures[username]
+	f := s.failuresOf(username, true)
 	if now.After(f.lockedUntil.Add(maxLoginLockout)) {
 		f.lockouts = 0
 	}
@@ -164,5 +175,33 @@ func (s *sessions) recordLogin(username string, ok bool) {
 		f.count, f.lockedUntil = 0, now.Add(min(loginLockout<<min(f.lockouts, 6), maxLoginLockout))
 		f.lockouts++
 	}
+	f.last = now
+	if f.elem != nil {
+		s.byLast.MoveToBack(f.elem)
+	}
+}
+
+// failuresOf returns username's failures: its own when tracked, or, with
+// track, when the table has room or a quiet name to evict for it; else the
+// shared overflow. The zero failures of an untracked name allow a sign-in
+// unless the table is full, when the overflow's lockout holds.
+func (s *sessions) failuresOf(username string, track bool) *loginFailures {
+	if f, tracked := s.failures[username]; tracked {
+		return f
+	}
+	if len(s.failures) >= maxTrackedLogins {
+		oldest := s.byLast.Front()
+		if oldest == nil || !s.failures[oldest.Value.(string)].quiet(s.now()) {
+			return &s.overflow
+		}
+		if track {
+			delete(s.failures, s.byLast.Remove(oldest).(string))
+		}
+	}
+	if !track {
+		return &loginFailures{}
+	}
+	f := &loginFailures{elem: s.byLast.PushBack(username)}
 	s.failures[username] = f
+	return f
 }

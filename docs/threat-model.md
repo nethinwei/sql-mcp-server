@@ -391,14 +391,17 @@ Provider 适用范围使用以下口径：
 - **控制**：每个 resolver 或其调用的配置服务（`x/admin/configapp`）在执行前、解析输入
   （方案、范围、版本号）之前要求操作所需的权限（`auth.Require`），只读、写、发布、账号管理分开，`admin:*` 持有全部；会话
   Cookie 为 HttpOnly + SameSite，变更请求必须携带与会话绑定的 CSRF 头；登录有全局并发
-  闸门与按用户名的失败锁定；停用账号与改密立即吊销该账号的全部会话，会话有空闲与绝对
+  闸门与按用户名的失败锁定，失败表有容量上限：表满时只淘汰已安静 `maxLoginLockout` 的
+  用户名，仍在锁定或退避期内的不会被大量新用户名挤掉，无法跟踪的用户名共享一个锁定；停用账号与改密立即吊销该账号的全部会话，会话有空闲与绝对
   超时；查询深度与复杂度有上限，超出即在执行前拒绝；introspection 与 playground 默认
   关闭。配置 MCP 端点（`/admin/mcp`）只接受令牌，不接受会话 Cookie（见 TM-012）。
 - **现有证据**：`x/admin/graph/authz_matrix_test.go` 的
   `TestEveryOperationEnforcesItsPermissions`：从 schema 为每个查询与变更自动生成参数合法
   的请求，在四种权限的全部 16 种组合下调用，断言当且仅当缺少所需权限时被拒；新增操作
   未登记所需权限即失败；`TestAuthorizationPrecedesInput` 以非法的版本号与方案调用每个
-  需要权限的操作，断言无权限时先得到权限拒绝。`x/admin/admin_test.go` 的登录、CSRF、锁定、并发闸门、停用与
+  需要权限的操作，断言无权限时先得到权限拒绝。`x/admin/session_test.go` 的
+  `TestLoginFailuresBounded`、`TestLockoutSurvivesNameFlood`（失败表有界，名字洪泛不清除
+  锁定与退避历史）；`x/admin/admin_test.go` 的登录、CSRF、锁定、并发闸门、停用与
   改密吊销、会话超时、深度（`TestSelectionDepth`）与复杂度（`TestComplexityLimit`）
   上限、playground 默认关闭与 `/admin/mcp` 拒绝会话测试；`x/admin/graph` 的
   `TestAdminAccountsKeepAnAccountManager`。

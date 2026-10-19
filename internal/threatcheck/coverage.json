@@ -238,6 +238,8 @@
       {"file": "x/admin/graph/authz_matrix_test.go", "name": "TestAuthorizationPrecedesInput"},
       {"file": "x/admin/admin_test.go", "name": "TestLoginSessionAndCSRF"},
       {"file": "x/admin/admin_test.go", "name": "TestLoginFailuresLockOut"},
+      {"file": "x/admin/session_test.go", "name": "TestLoginFailuresBounded"},
+      {"file": "x/admin/session_test.go", "name": "TestLockoutSurvivesNameFlood"},
       {"file": "x/admin/admin_test.go", "name": "TestLoginGateRejectsExcessAttempts"},
       {"file": "x/admin/admin_test.go", "name": "TestDisabledAccountLosesSessionAndCannotSignIn"},
       {"file": "x/admin/admin_test.go", "name": "TestPasswordChangeEndsSessions"},
