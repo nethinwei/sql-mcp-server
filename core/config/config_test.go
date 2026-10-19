@@ -451,7 +451,8 @@ func TestValidateNamedDatabasesAndRelationships(t *testing.T) {
 }
 
 // joinOn names columns: the join runs on them as written, so a field's alias
-// is refused on either side, and the column it aliases accepted.
+// is refused on either side, and the column it aliases accepted (also when
+// the alias names that column itself).
 func TestValidateRelationshipJoinRefusesAliases(t *testing.T) {
 	config := func(parent, child []FieldConfig, local, target string) *Config {
 		return &Config{
@@ -477,6 +478,10 @@ func TestValidateRelationshipJoinRefusesAliases(t *testing.T) {
 	}
 	if err := config(aliasedID, plain, "id", "parent_id").Validate(); err != nil {
 		t.Fatalf("the column of an aliased field: %v", err)
+	}
+	self := []FieldConfig{{Name: "parent_id", Alias: "parent_id"}}
+	if err := config([]FieldConfig{{Name: "id", Alias: "id"}}, self, "id", "parent_id").Validate(); err != nil {
+		t.Fatalf("an alias naming its own column: %v", err)
 	}
 }
 

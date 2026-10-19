@@ -2,7 +2,9 @@ package configstore
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,6 +26,35 @@ type dialect struct {
 	// (adding a column or an index): Init run again after it was interrupted,
 	// or a migration where DDL does not roll back (MySQL), then goes on.
 	alreadyApplied func(error) bool
+	// lockInit, when set, takes a lock that Inits of every process take on
+	// conn, held until unlock: concurrent CREATE TABLE IF NOT EXISTS fails on
+	// PostgreSQL, and two Inits would write the same metadata rows. SQLite
+	// serializes its writers itself.
+	lockInit func(ctx context.Context, conn *sql.Conn) (unlock func(), err error)
+}
+
+// initLockKey names the store's Init lock (PostgreSQL takes a number).
+const (
+	initLockName = "smcp_store_init"
+	initLockKey  = 0x736d6370 // "smcp"
+)
+
+func postgresLockInit(ctx context.Context, conn *sql.Conn) (func(), error) {
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", initLockKey); err != nil {
+		return nil, err
+	}
+	return func() { _, _ = conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock($1)", initLockKey) }, nil
+}
+
+func mysqlLockInit(ctx context.Context, conn *sql.Conn) (func(), error) {
+	var got sql.NullInt64
+	if err := conn.QueryRowContext(ctx, "SELECT GET_LOCK(?, 60)", initLockName).Scan(&got); err != nil {
+		return nil, err
+	}
+	if got.Int64 != 1 {
+		return nil, fmt.Errorf("another store init held the lock %s for 60s", initLockName)
+	}
+	return func() { _, _ = conn.ExecContext(context.Background(), "SELECT RELEASE_LOCK(?)", initLockName) }, nil
 }
 
 // runDDL runs statements, skipping those whose objects already exist.
@@ -264,18 +295,21 @@ var dialects = map[string]dialect{
 		prepareDSN:     identity,
 		migrations:     storeMigrations("TEXT", "TEXT", partialOnePublished),
 		alreadyApplied: postgresAlreadyApplied,
+		lockInit:       postgresLockInit,
 	},
 	"mysql": {
 		driver:         "mysql",
 		prepareDSN:     identity,
 		migrations:     storeMigrations("TEXT", "LONGTEXT", generatedOnePublished),
 		alreadyApplied: mysqlAlreadyApplied,
+		lockInit:       mysqlLockInit,
 	},
 	"oceanbase": {
 		driver:         "mysql",
 		prepareDSN:     identity,
 		migrations:     storeMigrations("TEXT", "LONGTEXT", generatedOnePublished),
 		alreadyApplied: mysqlAlreadyApplied,
+		lockInit:       mysqlLockInit,
 	},
 }
 

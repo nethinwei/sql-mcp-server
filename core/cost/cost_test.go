@@ -272,15 +272,26 @@ func TestValidateTemplateScopes(t *testing.T) {
 	if err := cost.ValidateTemplateScopes([]string{"primary"}, []string{"SELECT 1"}, []string{"SELECT bad"}); err != nil {
 		t.Fatalf("single datasource compatibility error = %v", err)
 	}
-	// A fingerprint of an earlier version matches nothing: a reject would
-	// stop rejecting. It is refused with one datasource or several.
-	for _, ds := range [][]string{{"primary"}, datasources} {
+}
+
+// A fingerprint of an earlier version, or one not written bare, matches
+// nothing: a reject would stop rejecting. It is refused with one datasource
+// or several.
+func TestValidateTemplateScopesRefusesFingerprintsMatchingNothing(t *testing.T) {
+	t.Parallel()
+	for _, ds := range [][]string{{"primary"}, {"primary", "replica"}} {
 		stale := []struct{ allow, reject []string }{{allow: []string{"fp:v2:abc"}}, {reject: []string{"fp:v1:def"}}}
 		for _, c := range stale {
 			err := cost.ValidateTemplateScopes(ds, c.allow, c.reject)
 			if err == nil || !strings.Contains(err.Error(), "earlier version") || !strings.Contains(err.Error(), "fp:v3:") {
 				t.Fatalf("%v %v: error = %v, want an earlier-version fingerprint refused", ds, c, err)
 			}
+		}
+	}
+	for _, value := range []string{" fp:v2:abc", "fp:v3:abc ", "primary:fp:v2:abc", "primary: fp:v3:abc"} {
+		err := cost.ValidateTemplateScopes([]string{"primary"}, nil, []string{value})
+		if err == nil || !strings.Contains(err.Error(), "matches nothing") {
+			t.Fatalf("%q: error = %v, want it refused", value, err)
 		}
 	}
 	if fp := cost.Fingerprint("primary", "postgres", codegen.Compiled{SQL: "SELECT 1"}); !strings.HasPrefix(fp, "fp:v3:") {

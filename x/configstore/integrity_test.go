@@ -19,6 +19,7 @@ func TestSQLiteStoreIntegrity(t *testing.T) {
 		assertMigrationRefusesTwoPublished(t, sqliteSpec(t))
 	})
 	t.Run("InitCompletesPartialMeta", func(t *testing.T) { assertInitCompletesPartialMeta(t, sqliteSpec(t)) })
+	t.Run("ConcurrentInit", func(t *testing.T) { assertConcurrentInit(t, sqliteSpec(t)) })
 }
 
 func draft(t *testing.T, store *SQLStore, payload string) revision.Revision {
@@ -148,7 +149,8 @@ func assertRerunsItsDDL(t *testing.T, store *SQLStore) {
 
 // assertInitCompletesPartialMeta: an Init that stopped after writing the
 // schema version runs again and writes the rows it left out; on a store with
-// revisions a missing row is not invented again (its value is lost).
+// revisions a missing row is not invented again (its value is lost). Open
+// refuses either store, rather than serving until the first write fails.
 func assertInitCompletesPartialMeta(t *testing.T, spec Spec) {
 	t.Helper()
 	ctx := context.Background()
@@ -164,6 +166,9 @@ func assertInitCompletesPartialMeta(t *testing.T, spec Spec) {
 		metaSchemaVersion); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := Open(ctx, spec, nil); !errors.Is(err, ErrNotInitialized) {
+		t.Fatalf("Open after a partial Init: %v, want ErrNotInitialized", err)
+	}
 	if err := Init(ctx, spec, nil); err != nil {
 		t.Fatalf("Init after a partial one: %v", err)
 	}
@@ -177,4 +182,31 @@ func assertInitCompletesPartialMeta(t *testing.T, spec Spec) {
 	if err := Init(ctx, spec, nil); !errors.Is(err, ErrStoreCorrupt) {
 		t.Fatalf("Init on a store with revisions missing next_id: %v, want ErrStoreCorrupt", err)
 	}
+	if _, err := Open(ctx, spec, nil); !errors.Is(err, ErrStoreCorrupt) {
+		t.Fatalf("Open on a store with revisions missing next_id: %v, want ErrStoreCorrupt", err)
+	}
+}
+
+// assertConcurrentInit: Inits running at the same time on an empty store
+// all succeed, whichever writes the metadata rows first.
+func assertConcurrentInit(t *testing.T, spec Spec) {
+	t.Helper()
+	ctx := context.Background()
+	errs := make([]error, 4)
+	var wg sync.WaitGroup
+	for i := range errs {
+		wg.Go(func() { errs[i] = Init(ctx, spec, nil) })
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("Init %d of %d: %v", i+1, len(errs), err)
+		}
+	}
+	store, err := Open(ctx, spec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	draft(t, store, "a: 1\n")
 }

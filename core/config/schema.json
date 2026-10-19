@@ -1300,8 +1300,8 @@
                 ]
               },
               "joinOn": {
-                "description": "Join pairs: this entity's field → the target's field; a multi-column foreign key lists every pair, all of which must match.",
-                "x-description-zh-CN": "连接键：本实体字段 → 目标实体字段；多列外键写多对，全部相等才关联。",
+                "description": "Join pairs: this entity's column → the target's column (not a field alias); a multi-column foreign key lists every pair, all of which must match.",
+                "x-description-zh-CN": "连接键：本实体列名 → 目标实体列名（不能写字段别名）；多列外键写多对，全部相等才关联。",
                 "type": "object",
                 "additionalProperties": {
                   "type": "string"

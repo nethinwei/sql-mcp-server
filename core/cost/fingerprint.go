@@ -78,9 +78,22 @@ func ValidateTemplateScopes(datasources, allowTemplates, rejectTemplates []strin
 	return nil
 }
 
+// validateFingerprintVersion refuses an entry naming a fingerprint that
+// matches nothing: of an earlier version, or not written bare (a fingerprint
+// is compared whole, and already names its datasource).
 func validateFingerprintVersion(name string, values []string) error {
 	for _, value := range values {
-		if strings.HasPrefix(value, "fp:") && !strings.HasPrefix(value, fingerprintPrefix) {
+		fp := strings.TrimSpace(value)
+		if _, scoped, ok := strings.Cut(fp, ":"); ok && !strings.HasPrefix(fp, "fp:") &&
+			strings.HasPrefix(strings.TrimSpace(scoped), "fp:") {
+			fp = strings.TrimSpace(scoped)
+		}
+		switch {
+		case !strings.HasPrefix(fp, "fp:"):
+		case fp != value:
+			return fmt.Errorf("cost: %s entry %q matches nothing: write the fingerprint bare, as %q "+
+				"(it names its datasource)", name, value, fp)
+		case !strings.HasPrefix(fp, fingerprintPrefix):
 			return fmt.Errorf("cost: %s entry %q is a fingerprint of an earlier version, which matches nothing; "+
 				"capture it again as fp:v3:<sha256> (decimal arguments now bind as text)", name, value)
 		}

@@ -67,7 +67,9 @@ func (s Spec) String() string { return s.Driver + ":<redacted>" }
 type Resolver func(string) (string, error)
 
 // Open connects to an initialized store. It fails with ErrNotInitialized
-// when the tables are missing and with ErrNewerSchema on a newer layout.
+// when the tables or metadata rows are missing (an Init that stopped part
+// way), with ErrStoreCorrupt when a store with revisions lost one, and with
+// ErrNewerSchema on a newer layout.
 func Open(ctx context.Context, spec Spec, resolve Resolver) (*SQLStore, error) {
 	s, err := connect(spec, resolve)
 	if err != nil {
@@ -76,6 +78,12 @@ func Open(ctx context.Context, spec Spec, resolve Resolver) (*SQLStore, error) {
 	version, err := s.checkSchema(ctx)
 	if err == nil && version < SchemaVersion {
 		err = s.migrate(ctx, version)
+	}
+	if err == nil {
+		var missing [][2]any
+		if missing, err = s.missingMeta(ctx, s.db); err == nil && len(missing) > 0 {
+			err = fmt.Errorf("%w (metadata row %v missing)", ErrNotInitialized, missing[0][0])
+		}
 	}
 	if err != nil {
 		_ = s.db.Close()
@@ -140,12 +148,30 @@ func onePublished(ctx context.Context, s *SQLStore, tx *sql.Tx) error {
 // Init creates the store tables when absent; it is a no-op on an initialized
 // store of the same version. An Init that stopped part way runs again: the
 // tables are created if absent and the missing metadata rows written.
+// Inits running at the same time, in any process, run one after another
+// (see dialect.lockInit): each after the first finds the store initialized.
 func Init(ctx context.Context, spec Spec, resolve Resolver) error {
 	s, err := connect(spec, resolve)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = s.db.Close() }()
+	if s.dialect.lockInit != nil {
+		conn, err := s.db.Conn(ctx)
+		if err != nil {
+			return fmt.Errorf("configstore: connect: %w", err)
+		}
+		defer func() { _ = conn.Close() }()
+		unlock, err := s.dialect.lockInit(ctx, conn)
+		if err != nil {
+			return fmt.Errorf("configstore: lock the store for init: %w", err)
+		}
+		defer unlock()
+	}
+	return s.init(ctx)
+}
+
+func (s *SQLStore) init(ctx context.Context) error {
 	version, err := s.checkSchema(ctx)
 	if err == nil {
 		if version < SchemaVersion {
@@ -166,31 +192,47 @@ func Init(ctx context.Context, spec Spec, resolve Resolver) error {
 	return s.initMeta(ctx)
 }
 
-// initMeta writes the metadata rows the store lacks, in one transaction and
-// the schema version last: a store has its version only with the others.
-// Their first values hold only while the store has no revision; one that
-// has revisions and lacks a row lost it, and is corrupt.
+// missingMeta returns the metadata rows the store lacks, with their first
+// values, the schema version last. Those values hold only while the store
+// has no revision; one that has revisions and lacks a row lost it, and is
+// corrupt.
+func (s *SQLStore) missingMeta(ctx context.Context, q execer) ([][2]any, error) {
+	keys, err := queryAll(ctx, s, q, func(row scanner) (key string, err error) {
+		return key, row.Scan(&key)
+	}, "SELECT meta_key FROM smcp_store_meta")
+	if err != nil {
+		return nil, err
+	}
+	rows := [][2]any{{metaNextID, 1}, {metaPublishLock, 0}, {metaRevisionSeq, 0},
+		{metaSchemaVersion, SchemaVersion}}
+	rows = slices.DeleteFunc(rows, func(row [2]any) bool { return slices.Contains(keys, row[0].(string)) })
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	var revisions int64
+	if err := s.queryRow(ctx, q, "SELECT COUNT(*) FROM smcp_revisions").Scan(&revisions); err != nil {
+		return nil, err
+	}
+	if revisions > 0 {
+		return nil, fmt.Errorf("%w: store metadata row %v missing from a store with revisions; restore it from "+
+			"a backup", ErrStoreCorrupt, rows[0][0])
+	}
+	return rows, nil
+}
+
+// initMeta writes the metadata rows the store lacks (see missingMeta) in one
+// transaction, the schema version last: a store has its version only with
+// the others.
 func (s *SQLStore) initMeta(ctx context.Context) error {
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		keys, err := queryAll(ctx, s, tx, func(row scanner) (key string, err error) {
-			return key, row.Scan(&key)
-		}, "SELECT meta_key FROM smcp_store_meta")
+		// Write before reading: SQLite then takes its write lock first, waiting
+		// for another Init's, instead of failing to upgrade a read (SQLITE_BUSY).
+		if _, err := s.exec(ctx, tx, "UPDATE smcp_store_meta SET meta_value = meta_value WHERE 1 = 0"); err != nil {
+			return err
+		}
+		rows, err := s.missingMeta(ctx, tx)
 		if err != nil {
 			return err
-		}
-		rows := [][2]any{{metaNextID, 1}, {metaPublishLock, 0}, {metaRevisionSeq, 0},
-			{metaSchemaVersion, SchemaVersion}}
-		rows = slices.DeleteFunc(rows, func(row [2]any) bool { return slices.Contains(keys, row[0].(string)) })
-		if len(rows) == 0 {
-			return nil
-		}
-		var revisions int64
-		if err := s.queryRow(ctx, tx, "SELECT COUNT(*) FROM smcp_revisions").Scan(&revisions); err != nil {
-			return err
-		}
-		if revisions > 0 {
-			return fmt.Errorf("%w: store metadata row %v missing from a store with revisions; restore it from a "+
-				"backup", ErrStoreCorrupt, rows[0][0])
 		}
 		for _, row := range rows {
 			if _, err := s.exec(ctx, tx, "INSERT INTO smcp_store_meta (meta_key, meta_value) VALUES (?, ?)",

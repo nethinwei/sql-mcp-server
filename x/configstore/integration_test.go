@@ -65,6 +65,10 @@ func runServerConformance(t *testing.T, spec Spec) {
 		dropTables(t, spec)
 		assertInitCompletesPartialMeta(t, spec)
 	})
+	t.Run("ConcurrentInit", func(t *testing.T) {
+		dropTables(t, spec)
+		assertConcurrentInit(t, spec)
+	})
 }
 
 // freshStore drops the store tables and initializes them again.

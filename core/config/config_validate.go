@@ -479,11 +479,12 @@ func validateRelationshipJoin(
 	return nil
 }
 
-// aliasedColumn returns the column whose alias name is (an alias never names
-// another field, see validateFieldNames).
+// aliasedColumn returns the column whose alias name is: an alias never names
+// another field (see validateFieldNames), and one naming its own column is
+// that column.
 func aliasedColumn(fields []FieldConfig, name string) (string, bool) {
 	for _, f := range fields {
-		if f.Alias == name {
+		if f.Alias == name && f.Name != name {
 			return f.Name, true
 		}
 	}

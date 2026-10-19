@@ -230,8 +230,8 @@ defs.entity.relationships.cardinality:
   zh-CN: 基数；belongs-to/one 展开为单个对象，has-many/many 展开为列表。
   en: Cardinality; belongs-to/one expand to an object, has-many/many to a list.
 defs.entity.relationships.joinOn:
-  zh-CN: 连接键：本实体字段 → 目标实体字段；多列外键写多对，全部相等才关联。
-  en: 'Join pairs: this entity''s field → the target''s field; a multi-column foreign key lists every pair, all of which must match.'
+  zh-CN: 连接键：本实体列名 → 目标实体列名（不能写字段别名）；多列外键写多对，全部相等才关联。
+  en: 'Join pairs: this entity''s column → the target''s column (not a field alias); a multi-column foreign key lists every pair, all of which must match.'
 defs.entity.tenantPolicy:
   zh-CN: 租户硬边界，语法同一条行过滤；对所有主体始终 AND，不参与多角色合并。引用的 ${subject.x} 缺失时匹配零行。
   en: Tenant boundary with row-filter syntax; always ANDed for every principal and never merged across roles. A missing ${subject.x} matches no rows.

@@ -455,7 +455,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `relationships.name` | 字符串 |  | 必填；非空 | 关系名，展开时使用。 |
 | `relationships.target` | 字符串 |  | 必填；非空 | 目标实体。引用实体可写 name、schema.name、datasource.name 或 datasource.schema.name，须只对应一个实体。 |
 | `relationships.cardinality` | 字符串 |  | 必填；可选 `one`、`one-to-one`、`belongs-to`、`many`、`one-to-many`、`has-many` | 基数；belongs-to/one 展开为单个对象，has-many/many 展开为列表。 |
-| `relationships.joinOn` | 映射（名称 → 字符串） |  | 必填 | 连接键：本实体字段 → 目标实体字段；多列外键写多对，全部相等才关联。 |
+| `relationships.joinOn` | 映射（名称 → 字符串） |  | 必填 | 连接键：本实体列名 → 目标实体列名（不能写字段别名）；多列外键写多对，全部相等才关联。 |
 | `relationships` | 对象列表 |  |  | 可展开的关系。当前只支持同数据源内的一层展开。 |
 | `tenantPolicy` | 自由对象 |  |  | 租户硬边界，语法同一条行过滤；对所有主体始终 AND，不参与多角色合并。引用的 ${subject.x} 缺失时匹配零行。 |
 | `params` | 字符串列表 |  |  | 存储过程参数的固定位置顺序；省略或空表示无参。 |
