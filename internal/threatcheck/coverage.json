@@ -152,6 +152,7 @@
       {"file": "x/bootstrap/bootstrap_access_test.go", "name": "TestReloadReportsRevokedPrincipals"},
       {"file": "core/config/config_access_test.go", "name": "TestValidateAccessRejectsInvalidConfig"},
       {"file": "core/config/listen_test.go", "name": "TestSharedTokenLength"},
+      {"file": "core/config/listen_test.go", "name": "TestSharedTokenLengthOnlyForHTTP"},
       {"file": "x/mcpserver/http_test.go", "name": "TestValidateHTTPSecurity"},
       {"file": "x/mcpserver/cert_identity_test.go", "name": "TestCertIdentity"},
       {"file": "x/mcpserver/cert_identity_test.go", "name": "TestMTLSClientCertificateIdentity"},
