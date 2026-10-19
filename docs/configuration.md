@@ -52,7 +52,8 @@ procedure 不参与 drift 检查。读取不到结构的数据源（不可达、
 `lte`、`in`、`not_in`、`like`、`is_null`、`is_not_null`；`is_null`/`is_not_null`
 不带 `value`，`in`/`not_in` 的 `value` 是非空的标量列表（至多 1000 项），其余
 operator 的 `value` 是标量。`value` 可以写 `${subject.x}`，请求时替换为调用方的
-subject 属性（`in`/`not_in` 时属性应为列表）。条件中多余的键、空的 `and`/`or`
+subject 属性（`in`/`not_in` 时属性应为列表；列表中的单项也可以写占位符，列表属性展开为多项，
+缺失的属性为 NULL）。条件中多余的键、空的 `and`/`or`
 在校验时即拒绝。
 
 `field` 写**列名**，可以是未暴露为字段的列（例如不对 Agent 暴露的租户列），不能写
