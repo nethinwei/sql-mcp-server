@@ -333,6 +333,9 @@ func parseSubjectHeader(raw string) (map[string]any, error) {
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		return nil, errInvalid
 	}
+	if err := tool.NormalizeSubject(attrs); err != nil {
+		return nil, fmt.Errorf("invalid X-MCP-Subject: %w", err)
+	}
 	return attrs, nil
 }
 

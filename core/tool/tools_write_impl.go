@@ -47,6 +47,9 @@ func prepareInsert(ctx context.Context, tc Context, in createInput) (statement, 
 	if err != nil {
 		return statement{}, err
 	}
+	if err := coerceValues(res.Entity, in.Values); err != nil {
+		return statement{}, err
+	}
 	columns, tup, err := insertColumns(res.Entity, g.RowFilter, in.Values)
 	if err != nil {
 		return statement{}, err
@@ -148,7 +151,7 @@ func prepareUpdate(ctx context.Context, tc Context, in updateInput) (statement, 
 	if err != nil {
 		return statement{}, err
 	}
-	if err := refuseKeyUpdate(plan.res.Entity, sortedKeys(in.Set)); err != nil {
+	if err := checkAssignments(plan.res.Entity, in.Set); err != nil {
 		return statement{}, err
 	}
 	full := andPreds(pred, g.RowFilter)
@@ -177,6 +180,15 @@ func prepareUpdate(ctx context.Context, tc Context, in updateInput) (statement, 
 		return statement{}, err
 	}
 	return plan.statement(ctx, g, compiled)
+}
+
+// checkAssignments refuses assigning the row's key and takes each
+// assigned number as its column does.
+func checkAssignments(e entity.Entity, set map[string]any) error {
+	if err := refuseKeyUpdate(e, sortedKeys(set)); err != nil {
+		return err
+	}
+	return coerceValues(e, set)
 }
 
 func validateUpdateFields(res entity.Resolved, in updateInput) error {

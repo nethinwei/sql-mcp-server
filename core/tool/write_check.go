@@ -50,7 +50,7 @@ func insertColumns(e entity.Entity, scope relalg.Predicate, values map[string]an
 	}
 	// A column the scope tests but the row leaves out is decided by the
 	// database (a default), which the check cannot see: Depends refuses it.
-	if _, verdict, err := interp.Check(scope, row); verdict != interp.Holds {
+	if _, verdict, err := interp.Check(scope, exactValues(e, row)); verdict != interp.Holds {
 		return nil, nil, &RowPolicyViolationError{Fields: scopeFields(e, scope), cause: err}
 	}
 	columns := slices.Sorted(maps.Keys(row))
@@ -69,7 +69,7 @@ func updateCheck(e entity.Entity, scope relalg.Predicate, set map[string]any) (r
 	for field, v := range set {
 		assigned[columnOf(e, field)] = v
 	}
-	residual, verdict, err := interp.Check(scope, assigned)
+	residual, verdict, err := interp.Check(scope, exactValues(e, assigned))
 	switch verdict {
 	case interp.Holds:
 		return nil, nil
@@ -78,6 +78,19 @@ func updateCheck(e entity.Entity, scope relalg.Predicate, set map[string]any) (r
 	default:
 		return nil, &RowPolicyViolationError{Fields: scopeFields(e, scope), cause: err}
 	}
+}
+
+// exactValues are row's values, by column, as the check compares them: a
+// decimal column's text as the number it holds.
+func exactValues(e entity.Entity, row map[string]any) map[string]any {
+	out := make(map[string]any, len(row))
+	for column, v := range row {
+		if i := slices.IndexFunc(e.Attributes, func(a entity.Attribute) bool { return a.Name == column }); i >= 0 {
+			v = exactValue(e.Attributes[i].Domain.Type, v)
+		}
+		out[column] = v
+	}
+	return out
 }
 
 // pinned are the columns scope requires to equal one value: its equality

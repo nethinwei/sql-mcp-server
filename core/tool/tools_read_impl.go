@@ -216,7 +216,8 @@ func cursorPredicate(e entity.Entity, cursor map[string]any) (relalg.Predicate, 
 		return nil, nil, fmt.Errorf("%w: cursor must name a leading part of the key (%s)",
 			ErrInvalidInput, strings.Join(key, ", "))
 	}
-	return keyset, cols, nil
+	keyset, err := coercePredicate(e, keyset)
+	return keyset, cols, err
 }
 
 func readFieldNames(res entity.Resolved, in readInput) ([]string, []string, error) {
@@ -411,8 +412,7 @@ func decimalColumns(e entity.Entity, columns []string) []bool {
 	out := make([]bool, len(columns))
 	for i, c := range columns {
 		if a, ok := e.AttributeByName(c); ok {
-			t := strings.ToLower(a.Domain.Type)
-			out[i] = strings.HasPrefix(t, "numeric") || strings.HasPrefix(t, "decimal")
+			out[i] = isDecimalType(a.Domain.Type)
 		}
 	}
 	return out

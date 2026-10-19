@@ -138,6 +138,13 @@
   `{"any": [...]}`（其一成立，OR）、`{"all": [...]}`（全部成立，AND）、`{"not": {...}}`；
   顶层各项全部成立。组最多嵌套 4 层，条件总数（计入组内）受 `cost.maxFilterConditions`
   约束。read、aggregate、update、delete 通用；含 OR/NOT 的写入不会被当作主键点写。
+- **数字**（v0.1.20 起）：整数按 int64 传递，超出范围的整数须写成字符串。带小数点或指数的
+  数字按字段的列类型取值：浮点列（real、float、double）为浮点数；整数列拒绝
+  （`INVALID_INPUT`）；decimal/numeric 等其他列按原文字传给数据库，不经 float64，
+  `0.1`、超过 15 位有效数字的金额都按写出的值比较与写入。用于 `create_record` 的
+  `values`、`update_record` 的 `set`、`filter`（含 `exists` 内）与 `cursor`；没有列可依
+  的值（存储过程参数、`execute_sql` 的 `args`、关联字段与 `having` 的值）按原文字传递，
+  由数据库转换。此前小数一律转为 float64。
 - **排序与分页**（`read_records`）：`orderBy: [{field, dir}]`（`asc` 默认，最多 8 项），
   末尾自动补上实体的键使顺序确定；脱敏字段不能排序。NULL 一律排在最后（可空字段）。
   带 `limit` 且本页取满时，结果在 `result` 旁给出 `nextCursor`，下一页与相同的

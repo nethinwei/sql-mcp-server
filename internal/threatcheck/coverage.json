@@ -66,6 +66,7 @@
       {"file": "cmd/sql-mcp-server/cli_auth_test.go", "name": "TestPreparedAuthsFailOnUnreadableCertificate"},
       {"file": "cmd/sql-mcp-server/cli_auth_test.go", "name": "TestPreparedAuthsFollowPublishedApps"},
       {"file": "x/mcpserver/http_test.go", "name": "TestWithRequestSubjectRejectsMalformedSubject"},
+      {"file": "core/tool/numbers_test.go", "name": "TestNormalizedSubjectSharesTheConfiguredScope"},
       {"file": "x/mcpserver/http_test.go", "name": "TestTrustedProxyAddress"},
       {"file": "x/mcpserver/http_test.go", "name": "TestTrustedProxyCertificate"},
       {"file": "x/mcpserver/auth_reload_test.go", "name": "TestAuthChangesTrustProxyCertificateSubjects"},

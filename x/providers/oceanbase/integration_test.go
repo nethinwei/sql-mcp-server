@@ -20,6 +20,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
 	"github.com/nethinwei/sql-mcp-server/internal/escapetest"
+	"github.com/nethinwei/sql-mcp-server/internal/numbertest"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/providers/oceanbase"
 )
@@ -485,4 +486,11 @@ func TestOBExecuteSQL(t *testing.T) {
 	prov, cleanup := setupOB(t)
 	defer cleanup()
 	escapetest.Run(t, "oceanbase", prov, "test.users", "test.escape_probe")
+}
+
+// JSON numbers on oceanbase: see internal/numbertest.
+func TestOBNumbers(t *testing.T) {
+	prov, cleanup := setupOB(t)
+	defer cleanup()
+	numbertest.Run(t, "oceanbase", prov, "test")
 }

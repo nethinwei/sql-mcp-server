@@ -501,11 +501,8 @@ func normalizeJSONValue(value any) (any, error) {
 			return integer, nil
 		}
 		if strings.ContainsAny(typed.String(), ".eE") {
-			floating, err := typed.Float64()
-			if err != nil {
-				return nil, fmt.Errorf("invalid JSON number %q", typed)
-			}
-			return floating, nil
+			// Kept exact: the column decides (see coerceNumber).
+			return typed, nil
 		}
 		return nil, fmt.Errorf("integer %q exceeds int64; encode it as a JSON string", typed)
 	case []any:

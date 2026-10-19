@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -310,6 +311,8 @@ func TestWithRequestSubjectRejectsMalformedSubject(t *testing.T) {
 		{name: "array", subject: `[]`},
 		{name: "null", subject: `null`},
 		{name: "trailing JSON", subject: `{"tenant":7} {}`},
+		{name: "object attribute", subject: `{"tenant":{"id":7}}`},
+		{name: "nested list", subject: `{"regions":[["eu"]]}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -330,12 +333,18 @@ func TestWithRequestSubjectRejectsMalformedSubject(t *testing.T) {
 func TestWithRequestSubjectPreservesLargeInteger(t *testing.T) {
 	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		_, subject := subjectFromContext(r.Context(), "reader")
-		if got := subject["tenant"]; got == nil || got.(interface{ String() string }).String() != "9007199254740993" {
+		if got := subject["tenant"]; got != int64(9007199254740993) {
 			t.Fatalf("tenant = %#v", got)
+		}
+		if got := subject["rate"]; got != "0.125" {
+			t.Fatalf("rate = %#v, want its literal text", got)
+		}
+		if got := subject["regions"]; !reflect.DeepEqual(got, []any{"eu", int64(2)}) {
+			t.Fatalf("regions = %#v", got)
 		}
 	})
 	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
-	req.Header.Set("X-MCP-Subject", `{"tenant":9007199254740993}`)
+	req.Header.Set("X-MCP-Subject", `{"tenant":9007199254740993,"rate":0.125,"regions":["eu",2]}`)
 	withRequestSubject(next).ServeHTTP(httptest.NewRecorder(), req)
 }
 

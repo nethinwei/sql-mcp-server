@@ -88,6 +88,7 @@ func (in *executeSQLInput) normalize() error {
 			return err
 		}
 		in.Args, _ = normalized.([]any)
+		literalNumbers(in.Args) // no column to take them: the database converts the text
 	}
 	return nil
 }
