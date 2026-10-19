@@ -81,9 +81,10 @@ databases:
 tools:
   describeEntities: true
   readRecords: true
+  # The writing tools are off when the tools section is omitted.
   createRecord: true
   updateRecord: true
-  deleteRecord: false # safe default
+  deleteRecord: false
   executeEntity: true
   aggregateRecords: true
   beginTransaction: true

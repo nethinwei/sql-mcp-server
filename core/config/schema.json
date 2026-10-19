@@ -231,8 +231,8 @@
     "tools": {
       "title": "Tool switches",
       "x-title-zh-CN": "工具开关",
-      "description": "Omitting the block enables every tool except deleteRecord; once the block is written, unlisted tools stay off.",
-      "x-description-zh-CN": "省略整个块时除 deleteRecord 外全部开启；一旦写出该块，未写的工具保持关闭。",
+      "description": "Omitting the block enables the reading, aggregating, procedure and transaction tools and leaves the writing tools (createRecord, updateRecord, deleteRecord) off (since v0.1.20; createRecord and updateRecord were on before); once the block is written, unlisted tools stay off.",
+      "x-description-zh-CN": "省略整个块时开启读取、聚合、过程与事务工具，写工具（createRecord、updateRecord、deleteRecord）关闭（v0.1.20 起；此前 createRecord、updateRecord 默认开启）；一旦写出该块，未写的工具保持关闭。",
       "type": "object",
       "properties": {
         "describeEntities": {

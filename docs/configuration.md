@@ -249,7 +249,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 
 ### `tools`：工具开关
 
-省略整个块时除 deleteRecord 外全部开启；一旦写出该块，未写的工具保持关闭。
+省略整个块时开启读取、聚合、过程与事务工具，写工具（createRecord、updateRecord、deleteRecord）关闭（v0.1.20 起；此前 createRecord、updateRecord 默认开启）；一旦写出该块，未写的工具保持关闭。
 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |

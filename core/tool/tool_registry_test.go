@@ -9,13 +9,14 @@ import (
 func TestRegistryEnabledFilters(t *testing.T) {
 	t.Parallel()
 	r, _ := NewRegistry(DefaultTools())
-	enabled := r.Enabled(config.DefaultToolFlags()) // delete off
-	if len(enabled) != 9 {
-		t.Fatalf("got %d tools, want 9 (delete off, transaction tools on)", len(enabled))
+	enabled := r.Enabled(config.DefaultToolFlags()) // the writing tools off
+	if len(enabled) != 7 {
+		t.Fatalf("got %d tools, want 7 (writing tools off, transaction tools on)", len(enabled))
 	}
 	for _, tl := range enabled {
-		if tl.Info().Name == "delete_record" {
-			t.Fatal("delete_record should be filtered out")
+		switch tl.Info().Name {
+		case "create_record", "update_record", "delete_record":
+			t.Fatalf("%s is on by default", tl.Info().Name)
 		}
 	}
 	all := r.Enabled(config.ToolFlags{

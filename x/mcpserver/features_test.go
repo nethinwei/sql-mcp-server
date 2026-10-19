@@ -285,7 +285,9 @@ func TestToolsAreAnnotatedAndResultsStructured(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app.Tools, app.ToolFlags = tools, config.DefaultToolFlags()
+	flags := config.DefaultToolFlags()
+	flags.UpdateRecord = true
+	app.Tools, app.ToolFlags = tools, flags
 	session, ctx, cancel := connectMCPSession(t, app)
 	defer cancel()
 	defer session.Close()

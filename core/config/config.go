@@ -567,14 +567,16 @@ type AuditConfig struct {
 	QueueSize int    `yaml:"queueSize" json:"queueSize" schema:"min=0"`
 }
 
-// DefaultToolFlags returns the safe default tool set: all tools enabled except
-// delete_record, which is off by default to prevent accidental data loss.
+// DefaultToolFlags returns the safe default tool set for untrusted agents:
+// reading, aggregating, procedures and transactions; the writing tools
+// (create_record, update_record, delete_record) are off until the tools
+// section turns them on.
 func DefaultToolFlags() ToolFlags {
 	return ToolFlags{
 		DescribeEntities:    true,
 		ReadRecords:         true,
-		CreateRecord:        true,
-		UpdateRecord:        true,
+		CreateRecord:        false,
+		UpdateRecord:        false,
 		DeleteRecord:        false,
 		ExecuteEntity:       true,
 		AggregateRecords:    true,

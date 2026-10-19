@@ -101,8 +101,9 @@ update/delete 必须有用户 filter 或行级 filter。`requirePKForWrite` 默�
 不是按身份键等值定位单行的写由 `WriteGuard` 拒绝；allow fingerprint 不绕过该
 mandatory 保护。身份键是主键与能唯一定位一行的唯一键（列全部非空，且不是部分、
 表达式或前缀索引），表的身份键以数据库为准；视图、外部表上声明的键只用于读，不能
-让写入通过 `WriteGuard`；可延迟约束在事务内不算身份键。`delete_record` 默认不
-注册。MySQL 协议 provider 还会在 DSN 未显式指定时加入 `sql_safe_updates=1`。
+让写入通过 `WriteGuard`；可延迟约束在事务内不算身份键。省略 `tools` 时写工具
+（`create_record`、`update_record`、`delete_record`）都不注册（v0.1.20 起；此前
+`create_record`、`update_record` 默认注册），需要在 `tools` 中显式开启，且仍要求授权。MySQL 协议 provider 还会在 DSN 未显式指定时加入 `sql_safe_updates=1`。
 
 外键的 `CASCADE`、`SET NULL`、`SET DEFAULT` 会让一次写入改写其他表的行，并可能
 继续级联下去。删除（或修改被引用列）前，调用方必须对级联链上每一层的实体拥有对应

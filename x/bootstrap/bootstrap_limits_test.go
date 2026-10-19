@@ -28,6 +28,8 @@ func limitsConfig(actions ...string) *config.Config {
 	cfg := connectionsConfig(config.EntityConfig{
 		Name: "users", DataSource: "main", Fields: []config.FieldConfig{{Name: "id"}},
 	})
+	cfg.Tools = config.DefaultToolFlags()
+	cfg.Tools.CreateRecord, cfg.Tools.UpdateRecord = true, true
 	if len(actions) > 0 {
 		cfg.Roles = map[string]config.RoleDefinition{"writer": {
 			Grants: []config.GrantConfig{{Entity: "users", Actions: actions}},
