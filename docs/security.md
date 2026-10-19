@@ -75,7 +75,9 @@ session 关闭时绑定会同步清理。该绑定防止可信代理后的调用
 - mask 在所有结果路径（包括 aggregate/procedure）返回前执行。mask 字段只允许
   投影，禁止用于 filter、cursor、group-by、aggregate 和写谓词，避免等值/LIKE
   盲测与统计侧信道。内置规则为 `email`、`phone`、`idcard`、`secret`；配置未知
-  规则会在启动时失败。
+  规则会在启动时失败。`phone`/`idcard` 按字符（非字节）保留 11 位及以上值的前 3、
+  后 4 位，8–10 位值的前 2、后 2 位，中间固定替换为 `****`（不泄露原值长度），
+  不足 8 位整体替换为 `***`（v0.1.20 起；此前中间星号数等于被遮字符数）。
 - `describe_entities` 按实体权限和字段 ACL 过滤；procedure 结果仅返回声明为
   visible 且获 `fieldACL.read` 许可的列，未声明列按 fail-closed 丢弃。
 - schema resource（摘要 `sql-mcp://schema` 与单实体 `sql-mcp://schema/{entity}`）按调用者的

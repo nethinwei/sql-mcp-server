@@ -26,7 +26,7 @@ func runExecute(ctx context.Context, tc Context, in executeInput, requireDMLTool
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{Content: got.rows, ReturnedRows: int64(len(got.rows))}, nil
+	return Result{Content: got.rows, ReturnedRows: int64(len(got.rows)), Truncated: got.truncated}, nil
 }
 
 func prepareExecute(

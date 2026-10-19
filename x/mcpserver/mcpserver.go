@@ -156,11 +156,13 @@ func destructiveHint(info tool.Info) *bool {
 }
 
 // A call's structured result, which its text repeats as JSON: rows are
-// {"result": [...]} (with nextCursor when an ordered read has a next page),
-// and a tool returning one object returns it as is.
+// {"result": [...]} (with nextCursor when an ordered read has a next page,
+// truncated when a write's rows were cut short), and a tool returning one
+// object returns it as is.
 var (
 	rowsOutputSchema = json.RawMessage(`{"type":"object","properties":{"result":` +
-		`{"type":"array","items":{"type":"object"}},"nextCursor":{"type":"object"}},"required":["result"]}`)
+		`{"type":"array","items":{"type":"object"}},"nextCursor":{"type":"object"},` +
+		`"truncated":{"type":"boolean"}},"required":["result"]}`)
 	objectOutputSchema = json.RawMessage(`{"type":"object"}`)
 )
 
@@ -212,6 +214,9 @@ func toMCPResult(r tool.Result, info tool.Info) *mcp.CallToolResult {
 	rows := map[string]any{"result": r.Content}
 	if r.NextCursor != nil {
 		rows["nextCursor"] = r.NextCursor
+	}
+	if r.Truncated {
+		rows["truncated"] = true
 	}
 	var structured any = rows
 	if info.Object && len(r.Content) == 1 {

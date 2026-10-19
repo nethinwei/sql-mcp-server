@@ -69,6 +69,9 @@ func insertWithReturning(ctx context.Context, st statement) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	if got.truncated {
+		return Result{Content: []map[string]any{{"rowsAffected": int64(1), "truncated": true}}, Truncated: true}, nil
+	}
 	if len(got.rows) == 0 {
 		return Result{Content: []map[string]any{{"rowsAffected": int64(0)}}}, nil
 	}

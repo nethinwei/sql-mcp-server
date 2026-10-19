@@ -714,8 +714,8 @@
           "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
         },
         "maxResultMemory": {
-          "description": "Bytes of query results the process holds in memory at once (all calls together, counted as rows are read and released when a call ends); a call past it fails as over budget. Default 256 MiB.",
-          "x-description-zh-CN": "进程同时在内存中持有的查询结果字节数上限（各调用合计，按读出的行计，调用结束释放），超出时调用以预算超限失败；默认 256 MiB。",
+          "description": "Bytes of query results the process holds in memory at once (all calls together, counted as rows are read and released when a call ends); a read past it fails as over budget, while a write or a procedure (which took effect) returns the rows read so far, marked truncated. Default 256 MiB.",
+          "x-description-zh-CN": "进程同时在内存中持有的查询结果字节数上限（各调用合计，按读出的行计，调用结束释放），超出时读取以预算超限失败，写操作与过程（写已生效）只返回已读取的行并标记 truncated；默认 256 MiB。",
           "type": "integer",
           "default": 268435456,
           "minimum": 0

@@ -43,6 +43,9 @@ func recordToolAudit(
 		Duration:     time.Since(start),
 		ReturnedRows: returnedRows(res),
 	}
+	if res.Truncated {
+		ev.ResultSummary = "truncated: the server held too many results in memory"
+	}
 	trace, durable := ctx.Value(escapeTraceKey{}).(*escapeTrace)
 	if !durable {
 		_ = tc.Auditor.Record(ctx, ev)

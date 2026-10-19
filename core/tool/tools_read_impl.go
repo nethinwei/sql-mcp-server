@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"math/big"
 	"slices"
 	"strconv"
 	"strings"
@@ -356,11 +357,16 @@ func expandRows(ctx context.Context, tc Context, parent entity.Entity, parents q
 
 func expandOneRelationship(ctx context.Context, tc Context, parent entity.Entity, parents queried, name string) error {
 	relation, _ := relationshipByName(parent, name)
-	join := relationJoin(relation)
+	if len(relation.JoinOn) == 0 {
+		return fmt.Errorf("%w: relationship %q joins on no field", ErrInvalidInput, name)
+	}
 	target, err := resolveDMLEntity(tc, relation.Target)
 	if err != nil {
 		return err
 	}
+	join := relationJoin(relation)
+	join.localDecimal = decimalColumns(parent, join.local)
+	join.targetDecimal = decimalColumns(target.Entity, join.target)
 	if err := validateFields(target, join.target...); err != nil {
 		return err
 	}
@@ -371,7 +377,7 @@ func expandOneRelationship(ctx context.Context, tc Context, parent entity.Entity
 	if err != nil {
 		return err
 	}
-	tuples := uniqueJoinTuples(parents.kept, join.local)
+	tuples := uniqueJoinTuples(parents.kept, join.local, join.localDecimal)
 	grouped := map[string][]map[string]any{}
 	if len(tuples) > 0 {
 		grouped, err = queryExpandedChildren(ctx, tc, targetTC, target, relation, join, tuples)
@@ -384,8 +390,11 @@ func expandOneRelationship(ctx context.Context, tc Context, parent entity.Entity
 }
 
 // joinColumns pairs a relationship's local and target columns in a fixed
-// order.
-type joinColumns struct{ local, target []string }
+// order, with which of them hold decimals (see joinKeyOf).
+type joinColumns struct {
+	local, target               []string
+	localDecimal, targetDecimal []bool
+}
 
 func relationJoin(relation entity.Relationship) joinColumns {
 	var join joinColumns
@@ -396,10 +405,27 @@ func relationJoin(relation entity.Relationship) joinColumns {
 	return join
 }
 
-// joinKey identifies a tuple of join values regardless of how the driver
-// typed them (an int4 foreign key matches an int8 key; text may arrive as
-// bytes); ok is false when a value is NULL, which matches nothing.
-func joinKey(values ...any) (key string, ok bool) {
+// decimalColumns reports the columns of a numeric or decimal type, which
+// drivers return as text.
+func decimalColumns(e entity.Entity, columns []string) []bool {
+	out := make([]bool, len(columns))
+	for i, c := range columns {
+		if a, ok := e.AttributeByName(c); ok {
+			t := strings.ToLower(a.Domain.Type)
+			out[i] = strings.HasPrefix(t, "numeric") || strings.HasPrefix(t, "decimal")
+		}
+	}
+	return out
+}
+
+// joinKey is joinKeyOf with no decimal column.
+func joinKey(values ...any) (key string, ok bool) { return joinKeyOf(values, nil) }
+
+// joinKeyOf identifies a tuple of join values regardless of how the driver
+// typed them: an int4 foreign key matches an int8 key, a float or the text
+// of a decimal column the same number (12.50 matches 12.5), text may arrive
+// as bytes; ok is false when a value is NULL, which matches nothing.
+func joinKeyOf(values []any, decimal []bool) (key string, ok bool) {
 	parts := make([]string, len(values))
 	for i, v := range values {
 		// Each part is quoted, so no value can contain the separator.
@@ -408,10 +434,14 @@ func joinKey(values ...any) (key string, ok bool) {
 			return "", false
 		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 			parts[i] = "n:" + fmt.Sprint(x)
+		case float32:
+			parts[i] = numberKey(strconv.FormatFloat(float64(x), 'g', -1, 32), x)
+		case float64:
+			parts[i] = numberKey(strconv.FormatFloat(x, 'g', -1, 64), x)
 		case []byte:
-			parts[i] = "s:" + strconv.Quote(string(x))
+			parts[i] = textKey(string(x), i < len(decimal) && decimal[i])
 		case string:
-			parts[i] = "s:" + strconv.Quote(x)
+			parts[i] = textKey(x, i < len(decimal) && decimal[i])
 		default:
 			parts[i] = fmt.Sprintf("%T:%q", x, fmt.Sprint(x))
 		}
@@ -419,20 +449,37 @@ func joinKey(values ...any) (key string, ok bool) {
 	return strings.Join(parts, ","), true
 }
 
-func rowJoinKey(row map[string]any, columns []string) (string, bool) {
+// numberKey is the key of the number text spells, as an exact fraction in
+// lowest terms; v's own key when text is not a finite number.
+func numberKey(text string, v any) string {
+	r, ok := new(big.Rat).SetString(text)
+	if !ok {
+		return fmt.Sprintf("%T:%q", v, text)
+	}
+	return "n:" + r.RatString()
+}
+
+func textKey(s string, decimal bool) string {
+	if decimal {
+		return numberKey(s, s)
+	}
+	return "s:" + strconv.Quote(s)
+}
+
+func rowJoinKey(row map[string]any, columns []string, decimal []bool) (string, bool) {
 	values := make([]any, len(columns))
 	for i, c := range columns {
 		values[i] = row[c]
 	}
-	return joinKey(values...)
+	return joinKeyOf(values, decimal)
 }
 
 // uniqueJoinTuples lists the distinct non-NULL join tuples of rows.
-func uniqueJoinTuples(rows []map[string]any, columns []string) [][]any {
+func uniqueJoinTuples(rows []map[string]any, columns []string, decimal []bool) [][]any {
 	tuples := make([][]any, 0, len(rows))
 	seen := map[string]bool{}
 	for _, row := range rows {
-		key, ok := rowJoinKey(row, columns)
+		key, ok := rowJoinKey(row, columns, decimal)
 		if !ok || seen[key] {
 			continue
 		}
@@ -470,7 +517,7 @@ func queryExpandedChildren(
 			return nil, err
 		}
 		for i, child := range children.rows {
-			if key, ok := rowJoinKey(children.kept[i], join.target); ok {
+			if key, ok := rowJoinKey(children.kept[i], join.target, join.targetDecimal); ok {
 				grouped[key] = append(grouped[key], child)
 			}
 		}
@@ -548,7 +595,7 @@ func attachExpandedChildren(
 ) {
 	for i, row := range parents.rows {
 		var children []map[string]any
-		if key, ok := rowJoinKey(parents.kept[i], join.local); ok {
+		if key, ok := rowJoinKey(parents.kept[i], join.local, join.localDecimal); ok {
 			children = grouped[key]
 		}
 		switch {

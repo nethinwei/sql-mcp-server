@@ -175,6 +175,10 @@
 
 - 返回行的工具（`read_records`、`aggregate_records`、`execute_entity`、
   `procedure_*`）：`{"result": [行, ...]}`；有序读取还有下一页时另带 `nextCursor`；
+  过程（或其他写操作）返回的行超出进程的结果内存（`rateLimit.maxResultMemory`）时，
+  写已生效，调用不失败，只返回已读取的行并另带 `"truncated": true`（v0.1.20 起；
+  此前这类结果不受该上限约束），审计事件的 `resultSummary` 记录截断；
+  `create_record` 的 RETURNING 行被截断时返回 `{"rowsAffected": 1, "truncated": true}`；
 - 返回单个对象的工具直接给出该对象：`describe_entities`、`create_record`、
   `update_record`、`delete_record`、`begin_transaction`、`commit_transaction`、
   `rollback_transaction`、`execute_sql`。

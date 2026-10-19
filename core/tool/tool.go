@@ -116,6 +116,9 @@ type Result struct {
 	// NextCursor, when set, is the cursor of the next page of an ordered
 	// read (see read_records orderBy).
 	NextCursor map[string]any
+	// Truncated says a write's or a procedure's rows were cut short: the
+	// server held too many results in memory (the write took effect).
+	Truncated bool
 	// Grants lists covering grant IDs for audit; it is not sent to clients.
 	Grants []string
 }

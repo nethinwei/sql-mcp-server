@@ -741,3 +741,44 @@ func TestJoinKeysDoNotCollide(t *testing.T) {
 		t.Fatalf("driver typing changed the key: %q vs %q", n, m)
 	}
 }
+
+// A float or a decimal key matches the same number however the driver typed
+// it; text that merely looks numeric stays text.
+func TestJoinKeysNormalizeNumbers(t *testing.T) {
+	t.Parallel()
+	decimal := []bool{true}
+	same := [][2]string{}
+	for _, pair := range [][2]any{
+		{int64(7), float64(7)},
+		{float64(0.1), "0.1"},
+		{"12.50", []byte("12.5000")},
+		{int32(12), "12.0"},
+	} {
+		a, _ := joinKeyOf([]any{pair[0]}, decimal)
+		b, _ := joinKeyOf([]any{pair[1]}, decimal)
+		same = append(same, [2]string{a, b})
+	}
+	for _, s := range same {
+		if s[0] != s[1] {
+			t.Errorf("one number, two keys: %q vs %q", s[0], s[1])
+		}
+	}
+	text, _ := joinKeyOf([]any{"007"}, []bool{false})
+	seven, _ := joinKeyOf([]any{int64(7)}, []bool{false})
+	if text == seven {
+		t.Errorf("text %q matched the number 7", text)
+	}
+}
+
+func TestExpandRefusesARelationshipWithoutJoinColumns(t *testing.T) {
+	t.Parallel()
+	parent := entity.Entity{
+		Name: "orders", Source: "orders", Attributes: []entity.Attribute{{Name: "id"}},
+		Relations: []entity.Relationship{{Name: "lines", Target: "lines"}},
+	}
+	err := expandOneRelationship(context.Background(), Context{}, parent,
+		queried{kept: []map[string]any{{"id": int64(1)}}, rows: []map[string]any{{"id": int64(1)}}}, "lines")
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("err = %v, want ErrInvalidInput", err)
+	}
+}

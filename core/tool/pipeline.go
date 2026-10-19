@@ -264,6 +264,8 @@ func (st statement) admitted() error {
 type queried struct {
 	rows []map[string]any
 	kept []map[string]any
+	// truncated: a write's rows were cut short past the result memory.
+	truncated bool
 }
 
 // query runs st and reads its rows: shaped, masked and counted against the
@@ -295,7 +297,13 @@ func (st statement) query(ctx context.Context) (out queried, err error) {
 		if st.rowCap > 0 && int64(len(out.rows)) >= st.rowCap {
 			return queried{}, budget.ErrExceeded
 		}
-		if err := st.tc.results.add(row); err != nil {
+		if err := st.tc.results.add(row); errors.Is(err, errResultCut) {
+			out.truncated = true
+			if st.keep != nil {
+				out.kept = out.kept[:len(out.rows)]
+			}
+			return out, nil
+		} else if err != nil {
 			return queried{}, err
 		}
 		out.rows = append(out.rows, row)

@@ -613,10 +613,11 @@ rateLimit.breakerCooldown:
   zh-CN: 熔断后多久重试；冷却后只放行一个探测调用，成功才恢复。
   en: Time before retrying after the breaker opens; one probe call is then let through, and only its success closes it.
 rateLimit.maxResultMemory:
-  zh-CN: 进程同时在内存中持有的查询结果字节数上限（各调用合计，按读出的行计，调用结束释放），超出时调用以预算超限失败；默认 256 MiB。
+  zh-CN: 进程同时在内存中持有的查询结果字节数上限（各调用合计，按读出的行计，调用结束释放），超出时读取以预算超限失败，写操作与过程（写已生效）只返回已读取的行并标记 truncated；默认 256 MiB。
   en: >-
     Bytes of query results the process holds in memory at once (all calls together, counted as rows are read and
-    released when a call ends); a call past it fails as over budget. Default 256 MiB.
+    released when a call ends); a read past it fails as over budget, while a write or a procedure (which took
+    effect) returns the rows read so far, marked truncated. Default 256 MiB.
 rateLimit.connMaxIdleTime:
   zh-CN: 数据库连接最长空闲时间。
   en: Maximum idle time of a database connection.
