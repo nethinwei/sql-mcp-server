@@ -407,6 +407,29 @@ Provider 适用范围使用以下口径：
   OIDC/OAuth2 与多因素认证（OIDC 已降为 Later）；登录闸门之外没有按账号的请求限速。
 - **Provider**：共享层（与数据库方言无关）。
 
+### TM-015 — 跨租户与越出行范围的写入
+
+- **等级/状态**：critical / create 与 update 的行范围检查已由单元测试验证。
+- **攻击**：获授 create 的调用方插入属于其他租户、或落在其授权行范围之外的行（此前
+  create 不应用 `tenantPolicy` 与行范围）；获授 update 的调用方把自己范围内的行改到
+  其他租户或改成行范围排除的状态，使行脱离自己的可见范围、进入他人的范围；修改主键
+  使引用它的行、缓存与审计记录失去对应。
+- **控制**：create 插入前在服务端按 IR 语义求值行范围，行范围以等值固定的列在调用方
+  未提供时由服务端填入，结果不为真即拒绝；update 把新值代入行范围，必然越界即拒绝，
+  否则剩余条件并入 WHERE（I30）。update 默认拒绝修改标识行的列，需实体显式
+  `allowKeyUpdate`；codegen 拒绝无谓词或不赋值的写语句（I31）。无法精确判定时拒绝。
+- **现有证据**：`core/tool/write_check_test.go` 的 `TestCreateCannotCrossTenant`、
+  `TestCreatePinsTheHiddenTenantColumn`、`TestCreateViolationNamesOnlyVisibleFields`、
+  `TestUpdateCannotMoveRowAcrossTenant`、`TestUpdateWithinScopeKeepsThePolicy`、
+  `TestUpdateResidualPolicyConjoined`、`TestUpdateRejectsKeyColumnsByDefault`；
+  `core/relalg/interp/check_test.go` 的 `TestCheckAgreesWithEval`（随机谓词与参考
+  解释器差分）与 `TestCheckFailsClosed`；`core/codegen` 的
+  `TestCompileRefusesUnboundedWrites`。
+- **持续验证**：以上测试在默认单元测试中运行。
+- **剩余风险**：服务端求值不模拟数据库的排序规则，大小写不敏感的排序规则下否定条件
+  可能与数据库判定不同；过程（procedure）与 `execute_sql` 的写入不受此检查。
+- **Provider**：共享层（与数据库方言无关）。
+
 ## 证据维护规则
 
 - 本账本每个 threat ID 到回归测试的映射由

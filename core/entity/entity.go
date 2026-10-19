@@ -294,6 +294,9 @@ type Entity struct {
 	// AllowCascade admits such writes without checking the caller's
 	// permissions on the cascaded entities.
 	AllowCascade bool
+	// AllowKeyUpdate lets update_records assign the columns that identify a
+	// row (the primary key, else the first identity key).
+	AllowKeyUpdate bool
 	// SideEffects reports triggers or rules on the relation: a write may
 	// change other relations of the datasource.
 	SideEffects bool

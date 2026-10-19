@@ -5,7 +5,7 @@ import { graphql } from '@/gql'
 
 export const EntityPartsFragment = graphql(`
   fragment EntityParts on Entity {
-    name source datasource schema kind description primaryKey uniqueKeys params affects allowCascade tenantPolicy legacyAccess
+    name source datasource schema kind description primaryKey uniqueKeys params affects allowCascade allowKeyUpdate tenantPolicy legacyAccess
     mcp { dmlTools customTool trustedProcedure }
     fields { name alias description mask exclude }
     relationships { name target cardinality joinOn }

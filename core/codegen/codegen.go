@@ -14,6 +14,10 @@ import (
 // cannot render.
 var ErrUnsupportedExpr = errors.New("codegen: unsupported expression")
 
+// ErrUnboundedWrite is an UPDATE or DELETE without a predicate, or an UPDATE
+// assigning nothing: the tools never build one, and codegen refuses it too.
+var ErrUnboundedWrite = errors.New("codegen: write without a predicate or an assignment")
+
 // Kind identifies the execution class of a compiled statement.
 type Kind string
 

@@ -204,6 +204,9 @@ type EntityConfig struct {
 	// AllowCascade admits deletes and key updates that foreign keys cascade
 	// to other relations without the caller's permissions on them.
 	AllowCascade bool `yaml:"allowCascade,omitempty"  json:"allowCascade,omitempty"`
+	// AllowKeyUpdate lets update_records assign the columns that identify a
+	// row; refused by default.
+	AllowKeyUpdate bool `yaml:"allowKeyUpdate,omitempty" json:"allowKeyUpdate,omitempty"`
 }
 
 // PhysicalSource is the table or procedure the entity reads: Source, or the

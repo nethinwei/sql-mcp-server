@@ -42,6 +42,9 @@
      `constraints.kind` 为 `unique`、`foreign_key`、`not_null`、`check` 或
      `exclusion`，`constraints.fields` 只列出调用方可见的相关字段，不含约束名与
      数据库原文；
+   - `ROW_POLICY_VIOLATION`（`constraints.fields` 非空时 retryable，v0.1.20 起）：create
+     或 update 写出的行会落在调用方的行范围之外（租户策略、授权项行范围）；
+     `constraints.fields` 只列出调用方可见、决定结果的字段，不含策略的值；
    - `DATASOURCE_FORBIDDEN`（不可重试）：动作路由到的数据源连接没有对应的数据库权限
      （包括连接到只读服务器），授权本身允许；需要管理员补权限或调整路由，修改请求无法
      绕过；

@@ -569,24 +569,25 @@ func (c SQLEscapeConfig) spec() SQLEscapeSpec {
 
 // EntitySpec is a EntityConfig as written: a nil field was not.
 type EntitySpec struct {
-	Name          *string                     `yaml:"name,omitempty" json:"name,omitempty"`
-	Source        *string                     `yaml:"source,omitempty" json:"source,omitempty"`
-	DataSource    *string                     `yaml:"datasource,omitempty" json:"datasource,omitempty"`
-	Schema        *string                     `yaml:"schema,omitempty" json:"schema,omitempty"`
-	Kind          *string                     `yaml:"kind,omitempty" json:"kind,omitempty"`
-	Description   *string                     `yaml:"description,omitempty" json:"description,omitempty"`
-	PrimaryKey    List[string]                `yaml:"primaryKey,omitempty" json:"primaryKey,omitempty"`
-	UniqueKeys    List[[]string]              `yaml:"uniqueKeys,omitempty" json:"uniqueKeys,omitempty"`
-	Fields        List[FieldSpec]             `yaml:"fields,omitempty" json:"fields,omitempty"`
-	Roles         *RoleSpec                   `yaml:"roles,omitempty" json:"roles,omitempty"`
-	FieldACL      Map[string, FieldACLSpec]   `yaml:"fieldACL,omitempty" json:"fieldACL,omitempty"`
-	MCP           *MCPFlagsSpec               `yaml:"mcp,omitempty" json:"mcp,omitempty"`
-	RowPolicies   Map[string, map[string]any] `yaml:"rowPolicies,omitempty" json:"rowPolicies,omitempty"`
-	Relationships List[RelationshipSpec]      `yaml:"relationships,omitempty" json:"relationships,omitempty"`
-	TenantPolicy  map[string]any              `yaml:"tenantPolicy,omitempty" json:"tenantPolicy,omitempty"`
-	Params        List[string]                `yaml:"params,omitempty" json:"params,omitempty"`
-	Affects       List[string]                `yaml:"affects,omitempty" json:"affects,omitempty"`
-	AllowCascade  *bool                       `yaml:"allowCascade,omitempty" json:"allowCascade,omitempty"`
+	Name           *string                     `yaml:"name,omitempty" json:"name,omitempty"`
+	Source         *string                     `yaml:"source,omitempty" json:"source,omitempty"`
+	DataSource     *string                     `yaml:"datasource,omitempty" json:"datasource,omitempty"`
+	Schema         *string                     `yaml:"schema,omitempty" json:"schema,omitempty"`
+	Kind           *string                     `yaml:"kind,omitempty" json:"kind,omitempty"`
+	Description    *string                     `yaml:"description,omitempty" json:"description,omitempty"`
+	PrimaryKey     List[string]                `yaml:"primaryKey,omitempty" json:"primaryKey,omitempty"`
+	UniqueKeys     List[[]string]              `yaml:"uniqueKeys,omitempty" json:"uniqueKeys,omitempty"`
+	Fields         List[FieldSpec]             `yaml:"fields,omitempty" json:"fields,omitempty"`
+	Roles          *RoleSpec                   `yaml:"roles,omitempty" json:"roles,omitempty"`
+	FieldACL       Map[string, FieldACLSpec]   `yaml:"fieldACL,omitempty" json:"fieldACL,omitempty"`
+	MCP            *MCPFlagsSpec               `yaml:"mcp,omitempty" json:"mcp,omitempty"`
+	RowPolicies    Map[string, map[string]any] `yaml:"rowPolicies,omitempty" json:"rowPolicies,omitempty"`
+	Relationships  List[RelationshipSpec]      `yaml:"relationships,omitempty" json:"relationships,omitempty"`
+	TenantPolicy   map[string]any              `yaml:"tenantPolicy,omitempty" json:"tenantPolicy,omitempty"`
+	Params         List[string]                `yaml:"params,omitempty" json:"params,omitempty"`
+	Affects        List[string]                `yaml:"affects,omitempty" json:"affects,omitempty"`
+	AllowCascade   *bool                       `yaml:"allowCascade,omitempty" json:"allowCascade,omitempty"`
+	AllowKeyUpdate *bool                       `yaml:"allowKeyUpdate,omitempty" json:"allowKeyUpdate,omitempty"`
 }
 
 func (s EntitySpec) config() EntityConfig {
@@ -641,6 +642,9 @@ func (s EntitySpec) config() EntityConfig {
 	out.Affects = []string(s.Affects)
 	if s.AllowCascade != nil {
 		out.AllowCascade = *s.AllowCascade
+	}
+	if s.AllowKeyUpdate != nil {
+		out.AllowKeyUpdate = *s.AllowKeyUpdate
 	}
 	return out
 }
@@ -709,6 +713,9 @@ func (s *EntitySpec) canonical() {
 	if s.AllowCascade != nil && *s.AllowCascade == *new(bool) {
 		s.AllowCascade = nil
 	}
+	if s.AllowKeyUpdate != nil && *s.AllowKeyUpdate == *new(bool) {
+		s.AllowKeyUpdate = nil
+	}
 }
 
 func (c EntityConfig) spec() EntitySpec {
@@ -750,6 +757,7 @@ func (c EntityConfig) spec() EntitySpec {
 	out.Params = List[string](c.Params)
 	out.Affects = List[string](c.Affects)
 	out.AllowCascade = set(c.AllowCascade)
+	out.AllowKeyUpdate = set(c.AllowKeyUpdate)
 	return out
 }
 

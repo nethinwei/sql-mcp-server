@@ -48,6 +48,8 @@ type EntityItem struct {
 	Params        []string           `json:"params"`
 	Affects       []string           `json:"affects"`
 	AllowCascade  *bool              `json:"allowCascade,omitempty" merge:"unset"`
+	// AllowKeyUpdate lets update_records assign the row's identifying columns.
+	AllowKeyUpdate *bool `json:"allowKeyUpdate,omitempty" merge:"unset"`
 }
 
 // FieldItem is a field of an entity.
@@ -201,7 +203,8 @@ func entityItem(e config.EntitySpec) EntityItem {
 		Kind: nonEmpty(e.Kind), Description: nonEmpty(e.Description), PrimaryKey: listOf([]string(e.PrimaryKey)),
 		UniqueKeys: listOf([][]string(e.UniqueKeys)), Params: listOf([]string(e.Params)),
 		Affects: listOf([]string(e.Affects)), AllowCascade: e.AllowCascade,
-		Fields: make([]FieldItem, 0, len(e.Fields)), Relationships: make([]RelationshipItem, 0, len(e.Relationships)),
+		AllowKeyUpdate: e.AllowKeyUpdate,
+		Fields:         make([]FieldItem, 0, len(e.Fields)), Relationships: make([]RelationshipItem, 0, len(e.Relationships)),
 	}
 	if e.MCP != nil {
 		out.Mcp = &EntityMCPItem{
@@ -347,7 +350,7 @@ func (in EntityItem) spec() (config.EntitySpec, error) {
 		Name: &in.Name, Source: nonEmpty(in.Source), DataSource: nonEmpty(in.Datasource), Schema: nonEmpty(in.Schema),
 		Kind: nonEmpty(in.Kind), Description: nonEmpty(in.Description), PrimaryKey: listSpec(in.PrimaryKey),
 		UniqueKeys: listSpec(in.UniqueKeys), Params: listSpec(in.Params), Affects: listSpec(in.Affects),
-		AllowCascade: onlyTrue(in.AllowCascade),
+		AllowCascade: onlyTrue(in.AllowCascade), AllowKeyUpdate: onlyTrue(in.AllowKeyUpdate),
 	}
 	for _, f := range in.Fields {
 		e.Fields = append(e.Fields, config.FieldSpec{

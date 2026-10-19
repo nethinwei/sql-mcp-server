@@ -221,6 +221,8 @@ type Entity {
   affects: [String!]!
   "Admit deletes and key updates that foreign keys cascade to other tables without checking permissions there."
   allowCascade: Boolean
+  "Let update_records assign the columns that identify a row."
+  allowKeyUpdate: Boolean
 }
 
 type Field {
@@ -621,6 +623,7 @@ input EntityInput {
   params: [String!]
   affects: [String!]
   allowCascade: Boolean
+  allowKeyUpdate: Boolean
 }
 
 input FieldInput {

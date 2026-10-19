@@ -93,6 +93,7 @@
     {
       "affects": [],
       "allowCascade": true,
+      "allowKeyUpdate": true,
       "datasource": "shop",
       "fields": [
         {

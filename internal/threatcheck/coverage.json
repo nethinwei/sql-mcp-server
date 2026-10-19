@@ -251,5 +251,23 @@
     "gaps": [
       "会话只在进程内保存，多副本需要会话粘性；只有本地账号登录，没有 OIDC/OAuth2 与多因素认证；登录闸门之外没有按账号的请求限速"
     ]
+  },
+  "TM-015": {
+    "severity": "critical",
+    "tests": [
+      {"file": "core/tool/write_check_test.go", "name": "TestCreateCannotCrossTenant"},
+      {"file": "core/tool/write_check_test.go", "name": "TestCreatePinsTheHiddenTenantColumn"},
+      {"file": "core/tool/write_check_test.go", "name": "TestCreateViolationNamesOnlyVisibleFields"},
+      {"file": "core/tool/write_check_test.go", "name": "TestUpdateCannotMoveRowAcrossTenant"},
+      {"file": "core/tool/write_check_test.go", "name": "TestUpdateWithinScopeKeepsThePolicy"},
+      {"file": "core/tool/write_check_test.go", "name": "TestUpdateResidualPolicyConjoined"},
+      {"file": "core/tool/write_check_test.go", "name": "TestUpdateRejectsKeyColumnsByDefault"},
+      {"file": "core/relalg/interp/check_test.go", "name": "TestCheckAgreesWithEval"},
+      {"file": "core/relalg/interp/check_test.go", "name": "TestCheckFailsClosed"},
+      {"file": "core/codegen/codegen_test.go", "name": "TestCompileRefusesUnboundedWrites"}
+    ],
+    "gaps": [
+      "服务端求值不模拟数据库排序规则，大小写不敏感时否定条件可能与数据库判定不同；procedure 与 execute_sql 的写入不受此检查"
+    ]
   }
 }

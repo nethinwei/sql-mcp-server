@@ -206,7 +206,7 @@ func TestWriteWithLostConnectionHasUnknownOutcome(t *testing.T) {
 		Dialect:  testdialect.Postgres{},
 	}
 	in, _ := json.Marshal(updateInput{
-		Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: 1}}, Set: map[string]any{"id": 2},
+		Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: 1}}, Set: map[string]any{"email": "x"},
 	})
 	_, err := RunTool(context.Background(), UpdateTool{}, in, tc)
 	denial, ok := DenialFor(err, "d")

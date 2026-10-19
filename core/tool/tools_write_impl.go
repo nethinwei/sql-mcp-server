@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
@@ -46,14 +47,14 @@ func prepareInsert(ctx context.Context, tc Context, in createInput) (statement, 
 	if err != nil {
 		return statement{}, err
 	}
-	tup := make(relalg.Tuple, len(keys))
-	for i, k := range keys {
-		tup[i] = in.Values[k]
+	columns, tup, err := insertColumns(res.Entity, g.RowFilter, in.Values)
+	if err != nil {
+		return statement{}, err
 	}
 	compiled, err := compile(
 		tc,
 		res.Entity,
-		relalg.Insert{Target: res.Entity.Ref(), Columns: columnsOf(res.Entity, keys), Tuples: []relalg.Tuple{tup}},
+		relalg.Insert{Target: res.Entity.Ref(), Columns: columns, Tuples: []relalg.Tuple{tup}},
 	)
 	if err != nil {
 		return statement{}, err
@@ -127,21 +128,14 @@ func runFilteredWrite(
 }
 
 func prepareUpdate(ctx context.Context, tc Context, in updateInput) (statement, error) {
+	if len(in.Set) == 0 {
+		return statement{}, fmt.Errorf("%w: set assigns no field", ErrInvalidInput)
+	}
 	plan, pred, err := planEntity(ctx, tc, in.Entity, entity.ActionUpdate, in.Filter)
 	if err != nil {
 		return statement{}, err
 	}
-	updFields := append(filterFields(in.Filter), sortedKeys(in.Set)...)
-	if err := validateFields(plan.res, updFields...); err != nil {
-		return statement{}, err
-	}
-	if err := validateUnmaskedFields(plan.res, filterFields(in.Filter)...); err != nil {
-		return statement{}, err
-	}
-	if err := distinctColumns(plan.res.Entity, sortedKeys(in.Set)); err != nil {
-		return statement{}, err
-	}
-	if err := validateWritable(plan.res, sortedKeys(in.Set)...); err != nil {
+	if err := validateUpdateFields(plan.res, in); err != nil {
 		return statement{}, err
 	}
 	g, err := authorizeRequest(ctx, plan.tc, rbac.Request{
@@ -151,10 +145,18 @@ func prepareUpdate(ctx context.Context, tc Context, in updateInput) (statement, 
 	if err != nil {
 		return statement{}, err
 	}
+	if err := refuseKeyUpdate(plan.res.Entity, sortedKeys(in.Set)); err != nil {
+		return statement{}, err
+	}
 	full := andPreds(pred, g.RowFilter)
 	if full == nil {
 		return statement{}, ErrUnsafeWrite
 	}
+	check, err := updateCheck(plan.res.Entity, g.RowFilter, in.Set)
+	if err != nil {
+		return statement{}, err
+	}
+	full = andPreds(full, check)
 	if err := checkCascades(ctx, plan.tc, plan.res.Entity, entity.ActionUpdate, sortedKeys(in.Set)); err != nil {
 		return statement{}, err
 	}
@@ -172,6 +174,19 @@ func prepareUpdate(ctx context.Context, tc Context, in updateInput) (statement, 
 		return statement{}, err
 	}
 	return plan.statement(ctx, g, compiled)
+}
+
+func validateUpdateFields(res entity.Resolved, in updateInput) error {
+	if err := validateFields(res, append(filterFields(in.Filter), sortedKeys(in.Set)...)...); err != nil {
+		return err
+	}
+	if err := validateUnmaskedFields(res, filterFields(in.Filter)...); err != nil {
+		return err
+	}
+	if err := distinctColumns(res.Entity, sortedKeys(in.Set)); err != nil {
+		return err
+	}
+	return validateWritable(res, sortedKeys(in.Set)...)
 }
 
 func prepareDelete(ctx context.Context, tc Context, in deleteInput) (statement, error) {

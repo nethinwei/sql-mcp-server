@@ -266,6 +266,8 @@ export default {
     visible: '对 Agent 可见', visibleHint: '关闭后通用读写工具不再暴露此实体（授权仍然保留）。',
     allowCascade: '允许级联写入',
     allowCascadeHint: '外键级联删除或改写其他表时，不再要求调用方对被级联的实体有不带行范围的权限；级联到未暴露的表也放行。',
+    allowKeyUpdate: '允许修改主键',
+    allowKeyUpdateHint: '允许 update_records 修改标识行的列（主键，无主键时为第一个唯一键）。默认拒绝，应先删除再创建。',
     fields: '字段', commentDefault: '说明留空时使用数据库备注（灰色显示），填写后覆盖。', maskHint: '脱敏字段只能出现在结果中，不能用于过滤、分组或聚合。',
     field: '字段', fieldDescription: '说明', fieldDescriptionHint: '给 Agent 看的字段说明', alias: '别名', mask: '脱敏', hidden: '隐藏',
     masks: { none: '不脱敏', email: '邮箱', phone: '手机号', idcard: '证件号', secret: '密文' },

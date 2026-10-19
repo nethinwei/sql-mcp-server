@@ -48,7 +48,7 @@ func TestExecErrorsAreWrapped(t *testing.T) {
 	e := entity.Entity{
 		Name:       "users",
 		Source:     "users",
-		Attributes: []entity.Attribute{{Name: "id"}},
+		Attributes: []entity.Attribute{{Name: "id"}, {Name: "name"}},
 		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
 		Role:       entity.RoleAccess{entity.ActionUpdate: {"writer"}},
 		MCP:        entity.MCPFlags{DMLTools: true},
@@ -64,7 +64,7 @@ func TestExecErrorsAreWrapped(t *testing.T) {
 		Dialect:  testdialect.Postgres{},
 	}
 	_, err := (UpdateTool{}).Run(context.Background(), json.RawMessage(
-		`{"entity":"users","filter":[{"field":"id","op":"eq","value":1}],"set":{"id":2}}`,
+		`{"entity":"users","filter":[{"field":"id","op":"eq","value":1}],"set":{"name":"x"}}`,
 	), tc)
 	if !errors.Is(err, ErrDatabase) || !errors.Is(err, cause) {
 		t.Fatalf("exec error = %v", err)

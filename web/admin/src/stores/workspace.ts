@@ -123,6 +123,7 @@ export function toEntityInput(e: EntityPartsFragment): EntityInput {
     params: [...e.params],
     affects: [...e.affects],
     allowCascade: e.allowCascade || undefined,
+    allowKeyUpdate: e.allowKeyUpdate || undefined,
     tenantPolicy: e.tenantPolicy ?? undefined,
     legacyAccess: e.legacyAccess ?? undefined,
     // Field by field: the client adds __typename to what it reads.

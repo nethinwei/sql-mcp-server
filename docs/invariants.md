@@ -84,6 +84,16 @@ MCP 工具是否在 tools/list 中还取决于全局 `tools` 开关；custom pro
   `WriteGuard` 拒绝，除非精确命中 allow template；无任何有效谓词的写始终由
   工具层拒绝。
 - **I15** 的字段可见性检查同时覆盖读过滤和写目标，避免通过隐藏字段推断数据。
+- **I30** 写后的行仍在调用方的行范围内（WITH CHECK）：create 插入的行、update
+  修改后的行都必须满足 `授权项行范围的 OR AND tenantPolicy`。create 时调用方未提供、
+  而行范围以等值固定的列（通常是隐藏的租户列）由服务端按该值填入；调用方提供的值
+  使行越界即拒绝（`ROW_POLICY_VIOLATION`），不改写。update 把 `set` 代入行范围：
+  必然越界即拒绝，否则剩余条件并入 WHERE，越界的行不被修改。比较按
+  [IR 语义](design/ir-semantics.md)；无法精确判定（EXISTS、类型不可比、NULL 与
+  未知列混合）时拒绝。
+- **I31** update 默认不能修改标识行的列（主键，无主键时为第一个可标识行的唯一键），
+  实体显式 `allowKeyUpdate: true` 时才允许；codegen 拒绝无谓词的 UPDATE/DELETE 与
+  不赋值的 UPDATE，作为工具层之外的最后防线。
 
 MySQL/OceanBase 的 `sql_safe_updates` 是额外防线，不替代 I14。配置显式关闭
 `requirePKForWrite` 或加入 allow template 会缩小这项保证，必须经过安全评审。

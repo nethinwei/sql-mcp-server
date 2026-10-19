@@ -277,6 +277,8 @@ const en: typeof zh = {
     visible: 'Visible to agents', visibleHint: 'When off, the generic read/write tools no longer expose this entity (grants are kept).',
     allowCascade: 'Allow cascading writes',
     allowCascadeHint: 'When foreign keys cascade deletes or updates to other tables, the caller no longer needs unscoped permission on the cascaded entities; cascades into unexposed tables are admitted too.',
+    allowKeyUpdate: 'Allow key updates',
+    allowKeyUpdateHint: 'Lets update_records assign the columns that identify a row (the primary key, else the first unique key). Refused by default: delete the row and create it again.',
     fields: 'Fields', commentDefault: 'Empty descriptions use the database comment (shown in grey); writing one overrides it.', maskHint: 'Masked fields may only appear in results, never in filters, grouping or aggregates.',
     field: 'Field', fieldDescription: 'Description', fieldDescriptionHint: 'Field description for agents', alias: 'Alias',
     mask: 'Masking', hidden: 'Hidden',

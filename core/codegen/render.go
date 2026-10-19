@@ -443,6 +443,9 @@ func (b *builder) renderInsert(n relalg.Insert) error {
 }
 
 func (b *builder) renderUpdate(n relalg.Update) error {
+	if len(n.Set) == 0 || n.Predicate == nil {
+		return ErrUnboundedWrite
+	}
 	b.noteTable(n.Target.Name)
 	b.sql.WriteString("UPDATE ")
 	b.sql.WriteString(b.qtable(n.Target))
@@ -456,32 +459,25 @@ func (b *builder) renderUpdate(n relalg.Update) error {
 		b.sql.WriteString(b.placeholder())
 		b.args = append(b.args, s.Value)
 	}
-	if n.Predicate != nil {
-		if err := b.validate(n.Predicate); err != nil {
-			return err
-		}
-		b.sql.WriteString(" WHERE ")
-		if err := b.renderPredicate(n.Predicate); err != nil {
-			return err
-		}
-	}
-	return nil
+	return b.renderWhere(n.Predicate)
 }
 
 func (b *builder) renderDelete(n relalg.Delete) error {
+	if n.Predicate == nil {
+		return ErrUnboundedWrite
+	}
 	b.noteTable(n.Target.Name)
 	b.sql.WriteString("DELETE FROM ")
 	b.sql.WriteString(b.qtable(n.Target))
-	if n.Predicate != nil {
-		if err := b.validate(n.Predicate); err != nil {
-			return err
-		}
-		b.sql.WriteString(" WHERE ")
-		if err := b.renderPredicate(n.Predicate); err != nil {
-			return err
-		}
+	return b.renderWhere(n.Predicate)
+}
+
+func (b *builder) renderWhere(p relalg.Predicate) error {
+	if err := b.validate(p); err != nil {
+		return err
 	}
-	return nil
+	b.sql.WriteString(" WHERE ")
+	return b.renderPredicate(p)
 }
 
 func (b *builder) renderCall(n relalg.Call) error {

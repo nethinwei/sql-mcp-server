@@ -267,6 +267,8 @@ entities:
     # Cascading writes (foreign keys rewriting other tables) need delete or
     # update permission on every cascaded entity unless this is true.
     allowCascade: false
+    # update_records may not change the primary key unless this is true.
+    allowKeyUpdate: false
     mcp:
       dmlTools: true
       customTool: false

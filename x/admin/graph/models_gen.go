@@ -127,22 +127,23 @@ type EntityCapability struct {
 }
 
 type EntityInput struct {
-	Name          string              `json:"name"`
-	Source        *string             `json:"source,omitempty"`
-	Datasource    *string             `json:"datasource,omitempty"`
-	Schema        *string             `json:"schema,omitempty"`
-	Kind          *string             `json:"kind,omitempty"`
-	Description   *string             `json:"description,omitempty"`
-	PrimaryKey    []string            `json:"primaryKey,omitempty"`
-	UniqueKeys    [][]string          `json:"uniqueKeys,omitempty"`
-	Fields        []FieldInput        `json:"fields,omitempty"`
-	Relationships []RelationshipInput `json:"relationships,omitempty"`
-	TenantPolicy  any                 `json:"tenantPolicy,omitempty"`
-	LegacyAccess  any                 `json:"legacyAccess,omitempty"`
-	Mcp           *EntityMCPInput     `json:"mcp,omitempty"`
-	Params        []string            `json:"params,omitempty"`
-	Affects       []string            `json:"affects,omitempty"`
-	AllowCascade  *bool               `json:"allowCascade,omitempty"`
+	Name           string              `json:"name"`
+	Source         *string             `json:"source,omitempty"`
+	Datasource     *string             `json:"datasource,omitempty"`
+	Schema         *string             `json:"schema,omitempty"`
+	Kind           *string             `json:"kind,omitempty"`
+	Description    *string             `json:"description,omitempty"`
+	PrimaryKey     []string            `json:"primaryKey,omitempty"`
+	UniqueKeys     [][]string          `json:"uniqueKeys,omitempty"`
+	Fields         []FieldInput        `json:"fields,omitempty"`
+	Relationships  []RelationshipInput `json:"relationships,omitempty"`
+	TenantPolicy   any                 `json:"tenantPolicy,omitempty"`
+	LegacyAccess   any                 `json:"legacyAccess,omitempty"`
+	Mcp            *EntityMCPInput     `json:"mcp,omitempty"`
+	Params         []string            `json:"params,omitempty"`
+	Affects        []string            `json:"affects,omitempty"`
+	AllowCascade   *bool               `json:"allowCascade,omitempty"`
+	AllowKeyUpdate *bool               `json:"allowKeyUpdate,omitempty"`
 }
 
 type EntityMCPInput struct {

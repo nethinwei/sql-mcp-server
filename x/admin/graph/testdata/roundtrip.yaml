@@ -41,6 +41,7 @@ entities:
     datasource: shop
     uniqueKeys: [[customer_id]]
     allowCascade: true
+    allowKeyUpdate: true
     fields:
       - name: id
       - name: customer_id

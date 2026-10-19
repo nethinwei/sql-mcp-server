@@ -585,6 +585,7 @@
         },
         "set": {
           "description": "Column name to new value map",
+          "minProperties": 1,
           "type": "object"
         },
         "transaction": {

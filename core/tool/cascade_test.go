@@ -19,10 +19,11 @@ import (
 func cascadeRegistry(t *testing.T, allow bool, auditExposed bool) *entity.Registry {
 	t.Helper()
 	customers := entity.Entity{
-		Name: "customers", Source: "customers", MCP: entity.MCPFlags{DMLTools: true}, AllowCascade: allow,
-		Attributes: []entity.Attribute{{Name: "id"}, {Name: "name"}},
-		Keys:       []entity.Key{{Name: "pk", Columns: []string{"id"}, Primary: true}},
-		Role:       entity.RoleAccess{entity.ActionDelete: {"w", "scoped"}, entity.ActionUpdate: {"w", "scoped"}},
+		Name: "customers", Source: "customers", MCP: entity.MCPFlags{DMLTools: true}, AllowKeyUpdate: true,
+		AllowCascade: allow,
+		Attributes:   []entity.Attribute{{Name: "id"}, {Name: "name"}},
+		Keys:         []entity.Key{{Name: "pk", Columns: []string{"id"}, Primary: true}},
+		Role:         entity.RoleAccess{entity.ActionDelete: {"w", "scoped"}, entity.ActionUpdate: {"w", "scoped"}},
 		Cascades: []entity.Cascade{
 			{
 				Table:    "orders",

@@ -311,7 +311,10 @@ func TestCompileKinds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	write, err := r.Compile(relalg.Delete{Target: relalg.RelationRef{Name: "users"}})
+	write, err := r.Compile(relalg.Delete{
+		Target:    relalg.RelationRef{Name: "users"},
+		Predicate: relalg.Condition{Field: "id", Op: relalg.OpEq, Value: 1},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,5 +450,21 @@ func TestCompileWriteIsPKPoint(t *testing.T) {
 	}
 	if c2.IsKeyPoint {
 		t.Fatal("DELETE by a non-PK column must not be IsKeyPoint")
+	}
+}
+
+func TestCompileRefusesUnboundedWrites(t *testing.T) {
+	t.Parallel()
+	r := Renderer{Dialect: testdialect.Postgres{}}
+	users := relalg.RelationRef{Name: "users"}
+	id := relalg.Condition{Field: "id", Op: relalg.OpEq, Value: 1}
+	for name, e := range map[string]relalg.Expr{
+		"delete without predicate": relalg.Delete{Target: users},
+		"update without predicate": relalg.Update{Target: users, Set: []relalg.SetItem{{Field: "a", Value: 1}}},
+		"update without set":       relalg.Update{Target: users, Predicate: id},
+	} {
+		if _, err := r.Compile(e); !errors.Is(err, ErrUnboundedWrite) {
+			t.Errorf("%s: err = %v, want ErrUnboundedWrite", name, err)
+		}
 	}
 }

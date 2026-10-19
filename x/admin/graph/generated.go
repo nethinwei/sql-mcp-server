@@ -163,22 +163,23 @@ type ComplexityRoot struct {
 	}
 
 	Entity struct {
-		Affects       func(childComplexity int) int
-		AllowCascade  func(childComplexity int) int
-		Datasource    func(childComplexity int) int
-		Description   func(childComplexity int) int
-		Fields        func(childComplexity int) int
-		Kind          func(childComplexity int) int
-		LegacyAccess  func(childComplexity int) int
-		Mcp           func(childComplexity int) int
-		Name          func(childComplexity int) int
-		Params        func(childComplexity int) int
-		PrimaryKey    func(childComplexity int) int
-		Relationships func(childComplexity int) int
-		Schema        func(childComplexity int) int
-		Source        func(childComplexity int) int
-		TenantPolicy  func(childComplexity int) int
-		UniqueKeys    func(childComplexity int) int
+		Affects        func(childComplexity int) int
+		AllowCascade   func(childComplexity int) int
+		AllowKeyUpdate func(childComplexity int) int
+		Datasource     func(childComplexity int) int
+		Description    func(childComplexity int) int
+		Fields         func(childComplexity int) int
+		Kind           func(childComplexity int) int
+		LegacyAccess   func(childComplexity int) int
+		Mcp            func(childComplexity int) int
+		Name           func(childComplexity int) int
+		Params         func(childComplexity int) int
+		PrimaryKey     func(childComplexity int) int
+		Relationships  func(childComplexity int) int
+		Schema         func(childComplexity int) int
+		Source         func(childComplexity int) int
+		TenantPolicy   func(childComplexity int) int
+		UniqueKeys     func(childComplexity int) int
 	}
 
 	EntityCapability struct {
@@ -1282,6 +1283,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Entity.AllowCascade(childComplexity), true
+	case "Entity.allowKeyUpdate":
+		if e.ComplexityRoot.Entity.AllowKeyUpdate == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Entity.AllowKeyUpdate(childComplexity), true
 	case "Entity.datasource":
 		if e.ComplexityRoot.Entity.Datasource == nil {
 			break
@@ -4257,6 +4264,8 @@ func (ec *executionContext) childFields_Entity(ctx context.Context, field graphq
 		return ec.fieldContext_Entity_affects(ctx, field)
 	case "allowCascade":
 		return ec.fieldContext_Entity_allowCascade(ctx, field)
+	case "allowKeyUpdate":
+		return ec.fieldContext_Entity_allowKeyUpdate(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Entity", field.Name)
 }
@@ -8312,6 +8321,29 @@ func (ec *executionContext) _Entity_allowCascade(ctx context.Context, field grap
 	)
 }
 func (ec *executionContext) fieldContext_Entity_allowCascade(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Entity", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _Entity_allowKeyUpdate(ctx context.Context, field graphql.CollectedField, obj *configapp.EntityItem) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Entity_allowKeyUpdate(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.AllowKeyUpdate, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *bool) graphql.Marshaler {
+			return ec.marshalOBoolean2ᚖbool(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Entity_allowKeyUpdate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Entity", field, false, false, errors.New("field of type Boolean does not have child fields"))
 }
 
@@ -19680,7 +19712,7 @@ func (ec *executionContext) unmarshalInputEntityInput(ctx context.Context, obj a
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"name", "source", "datasource", "schema", "kind", "description", "primaryKey", "uniqueKeys", "fields", "relationships", "tenantPolicy", "legacyAccess", "mcp", "params", "affects", "allowCascade"}
+	fieldsInOrder := [...]string{"name", "source", "datasource", "schema", "kind", "description", "primaryKey", "uniqueKeys", "fields", "relationships", "tenantPolicy", "legacyAccess", "mcp", "params", "affects", "allowCascade", "allowKeyUpdate"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -19799,6 +19831,13 @@ func (ec *executionContext) unmarshalInputEntityInput(ctx context.Context, obj a
 				return it, err
 			}
 			it.AllowCascade = data
+		case "allowKeyUpdate":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("allowKeyUpdate"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AllowKeyUpdate = data
 		}
 	}
 	return it, nil
@@ -21835,6 +21874,11 @@ func (ec *executionContext) _Entity(ctx context.Context, sel ast.SelectionSet, o
 			}
 		case "allowCascade":
 			out.Values[i] = ec._Entity_allowCascade(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "allowKeyUpdate":
+			out.Values[i] = ec._Entity_allowKeyUpdate(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}

@@ -238,6 +238,9 @@ defs.entity.params:
 defs.entity.allowCascade:
   zh-CN: '允许级联写入：删除本实体的行或修改其被引用列时，外键的 CASCADE、SET NULL、SET DEFAULT 会改写其他表的行。默认要求调用方对每个被级联的实体都有对应的删除或修改权限，且不带行范围限制；被级联的表未暴露为实体时拒绝。设为 true 则不做该检查，由管理员对级联负责。'
   en: 'Allow cascading writes: deleting this entity''s rows or updating their referenced columns makes foreign keys (CASCADE, SET NULL, SET DEFAULT) rewrite rows of other tables. By default the caller needs delete or update permission without a row scope on every cascaded entity, and a cascade into a table no entity exposes is rejected. true skips the check and leaves the cascade to the administrator.'
+defs.entity.allowKeyUpdate:
+  zh-CN: 允许 update_records 修改标识行的列（主键；无主键时为第一个可标识行的唯一键）。默认拒绝：改主键会让引用它的行、缓存与审计记录失去对应，应先删除再创建。
+  en: 'Lets update_records assign the columns that identify a row (the primary key, else the first unique key that identifies one). Refused by default: a changed key orphans the rows, cached reads and audit records that refer to it; delete the row and create it again instead.'
 defs.entity.affects:
   zh-CN: 存储过程会写入的实体（须与过程同一数据源，引用写法同 grants），用于读缓存失效；省略时过程执行后失效该数据源的全部缓存。
   en: Entities the procedure writes (on its datasource, referred to as in grants), for read-cache invalidation; when omitted, every cached read of the datasource is invalidated after it runs.

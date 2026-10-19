@@ -57,12 +57,13 @@ func configToEntity(ec config.EntityConfig, refs config.EntityRefs) (entity.Enti
 			DMLTools: ec.MCP.DMLTools, CustomTool: ec.MCP.CustomTool,
 			TrustedProcedure: ec.MCP.TrustedProcedure,
 		},
-		RowPolicies:  rowPolicies,
-		AllowCascade: ec.AllowCascade,
-		TenantPolicy: tenantPolicy,
-		Relations:    relations,
-		Params:       ec.Params,
-		Affects:      affects,
+		RowPolicies:    rowPolicies,
+		AllowCascade:   ec.AllowCascade,
+		AllowKeyUpdate: ec.AllowKeyUpdate,
+		TenantPolicy:   tenantPolicy,
+		Relations:      relations,
+		Params:         ec.Params,
+		Affects:        affects,
 	}, nil
 }
 

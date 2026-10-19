@@ -225,6 +225,14 @@ function remove() {
             <n-text depth="3" class="hint">{{ t('entity.allowCascadeHint') }}</n-text>
           </div>
         </div>
+        <div v-if="entity.kind !== 'procedure'" class="switch-row">
+          <n-switch :value="entity.allowKeyUpdate ?? false" :disabled="!editable"
+            @update:value="(v: boolean) => (entity!.allowKeyUpdate = v || undefined)" />
+          <div>
+            <div>{{ t('entity.allowKeyUpdate') }}</div>
+            <n-text depth="3" class="hint">{{ t('entity.allowKeyUpdateHint') }}</n-text>
+          </div>
+        </div>
       </n-form>
     </n-card>
 

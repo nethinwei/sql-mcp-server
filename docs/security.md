@@ -67,6 +67,10 @@ session 关闭时绑定会同步清理。该绑定防止可信代理后的调用
 - `rowPolicies` 与用户 filter 以 AND 合并。`${subject.x}` 从请求 subject
   解析；属性缺失时生成 NULL 条件，因而不匹配普通行。
 - 实体 `tenantPolicy` 对所有主体始终 AND，不参与多角色合并。
+- 写入同样受行范围约束（WITH CHECK）：create 插入的行、update 修改后的行必须仍在
+  调用方的行范围内，否则返回 `ROW_POLICY_VIOLATION`；行范围以等值固定的隐藏列
+  （如租户列）在 create 时由服务端填入。update 默认不能修改主键，需实体显式
+  `allowKeyUpdate`。规则见[授权模型](design/authorization-model.md#写入的行范围)。
 - mask 在所有结果路径（包括 aggregate/procedure）返回前执行。mask 字段只允许
   投影，禁止用于 filter、cursor、group-by、aggregate 和写谓词，避免等值/LIKE
   盲测与统计侧信道。内置规则为 `email`、`phone`、`idcard`、`secret`；配置未知

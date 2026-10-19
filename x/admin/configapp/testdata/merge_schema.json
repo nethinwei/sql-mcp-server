@@ -6,6 +6,7 @@
   },
   "unset": [
     "allowCascade",
+    "allowKeyUpdate",
     "datasource",
     "description",
     "disabled",
