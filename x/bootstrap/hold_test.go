@@ -147,3 +147,44 @@ func TestRevokedPrincipalsIncludeChangedSubjects(t *testing.T) {
 		t.Fatalf("changed subject revoked %v", got)
 	}
 }
+
+// A credential resolves within one snapshot: a reload that rotates alice's
+// token never lets the old token reach the identity the new snapshot gives
+// her, however the lookup interleaves with the publish.
+func TestCredentialResolvesWithinOneSnapshot(t *testing.T) {
+	t.Parallel()
+	rotated := func(token, principal string) *App {
+		return &App{
+			Users:      map[string]UserIdentity{"alice": {Principal: principal}},
+			UserTokens: map[string]string{config.TokenHash(token): "alice"},
+		}
+	}
+	before, after := rotated("old", "user:alice-before"), rotated("new", "user:alice-after")
+	runtime := NewRuntimeWithBuilder(before, nil)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			next := before
+			if i%2 == 0 {
+				next = after
+			}
+			runtime.current.Store(newAppSnapshot(next))
+		}
+	}()
+	for range 200000 {
+		if id, ok := runtime.UserByTokenHash(config.TokenHash("old")); ok && id.Principal != "user:alice-before" {
+			close(stop)
+			<-done
+			t.Fatalf("the rotated-out token resolved to %q", id.Principal)
+		}
+	}
+	close(stop)
+	<-done
+}

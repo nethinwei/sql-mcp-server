@@ -332,14 +332,14 @@ func TestValidateRejectsBareTemplatesWithMultipleDatasources(t *testing.T) {
 			err := cfg.Validate()
 			if err == nil || !strings.Contains(err.Error(), tc.want) ||
 				!strings.Contains(err.Error(), "legacy bare SQL") ||
-				!strings.Contains(err.Error(), "fp:v2:<sha256>") {
+				!strings.Contains(err.Error(), "fp:v3:<sha256>") {
 				t.Fatalf("Validate() error = %v, want clear %s migration error", err, tc.want)
 			}
 		})
 	}
 
 	cfg := base()
-	cfg.Cost.AllowTemplates = []string{"fp:v2:abc", "primary:SELECT 1"}
+	cfg.Cost.AllowTemplates = []string{"fp:v3:abc", "primary:SELECT 1"}
 	cfg.Cost.RejectTemplates = []string{"replica:SELECT bad"}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("scoped multi-datasource templates error = %v", err)
@@ -447,6 +447,36 @@ func TestValidateNamedDatabasesAndRelationships(t *testing.T) {
 	cfg.Entities[1].DataSource = "archive"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("cross-datasource relationship must be rejected")
+	}
+}
+
+// joinOn names columns: the join runs on them as written, so a field's alias
+// is refused on either side, and the column it aliases accepted.
+func TestValidateRelationshipJoinRefusesAliases(t *testing.T) {
+	config := func(parent, child []FieldConfig, local, target string) *Config {
+		return &Config{
+			Database: DatabaseConfig{Driver: "postgres", DSN: "x"},
+			Entities: []EntityConfig{
+				{Name: "parents", Fields: parent, Relationships: []RelationshipConfig{{
+					Name: "children", Target: "children", Cardinality: "many",
+					JoinOn: map[string]string{local: target},
+				}}},
+				{Name: "children", Fields: child},
+			},
+		}
+	}
+	plain, aliasedID := []FieldConfig{{Name: "parent_id"}}, []FieldConfig{{Name: "id", Alias: "parentId"}}
+	if err := config(aliasedID, plain, "parentId", "parent_id").Validate(); err == nil ||
+		!strings.Contains(err.Error(), `alias of column "id"`) {
+		t.Fatalf("local alias: err = %v", err)
+	}
+	aliased := []FieldConfig{{Name: "parent_id", Alias: "parentId"}}
+	if err := config([]FieldConfig{{Name: "id"}}, aliased, "id", "parentId").Validate(); err == nil ||
+		!strings.Contains(err.Error(), `alias of column "parent_id"`) {
+		t.Fatalf("target alias: err = %v", err)
+	}
+	if err := config(aliasedID, plain, "id", "parent_id").Validate(); err != nil {
+		t.Fatalf("the column of an aliased field: %v", err)
 	}
 }
 

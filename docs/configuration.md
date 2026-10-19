@@ -113,7 +113,7 @@ PostgreSQL sampler 始终使用独立 read-only transaction 并 rollback，调�
 
 从单数据源升级到 `databases` 多数据源前，必须迁移 `allowTemplates` 和
 `rejectTemplates` 中的旧裸 SQL。每项应替换为 datasource 隔离的
-`fp:v2:<sha256>` fingerprint，或改成 `datasource:SQL`（例如
+`fp:v3:<sha256>` fingerprint，或改成 `datasource:SQL`（例如
 `primary:SELECT * FROM users`）。只要多数据源配置中仍存在裸 SQL，配置校验、
 启动装配和 reload 都会 fail-closed；reload 失败时继续保留旧运行快照。该检查
 同时覆盖 allow 和 reject，避免 allow 错误放行，也避免 reject 静默失效。
@@ -293,7 +293,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `requireFreshStats` | 布尔 |  |  | 统计信息过旧时拒绝（未开启时只在评分中扣 15 分）。PostgreSQL 中过旧指被扫描的表既没被 ANALYZE 也没被 autovacuum 分析过，且大于 64 KiB；MySQL、OceanBase 不判断。 |
 | `queryTimeout` | 时长 | `"30s"` | ≥ 0 | 查询超时，0（不限）或不小于 100ms；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。 |
 | `requireNativeLimits` | 布尔 |  |  | 严格模式：数据源的连接无法在数据库侧把语句限制在 queryTimeout 内（能力不是 enforced）时，拒绝加载该配置，控制台校验也报错；关闭时只告警。 |
-| `allowTemplates` | 字符串列表 |  |  | 跳过估算的 SQL 模板：推荐 fp:v2:<sha256> 指纹；多数据源下精确 SQL 写成 datasource:SQL。不绕过安全检查。 |
+| `allowTemplates` | 字符串列表 |  |  | 跳过估算的 SQL 模板：推荐 fp:v3:<sha256> 指纹；多数据源下精确 SQL 写成 datasource:SQL。不绕过安全检查。 |
 | `rejectTemplates` | 字符串列表 |  |  | 总是拒绝的 SQL 模板，写法同 allowTemplates。 |
 | `aqe.windowSize` | 整数 | `32` | ≥ 0 | 每个模板保留的反馈样本数。 |
 | `aqe.anomalyFactor` | 数字 | `3` | ≥ 0 | 实际与估算偏差超过该倍数视为异常。 |

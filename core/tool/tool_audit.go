@@ -44,7 +44,7 @@ func recordToolAudit(
 		ReturnedRows: returnedRows(res),
 	}
 	if res.Truncated {
-		ev.ResultSummary = "truncated: the server held too many results in memory"
+		ev.ResultSummary = "truncated: past the call's row limits or the server's result memory"
 	}
 	trace, durable := ctx.Value(escapeTraceKey{}).(*escapeTrace)
 	if !durable {

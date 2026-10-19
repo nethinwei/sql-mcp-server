@@ -432,7 +432,7 @@ func validateRelationship(
 	if target.DatasourceName() != e.DatasourceName() {
 		return fmt.Errorf("config: cross-datasource relationship %q is not supported", relation.Name)
 	}
-	return validateRelationshipJoin(relation, localFields, target)
+	return validateRelationshipJoin(relation, e, localFields, target)
 }
 
 func validateRelationshipIdentity(e EntityConfig, relation RelationshipConfig, relationNames map[string]bool) error {
@@ -446,24 +446,48 @@ func validateRelationshipIdentity(e EntityConfig, relation RelationshipConfig, r
 	return nil
 }
 
-func validateRelationshipJoin(relation RelationshipConfig, localFields map[string]bool, target EntityConfig) error {
+// validateRelationshipJoin checks joinOn, whose fields name columns: the join
+// runs on them as written, so one naming a field's alias is refused.
+func validateRelationshipJoin(
+	relation RelationshipConfig, e EntityConfig, localFields map[string]bool, target EntityConfig,
+) error {
 	if len(relation.JoinOn) == 0 {
 		return fmt.Errorf("config: relationship %q requires at least one joinOn pair", relation.Name)
 	}
 	targetFields := configuredFields(target.Fields)
-	for local, target := range relation.JoinOn {
+	for local, targetField := range relation.JoinOn {
 		if !localFields[local] {
 			return fmt.Errorf("config: relationship %q references unknown local field %q", relation.Name, local)
 		}
-		if !targetFields[target] {
+		if !targetFields[targetField] {
 			return fmt.Errorf(
 				"config: relationship %q references unknown target field %q",
 				relation.Name,
-				target,
+				targetField,
 			)
+		}
+		for _, side := range []struct {
+			field  string
+			fields []FieldConfig
+		}{{local, e.Fields}, {targetField, target.Fields}} {
+			if column, ok := aliasedColumn(side.fields, side.field); ok {
+				return fmt.Errorf("config: relationship %q joinOn field %q is the alias of column %q: "+
+					"joinOn names columns", relation.Name, side.field, column)
+			}
 		}
 	}
 	return nil
+}
+
+// aliasedColumn returns the column whose alias name is (an alias never names
+// another field, see validateFieldNames).
+func aliasedColumn(fields []FieldConfig, name string) (string, bool) {
+	for _, f := range fields {
+		if f.Alias == name {
+			return f.Name, true
+		}
+	}
+	return "", false
 }
 
 func (c *Config) normalizeRoles() error {

@@ -485,8 +485,8 @@ cost.requireNativeLimits:
   zh-CN: 严格模式：数据源的连接无法在数据库侧把语句限制在 queryTimeout 内（能力不是 enforced）时，拒绝加载该配置，控制台校验也报错；关闭时只告警。
   en: Strict mode. Refuse the configuration when a datasource's connection cannot stop statements at queryTimeout on the database side (the capability is not enforced), and fail its validation in the console; off, it only warns.
 cost.allowTemplates:
-  zh-CN: 跳过估算的 SQL 模板：推荐 fp:v2:<sha256> 指纹；多数据源下精确 SQL 写成 datasource:SQL。不绕过安全检查。
-  en: SQL templates that skip estimation; prefer fp:v2:<sha256> fingerprints, and with several datasources write exact SQL as datasource:SQL. Safety checks still apply.
+  zh-CN: 跳过估算的 SQL 模板：推荐 fp:v3:<sha256> 指纹；多数据源下精确 SQL 写成 datasource:SQL。不绕过安全检查。
+  en: SQL templates that skip estimation; prefer fp:v3:<sha256> fingerprints, and with several datasources write exact SQL as datasource:SQL. Safety checks still apply.
 cost.rejectTemplates:
   zh-CN: 总是拒绝的 SQL 模板，写法同 allowTemplates。
   en: SQL templates that are always rejected; same forms as allowTemplates.

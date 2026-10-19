@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
@@ -113,9 +114,15 @@ func checkConditionValue(c relalg.Condition) error {
 		if items, ok := c.Value.([]any); ok && slices.ContainsFunc(items, isComposite) {
 			return fmt.Errorf("%s list items must be scalars", c.Op)
 		}
+		if items, ok := c.Value.([]any); ok && slices.ContainsFunc(items, isNonFinite) {
+			return fmt.Errorf("%s list items must be finite numbers (not .nan or .inf)", c.Op)
+		}
 	default:
 		if c.Value == nil || isComposite(c.Value) {
 			return fmt.Errorf("%s needs a scalar value", c.Op)
+		}
+		if isNonFinite(c.Value) {
+			return fmt.Errorf("%s needs a finite number (not .nan or .inf)", c.Op)
 		}
 	}
 	return relalg.ValidatePredicate(c)
@@ -127,6 +134,13 @@ func isComposite(v any) bool {
 		return true
 	}
 	return false
+}
+
+// isNonFinite reports NaN or an infinity, which YAML writes as .nan and .inf
+// and which no column holds or compares with.
+func isNonFinite(v any) bool {
+	f, ok := v.(float64)
+	return ok && (math.IsNaN(f) || math.IsInf(f, 0))
 }
 
 // validateRowFilter parses a row filter of e. Its fields name columns, so

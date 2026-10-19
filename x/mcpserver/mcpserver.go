@@ -531,13 +531,16 @@ func fromProxyAddress(networks []*net.IPNet, r *http.Request) bool {
 
 // fromProxyCertificate reports whether the leaf certificate of r's
 // connection (verified by requireClientCert) has a CN or DNS SAN in subjects.
+// A DNS name matches in any case, as DNS does.
 func fromProxyCertificate(subjects []string, r *http.Request) bool {
 	if len(subjects) == 0 || r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 		return false
 	}
 	leaf := r.TLS.PeerCertificates[0]
 	return slices.Contains(subjects, leaf.Subject.CommonName) ||
-		slices.ContainsFunc(leaf.DNSNames, func(name string) bool { return slices.Contains(subjects, name) })
+		slices.ContainsFunc(leaf.DNSNames, func(name string) bool {
+			return slices.ContainsFunc(subjects, func(s string) bool { return strings.EqualFold(s, name) })
+		})
 }
 
 func hasIdentityHeader(r *http.Request) bool {

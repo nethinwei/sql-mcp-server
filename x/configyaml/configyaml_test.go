@@ -312,3 +312,21 @@ func TestDecodeRejectsUnknownFields(t *testing.T) {
 		t.Fatalf("filter maps must accept their own keys: %v", err)
 	}
 }
+
+// TestDecodeRejectsNonFiniteFilterValues: YAML writes NaN and the infinities
+// as .nan and .inf; a row filter comparing with one is refused when loaded,
+// before a write's check could meet it.
+func TestDecodeRejectsNonFiniteFilterValues(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{".nan", ".inf", "-.inf", "[1, .nan]"} {
+		op := "eq"
+		if strings.HasPrefix(value, "[") {
+			op = "in"
+		}
+		yaml := validDatabase + "entities:\n  - name: orders\n    rowPolicies:\n      reader: {op: " + op +
+			", field: tenant_id, value: " + value + "}\n    fields:\n      - {name: tenant_id}\n"
+		if _, err := Decode([]byte(yaml)); err == nil || !strings.Contains(err.Error(), "finite") {
+			t.Errorf("value %s: err = %v, want a finite-number error", value, err)
+		}
+	}
+}

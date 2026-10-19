@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -137,7 +138,8 @@ func onePublished(ctx context.Context, s *SQLStore, tx *sql.Tx) error {
 }
 
 // Init creates the store tables when absent; it is a no-op on an initialized
-// store of the same version.
+// store of the same version. An Init that stopped part way runs again: the
+// tables are created if absent and the missing metadata rows written.
 func Init(ctx context.Context, spec Spec, resolve Resolver) error {
 	s, err := connect(spec, resolve)
 	if err != nil {
@@ -147,9 +149,11 @@ func Init(ctx context.Context, spec Spec, resolve Resolver) error {
 	version, err := s.checkSchema(ctx)
 	if err == nil {
 		if version < SchemaVersion {
-			return s.migrate(ctx, version)
+			if err := s.migrate(ctx, version); err != nil {
+				return err
+			}
 		}
-		return nil
+		return s.initMeta(ctx)
 	}
 	if !errors.Is(err, ErrNotInitialized) {
 		return err
@@ -159,12 +163,45 @@ func Init(ctx context.Context, spec Spec, resolve Resolver) error {
 			return fmt.Errorf("configstore: create tables: %w", err)
 		}
 	}
-	for _, row := range [][2]any{{metaSchemaVersion, SchemaVersion}, {metaNextID, 1}, {metaPublishLock, 0},
-		{metaRevisionSeq, 0}} {
-		if _, err := s.exec(ctx, s.db, "INSERT INTO smcp_store_meta (meta_key, meta_value) VALUES (?, ?)",
-			row[0], row[1]); err != nil {
-			return fmt.Errorf("configstore: initialize metadata: %w", err)
+	return s.initMeta(ctx)
+}
+
+// initMeta writes the metadata rows the store lacks, in one transaction and
+// the schema version last: a store has its version only with the others.
+// Their first values hold only while the store has no revision; one that
+// has revisions and lacks a row lost it, and is corrupt.
+func (s *SQLStore) initMeta(ctx context.Context) error {
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		keys, err := queryAll(ctx, s, tx, func(row scanner) (key string, err error) {
+			return key, row.Scan(&key)
+		}, "SELECT meta_key FROM smcp_store_meta")
+		if err != nil {
+			return err
 		}
+		rows := [][2]any{{metaNextID, 1}, {metaPublishLock, 0}, {metaRevisionSeq, 0},
+			{metaSchemaVersion, SchemaVersion}}
+		rows = slices.DeleteFunc(rows, func(row [2]any) bool { return slices.Contains(keys, row[0].(string)) })
+		if len(rows) == 0 {
+			return nil
+		}
+		var revisions int64
+		if err := s.queryRow(ctx, tx, "SELECT COUNT(*) FROM smcp_revisions").Scan(&revisions); err != nil {
+			return err
+		}
+		if revisions > 0 {
+			return fmt.Errorf("%w: store metadata row %v missing from a store with revisions; restore it from a "+
+				"backup", ErrStoreCorrupt, rows[0][0])
+		}
+		for _, row := range rows {
+			if _, err := s.exec(ctx, tx, "INSERT INTO smcp_store_meta (meta_key, meta_value) VALUES (?, ?)",
+				row[0], row[1]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("configstore: initialize metadata: %w", err)
 	}
 	return nil
 }

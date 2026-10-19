@@ -1,6 +1,8 @@
 package interp
 
 import (
+	"math"
+	"math/big"
 	"math/rand/v2"
 	"reflect"
 	"testing"
@@ -56,6 +58,10 @@ func TestCheckFailsClosed(t *testing.T) {
 			relalg.Condition{Field: "a", Op: relalg.OpEq, Value: int64(1)},
 			relalg.Condition{Field: "b", Op: relalg.OpEq, Value: int64(1)},
 		}}}, map[string]any{"a": nil}},
+		"NaN value": {relalg.Condition{Field: "a", Op: relalg.OpEq, Value: math.NaN()}, map[string]any{"a": int64(1)}},
+		"NaN cell":  {relalg.Condition{Field: "a", Op: relalg.OpEq, Value: int64(1)}, map[string]any{"a": math.NaN()}},
+		"infinite":  {relalg.Condition{Field: "a", Op: relalg.OpLt, Value: math.Inf(1)}, map[string]any{"a": 1.5}},
+		"nil rat":   {relalg.Condition{Field: "a", Op: relalg.OpEq, Value: (*big.Rat)(nil)}, map[string]any{"a": 1.5}},
 	} {
 		if _, verdict, err := Check(c.p, c.known); verdict != Fails || err == nil {
 			t.Errorf("%s: verdict %v, err %v; want Fails with a reason", name, verdict, err)

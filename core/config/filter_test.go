@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"math/rand/v2"
 	"reflect"
 	"strings"
@@ -29,6 +30,9 @@ func TestParseFilterRejectsMalformedFilters(t *testing.T) {
 		"is_null with value": {FilterConfig{"op": "is_null", "field": "a", "value": 1}, "value"},
 		"not of a list":      {FilterConfig{"not": []any{}}, "filter object"},
 		"unknown operator":   {FilterConfig{"op": "between", "field": "a"}, "invalid operator"},
+		"eq NaN":             {FilterConfig{"op": "eq", "field": "a", "value": math.NaN()}, "finite"},
+		"lt infinity":        {FilterConfig{"op": "lt", "field": "a", "value": math.Inf(-1)}, "finite"},
+		"in with NaN":        {FilterConfig{"op": "in", "field": "a", "value": []any{1, math.NaN()}}, "finite"},
 	} {
 		if _, err := ParseFilter(c.fc); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: err = %v, want %q", name, err, c.want)

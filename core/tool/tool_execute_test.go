@@ -343,17 +343,17 @@ func procedureConsumptionCases() []struct {
 			}(),
 			want: ErrDatabase,
 		},
+		// Past its rows a procedure (which may have written) is cut, not
+		// refused: a refusal would invite running it again.
 		{
-			name:   "budget error",
+			name:   "budget rows cut",
 			rows:   storetest.NewFakeRows([]string{"n"}, []any{1}, []any{2}),
 			limits: budget.Limits{MaxReturnedRows: 1},
-			want:   budget.ErrExceeded,
 		},
 		{
-			name:             "procedure hard cap",
+			name:             "procedure hard cap cut",
 			rows:             storetest.NewFakeRows([]string{"n"}, []any{1}, []any{2}),
 			maxProcedureRows: 1,
-			want:             budget.ErrExceeded,
 		},
 	}
 }
@@ -386,7 +386,11 @@ func assertExecuteConsumptionError(
 		Dialect:      testdialect.Postgres{},
 		BudgetLimits: tcse.limits,
 	}
-	_, err := (ExecuteTool{}).Run(context.Background(), json.RawMessage(`{"entity":"sp","args":{"x":1}}`), tc)
+	res, err := (ExecuteTool{}).Run(context.Background(), json.RawMessage(`{"entity":"sp","args":{"x":1}}`), tc)
+	if tcse.want == nil && (err != nil || !res.Truncated || len(res.Content) != 1) {
+		t.Fatalf("result = %d rows, truncated %v, error %v; want the first row, truncated",
+			len(res.Content), res.Truncated, err)
+	}
 	if !errors.Is(err, tcse.want) {
 		t.Fatalf("error = %v, want %v", err, tcse.want)
 	}

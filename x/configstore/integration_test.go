@@ -61,6 +61,10 @@ func runServerConformance(t *testing.T, spec Spec) {
 		dropTables(t, spec)
 		assertMigrationRefusesTwoPublished(t, spec)
 	})
+	t.Run("InitCompletesPartialMeta", func(t *testing.T) {
+		dropTables(t, spec)
+		assertInitCompletesPartialMeta(t, spec)
+	})
 }
 
 // freshStore drops the store tables and initializes them again.

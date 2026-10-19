@@ -18,6 +18,7 @@ func TestSQLiteStoreIntegrity(t *testing.T) {
 	t.Run("MigrationRefusesTwoPublished", func(t *testing.T) {
 		assertMigrationRefusesTwoPublished(t, sqliteSpec(t))
 	})
+	t.Run("InitCompletesPartialMeta", func(t *testing.T) { assertInitCompletesPartialMeta(t, sqliteSpec(t)) })
 }
 
 func draft(t *testing.T, store *SQLStore, payload string) revision.Revision {
@@ -142,5 +143,38 @@ func assertRerunsItsDDL(t *testing.T, store *SQLStore) {
 		if err := store.dialect.runDDL(context.Background(), store.db, step); err != nil {
 			t.Fatalf("schema version %d again: %v", v+1, err)
 		}
+	}
+}
+
+// assertInitCompletesPartialMeta: an Init that stopped after writing the
+// schema version runs again and writes the rows it left out; on a store with
+// revisions a missing row is not invented again (its value is lost).
+func assertInitCompletesPartialMeta(t *testing.T, spec Spec) {
+	t.Helper()
+	ctx := context.Background()
+	if err := Init(ctx, spec, nil); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(ctx, spec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	if _, err := store.exec(ctx, store.db, "DELETE FROM smcp_store_meta WHERE meta_key <> ?",
+		metaSchemaVersion); err != nil {
+		t.Fatal(err)
+	}
+	if err := Init(ctx, spec, nil); err != nil {
+		t.Fatalf("Init after a partial one: %v", err)
+	}
+	d := draft(t, store, "a: 1\n")
+	if _, err := store.Publish(ctx, d.ID, 0, revision.Meta{Author: "root"}); err != nil {
+		t.Fatalf("Publish after Init completed the metadata: %v", err)
+	}
+	if _, err := store.exec(ctx, store.db, "DELETE FROM smcp_store_meta WHERE meta_key = ?", metaNextID); err != nil {
+		t.Fatal(err)
+	}
+	if err := Init(ctx, spec, nil); !errors.Is(err, ErrStoreCorrupt) {
+		t.Fatalf("Init on a store with revisions missing next_id: %v, want ErrStoreCorrupt", err)
 	}
 }

@@ -79,9 +79,9 @@ type resultMeter struct {
 	rows, bytes, held int64
 	maxRows, maxBytes int64
 	memory            *ResultMemory
-	// write: a write's rows are read after it took effect, so past the
-	// memory they are cut (errResultCut) rather than refused (failing the
-	// call would invite a duplicate retry, see finalizeToolResult).
+	// write: a write's rows are read after it took effect, so past its rows
+	// or the memory they are cut (errResultCut) rather than refused (failing
+	// the call would invite a duplicate retry, see finalizeToolResult).
 	write bool
 	// closed: the call ended. An execution it shared (singleflight) may
 	// still read rows for the calls waiting on it; they are no longer held
@@ -103,9 +103,10 @@ func meterCall(tc Context, readOnly bool) (Context, func()) {
 	return tc, m.close
 }
 
-// errResultCut stops reading a write's rows past the process's result
-// memory: the call returns the rows read so far, marked truncated.
-var errResultCut = errors.New("tool: the result was cut short: the server holds too many results in memory")
+// errResultCut stops reading a write's rows past the call's rows or the
+// process's result memory: the call returns the rows read so far, marked
+// truncated.
+var errResultCut = errors.New("tool: the result of a write was cut short")
 
 // minLimit is the stricter of two limits, where 0 is no limit.
 func minLimit(a, b int64) int64 {
@@ -129,6 +130,10 @@ func (m *resultMeter) add(row map[string]any) error {
 	defer m.mu.Unlock()
 	m.rows++
 	if m.maxRows > 0 && m.rows > m.maxRows {
+		if m.write {
+			m.rows--
+			return errResultCut
+		}
 		return budget.ErrExceeded
 	}
 	m.bytes += n

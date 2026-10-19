@@ -113,3 +113,27 @@ func TestMTLSClientCertificateIdentity(t *testing.T) {
 		}
 	}
 }
+
+// A proxy's DNS SAN matches its configured subject in any case, as DNS
+// names do; its CN matches exactly, as a user's does.
+func TestProxyCertificateMatchesDNSNamesInAnyCase(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		subjects []string
+		cert     x509.Certificate
+		want     bool
+	}{
+		{[]string{"gateway.example.com"}, x509.Certificate{DNSNames: []string{"Gateway.Example.COM"}}, true},
+		{[]string{"Gateway.example.com"}, x509.Certificate{DNSNames: []string{"gateway.example.com"}}, true},
+		{[]string{"gateway.example.com"}, x509.Certificate{DNSNames: []string{"other.example.com"}}, false},
+		{[]string{"gateway"}, x509.Certificate{Subject: pkix.Name{CommonName: "gateway"}}, true},
+		{[]string{"gateway"}, x509.Certificate{Subject: pkix.Name{CommonName: "Gateway"}}, false},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+		req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{&c.cert}}
+		if got := fromProxyCertificate(c.subjects, req); got != c.want {
+			t.Errorf("subjects %v, DNS %v, CN %q: %v, want %v", c.subjects, c.cert.DNSNames,
+				c.cert.Subject.CommonName, got, c.want)
+		}
+	}
+}

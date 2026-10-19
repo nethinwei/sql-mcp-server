@@ -233,7 +233,10 @@ func (st statement) queryRaw(ctx context.Context) (out rawRows, err error) {
 		if err := rows.Scan(pointers...); err != nil {
 			return rawRows{}, st.fail(err)
 		}
-		if err := st.tc.results.add(rowOf(out.columns, values)); err != nil {
+		if err := st.tc.results.add(rowOf(out.columns, values)); errors.Is(err, errResultCut) {
+			out.truncated = true
+			break
+		} else if err != nil {
 			return rawRows{}, err
 		}
 		out.rows = append(out.rows, values)
@@ -297,10 +300,13 @@ func (st statement) query(ctx context.Context) (out queried, err error) {
 			out.kept = append(out.kept, kept)
 		}
 		st.present(row)
-		if st.rowCap > 0 && int64(len(out.rows)) >= st.rowCap {
+		err := errResultCut // a write's rows past its cap are cut: it already took effect
+		if st.rowCap <= 0 || int64(len(out.rows)) < st.rowCap {
+			err = st.tc.results.add(row)
+		} else if !st.write {
 			return queried{}, budget.ErrExceeded
 		}
-		if err := st.tc.results.add(row); errors.Is(err, errResultCut) {
+		if errors.Is(err, errResultCut) {
 			out.truncated = true
 			if st.keep != nil {
 				out.kept = out.kept[:len(out.rows)]

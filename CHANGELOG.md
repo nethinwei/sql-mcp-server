@@ -32,6 +32,10 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 - `readAfterWrite` 上限 1 小时；行过滤的空 `and`/`or`、多余键、引用字段别名，以及重复的字段
   别名在加载时拒绝。
 - `phone`/`idcard` 脱敏的中间部分固定为 `****`。
+- 成本 fingerprint 前缀升为 `fp:v3:`（小数参数改为文字后 fingerprint 已改变），`fp:v2:` 模板在
+  加载时拒绝，需重新采集；行过滤值为 `.nan`/`.inf`、关系 `joinOn` 引用字段别名在加载时拒绝。
+- 写入与过程超出行上限时截断并标 `truncated`，不再返回 `BUDGET_EXCEEDED`。
+- Go API：`x/mcpserver.UserDirectory` 新增 `UserByCertificate`。
 
 ### Added
 
@@ -57,6 +61,8 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   MySQL/OceanBase 迁移可以重跑。
 - 管理端登录失败表有界且不丢失锁定；MCP 事件存储淘汰降为 O(log n)。
 - 控制台可以应用只删除实体的方案。
+- 发布前复核：服务端求值遇到 NaN/Inf 不再 panic；`Runtime` 的 token/证书解析在同一配置快照上
+  完成；`store init` 元数据行部分写入后可以重跑；受信代理证书的 DNS SAN 不区分大小写。
 
 ## 0.1.19 - 2026-10-17
 

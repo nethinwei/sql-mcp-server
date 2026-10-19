@@ -60,6 +60,8 @@ func (ev *evaluation) runtimeTargets(targets []target, exclude map[string]bool) 
 		if table.Schema == "" {
 			table.Schema = defaults[ds]
 		}
+		// No Table: nothing scanned it, so syncStructure leaves its keys and
+		// columns as they are (an empty table would clear them).
 		row := Row{Ref: Ref(ds, table.Schema, table.Source), Datasource: ds, Entity: &e, Status: ev.statusOf(id),
 			Missing: configuredFields(e, ev.in.MissingFields[id])}
 		if e.Kind == "procedure" || exclude[row.Ref] || m.datasources != nil && !m.datasources[ds] ||
