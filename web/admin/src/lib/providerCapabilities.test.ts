@@ -15,10 +15,10 @@ const caps: ProviderCapabilities = {
     { datasource: 'shop', connection: 'ro', key: 'limit.timeout.read', use: 'reads', strength: 'BEST_EFFORT', reason: 'x',
       useDetail: { code: 'limitUse.reads', params: {}, parts: [], text: 'reads' }, reasonDetail: null },
     { datasource: 'ledger', connection: 'rw', key: 'limit.timeout.write', use: 'writes', strength: 'UNSUPPORTED',
-      reason: 'max_execution_time stops SELECT only',
+      reason: 'max_execution_time stops SELECT only, and behind a transaction pooler',
       useDetail: { code: 'limitUse.writes', params: {}, parts: [], text: 'writes' },
-      reasonDetail: { code: 'timeout.mysqlMaxExecutionTimeSelectOnly', params: {}, parts: [],
-        text: 'max_execution_time stops SELECT only' } },
+      reasonDetail: { code: 'timeout.mysqlWritePooled', params: {}, parts: [],
+        text: 'max_execution_time stops SELECT only, and behind a transaction pooler' } },
   ],
 }
 
@@ -35,7 +35,8 @@ describe('provider capabilities', () => {
   it('reads an issue in the console language', () => {
     locale.value = 'zh-CN'
     expect(issueText(caps.issues[1])).toBe('rw：写超时（写入）为 无：' +
-      'max_execution_time 只限制 SELECT，请求取消时只断开连接：写语句须由数据库侧限制（DBA）')
+      'max_execution_time 只限制 SELECT；经事务型连接池时无法停止超时的语句（KILL QUERY 可能误停其他客户端的会话）：' +
+      '写语句须由数据库侧限制（DBA）')
     expect(issueText({ ...caps.issues[0], reasonDetail: null })).toBe('ro：读超时（读取）为 尽力：x')
   })
 })

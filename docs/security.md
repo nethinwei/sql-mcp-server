@@ -139,9 +139,10 @@ PostgreSQL 使用准确 Estimate；MySQL/OceanBase 默认在 EXPLAIN 失败、�
 statement timeout 生效；无法装配 EXPLAIN 的 provider 在启动时失败。
 
 数据库侧是否真的把语句停在 `queryTimeout` 按连接判定（[Provider 能力](provider-compatibility.md#provider-能力)）：
-服务注入的会话设置被 DSN 覆盖、经 transaction pooler，或 MySQL 的写语句
-（`max_execution_time` 只作用于 SELECT，取消请求只关闭连接）时，Go context 只约束
-调用方的等待，语句可能在数据库里继续执行。直连 PostgreSQL 时，请求超时由驱动发送
+服务注入的会话设置被 DSN 覆盖，或经 transaction pooler 时，Go context 只约束调用方的
+等待，语句可能在数据库里继续执行。MySQL 的 `max_execution_time` 只作用于 SELECT，写语句
+（含存储过程与逃生通道）在请求截止时由服务经另一条连接发送 `KILL QUERY` 停止并回滚
+（v0.1.20 起；经 transaction pooler 时不发送，见[能力模型设计](design/capability-model.md)）。直连 PostgreSQL 时，请求超时由驱动发送
 cancel request，语句仍在数据库侧终止；经 transaction pooler 时，cancel request 只有在
 pooler 转发时才生效（pgbouncer 会转发，但本项目未做测试），因此定级为 `best_effort`。
 `queryTimeout` 为 0（不限）或不小于 100ms。启动与热重载时，数据源依赖的语句超时（读、被

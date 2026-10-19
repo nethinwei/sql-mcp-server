@@ -57,7 +57,7 @@
 | `cost.explain.accurate` | `enforced`（真实数据库验证） | `best_effort`（真实数据库验证） | `best_effort`（真实数据库验证） |
 | `cost.explain.analyze` | `enforced`（真实数据库验证） | `unsupported`（核心层验证） | `unsupported`（核心层验证） |
 | `limit.timeout.read` | `enforced`（真实数据库验证） | `enforced`（真实数据库验证） | `enforced`（真实数据库验证） |
-| `limit.timeout.write` | `enforced`（真实数据库验证） | `unsupported`（仅声明） | `enforced`（真实数据库验证） |
+| `limit.timeout.write` | `enforced`（真实数据库验证） | `enforced`（真实数据库验证） | `enforced`（真实数据库验证） |
 | `limit.unkeyedWrite` | `unsupported`（仅声明） | `enforced`（真实数据库验证） | `enforced`（真实数据库验证） |
 
 按连接判定的限制（默认连接，以及与默认不同的连接方式）：
@@ -72,11 +72,12 @@
 | PostgreSQL | `pooler: transaction` | `limit.timeout.read` | `best_effort` | statement_timeout is a session setting a transaction pooler does not keep; a cancel request at the request deadline stops the statement only if the pooler forwards it |
 | PostgreSQL | `pooler: transaction` | `limit.timeout.write` | `best_effort` | statement_timeout is a session setting a transaction pooler does not keep; a cancel request at the request deadline stops the statement only if the pooler forwards it |
 | MySQL | 默认 | `limit.timeout.read` | `enforced` | max_execution_time just under cost.queryTimeout (SELECT only) |
-| MySQL | 默认 | `limit.timeout.write` | `unsupported` | max_execution_time stops SELECT only, and a cancelled request only closes the connection: bound writes on the database side (DBA) |
+| MySQL | 默认 | `limit.timeout.write` | `enforced` | KILL QUERY at the request deadline (max_execution_time stops SELECT only) |
 | MySQL | 默认 | `limit.unkeyedWrite` | `enforced` | sql_safe_updates = 1 |
 | MySQL | DSN 设置 `max_execution_time` | `limit.timeout.read` | `best_effort` | the DSN sets max_execution_time, so cost.queryTimeout is not applied natively |
 | MySQL | DSN 设置 `sql_safe_updates=0` | `limit.unkeyedWrite` | `unsupported` | the DSN turns sql_safe_updates off; the gate's WriteGuard still refuses unkeyed writes |
 | MySQL | `pooler: transaction` | `limit.timeout.read` | `best_effort` | max_execution_time is a session setting a transaction pooler does not keep |
+| MySQL | `pooler: transaction` | `limit.timeout.write` | `unsupported` | max_execution_time stops SELECT only, and behind a transaction pooler a statement past its deadline cannot be stopped (KILL QUERY could reach another client's session): bound writes on the database side (DBA) |
 | MySQL | `pooler: transaction` | `limit.unkeyedWrite` | `best_effort` | sql_safe_updates is a session setting a transaction pooler does not keep |
 | OceanBase | 默认 | `limit.timeout.read` | `enforced` | ob_query_timeout just under cost.queryTimeout |
 | OceanBase | 默认 | `limit.timeout.write` | `enforced` | ob_query_timeout just under cost.queryTimeout |

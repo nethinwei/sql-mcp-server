@@ -22,7 +22,8 @@ export const reasonsZh = {
     sessionVariable: '{variable} 略小于 cost.queryTimeout',
     sessionVariableSelectOnly: '{variable} 略小于 cost.queryTimeout（只限制 SELECT）',
     dsnSetsVariable: 'DSN 自行设置了 {variable}，cost.queryTimeout 不在数据库侧生效',
-    mysqlMaxExecutionTimeSelectOnly: 'max_execution_time 只限制 SELECT，请求取消时只断开连接：写语句须由数据库侧限制（DBA）',
+    mysqlWriteKilled: '请求到期时以 KILL QUERY 停止（max_execution_time 只限制 SELECT）',
+    mysqlWritePooled: 'max_execution_time 只限制 SELECT；经事务型连接池时无法停止超时的语句（KILL QUERY 可能误停其他客户端的会话）：写语句须由数据库侧限制（DBA）',
   },
   setting: {
     pooled: '{variable} 是会话设置，事务型连接池不保留',
@@ -84,7 +85,8 @@ export const reasonsEn: typeof reasonsZh = {
     sessionVariable: '{variable} just under cost.queryTimeout',
     sessionVariableSelectOnly: '{variable} just under cost.queryTimeout (SELECT only)',
     dsnSetsVariable: 'the DSN sets {variable}, so cost.queryTimeout is not applied natively',
-    mysqlMaxExecutionTimeSelectOnly: 'max_execution_time stops SELECT only, and a cancelled request only closes the connection: bound writes on the database side (DBA)',
+    mysqlWriteKilled: 'KILL QUERY at the request deadline (max_execution_time stops SELECT only)',
+    mysqlWritePooled: 'max_execution_time stops SELECT only, and behind a transaction pooler a statement past its deadline cannot be stopped (KILL QUERY could reach another client\'s session): bound writes on the database side (DBA)',
   },
   setting: {
     pooled: '{variable} is a session setting a transaction pooler does not keep',

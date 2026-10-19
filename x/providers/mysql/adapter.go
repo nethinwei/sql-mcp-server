@@ -23,6 +23,9 @@ import (
 // the driver instead of server-side prepared statements, which a pooler may
 // not keep. The adapter is shared with the oceanbase provider.
 //
+// On MySQL a statement still running at its context's end is stopped with
+// KILL QUERY (see killConn): max_execution_time stops SELECT only.
+//
 // It returns the connection's limits as well: what those settings guarantee
 // given what the DSN already set (see Limits).
 func NewAdapter(
@@ -52,10 +55,14 @@ func NewAdapter(
 	} else if _, ok := cfg.Params[oceanBaseVariable]; !ok {
 		cfg.Params[oceanBaseVariable] = strconv.FormatInt(opts.NativeTimeout().Microseconds(), 10)
 	}
-	db, err := sql.Open("mysql", cfg.FormatDSN())
+	connector, err := mysqldriver.NewConnector(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
+	if killsStatements(opts.Pooler, oceanBaseVariable) {
+		connector = newKillConnector(connector)
+	}
+	db := sql.OpenDB(connector)
 	if !opts.Lazy {
 		if err := db.PingContext(opts.OpenContext()); err != nil {
 			_ = db.Close()

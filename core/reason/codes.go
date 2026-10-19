@@ -22,7 +22,8 @@ const (
 	SessionVariable          Code = "timeout.sessionVariable"
 	SessionVariableReadsOnly Code = "timeout.sessionVariableSelectOnly"
 	DSNSetsTimeout           Code = "timeout.dsnSetsVariable"
-	MySQLWriteTimeout        Code = "timeout.mysqlMaxExecutionTimeSelectOnly"
+	MySQLWriteKilled         Code = "timeout.mysqlWriteKilled"
+	MySQLWritePooled         Code = "timeout.mysqlWritePooled"
 	SettingPooled            Code = "setting.pooled"
 	UnkeyedGateOnly          Code = "unkeyedWrite.gateOnly"
 	UnkeyedDSNOff            Code = "unkeyedWrite.dsnOff"
@@ -73,7 +74,9 @@ var templates = map[Code]string{
 	SessionVariable:          "{variable} just under cost.queryTimeout",
 	SessionVariableReadsOnly: "{variable} just under cost.queryTimeout (SELECT only)",
 	DSNSetsTimeout:           "the DSN sets {variable}, so cost.queryTimeout is not applied natively",
-	MySQLWriteTimeout: "max_execution_time stops SELECT only, and a cancelled request only closes the connection: " +
+	MySQLWriteKilled:         "KILL QUERY at the request deadline (max_execution_time stops SELECT only)",
+	MySQLWritePooled: "max_execution_time stops SELECT only, and behind a transaction pooler a statement " +
+		"past its deadline cannot be stopped (KILL QUERY could reach another client's session): " +
 		"bound writes on the database side (DBA)",
 	SettingPooled:   "{variable} is a session setting a transaction pooler does not keep",
 	UnkeyedGateOnly: "no database-side refusal; the gate's WriteGuard refuses unkeyed writes",

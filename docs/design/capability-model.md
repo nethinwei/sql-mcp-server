@@ -106,7 +106,7 @@ type Profile map[Key]Claim
 能力的原因、连接权限的原因、限制所依赖的工作（读、写、过程、逃生通道）以及发布前判定的
 提示，都是 `reason.Reason{Code, Params, Parts, Text}`：
 
-- `Code` 是稳定的编码（如 `timeout.mysqlMaxExecutionTimeSelectOnly`、`privilege.missing`），
+- `Code` 是稳定的编码（如 `timeout.mysqlWritePooled`、`privilege.missing`），
   全部登记在 `core/reason/codes.go`，每个编码有一个带 `{占位符}` 的英文模板；
 - `Params` 是占位符的取值（变量名、权限名、驱动错误原文等）；`Parts` 是由另一个原因填充的
   占位符（如判定提示中的 `{cause}`、`{use}`、`{strength}`），不再嵌套；
