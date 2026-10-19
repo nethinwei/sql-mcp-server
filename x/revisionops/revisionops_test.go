@@ -142,12 +142,13 @@ entities:
       - name: id
 `)
 	}
-	old, current := cfg("hunter2", "s3cret-ro", "tok-old"), cfg("swordfish", "s3cret-ro", "tok-old")
+	const token = "tok-old-0123456789abcdef0123456789"
+	old, current := cfg("hunter2", "s3cret-ro", token), cfg("swordfish", "s3cret-ro", token)
 	diff, err := Diff("old", old, "current", current)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, secret := range []string{"hunter2", "swordfish", "s3cret-ro", "tok-old"} {
+	for _, secret := range []string{"hunter2", "swordfish", "s3cret-ro", token} {
 		if strings.Contains(diff, secret) {
 			t.Fatalf("diff carries %q:\n%s", secret, diff)
 		}
@@ -167,7 +168,7 @@ entities:
 // A revision shown whole carries no secret either.
 func TestRedactedHidesSecrets(t *testing.T) {
 	t.Parallel()
-	shown := string(Redacted([]byte(`server: {auth: {token: tok-secret}}
+	shown := string(Redacted([]byte(`server: {auth: {token: tok-secret-0123456789abcdef0123456789}}
 databases:
   shop: {driver: postgres, dsn: "postgres://app:hunter2@db/shop"}
 `)))

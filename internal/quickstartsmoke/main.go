@@ -16,7 +16,7 @@ import (
 
 const (
 	defaultEndpoint = "http://127.0.0.1:8080/mcp"
-	defaultToken    = "quickstart-only-token"
+	defaultToken    = "quickstart-only-token-not-for-production"
 )
 
 type headerTransport struct {

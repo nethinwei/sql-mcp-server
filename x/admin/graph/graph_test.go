@@ -222,8 +222,8 @@ func TestWorkspaceItemsReplaceAndNormalize(t *testing.T) {
 // set and plaintext secrets.
 func TestValidateRejectsForbiddenSettingsAndPlaintextSecrets(t *testing.T) {
 	for settings, want := range map[string]string{
-		`{"databases": {}}`:                    "datasources are managed by the CLI",
-		`{"server": {"auth": {"token": "x"}}}`: "plaintext secrets",
+		`{"databases": {}}`: "datasources are managed by the CLI",
+		`{"server": {"auth": {"token": "0123456789abcdef0123456789abcdef"}}}`: "plaintext secrets",
 	} {
 		_, c := planningHarness(t)
 		var read struct{ Workspace workspaceState }

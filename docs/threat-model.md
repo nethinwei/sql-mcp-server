@@ -244,12 +244,14 @@ Provider 适用范围使用以下口径：
 ### TM-010 — 用户身份伪造、提升与吊销残留
 
 - **等级/状态**：critical / 认证链路、代理头与吊销已由 handler 与 runtime 测试验证。
-- **攻击**：伪造或猜测用户 token；在已认证用户请求上附加 `X-MCP-User`/
+- **攻击**：伪造或猜测用户 token 或共享 token（例如暴力枚举很短的 `server.auth.token`）；在已认证用户请求上附加 `X-MCP-User`/
   `X-MCP-Role`/`X-MCP-Subject` 冒充他人或改写租户；在可信代理后用
   `X-MCP-Role: user:<name>`（或自定义 transport 的 `WithSubject`）冒充用户，拿到其授权与
   `sql:execute`，并绕过配置 subject 的覆盖；利用被删除/禁用用户的旧会话
   与在途事务继续访问。
-- **控制**：用户 token 只以 `sha256:` hash 保存，CLI 生成 256 bit 随机 token；
+- **控制**：用户 token 只以 `sha256:` hash 保存，CLI 生成 256 bit 随机 token；监听
+  非 loopback 地址时共享 token 至少 32 字节，配置校验与启动时按实际监听地址各检查一次
+  （v0.1.20 起）；
   配置用户后，无共享 token 且非 mTLS/可信代理通道时必须携带用户 token；带用户
   token 的请求出现任何代理身份头返回 403；`X-MCP-User` 必须指向启用用户且不能与
   `X-MCP-Role` 同时出现；`X-MCP-Role` 含 `:`（主体键）返回 400，非用户入口注入的主体键
@@ -261,9 +263,11 @@ Provider 适用范围使用以下口径：
   主体键拒绝（`TestRoleHeaderCannotNameAPrincipal`、`TestWithSubjectCannotAssumeAUser`）与会话
   吊销测试；`x/mcpserver/execute_sql_test.go` 的
   `TestExecuteSQLRoleHeaderCannotImpersonateUser`（真实中间件链）；`x/bootstrap/bootstrap_access_test.go` 的吊销通知测试；
-  `core/config/config_access_test.go` 的 tokenHash 与名称校验测试。
+  `core/config/config_access_test.go` 的 tokenHash 与名称校验测试；`core/config/listen_test.go`
+  的 `TestSharedTokenLength` 与 `x/mcpserver/http_test.go` 的 `TestValidateHTTPSecurity`（共享 token
+  长度）。
 - **持续验证**：以上测试在默认单元测试中运行。
-- **剩余风险**：token 没有过期时间；hash 未加盐，依赖 token 本身的高熵，人工设置
+- **剩余风险**：token 没有过期时间；共享 token 只检查长度，不检查熵；hash 未加盐，依赖 token 本身的高熵，人工设置
   低熵 token 会降低强度；`X-MCP-User` 的真实反向代理 e2e 仍未实现。
 - **Provider**：transport/部署边界，与数据库无关。
 

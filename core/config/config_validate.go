@@ -59,6 +59,9 @@ func (c *Config) validateServerAuth() error {
 		return fmt.Errorf("config: tls.cert and tls.key must be configured together")
 	}
 	auth := c.Server.Auth
+	if err := CheckSharedToken(c.Server.Addr, auth.Token); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
 	if len(auth.TrustedProxyCertSubjects) > 0 && auth.TLS.ClientCA == "" {
 		return fmt.Errorf("config: trustedProxyCertSubjects requires mTLS clientCA")
 	}

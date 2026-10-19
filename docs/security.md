@@ -10,7 +10,8 @@ stdio 模式使用进程启动时的默认身份（`server.user`，未设置时�
 适合由本机 MCP 客户端管理的子进程。
 
 HTTP 支持共享 bearer token、每用户 token 和 mTLS。监听非 loopback 地址时，如果
-既无 token、也无已配置用户、也无 `clientCA`，服务拒绝启动；mTLS 还要求服务端证书和私钥。HTTP 请求体默认
+既无 token、也无已配置用户、也无 `clientCA`，服务拒绝启动；共享 token 短于 32 字节时
+同样拒绝启动（v0.1.20 起，`openssl rand -hex 32` 可生成）；mTLS 还要求服务端证书和私钥。HTTP 请求体默认
 限制为 4 MiB，header 默认限制为 1 MiB，并设置 header/idle timeout。
 CLI 地址默认值 `:8080` 会监听所有接口，属于非 loopback，因此选择 HTTP 且未
 指定 loopback 地址或认证时会 fail closed。

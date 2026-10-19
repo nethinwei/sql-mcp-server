@@ -5,7 +5,7 @@ server:
   addr: "0.0.0.0:8080"
   role: reader
   auth:
-    token: "quickstart-only-token"
+    token: "quickstart-only-token-not-for-production"
     trustProxyHeaders: true
     trustedProxyCIDRs: ["172.30.0.0/24"]
 

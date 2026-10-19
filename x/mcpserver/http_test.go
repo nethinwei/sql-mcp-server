@@ -22,25 +22,8 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 )
 
-func TestIsLoopbackAddr(t *testing.T) {
-	cases := []struct {
-		addr string
-		want bool
-	}{
-		{"127.0.0.1:8080", true},
-		{"localhost:8080", true},
-		{"[::1]:8080", true},
-		{":8080", false},
-		{"0.0.0.0:8080", false},
-		{"[::]:8080", false},
-		{"192.168.1.10:8080", false},
-	}
-	for _, c := range cases {
-		if got := isLoopbackAddr(c.addr); got != c.want {
-			t.Errorf("isLoopbackAddr(%q) = %v, want %v", c.addr, got, c.want)
-		}
-	}
-}
+// strongToken is a shared token long enough for a listener beyond loopback.
+const strongToken = "0123456789abcdef0123456789abcdef"
 
 func TestValidateHTTPSecurity(t *testing.T) {
 	cases := []struct {
@@ -50,7 +33,9 @@ func TestValidateHTTPSecurity(t *testing.T) {
 	}{
 		{"loopback no auth ok", HTTPConfig{Addr: "127.0.0.1:8080"}, false},
 		{"exposed no auth refused", HTTPConfig{Addr: ":8080"}, true},
-		{"exposed with token ok", HTTPConfig{Addr: ":8080", HTTPAuth: HTTPAuth{Token: "s3cret"}}, false},
+		{"exposed with a strong token ok", HTTPConfig{Addr: ":8080", HTTPAuth: HTTPAuth{Token: strongToken}}, false},
+		{"exposed with a short token refused", HTTPConfig{Addr: ":8080", HTTPAuth: HTTPAuth{Token: "s3cret"}}, true},
+		{"loopback with a short token ok", HTTPConfig{Addr: "127.0.0.1:8080", HTTPAuth: HTTPAuth{Token: "s3cret"}}, false},
 		{"exposed with mtls needs cert", HTTPConfig{Addr: ":8080", HTTPAuth: HTTPAuth{ClientCA: "ca.pem"}}, true},
 		{
 			"exposed with mtls and cert ok",

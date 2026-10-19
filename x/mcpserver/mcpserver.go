@@ -20,6 +20,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/nethinwei/sql-mcp-server/core/bus"
+	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
 	"github.com/nethinwei/sql-mcp-server/version"
@@ -435,26 +436,6 @@ func (c HTTPConfig) authConfigured() bool {
 	return c.Token != "" || c.mtlsEnabled() || c.Users != nil
 }
 
-// isLoopbackAddr reports whether a listen address binds only the loopback
-// interface. An empty host (e.g. ":8080") or a wildcard binds all interfaces
-// and is treated as non-loopback (exposed).
-func isLoopbackAddr(addr string) bool {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		host = addr
-	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		return false
-	}
-	if host == "localhost" {
-		return true
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback()
-	}
-	return false
-}
-
 // validateHTTPSecurity enforces fail-closed startup: a listener exposed beyond
 // loopback must configure authentication (token or mTLS); mTLS requires a
 // server certificate.
@@ -462,7 +443,10 @@ func validateHTTPSecurity(c HTTPConfig) error {
 	if (c.TLSCert == "") != (c.TLSKey == "") {
 		return errors.New("mcpserver: tls.cert and tls.key must be configured together")
 	}
-	if !isLoopbackAddr(c.Addr) && !c.authConfigured() {
+	if err := config.CheckSharedToken(c.Addr, c.Token); err != nil {
+		return fmt.Errorf("mcpserver: %w", err)
+	}
+	if !config.IsLoopbackAddr(c.Addr) && !c.authConfigured() {
 		return fmt.Errorf(
 			"mcpserver: refusing to serve on non-loopback address %q without authentication: "+
 				"configure users, server.auth.token or server.auth.tls.clientCA, or bind to 127.0.0.1",

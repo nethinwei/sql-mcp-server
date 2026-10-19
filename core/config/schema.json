@@ -70,8 +70,8 @@
           "type": "object",
           "properties": {
             "token": {
-              "description": "Shared bearer token, read literally (no ${ENV} expansion). Configured users use their own tokens.",
-              "x-description-zh-CN": "共享 bearer token，按字面读取（不做 ${ENV} 替换）。配置用户后各用户使用自己的 token。",
+              "description": "Shared bearer token, read literally (no ${ENV} expansion). At least 32 bytes on a listener beyond loopback (openssl rand -hex 32 makes one). Configured users use their own tokens.",
+              "x-description-zh-CN": "共享 bearer token，按字面读取（不做 ${ENV} 替换）。监听非 loopback 地址时至少 32 字节（可用 openssl rand -hex 32 生成）。配置用户后各用户使用自己的 token。",
               "type": "string"
             },
             "trustProxyHeaders": {

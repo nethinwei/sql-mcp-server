@@ -124,6 +124,7 @@ var accessRejectCases = []struct {
 		c.Users["bob"] = UserConfig{TokenHash: TokenHash("alice-token")}
 	}, "collides"},
 	{"token hash equals shared token", func(c *Config) {
+		c.Server.Addr = "127.0.0.1:8080"
 		c.Server.Auth.Token = "alice-token"
 	}, "collides with server.auth.token"},
 	{"grant unknown entity", func(c *Config) {

@@ -149,7 +149,9 @@
       {"file": "x/mcpserver/execute_sql_test.go", "name": "TestExecuteSQLRoleHeaderCannotImpersonateUser"},
       {"file": "x/mcpserver/users_test.go", "name": "TestRevokeSessionsDropsBindingsAndRollsBack"},
       {"file": "x/bootstrap/bootstrap_access_test.go", "name": "TestReloadReportsRevokedPrincipals"},
-      {"file": "core/config/config_access_test.go", "name": "TestValidateAccessRejectsInvalidConfig"}
+      {"file": "core/config/config_access_test.go", "name": "TestValidateAccessRejectsInvalidConfig"},
+      {"file": "core/config/listen_test.go", "name": "TestSharedTokenLength"},
+      {"file": "x/mcpserver/http_test.go", "name": "TestValidateHTTPSecurity"}
     ],
     "gaps": [
       "token 无过期时间；X-MCP-User 的真实反向代理 e2e 未实现"
