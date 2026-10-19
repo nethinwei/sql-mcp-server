@@ -137,20 +137,24 @@ func (m *MemoryManager) limits(scope Scope) Limits {
 	}
 	return Limits{
 		MaxConcurrent:           l.MaxConcurrent,
-		MaxExecution:            stricter(l.MaxExecution, t.MaxExecution),
-		MaxEstimatedScannedRows: stricter(l.MaxEstimatedScannedRows, t.MaxEstimatedScannedRows),
-		MaxReturnedRows:         stricter(l.MaxReturnedRows, t.MaxReturnedRows),
-		MaxReturnedBytes:        stricter(l.MaxReturnedBytes, t.MaxReturnedBytes),
-		MaxSessionCost:          stricter(l.MaxSessionCost, t.MaxSessionCost),
+		MaxExecution:            Stricter(l.MaxExecution, t.MaxExecution),
+		MaxEstimatedScannedRows: Stricter(l.MaxEstimatedScannedRows, t.MaxEstimatedScannedRows),
+		MaxReturnedRows:         Stricter(l.MaxReturnedRows, t.MaxReturnedRows),
+		MaxReturnedBytes:        Stricter(l.MaxReturnedBytes, t.MaxReturnedBytes),
+		MaxSessionCost:          Stricter(l.MaxSessionCost, t.MaxSessionCost),
 	}
 }
 
-// stricter is the smaller of two limits where zero means unlimited.
-func stricter[T int | int64 | time.Duration](a, b T) T {
-	if a == 0 || (b != 0 && b < a) {
+// Stricter is the lower of two limits, where zero (or less) is unlimited:
+// how a role's, a user's or a tenant's limit narrows another.
+func Stricter[T int | int64 | time.Duration](a, b T) T {
+	switch {
+	case b <= 0:
+		return a
+	case a <= 0:
 		return b
 	}
-	return a
+	return min(a, b)
 }
 
 // Acquire acquires a lease without a reservation.

@@ -103,7 +103,7 @@ func pinned(scope relalg.Predicate) map[string]any {
 // scopeFields names the visible fields scope tests, as the caller names them.
 func scopeFields(e entity.Entity, scope relalg.Predicate) []string {
 	var out []string
-	for _, column := range conditionFields(scope) {
+	for _, column := range relalg.Fields(scope) {
 		i := slices.IndexFunc(e.Attributes, func(a entity.Attribute) bool { return a.Name == column })
 		if i < 0 || e.Attributes[i].Excluded {
 			continue

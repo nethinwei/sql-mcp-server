@@ -529,33 +529,18 @@ func fieldAllowed(field string, allowed map[string]bool, visible []entity.Attrib
 // for a missing subject rather than exposing every tenant's data. The row
 // policy is stored immutably; resolveSubject returns fresh nodes.
 func resolveSubject(p relalg.Predicate, subject map[string]any) relalg.Predicate {
-	switch pp := p.(type) {
-	case relalg.Condition:
-		if s, ok := pp.Value.(string); ok {
+	return relalg.MapConditions(p, func(c relalg.Condition) relalg.Condition {
+		if s, ok := c.Value.(string); ok {
 			if attr, isPlaceholder := SubjectPlaceholder(s); isPlaceholder {
-				pp.Value = subject[attr]
+				c.Value = subject[attr]
 			}
 		}
-		return pp
-	case relalg.And:
-		out := make([]relalg.Predicate, len(pp.Preds))
-		for i, q := range pp.Preds {
-			out[i] = resolveSubject(q, subject)
-		}
-		return relalg.And{Preds: out}
-	case relalg.Or:
-		out := make([]relalg.Predicate, len(pp.Preds))
-		for i, q := range pp.Preds {
-			out[i] = resolveSubject(q, subject)
-		}
-		return relalg.Or{Preds: out}
-	case relalg.Not:
-		return relalg.Not{P: resolveSubject(pp.P, subject)}
-	}
-	return p
+		return c
+	})
 }
 
-// subjectPlaceholder parses "${subject.attr}" into ("attr", true).
+// SubjectPlaceholder parses "${subject.attr}" into ("attr", true): a row
+// filter value the caller's subject attribute replaces at request time.
 func SubjectPlaceholder(s string) (string, bool) {
 	const prefix, suffix = "${subject.", "}"
 	if strings.HasPrefix(s, prefix) && strings.HasSuffix(s, suffix) {

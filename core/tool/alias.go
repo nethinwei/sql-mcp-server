@@ -24,26 +24,10 @@ func columnOf(e entity.Entity, field string) string {
 // columnsPredicate is p with its conditions naming columns. An exists group
 // names its target's fields, named there (see resolveExists).
 func columnsPredicate(e entity.Entity, p relalg.Predicate) relalg.Predicate {
-	switch pp := p.(type) {
-	case relalg.Condition:
-		pp.Field = columnOf(e, pp.Field)
-		return pp
-	case relalg.And:
-		return relalg.And{Preds: columnsPredicates(e, pp.Preds)}
-	case relalg.Or:
-		return relalg.Or{Preds: columnsPredicates(e, pp.Preds)}
-	case relalg.Not:
-		return relalg.Not{P: columnsPredicate(e, pp.P)}
-	}
-	return p
-}
-
-func columnsPredicates(e entity.Entity, preds []relalg.Predicate) []relalg.Predicate {
-	out := make([]relalg.Predicate, len(preds))
-	for i, p := range preds {
-		out[i] = columnsPredicate(e, p)
-	}
-	return out
+	return relalg.MapConditions(p, func(c relalg.Condition) relalg.Condition {
+		c.Field = columnOf(e, c.Field)
+		return c
+	})
 }
 
 // projectItems project fields from their columns, each named as asked.

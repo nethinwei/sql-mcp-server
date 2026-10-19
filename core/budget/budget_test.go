@@ -259,3 +259,14 @@ func TestTenantConcurrencySpansSessions(t *testing.T) {
 	}
 	_ = again.Complete(Usage{})
 }
+
+func TestStricter(t *testing.T) {
+	t.Parallel()
+	for _, c := range [][3]int64{
+		{0, 0, 0}, {5, 0, 5}, {0, 5, 5}, {5, 3, 3}, {3, 5, 3}, {-1, 5, 5}, {5, -1, 5}, {-1, -1, -1},
+	} {
+		if got := Stricter(c[0], c[1]); got != c[2] {
+			t.Errorf("Stricter(%d, %d) = %d, want %d", c[0], c[1], got, c[2])
+		}
+	}
+}

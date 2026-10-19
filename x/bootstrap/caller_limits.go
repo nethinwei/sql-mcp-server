@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/core/budget"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
 	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
@@ -89,23 +90,12 @@ func cmpOr[T int | int64 | float64 | time.Duration](own, base T) T {
 // toolLimitsFor are global as tightened by caller's limits p: a set limit
 // only lowers the global one.
 func toolLimitsFor(global tool.Limits, p config.PrincipalLimits) tool.Limits {
-	global.MaxRows = stricter(global.MaxRows, p.MaxRows)
-	global.MaxReturnedBytes = stricter(global.MaxReturnedBytes, p.MaxBytes)
-	global.Timeout = stricter(global.Timeout, p.QueryTimeout)
+	global.MaxRows = budget.Stricter(global.MaxRows, p.MaxRows)
+	global.MaxReturnedBytes = budget.Stricter(global.MaxReturnedBytes, p.MaxBytes)
+	global.Timeout = budget.Stricter(global.Timeout, p.QueryTimeout)
 	global.Tightening = cost.Tightening{SoftScore: p.SoftScore, HardScore: p.HardScore, RejectFullScan: p.RejectFullScan,
 		MaxScannedRows: p.MaxScannedRows}
 	return global
-}
-
-// stricter is the lower of two limits, where zero is unlimited.
-func stricter[T int64 | time.Duration](global, own T) T {
-	switch {
-	case own <= 0:
-		return global
-	case global <= 0:
-		return own
-	}
-	return min(global, own)
 }
 
 // keyLimits are the rate and calls in flight of each caller that sets them.

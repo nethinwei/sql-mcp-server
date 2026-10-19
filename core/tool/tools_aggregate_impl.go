@@ -186,7 +186,7 @@ func aggregateShape(res entity.Resolved, in aggregateInput, agg relalg.Aggregate
 	if relalg.HasExists(having) {
 		return nil, fmt.Errorf("%w: having filters the groups; exists goes in filter", ErrInvalidInput)
 	}
-	for _, f := range conditionFields(having) {
+	for _, f := range relalg.Fields(having) {
 		if !slices.Contains(columns, f) {
 			return nil, fmt.Errorf("%w: having names %q, not a group-by field or an aggregate (%s)",
 				ErrInvalidInput, f, strings.Join(columns, ", "))
