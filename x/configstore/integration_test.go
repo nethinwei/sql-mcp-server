@@ -56,6 +56,7 @@ func runServerConformance(t *testing.T, spec Spec) {
 	t.Run("LockRowRequired", func(t *testing.T) { assertLockRowRequired(t, freshStore(t, spec)) })
 	t.Run("OnePublished", func(t *testing.T) { assertOnePublished(t, freshStore(t, spec)) })
 	t.Run("PublishRaceLeavesOne", func(t *testing.T) { assertConcurrentPublish(t, freshStore(t, spec)) })
+	t.Run("RerunsItsDDL", func(t *testing.T) { assertRerunsItsDDL(t, freshStore(t, spec)) })
 	t.Run("MigrationRefusesTwoPublished", func(t *testing.T) {
 		dropTables(t, spec)
 		assertMigrationRefusesTwoPublished(t, spec)

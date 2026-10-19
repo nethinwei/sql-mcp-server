@@ -93,10 +93,8 @@ func (s *SQLStore) migrate(ctx context.Context, version int64) error {
 					return err
 				}
 			}
-			for _, ddl := range s.dialect.migrations[v-1] {
-				if _, err := tx.ExecContext(ctx, ddl); err != nil {
-					return err
-				}
+			if err := s.dialect.runDDL(ctx, tx, s.dialect.migrations[v-1]); err != nil {
+				return err
 			}
 			if move, ok := dataMigrations[v]; ok {
 				if err := move(ctx, s, tx); err != nil {
@@ -157,10 +155,8 @@ func Init(ctx context.Context, spec Spec, resolve Resolver) error {
 		return err
 	}
 	for _, step := range s.dialect.migrations {
-		for _, ddl := range step {
-			if _, err := s.db.ExecContext(ctx, ddl); err != nil {
-				return fmt.Errorf("configstore: create tables: %w", err)
-			}
+		if err := s.dialect.runDDL(ctx, s.db, step); err != nil {
+			return fmt.Errorf("configstore: create tables: %w", err)
 		}
 	}
 	for _, row := range [][2]any{{metaSchemaVersion, SchemaVersion}, {metaNextID, 1}, {metaPublishLock, 0},

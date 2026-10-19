@@ -1,9 +1,14 @@
 package configstore
 
 import (
+	"context"
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // dialect captures the few differences between store backends: driver name,
@@ -14,6 +19,41 @@ type dialect struct {
 	prepareDSN func(string) string
 	// migrations[v-1] holds the DDL that brings a store to schema version v.
 	migrations [][]string
+	// alreadyApplied reports a DDL error saying the statement's object
+	// exists, for the statements not every database can write IF NOT EXISTS
+	// (adding a column or an index): Init run again after it was interrupted,
+	// or a migration where DDL does not roll back (MySQL), then goes on.
+	alreadyApplied func(error) bool
+}
+
+// runDDL runs statements, skipping those whose objects already exist.
+func (d dialect) runDDL(ctx context.Context, db execer, statements []string) error {
+	for _, ddl := range statements {
+		if _, err := db.ExecContext(ctx, ddl); err != nil && (d.alreadyApplied == nil || !d.alreadyApplied(err)) {
+			return err
+		}
+	}
+	return nil
+}
+
+// mysqlAlreadyApplied: ER_DUP_FIELDNAME (1060) and ER_DUP_KEYNAME (1061).
+func mysqlAlreadyApplied(err error) bool {
+	var me *mysql.MySQLError
+	return errors.As(err, &me) && (me.Number == 1060 || me.Number == 1061)
+}
+
+// postgresAlreadyApplied: duplicate_column, duplicate_table (an index is a
+// relation) and duplicate_object.
+func postgresAlreadyApplied(err error) bool {
+	var pe *pgconn.PgError
+	return errors.As(err, &pe) && (pe.Code == "42701" || pe.Code == "42P07" || pe.Code == "42710")
+}
+
+// sqliteAlreadyApplied: the driver reports both as SQLITE_ERROR, told apart
+// by the message only.
+func sqliteAlreadyApplied(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "duplicate column name") || strings.Contains(msg, "already exists")
 }
 
 func storeMigrations(text, longText string, onePublished []string) [][]string {
@@ -213,25 +253,29 @@ func revisionDDL(text, longText string) []string {
 
 var dialects = map[string]dialect{
 	"sqlite": {
-		driver:     "sqlite",
-		prepareDSN: sqliteDSN,
-		migrations: storeMigrations("TEXT", "TEXT", partialOnePublished),
+		driver:         "sqlite",
+		prepareDSN:     sqliteDSN,
+		migrations:     storeMigrations("TEXT", "TEXT", partialOnePublished),
+		alreadyApplied: sqliteAlreadyApplied,
 	},
 	"postgres": {
-		driver:     "pgx",
-		dollarArgs: true,
-		prepareDSN: identity,
-		migrations: storeMigrations("TEXT", "TEXT", partialOnePublished),
+		driver:         "pgx",
+		dollarArgs:     true,
+		prepareDSN:     identity,
+		migrations:     storeMigrations("TEXT", "TEXT", partialOnePublished),
+		alreadyApplied: postgresAlreadyApplied,
 	},
 	"mysql": {
-		driver:     "mysql",
-		prepareDSN: identity,
-		migrations: storeMigrations("TEXT", "LONGTEXT", generatedOnePublished),
+		driver:         "mysql",
+		prepareDSN:     identity,
+		migrations:     storeMigrations("TEXT", "LONGTEXT", generatedOnePublished),
+		alreadyApplied: mysqlAlreadyApplied,
 	},
 	"oceanbase": {
-		driver:     "mysql",
-		prepareDSN: identity,
-		migrations: storeMigrations("TEXT", "LONGTEXT", generatedOnePublished),
+		driver:         "mysql",
+		prepareDSN:     identity,
+		migrations:     storeMigrations("TEXT", "LONGTEXT", generatedOnePublished),
+		alreadyApplied: mysqlAlreadyApplied,
 	},
 }
 

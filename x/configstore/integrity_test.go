@@ -14,6 +14,7 @@ func TestSQLiteStoreIntegrity(t *testing.T) {
 	t.Run("LockRowRequired", func(t *testing.T) { assertLockRowRequired(t, openSQLite(t)) })
 	t.Run("OnePublished", func(t *testing.T) { assertOnePublished(t, openSQLite(t)) })
 	t.Run("PublishRaceLeavesOne", func(t *testing.T) { assertConcurrentPublish(t, openSQLite(t)) })
+	t.Run("RerunsItsDDL", func(t *testing.T) { assertRerunsItsDDL(t, openSQLite(t)) })
 	t.Run("MigrationRefusesTwoPublished", func(t *testing.T) {
 		assertMigrationRefusesTwoPublished(t, sqliteSpec(t))
 	})
@@ -131,4 +132,15 @@ func assertMigrationRefusesTwoPublished(t *testing.T, spec Spec) {
 		t.Fatalf("Open after the repair: %v", err)
 	}
 	_ = store.Close()
+}
+
+// assertRerunsItsDDL: every migration runs again on an initialized store, as
+// after an Init or a migration interrupted past some of its statements.
+func assertRerunsItsDDL(t *testing.T, store *SQLStore) {
+	t.Helper()
+	for v, step := range store.dialect.migrations {
+		if err := store.dialect.runDDL(context.Background(), store.db, step); err != nil {
+			t.Fatalf("schema version %d again: %v", v+1, err)
+		}
+	}
 }
