@@ -245,7 +245,9 @@ func costDenial(ce *cost.ExceededError, decisionID string) Denial {
 		"scoreValue":    ce.Score.Value,
 		"soft":          ce.Soft,
 	}
-	if scanned := ce.Plan.ScannedRows(); scanned > 0 {
+	if scanned, known := ce.Plan.ScannedRowsKnown(); !known {
+		constraints["scannedRowsUnknown"] = true
+	} else if scanned > 0 {
 		constraints["estimatedScannedRows"] = scanned
 	}
 	if ce.Threshold.MaxScannedRows > 0 {

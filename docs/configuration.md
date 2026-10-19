@@ -276,7 +276,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `hardScore` | 整数 | `40` | 0–100 | 安全分低于它时直接拒绝。 |
 | `maxRows` | 整数 | `10000` | ≥ 1 | 读取 SQL 的外层 LIMIT。 |
 | `maxBytes` | 整数 | `16777216` | ≥ 1 | 单次响应的字节上限。 |
-| `maxScannedRows` | 整数 | `100000` | ≥ 0 | 语句预计读取的行数超过它即拒绝，不论是否用到索引；0 表示不限。读取行数取 EXPLAIN 中最大的行数估计（MySQL rows_examined_per_scan，PostgreSQL 与 OceanBase 各节点的行数），全表扫描时取表的行数。角色或用户的 limits.maxScannedRows 只能收紧；与预算 maxEstimatedScannedRows 同时生效。 |
+| `maxScannedRows` | 整数 | `100000` | ≥ 0 | 语句预计读取的行数超过它即拒绝，不论是否用到索引；0 表示不限。读取行数取 EXPLAIN 中最大的行数估计（MySQL rows_examined_per_scan，PostgreSQL 与 OceanBase 各节点的行数），全表扫描时取表的行数；表的行数未能测得的全表扫描读取行数未知，即拒绝（可对该表运行 ANALYZE）。角色或用户的 limits.maxScannedRows 只能收紧；与预算 maxEstimatedScannedRows 同时生效。 |
 | `maxINListSize` | 整数 | `256` | ≥ 1 | IN 列表最多元素数，关系展开也按它分批。 |
 | `maxFilterConditions` | 整数 | `32` | ≥ 1 | 一次请求最多过滤条件数。 |
 | `maxGroupByFields` | 整数 | `8` | ≥ 1 | 最多分组字段数。 |

@@ -155,7 +155,7 @@ func (e Estimate) evaluatePlan(
 	if plan.ScanType == ScanFull && th.RejectFullScan {
 		return deny(false)
 	}
-	if th.MaxScannedRows > 0 && plan.ScannedRows() > th.MaxScannedRows {
+	if plan.OverScanLimit(th.MaxScannedRows) {
 		return deny(false)
 	}
 	if plan.ScanType == ScanUnknown && th.RequireKnownScan {

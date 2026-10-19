@@ -3,6 +3,7 @@ package cost_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -635,5 +636,28 @@ func TestEstimateReportsARefusedExplain(t *testing.T) {
 		if !errors.Is(err, refused) {
 			t.Fatalf("a refused EXPLAIN (%v) became %v", refused, err)
 		}
+	}
+}
+
+// A soft refusal reports the chain's last plan and score, and every hint,
+// not the ones current when the soft layer ran.
+func TestChainGateSoftDenyCarriesTheFinalDiagnosis(t *testing.T) {
+	t.Parallel()
+	early, late := cost.Plan{EstimatedRows: 1}, cost.Plan{EstimatedRows: 99}
+	g := cost.NewGate(
+		stubLayer{name: "soft", phase: cost.PhaseEstimate, decision: cost.Decision{
+			Soft: true, Plan: &early, Score: &cost.Score{Value: 50}, Hints: []string{"add LIMIT", "retry"},
+		}},
+		stubLayer{name: "later", decision: cost.Decision{
+			Allow: true, Bypass: true, Plan: &late, Score: &cost.Score{Value: 40}, Hints: []string{"retry", "narrow"},
+		}},
+	)
+	d, err := g.Check(context.Background(), codegen.Compiled{Kind: codegen.KindRead})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Allow || !d.Soft || d.Plan != &late || d.Score.Value != 40 || !d.Bypass ||
+		!slices.Equal(d.Hints, []string{"add LIMIT", "retry", "narrow"}) {
+		t.Fatalf("soft deny = %+v", d)
 	}
 }

@@ -69,3 +69,27 @@ func TestTightenScannedRows(t *testing.T) {
 		}
 	}
 }
+
+// A full scan of a table whose size no provider measured reads an unknown
+// number of rows: under a scanned-rows limit it is refused, not taken for
+// the rows it outputs, and the hints say why.
+func TestUnsizedFullScanIsRefusedUnderAScanLimit(t *testing.T) {
+	t.Parallel()
+	read := codegen.Compiled{Kind: codegen.KindRead, SQL: "select 1"}
+	plan := Plan{ScanType: ScanFull, EstimatedRows: 1, StatsFresh: true}
+	if rows, known := plan.ScannedRowsKnown(); known || rows != 1 {
+		t.Fatalf("ScannedRowsKnown = %d, %v; want unknown", rows, known)
+	}
+	limited := Estimate{Explainer: fixedExplainer{plan}, Threshold: Threshold{MaxScannedRows: 100_000}}
+	dec, err := limited.Check(context.Background(), read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dec.Allow || dec.Soft || !strings.Contains(strings.Join(dec.Hints, "\n"), "ANALYZE") {
+		t.Fatalf("unsized full scan under a limit: %+v", dec)
+	}
+	unlimited := Estimate{Explainer: fixedExplainer{plan}, Threshold: Threshold{}}
+	if dec, _ := unlimited.Check(context.Background(), read); !dec.Allow {
+		t.Fatalf("without a limit the scan is judged by its score only: %+v", dec)
+	}
+}

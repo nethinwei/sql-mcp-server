@@ -40,7 +40,8 @@ YAML presence 解码位于 `x/configyaml`，不会把 `yaml.v3` 引入核心。
   有全局容量边界。
 - **I23** begin、commit、rollback 各自受 deadline；commit 失败必须尝试 rollback。
 - **I24** 不能将返回行数冒充实际扫描行数；跨方言只承诺 EXPLAIN 估算上限，并在
-  计划未知或 EXPLAIN 失败时 fail closed。
+  计划未知或 EXPLAIN 失败时 fail closed。表的行数未能测得的全表扫描读取行数未知，
+  在设置了扫描行数上限（`cost.maxScannedRows` 或预算 `maxEstimatedScannedRows`）时拒绝。
 - **I25** 多角色/直授合并时，每个返回的行和列都至少被一个授权项同时覆盖：
   只有覆盖请求所用全部字段的授权项参与行范围合并，没有单一授权项覆盖时拒绝
   （`AMBIGUOUS_FIELD_SCOPE`），不对字段与行分别取并集。

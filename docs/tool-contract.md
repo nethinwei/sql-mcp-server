@@ -160,8 +160,9 @@
   列出时为真；部分索引只标 `partial`，不给条件；表达式索引不列出。资源
   `sql-mcp://schema/{entity}` 同样给出。
 - **成本拒绝**（`COST_EXCEEDED`）：`constraints` 带 `estimatedScannedRows`（预计读取
-  行数）与 `maxScannedRows`（生效上限，见 `cost.maxScannedRows`）；read/aggregate 的
-  `hints` 首条列出可用于过滤的索引字段。
+  行数）与 `maxScannedRows`（生效上限，见 `cost.maxScannedRows`）；全表扫描的表行数
+  未能测得时不给 `estimatedScannedRows`，改给 `scannedRowsUnknown: true`（v0.1.20 起）。
+  read/aggregate 的 `hints` 首条列出可用于过滤的索引字段。
 - **`execute_sql` 元数据语句**：`query` 模式下单条 `SHOW`、`DESCRIBE <表>`、`DESC <表>`
   不做 EXPLAIN 估算（`cost.sqlEscape.metadata: allow`，默认），只受硬上限约束；
   `DESCRIBE ANALYZE`、`DESC SELECT` 等 EXPLAIN 用法照常估算。

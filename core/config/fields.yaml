@@ -434,8 +434,8 @@ cost.maxBytes:
   zh-CN: 单次响应的字节上限。
   en: Response size cap in bytes.
 cost.maxScannedRows:
-  zh-CN: 语句预计读取的行数超过它即拒绝，不论是否用到索引；0 表示不限。读取行数取 EXPLAIN 中最大的行数估计（MySQL rows_examined_per_scan，PostgreSQL 与 OceanBase 各节点的行数），全表扫描时取表的行数。角色或用户的 limits.maxScannedRows 只能收紧；与预算 maxEstimatedScannedRows 同时生效。
-  en: Refuse a statement estimated to read more rows than this, whatever its access path; 0 is unlimited. The rows read are the largest row estimate of the EXPLAIN (MySQL rows_examined_per_scan, PostgreSQL and OceanBase each node's rows), and a full scan's table size. A role's or user's limits.maxScannedRows only tightens it; the budget's maxEstimatedScannedRows applies as well.
+  zh-CN: 语句预计读取的行数超过它即拒绝，不论是否用到索引；0 表示不限。读取行数取 EXPLAIN 中最大的行数估计（MySQL rows_examined_per_scan，PostgreSQL 与 OceanBase 各节点的行数），全表扫描时取表的行数；表的行数未能测得的全表扫描读取行数未知，即拒绝（可对该表运行 ANALYZE）。角色或用户的 limits.maxScannedRows 只能收紧；与预算 maxEstimatedScannedRows 同时生效。
+  en: Refuse a statement estimated to read more rows than this, whatever its access path; 0 is unlimited. The rows read are the largest row estimate of the EXPLAIN (MySQL rows_examined_per_scan, PostgreSQL and OceanBase each node's rows), and a full scan's table size; a full scan of a table whose size could not be measured reads an unknown number of rows and is refused (run ANALYZE on the table). A role's or user's limits.maxScannedRows only tightens it; the budget's maxEstimatedScannedRows applies as well.
 cost.maxINListSize:
   zh-CN: IN 列表最多元素数，关系展开也按它分批。
   en: Maximum IN-list size; relationship expansion batches by it.

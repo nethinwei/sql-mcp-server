@@ -133,10 +133,15 @@ func estimateSQL(ctx context.Context, tc Context, route EscapeRoute, sql string,
 // refuses is refused as too costly, which tells how to narrow it, where
 // waiting for the budget to reset never helps.
 func checkScannedBudget(tc Context, plan *cost.Plan) error {
-	if limit := tc.BudgetLimits.MaxEstimatedScannedRows; plan != nil && limit > 0 && plan.ScannedRows() > limit {
-		return fmt.Errorf("%w: estimated scanned rows %d exceed limit %d", budget.ErrExceeded, plan.ScannedRows(), limit)
+	limit := tc.BudgetLimits.MaxEstimatedScannedRows
+	if plan == nil || !plan.OverScanLimit(limit) {
+		return nil
 	}
-	return nil
+	if rows, known := plan.ScannedRowsKnown(); known {
+		return fmt.Errorf("%w: estimated scanned rows %d exceed limit %d", budget.ErrExceeded, rows, limit)
+	}
+	return fmt.Errorf("%w: a full scan of a table of unknown size may exceed the scanned-row limit %d",
+		budget.ErrExceeded, limit)
 }
 
 // estimatedRows is the rows the gate estimated the statement scans.

@@ -61,3 +61,31 @@ func TestExecuteSQLCostRefusalComesBeforeTheBudget(t *testing.T) {
 		t.Errorf("allowed by the gate: %v", err)
 	}
 }
+
+// A full scan of a table of unknown size is refused under a scanned-row
+// limit, the gate's or the budget's, and the refusal says the count is
+// unknown rather than reporting the rows the scan outputs.
+func TestUnsizedFullScanIsRefusedUnderScanLimits(t *testing.T) {
+	t.Parallel()
+	reg, _ := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	unsized := cost.Plan{ScanType: cost.ScanFull, EstimatedRows: 1, StatsFresh: true}
+	run := func(th cost.Threshold, limits budget.Limits) error {
+		gate := cost.NewGate(cost.Estimate{Explainer: costtest.FakeExplainer{Plan: unsized}, Threshold: th})
+		tc := Context{Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}, Role: "reader",
+			Dialect: testdialect.Postgres{}, Gate: gate, BudgetLimits: limits, DB: threeRows()}
+		_, err := ReadTool{}.Run(context.Background(), json.RawMessage(`{"entity":"users"}`), tc)
+		return err
+	}
+	err := run(cost.Threshold{MaxScannedRows: 1000}, budget.Limits{})
+	d, _ := DenialFor(err, "d")
+	if !errors.Is(err, cost.ErrCostExceeded) || d.Constraints["scannedRowsUnknown"] != true ||
+		d.Constraints["estimatedScannedRows"] != nil {
+		t.Errorf("gate limit: err %v, denial %+v", err, d)
+	}
+	if err := run(cost.Threshold{}, budget.Limits{MaxEstimatedScannedRows: 1000}); !errors.Is(err, budget.ErrExceeded) {
+		t.Errorf("budget limit: %v", err)
+	}
+	if err := run(cost.Threshold{}, budget.Limits{}); err != nil {
+		t.Errorf("no limit: %v", err)
+	}
+}
