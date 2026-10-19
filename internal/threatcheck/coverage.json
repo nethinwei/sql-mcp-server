@@ -225,6 +225,7 @@
       {"file": "x/mcpserver/execute_sql_test.go", "name": "TestExecuteSQLStdioDefaultIdentity"},
       {"file": "x/mcpserver/execute_sql_test.go", "name": "TestReloadRevokesExecuteSQL"},
       {"file": "x/bootstrap/bootstrap_test.go", "name": "TestAssembleRoutesEscapeHatch"},
+      {"file": "x/bootstrap/escape_test.go", "name": "TestEscapeExplainerRequiresEXPLAINForARequiredEstimate"},
       {"file": "core/config/config_access_test.go", "name": "TestValidateSQLEscape"},
       {"file": "core/rbac/rbac_test.go", "name": "TestPolicyHasPermission"},
       {"file": "core/audit/audit_test.go", "name": "TestRecordSync"},

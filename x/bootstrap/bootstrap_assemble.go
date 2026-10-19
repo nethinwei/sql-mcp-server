@@ -106,7 +106,9 @@ func (a *assembly) acquire() (err error) {
 	if err != nil {
 		return err
 	}
-	a.escapes = buildEscapes(cfg, a.connections, a.prepared, a.gs)
+	if a.escapes, err = buildEscapes(cfg, a.connections, a.prepared, a.gs); err != nil {
+		return err
+	}
 	if a.engine, err = newAssembleEngine(cfg, a.shared); err != nil {
 		return err
 	}
@@ -528,10 +530,10 @@ func buildDataSources(
 // hatch while tools.executeSql is off: the switch is one of its conditions.
 func buildEscapes(
 	cfg *config.Config, connections Connections, prepared map[string]*store.PreparedDB, gs guards,
-) map[string]tool.EscapeRoute {
+) (map[string]tool.EscapeRoute, error) {
 	escapes := map[string]tool.EscapeRoute{}
 	if !cfg.Tools.ExecuteSQL {
-		return escapes
+		return escapes, nil
 	}
 	for name, byName := range connections {
 		database := cfg.Databases[name]
@@ -547,17 +549,33 @@ func buildEscapes(
 			prepared[key] = db
 		}
 		wrap, _ := gs.guard(name, connection, p)
-		explainer, _ := planners(p, gs.health(name, connection))
+		explainer, err := escapeExplainer(cfg, name, p, gs.health(name, connection))
+		if err != nil {
+			return nil, err
+		}
 		threshold := cfg.Cost.Threshold()
 		threshold.Datasource, threshold.DialectName = name, p.Dialect().Name()
-		if !cfg.Cost.EnabledOrDefault() {
-			explainer = nil
-		}
 		escapes[name] = tool.EscapeRoute{
 			Connection: connection, DB: wrap(db), Dialect: p.Dialect(), Explainer: explainer, Threshold: threshold,
 		}
 	}
-	return escapes
+	return escapes, nil
+}
+
+// escapeExplainer is the EXPLAIN execute_sql estimates with on datasource
+// name: none when the estimate is skipped, and a datasource that has none
+// while it is required (a provider without EXPLAIN) is refused rather than
+// admitting every statement unestimated.
+func escapeExplainer(cfg *config.Config, name string, p Provider, h *health) (cost.Explainer, error) {
+	if !cfg.Cost.EnabledOrDefault() || !cfg.Cost.SQLEscape.EstimateRequired() {
+		return nil, nil
+	}
+	explainer, _ := planners(p, h)
+	if explainer == nil {
+		return nil, fmt.Errorf("assemble: datasource %q admits execute_sql with cost.sqlEscape.estimate: required, "+
+			"but its provider (%s) has no EXPLAIN; set cost.sqlEscape.estimate: skip", name, p.Dialect().Name())
+	}
+	return explainer, nil
 }
 
 func dataSourceForProvider(

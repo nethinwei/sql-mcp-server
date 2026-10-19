@@ -309,6 +309,9 @@ func TestExecuteSQLEstimate(t *testing.T) {
 	if _, err := run(costtest.FakeExplainer{Err: errors.New("syntax error")}, false); err != nil {
 		t.Fatalf("skipped estimate: %v", err)
 	}
+	if _, err := run(nil, true); !errors.As(err, &unestimable) {
+		t.Fatalf("a required estimate without EXPLAIN ran: %v", err)
+	}
 	full := costtest.FakeExplainer{Plan: cost.Plan{ScanType: cost.ScanFull, EstimatedRows: 1e6, StatsFresh: true}}
 	if _, err := run(full, true); !errors.Is(err, cost.ErrCostExceeded) {
 		t.Fatalf("full scan: %v", err)

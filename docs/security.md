@@ -217,7 +217,9 @@ Agent 会看到它们。
 
 硬上限与受治理面相同且不可关闭：`cost.queryTimeout`、`cost.maxRows` 与预算的
 `maxReturnedRows`（到上限即截断并标 `truncated: true`，不报错）、`cost.maxBytes` 与预算的
-`maxReturnedBytes`、并发 / rate limit、session 预算。`cost.enabled: false` 只关闭估算。
+`maxReturnedBytes`、并发 / rate limit、session 预算。不做估算须显式写
+`cost.sqlEscape.estimate: skip`：`cost.enabled: false` 或 provider 没有 EXPLAIN 时仍为
+`required` 的配置被拒绝（v0.1.20 起，此前静默跳过估算）。
 估算默认必需（`cost.sqlEscape.estimate: required`）：每条语句先在逃生通道连接上
 EXPLAIN，按与闸门相同的阈值打分（软拒绝同样拒绝），EXPLAIN 失败的语句（DDL、`SET`、
 `SHOW`、语法错误、规划期报错）一律拒绝并回显数据库原文；不读表的语句（常量 `SELECT`、

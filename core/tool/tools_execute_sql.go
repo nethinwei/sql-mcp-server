@@ -245,6 +245,9 @@ func skipSpaceAndComments(s string) string {
 	}
 }
 
+// errNoExplain is the estimate of a route without EXPLAIN.
+var errNoExplain = errors.New("the datasource has no EXPLAIN to estimate with")
+
 // UnestimableError is a statement the escape hatch could not estimate: the
 // datasource's EXPLAIN failed on it (DDL, SET, SHOW, a syntax error, an
 // error raised while planning). It is refused while

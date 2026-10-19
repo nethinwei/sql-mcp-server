@@ -36,7 +36,7 @@ func (c *Config) Validate() error {
 	if err := c.validateAccess(databases); err != nil {
 		return err
 	}
-	if err := c.validateSQLEscape(); err != nil {
+	if err := c.validateSQLEscape(databases); err != nil {
 		return err
 	}
 	// Per-field rules (ranges, enums, patterns) come from `schema` tags.
@@ -140,9 +140,22 @@ func validateConnections(name string, db DatabaseConfig) error {
 
 // validateSQLEscape requires the escape hatch to be audited: without an
 // audit sink the fail-closed audit of execute_sql cannot hold.
-func (c *Config) validateSQLEscape() error {
-	if c.Tools.ExecuteSQL && !c.Audit.Enabled {
+func (c *Config) validateSQLEscape(databases map[string]DatabaseConfig) error {
+	if !c.Tools.ExecuteSQL {
+		return nil
+	}
+	if !c.Audit.Enabled {
 		return fmt.Errorf("config: tools.executeSql requires audit.enabled")
+	}
+	if c.Cost.EnabledOrDefault() || !c.Cost.SQLEscape.EstimateRequired() {
+		return nil
+	}
+	for name, db := range databases {
+		if db.SQLEscape.Enabled() {
+			return fmt.Errorf("config: database %q admits execute_sql with cost.sqlEscape.estimate: required, "+
+				"but cost.enabled: false leaves no EXPLAIN to estimate with; set cost.sqlEscape.estimate: skip "+
+				"to run it under the hard limits alone, or enable cost", name)
+		}
 	}
 	return nil
 }

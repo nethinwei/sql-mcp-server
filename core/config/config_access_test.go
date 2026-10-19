@@ -282,6 +282,16 @@ func TestValidateSQLEscape(t *testing.T) {
 	if err := cfg.Validate(); err != nil || cfg.Cost.SQLEscape.EstimateRequired() {
 		t.Fatalf("skip: %v", err)
 	}
+	// Without cost there is no EXPLAIN: a required estimate cannot hold.
+	off := false
+	cfg.Cost.Enabled = &off
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("skip without cost: %v", err)
+	}
+	cfg.Cost.SQLEscape.Estimate = SQLEscapeEstimateRequired
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "estimate: skip") {
+		t.Fatalf("a required estimate without cost: %v", err)
+	}
 	old, next := accessConfig(), accessConfig()
 	old.ApplyDefaults()
 	next.Databases = map[string]DatabaseConfig{"default": {Driver: "postgres", DSN: "x",

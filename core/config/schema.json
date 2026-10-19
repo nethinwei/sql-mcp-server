@@ -531,8 +531,8 @@
           "type": "object",
           "properties": {
             "estimate": {
-              "description": "required (the default): every statement is EXPLAINed first and refused when it cannot be estimated (DDL, SET, SHOW) or exceeds the thresholds; skip: no estimate, the hard limits alone.",
-              "x-description-zh-CN": "required（默认）：每条语句先 EXPLAIN，无法估算（DDL、SET、SHOW 等）或超出阈值即拒绝；skip：不估算，只保留硬上限。",
+              "description": "required (the default): every statement is EXPLAINed first and refused when it cannot be estimated (DDL, SET, SHOW) or exceeds the thresholds; skip: no estimate, the hard limits alone. With cost.enabled false or a datasource without EXPLAIN, skip must be written out, or the configuration is refused.",
+              "x-description-zh-CN": "required（默认）：每条语句先 EXPLAIN，无法估算（DDL、SET、SHOW 等）或超出阈值即拒绝；skip：不估算，只保留硬上限。cost.enabled 为 false 或数据源没有 EXPLAIN 时，须显式写 skip，否则配置被拒绝。",
               "type": "string",
               "default": "required",
               "enum": [

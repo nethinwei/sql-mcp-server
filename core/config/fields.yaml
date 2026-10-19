@@ -521,8 +521,8 @@ cost.sqlEscape:
   zh-CN: execute_sql 的估算策略。超时、行数与字节上限、并发与预算是不可关闭的硬上限，这里只决定 EXPLAIN 估算。
   en: The estimate policy of execute_sql. Timeout, row and byte caps, concurrency and budgets are hard limits that cannot be switched off; this only decides the EXPLAIN estimate.
 cost.sqlEscape.estimate:
-  zh-CN: required（默认）：每条语句先 EXPLAIN，无法估算（DDL、SET、SHOW 等）或超出阈值即拒绝；skip：不估算，只保留硬上限。
-  en: 'required (the default): every statement is EXPLAINed first and refused when it cannot be estimated (DDL, SET, SHOW) or exceeds the thresholds; skip: no estimate, the hard limits alone.'
+  zh-CN: required（默认）：每条语句先 EXPLAIN，无法估算（DDL、SET、SHOW 等）或超出阈值即拒绝；skip：不估算，只保留硬上限。cost.enabled 为 false 或数据源没有 EXPLAIN 时，须显式写 skip，否则配置被拒绝。
+  en: 'required (the default): every statement is EXPLAINed first and refused when it cannot be estimated (DDL, SET, SHOW) or exceeds the thresholds; skip: no estimate, the hard limits alone. With cost.enabled false or a datasource without EXPLAIN, skip must be written out, or the configuration is refused.'
 cost.sqlEscape.metadata:
   zh-CN: allow（默认）：query 模式下的单条 SHOW、DESCRIBE、DESC 语句不做 EXPLAIN 估算，只受硬上限约束（按语句开头识别，不解析 SQL）；refuse：与其他无法估算的语句一样，在 estimate 为 required 时拒绝。
   en: 'allow (the default): a single SHOW, DESCRIBE or DESC statement in query mode runs without an EXPLAIN estimate, under the hard limits alone (recognized by how it begins; SQL is not parsed); refuse: refused like any statement EXPLAIN cannot estimate while estimate is required.'

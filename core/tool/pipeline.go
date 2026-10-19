@@ -94,15 +94,18 @@ func authorizeSQL(tc Context, datasource string) (grant, EscapeRoute, error) {
 // estimateSQL is the escape hatch's cost gate: EXPLAIN on the escape
 // connection, judged as the Estimate layer judges plans, and a statement
 // EXPLAIN cannot estimate refused. There is no estimate when the
-// configuration skips it or has no EXPLAIN (cost.enabled: false); the hard
-// limits apply either way.
+// configuration skips it; a route without EXPLAIN while the estimate is
+// required refuses every statement (assembly refuses that configuration, so
+// this only backs it up). The hard limits apply either way.
 func estimateSQL(ctx context.Context, tc Context, route EscapeRoute, sql string, args []any, query bool) (
 	gated, error,
 ) {
 	compiled := codegen.Compiled{SQL: sql, Args: args}
-	if !tc.SQLEscapeEstimateRequired || route.Explainer == nil ||
-		query && tc.SQLEscapeMetadata && isMetadataStatement(sql) {
+	if !tc.SQLEscapeEstimateRequired || query && tc.SQLEscapeMetadata && isMetadataStatement(sql) {
 		return gated{Compiled: compiled}, nil
+	}
+	if route.Explainer == nil {
+		return gated{}, &UnestimableError{Cause: errNoExplain}
 	}
 	plan, err := route.Explainer.Explain(ctx, sql, args)
 	if err != nil {

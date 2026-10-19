@@ -303,7 +303,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `aqe.timeout` | 时长 | `"1s"` | 0–5s | 采样超时，独立于主查询；启用采样时必须大于 0。 |
 | `aqe.maxFingerprints` | 整数 | `4096` | ≥ 1 | 全局最多跟踪的模板数。 |
 | `aqe` | 对象 |  |  | 基于实际执行反馈的自适应估算与可选的 EXPLAIN ANALYZE 采样。 |
-| `sqlEscape.estimate` | 字符串 | `"required"` | 可选 `required`、`skip` | required（默认）：每条语句先 EXPLAIN，无法估算（DDL、SET、SHOW 等）或超出阈值即拒绝；skip：不估算，只保留硬上限。 |
+| `sqlEscape.estimate` | 字符串 | `"required"` | 可选 `required`、`skip` | required（默认）：每条语句先 EXPLAIN，无法估算（DDL、SET、SHOW 等）或超出阈值即拒绝；skip：不估算，只保留硬上限。cost.enabled 为 false 或数据源没有 EXPLAIN 时，须显式写 skip，否则配置被拒绝。 |
 | `sqlEscape.metadata` | 字符串 | `"allow"` | 可选 `allow`、`refuse` | allow（默认）：query 模式下的单条 SHOW、DESCRIBE、DESC 语句不做 EXPLAIN 估算，只受硬上限约束（按语句开头识别，不解析 SQL）；refuse：与其他无法估算的语句一样，在 estimate 为 required 时拒绝。 |
 | `sqlEscape` | 对象 |  |  | execute_sql 的估算策略。超时、行数与字节上限、并发与预算是不可关闭的硬上限，这里只决定 EXPLAIN 估算。 |
 
