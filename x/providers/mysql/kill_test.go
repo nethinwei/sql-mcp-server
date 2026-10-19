@@ -109,3 +109,34 @@ func TestKillConnStopsOnlyAStatementPastItsContext(t *testing.T) {
 		t.Fatal("a connection sent a KILL QUERY must not be reused")
 	}
 }
+
+// A statement that returns as its context ends (as the driver does: it
+// closes its side and returns) is still stopped on the server. Context
+// cancellation closes Done before it starts the KILL QUERY, so the
+// statement's return can come first; it must not call the KILL off.
+func TestKillConnStopsAStatementReturningAtItsDeadline(t *testing.T) {
+	t.Parallel()
+	for i := range 200 {
+		d := &fakeDriver{}
+		connector := newKillConnector(d)
+		raw, err := connector.Connect(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := raw.(*killConn)
+		ctx, cancel := context.WithCancel(context.Background())
+		go cancel()
+		_, _ = c.ExecContext(ctx, "slow", nil)
+		if c.IsValid() {
+			t.Fatalf("run %d: a statement past its context left its connection usable", i)
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for !slices.Contains(d.statements(), "KILL QUERY 1") {
+			if time.Now().After(deadline) {
+				t.Fatalf("run %d: no KILL QUERY for a statement returning at its deadline: %v", i, d.statements())
+			}
+			time.Sleep(time.Millisecond)
+		}
+		_ = connector.Close()
+	}
+}

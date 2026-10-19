@@ -147,7 +147,24 @@ func (c *killConn) watch(ctx context.Context) (stop func()) {
 		c.killed.Store(true)
 		c.k.kill(c.id)
 	})
-	return func() { stopKill() }
+	return func() {
+		stopped := stopKill()
+		if ctx.Err() == nil {
+			return
+		}
+		// Ended with its context, the statement did not finish in time: the
+		// server may still be running it. The connection is bad from now on,
+		// before database/sql asks (IsValid, ResetSession) whether to reuse
+		// it; a started AfterFunc would mark it only as it runs. And a
+		// context closes Done before it starts its AfterFunc, while the
+		// driver returns as soon as Done closes: stopped here first, the
+		// AfterFunc never runs, so the KILL QUERY is sent here (by another
+		// AfterFunc, which a done context starts at once).
+		c.killed.Store(true)
+		if stopped {
+			context.AfterFunc(ctx, func() { c.k.kill(c.id) })
+		}
+	}
 }
 
 func (c *killConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
