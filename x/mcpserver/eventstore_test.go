@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -52,5 +53,65 @@ func TestFairEventStoreEvictsTheLargestSession(t *testing.T) {
 	_ = s.SessionClosed(ctx, "large")
 	if s.nBytes != 0 || len(s.sessions) != 0 {
 		t.Fatalf("closed sessions left %d bytes in %d sessions", s.nBytes, len(s.sessions))
+	}
+}
+
+// A stream whose events were all evicted keeps its place: resuming reports
+// the events purged, and new events continue its indexes.
+func TestFairEventStoreEvictedStreamKeepsItsIndexes(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := newFairEventStore(10)
+	_ = s.Append(ctx, "a", "st", []byte("0123456789"))
+	_ = s.Append(ctx, "b", "st", []byte("0123456789")) // evicts a's only event
+	for _, err := range s.After(ctx, "a", "st", -1) {
+		if !errors.Is(err, mcp.ErrEventsPurged) {
+			t.Fatalf("evicted stream: %v, want purged", err)
+		}
+	}
+	_ = s.SessionClosed(ctx, "b")
+	_ = s.Append(ctx, "a", "st", []byte("x"))
+	var got []string
+	for d, err := range s.After(ctx, "a", "st", 0) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, string(d))
+	}
+	if strings.Join(got, ",") != "x" {
+		t.Fatalf("after index 0 = %q, want the second event", got)
+	}
+	_ = s.SessionClosed(ctx, "a")
+	if s.nBytes != 0 || len(s.sessions) != 0 || len(s.bySize) != 0 {
+		t.Fatalf("closed sessions left %d bytes, %d sessions, %d in the heap", s.nBytes, len(s.sessions), len(s.bySize))
+	}
+}
+
+// Each append over the bound evicts one small event while many sessions
+// and streams hold many events: spread over 1000 sessions, or all in one
+// session's 100 streams.
+func BenchmarkFairEventStoreEvictSmallEvents(b *testing.B) {
+	for _, shape := range []struct {
+		name              string
+		sessions, streams int
+	}{{"spread", 1000, 10}, {"one session", 1, 100}} {
+		b.Run(shape.name, func(b *testing.B) {
+			ctx := context.Background()
+			s := newFairEventStore(1 << 20)
+			data := make([]byte, 64)
+			key := func(i int) (string, string) {
+				return fmt.Sprint(i % shape.sessions), fmt.Sprint(i / shape.sessions % shape.streams)
+			}
+			i := 0
+			for ; s.nBytes+len(data) <= s.maxBytes; i++ {
+				session, stream := key(i)
+				_ = s.Append(ctx, session, stream, data)
+			}
+			for b.Loop() {
+				session, stream := key(i)
+				_ = s.Append(ctx, session, stream, data)
+				i++
+			}
+		})
 	}
 }

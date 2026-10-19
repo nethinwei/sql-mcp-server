@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"container/heap"
 	"context"
 	"fmt"
 	"iter"
@@ -17,41 +18,85 @@ const eventStoreMaxBytes = 10 << 20
 // fairEventStore keeps the events of every stream so a client can resume it,
 // like mcp.MemoryEventStore, but when over its bound it drops the oldest
 // events of the session holding the most: one session's large results never
-// cost the other sessions their ability to resume.
+// cost the other sessions their ability to resume. Sessions, and each
+// session's streams, are max-heaps by bytes held, so making room costs
+// O(log n) per event dropped.
 type fairEventStore struct {
 	mu       sync.Mutex
 	maxBytes int
 	nBytes   int
 	sessions map[string]*sessionEvents
+	bySize   bySize[*sessionEvents]
 }
 
 type sessionEvents struct {
-	size    int
+	held
 	streams map[string]*streamEvents
+	bySize  bySize[*streamEvents]
 }
 
-// streamEvents are a stream's events from index first on.
+// streamEvents are a stream's events from index first on. A stream stays
+// when all its events are dropped: first keeps its indexes going.
 type streamEvents struct {
+	held
 	first int
 	data  [][]byte
+}
+
+// held is the bytes something holds and its place in a bySize heap.
+type held struct {
+	size  int
+	index int
+}
+
+func (h *held) holding() *held { return h }
+
+// bySize is a max-heap by bytes held (container/heap).
+type bySize[T interface{ holding() *held }] []T
+
+func (h bySize[T]) Len() int           { return len(h) }
+func (h bySize[T]) Less(i, j int) bool { return h[i].holding().size > h[j].holding().size }
+func (h bySize[T]) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].holding().index, h[j].holding().index = i, j
+}
+func (h *bySize[T]) Push(x any) {
+	x.(T).holding().index = len(*h)
+	*h = append(*h, x.(T))
+}
+func (h *bySize[T]) Pop() any {
+	old := *h
+	x := old[len(old)-1]
+	var zero T
+	old[len(old)-1] = zero
+	*h = old[:len(old)-1]
+	return x
+}
+
+// grow adds n (negative to shrink) to what x holds and restores h.
+func grow[T interface{ holding() *held }](h *bySize[T], x T, n int) {
+	x.holding().size += n
+	heap.Fix(h, x.holding().index)
 }
 
 func newFairEventStore(maxBytes int) *fairEventStore {
 	return &fairEventStore{maxBytes: maxBytes, sessions: map[string]*sessionEvents{}}
 }
 
-func (s *fairEventStore) stream(sessionID, streamID string) *streamEvents {
+func (s *fairEventStore) stream(sessionID, streamID string) (*sessionEvents, *streamEvents) {
 	session, ok := s.sessions[sessionID]
 	if !ok {
 		session = &sessionEvents{streams: map[string]*streamEvents{}}
 		s.sessions[sessionID] = session
+		heap.Push(&s.bySize, session)
 	}
 	stream, ok := session.streams[streamID]
 	if !ok {
 		stream = &streamEvents{}
 		session.streams[streamID] = stream
+		heap.Push(&session.bySize, stream)
 	}
-	return stream
+	return session, stream
 }
 
 // Open implements mcp.EventStore.
@@ -67,14 +112,15 @@ func (s *fairEventStore) Open(_ context.Context, sessionID, streamID string) err
 func (s *fairEventStore) Append(_ context.Context, sessionID, streamID string, data []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	stream := s.stream(sessionID, streamID)
+	session, stream := s.stream(sessionID, streamID)
 	for s.nBytes+len(data) > s.maxBytes {
 		if !s.dropOldestOfLargest() {
 			break
 		}
 	}
 	stream.data = append(stream.data, data)
-	s.sessions[sessionID].size += len(data)
+	grow(&session.bySize, stream, len(data))
+	grow(&s.bySize, session, len(data))
 	s.nBytes += len(data)
 	return nil
 }
@@ -82,31 +128,20 @@ func (s *fairEventStore) Append(_ context.Context, sessionID, streamID string, d
 // dropOldestOfLargest drops the first event of the largest stream of the
 // session holding the most bytes; false when nothing is held.
 func (s *fairEventStore) dropOldestOfLargest() bool {
-	var session *sessionEvents
-	for _, candidate := range s.sessions {
-		if candidate.size > 0 && (session == nil || candidate.size > session.size) {
-			session = candidate
-		}
-	}
-	if session == nil {
+	if len(s.bySize) == 0 || s.bySize[0].size == 0 {
 		return false
 	}
-	var stream *streamEvents
-	streamSize := -1
-	for _, candidate := range session.streams {
-		size := 0
-		for _, d := range candidate.data {
-			size += len(d)
-		}
-		if len(candidate.data) > 0 && size > streamSize {
-			stream, streamSize = candidate, size
-		}
-	}
+	session := s.bySize[0]
+	stream := session.bySize[0]
 	n := len(stream.data[0])
 	stream.data[0] = nil
 	stream.data = stream.data[1:]
+	if len(stream.data) == 0 {
+		stream.data = nil // release the backing array
+	}
 	stream.first++
-	session.size -= n
+	grow(&session.bySize, stream, -n)
+	grow(&s.bySize, session, -n)
 	s.nBytes -= n
 	return true
 }
@@ -151,6 +186,7 @@ func (s *fairEventStore) SessionClosed(_ context.Context, sessionID string) erro
 	defer s.mu.Unlock()
 	if session, ok := s.sessions[sessionID]; ok {
 		s.nBytes -= session.size
+		heap.Remove(&s.bySize, session.index)
 		delete(s.sessions, sessionID)
 	}
 	return nil
