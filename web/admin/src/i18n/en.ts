@@ -317,13 +317,13 @@ const en: typeof zh = {
     filterFields: 'Filter fields', readable: 'Readable fields', writable: 'Writable fields',
   },
   filter: {
-    allRows: 'all rows', and: ' and ', or: ' or ', currentUser: 'current user', isNull: 'is null', isNotNull: 'is not null',
+    allRows: 'all rows', and: ' and ', or: ' or ', not: 'not ', currentUser: 'current user', isNull: 'is null', isNotNull: 'is not null',
     ops: {
       eq: 'equals', ne: 'not equal', gt: 'greater than', gte: 'at least', lt: 'less than', lte: 'at most', in: 'in',
       not_in: 'not in', like: 'like', is_null: 'is null', is_not_null: 'is not null',
     },
     emptyHint: 'No row limit: every row is readable', addCondition: 'Add condition', addGroup: 'Add group',
-    matchAll: 'Match all', matchAny: 'Match any', removeGroup: 'Remove group', field: 'Field', value: 'Value',
+    matchAll: 'Match all', matchAny: 'Match any', negate: 'Negate', removeGroup: 'Remove group', field: 'Field', value: 'Value',
     listValue: 'a, b, c', noValue: '(no value needed)',
     valueHint: 'Values are typed automatically: write numbers as 100, strings as-is (quote them to force a string), lists comma separated.',
   },

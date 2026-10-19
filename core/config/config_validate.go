@@ -228,8 +228,8 @@ func (c *Config) validateEntities(databases map[string]DatabaseConfig) error {
 }
 
 func (c *Config) validateEntity(e EntityConfig, refs EntityRefs) error {
-	if duplicate, ok := firstDuplicateField(e.Fields); ok {
-		return fmt.Errorf("config: entity %q has duplicate field %q", e.Name, duplicate)
+	if err := validateFieldNames(e); err != nil {
+		return err
 	}
 	if duplicate, ok := firstDuplicate(e.Params); ok {
 		return fmt.Errorf("config: entity %q has duplicate parameter %q", e.Name, duplicate)
@@ -249,7 +249,7 @@ func (c *Config) validateEntity(e EntityConfig, refs EntityRefs) error {
 		return err
 	}
 	for role, policy := range e.RowPolicies {
-		if _, err := ParseFilter(policy); err != nil {
+		if err := validateRowFilter(e, policy); err != nil {
 			return fmt.Errorf("config: entity %q row policy for role %q: %w", e.Name, role, err)
 		}
 	}
@@ -526,15 +526,34 @@ func configuredFields(fields []FieldConfig) map[string]bool {
 	return out
 }
 
-func firstDuplicateField(fields []FieldConfig) (string, bool) {
-	seen := make(map[string]bool, len(fields))
-	for _, field := range fields {
-		if seen[field.Name] {
-			return field.Name, true
+// validateFieldNames requires every name and alias to name one field: a
+// request names a field by either, so two fields sharing one would resolve to
+// whichever comes first (and take each other's mask).
+func validateFieldNames(e EntityConfig) error {
+	owner := make(map[string]string, len(e.Fields)*2)
+	for _, field := range e.Fields {
+		if prev, ok := owner[field.Name]; ok {
+			if prev == field.Name {
+				return fmt.Errorf("config: entity %q has duplicate field %q", e.Name, field.Name)
+			}
+			return fmt.Errorf("config: entity %q field %q is also the alias of field %q", e.Name, field.Name, prev)
 		}
-		seen[field.Name] = true
+		owner[field.Name] = field.Name
 	}
-	return "", false
+	for _, field := range e.Fields {
+		alias := field.Alias
+		if alias == "" || alias == field.Name {
+			continue
+		}
+		if strings.TrimSpace(alias) != alias {
+			return fmt.Errorf("config: entity %q field %q has an alias with surrounding spaces", e.Name, field.Name)
+		}
+		if prev, ok := owner[alias]; ok {
+			return fmt.Errorf("config: entity %q field %q alias %q already names field %q", e.Name, field.Name, alias, prev)
+		}
+		owner[alias] = field.Name
+	}
+	return nil
 }
 
 func firstDuplicate(values []string) (string, bool) {

@@ -19,7 +19,7 @@ revision 保存在配置存储中（`serve --store`），加载链路完全相�
 密钥规则；见[运维指南](operations.md#配置存储)。
 
 配置中出现未知字段（包括拼写错误）时加载失败并报告行号，不会被静默忽略；
-行过滤（`rows`、`rowPolicies`、`tenantPolicy`）是自由结构，不受此限制。
+行过滤（`rows`、`rowPolicies`、`tenantPolicy`）按下文“行过滤”的结构单独校验。
 
 显式 `--transport`/`--addr`/`--role`/`--user` 优先于 `server` 中的同名字段。
 热重载不是 YAML 字段，通过 `serve --watch` 开启；标记“修改需重启”的字段在
@@ -41,14 +41,26 @@ DSN 中的 `${file:/path}` 必须是 `server.secrets.allowedRoots` 下的绝对�
 且符号链接不能逃逸允许根。启动与重载时自省各数据源：table/view 或已配置的字段在
 数据库中不存在的实体标记为不可用（工具对有权限的调用方返回 `ENTITY_UNAVAILABLE`，
 不生成 SQL），配置其余部分照常加载，日志告警 `entities unavailable`，控制台列出这些
-实体；额外的数据库列不报错，procedure 不参与 drift 检查。读取不到结构的数据源（不可达、
+实体；行过滤引用的列（可以不是字段）不存在时同样按缺列处理；额外的数据库列不报错，
+procedure 不参与 drift 检查。读取不到结构的数据源（不可达、
 自省超时）同样不阻塞配置：它的实体全部不可用（对调用方只说明“数据源不可达”），日志
 告警 `datasource unreachable`，`--watch` 时服务按退避重新装配，数据源恢复后自动可用。
 
-行过滤（`rowPolicies` 的一项、授权的 `rows`、`tenantPolicy`）写作
-`{op, field, value}` 或 `and`/`or` 组合，operator 与工具 filter 相同：`eq`、
-`ne`、`gt`、`gte`、`lt`、`lte`、`in`、`not_in`、`like`、`is_null`、
-`is_not_null`。`value` 可以引用 `${subject.x}`。
+行过滤（`rowPolicies` 的一项、授权的 `rows`、`tenantPolicy`）每一层恰好是以下之一：
+条件 `{op, field, value}`、`{and: [...]}`、`{or: [...]}`（列表非空）或
+`{not: {...}}`。operator 与工具 filter 相同：`eq`、`ne`、`gt`、`gte`、`lt`、
+`lte`、`in`、`not_in`、`like`、`is_null`、`is_not_null`；`is_null`/`is_not_null`
+不带 `value`，`in`/`not_in` 的 `value` 是非空的标量列表（至多 1000 项），其余
+operator 的 `value` 是标量。`value` 可以写 `${subject.x}`，请求时替换为调用方的
+subject 属性（`in`/`not_in` 时属性应为列表）。条件中多余的键、空的 `and`/`or`
+在校验时即拒绝。
+
+`field` 写**列名**，可以是未暴露为字段的列（例如不对 Agent 暴露的租户列），不能写
+字段的 `alias`；装配时检查该列在表中存在。写入同样受行过滤约束：新行必须仍在调用方的
+行范围内（见[授权模型](design/authorization-model.md#写入的行范围)）。
+
+字段的 `name` 与 `alias` 在同一实体内必须各自唯一：一个别名不能与其他字段的名称或别名
+相同（请求按名称或别名定位字段，重复会解析到错误的列）。
 
 ## 用户、角色与权限
 

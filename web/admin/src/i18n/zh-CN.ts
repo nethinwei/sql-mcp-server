@@ -305,13 +305,13 @@ export default {
     readable: '可读字段', writable: '可写字段',
   },
   filter: {
-    allRows: '全部行', and: ' 且 ', or: ' 或 ', currentUser: '当前用户', isNull: '为空', isNotNull: '不为空',
+    allRows: '全部行', and: ' 且 ', or: ' 或 ', not: '非', currentUser: '当前用户', isNull: '为空', isNotNull: '不为空',
     ops: {
       eq: '等于', ne: '不等于', gt: '大于', gte: '大于等于', lt: '小于', lte: '小于等于', in: '属于',
       not_in: '不属于', like: '匹配', is_null: '为空', is_not_null: '不为空',
     },
     emptyHint: '不限制行：可读取全部行', addCondition: '添加条件', addGroup: '添加条件组',
-    matchAll: '满足全部', matchAny: '满足任一', removeGroup: '删除此组', field: '字段', value: '值',
+    matchAll: '满足全部', matchAny: '满足任一', negate: '取反', removeGroup: '删除此组', field: '字段', value: '值',
     listValue: 'a, b, c', noValue: '（无需填写值）',
     valueHint: '值按类型自动识别：数字写作 100，字符串直接写（或加引号强制为字符串），列表用逗号分隔。',
   },

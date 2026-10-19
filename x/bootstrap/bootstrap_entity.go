@@ -2,9 +2,12 @@ package bootstrap
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
+	"github.com/nethinwei/sql-mcp-server/core/rbac"
+	"github.com/nethinwei/sql-mcp-server/core/relalg"
 )
 
 // configToEntities converts config entities to the core entity model, named
@@ -139,4 +142,34 @@ func parseKind(s string) entity.Kind {
 		return entity.KindProcedure
 	}
 	return entity.KindTable
+}
+
+// withRowColumns records on each entity the columns its row scopes test: its
+// tenant policy, its row policies and the rows of every grant on it.
+func withRowColumns(entities []entity.Entity, policy rbac.Policy) {
+	for i := range entities {
+		e := &entities[i]
+		preds := []relalg.Predicate{e.TenantPolicy}
+		for _, p := range e.RowPolicies {
+			preds = append(preds, p)
+		}
+		for _, byEntity := range policy.Roles {
+			for _, g := range byEntity[e.Name] {
+				preds = append(preds, g.Rows)
+			}
+		}
+		for _, p := range policy.Principals {
+			for _, g := range p.Grants[e.Name] {
+				preds = append(preds, g.Rows)
+			}
+		}
+		for _, p := range preds {
+			for _, c := range relalg.Fields(p) {
+				if !slices.Contains(e.RowColumns, c) {
+					e.RowColumns = append(e.RowColumns, c)
+				}
+			}
+		}
+		slices.Sort(e.RowColumns)
+	}
 }

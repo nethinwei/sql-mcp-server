@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NButton, NEmpty, NText } from 'naive-ui'
 import FilterGroup from './FilterGroup.vue'
-import { isCondition, type Filter, type Group } from '@/lib/filter'
+import { isCondition, isNegation, type Filter, type Group } from '@/lib/filter'
 
 // Edits a row filter visually. Internally the filter is always a group; a
 // single condition or an empty group is emitted in its simplest form.
@@ -22,8 +22,17 @@ watch(() => props.modelValue, (v) => {
   if (JSON.stringify(v ?? null) !== JSON.stringify(simplify(group.value) ?? null)) group.value = toGroup(v)
 })
 
+function simplifyItem(f: Filter): Filter | undefined {
+  if (isCondition(f)) return f
+  if (isNegation(f)) {
+    const inner = simplifyItem(f.not)
+    return inner && { not: inner }
+  }
+  return simplify(f)
+}
+
 function simplify(g: Group): Filter | undefined {
-  const items = (g.and ?? g.or ?? []).map((i) => (isCondition(i) ? i : simplify(i))).filter(Boolean) as Filter[]
+  const items = (g.and ?? g.or ?? []).map(simplifyItem).filter(Boolean) as Filter[]
   if (items.length === 0) return undefined
   if (items.length === 1) return items[0]
   return g.or ? { or: items } : { and: items }

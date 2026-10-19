@@ -532,7 +532,7 @@ func resolveSubject(p relalg.Predicate, subject map[string]any) relalg.Predicate
 	switch pp := p.(type) {
 	case relalg.Condition:
 		if s, ok := pp.Value.(string); ok {
-			if attr, isPlaceholder := subjectPlaceholder(s); isPlaceholder {
+			if attr, isPlaceholder := SubjectPlaceholder(s); isPlaceholder {
 				pp.Value = subject[attr]
 			}
 		}
@@ -556,7 +556,7 @@ func resolveSubject(p relalg.Predicate, subject map[string]any) relalg.Predicate
 }
 
 // subjectPlaceholder parses "${subject.attr}" into ("attr", true).
-func subjectPlaceholder(s string) (string, bool) {
+func SubjectPlaceholder(s string) (string, bool) {
 	const prefix, suffix = "${subject.", "}"
 	if strings.HasPrefix(s, prefix) && strings.HasSuffix(s, suffix) {
 		return s[len(prefix) : len(s)-len(suffix)], true

@@ -327,6 +327,7 @@ func offlineAssembly(cfg *config.Config) (offlineChecked, error) {
 	if err != nil {
 		return offlineChecked{}, fmt.Errorf("assemble: %w", err)
 	}
+	withRowColumns(entities, policy)
 	msk, err := newAssembleMasker(cfg, entities)
 	if err != nil {
 		return offlineChecked{}, err

@@ -297,6 +297,10 @@ type Entity struct {
 	// AllowKeyUpdate lets update_records assign the columns that identify a
 	// row (the primary key, else the first identity key).
 	AllowKeyUpdate bool
+	// RowColumns are the columns its row scopes test (tenant policy, row
+	// policies, the rows of grants on it), exposed as fields or not: the
+	// table must have them.
+	RowColumns []string
 	// SideEffects reports triggers or rules on the relation: a write may
 	// change other relations of the datasource.
 	SideEffects bool

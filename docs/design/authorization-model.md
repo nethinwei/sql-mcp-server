@@ -93,7 +93,8 @@ entities:
 - `grants[].actions` 取值与现有实体动作相同：`read`、`create`、`update`、
   `delete`、`execute`、`aggregate`；
 - `fields.read` / `fields.write` 语义与现有 `fieldACL` 相同（按 name 或 alias
-  匹配，只能引用可见字段）；`rows` 语法与现有 `rowPolicies` 相同；
+  匹配，只能引用可见字段）；`rows` 语法与现有 `rowPolicies` 相同（条件、非空 `and`/`or`、`not`；`field` 写列名，
+可以是未暴露的列，装配时检查其存在，见[配置参考](../configuration.md#数据源与实体)）；
 - `tenantPolicy` 语法与 `rows` 相同；缺少对应 subject 属性时解析为 nil，
   匹配零行（与现有 `resolveSubject` 的 fail-closed 行为一致）；
 - 系统权限预留独立字段 `permissions: ["sql:execute@<datasource>", …]`；

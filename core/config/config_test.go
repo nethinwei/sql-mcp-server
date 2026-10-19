@@ -176,6 +176,7 @@ func TestValidateSecurityConstraints(t *testing.T) {
 		t.Fatalf("the base configuration must be valid, or every case below passes vacuously: %v", err)
 	}
 	cases := append(securityConstraintCases(), proxyTrustCases()...)
+	cases = append(cases, fieldNameCases()...)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := validSecurityConfig()
@@ -235,6 +236,34 @@ func validSecurityConfig() *Config {
 		Database: DatabaseConfig{Driver: "postgres", DSN: "x"},
 		Cost:     CostConfig{SoftScore: 60, HardScore: 40},
 		Entities: []EntityConfig{{Name: "users"}},
+	}
+}
+
+// fieldNameCases are fields and row filters naming columns ambiguously.
+func fieldNameCases() []struct {
+	name   string
+	mutate func(*Config)
+} {
+	return []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{"two fields share an alias", func(c *Config) {
+			c.Entities[0].Fields = []FieldConfig{{Name: "a", Alias: "x"}, {Name: "b", Alias: "x"}}
+		}},
+		{"alias names another field", func(c *Config) {
+			c.Entities[0].Fields = []FieldConfig{{Name: "a"}, {Name: "b", Alias: "a"}}
+		}},
+		{"alias with spaces", func(c *Config) {
+			c.Entities[0].Fields = []FieldConfig{{Name: "a", Alias: " x"}}
+		}},
+		{"row policy names an alias", func(c *Config) {
+			c.Entities[0].Fields = []FieldConfig{{Name: "id"}, {Name: "tenant_id", Alias: "tenant"}}
+			c.Entities[0].RowPolicies = RowPolicies{"reader": {"op": "eq", "field": "tenant", "value": 1}}
+		}},
+		{"empty row policy group", func(c *Config) {
+			c.Entities[0].RowPolicies = RowPolicies{"reader": {"and": []any{}}}
+		}},
 	}
 }
 
