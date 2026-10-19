@@ -75,7 +75,9 @@ MCP 工具是否在 tools/list 中还取决于全局 `tools` 开关；custom pro
 - **I13** engine/预算达到配置并发上限时拒绝新工作，不创建无界 goroutine。所有
   触达数据库的执行都在执行总线的某个通道上准入并共享 `rateLimit.ioPool`，非工具
   调用通道合计至多占一半；生产代码的 goroutine 与定时器只经 `core/bus` 启动，由
-  `internal/buscheck` 强制。
+  `internal/buscheck` 强制。例外是语句超时时的取消：PostgreSQL 驱动发送的取消请求与
+  MySQL 直连时经独立连接执行的 `KILL QUERY`（`context.AfterFunc` 触发，限时 2 秒，失败只记
+  日志）不是新准入的工作，不经总线。
 
 这些条目由包级单元测试、`go test -race` 和部分 MCP goleak e2e 覆盖；它们不
 构成对数据库 driver 或外部审计 sink 的形式化证明。
