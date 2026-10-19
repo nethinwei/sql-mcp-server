@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -101,7 +102,10 @@ type AsyncAuditor struct {
 	closeSink func() error
 	done      chan struct{}
 	dropped   atomic.Int64
-	closed    atomic.Bool
+	// mu orders Record's send before Close closes the queue: senders hold it
+	// shared, Close exclusively, so no send can reach a closed channel.
+	mu     sync.RWMutex
+	closed bool
 }
 
 // Durably makes a record synchronously through d (its sink, typically) on
@@ -115,7 +119,7 @@ func (a *AsyncAuditor) Durably(d Durable) *AsyncAuditor {
 // written, and synced, before it returns, past the queue (events queued
 // earlier may reach the sink after it; readers order events by time).
 func (a *AsyncAuditor) RecordSync(ctx context.Context, e Event) error {
-	if a.closed.Load() {
+	if a.isClosed() {
 		return ErrSinkClosed
 	}
 	if a.durable == nil {
@@ -143,7 +147,7 @@ func NewAsyncAuditorOn(b *bus.Bus, sink Sink, closeSink func() error, queueSize 
 		done:      make(chan struct{}),
 	}
 	if !b.Go("audit flush", func(context.Context) { a.flush() }) {
-		a.closed.Store(true)
+		a.closed = true
 		if closeSink != nil {
 			_ = closeSink()
 		}
@@ -168,7 +172,9 @@ func (a *AsyncAuditor) flush() {
 
 // Record enqueues an event non-blocking. On a full queue it drops and counts.
 func (a *AsyncAuditor) Record(_ context.Context, e Event) error {
-	if a.closed.Load() {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.closed {
 		return ErrSinkClosed
 	}
 	select {
@@ -184,8 +190,19 @@ func (a *AsyncAuditor) Dropped() int64 { return a.dropped.Load() }
 
 // Close stops accepting events and waits for the flusher to drain the queue.
 func (a *AsyncAuditor) Close() {
-	if a.closed.CompareAndSwap(false, true) {
-		close(a.queue)
-		<-a.done
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return
 	}
+	a.closed = true
+	close(a.queue)
+	a.mu.Unlock()
+	<-a.done
+}
+
+func (a *AsyncAuditor) isClosed() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.closed
 }
