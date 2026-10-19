@@ -207,3 +207,22 @@ func TestRecordSync(t *testing.T) {
 		t.Fatalf("after close: %v", err)
 	}
 }
+
+func TestAsyncAuditorRecordRacesClose(t *testing.T) {
+	t.Parallel()
+	for range 200 {
+		a := NewAsyncAuditorWithClose(func(Event) error { return nil }, nil, 1)
+		var wg sync.WaitGroup
+		for range 8 {
+			wg.Go(func() {
+				for range 16 {
+					if err := a.Record(context.Background(), Event{Tool: "x"}); err != nil && err != ErrSinkClosed {
+						t.Errorf("Record: %v", err)
+					}
+				}
+			})
+		}
+		a.Close()
+		wg.Wait()
+	}
+}

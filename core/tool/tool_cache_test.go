@@ -122,13 +122,14 @@ func TestWriteInvalidatesDatasourcesReachingTheSameDatabase(t *testing.T) {
 			_ = c.Set(context.Background(), key(e), []map[string]any{{}}, 0)
 		}
 		writes := NewWriteTracker()
-		tcx := Context{Services: &Services{Registry: reg, Cache: c, Writes: writes}, Session: "s"}
+		services := &Services{Registry: reg, Cache: c, Writes: writes, Sources: followingWrites("rw", "ro", "archive")}
+		tcx := Context{Services: services, Session: "s"}
 		if err := afterWrite(bg, tcx, byName[writer], ""); err != nil {
 			t.Fatal(err)
 		}
 		// The session's reads through every datasource reaching pg1 follow the write.
 		for datasource, follows := range map[string]bool{"rw": true, "ro": true, "archive": false} {
-			if writes.Recent("s", datasource, time.Minute) != follows {
+			if writes.Recent("s", datasource) != follows {
 				t.Errorf("write to %s: reads through %s follow it = %v", writer, datasource, !follows)
 			}
 		}

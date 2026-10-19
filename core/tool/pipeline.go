@@ -94,15 +94,18 @@ func authorizeSQL(tc Context, datasource string) (grant, EscapeRoute, error) {
 // estimateSQL is the escape hatch's cost gate: EXPLAIN on the escape
 // connection, judged as the Estimate layer judges plans, and a statement
 // EXPLAIN cannot estimate refused. There is no estimate when the
-// configuration skips it or has no EXPLAIN (cost.enabled: false); the hard
-// limits apply either way.
+// configuration skips it; a route without EXPLAIN while the estimate is
+// required refuses every statement (assembly refuses that configuration, so
+// this only backs it up). The hard limits apply either way.
 func estimateSQL(ctx context.Context, tc Context, route EscapeRoute, sql string, args []any, query bool) (
 	gated, error,
 ) {
 	compiled := codegen.Compiled{SQL: sql, Args: args}
-	if !tc.SQLEscapeEstimateRequired || route.Explainer == nil ||
-		query && tc.SQLEscapeMetadata && isMetadataStatement(sql) {
+	if !tc.SQLEscapeEstimateRequired || query && tc.SQLEscapeMetadata && isMetadataStatement(sql) {
 		return gated{Compiled: compiled}, nil
+	}
+	if route.Explainer == nil {
+		return gated{}, &UnestimableError{Cause: errNoExplain}
 	}
 	plan, err := route.Explainer.Explain(ctx, sql, args)
 	if err != nil {
@@ -133,10 +136,15 @@ func estimateSQL(ctx context.Context, tc Context, route EscapeRoute, sql string,
 // refuses is refused as too costly, which tells how to narrow it, where
 // waiting for the budget to reset never helps.
 func checkScannedBudget(tc Context, plan *cost.Plan) error {
-	if limit := tc.BudgetLimits.MaxEstimatedScannedRows; plan != nil && limit > 0 && plan.ScannedRows() > limit {
-		return fmt.Errorf("%w: estimated scanned rows %d exceed limit %d", budget.ErrExceeded, plan.ScannedRows(), limit)
+	limit := tc.BudgetLimits.MaxEstimatedScannedRows
+	if plan == nil || !plan.OverScanLimit(limit) {
+		return nil
 	}
-	return nil
+	if rows, known := plan.ScannedRowsKnown(); known {
+		return fmt.Errorf("%w: estimated scanned rows %d exceed limit %d", budget.ErrExceeded, rows, limit)
+	}
+	return fmt.Errorf("%w: a full scan of a table of unknown size may exceed the scanned-row limit %d",
+		budget.ErrExceeded, limit)
 }
 
 // estimatedRows is the rows the gate estimated the statement scans.
@@ -225,7 +233,10 @@ func (st statement) queryRaw(ctx context.Context) (out rawRows, err error) {
 		if err := rows.Scan(pointers...); err != nil {
 			return rawRows{}, st.fail(err)
 		}
-		if err := st.tc.results.add(rowOf(out.columns, values)); err != nil {
+		if err := st.tc.results.add(rowOf(out.columns, values)); errors.Is(err, errResultCut) {
+			out.truncated = true
+			break
+		} else if err != nil {
 			return rawRows{}, err
 		}
 		out.rows = append(out.rows, values)
@@ -259,6 +270,8 @@ func (st statement) admitted() error {
 type queried struct {
 	rows []map[string]any
 	kept []map[string]any
+	// truncated: a write's rows were cut short past the result memory.
+	truncated bool
 }
 
 // query runs st and reads its rows: shaped, masked and counted against the
@@ -287,10 +300,19 @@ func (st statement) query(ctx context.Context) (out queried, err error) {
 			out.kept = append(out.kept, kept)
 		}
 		st.present(row)
-		if st.rowCap > 0 && int64(len(out.rows)) >= st.rowCap {
+		err := errResultCut // a write's rows past its cap are cut: it already took effect
+		if st.rowCap <= 0 || int64(len(out.rows)) < st.rowCap {
+			err = st.tc.results.add(row)
+		} else if !st.write {
 			return queried{}, budget.ErrExceeded
 		}
-		if err := st.tc.results.add(row); err != nil {
+		if errors.Is(err, errResultCut) {
+			out.truncated = true
+			if st.keep != nil {
+				out.kept = out.kept[:len(out.rows)]
+			}
+			return out, nil
+		} else if err != nil {
 			return queried{}, err
 		}
 		out.rows = append(out.rows, row)
@@ -375,7 +397,7 @@ func (st statement) failRaw(err error) error {
 // it changed is unknown, so every cached read of its database is dropped.
 func (st statement) settle(ctx context.Context, err error) error {
 	if st.raw {
-		st.tc.Writes.Record(st.tc.Session, st.tc.DataSource)
+		st.tc.Writes.Record(st.tc.Session, st.tc.DataSource, st.tc.Sources[st.tc.DataSource].ReadAfterWrite)
 		w := writeTargets(st.tc)
 		if followErr := applyWrite(st.tc, w, []CacheTarget{{Physical: w.database(st.tc.DataSource)}}); err == nil {
 			return followErr

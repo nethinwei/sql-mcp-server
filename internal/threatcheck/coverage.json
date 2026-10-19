@@ -66,6 +66,7 @@
       {"file": "cmd/sql-mcp-server/cli_auth_test.go", "name": "TestPreparedAuthsFailOnUnreadableCertificate"},
       {"file": "cmd/sql-mcp-server/cli_auth_test.go", "name": "TestPreparedAuthsFollowPublishedApps"},
       {"file": "x/mcpserver/http_test.go", "name": "TestWithRequestSubjectRejectsMalformedSubject"},
+      {"file": "core/tool/numbers_test.go", "name": "TestNormalizedSubjectSharesTheConfiguredScope"},
       {"file": "x/mcpserver/http_test.go", "name": "TestTrustedProxyAddress"},
       {"file": "x/mcpserver/http_test.go", "name": "TestTrustedProxyCertificate"},
       {"file": "x/mcpserver/auth_reload_test.go", "name": "TestAuthChangesTrustProxyCertificateSubjects"},
@@ -149,7 +150,13 @@
       {"file": "x/mcpserver/execute_sql_test.go", "name": "TestExecuteSQLRoleHeaderCannotImpersonateUser"},
       {"file": "x/mcpserver/users_test.go", "name": "TestRevokeSessionsDropsBindingsAndRollsBack"},
       {"file": "x/bootstrap/bootstrap_access_test.go", "name": "TestReloadReportsRevokedPrincipals"},
-      {"file": "core/config/config_access_test.go", "name": "TestValidateAccessRejectsInvalidConfig"}
+      {"file": "core/config/config_access_test.go", "name": "TestValidateAccessRejectsInvalidConfig"},
+      {"file": "core/config/listen_test.go", "name": "TestSharedTokenLength"},
+      {"file": "core/config/listen_test.go", "name": "TestSharedTokenLengthOnlyForHTTP"},
+      {"file": "x/mcpserver/http_test.go", "name": "TestValidateHTTPSecurity"},
+      {"file": "x/mcpserver/cert_identity_test.go", "name": "TestCertIdentity"},
+      {"file": "x/mcpserver/cert_identity_test.go", "name": "TestMTLSClientCertificateIdentity"},
+      {"file": "x/bootstrap/bootstrap_access_test.go", "name": "TestUserByCertificate"}
     ],
     "gaps": [
       "token 无过期时间；X-MCP-User 的真实反向代理 e2e 未实现"
@@ -220,6 +227,7 @@
       {"file": "x/mcpserver/execute_sql_test.go", "name": "TestExecuteSQLStdioDefaultIdentity"},
       {"file": "x/mcpserver/execute_sql_test.go", "name": "TestReloadRevokesExecuteSQL"},
       {"file": "x/bootstrap/bootstrap_test.go", "name": "TestAssembleRoutesEscapeHatch"},
+      {"file": "x/bootstrap/escape_test.go", "name": "TestEscapeExplainerRequiresEXPLAINForARequiredEstimate"},
       {"file": "core/config/config_access_test.go", "name": "TestValidateSQLEscape"},
       {"file": "core/rbac/rbac_test.go", "name": "TestPolicyHasPermission"},
       {"file": "core/audit/audit_test.go", "name": "TestRecordSync"},
@@ -238,6 +246,8 @@
       {"file": "x/admin/graph/authz_matrix_test.go", "name": "TestAuthorizationPrecedesInput"},
       {"file": "x/admin/admin_test.go", "name": "TestLoginSessionAndCSRF"},
       {"file": "x/admin/admin_test.go", "name": "TestLoginFailuresLockOut"},
+      {"file": "x/admin/session_test.go", "name": "TestLoginFailuresBounded"},
+      {"file": "x/admin/session_test.go", "name": "TestLockoutSurvivesNameFlood"},
       {"file": "x/admin/admin_test.go", "name": "TestLoginGateRejectsExcessAttempts"},
       {"file": "x/admin/admin_test.go", "name": "TestDisabledAccountLosesSessionAndCannotSignIn"},
       {"file": "x/admin/admin_test.go", "name": "TestPasswordChangeEndsSessions"},
@@ -250,6 +260,24 @@
     ],
     "gaps": [
       "会话只在进程内保存，多副本需要会话粘性；只有本地账号登录，没有 OIDC/OAuth2 与多因素认证；登录闸门之外没有按账号的请求限速"
+    ]
+  },
+  "TM-015": {
+    "severity": "critical",
+    "tests": [
+      {"file": "core/tool/write_check_test.go", "name": "TestCreateCannotCrossTenant"},
+      {"file": "core/tool/write_check_test.go", "name": "TestCreatePinsTheHiddenTenantColumn"},
+      {"file": "core/tool/write_check_test.go", "name": "TestCreateViolationNamesOnlyVisibleFields"},
+      {"file": "core/tool/write_check_test.go", "name": "TestUpdateCannotMoveRowAcrossTenant"},
+      {"file": "core/tool/write_check_test.go", "name": "TestUpdateWithinScopeKeepsThePolicy"},
+      {"file": "core/tool/write_check_test.go", "name": "TestUpdateResidualPolicyConjoined"},
+      {"file": "core/tool/write_check_test.go", "name": "TestUpdateRejectsKeyColumnsByDefault"},
+      {"file": "core/relalg/interp/check_test.go", "name": "TestCheckAgreesWithEval"},
+      {"file": "core/relalg/interp/check_test.go", "name": "TestCheckFailsClosed"},
+      {"file": "core/codegen/codegen_test.go", "name": "TestCompileRefusesUnboundedWrites"}
+    ],
+    "gaps": [
+      "服务端求值不模拟数据库排序规则，大小写不敏感时否定条件可能与数据库判定不同；procedure 与 execute_sql 的写入不受此检查"
     ]
   }
 }

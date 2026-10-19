@@ -87,8 +87,9 @@ func TestFilterFields(t *testing.T) {
 	filter := map[string]any{"or": []any{
 		map[string]any{"op": "eq", "field": "region", "value": "${subject.region}"},
 		map[string]any{"and": []any{map[string]any{"op": "is_null", "field": "deleted_at"}}},
+		map[string]any{"not": map[string]any{"op": "eq", "field": "status", "value": "archived"}},
 	}}
-	if got := FilterFields(filter); !slices.Equal(got, []string{"region", "deleted_at"}) {
+	if got := FilterFields(filter); !slices.Equal(got, []string{"region", "deleted_at", "status"}) {
 		t.Fatalf("FilterFields = %v", got)
 	}
 	if got := FilterFields(nil); got != nil {

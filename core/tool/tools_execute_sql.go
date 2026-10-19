@@ -88,6 +88,7 @@ func (in *executeSQLInput) normalize() error {
 			return err
 		}
 		in.Args, _ = normalized.([]any)
+		literalNumbers(in.Args) // no column to take them: the database converts the text
 	}
 	return nil
 }
@@ -138,7 +139,7 @@ func (ExecuteSQLTool) Run(ctx context.Context, input json.RawMessage, tc Context
 		Content: []map[string]any{{
 			"columns": got.columns, "rows": got.rows, "rowCount": len(got.rows), "truncated": got.truncated,
 		}},
-		ReturnedRows: int64(len(got.rows)), Counted: true,
+		ReturnedRows: int64(len(got.rows)), Counted: true, Truncated: got.truncated,
 	}, nil
 }
 
@@ -244,6 +245,9 @@ func skipSpaceAndComments(s string) string {
 		}
 	}
 }
+
+// errNoExplain is the estimate of a route without EXPLAIN.
+var errNoExplain = errors.New("the datasource has no EXPLAIN to estimate with")
 
 // UnestimableError is a statement the escape hatch could not estimate: the
 // datasource's EXPLAIN failed on it (DDL, SET, SHOW, a syntax error, an

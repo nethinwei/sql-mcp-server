@@ -55,3 +55,13 @@ type PrivilegeInspector interface {
 	// name is overloaded.
 	ProcedurePrivilege(ctx context.Context, schema, name string) (Privilege, error)
 }
+
+// WriteInspector is implemented by introspectors that can tell whether
+// their connection's account may write at all.
+type WriteInspector interface {
+	// CanWrite reports whether the account holds any privilege that changes
+	// data, schema or routines (or runs routines, which may): denied when
+	// every privilege it holds only reads, unknown when the database does not
+	// say all it holds.
+	CanWrite(ctx context.Context) (Privilege, error)
+}

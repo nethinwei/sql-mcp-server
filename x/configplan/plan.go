@@ -53,6 +53,9 @@ type Scope struct {
 	Drift bool `json:"drift,omitempty"`
 	// Refs limits the scope to these tables.
 	Refs []string `json:"refs,omitempty"`
+	// Entities limits the scope to the tables of these configured entities,
+	// by ID.
+	Entities []string `json:"entities,omitempty"`
 }
 
 // Status is where a table stands against the configuration.
@@ -90,7 +93,7 @@ type FieldRule struct {
 }
 
 // SyncRule adds fields for new columns and removes those of dropped ones,
-// and removes the entities of dropped tables.
+// brings keys and kinds in line, and removes the entities of dropped tables.
 type SyncRule struct {
 	Add    bool `json:"add,omitempty"`
 	Remove bool `json:"remove,omitempty"`
@@ -99,6 +102,11 @@ type SyncRule struct {
 	// RemoveTables removes the entities whose tables are gone (see
 	// GoneTables), with the grants, relationships and affects naming them.
 	RemoveTables bool `json:"removeTables,omitempty"`
+	// Keys sets the primary and unique keys of tables to those scanned, and
+	// the kind (table or view) of each entity to its table's. Relationships
+	// are reported where they and the foreign keys differ, not changed: a
+	// configured relationship is not known to come from a foreign key.
+	Keys bool `json:"keys,omitempty"`
 }
 
 var grantable = []string{"read", "aggregate", "create", "update", "delete"}
@@ -136,7 +144,7 @@ func (p *Plan) Check() error {
 			errs = append(errs, checkGlob(pattern))
 		}
 	}
-	syncs := p.Sync != nil && (p.Sync.Add || p.Sync.Remove || p.Sync.RemoveTables)
+	syncs := p.Sync != nil && (p.Sync.Add || p.Sync.Remove || p.Sync.RemoveTables || p.Sync.Keys)
 	if !p.Import && len(p.Grants) == 0 && len(p.Fields) == 0 && !syncs {
 		errs = append(errs, errors.New("plan: nothing to do: set import, grants, fields or sync"))
 	}

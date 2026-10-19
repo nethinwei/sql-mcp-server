@@ -48,6 +48,8 @@ type EntityItem struct {
 	Params        []string           `json:"params"`
 	Affects       []string           `json:"affects"`
 	AllowCascade  *bool              `json:"allowCascade,omitempty" merge:"unset"`
+	// AllowKeyUpdate lets update_records assign the row's identifying columns.
+	AllowKeyUpdate *bool `json:"allowKeyUpdate,omitempty" merge:"unset"`
 }
 
 // FieldItem is a field of an entity.
@@ -107,6 +109,8 @@ type UserItem struct {
 	Subject     any         `json:"subject,omitempty"`
 	Disabled    *bool       `json:"disabled,omitempty"    merge:"unset"`
 	TokenHash   *string     `json:"tokenHash,omitempty"`
+	// CertSubjects name the client certificates that are the user (mTLS).
+	CertSubjects []string `json:"certSubjects"`
 	// Limits are as a role's.
 	Limits any `json:"limits,omitempty"`
 }
@@ -150,7 +154,8 @@ func SectionsOf(spec *config.Spec) (Sections, error) {
 		item := UserItem{
 			Name: name, Description: nonEmpty(u.Description), Roles: listOf([]string(u.Roles)),
 			Grants: grantItems(u.Grants), Permissions: listOf([]string(u.Permissions)), Disabled: u.Disabled,
-			TokenHash: nonEmpty(u.TokenHash), Limits: limitsOf(doc, "users", name),
+			TokenHash: nonEmpty(u.TokenHash), CertSubjects: listOf([]string(u.CertSubjects)),
+			Limits: limitsOf(doc, "users", name),
 		}
 		if len(u.Subject) > 0 {
 			item.Subject = u.Subject
@@ -201,7 +206,8 @@ func entityItem(e config.EntitySpec) EntityItem {
 		Kind: nonEmpty(e.Kind), Description: nonEmpty(e.Description), PrimaryKey: listOf([]string(e.PrimaryKey)),
 		UniqueKeys: listOf([][]string(e.UniqueKeys)), Params: listOf([]string(e.Params)),
 		Affects: listOf([]string(e.Affects)), AllowCascade: e.AllowCascade,
-		Fields: make([]FieldItem, 0, len(e.Fields)), Relationships: make([]RelationshipItem, 0, len(e.Relationships)),
+		AllowKeyUpdate: e.AllowKeyUpdate,
+		Fields:         make([]FieldItem, 0, len(e.Fields)), Relationships: make([]RelationshipItem, 0, len(e.Relationships)),
 	}
 	if e.MCP != nil {
 		out.Mcp = &EntityMCPItem{
@@ -347,7 +353,7 @@ func (in EntityItem) spec() (config.EntitySpec, error) {
 		Name: &in.Name, Source: nonEmpty(in.Source), DataSource: nonEmpty(in.Datasource), Schema: nonEmpty(in.Schema),
 		Kind: nonEmpty(in.Kind), Description: nonEmpty(in.Description), PrimaryKey: listSpec(in.PrimaryKey),
 		UniqueKeys: listSpec(in.UniqueKeys), Params: listSpec(in.Params), Affects: listSpec(in.Affects),
-		AllowCascade: onlyTrue(in.AllowCascade),
+		AllowCascade: onlyTrue(in.AllowCascade), AllowKeyUpdate: onlyTrue(in.AllowKeyUpdate),
 	}
 	for _, f := range in.Fields {
 		e.Fields = append(e.Fields, config.FieldSpec{
@@ -442,7 +448,8 @@ func (u UserItem) spec() (configedit.User, error) {
 		return configedit.User{}, err
 	}
 	out := configedit.User{Name: u.Name, UserSpec: config.UserSpec{
-		Description: nonEmpty(u.Description), TokenHash: nonEmpty(u.TokenHash), Roles: listSpec(u.Roles),
+		Description: nonEmpty(u.Description), TokenHash: nonEmpty(u.TokenHash), CertSubjects: listSpec(u.CertSubjects),
+		Roles:  listSpec(u.Roles),
 		Grants: grants, Permissions: listSpec(u.Permissions), Disabled: onlyTrue(u.Disabled), Limits: limits,
 	}}
 	if u.Subject != nil {

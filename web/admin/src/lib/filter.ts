@@ -1,7 +1,7 @@
 import { t } from '@/i18n'
 
 // Row filters use the rowPolicies JSON shape:
-//   {op, field, value} | {and: Filter[]} | {or: Filter[]}
+//   {op, field, value} | {and: Filter[]} | {or: Filter[]} | {not: Filter}
 
 export type Op = 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'not_in' | 'like' | 'is_null' | 'is_not_null'
 
@@ -14,7 +14,10 @@ export interface Group {
   and?: Filter[]
   or?: Filter[]
 }
-export type Filter = Condition | Group
+export interface Negation {
+  not: Filter
+}
+export type Filter = Condition | Group | Negation
 
 /** Operators; labels are message keys under filter.ops. */
 export const ops: { value: Op; arity: 0 | 1 | 'list' }[] = [
@@ -39,6 +42,10 @@ export function isCondition(f: Filter): f is Condition {
   return typeof (f as Condition).op === 'string'
 }
 
+export function isNegation(f: Filter): f is Negation {
+  return typeof f === 'object' && f !== null && 'not' in f
+}
+
 const subjectRe = /^\$\{subject\.([^}]+)\}$/
 
 function describeValue(v: unknown): string {
@@ -58,9 +65,10 @@ export function describeFilter(f: Filter | null | undefined): string {
     if (f.op === 'is_not_null') return `${f.field} ${t('filter.isNotNull')}`
     return `${f.field} ${symbols[f.op]} ${describeValue(f.value)}`
   }
+  if (isNegation(f)) return `${t('filter.not')}(${describeFilter(f.not)})`
   const [joiner, items] = f.and ? [t('filter.and'), f.and] : [t('filter.or'), f.or ?? []]
   if (items.length === 0) return t('filter.allRows')
-  const parts = items.map((i) => (isCondition(i) ? describeFilter(i) : `(${describeFilter(i)})`))
+  const parts = items.map((i) => (isCondition(i) || isNegation(i) ? describeFilter(i) : `(${describeFilter(i)})`))
   return parts.join(joiner)
 }
 
@@ -68,5 +76,6 @@ export function describeFilter(f: Filter | null | undefined): string {
 export function filterFields(f: Filter | null | undefined): string[] {
   if (!f) return []
   if (isCondition(f)) return [f.field]
+  if (isNegation(f)) return filterFields(f.not)
   return [...(f.and ?? []), ...(f.or ?? [])].flatMap(filterFields)
 }

@@ -51,6 +51,9 @@ const (
 	CodeTransactionStale    = "TRANSACTION_STALE"
 	CodeAmbiguousFieldScope = "AMBIGUOUS_FIELD_SCOPE"
 	CodeConstraintViolation = "CONSTRAINT_VIOLATION"
+	// CodeRowPolicyViolation: the row a create or update writes would be
+	// outside the caller's row scope (tenant policy, granted rows).
+	CodeRowPolicyViolation  = "ROW_POLICY_VIOLATION"
 	CodeDatasourceForbidden = "DATASOURCE_FORBIDDEN"
 	CodeAmbiguousEntity     = "AMBIGUOUS_ENTITY"
 	CodeOutcomeUnknown      = "OUTCOME_UNKNOWN"
@@ -189,13 +192,8 @@ func typedDenial(err error) (Denial, bool) {
 	if errors.As(err, &ce) {
 		return costDenial(ce, ""), true
 	}
-	var cv *ConstraintViolationError
-	if errors.As(err, &cv) {
-		return Denial{
-			Code: CodeConstraintViolation, Reason: cv.Error(), Retryable: true,
-			Constraints: map[string]any{"kind": cv.Kind, "fields": cv.Fields},
-			Hints:       []string{"change the values of constraints.fields (or check referenced rows) and retry"},
-		}, true
+	if d, ok := writeDenial(err); ok {
+		return d, true
 	}
 	var ee *AmbiguousEntityError
 	if errors.As(err, &ee) {
@@ -217,6 +215,28 @@ func typedDenial(err error) (Denial, bool) {
 	return Denial{}, false
 }
 
+// writeDenial maps a write refused for the values it writes.
+func writeDenial(err error) (Denial, bool) {
+	var cv *ConstraintViolationError
+	if errors.As(err, &cv) {
+		return Denial{
+			Code: CodeConstraintViolation, Reason: cv.Error(), Retryable: true,
+			Constraints: map[string]any{"kind": cv.Kind, "fields": cv.Fields},
+			Hints:       []string{"change the values of constraints.fields (or check referenced rows) and retry"},
+		}, true
+	}
+	var rp *RowPolicyViolationError
+	if errors.As(err, &rp) {
+		d := Denial{Code: CodeRowPolicyViolation, Reason: rp.Error(), Retryable: len(rp.Fields) > 0}
+		if len(rp.Fields) > 0 {
+			d.Constraints = map[string]any{"fields": rp.Fields}
+			d.Hints = []string{"write values of constraints.fields that keep the row within your access"}
+		}
+		return d, true
+	}
+	return Denial{}, false
+}
+
 // costDenial exposes the cost gate's estimate and effective limits so the
 // agent can tighten the request instead of retrying blindly.
 func costDenial(ce *cost.ExceededError, decisionID string) Denial {
@@ -225,7 +245,9 @@ func costDenial(ce *cost.ExceededError, decisionID string) Denial {
 		"scoreValue":    ce.Score.Value,
 		"soft":          ce.Soft,
 	}
-	if scanned := ce.Plan.ScannedRows(); scanned > 0 {
+	if scanned, known := ce.Plan.ScannedRowsKnown(); !known {
+		constraints["scannedRowsUnknown"] = true
+	} else if scanned > 0 {
 		constraints["estimatedScannedRows"] = scanned
 	}
 	if ce.Threshold.MaxScannedRows > 0 {

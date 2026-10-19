@@ -1,7 +1,9 @@
 import type zh from './zh-CN'
+import { reasonsEn } from './reasons'
 
 // English. The type annotation keeps the keys identical to zh-CN.ts.
 const en: typeof zh = {
+  reasons: reasonsEn,
   app: { title: 'MCP Console', subtitle: 'Admin console for the governed SQL gateway' },
   common: {
     cancel: 'Cancel', confirm: 'OK', save: 'Save', delete: 'Delete', add: 'Add', create: 'Create', remove: 'Remove',
@@ -104,6 +106,11 @@ const en: typeof zh = {
     limitIssue: '{connection}: {key} ({use}) is {strength}: {reason}',
     limits: 'Serving database-side guarantees: read timeout {read}, write timeout {write}, unkeyed-write refusal {unkeyed}',
     strength: { ENFORCED: 'enforced', BEST_EFFORT: 'best effort', UNSUPPORTED: 'none' },
+    capKey: {
+      write_returning: 'write read-back', cost_explain: 'EXPLAIN estimate', cost_explain_accurate: 'trusted estimates',
+      cost_explain_analyze: 'EXPLAIN ANALYZE sampling', limit_timeout_read: 'read timeout',
+      limit_timeout_write: 'write timeout', limit_unkeyedWrite: 'unkeyed write refusal',
+    },
     cliOnly: 'Datasources and connection strings can only be changed with the CLI, so credentials never pass through the console. Imported tables carry no permissions by default; you can grant them to roles as you add them.', scan: 'Scan',
     rescan: 'Rescan', searchTables: 'Search tables or descriptions',
     refreshSchemas: 'Refresh databases',
@@ -188,7 +195,7 @@ const en: typeof zh = {
     unscanned: '{n} schemas in scope are not scanned; their tables are not in the plan:',
     changes: 'Changes', noChanges: 'Nothing to change.', objects: 'Schemas covered ({n})',
     objectCounts: '{tables} tables · {imported} added · {changed} changed',
-    rename: 'Rename', excludeTable: 'Exclude table',
+    rename: 'Rename', excludeTable: 'Exclude table', locate: 'Fix it', removedList: 'Removes {n} entities whose tables are gone:',
     more: '{n} more',
     change: {
       import: 'Add {n} entities (no access, named after the tables)', createRole: 'Create role {principal}',
@@ -196,6 +203,7 @@ const en: typeof zh = {
       mask: 'Mask {fields} fields as “{mask}” ({n} entities)', syncAdd: 'Add {fields} fields ({n} entities)',
       syncRemove: 'Remove {fields} fields ({n} entities)',
       removeTable: 'Remove {n} entities whose tables are gone (with the grants and relationships naming them)',
+      syncKeys: 'Set primary and unique keys from the database ({n} entities)', syncKind: 'Set table or view from the database ({n} entities)',
     },
     exception: {
       renamed: { title: 'Name taken', detail: 'entity named {detail}', plain: 'entity renamed' },
@@ -208,6 +216,10 @@ const en: typeof zh = {
       referenced: { title: 'Field referenced', detail: 'not removed: {detail}', plain: 'still referenced, not removed' },
       denied: { title: 'Connection lacks privilege', detail: '{detail}', plain: 'the connection lacks the database privilege' },
       review: { title: 'New table granted', detail: 'the new table is granted to {detail}; confirm', plain: 'a new table enters a grant' },
+      keyReferenced: { title: 'Key change affects a relationship', detail: 'the keys no longer include {detail}', plain: 'the keys no longer include a joined column' },
+      rowColumnMissing: { title: 'Row scope column gone', detail: 'missing {detail}: fix the tenant policy, row policies or grant rows by hand; the entity stays unavailable until then', plain: 'a column a row scope tests is gone' },
+      relationshipNew: { title: 'Foreign key without relationship', detail: '{detail}', plain: 'a foreign key no relationship follows' },
+      relationshipStale: { title: 'Relationship without foreign key', detail: 'relationship {detail} is named as imported ones are but no foreign key backs it; ignore it if written by hand', plain: 'a relationship no foreign key backs' },
     },
     invalid: 'The configuration does not validate with the plan applied',
     effectHot: 'Applies on publish without a restart.', effectRestart: 'Needs a restart after publishing: {list}',
@@ -265,6 +277,19 @@ const en: typeof zh = {
     deleteChecked: 'Delete selected ({n})', deleteMatching: 'Delete all {n} matching',
     deleteTitle: 'Delete {n} entities from the workspace?', deleteNoAccess: 'No role or user has access to them.',
     andMore: '{list} and others ({n} in all)', deleted: 'Deleted {n} entities from your workspace; review and publish to apply',
+    syncAll: 'Sync entities', syncMatching: 'Sync the {n} matching',
+    sync: {
+      title: 'Sync entities', previewTitle: 'Sync entities: preview',
+      intro: 'Brings {n} entities in line with the database: new columns (hidden by default), fields whose columns are gone, primary and unique keys, table or view, and entities whose tables are gone. The outcome goes into the workspace, to review and publish.',
+      unreachable: 'These datasources are unreachable; their entities are left out (unreachable is not gone): {list}',
+      procedures: '{n} procedures are left out.',
+      schemas: 'Scan these schemas first (differences are judged from the last scan):', defaultSchema: 'default schema',
+      neverScanned: 'never scanned',
+      stale: 'over an hour old', hint: 'Schemas scanned over an hour ago are checked; you may skip the scan and preview from the scans there are and what the server found missing.',
+      skipScan: 'Skip the scan', preview: 'Preview', scanThenPreview: 'Scan {n} schemas, then preview',
+      state: { pending: 'waiting', running: 'scanning', done: 'done', failed: 'failed', canceled: 'canceled' },
+      applied: 'Added to the workspace ({n} changes); publish after review',
+    },
   },
   entity: {
     renameTitle: 'Rename entity', name: 'Name', renameHint: 'Grants and relationships of other entities follow; the table it reads stays the same.',
@@ -277,6 +302,8 @@ const en: typeof zh = {
     visible: 'Visible to agents', visibleHint: 'When off, the generic read/write tools no longer expose this entity (grants are kept).',
     allowCascade: 'Allow cascading writes',
     allowCascadeHint: 'When foreign keys cascade deletes or updates to other tables, the caller no longer needs unscoped permission on the cascaded entities; cascades into unexposed tables are admitted too.',
+    allowKeyUpdate: 'Allow key updates',
+    allowKeyUpdateHint: 'Lets update_records assign the columns that identify a row (the primary key, else the first unique key). Refused by default: delete the row and create it again.',
     fields: 'Fields', commentDefault: 'Empty descriptions use the database comment (shown in grey); writing one overrides it.', maskHint: 'Masked fields may only appear in results, never in filters, grouping or aggregates.',
     field: 'Field', fieldDescription: 'Description', fieldDescriptionHint: 'Field description for agents', alias: 'Alias',
     mask: 'Masking', hidden: 'Hidden',
@@ -315,13 +342,13 @@ const en: typeof zh = {
     filterFields: 'Filter fields', readable: 'Readable fields', writable: 'Writable fields',
   },
   filter: {
-    allRows: 'all rows', and: ' and ', or: ' or ', currentUser: 'current user', isNull: 'is null', isNotNull: 'is not null',
+    allRows: 'all rows', and: ' and ', or: ' or ', not: 'not ', currentUser: 'current user', isNull: 'is null', isNotNull: 'is not null',
     ops: {
       eq: 'equals', ne: 'not equal', gt: 'greater than', gte: 'at least', lt: 'less than', lte: 'at most', in: 'in',
       not_in: 'not in', like: 'like', is_null: 'is null', is_not_null: 'is not null',
     },
     emptyHint: 'No row limit: every row is readable', addCondition: 'Add condition', addGroup: 'Add group',
-    matchAll: 'Match all', matchAny: 'Match any', removeGroup: 'Remove group', field: 'Field', value: 'Value',
+    matchAll: 'Match all', matchAny: 'Match any', negate: 'Negate', removeGroup: 'Remove group', field: 'Field', value: 'Value',
     listValue: 'a, b, c', noValue: '(no value needed)',
     valueHint: 'Values are typed automatically: write numbers as 100, strings as-is (quote them to force a string), lists comma separated.',
   },
@@ -350,6 +377,8 @@ const en: typeof zh = {
     tokenOnce: 'This is the only time the token is shown. Give it to the caller to send as Authorization: Bearer <token>; it works after publishing.',
     revokeTitle: 'Revoke this user\'s token?',
     revokeBody: 'After publishing, clients with the old token are rejected immediately and their sessions are closed.',
+    certSubjects: 'Client certificates (mTLS)',
+    certSubjectsHint: 'A request presenting one of these certificates (without a token) calls as this user: cn:<CN>, dns:<name>, uri:<URI, such as a SPIFFE ID>, email:<address>.',
     subject: 'Subject attributes', subjectHint: '"current user.x" in row scopes and tenant boundaries comes from here, e.g. tenant_id.',
     attrName: 'Attribute', attrValue: 'Value', addAttr: 'Add attribute',
     grants: 'Direct grants', grantsHint: 'Extra access for this user only; prefer granting through roles.',

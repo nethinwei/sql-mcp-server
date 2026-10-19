@@ -68,9 +68,9 @@ type Config struct {
 	Capabilities func() bootstrap.EntityCapabilities
 	// Profiles reports what the serving connections guarantee; optional.
 	Profiles func() ([]bootstrap.ConnectionProfile, []bootstrap.LimitIssue)
-	// MissingTables reports the entities whose tables the serving
-	// configuration found missing; optional.
-	MissingTables func() map[string]bool
+	// Missing reports what the serving configuration found missing from the
+	// databases; optional.
+	Missing func() bootstrap.Missing
 	// PlannedLimits judges a configuration before it is applied; optional.
 	PlannedLimits func(*config.Config) []bootstrap.LimitIssue
 	// PathPrefix is the path a gateway serves the service under and strips
@@ -110,7 +110,7 @@ func New(cfg Config) *Handler {
 	}
 	app := &configapp.Service{
 		Store: cfg.Store, Introspect: cfg.Introspect, Capabilities: cfg.Capabilities, Profiles: cfg.Profiles,
-		MissingTables: cfg.MissingTables, PlannedLimits: cfg.PlannedLimits, Scans: h.scans, Plans: cfg.Plans,
+		Missing: cfg.Missing, PlannedLimits: cfg.PlannedLimits, Scans: h.scans, Plans: cfg.Plans,
 	}
 	app.WatchScanBatches()
 	cfg.Bus.Go("warm console caches", app.Warm)

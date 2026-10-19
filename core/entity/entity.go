@@ -282,6 +282,9 @@ type Entity struct {
 	// configured column, is missing from the database (set at assembly).
 	// Empty when it can be; tools refuse it once the caller is authorized.
 	Unavailable string
+	// Absent are the columns missing from its table when Unavailable says
+	// columns are (fields, or columns its row scopes test).
+	Absent []string
 	// Relation identifies the physical relation (set at assembly, see
 	// RelationKey); at most one entity exposes a relation.
 	Relation string
@@ -294,6 +297,13 @@ type Entity struct {
 	// AllowCascade admits such writes without checking the caller's
 	// permissions on the cascaded entities.
 	AllowCascade bool
+	// AllowKeyUpdate lets update_records assign the columns that identify a
+	// row (the primary key, else the first identity key).
+	AllowKeyUpdate bool
+	// RowColumns are the columns its row scopes test (tenant policy, row
+	// policies, the rows of grants on it), exposed as fields or not: the
+	// table must have them.
+	RowColumns []string
 	// SideEffects reports triggers or rules on the relation: a write may
 	// change other relations of the datasource.
 	SideEffects bool

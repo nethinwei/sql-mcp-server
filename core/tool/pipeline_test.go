@@ -199,14 +199,19 @@ func TestWriteWithLostConnectionHasUnknownOutcome(t *testing.T) {
 	}}
 	writes := NewWriteTracker()
 	tc := Context{
-		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Writes: writes},
-		Role:     "writer",
-		Session:  "s",
-		DB:       db,
-		Dialect:  testdialect.Postgres{},
+		Services: &Services{
+			Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Writes: writes,
+			Sources: map[string]DataSource{"default": {
+				DB: db, Dialect: testdialect.Postgres{}, ReadAfterWrite: time.Minute,
+			}},
+		},
+		Role:    "writer",
+		Session: "s",
+		DB:      db,
+		Dialect: testdialect.Postgres{},
 	}
 	in, _ := json.Marshal(updateInput{
-		Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: 1}}, Set: map[string]any{"id": 2},
+		Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: 1}}, Set: map[string]any{"email": "x"},
 	})
 	_, err := RunTool(context.Background(), UpdateTool{}, in, tc)
 	denial, ok := DenialFor(err, "d")
@@ -338,5 +343,47 @@ func TestWriteIsNeverRefusedForResultMemory(t *testing.T) {
 	}
 	if held := memory.InUse(); held != 0 {
 		t.Fatalf("%d bytes held after the call", held)
+	}
+}
+
+// A procedure's rows past the result memory are cut, not held: the call
+// returns what fit, marked truncated, and audits it.
+func TestProcedureRowsPastResultMemoryAreCut(t *testing.T) {
+	t.Parallel()
+	proc := entity.Entity{
+		Name: "refresh", Source: "refresh", Kind: entity.KindProcedure,
+		Attributes: []entity.Attribute{{Name: "id"}, {Name: "note"}},
+		Role:       entity.RoleAccess{entity.ActionExecute: {"w"}},
+		MCP:        entity.MCPFlags{DMLTools: true, TrustedProcedure: true},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{proc})
+	rows := make([][]any, 100)
+	for i := range rows {
+		rows[i] = []any{int64(i), strings.Repeat("x", 100)}
+	}
+	db := &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return storetest.NewFakeRows([]string{"id", "note"}, rows...), nil
+	}}
+	memory := NewResultMemory(1000)
+	auditor := &recorderAuditor{}
+	events := []string{}
+	tc := Context{
+		Services: &Services{
+			Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), ResultMemory: memory, Auditor: auditor,
+		},
+		Role:    "w",
+		DB:      db,
+		Dialect: testdialect.Postgres{},
+		Gate:    recordingGate{events: &events},
+	}
+	res, err := RunTool(context.Background(), ExecuteTool{}, json.RawMessage(`{"entity":"refresh"}`), tc)
+	if err != nil || !res.Truncated || len(res.Content) == 0 || len(res.Content) >= len(rows) {
+		t.Fatalf("execute = %d rows, truncated %v, %v", len(res.Content), res.Truncated, err)
+	}
+	if held := memory.InUse(); held != 0 {
+		t.Fatalf("%d bytes held after the call", held)
+	}
+	if n := len(auditor.events); n == 0 || !strings.Contains(auditor.events[n-1].ResultSummary, "truncated") {
+		t.Fatalf("audit = %+v", auditor.events)
 	}
 }

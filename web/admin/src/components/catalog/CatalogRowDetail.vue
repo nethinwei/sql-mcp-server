@@ -26,5 +26,8 @@ onMounted(() => resource.load(props.tableRef))
 </template>
 
 <style scoped>
-.wait { margin: 12px 36px; }
+/* The layout's n-spin around the page centres every n-spin-body inside it
+   absolutely (.n-spin-container .n-spin-body): this one stays in the flow, or
+   the expanded row collapses and clips it. */
+.n-spin-body.wait { position: static; transform: none; margin: 12px 36px; }
 </style>

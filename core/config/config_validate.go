@@ -36,7 +36,7 @@ func (c *Config) Validate() error {
 	if err := c.validateAccess(databases); err != nil {
 		return err
 	}
-	if err := c.validateSQLEscape(); err != nil {
+	if err := c.validateSQLEscape(databases); err != nil {
 		return err
 	}
 	// Per-field rules (ranges, enums, patterns) come from `schema` tags.
@@ -59,6 +59,13 @@ func (c *Config) validateServerAuth() error {
 		return fmt.Errorf("config: tls.cert and tls.key must be configured together")
 	}
 	auth := c.Server.Auth
+	// Over stdio nothing listens; serving HTTP with flags that override the
+	// transport or address is checked against the address it listens on.
+	if c.Server.Transport == "http" {
+		if err := CheckSharedToken(c.Server.Addr, auth.Token); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
+	}
 	if len(auth.TrustedProxyCertSubjects) > 0 && auth.TLS.ClientCA == "" {
 		return fmt.Errorf("config: trustedProxyCertSubjects requires mTLS clientCA")
 	}
@@ -137,9 +144,22 @@ func validateConnections(name string, db DatabaseConfig) error {
 
 // validateSQLEscape requires the escape hatch to be audited: without an
 // audit sink the fail-closed audit of execute_sql cannot hold.
-func (c *Config) validateSQLEscape() error {
-	if c.Tools.ExecuteSQL && !c.Audit.Enabled {
+func (c *Config) validateSQLEscape(databases map[string]DatabaseConfig) error {
+	if !c.Tools.ExecuteSQL {
+		return nil
+	}
+	if !c.Audit.Enabled {
 		return fmt.Errorf("config: tools.executeSql requires audit.enabled")
+	}
+	if c.Cost.EnabledOrDefault() || !c.Cost.SQLEscape.EstimateRequired() {
+		return nil
+	}
+	for name, db := range databases {
+		if db.SQLEscape.Enabled() {
+			return fmt.Errorf("config: database %q admits execute_sql with cost.sqlEscape.estimate: required, "+
+				"but cost.enabled: false leaves no EXPLAIN to estimate with; set cost.sqlEscape.estimate: skip "+
+				"to run it under the hard limits alone, or enable cost", name)
+		}
 	}
 	return nil
 }
@@ -228,8 +248,8 @@ func (c *Config) validateEntities(databases map[string]DatabaseConfig) error {
 }
 
 func (c *Config) validateEntity(e EntityConfig, refs EntityRefs) error {
-	if duplicate, ok := firstDuplicateField(e.Fields); ok {
-		return fmt.Errorf("config: entity %q has duplicate field %q", e.Name, duplicate)
+	if err := validateFieldNames(e); err != nil {
+		return err
 	}
 	if duplicate, ok := firstDuplicate(e.Params); ok {
 		return fmt.Errorf("config: entity %q has duplicate parameter %q", e.Name, duplicate)
@@ -249,7 +269,7 @@ func (c *Config) validateEntity(e EntityConfig, refs EntityRefs) error {
 		return err
 	}
 	for role, policy := range e.RowPolicies {
-		if _, err := ParseFilter(policy); err != nil {
+		if err := validateRowFilter(e, policy); err != nil {
 			return fmt.Errorf("config: entity %q row policy for role %q: %w", e.Name, role, err)
 		}
 	}
@@ -412,7 +432,7 @@ func validateRelationship(
 	if target.DatasourceName() != e.DatasourceName() {
 		return fmt.Errorf("config: cross-datasource relationship %q is not supported", relation.Name)
 	}
-	return validateRelationshipJoin(relation, localFields, target)
+	return validateRelationshipJoin(relation, e, localFields, target)
 }
 
 func validateRelationshipIdentity(e EntityConfig, relation RelationshipConfig, relationNames map[string]bool) error {
@@ -426,24 +446,49 @@ func validateRelationshipIdentity(e EntityConfig, relation RelationshipConfig, r
 	return nil
 }
 
-func validateRelationshipJoin(relation RelationshipConfig, localFields map[string]bool, target EntityConfig) error {
+// validateRelationshipJoin checks joinOn, whose fields name columns: the join
+// runs on them as written, so one naming a field's alias is refused.
+func validateRelationshipJoin(
+	relation RelationshipConfig, e EntityConfig, localFields map[string]bool, target EntityConfig,
+) error {
 	if len(relation.JoinOn) == 0 {
 		return fmt.Errorf("config: relationship %q requires at least one joinOn pair", relation.Name)
 	}
 	targetFields := configuredFields(target.Fields)
-	for local, target := range relation.JoinOn {
+	for local, targetField := range relation.JoinOn {
 		if !localFields[local] {
 			return fmt.Errorf("config: relationship %q references unknown local field %q", relation.Name, local)
 		}
-		if !targetFields[target] {
+		if !targetFields[targetField] {
 			return fmt.Errorf(
 				"config: relationship %q references unknown target field %q",
 				relation.Name,
-				target,
+				targetField,
 			)
+		}
+		for _, side := range []struct {
+			field  string
+			fields []FieldConfig
+		}{{local, e.Fields}, {targetField, target.Fields}} {
+			if column, ok := aliasedColumn(side.fields, side.field); ok {
+				return fmt.Errorf("config: relationship %q joinOn field %q is the alias of column %q: "+
+					"joinOn names columns", relation.Name, side.field, column)
+			}
 		}
 	}
 	return nil
+}
+
+// aliasedColumn returns the column whose alias name is: an alias never names
+// another field (see validateFieldNames), and one naming its own column is
+// that column.
+func aliasedColumn(fields []FieldConfig, name string) (string, bool) {
+	for _, f := range fields {
+		if f.Alias == name && f.Name != name {
+			return f.Name, true
+		}
+	}
+	return "", false
 }
 
 func (c *Config) normalizeRoles() error {
@@ -526,15 +571,34 @@ func configuredFields(fields []FieldConfig) map[string]bool {
 	return out
 }
 
-func firstDuplicateField(fields []FieldConfig) (string, bool) {
-	seen := make(map[string]bool, len(fields))
-	for _, field := range fields {
-		if seen[field.Name] {
-			return field.Name, true
+// validateFieldNames requires every name and alias to name one field: a
+// request names a field by either, so two fields sharing one would resolve to
+// whichever comes first (and take each other's mask).
+func validateFieldNames(e EntityConfig) error {
+	owner := make(map[string]string, len(e.Fields)*2)
+	for _, field := range e.Fields {
+		if prev, ok := owner[field.Name]; ok {
+			if prev == field.Name {
+				return fmt.Errorf("config: entity %q has duplicate field %q", e.Name, field.Name)
+			}
+			return fmt.Errorf("config: entity %q field %q is also the alias of field %q", e.Name, field.Name, prev)
 		}
-		seen[field.Name] = true
+		owner[field.Name] = field.Name
 	}
-	return "", false
+	for _, field := range e.Fields {
+		alias := field.Alias
+		if alias == "" || alias == field.Name {
+			continue
+		}
+		if strings.TrimSpace(alias) != alias {
+			return fmt.Errorf("config: entity %q field %q has an alias with surrounding spaces", e.Name, field.Name)
+		}
+		if prev, ok := owner[alias]; ok {
+			return fmt.Errorf("config: entity %q field %q alias %q already names field %q", e.Name, field.Name, alias, prev)
+		}
+		owner[alias] = field.Name
+	}
+	return nil
 }
 
 func firstDuplicate(values []string) (string, bool) {

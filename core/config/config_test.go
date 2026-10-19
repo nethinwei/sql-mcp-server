@@ -176,6 +176,7 @@ func TestValidateSecurityConstraints(t *testing.T) {
 		t.Fatalf("the base configuration must be valid, or every case below passes vacuously: %v", err)
 	}
 	cases := append(securityConstraintCases(), proxyTrustCases()...)
+	cases = append(cases, fieldNameCases()...)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := validSecurityConfig()
@@ -235,6 +236,34 @@ func validSecurityConfig() *Config {
 		Database: DatabaseConfig{Driver: "postgres", DSN: "x"},
 		Cost:     CostConfig{SoftScore: 60, HardScore: 40},
 		Entities: []EntityConfig{{Name: "users"}},
+	}
+}
+
+// fieldNameCases are fields and row filters naming columns ambiguously.
+func fieldNameCases() []struct {
+	name   string
+	mutate func(*Config)
+} {
+	return []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{"two fields share an alias", func(c *Config) {
+			c.Entities[0].Fields = []FieldConfig{{Name: "a", Alias: "x"}, {Name: "b", Alias: "x"}}
+		}},
+		{"alias names another field", func(c *Config) {
+			c.Entities[0].Fields = []FieldConfig{{Name: "a"}, {Name: "b", Alias: "a"}}
+		}},
+		{"alias with spaces", func(c *Config) {
+			c.Entities[0].Fields = []FieldConfig{{Name: "a", Alias: " x"}}
+		}},
+		{"row policy names an alias", func(c *Config) {
+			c.Entities[0].Fields = []FieldConfig{{Name: "id"}, {Name: "tenant_id", Alias: "tenant"}}
+			c.Entities[0].RowPolicies = RowPolicies{"reader": {"op": "eq", "field": "tenant", "value": 1}}
+		}},
+		{"empty row policy group", func(c *Config) {
+			c.Entities[0].RowPolicies = RowPolicies{"reader": {"and": []any{}}}
+		}},
 	}
 }
 
@@ -303,14 +332,14 @@ func TestValidateRejectsBareTemplatesWithMultipleDatasources(t *testing.T) {
 			err := cfg.Validate()
 			if err == nil || !strings.Contains(err.Error(), tc.want) ||
 				!strings.Contains(err.Error(), "legacy bare SQL") ||
-				!strings.Contains(err.Error(), "fp:v2:<sha256>") {
+				!strings.Contains(err.Error(), "fp:v3:<sha256>") {
 				t.Fatalf("Validate() error = %v, want clear %s migration error", err, tc.want)
 			}
 		})
 	}
 
 	cfg := base()
-	cfg.Cost.AllowTemplates = []string{"fp:v2:abc", "primary:SELECT 1"}
+	cfg.Cost.AllowTemplates = []string{"fp:v3:abc", "primary:SELECT 1"}
 	cfg.Cost.RejectTemplates = []string{"replica:SELECT bad"}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("scoped multi-datasource templates error = %v", err)
@@ -418,6 +447,41 @@ func TestValidateNamedDatabasesAndRelationships(t *testing.T) {
 	cfg.Entities[1].DataSource = "archive"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("cross-datasource relationship must be rejected")
+	}
+}
+
+// joinOn names columns: the join runs on them as written, so a field's alias
+// is refused on either side, and the column it aliases accepted (also when
+// the alias names that column itself).
+func TestValidateRelationshipJoinRefusesAliases(t *testing.T) {
+	config := func(parent, child []FieldConfig, local, target string) *Config {
+		return &Config{
+			Database: DatabaseConfig{Driver: "postgres", DSN: "x"},
+			Entities: []EntityConfig{
+				{Name: "parents", Fields: parent, Relationships: []RelationshipConfig{{
+					Name: "children", Target: "children", Cardinality: "many",
+					JoinOn: map[string]string{local: target},
+				}}},
+				{Name: "children", Fields: child},
+			},
+		}
+	}
+	plain, aliasedID := []FieldConfig{{Name: "parent_id"}}, []FieldConfig{{Name: "id", Alias: "parentId"}}
+	if err := config(aliasedID, plain, "parentId", "parent_id").Validate(); err == nil ||
+		!strings.Contains(err.Error(), `alias of column "id"`) {
+		t.Fatalf("local alias: err = %v", err)
+	}
+	aliased := []FieldConfig{{Name: "parent_id", Alias: "parentId"}}
+	if err := config([]FieldConfig{{Name: "id"}}, aliased, "id", "parentId").Validate(); err == nil ||
+		!strings.Contains(err.Error(), `alias of column "parent_id"`) {
+		t.Fatalf("target alias: err = %v", err)
+	}
+	if err := config(aliasedID, plain, "id", "parent_id").Validate(); err != nil {
+		t.Fatalf("the column of an aliased field: %v", err)
+	}
+	self := []FieldConfig{{Name: "parent_id", Alias: "parent_id"}}
+	if err := config([]FieldConfig{{Name: "id", Alias: "id"}}, self, "id", "parent_id").Validate(); err != nil {
+		t.Fatalf("an alias naming its own column: %v", err)
 	}
 }
 

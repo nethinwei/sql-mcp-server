@@ -17,7 +17,7 @@ curl -fsS http://127.0.0.1:8080/healthz
 
 `--wait` 会等到 `mcp` 服务的健康检查（`sql-mcp-server healthcheck`）通过才返回。
 服务只发布到本机 `127.0.0.1:8080`。示例 bearer token 为
-`quickstart-only-token`，不得用于其他环境。
+`quickstart-only-token-not-for-production`，不得用于其他环境。
 
 ## 连接 MCP Inspector
 
@@ -28,7 +28,7 @@ npx -y @modelcontextprotocol/inspector http://127.0.0.1:8080/mcp
 在 Inspector 中为连接设置以下 header：
 
 ```text
-Authorization: Bearer quickstart-only-token
+Authorization: Bearer quickstart-only-token-not-for-production
 X-MCP-Role: reader
 X-MCP-Subject: {"tenant_id":7}
 ```
@@ -57,9 +57,9 @@ X-MCP-Subject: {"tenant_id":7}
 }
 ```
 
-该调用会被字段 ACL 拒绝。`tools/list` 中也不会出现默认关闭的
-`delete_record`，以及默认关闭、且只对显式授权用户可见的 `execute_sql`（quickstart
-不开启它）。
+该调用会被字段 ACL 拒绝。`tools/list` 中也不会出现默认关闭的写工具
+（`create_record`、`update_record`、`delete_record`），以及默认关闭、且只对显式授权
+用户可见的 `execute_sql`（quickstart 不开启它们）。
 
 场景 4 —— mask 字段可返回但不可过滤：
 

@@ -64,7 +64,10 @@ func planEntity(
 	if action != entity.ActionRead && action != entity.ActionAggregate && relalg.HasExists(pred) {
 		return entityPlan{}, nil, fmt.Errorf("%w: exists filters reads and aggregates only", ErrInvalidInput)
 	}
-	pred = columnsPredicate(res.Entity, pred)
+	pred, err = coercePredicate(res.Entity, columnsPredicate(res.Entity, pred))
+	if err != nil {
+		return entityPlan{}, nil, err
+	}
 	return entityPlan{res: res, tc: tc}, pred, nil
 }
 
@@ -74,7 +77,9 @@ func compile(tc Context, e entity.Entity, expr relalg.Expr, opts ...codegen.Comp
 	base := []codegen.CompileOption{
 		codegen.WithPrimaryKey(e.PrimaryKey()...), codegen.WithMaxINCardinality(effectiveMaxIN(tc)),
 	}
-	return codegen.Renderer{Dialect: tc.Dialect}.Compile(expr, append(base, opts...)...)
+	c, err := codegen.Renderer{Dialect: tc.Dialect}.Compile(expr, append(base, opts...)...)
+	literalNumbers(c.Args)
+	return c, err
 }
 
 // identityKeys names the keys identifying one row of e for tc's statement:

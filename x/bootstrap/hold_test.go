@@ -92,7 +92,7 @@ func TestChangedUsers(t *testing.T) {
 		}}
 	}
 	app := &App{config: base()}
-	app.Users, app.UserTokens = userDirectory(app.config)
+	app.Users, app.UserTokens, app.UserCerts = userDirectory(app.config)
 	cases := map[string]struct {
 		change func(*config.Config)
 		held   []string
@@ -101,6 +101,7 @@ func TestChangedUsers(t *testing.T) {
 		"removed": {func(c *config.Config) { delete(c.Users, "alice") }, []string{"alice"}},
 		"roles":   {setUser("alice", func(u *config.UserConfig) { u.Roles = nil }), []string{"alice"}},
 		"token":   {setUser("bob", func(u *config.UserConfig) { u.TokenHash = "x" }), []string{"bob"}},
+		"cert":    {setUser("bob", func(u *config.UserConfig) { u.CertSubjects = []string{"cn:bob"} }), []string{"bob"}},
 		"perms":   {setUser("bob", func(u *config.UserConfig) { u.Permissions = nil }), []string{"bob"}},
 		"text":    {setUser("bob", func(u *config.UserConfig) { u.Description = "x" }), nil},
 		"added":   {func(c *config.Config) { c.Users["carol"] = config.UserConfig{} }, nil},
@@ -145,4 +146,45 @@ func TestRevokedPrincipalsIncludeChangedSubjects(t *testing.T) {
 	if !reflect.DeepEqual(got, []string{"user:alice"}) {
 		t.Fatalf("changed subject revoked %v", got)
 	}
+}
+
+// A credential resolves within one snapshot: a reload that rotates alice's
+// token never lets the old token reach the identity the new snapshot gives
+// her, however the lookup interleaves with the publish.
+func TestCredentialResolvesWithinOneSnapshot(t *testing.T) {
+	t.Parallel()
+	rotated := func(token, principal string) *App {
+		return &App{
+			Users:      map[string]UserIdentity{"alice": {Principal: principal}},
+			UserTokens: map[string]string{config.TokenHash(token): "alice"},
+		}
+	}
+	before, after := rotated("old", "user:alice-before"), rotated("new", "user:alice-after")
+	runtime := NewRuntimeWithBuilder(before, nil)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			next := before
+			if i%2 == 0 {
+				next = after
+			}
+			runtime.current.Store(newAppSnapshot(next))
+		}
+	}()
+	for range 200000 {
+		if id, ok := runtime.UserByTokenHash(config.TokenHash("old")); ok && id.Principal != "user:alice-before" {
+			close(stop)
+			<-done
+			t.Fatalf("the rotated-out token resolved to %q", id.Principal)
+		}
+	}
+	close(stop)
+	<-done
 }

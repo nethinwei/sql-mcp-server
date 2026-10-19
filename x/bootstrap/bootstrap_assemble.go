@@ -46,7 +46,9 @@ type assembly struct {
 	shared *Shared
 	gs     guards
 	// providers are the read connections, by datasource.
-	providers   map[string]Provider
+	providers map[string]Provider
+	// readOnly are the SQL escape hatch connections that cannot write.
+	readOnly    ReadOnly
 	checked     checkedAssembly
 	feedback    cost.FeedbackStore
 	sources     map[string]tool.DataSource
@@ -79,7 +81,8 @@ func (a *assembly) check() (err error) {
 	if a.providers, err = readConnections(a.cfg, a.connections); err != nil {
 		return err
 	}
-	if err := checkNativeLimits(a.cfg, a.connections, a.shared); err != nil {
+	a.readOnly = readOnlyEscapes(a.cfg, a.connections)
+	if err := checkNativeLimits(a.cfg, a.connections, a.readOnly, a.shared); err != nil {
 		return err
 	}
 	b := sharedBus(a.shared)
@@ -106,7 +109,9 @@ func (a *assembly) acquire() (err error) {
 	if err != nil {
 		return err
 	}
-	a.escapes = buildEscapes(cfg, a.connections, a.prepared, a.gs)
+	if a.escapes, err = buildEscapes(cfg, a.connections, a.prepared, a.gs); err != nil {
+		return err
+	}
 	if a.engine, err = newAssembleEngine(cfg, a.shared); err != nil {
 		return err
 	}
@@ -154,6 +159,7 @@ func (a *assembly) app() *App {
 		TxBeginners:   a.txBeginners,
 		WriteTargets:  tool.BuildWriteTargets(checked.registry),
 		config:        cfg,
+		readOnly:      a.readOnly,
 	}
 	applyAssembledAppConfig(app, cfg)
 	app.attachProcess(cfg, a.shared)
@@ -327,6 +333,7 @@ func offlineAssembly(cfg *config.Config) (offlineChecked, error) {
 	if err != nil {
 		return offlineChecked{}, fmt.Errorf("assemble: %w", err)
 	}
+	withRowColumns(entities, policy)
 	msk, err := newAssembleMasker(cfg, entities)
 	if err != nil {
 		return offlineChecked{}, err
@@ -527,10 +534,10 @@ func buildDataSources(
 // hatch while tools.executeSql is off: the switch is one of its conditions.
 func buildEscapes(
 	cfg *config.Config, connections Connections, prepared map[string]*store.PreparedDB, gs guards,
-) map[string]tool.EscapeRoute {
+) (map[string]tool.EscapeRoute, error) {
 	escapes := map[string]tool.EscapeRoute{}
 	if !cfg.Tools.ExecuteSQL {
-		return escapes
+		return escapes, nil
 	}
 	for name, byName := range connections {
 		database := cfg.Databases[name]
@@ -546,17 +553,33 @@ func buildEscapes(
 			prepared[key] = db
 		}
 		wrap, _ := gs.guard(name, connection, p)
-		explainer, _ := planners(p, gs.health(name, connection))
+		explainer, err := escapeExplainer(cfg, name, p, gs.health(name, connection))
+		if err != nil {
+			return nil, err
+		}
 		threshold := cfg.Cost.Threshold()
 		threshold.Datasource, threshold.DialectName = name, p.Dialect().Name()
-		if !cfg.Cost.EnabledOrDefault() {
-			explainer = nil
-		}
 		escapes[name] = tool.EscapeRoute{
 			Connection: connection, DB: wrap(db), Dialect: p.Dialect(), Explainer: explainer, Threshold: threshold,
 		}
 	}
-	return escapes
+	return escapes, nil
+}
+
+// escapeExplainer is the EXPLAIN execute_sql estimates with on datasource
+// name: none when the estimate is skipped, and a datasource that has none
+// while it is required (a provider without EXPLAIN) is refused rather than
+// admitting every statement unestimated.
+func escapeExplainer(cfg *config.Config, name string, p Provider, h *health) (cost.Explainer, error) {
+	if !cfg.Cost.EnabledOrDefault() || !cfg.Cost.SQLEscape.EstimateRequired() {
+		return nil, nil
+	}
+	explainer, _ := planners(p, h)
+	if explainer == nil {
+		return nil, fmt.Errorf("assemble: datasource %q admits execute_sql with cost.sqlEscape.estimate: required, "+
+			"but its provider (%s) has no EXPLAIN; set cost.sqlEscape.estimate: skip", name, p.Dialect().Name())
+	}
+	return explainer, nil
 }
 
 func dataSourceForProvider(
@@ -684,7 +707,7 @@ func applyAssembledAppConfig(app *App, cfg *config.Config) {
 	app.ToolFlags = cfg.Tools
 	app.DefaultRole = cfg.Server.Role
 	app.DefaultUser = cfg.Server.User
-	app.Users, app.UserTokens = userDirectory(cfg)
+	app.Users, app.UserTokens, app.UserCerts = userDirectory(cfg)
 	app.Limits = tool.Limits{
 		Timeout: cfg.Cost.QueryTimeout, MaxRows: cfg.Cost.MaxRows, MaxProcedureRows: cfg.Cost.MaxProcedureRows,
 		MaxReturnedBytes: cfg.Cost.MaxBytes, MaxINListSize: cfg.Cost.MaxINListSize,

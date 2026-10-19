@@ -120,10 +120,30 @@ var accessRejectCases = []struct {
 		u.TokenHash = TokenHashPrefix + strings.Repeat("z", 64)
 		c.Users["Alice"] = u
 	}, "must match ^sha256:"},
+	{"malformed certificate subject", func(c *Config) {
+		u := c.Users["Alice"]
+		u.CertSubjects = []string{"subject:alice"}
+		c.Users["Alice"] = u
+	}, "must match"},
+	{"certificate subject of two users", func(c *Config) {
+		u := c.Users["Alice"]
+		u.CertSubjects = []string{"dns:agent.example.org"}
+		c.Users["Alice"] = u
+		c.Users["bob"] = UserConfig{CertSubjects: []string{"DNS:Agent.example.org"}}
+	}, "names users"},
+	{"certificate subject of a trusted proxy", func(c *Config) {
+		u := c.Users["Alice"]
+		u.CertSubjects = []string{"cn:gateway"}
+		c.Users["Alice"] = u
+		c.Server.Auth.TLS.ClientCA = "ca.pem"
+		c.Server.Auth.TrustedProxyCertSubjects = []string{"gateway"}
+	}, "trusted proxy"},
+	{"unknown client identity", func(c *Config) { c.Server.Auth.TLS.ClientIdentity = "anyone" }, "want one of"},
 	{"duplicate token hash", func(c *Config) {
 		c.Users["bob"] = UserConfig{TokenHash: TokenHash("alice-token")}
 	}, "collides"},
 	{"token hash equals shared token", func(c *Config) {
+		c.Server.Addr = "127.0.0.1:8080"
 		c.Server.Auth.Token = "alice-token"
 	}, "collides with server.auth.token"},
 	{"grant unknown entity", func(c *Config) {
@@ -261,6 +281,16 @@ func TestValidateSQLEscape(t *testing.T) {
 	cfg.Cost.SQLEscape.Estimate = SQLEscapeEstimateSkip
 	if err := cfg.Validate(); err != nil || cfg.Cost.SQLEscape.EstimateRequired() {
 		t.Fatalf("skip: %v", err)
+	}
+	// Without cost there is no EXPLAIN: a required estimate cannot hold.
+	off := false
+	cfg.Cost.Enabled = &off
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("skip without cost: %v", err)
+	}
+	cfg.Cost.SQLEscape.Estimate = SQLEscapeEstimateRequired
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "estimate: skip") {
+		t.Fatalf("a required estimate without cost: %v", err)
 	}
 	old, next := accessConfig(), accessConfig()
 	old.ApplyDefaults()

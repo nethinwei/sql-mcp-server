@@ -529,34 +529,42 @@ func fieldAllowed(field string, allowed map[string]bool, visible []entity.Attrib
 // for a missing subject rather than exposing every tenant's data. The row
 // policy is stored immutably; resolveSubject returns fresh nodes.
 func resolveSubject(p relalg.Predicate, subject map[string]any) relalg.Predicate {
-	switch pp := p.(type) {
-	case relalg.Condition:
-		if s, ok := pp.Value.(string); ok {
-			if attr, isPlaceholder := subjectPlaceholder(s); isPlaceholder {
-				pp.Value = subject[attr]
+	return relalg.MapConditions(p, func(c relalg.Condition) relalg.Condition {
+		switch v := c.Value.(type) {
+		case string:
+			if attr, isPlaceholder := SubjectPlaceholder(v); isPlaceholder {
+				c.Value = subject[attr]
 			}
+		case []any:
+			c.Value = resolveSubjectList(v, subject)
 		}
-		return pp
-	case relalg.And:
-		out := make([]relalg.Predicate, len(pp.Preds))
-		for i, q := range pp.Preds {
-			out[i] = resolveSubject(q, subject)
-		}
-		return relalg.And{Preds: out}
-	case relalg.Or:
-		out := make([]relalg.Predicate, len(pp.Preds))
-		for i, q := range pp.Preds {
-			out[i] = resolveSubject(q, subject)
-		}
-		return relalg.Or{Preds: out}
-	case relalg.Not:
-		return relalg.Not{P: resolveSubject(pp.P, subject)}
-	}
-	return p
+		return c
+	})
 }
 
-// subjectPlaceholder parses "${subject.attr}" into ("attr", true).
-func subjectPlaceholder(s string) (string, bool) {
+// resolveSubjectList resolves the placeholders of an IN list: a list
+// attribute contributes its items, any other value (nil when missing) one.
+func resolveSubjectList(items []any, subject map[string]any) []any {
+	out := make([]any, 0, len(items))
+	for _, item := range items {
+		s, ok := item.(string)
+		attr, isPlaceholder := SubjectPlaceholder(s)
+		if !ok || !isPlaceholder {
+			out = append(out, item)
+			continue
+		}
+		if list, ok := subject[attr].([]any); ok {
+			out = append(out, list...)
+		} else {
+			out = append(out, subject[attr])
+		}
+	}
+	return out
+}
+
+// SubjectPlaceholder parses "${subject.attr}" into ("attr", true): a row
+// filter value the caller's subject attribute replaces at request time.
+func SubjectPlaceholder(s string) (string, bool) {
 	const prefix, suffix = "${subject.", "}"
 	if strings.HasPrefix(s, prefix) && strings.HasSuffix(s, suffix) {
 		return s[len(prefix) : len(s)-len(suffix)], true

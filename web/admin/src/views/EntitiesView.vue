@@ -11,6 +11,9 @@ import { can } from '@/api/session'
 import { loadTableComments, tableComments } from '@/lib/tableComments'
 import { byNamespace, sourceIfRenamed } from '@/lib/names'
 import { entityId } from '@/lib/entityRefs'
+import type { Plan } from '@/lib/plan'
+import SyncEntitiesDialog from '@/components/catalog/SyncEntitiesDialog.vue'
+import PlanPreviewDialog from '@/components/plan/PlanPreviewDialog.vue'
 
 const { t } = useI18n()
 const ws = useWorkspace()
@@ -154,6 +157,20 @@ function openEntity(ev: MouseEvent, e: EntityInput) {
   void router.push({ name: 'entity', params: { id: entityId(e) } })
 }
 
+// Entity sync: the entities in view (all, or those the search and datasource
+// match) are brought in line with the database: a scan, then a plan preview.
+const syncing = ref(false)
+const syncEntities = computed(() => (filtered.value ? shown.value.map(({ e }) => e) : ws.entities))
+const syncPreview = ref(false)
+const syncingPlan = ref<Plan | null>(null)
+function previewSync(p: Plan) {
+  syncingPlan.value = p
+  syncPreview.value = true
+}
+function onSynced(r: { added: string[]; changed: number }) {
+  message.success(t('entities.sync.applied', { n: r.changed }))
+}
+
 const datasourceOptions = computed(() => ws.datasources.map((d) => ({ label: d.name, value: d.name })))
 </script>
 
@@ -171,6 +188,8 @@ const datasourceOptions = computed(() => ws.datasources.map((d) => ({ label: d.n
             {{ t('entities.deleteChecked', { n: checked.length }) }}</n-button>
           <n-button v-if="filtered && shown.length" size="small" type="error" secondary @click="removeMatching">
             {{ t('entities.deleteMatching', { n: shown.length }) }}</n-button>
+          <n-button v-if="ws.entities.length" size="small" :disabled="filtered && !shown.length" @click="syncing = true">
+            {{ filtered ? t('entities.syncMatching', { n: shown.length }) : t('entities.syncAll') }}</n-button>
         </template>
         <n-button size="small" @click="router.push({ name: 'datasources' })">{{ t('entities.importFromDb') }}</n-button>
       </n-space>
@@ -185,6 +204,9 @@ const datasourceOptions = computed(() => ws.datasources.map((d) => ({ label: d.n
       :checked-row-keys="checked" @update:checked-row-keys="(keys: (string | number)[]) => (checked = keys.map(String))"
       :row-props="(r: Row) => (isHeading(r) ? { class: 'heading' }
         : { class: 'clickable', onClick: (ev: MouseEvent) => openEntity(ev, r) })" />
+    <sync-entities-dialog v-model:show="syncing" :entities="syncEntities" @plan="previewSync" />
+    <plan-preview-dialog v-model:show="syncPreview" :plan="syncingPlan" :title="t('entities.sync.previewTitle')"
+      @applied="onSynced" />
   </n-space>
 </template>
 

@@ -338,9 +338,10 @@ func (c AuthConfig) spec() AuthSpec {
 
 // TLSSpec is a TLSConfig as written: a nil field was not.
 type TLSSpec struct {
-	Cert     *string `yaml:"cert,omitempty" json:"cert,omitempty"`
-	Key      *string `yaml:"key,omitempty" json:"key,omitempty"`
-	ClientCA *string `yaml:"clientCA,omitempty" json:"clientCA,omitempty"`
+	Cert           *string `yaml:"cert,omitempty" json:"cert,omitempty"`
+	Key            *string `yaml:"key,omitempty" json:"key,omitempty"`
+	ClientCA       *string `yaml:"clientCA,omitempty" json:"clientCA,omitempty"`
+	ClientIdentity *string `yaml:"clientIdentity,omitempty" json:"clientIdentity,omitempty"`
 }
 
 func (s TLSSpec) config() TLSConfig {
@@ -354,6 +355,9 @@ func (s TLSSpec) config() TLSConfig {
 	if s.ClientCA != nil {
 		out.ClientCA = *s.ClientCA
 	}
+	if s.ClientIdentity != nil {
+		out.ClientIdentity = *s.ClientIdentity
+	}
 	return out
 }
 
@@ -365,6 +369,7 @@ func (c TLSConfig) spec() TLSSpec {
 	out.Cert = set(c.Cert)
 	out.Key = set(c.Key)
 	out.ClientCA = set(c.ClientCA)
+	out.ClientIdentity = set(c.ClientIdentity)
 	return out
 }
 
@@ -569,24 +574,25 @@ func (c SQLEscapeConfig) spec() SQLEscapeSpec {
 
 // EntitySpec is a EntityConfig as written: a nil field was not.
 type EntitySpec struct {
-	Name          *string                     `yaml:"name,omitempty" json:"name,omitempty"`
-	Source        *string                     `yaml:"source,omitempty" json:"source,omitempty"`
-	DataSource    *string                     `yaml:"datasource,omitempty" json:"datasource,omitempty"`
-	Schema        *string                     `yaml:"schema,omitempty" json:"schema,omitempty"`
-	Kind          *string                     `yaml:"kind,omitempty" json:"kind,omitempty"`
-	Description   *string                     `yaml:"description,omitempty" json:"description,omitempty"`
-	PrimaryKey    List[string]                `yaml:"primaryKey,omitempty" json:"primaryKey,omitempty"`
-	UniqueKeys    List[[]string]              `yaml:"uniqueKeys,omitempty" json:"uniqueKeys,omitempty"`
-	Fields        List[FieldSpec]             `yaml:"fields,omitempty" json:"fields,omitempty"`
-	Roles         *RoleSpec                   `yaml:"roles,omitempty" json:"roles,omitempty"`
-	FieldACL      Map[string, FieldACLSpec]   `yaml:"fieldACL,omitempty" json:"fieldACL,omitempty"`
-	MCP           *MCPFlagsSpec               `yaml:"mcp,omitempty" json:"mcp,omitempty"`
-	RowPolicies   Map[string, map[string]any] `yaml:"rowPolicies,omitempty" json:"rowPolicies,omitempty"`
-	Relationships List[RelationshipSpec]      `yaml:"relationships,omitempty" json:"relationships,omitempty"`
-	TenantPolicy  map[string]any              `yaml:"tenantPolicy,omitempty" json:"tenantPolicy,omitempty"`
-	Params        List[string]                `yaml:"params,omitempty" json:"params,omitempty"`
-	Affects       List[string]                `yaml:"affects,omitempty" json:"affects,omitempty"`
-	AllowCascade  *bool                       `yaml:"allowCascade,omitempty" json:"allowCascade,omitempty"`
+	Name           *string                     `yaml:"name,omitempty" json:"name,omitempty"`
+	Source         *string                     `yaml:"source,omitempty" json:"source,omitempty"`
+	DataSource     *string                     `yaml:"datasource,omitempty" json:"datasource,omitempty"`
+	Schema         *string                     `yaml:"schema,omitempty" json:"schema,omitempty"`
+	Kind           *string                     `yaml:"kind,omitempty" json:"kind,omitempty"`
+	Description    *string                     `yaml:"description,omitempty" json:"description,omitempty"`
+	PrimaryKey     List[string]                `yaml:"primaryKey,omitempty" json:"primaryKey,omitempty"`
+	UniqueKeys     List[[]string]              `yaml:"uniqueKeys,omitempty" json:"uniqueKeys,omitempty"`
+	Fields         List[FieldSpec]             `yaml:"fields,omitempty" json:"fields,omitempty"`
+	Roles          *RoleSpec                   `yaml:"roles,omitempty" json:"roles,omitempty"`
+	FieldACL       Map[string, FieldACLSpec]   `yaml:"fieldACL,omitempty" json:"fieldACL,omitempty"`
+	MCP            *MCPFlagsSpec               `yaml:"mcp,omitempty" json:"mcp,omitempty"`
+	RowPolicies    Map[string, map[string]any] `yaml:"rowPolicies,omitempty" json:"rowPolicies,omitempty"`
+	Relationships  List[RelationshipSpec]      `yaml:"relationships,omitempty" json:"relationships,omitempty"`
+	TenantPolicy   map[string]any              `yaml:"tenantPolicy,omitempty" json:"tenantPolicy,omitempty"`
+	Params         List[string]                `yaml:"params,omitempty" json:"params,omitempty"`
+	Affects        List[string]                `yaml:"affects,omitempty" json:"affects,omitempty"`
+	AllowCascade   *bool                       `yaml:"allowCascade,omitempty" json:"allowCascade,omitempty"`
+	AllowKeyUpdate *bool                       `yaml:"allowKeyUpdate,omitempty" json:"allowKeyUpdate,omitempty"`
 }
 
 func (s EntitySpec) config() EntityConfig {
@@ -641,6 +647,9 @@ func (s EntitySpec) config() EntityConfig {
 	out.Affects = []string(s.Affects)
 	if s.AllowCascade != nil {
 		out.AllowCascade = *s.AllowCascade
+	}
+	if s.AllowKeyUpdate != nil {
+		out.AllowKeyUpdate = *s.AllowKeyUpdate
 	}
 	return out
 }
@@ -709,6 +718,9 @@ func (s *EntitySpec) canonical() {
 	if s.AllowCascade != nil && *s.AllowCascade == *new(bool) {
 		s.AllowCascade = nil
 	}
+	if s.AllowKeyUpdate != nil && *s.AllowKeyUpdate == *new(bool) {
+		s.AllowKeyUpdate = nil
+	}
 }
 
 func (c EntityConfig) spec() EntitySpec {
@@ -750,6 +762,7 @@ func (c EntityConfig) spec() EntitySpec {
 	out.Params = List[string](c.Params)
 	out.Affects = List[string](c.Affects)
 	out.AllowCascade = set(c.AllowCascade)
+	out.AllowKeyUpdate = set(c.AllowKeyUpdate)
 	return out
 }
 
@@ -1215,14 +1228,15 @@ func (c BudgetLimits) spec() BudgetLimitsSpec {
 
 // UserSpec is a UserConfig as written: a nil field was not.
 type UserSpec struct {
-	Description *string              `yaml:"description,omitempty" json:"description,omitempty"`
-	TokenHash   *string              `yaml:"tokenHash,omitempty" json:"tokenHash,omitempty"`
-	Roles       List[string]         `yaml:"roles,omitempty" json:"roles,omitempty"`
-	Subject     map[string]any       `yaml:"subject,omitempty" json:"subject,omitempty"`
-	Grants      List[GrantSpec]      `yaml:"grants,omitempty" json:"grants,omitempty"`
-	Permissions List[string]         `yaml:"permissions,omitempty" json:"permissions,omitempty"`
-	Disabled    *bool                `yaml:"disabled,omitempty" json:"disabled,omitempty"`
-	Limits      *PrincipalLimitsSpec `yaml:"limits,omitempty" json:"limits,omitempty"`
+	Description  *string              `yaml:"description,omitempty" json:"description,omitempty"`
+	TokenHash    *string              `yaml:"tokenHash,omitempty" json:"tokenHash,omitempty"`
+	CertSubjects List[string]         `yaml:"certSubjects,omitempty" json:"certSubjects,omitempty"`
+	Roles        List[string]         `yaml:"roles,omitempty" json:"roles,omitempty"`
+	Subject      map[string]any       `yaml:"subject,omitempty" json:"subject,omitempty"`
+	Grants       List[GrantSpec]      `yaml:"grants,omitempty" json:"grants,omitempty"`
+	Permissions  List[string]         `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+	Disabled     *bool                `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	Limits       *PrincipalLimitsSpec `yaml:"limits,omitempty" json:"limits,omitempty"`
 }
 
 func (s UserSpec) config() UserConfig {
@@ -1233,6 +1247,7 @@ func (s UserSpec) config() UserConfig {
 	if s.TokenHash != nil {
 		out.TokenHash = *s.TokenHash
 	}
+	out.CertSubjects = []string(s.CertSubjects)
 	out.Roles = []string(s.Roles)
 	out.Subject = map[string]any(s.Subject)
 	if s.Grants != nil {
@@ -1257,6 +1272,9 @@ func (s *UserSpec) canonical() {
 	}
 	if s.TokenHash != nil && *s.TokenHash == *new(string) {
 		s.TokenHash = nil
+	}
+	if len(s.CertSubjects) == 0 {
+		s.CertSubjects = nil
 	}
 	if len(s.Roles) == 0 {
 		s.Roles = nil
@@ -1286,6 +1304,7 @@ func (c UserConfig) spec() UserSpec {
 	var out UserSpec
 	out.Description = set(c.Description)
 	out.TokenHash = set(c.TokenHash)
+	out.CertSubjects = List[string](c.CertSubjects)
 	out.Roles = List[string](c.Roles)
 	out.Subject = map[string]any(c.Subject)
 	if c.Grants != nil {

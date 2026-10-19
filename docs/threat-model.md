@@ -244,12 +244,15 @@ Provider 适用范围使用以下口径：
 ### TM-010 — 用户身份伪造、提升与吊销残留
 
 - **等级/状态**：critical / 认证链路、代理头与吊销已由 handler 与 runtime 测试验证。
-- **攻击**：伪造或猜测用户 token；在已认证用户请求上附加 `X-MCP-User`/
+- **攻击**：伪造或猜测用户 token 或共享 token（例如暴力枚举很短的 `server.auth.token`）；在已认证用户请求上附加 `X-MCP-User`/
   `X-MCP-Role`/`X-MCP-Subject` 冒充他人或改写租户；在可信代理后用
   `X-MCP-Role: user:<name>`（或自定义 transport 的 `WithSubject`）冒充用户，拿到其授权与
   `sql:execute`，并绕过配置 subject 的覆盖；利用被删除/禁用用户的旧会话
   与在途事务继续访问。
-- **控制**：用户 token 只以 `sha256:` hash 保存，CLI 生成 256 bit 随机 token；
+- **控制**：mTLS 下配置了用户时，不带 token 的直连证书必须经 `certSubjects` 映射到唯一
+  用户，否则 401（v0.1.20 起，此前落到默认身份）；用户 token 只以 `sha256:` hash 保存，CLI 生成 256 bit 随机 token；监听
+  非 loopback 地址时共享 token 至少 32 字节，HTTP 传输的配置校验与启动时按实际监听地址各检查一次（stdio 不监听，不检查）
+  （v0.1.20 起）；
   配置用户后，无共享 token 且非 mTLS/可信代理通道时必须携带用户 token；带用户
   token 的请求出现任何代理身份头返回 403；`X-MCP-User` 必须指向启用用户且不能与
   `X-MCP-Role` 同时出现；`X-MCP-Role` 含 `:`（主体键）返回 400，非用户入口注入的主体键
@@ -261,9 +264,12 @@ Provider 适用范围使用以下口径：
   主体键拒绝（`TestRoleHeaderCannotNameAPrincipal`、`TestWithSubjectCannotAssumeAUser`）与会话
   吊销测试；`x/mcpserver/execute_sql_test.go` 的
   `TestExecuteSQLRoleHeaderCannotImpersonateUser`（真实中间件链）；`x/bootstrap/bootstrap_access_test.go` 的吊销通知测试；
-  `core/config/config_access_test.go` 的 tokenHash 与名称校验测试。
+  `core/config/config_access_test.go` 的 tokenHash 与名称校验测试；`core/config/listen_test.go`
+  的 `TestSharedTokenLength` 与 `x/mcpserver/http_test.go` 的 `TestValidateHTTPSecurity`（共享 token
+  长度）；`x/mcpserver/cert_identity_test.go` 的 `TestCertIdentity`、`TestMTLSClientCertificateIdentity`
+  与 `x/bootstrap/bootstrap_access_test.go` 的 `TestUserByCertificate`（证书到用户的映射）。
 - **持续验证**：以上测试在默认单元测试中运行。
-- **剩余风险**：token 没有过期时间；hash 未加盐，依赖 token 本身的高熵，人工设置
+- **剩余风险**：token 没有过期时间；共享 token 只检查长度，不检查熵；hash 未加盐，依赖 token 本身的高熵，人工设置
   低熵 token 会降低强度；`X-MCP-User` 的真实反向代理 e2e 仍未实现。
 - **Provider**：transport/部署边界，与数据库无关。
 
@@ -391,20 +397,49 @@ Provider 适用范围使用以下口径：
 - **控制**：每个 resolver 或其调用的配置服务（`x/admin/configapp`）在执行前、解析输入
   （方案、范围、版本号）之前要求操作所需的权限（`auth.Require`），只读、写、发布、账号管理分开，`admin:*` 持有全部；会话
   Cookie 为 HttpOnly + SameSite，变更请求必须携带与会话绑定的 CSRF 头；登录有全局并发
-  闸门与按用户名的失败锁定；停用账号与改密立即吊销该账号的全部会话，会话有空闲与绝对
+  闸门与按用户名的失败锁定，失败表有容量上限：表满时只淘汰已安静 `maxLoginLockout` 的
+  用户名，仍在锁定或退避期内的不会被大量新用户名挤掉，无法跟踪的用户名共享一个锁定；停用账号与改密立即吊销该账号的全部会话，会话有空闲与绝对
   超时；查询深度与复杂度有上限，超出即在执行前拒绝；introspection 与 playground 默认
   关闭。配置 MCP 端点（`/admin/mcp`）只接受令牌，不接受会话 Cookie（见 TM-012）。
 - **现有证据**：`x/admin/graph/authz_matrix_test.go` 的
   `TestEveryOperationEnforcesItsPermissions`：从 schema 为每个查询与变更自动生成参数合法
   的请求，在四种权限的全部 16 种组合下调用，断言当且仅当缺少所需权限时被拒；新增操作
   未登记所需权限即失败；`TestAuthorizationPrecedesInput` 以非法的版本号与方案调用每个
-  需要权限的操作，断言无权限时先得到权限拒绝。`x/admin/admin_test.go` 的登录、CSRF、锁定、并发闸门、停用与
+  需要权限的操作，断言无权限时先得到权限拒绝。`x/admin/session_test.go` 的
+  `TestLoginFailuresBounded`、`TestLockoutSurvivesNameFlood`（失败表有界，名字洪泛不清除
+  锁定与退避历史）；`x/admin/admin_test.go` 的登录、CSRF、锁定、并发闸门、停用与
   改密吊销、会话超时、深度（`TestSelectionDepth`）与复杂度（`TestComplexityLimit`）
   上限、playground 默认关闭与 `/admin/mcp` 拒绝会话测试；`x/admin/graph` 的
   `TestAdminAccountsKeepAnAccountManager`。
 - **持续验证**：以上测试在默认单元测试中运行。
 - **剩余风险**：会话只在进程内保存，多副本部署需要会话粘性；只有本地账号登录，没有
   OIDC/OAuth2 与多因素认证（OIDC 已降为 Later）；登录闸门之外没有按账号的请求限速。
+- **Provider**：共享层（与数据库方言无关）。
+
+### TM-015 — 跨租户与越出行范围的写入
+
+- **等级/状态**：critical / create 与 update 的行范围检查已由单元测试验证。
+- **攻击**：获授 create 的调用方插入属于其他租户、或落在其授权行范围之外的行（此前
+  create 不应用 `tenantPolicy` 与行范围）；获授 update 的调用方把自己范围内的行改到
+  其他租户或改成行范围排除的状态，使行脱离自己的可见范围、进入他人的范围；修改主键
+  使引用它的行、缓存与审计记录失去对应。
+- **控制**：create 插入前在服务端按 IR 语义求值行范围，行范围以等值固定的列在调用方
+  未提供时由服务端填入，结果不为真即拒绝；update 把新值代入行范围，必然越界即拒绝，
+  否则剩余条件并入 WHERE（I30）。update 默认拒绝修改标识行的列，需实体显式
+  `allowKeyUpdate`；codegen 拒绝无谓词或不赋值的写语句（I31）。无法精确判定时拒绝。
+- **现有证据**：`core/tool/write_check_test.go` 的 `TestCreateCannotCrossTenant`、
+  `TestCreatePinsTheHiddenTenantColumn`、`TestCreateViolationNamesOnlyVisibleFields`、
+  `TestUpdateCannotMoveRowAcrossTenant`、`TestUpdateWithinScopeKeepsThePolicy`、
+  `TestUpdateResidualPolicyConjoined`、`TestUpdateRejectsKeyColumnsByDefault`；
+  `core/relalg/interp/check_test.go` 的 `TestCheckAgreesWithEval`（随机谓词与参考
+  解释器差分）与 `TestCheckFailsClosed`；`core/codegen` 的
+  `TestCompileRefusesUnboundedWrites`。
+- **持续验证**：以上测试在默认单元测试中运行。
+- **剩余风险**：服务端求值不模拟数据库的排序规则，大小写不敏感的排序规则下否定条件
+  可能与数据库判定不同；服务端求值只比较数字、字符串、布尔，行范围里的其他类型
+  （如 YAML 未加引号的日期 `2024-01-01` 解码成的时间值）判为不满足，写入以
+  `ROW_POLICY_VIOLATION` 拒绝（fail closed），需要写入时把日期写成带引号的字符串；
+  过程（procedure）与 `execute_sql` 的写入不受此检查。
 - **Provider**：共享层（与数据库方言无关）。
 
 ## 证据维护规则

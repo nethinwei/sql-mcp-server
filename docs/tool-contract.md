@@ -42,6 +42,9 @@
      `constraints.kind` 为 `unique`、`foreign_key`、`not_null`、`check` 或
      `exclusion`，`constraints.fields` 只列出调用方可见的相关字段，不含约束名与
      数据库原文；
+   - `ROW_POLICY_VIOLATION`（`constraints.fields` 非空时 retryable，v0.1.20 起）：create
+     或 update 写出的行会落在调用方的行范围之外（租户策略、授权项行范围）；
+     `constraints.fields` 只列出调用方可见、决定结果的字段，不含策略的值；
    - `DATASOURCE_FORBIDDEN`（不可重试）：动作路由到的数据源连接没有对应的数据库权限
      （包括连接到只读服务器），授权本身允许；需要管理员补权限或调整路由，修改请求无法
      绕过；
@@ -135,6 +138,13 @@
   `{"any": [...]}`（其一成立，OR）、`{"all": [...]}`（全部成立，AND）、`{"not": {...}}`；
   顶层各项全部成立。组最多嵌套 4 层，条件总数（计入组内）受 `cost.maxFilterConditions`
   约束。read、aggregate、update、delete 通用；含 OR/NOT 的写入不会被当作主键点写。
+- **数字**（v0.1.20 起）：整数按 int64 传递，超出范围的整数须写成字符串。带小数点或指数的
+  数字按字段的列类型取值：浮点列（real、float、double）为浮点数；整数列拒绝
+  （`INVALID_INPUT`）；decimal/numeric 等其他列按原文字传给数据库，不经 float64，
+  `0.1`、超过 15 位有效数字的金额都按写出的值比较与写入。用于 `create_record` 的
+  `values`、`update_record` 的 `set`、`filter`（含 `exists` 内）与 `cursor`；没有列可依
+  的值（存储过程参数、`execute_sql` 的 `args`、关联字段与 `having` 的值）按原文字传递，
+  由数据库转换。此前小数一律转为 float64。
 - **排序与分页**（`read_records`）：`orderBy: [{field, dir}]`（`asc` 默认，最多 8 项），
   末尾自动补上实体的键使顺序确定；脱敏字段不能排序。NULL 一律排在最后（可空字段）。
   带 `limit` 且本页取满时，结果在 `result` 旁给出 `nextCursor`，下一页与相同的
@@ -157,8 +167,9 @@
   列出时为真；部分索引只标 `partial`，不给条件；表达式索引不列出。资源
   `sql-mcp://schema/{entity}` 同样给出。
 - **成本拒绝**（`COST_EXCEEDED`）：`constraints` 带 `estimatedScannedRows`（预计读取
-  行数）与 `maxScannedRows`（生效上限，见 `cost.maxScannedRows`）；read/aggregate 的
-  `hints` 首条列出可用于过滤的索引字段。
+  行数）与 `maxScannedRows`（生效上限，见 `cost.maxScannedRows`）；全表扫描的表行数
+  未能测得时不给 `estimatedScannedRows`，改给 `scannedRowsUnknown: true`（v0.1.20 起）。
+  read/aggregate 的 `hints` 首条列出可用于过滤的索引字段。
 - **`execute_sql` 元数据语句**：`query` 模式下单条 `SHOW`、`DESCRIBE <表>`、`DESC <表>`
   不做 EXPLAIN 估算（`cost.sqlEscape.metadata: allow`，默认），只受硬上限约束；
   `DESCRIBE ANALYZE`、`DESC SELECT` 等 EXPLAIN 用法照常估算。
@@ -171,9 +182,18 @@
 
 - 返回行的工具（`read_records`、`aggregate_records`、`execute_entity`、
   `procedure_*`）：`{"result": [行, ...]}`；有序读取还有下一页时另带 `nextCursor`；
+  过程（或其他写操作）返回的行超出进程的结果内存（`rateLimit.maxResultMemory`）
+  或调用的行上限（`cost.maxProcedureRows`、预算的 `maxReturnedRows`）时，写已生效，
+  调用不失败，只返回已读取的行并另带 `"truncated": true`（v0.1.20 起；此前前者不受
+  约束，后者返回可重试的 `BUDGET_EXCEEDED`，诱导重复执行），审计事件的
+  `resultSummary` 记录截断；
+  `create_record` 的 RETURNING 行被截断时返回 `{"rowsAffected": 1, "truncated": true}`；
 - 返回单个对象的工具直接给出该对象：`describe_entities`、`create_record`、
   `update_record`、`delete_record`、`begin_transaction`、`commit_transaction`、
   `rollback_transaction`、`execute_sql`。
+- `create_record` 的对象是新行的标识键（按列名；行范围预填的列也在内，没有 RETURNING 的数据库上
+  自增列取驱动的 last insert id）加 `rowsAffected`，没有 RETURNING 时另带 `lastInsertId`，截断时
+  另带 `truncated`。这三个名字是保留的：标识键列恰好同名时会被覆盖。
 
 `describe_entities` 不带 `entity` 时分页列出实体：
 `{"entities": [{name, id, description, datasource}], "total": n, "nextOffset": m}`；

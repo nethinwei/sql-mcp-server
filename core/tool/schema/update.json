@@ -18,6 +18,7 @@
         },
         "set": {
             "type": "object",
+            "minProperties": 1,
             "description": "Column name to new value map"
         }
     },

@@ -92,7 +92,11 @@ func evalCondition(rel relation, row []any, c relalg.Condition) (tri, error) {
 	if err != nil {
 		return triUnknown, err
 	}
-	left := row[i]
+	return evalOp(row[i], c)
+}
+
+// evalOp applies c's operator and value to left, the value of c.Field.
+func evalOp(left any, c relalg.Condition) (tri, error) {
 	switch c.Op {
 	case relalg.OpIsNull:
 		return boolTri(left == nil), nil

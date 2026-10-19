@@ -87,23 +87,108 @@ func TestActionsRouteToTheirConnection(t *testing.T) {
 	}
 }
 
+// followingWrites are datasources whose reads follow a session's writes for a
+// minute.
+func followingWrites(names ...string) map[string]DataSource {
+	out := map[string]DataSource{}
+	for _, name := range names {
+		out[name] = DataSource{ReadAfterWrite: time.Minute}
+	}
+	return out
+}
+
 func TestWriteTrackerWindow(t *testing.T) {
 	t.Parallel()
 	now := time.Unix(0, 0)
 	w := NewWriteTracker()
 	w.now = func() time.Time { return now }
-	w.Record("s", "db")
-	if !w.Recent("s", "db", time.Second) || w.Recent("s", "other", time.Second) || w.Recent("t", "db", time.Second) {
+	w.Record("s", "db", time.Second)
+	if !w.Recent("s", "db") || w.Recent("s", "other") || w.Recent("t", "db") {
 		t.Fatal("a write is recent for its session and datasource only")
 	}
 	now = now.Add(2 * time.Second)
-	if w.Recent("s", "db", time.Second) {
+	if w.Recent("s", "db") {
 		t.Fatal("the window elapsed")
 	}
-	w.Record("s", "db")
+	w.Record("s", "db", time.Hour)
 	w.Forget("s")
-	if w.Recent("s", "db", time.Hour) {
+	if w.Recent("s", "db") {
 		t.Fatal("Forget drops a closed session")
+	}
+}
+
+// A session that wrote stops counting as writing once its window ends, so
+// its reads share singleflight with other sessions again.
+func TestWroteExpiresAfterWindow(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(0, 0)
+	w := NewWriteTracker()
+	w.now = func() time.Time { return now }
+	w.Record("s", "db", time.Second)
+	if !w.Wrote("s") {
+		t.Fatal("a write within its window is not tracked")
+	}
+	now = now.Add(time.Second)
+	if w.Wrote("s") {
+		t.Fatal("a write past its window still isolates the session's reads")
+	}
+	w.Record("s", "db", 2*maxTrackedWindow)
+	now = now.Add(maxTrackedWindow)
+	if w.Wrote("s") {
+		t.Fatal("a window is not capped at maxTrackedWindow")
+	}
+}
+
+func TestNoTrackingWithoutReadAfterWrite(t *testing.T) {
+	t.Parallel()
+	w := NewWriteTracker()
+	w.Record("s", "db", 0)
+	if w.Wrote("s") || w.Recent("s", "db") || len(w.until) != 0 {
+		t.Fatal("a datasource without readAfterWrite records writes")
+	}
+}
+
+// Expired sessions are swept once per pruneInterval, whoever writes.
+func TestWriteTrackerPrunesExpiredSessions(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(0, 0)
+	w := NewWriteTracker()
+	w.now = func() time.Time { return now }
+	for _, s := range []string{"a", "b", "c"} {
+		w.Record(s, "db", time.Second)
+	}
+	now = now.Add(pruneInterval)
+	w.Record("d", "db", time.Second)
+	if len(w.until) != 1 {
+		t.Fatalf("tracked sessions = %d, want only the live one", len(w.until))
+	}
+}
+
+// After its read-after-write window a session's reads share results with
+// other sessions again.
+func TestSharedReadsResumeAfterTheWindow(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(0, 0)
+	w := NewWriteTracker()
+	w.now = func() time.Time { return now }
+	tc := Context{Services: &Services{Writes: w}, Role: "r", Session: "s"}
+	other := tc
+	other.Session = "t"
+	input := json.RawMessage(`{"entity":"users"}`)
+	key := func(c Context) string {
+		k, err := engineSubmitKey(context.Background(), ReadTool{}, input, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return k
+	}
+	w.Record("s", "db", time.Second)
+	if key(tc) == key(other) {
+		t.Fatal("a session following its write shares another session's read")
+	}
+	now = now.Add(time.Second)
+	if key(tc) != key(other) {
+		t.Fatal("reads stay isolated after the window")
 	}
 }
 

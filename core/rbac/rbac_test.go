@@ -2,6 +2,7 @@ package rbac
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/nethinwei/sql-mcp-server/core/entity"
@@ -213,5 +214,20 @@ func TestPolicyHasPermission(t *testing.T) {
 	var checker PermissionChecker = NewGrantAuthorizer(reg, policy)
 	if !checker.HasPermission("user:alice", "sql:execute@crm") {
 		t.Fatal("the authorizer answers from its policy")
+	}
+}
+
+// A placeholder inside an IN list resolves too: a scalar attribute is one
+// item, a list attribute its items, a missing one NULL (which matches none).
+func TestResolveSubjectInLists(t *testing.T) {
+	t.Parallel()
+	in := relalg.Condition{Field: "region", Op: relalg.OpIn,
+		Value: []any{"${subject.home}", "${subject.extra}", "global", "${subject.none}"}}
+	got := resolveSubject(in, map[string]any{"home": "cn", "extra": []any{"sg", "jp"}}).(relalg.Condition)
+	if want := []any{"cn", "sg", "jp", "global", nil}; !reflect.DeepEqual(got.Value, want) {
+		t.Fatalf("IN list = %#v, want %#v", got.Value, want)
+	}
+	if in.Value.([]any)[0] != "${subject.home}" {
+		t.Fatal("the stored policy was changed")
 	}
 }

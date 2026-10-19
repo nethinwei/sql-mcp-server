@@ -33,7 +33,7 @@ func TestLimits(t *testing.T) {
 		}
 		for _, k := range []dialect.Key{dialect.TimeoutRead, dialect.TimeoutWrite} {
 			c := p.Claim(k)
-			if c.Strength != test.want || !strings.Contains(c.Reason, test.reason) {
+			if c.Strength != test.want || !strings.Contains(c.Reason.Text, test.reason) {
 				t.Errorf("%s: %s = %+v", test.name, k, c)
 			}
 		}

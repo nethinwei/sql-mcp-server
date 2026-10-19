@@ -52,8 +52,10 @@ type CapabilityClaim struct {
 	Key      string             `json:"key"`
 	Strength CapabilityStrength `json:"strength"`
 	Evidence CapabilityEvidence `json:"evidence"`
-	// How it is provided, or why it is degraded.
+	// How it is provided, or why it is degraded, as English text.
 	Reason *string `json:"reason,omitempty"`
+	// The reason as an explanation the console translates.
+	ReasonDetail *configapp.Reason `json:"reasonDetail,omitempty"`
 }
 
 type CatalogInput struct {
@@ -123,26 +125,30 @@ type EntityCapability struct {
 	Connection string `json:"connection"`
 	// Columns granted at column level when the table-level privilege is not.
 	Columns []string `json:"columns,omitempty"`
-	Reason  *string  `json:"reason,omitempty"`
+	// Why the connection cannot run it, as English text.
+	Reason *string `json:"reason,omitempty"`
+	// The reason as an explanation the console translates.
+	ReasonDetail *configapp.Reason `json:"reasonDetail,omitempty"`
 }
 
 type EntityInput struct {
-	Name          string              `json:"name"`
-	Source        *string             `json:"source,omitempty"`
-	Datasource    *string             `json:"datasource,omitempty"`
-	Schema        *string             `json:"schema,omitempty"`
-	Kind          *string             `json:"kind,omitempty"`
-	Description   *string             `json:"description,omitempty"`
-	PrimaryKey    []string            `json:"primaryKey,omitempty"`
-	UniqueKeys    [][]string          `json:"uniqueKeys,omitempty"`
-	Fields        []FieldInput        `json:"fields,omitempty"`
-	Relationships []RelationshipInput `json:"relationships,omitempty"`
-	TenantPolicy  any                 `json:"tenantPolicy,omitempty"`
-	LegacyAccess  any                 `json:"legacyAccess,omitempty"`
-	Mcp           *EntityMCPInput     `json:"mcp,omitempty"`
-	Params        []string            `json:"params,omitempty"`
-	Affects       []string            `json:"affects,omitempty"`
-	AllowCascade  *bool               `json:"allowCascade,omitempty"`
+	Name           string              `json:"name"`
+	Source         *string             `json:"source,omitempty"`
+	Datasource     *string             `json:"datasource,omitempty"`
+	Schema         *string             `json:"schema,omitempty"`
+	Kind           *string             `json:"kind,omitempty"`
+	Description    *string             `json:"description,omitempty"`
+	PrimaryKey     []string            `json:"primaryKey,omitempty"`
+	UniqueKeys     [][]string          `json:"uniqueKeys,omitempty"`
+	Fields         []FieldInput        `json:"fields,omitempty"`
+	Relationships  []RelationshipInput `json:"relationships,omitempty"`
+	TenantPolicy   any                 `json:"tenantPolicy,omitempty"`
+	LegacyAccess   any                 `json:"legacyAccess,omitempty"`
+	Mcp            *EntityMCPInput     `json:"mcp,omitempty"`
+	Params         []string            `json:"params,omitempty"`
+	Affects        []string            `json:"affects,omitempty"`
+	AllowCascade   *bool               `json:"allowCascade,omitempty"`
+	AllowKeyUpdate *bool               `json:"allowKeyUpdate,omitempty"`
 }
 
 type EntityMCPInput struct {
@@ -264,10 +270,14 @@ type LimitIssue struct {
 	Datasource string `json:"datasource"`
 	Connection string `json:"connection"`
 	Key        string `json:"key"`
-	// The work relying on it: reads, writes, procedures or the SQL escape hatch.
-	Use      string             `json:"use"`
-	Strength CapabilityStrength `json:"strength"`
-	Reason   *string            `json:"reason,omitempty"`
+	// The work relying on it: reads, writes, procedures or the SQL escape hatch (English text).
+	Use string `json:"use"`
+	// The work relying on it as an explanation the console translates.
+	UseDetail *configapp.Reason  `json:"useDetail"`
+	Strength  CapabilityStrength `json:"strength"`
+	Reason    *string            `json:"reason,omitempty"`
+	// The reason as an explanation the console translates.
+	ReasonDetail *configapp.Reason `json:"reasonDetail,omitempty"`
 }
 
 type Mutation struct {
@@ -282,6 +292,8 @@ type PlanPreview struct {
 	Entities []configapp.EntityItem `json:"entities"`
 	// IDs of the entities added.
 	Added []string `json:"added"`
+	// IDs of the entities removed (their tables are gone).
+	Removed []string `json:"removed"`
 	// Roles and users added or changed, whole.
 	Roles []configapp.RoleItem `json:"roles"`
 	Users []configapp.UserItem `json:"users"`
@@ -426,15 +438,16 @@ type UnreachableDatasource struct {
 }
 
 type UserInput struct {
-	Name        string       `json:"name"`
-	Description *string      `json:"description,omitempty"`
-	Roles       []string     `json:"roles,omitempty"`
-	Grants      []GrantInput `json:"grants,omitempty"`
-	Permissions []string     `json:"permissions,omitempty"`
-	Subject     any          `json:"subject,omitempty"`
-	Disabled    *bool        `json:"disabled,omitempty"`
-	TokenHash   *string      `json:"tokenHash,omitempty"`
-	Limits      any          `json:"limits,omitempty"`
+	Name         string       `json:"name"`
+	Description  *string      `json:"description,omitempty"`
+	Roles        []string     `json:"roles,omitempty"`
+	Grants       []GrantInput `json:"grants,omitempty"`
+	Permissions  []string     `json:"permissions,omitempty"`
+	Subject      any          `json:"subject,omitempty"`
+	Disabled     *bool        `json:"disabled,omitempty"`
+	TokenHash    *string      `json:"tokenHash,omitempty"`
+	CertSubjects []string     `json:"certSubjects,omitempty"`
+	Limits       any          `json:"limits,omitempty"`
 }
 
 type UserToken struct {

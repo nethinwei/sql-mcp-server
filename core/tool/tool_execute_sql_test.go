@@ -182,6 +182,10 @@ func TestExecuteSQLQueryRowsAndAudit(t *testing.T) {
 		end.DecisionID != begin.DecisionID {
 		t.Fatalf("end = %+v", end)
 	}
+	// The cut is the call's result's too, which its audit records.
+	if !res.Truncated || !strings.Contains(end.ResultSummary, "truncated") {
+		t.Fatalf("result truncated %v, end summary %q; want both to tell the cut", res.Truncated, end.ResultSummary)
+	}
 }
 
 type recordingMasker struct{}
@@ -198,6 +202,7 @@ func TestExecuteSQLExecAndInvalidation(t *testing.T) {
 		c := &recordingCache{}
 		tc.Cache = c
 		tc.Writes = NewWriteTracker()
+		tc.Sources = followingWrites("crm")
 		res, err := RunTool(context.Background(), ExecuteSQLTool{}, sqlInput(t, map[string]any{"mode": mode}), tc)
 		if err != nil {
 			t.Fatal(err)
@@ -207,9 +212,9 @@ func TestExecuteSQLExecAndInvalidation(t *testing.T) {
 				t.Fatalf("exec result = %+v, events %+v", res.Content, auditor.sync)
 			}
 		}
-		if c.invalidations != 1 || !tc.Writes.Recent("s1", "crm", time.Minute) {
+		if c.invalidations != 1 || !tc.Writes.Recent("s1", "crm") {
 			t.Fatalf("%s: invalidations %d, write recorded %v", mode, c.invalidations,
-				tc.Writes.Recent("s1", "crm", time.Minute))
+				tc.Writes.Recent("s1", "crm"))
 		}
 	}
 }
@@ -307,6 +312,9 @@ func TestExecuteSQLEstimate(t *testing.T) {
 	}
 	if _, err := run(costtest.FakeExplainer{Err: errors.New("syntax error")}, false); err != nil {
 		t.Fatalf("skipped estimate: %v", err)
+	}
+	if _, err := run(nil, true); !errors.As(err, &unestimable) {
+		t.Fatalf("a required estimate without EXPLAIN ran: %v", err)
 	}
 	full := costtest.FakeExplainer{Plan: cost.Plan{ScanType: cost.ScanFull, EstimatedRows: 1e6, StatsFresh: true}}
 	if _, err := run(full, true); !errors.Is(err, cost.ErrCostExceeded) {

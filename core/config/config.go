@@ -91,7 +91,17 @@ type TLSConfig struct {
 	Cert     string `yaml:"cert"     json:"cert"`
 	Key      string `yaml:"key"      json:"key"`
 	ClientCA string `yaml:"clientCA" json:"clientCA"`
+	// ClientIdentity is who a client certificate without a bearer token
+	// calls as when users are configured: the user its certSubjects name
+	// ("user", refused when none does) or the default identity ("default").
+	ClientIdentity string `yaml:"clientIdentity" json:"clientIdentity" schema:"enum=@clientIdentity"`
 }
+
+// Values of TLSConfig.ClientIdentity.
+const (
+	ClientIdentityUser    = "user"
+	ClientIdentityDefault = "default"
+)
 
 // DatabaseConfig is one database (a datasource): one connection given by
 // DSN, or several connections, such as accounts with different privileges or
@@ -104,7 +114,7 @@ type DatabaseConfig struct {
 	Routing     RoutingConfig `yaml:"routing,omitempty"     json:"routing,omitempty"`
 	// ReadAfterWrite routes a session's reads to the write connection for
 	// this long after it writes, so it reads its own writes on a replica.
-	ReadAfterWrite time.Duration `yaml:"readAfterWrite,omitempty" json:"readAfterWrite,omitempty" schema:"min=0"`
+	ReadAfterWrite time.Duration `yaml:"readAfterWrite,omitempty" json:"readAfterWrite,omitempty" schema:"min=0,max=1h"`
 	// SQLEscape, when set, admits the trusted SQL escape hatch (execute_sql)
 	// to this database on the connection it names; unset, no user may run
 	// SQL on it whatever their permissions. It hot-reloads like the other
@@ -204,6 +214,9 @@ type EntityConfig struct {
 	// AllowCascade admits deletes and key updates that foreign keys cascade
 	// to other relations without the caller's permissions on them.
 	AllowCascade bool `yaml:"allowCascade,omitempty"  json:"allowCascade,omitempty"`
+	// AllowKeyUpdate lets update_records assign the columns that identify a
+	// row; refused by default.
+	AllowKeyUpdate bool `yaml:"allowKeyUpdate,omitempty" json:"allowKeyUpdate,omitempty"`
 }
 
 // PhysicalSource is the table or procedure the entity reads: Source, or the
@@ -270,13 +283,17 @@ type GrantConfig struct {
 // UserConfig is one authenticated caller. TokenHash is "sha256:<hex>" of the
 // bearer token; the plaintext token never appears in configuration.
 type UserConfig struct {
-	Description string         `yaml:"description,omitempty"   json:"description,omitempty"`
-	TokenHash   string         `yaml:"tokenHash,omitempty"   json:"tokenHash,omitempty" schema:"pattern=@tokenHash"`
-	Roles       []string       `yaml:"roles,omitempty"       json:"roles,omitempty" schema:"pattern=@accessName"`
-	Subject     map[string]any `yaml:"subject,omitempty"     json:"subject,omitempty"`
-	Grants      []GrantConfig  `yaml:"grants,omitempty"      json:"grants,omitempty"`
-	Permissions []string       `yaml:"permissions,omitempty" json:"permissions,omitempty"`
-	Disabled    bool           `yaml:"disabled,omitempty"    json:"disabled,omitempty"`
+	Description string `yaml:"description,omitempty"   json:"description,omitempty"`
+	TokenHash   string `yaml:"tokenHash,omitempty"   json:"tokenHash,omitempty" schema:"pattern=@tokenHash"`
+	// CertSubjects name the client certificates that authenticate the user
+	// under mTLS: cn:<common name>, dns:<DNS SAN>, uri:<URI SAN, such as a
+	// SPIFFE ID> or email:<email SAN>.
+	CertSubjects []string       `yaml:"certSubjects,omitempty" json:"certSubjects,omitempty" schema:"pattern=@certSubject"`
+	Roles        []string       `yaml:"roles,omitempty"       json:"roles,omitempty" schema:"pattern=@accessName"`
+	Subject      map[string]any `yaml:"subject,omitempty"     json:"subject,omitempty"`
+	Grants       []GrantConfig  `yaml:"grants,omitempty"      json:"grants,omitempty"`
+	Permissions  []string       `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+	Disabled     bool           `yaml:"disabled,omitempty"    json:"disabled,omitempty"`
 	// Limits narrow the global limits for the user's calls; set fields win
 	// over its roles'.
 	Limits PrincipalLimits `yaml:"limits,omitempty" json:"limits,omitempty"`
@@ -564,14 +581,16 @@ type AuditConfig struct {
 	QueueSize int    `yaml:"queueSize" json:"queueSize" schema:"min=0"`
 }
 
-// DefaultToolFlags returns the safe default tool set: all tools enabled except
-// delete_record, which is off by default to prevent accidental data loss.
+// DefaultToolFlags returns the safe default tool set for untrusted agents:
+// reading, aggregating, procedures and transactions; the writing tools
+// (create_record, update_record, delete_record) are off until the tools
+// section turns them on.
 func DefaultToolFlags() ToolFlags {
 	return ToolFlags{
 		DescribeEntities:    true,
 		ReadRecords:         true,
-		CreateRecord:        true,
-		UpdateRecord:        true,
+		CreateRecord:        false,
+		UpdateRecord:        false,
 		DeleteRecord:        false,
 		ExecuteEntity:       true,
 		AggregateRecords:    true,

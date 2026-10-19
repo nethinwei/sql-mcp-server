@@ -11,6 +11,11 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
 )
 
+// fingerprintPrefix versions Fingerprint: what it hashes changed in v3, when
+// a decimal argument began binding as its text (a string) for its precision,
+// so a v2 key of a statement with one no longer matches.
+const fingerprintPrefix = "fp:v3:"
+
 // Fingerprint returns a stable baseline key derived from datasource, dialect,
 // normalized generated SQL, and bound parameter types. Values are deliberately
 // excluded.
@@ -31,12 +36,20 @@ func Fingerprint(datasource, dialectName string, c codegen.Compiled) string {
 		_, _ = fmt.Fprintf(&b, "%s/%s", t.PkgPath(), t.String())
 	}
 	sum := sha256.Sum256([]byte(b.String()))
-	return "fp:v2:" + hex.EncodeToString(sum[:])
+	return fingerprintPrefix + hex.EncodeToString(sum[:])
 }
 
-// ValidateTemplateScopes rejects legacy exact-SQL baselines that would stop
-// matching when more than one datasource is configured.
+// ValidateTemplateScopes rejects fingerprints of an earlier version, which
+// match nothing (a reject that matches nothing lets its statement through),
+// and legacy exact-SQL baselines that would stop matching when more than one
+// datasource is configured.
 func ValidateTemplateScopes(datasources, allowTemplates, rejectTemplates []string) error {
+	if err := validateFingerprintVersion("allowTemplates", allowTemplates); err != nil {
+		return err
+	}
+	if err := validateFingerprintVersion("rejectTemplates", rejectTemplates); err != nil {
+		return err
+	}
 	if len(datasources) <= 1 {
 		return nil
 	}
@@ -50,16 +63,39 @@ func ValidateTemplateScopes(datasources, allowTemplates, rejectTemplates []strin
 		{name: "rejectTemplates", values: rejectTemplates},
 	} {
 		for _, value := range templates.values {
-			if strings.HasPrefix(value, "fp:v2:") || hasDatasourceScope(value, names) {
+			if strings.HasPrefix(value, fingerprintPrefix) || hasDatasourceScope(value, names) {
 				continue
 			}
 			return fmt.Errorf(
 				"cost: %s entry %q is legacy bare SQL and is unsafe with multiple datasources; "+
-					"migrate it to fp:v2:<sha256> or prefix it with a datasource, for example %q",
+					"migrate it to fp:v3:<sha256> or prefix it with a datasource, for example %q",
 				templates.name,
 				value,
 				names[0]+":"+value,
 			)
+		}
+	}
+	return nil
+}
+
+// validateFingerprintVersion refuses an entry naming a fingerprint that
+// matches nothing: of an earlier version, or not written bare (a fingerprint
+// is compared whole, and already names its datasource).
+func validateFingerprintVersion(name string, values []string) error {
+	for _, value := range values {
+		fp := strings.TrimSpace(value)
+		if _, scoped, ok := strings.Cut(fp, ":"); ok && !strings.HasPrefix(fp, "fp:") &&
+			strings.HasPrefix(strings.TrimSpace(scoped), "fp:") {
+			fp = strings.TrimSpace(scoped)
+		}
+		switch {
+		case !strings.HasPrefix(fp, "fp:"):
+		case fp != value:
+			return fmt.Errorf("cost: %s entry %q matches nothing: write the fingerprint bare, as %q "+
+				"(it names its datasource)", name, value, fp)
+		case !strings.HasPrefix(fp, fingerprintPrefix):
+			return fmt.Errorf("cost: %s entry %q is a fingerprint of an earlier version, which matches nothing; "+
+				"capture it again as fp:v3:<sha256> (decimal arguments now bind as text)", name, value)
 		}
 	}
 	return nil

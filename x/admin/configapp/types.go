@@ -7,7 +7,9 @@ package configapp
 import (
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/core/reason"
 	"github.com/nethinwei/sql-mcp-server/core/workspace"
+	"github.com/nethinwei/sql-mcp-server/internal/kit"
 )
 
 type CatalogCounts struct {
@@ -204,6 +206,8 @@ type PlanException struct {
 	Ref    *string `json:"ref,omitempty"`
 	Entity *string `json:"entity,omitempty"`
 	Detail *string `json:"detail,omitempty"`
+	// The server's explanation, when it gives one: Detail translated.
+	ReasonDetail *Reason `json:"reasonDetail,omitempty"`
 }
 
 type PlanObjects struct {
@@ -350,8 +354,60 @@ type Validation struct {
 	RestartRequired []string `json:"restartRequired"`
 	// Grants the routed datasource connections cannot run, and hard limits
 	// the connections would not enforce (they do not block publishing unless
-	// cost.requireNativeLimits is on, which makes them the Error).
+	// cost.requireNativeLimits is on, which makes them the Error): their
+	// English text, and the same as Notices the console translates.
 	Warnings []string `json:"warnings"`
+	Notices  []Reason `json:"notices"`
+}
+
+// Reason is an explanation (see core/reason): the code the console
+// translates, the values of its template's placeholders, the explanations
+// some placeholders name, and its English text.
+type Reason struct {
+	Code   string       `json:"code"`
+	Params any          `json:"params"`
+	Parts  []ReasonPart `json:"parts"`
+	Text   string       `json:"text"`
+}
+
+// ReasonPart is an explanation a placeholder of another names.
+type ReasonPart struct {
+	Name   string `json:"name"`
+	Code   string `json:"code"`
+	Params any    `json:"params"`
+	Text   string `json:"text"`
+}
+
+// ReasonOf is r for the API; nil for no explanation.
+func ReasonOf(r reason.Reason) *Reason {
+	if r.Code == "" && r.Text == "" {
+		return nil
+	}
+	out := &Reason{Code: string(r.Code), Params: reasonParams(r.Params), Parts: []ReasonPart{}, Text: r.Text}
+	for _, name := range kit.SortedKeys(r.Parts) {
+		p := r.Parts[name]
+		out.Parts = append(out.Parts, ReasonPart{Name: name, Code: string(p.Code), Params: reasonParams(p.Params),
+			Text: p.Text})
+	}
+	return out
+}
+
+func reasonParams(params map[string]string) map[string]any {
+	out := make(map[string]any, len(params))
+	for k, v := range params {
+		out[k] = v
+	}
+	return out
+}
+
+// notices are the explanations for the API, with their texts.
+func notices(rs []reason.Reason) ([]Reason, []string) {
+	out, texts := make([]Reason, 0, len(rs)), make([]string, 0, len(rs))
+	for _, r := range rs {
+		out = append(out, *ReasonOf(r))
+		texts = append(texts, r.Text)
+	}
+	return out, texts
 }
 
 // The states of a scan job (GraphQL ScanState), as scanjobs names them.

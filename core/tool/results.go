@@ -2,6 +2,7 @@ package tool
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -43,14 +44,14 @@ func (r *ResultMemory) InUse() int64 {
 	return r.used
 }
 
-// reserve holds n bytes; past the capacity it refuses them, unless force.
-func (r *ResultMemory) reserve(n int64, force bool) bool {
+// reserve holds n bytes; past the capacity it refuses them.
+func (r *ResultMemory) reserve(n int64) bool {
 	if r == nil {
 		return true
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !force && r.capacity > 0 && r.used+n > r.capacity {
+	if r.capacity > 0 && r.used+n > r.capacity {
 		return false
 	}
 	r.used += n
@@ -78,9 +79,9 @@ type resultMeter struct {
 	rows, bytes, held int64
 	maxRows, maxBytes int64
 	memory            *ResultMemory
-	// write: a write's rows are read after it took effect, so the memory
-	// holds them without refusing them (failing the call would invite a
-	// duplicate retry, see finalizeToolResult).
+	// write: a write's rows are read after it took effect, so past its rows
+	// or the memory they are cut (errResultCut) rather than refused (failing
+	// the call would invite a duplicate retry, see finalizeToolResult).
 	write bool
 	// closed: the call ended. An execution it shared (singleflight) may
 	// still read rows for the calls waiting on it; they are no longer held
@@ -101,6 +102,11 @@ func meterCall(tc Context, readOnly bool) (Context, func()) {
 	tc.results = m
 	return tc, m.close
 }
+
+// errResultCut stops reading a write's rows past the call's rows or the
+// process's result memory: the call returns the rows read so far, marked
+// truncated.
+var errResultCut = errors.New("tool: the result of a write was cut short")
 
 // minLimit is the stricter of two limits, where 0 is no limit.
 func minLimit(a, b int64) int64 {
@@ -124,6 +130,10 @@ func (m *resultMeter) add(row map[string]any) error {
 	defer m.mu.Unlock()
 	m.rows++
 	if m.maxRows > 0 && m.rows > m.maxRows {
+		if m.write {
+			m.rows--
+			return errResultCut
+		}
 		return budget.ErrExceeded
 	}
 	m.bytes += n
@@ -133,7 +143,11 @@ func (m *resultMeter) add(row map[string]any) error {
 	if m.closed {
 		return nil
 	}
-	if !m.memory.reserve(n, m.write) {
+	if !m.memory.reserve(n) {
+		if m.write {
+			m.rows, m.bytes = m.rows-1, m.bytes-n
+			return errResultCut
+		}
 		return fmt.Errorf("%w: the server holds too many results in memory; narrow the request or retry later",
 			budget.ErrExceeded)
 	}

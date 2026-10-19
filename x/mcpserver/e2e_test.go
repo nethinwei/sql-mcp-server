@@ -123,7 +123,7 @@ func e2eTestConfig() *config.Config {
 				Roles:  config.RoleConfig{Read: []string{"admin"}},
 			},
 		},
-		Tools: config.DefaultToolFlags(),
+		Tools: e2eToolFlags(),
 		Cost: config.CostConfig{
 			Enabled: new(true), SoftScore: 60, HardScore: 40, MaxRows: 10000,
 			RejectFullScan: true, WhitelistPKPoint: true,
@@ -195,7 +195,7 @@ func assertE2EToolVisibility(t *testing.T, ctx context.Context, session *mcp.Cli
 		t.Fatal("read_records not registered")
 	}
 	if names["delete_record"] {
-		t.Fatal("delete_record should be off by default")
+		t.Fatal("delete_record is off unless the tools section turns it on")
 	}
 	for _, want := range []string{"begin_transaction", "rollback_transaction"} {
 		if !names[want] {
@@ -355,4 +355,12 @@ func decodeTextContent(t *testing.T, res *mcp.CallToolResult, target any) {
 		}
 	}
 	t.Fatal("tool result has no text content")
+}
+
+// e2eToolFlags are the default tools with update_record on, which the
+// row-policy write test needs; the writing tools are off by default.
+func e2eToolFlags() config.ToolFlags {
+	flags := config.DefaultToolFlags()
+	flags.UpdateRecord = true
+	return flags
 }

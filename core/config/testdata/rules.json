@@ -119,5 +119,25 @@
     "config": {"database": {"driver": "postgres", "dsn": "x"}, "audit": {"enabled": true}},
     "error": "audit path is required",
     "path": null
+  },
+  {
+    "name": "two fields share an alias (cross-field, server only)",
+    "config": {"database": {"driver": "postgres", "dsn": "x"},
+      "entities": [{"name": "orders", "fields": [{"name": "a", "alias": "x"}, {"name": "b", "alias": "x"}]}]},
+    "error": "already names field",
+    "path": null
+  },
+  {
+    "name": "an empty tenant policy group (server only)",
+    "config": {"database": {"driver": "postgres", "dsn": "x"},
+      "entities": [{"name": "orders", "fields": [{"name": "id"}], "tenantPolicy": {"and": []}}]},
+    "error": "non-empty list",
+    "path": null
+  },
+  {
+    "name": "a negated row policy",
+    "config": {"database": {"driver": "postgres", "dsn": "x"},
+      "entities": [{"name": "orders", "fields": [{"name": "id"}],
+        "rowPolicies": {"reader": {"not": {"op": "is_null", "field": "deleted_at"}}}}]}
   }
 ]

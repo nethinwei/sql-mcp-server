@@ -5,7 +5,7 @@ import { graphql } from '@/gql'
 
 export const EntityPartsFragment = graphql(`
   fragment EntityParts on Entity {
-    name source datasource schema kind description primaryKey uniqueKeys params affects allowCascade tenantPolicy legacyAccess
+    name source datasource schema kind description primaryKey uniqueKeys params affects allowCascade allowKeyUpdate tenantPolicy legacyAccess
     mcp { dmlTools customTool trustedProcedure }
     fields { name alias description mask exclude }
     relationships { name target cardinality joinOn }
@@ -127,18 +127,28 @@ export const TableCommentsQuery = graphql(`
 `)
 
 export const ValidateQuery = graphql(`
-  query Validate($revision: ID) { validate(revision: $revision) { ok error contentHash restartRequired warnings } }
+  query Validate($revision: ID) {
+    validate(revision: $revision) { ok error contentHash restartRequired warnings notices { ...ReasonParts } }
+  }
+`)
+
+export const ReasonPartsFragment = graphql(`
+  fragment ReasonParts on Reason { code params parts { name code params text } text }
 `)
 
 export const CapabilitiesQuery = graphql(`
-  query Capabilities { capabilities { entity action privilege connection columns reason } }
+  query Capabilities {
+    capabilities { entity action privilege connection columns reason reasonDetail { ...ReasonParts } }
+  }
 `)
 
 export const ProviderCapabilitiesQuery = graphql(`
   query ProviderCapabilities {
     providerCapabilities {
-      connections { datasource connection claims { key strength evidence reason } }
-      issues { datasource connection key use strength reason }
+      connections { datasource connection claims { key strength evidence reason reasonDetail { ...ReasonParts } } }
+      issues {
+        datasource connection key use useDetail { ...ReasonParts } strength reason reasonDetail { ...ReasonParts }
+      }
     }
   }
 `)
@@ -250,7 +260,7 @@ export const PlanReportPartsFragment = graphql(`
     matched excluded scannedFrom scannedTo
     objects { datasource schema tables imported changed }
     changes { kind principal actions mask fields entities }
-    exceptions { id kind level warning ref entity detail }
+    exceptions { id kind level warning ref entity detail reasonDetail { ...ReasonParts } }
     unscanned { datasource schemas }
   }
 `)
@@ -261,10 +271,11 @@ export const PreviewPlanQuery = graphql(`
       planId
       report { ...PlanReportParts }
       added
+      removed
       entities { ...EntityParts }
       roles { name description grants { ...GrantParts } }
       users { name grants { ...GrantParts } }
-      validation { ok error restartRequired warnings }
+      validation { ok error restartRequired warnings notices { ...ReasonParts } }
     }
   }
 `)

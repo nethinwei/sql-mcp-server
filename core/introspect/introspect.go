@@ -150,15 +150,13 @@ type Drift struct {
 	Missing []string
 	// Extra lists DB columns not present in the config.
 	Extra []string
-	// TypeChanged lists fields whose DB type differs from the config.
-	TypeChanged []string
 	// Absent maps each entity that cannot be served to the configured
 	// columns its table lacks; an empty list means the table is missing.
 	Absent map[string][]string
 }
 
 // Reconcile matches configured table and view entities to their tables in the
-// catalog. It returns the entities with each field's domain (type,
+// catalog; the columns their row scopes test must be there too. It returns the entities with each field's domain (type,
 // nullability, defaults) and empty entity and field descriptions taken from
 // the database (a configured description overrides a comment), and the drift:
 // missing entities by name, missing and extra fields as "entity.field".
@@ -190,6 +188,13 @@ func Reconcile(configured []entity.Entity, c Catalog) ([]entity.Entity, Drift) {
 			}
 		}
 		fields := indexAttrs(ce.Attributes)
+		for _, c := range ce.RowColumns {
+			_, field := fields[c] // a missing field is reported above
+			if _, ok := columns[c]; !ok && !field {
+				d.Missing = append(d.Missing, ce.Name+"."+c)
+				d.absent(ce.Name, []string{c})
+			}
+		}
 		for _, a := range de.Attributes {
 			if _, ok := fields[a.Name]; !ok {
 				d.Extra = append(d.Extra, ce.Name+"."+a.Name)

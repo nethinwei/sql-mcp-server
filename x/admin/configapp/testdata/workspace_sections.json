@@ -93,6 +93,7 @@
     {
       "affects": [],
       "allowCascade": true,
+      "allowKeyUpdate": true,
       "datasource": "shop",
       "fields": [
         {
@@ -217,6 +218,10 @@
   },
   "users": [
     {
+      "certSubjects": [
+        "cn:alice",
+        "uri:spiffe://example.org/agent/alice"
+      ],
       "description": "BI agent",
       "disabled": true,
       "grants": [

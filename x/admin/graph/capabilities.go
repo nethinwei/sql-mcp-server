@@ -8,6 +8,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/internal/kit"
+	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 )
 
@@ -35,7 +36,8 @@ func toCapabilities(caps bootstrap.EntityCapabilities) []EntityCapability {
 			}
 			out = append(out, EntityCapability{
 				Entity: name, Action: strings.ToUpper(a.String()), Privilege: graphPrivileges[c.Privilege],
-				Connection: c.Connection, Columns: c.Columns, Reason: kit.Optional(c.Reason),
+				Connection: c.Connection, Columns: c.Columns, Reason: kit.Optional(c.Reason.Text),
+				ReasonDetail: configapp.ReasonOf(c.Reason),
 			})
 		}
 	}
@@ -73,15 +75,16 @@ func (r *Resolver) providerCapabilities() *ProviderCapabilities {
 			claim := p.Profile.Claim(k)
 			c.Claims = append(c.Claims, CapabilityClaim{
 				Key: string(k), Strength: graphStrengths[claim.Strength], Evidence: graphEvidence[claim.Evidence],
-				Reason: kit.Optional(claim.Reason),
+				Reason: kit.Optional(claim.Reason.Text), ReasonDetail: configapp.ReasonOf(claim.Reason),
 			})
 		}
 		out.Connections = append(out.Connections, c)
 	}
 	for _, i := range issues {
 		out.Issues = append(out.Issues, LimitIssue{
-			Datasource: i.Datasource, Connection: i.Connection, Key: string(i.Key), Use: i.Use,
-			Strength: graphStrengths[i.Claim.Strength], Reason: kit.Optional(i.Claim.Reason),
+			Datasource: i.Datasource, Connection: i.Connection, Key: string(i.Key), Use: i.Use.Text,
+			UseDetail: configapp.ReasonOf(i.Use), Strength: graphStrengths[i.Claim.Strength],
+			Reason: kit.Optional(i.Claim.Reason.Text), ReasonDetail: configapp.ReasonOf(i.Claim.Reason),
 		})
 	}
 	return out

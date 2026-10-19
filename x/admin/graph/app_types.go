@@ -50,6 +50,8 @@ type (
 	TableLink          = configapp.TableLink
 	UnscannedSchemas   = configapp.UnscannedSchemas
 	Validation         = configapp.Validation
+	Reason             = configapp.Reason
+	ReasonPart         = configapp.ReasonPart
 	Workspace          = configapp.Workspace
 	WorkspaceItems     = configapp.WorkspaceItems
 	WorkspaceItem      = configapp.WorkspaceItem

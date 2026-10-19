@@ -198,7 +198,7 @@ func applyWrite(tc Context, w *WriteTargets, targets []CacheTarget) error {
 		if !recorded[t.Physical] {
 			recorded[t.Physical] = true
 			for _, datasource := range w.datasources[t.Physical] {
-				tc.Writes.Record(tc.Session, datasource)
+				tc.Writes.Record(tc.Session, datasource, tc.Sources[datasource].ReadAfterWrite)
 			}
 		}
 	}

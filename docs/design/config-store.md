@@ -63,7 +63,18 @@
   生效值，按 Spec 读出时每个值都“写过”，生效值不变，重新编码逐字节相同。
 - **append-only**：revision 内容写入后不再修改，只有 `state` 与
   `published_at` 会变化。
-- **唯一 published**：任一时刻最多一个 revision 处于 `published`。
+- **唯一 published**：任一时刻最多一个 revision 处于 `published`。schema 版本 6 起
+  由数据库约束保证：PostgreSQL/SQLite 为部分唯一索引
+  `smcp_revisions_one_published ON smcp_revisions (state) WHERE state = 'published'`，
+  MySQL/OceanBase 为生成列 `published_flag`（`published` 时为 1，否则为 NULL）上的
+  唯一索引；此前只靠发布在锁行下串行。升级到版本 6 前若已有多个 published，迁移中止并
+  列出它们的 id，需保留服务正在运行的那个、把其余改为 `superseded` 后再打开。
+- **锁行与计数行必须存在**：写入在 `smcp_store_meta` 的 `publish_lock` 行上串行，
+  ID 与变更序号也是该表的计数行；行缺失时写入以“store is corrupt”失败，而不是在没有
+  锁的情况下继续（v0.1.20 起）。
+- **重复执行建表**：`store init` 中途中断后可以重新运行；建表、建索引与加列在对象已存在时
+  跳过（各库无法统一写 `IF NOT EXISTS` 的语句按数据库的“已存在”错误码识别）。MySQL/OceanBase
+  的 DDL 不随事务回滚，版本迁移中途中断后重新打开 store 同样从中断处继续。
 
 状态机：
 
@@ -130,7 +141,8 @@ smcp_revisions (
 的各库进度转成行，此后 payload 只写空数组）；管理员工作区 `smcp_workspaces`（基准版本、各项、冲突与说明等、版本号）与写入记录 `smcp_workspace_log`
 与 `smcp_store_meta.revision_seq`（schema 版本 5；revision 变更序号 =
 `next_id` + `revision_seq`，只有发布、回滚、丢弃与导入增长后者，其他写入只增长
-`publish_lock`）。见 `docs/design/planning.md` 与 `docs/design/versioning.md`。
+`publish_lock`）；唯一 published 的数据库约束（schema 版本 6）。见
+`docs/design/planning.md` 与 `docs/design/versioning.md`。
 
 - **store 自身 schema 版本化**：`smcp_store_meta.schema_version` 记录表结构
   版本；打开 store 时版本未知或更新于程序 → fail closed；旧版本按内置迁移

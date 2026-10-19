@@ -13,7 +13,8 @@ import (
 var ErrIncomparable = errors.New("interp: incomparable values")
 
 // toRat converts a numeric value to an exact rational. Decimal strings are
-// not accepted: fixture cells must be typed Go numerics.
+// not accepted: fixture cells must be typed Go numerics. NaN and infinities
+// have no rational, so they compare with nothing.
 func toRat(v any) (*big.Rat, bool) {
 	switch n := v.(type) {
 	case int:
@@ -23,9 +24,10 @@ func toRat(v any) (*big.Rat, bool) {
 	case int64:
 		return new(big.Rat).SetInt64(n), true
 	case float64:
-		return new(big.Rat).SetFloat64(n), true
+		r := new(big.Rat).SetFloat64(n)
+		return r, r != nil
 	case *big.Rat:
-		return n, true
+		return n, n != nil
 	}
 	return nil, false
 }

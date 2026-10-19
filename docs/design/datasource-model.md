@@ -114,7 +114,9 @@ entities:
   - write：create、update、delete 和读写事务；
   - execute：存储过程。
 - `readAfterWrite > 0` 时：同一 MCP 会话在某库写入后的这段时间内，该库的读改走 write 连接。此时 write 连接
-  必须有 SELECT 权限（启动时检查）。
+  必须有 SELECT 权限（启动时检查）。窗口最长 1h；窗口内该会话的只读调用不与其他会话共享 singleflight
+  结果，窗口结束即恢复共享。`readAfterWrite` 为 0 的库不记录写入（v0.1.20 起；此前写过一次的会话会
+  一直不与其他会话共享读取结果）。
 - `connections`、`routing`、`pooler` 的变化需要重启（与现有 DSN 一致）；`readAfterWrite` 可以热重载。
 - 预留 `catalog` 字段（SQL Server / Trino 的三段式命名），现有 provider 不使用。
 

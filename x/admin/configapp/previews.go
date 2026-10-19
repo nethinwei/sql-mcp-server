@@ -227,6 +227,7 @@ func toPlanReport(r configplan.Report) *PlanReport {
 		out.Exceptions = append(out.Exceptions, PlanException{
 			ID: digest([]string{x.Kind, x.Ref, x.Entity, x.Detail}), Kind: x.Kind, Level: x.Level, Warning: x.Warning,
 			Ref: kit.Optional(x.Ref), Entity: kit.Optional(x.Entity), Detail: kit.Optional(x.Detail),
+			ReasonDetail: ReasonOf(x.Reason),
 		})
 	}
 	datasources := make([]string, 0, len(r.Unscanned))

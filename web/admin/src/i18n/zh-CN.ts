@@ -1,7 +1,10 @@
 // Simplified Chinese. en.ts must have exactly the same keys (type-checked).
 // vue-i18n reserves { } @ | $ in messages; values are passed as parameters.
 // en.ts uses '|' for singular/plural forms; Chinese needs only one form.
+import { reasonsZh } from './reasons'
+
 export default {
+  reasons: reasonsZh,
   app: { title: 'MCP 控制台', subtitle: '受治理的 SQL 网关管理后台' },
   common: {
     cancel: '取消', confirm: '确定', save: '保存', delete: '删除', add: '添加', create: '创建', remove: '删除',
@@ -102,6 +105,11 @@ export default {
     limitIssue: '{connection}：{key}（{use}）为 {strength}：{reason}',
     limits: '服务中的数据库侧保证：读超时 {read}，写超时 {write}，无键写入拒绝 {unkeyed}',
     strength: { ENFORCED: '强制', BEST_EFFORT: '尽力', UNSUPPORTED: '无' },
+    capKey: {
+      write_returning: '写入回读', cost_explain: 'EXPLAIN 估算', cost_explain_accurate: '估算可信',
+      cost_explain_analyze: 'EXPLAIN ANALYZE 采样', limit_timeout_read: '读超时', limit_timeout_write: '写超时',
+      limit_unkeyedWrite: '无键写入拒绝',
+    },
     cliOnly: '数据源与连接串只能用 CLI 修改（避免经后台写入凭据）。导入的表默认零权限，可以在加入工作区时直接授权给角色。', scan: '扫描', rescan: '重新扫描', searchTables: '搜索表名或说明',
     refreshSchemas: '刷新库列表',
     defaultSchema: '默认', notScanned: '未扫描', scannedMeta: '{count} 张表 · {at} 扫描',
@@ -182,13 +190,15 @@ export default {
     unscanned: '范围内还有 {n} 个库未扫描，它们的表不在方案内：',
     changes: '准备改什么', noChanges: '没有需要修改的内容。', objects: '涉及的库（{n}）',
     objectCounts: '{tables} 张表 · 新增 {imported} · 修改 {changed}',
-    rename: '改名', excludeTable: '排除此表', more: '还有 {n} 项',
+    rename: '改名', excludeTable: '排除此表', more: '还有 {n} 项', locate: '去修改',
+    removedList: '将删除 {n} 个表已不存在的实体：',
     change: {
       import: '新增 {n} 个实体（零权限，按表名命名）', createRole: '新建角色 {principal}',
       grant: '授予 {principal}：{actions} · {n} 个实体', exclude: '隐藏 {fields} 个字段（{n} 个实体）',
       mask: '按「{mask}」脱敏 {fields} 个字段（{n} 个实体）', syncAdd: '新增 {fields} 个字段（{n} 个实体）',
       syncRemove: '移除 {fields} 个字段（{n} 个实体）',
       removeTable: '移除 {n} 个表已不存在的实体（连同指向它们的授权与关系）',
+      syncKeys: '按数据库更新主键与唯一键（{n} 个实体）', syncKind: '按数据库更新表/视图类型（{n} 个实体）',
     },
     exception: {
       renamed: { title: '名称已被占用', detail: '实体改名为 {detail}', plain: '实体改名' },
@@ -201,6 +211,10 @@ export default {
       referenced: { title: '字段仍被引用', detail: '未移除 {detail}', plain: '字段仍被引用，未移除' },
       denied: { title: '连接无此权限', detail: '{detail}', plain: '连接没有对应的数据库权限' },
       review: { title: '新表进入授权', detail: '新表将授予 {detail}，请确认', plain: '新表进入已有授权' },
+      keyReferenced: { title: '键变更影响关系', detail: '键不再包含 {detail}', plain: '键不再包含被关系连接的列' },
+      rowColumnMissing: { title: '行范围引用的列已不存在', detail: '缺少 {detail}：需手工修改租户策略、行策略或授权行范围，实体在此之前仍不可用', plain: '行范围引用的列已不存在' },
+      relationshipNew: { title: '外键没有对应关系', detail: '{detail}', plain: '外键没有对应的关系' },
+      relationshipStale: { title: '关系没有外键对应', detail: '关系 {detail} 按导入方式命名，但已没有外键对应；若是手写的可忽略', plain: '关系没有外键对应' },
     },
     invalid: '方案应用后配置校验不通过', 
     effectHot: '发布后热加载生效，无需重启。', effectRestart: '发布后需要重启服务才能生效：{list}',
@@ -255,6 +269,18 @@ export default {
     deleteChecked: '删除所选（{n}）', deleteMatching: '删除全部匹配的 {n} 个',
     deleteTitle: '从工作区删除 {n} 个实体？', deleteNoAccess: '没有角色或用户被授权访问它们。',
     andMore: '{list} 等 {n} 个', deleted: '已从工作区删除 {n} 个实体，审核后发布即可生效',
+    syncAll: '同步实体', syncMatching: '同步匹配的 {n} 个',
+    sync: {
+      title: '同步实体', previewTitle: '同步实体：预览',
+      intro: '按数据库现状同步 {n} 个实体：新增的列（默认隐藏）、已不存在的字段、主键与唯一键、表与视图类型，以及表已不存在的实体。结果写入工作区，审核后发布生效。',
+      unreachable: '这些数据源不可达，其实体不参与同步（不可达不等于表已删除）：{list}',
+      procedures: '{n} 个存储过程不参与同步。',
+      schemas: '先扫描以下库（依据最近一次扫描判断差异）：', defaultSchema: '默认库', neverScanned: '从未扫描',
+      stale: '超过 1 小时', hint: '默认勾选超过 1 小时未扫描的库；也可以跳过扫描，直接按已有扫描与运行中发现的缺失预览。',
+      skipScan: '跳过扫描', preview: '预览', scanThenPreview: '扫描 {n} 个库后预览',
+      state: { pending: '等待中', running: '扫描中', done: '已完成', failed: '失败', canceled: '已取消' },
+      applied: '已加入工作区（修改 {n} 处），审核后发布即可生效',
+    },
   },
   entity: {
     renameTitle: '重命名实体', name: '名称', renameHint: '授权与其他实体的关系会一起更新，读取的表不变。',
@@ -266,6 +292,8 @@ export default {
     visible: '对 Agent 可见', visibleHint: '关闭后通用读写工具不再暴露此实体（授权仍然保留）。',
     allowCascade: '允许级联写入',
     allowCascadeHint: '外键级联删除或改写其他表时，不再要求调用方对被级联的实体有不带行范围的权限；级联到未暴露的表也放行。',
+    allowKeyUpdate: '允许修改主键',
+    allowKeyUpdateHint: '允许 update_records 修改标识行的列（主键，无主键时为第一个唯一键）。默认拒绝，应先删除再创建。',
     fields: '字段', commentDefault: '说明留空时使用数据库备注（灰色显示），填写后覆盖。', maskHint: '脱敏字段只能出现在结果中，不能用于过滤、分组或聚合。',
     field: '字段', fieldDescription: '说明', fieldDescriptionHint: '给 Agent 看的字段说明', alias: '别名', mask: '脱敏', hidden: '隐藏',
     masks: { none: '不脱敏', email: '邮箱', phone: '手机号', idcard: '证件号', secret: '密文' },
@@ -303,13 +331,13 @@ export default {
     readable: '可读字段', writable: '可写字段',
   },
   filter: {
-    allRows: '全部行', and: ' 且 ', or: ' 或 ', currentUser: '当前用户', isNull: '为空', isNotNull: '不为空',
+    allRows: '全部行', and: ' 且 ', or: ' 或 ', not: '非', currentUser: '当前用户', isNull: '为空', isNotNull: '不为空',
     ops: {
       eq: '等于', ne: '不等于', gt: '大于', gte: '大于等于', lt: '小于', lte: '小于等于', in: '属于',
       not_in: '不属于', like: '匹配', is_null: '为空', is_not_null: '不为空',
     },
     emptyHint: '不限制行：可读取全部行', addCondition: '添加条件', addGroup: '添加条件组',
-    matchAll: '满足全部', matchAny: '满足任一', removeGroup: '删除此组', field: '字段', value: '值',
+    matchAll: '满足全部', matchAny: '满足任一', negate: '取反', removeGroup: '删除此组', field: '字段', value: '值',
     listValue: 'a, b, c', noValue: '（无需填写值）',
     valueHint: '值按类型自动识别：数字写作 100，字符串直接写（或加引号强制为字符串），列表用逗号分隔。',
   },
@@ -338,6 +366,8 @@ export default {
     tokenOnce: '这是唯一一次显示明文。复制后交给调用方，作为 HTTP 请求头 Authorization: Bearer <token> 使用；发布后生效。',
     revokeTitle: '撤销此用户的 token？',
     revokeBody: '发布后，持有旧 token 的客户端会立即被拒绝，进行中的会话也会被断开。',
+    certSubjects: '客户端证书（mTLS）',
+    certSubjectsHint: '出示这些证书之一（不带 token）即以该用户身份调用：cn:<CN>、dns:<域名>、uri:<URI，如 SPIFFE ID>、email:<邮箱>。',
     subject: '主体属性（subject）', subjectHint: '行范围与租户边界中的「当前用户.x」取自这里，例如 tenant_id。',
     attrName: '属性名', attrValue: '值', addAttr: '添加属性',
     grants: '直授权限', grantsHint: '只给这个用户的额外权限；通常优先通过角色授权。',

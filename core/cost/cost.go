@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
@@ -130,12 +131,32 @@ func rowPenalty(rows int64) int {
 
 // ScannedRows is how many rows the plan reads: its largest row estimate, or
 // the table a full scan reads whole when that is larger (a filter may output
-// one row after reading all of them).
+// one row after reading all of them). See ScannedRowsKnown for a full scan of
+// a table no one measured.
 func (p Plan) ScannedRows() int64 {
-	if p.ScanType == ScanFull && p.TableSized {
-		return max(p.EstimatedRows, p.TableRows)
+	rows, _ := p.ScannedRowsKnown()
+	return rows
+}
+
+// ScannedRowsKnown is ScannedRows, and whether it is known: a full scan of a
+// table whose size the provider did not measure reads all of its rows, which
+// the output estimate does not tell; its count is then the output estimate,
+// a floor, and a scanned-rows limit refuses it.
+func (p Plan) ScannedRowsKnown() (int64, bool) {
+	if p.ScanType != ScanFull {
+		return p.EstimatedRows, true
 	}
-	return p.EstimatedRows
+	if p.TableSized {
+		return max(p.EstimatedRows, p.TableRows), true
+	}
+	return p.EstimatedRows, false
+}
+
+// OverScanLimit reports a plan reading more rows than limit allows (0 is no
+// limit), or an unknown number of them under a limit.
+func (p Plan) OverScanLimit(limit int64) bool {
+	rows, known := p.ScannedRowsKnown()
+	return limit > 0 && (!known || rows > limit)
 }
 
 // Explainer estimates a plan for one query. Implementations live in x/providers
@@ -301,7 +322,7 @@ func (g *ChainGate) Check(ctx context.Context, c codegen.Compiled) (Decision, er
 	bypassEstimate := false
 	var result Decision
 	result.Allow = true
-	var soft *Decision
+	var soft *Decision // the last soft refusal, which the chain's result reports
 	for _, l := range g.layers {
 		if bypassEstimate && layerPhase(l) == PhaseEstimate {
 			continue
@@ -316,7 +337,7 @@ func (g *ChainGate) Check(ctx context.Context, c codegen.Compiled) (Decision, er
 		}
 	}
 	if soft != nil {
-		return g.attachRewritten(*soft, c, rewritten), nil
+		result.Allow, result.Soft, result.Threshold = false, true, soft.Threshold
 	}
 	return g.attachRewritten(result, c, rewritten), nil
 }
@@ -343,8 +364,10 @@ func (g *ChainGate) applyLayerDecision(
 	if d.Score != nil {
 		result.Score = d.Score
 	}
-	if len(d.Hints) > 0 {
-		result.Hints = d.Hints
+	for _, h := range d.Hints {
+		if !slices.Contains(result.Hints, h) {
+			result.Hints = append(result.Hints, h)
+		}
 	}
 	if !d.Allow && d.Soft {
 		copy := d
@@ -435,10 +458,16 @@ func (e *ExceededError) Unwrap() error { return ErrCostExceeded }
 // Hints produces table-driven rewrite suggestions for a rejected plan.
 func Hints(p Plan, th Threshold) []string {
 	var h []string
-	if scanned := p.ScannedRows(); th.MaxScannedRows > 0 && scanned > th.MaxScannedRows {
-		h = append(h, fmt.Sprintf("estimated to read %d rows, over the limit of %d: narrow the filter "+
-			"(a shorter time range, a more selective condition) or split the work into smaller ranges",
-			scanned, th.MaxScannedRows))
+	if scanned, known := p.ScannedRowsKnown(); p.OverScanLimit(th.MaxScannedRows) {
+		if known {
+			h = append(h, fmt.Sprintf("estimated to read %d rows, over the limit of %d: narrow the filter "+
+				"(a shorter time range, a more selective condition) or split the work into smaller ranges",
+				scanned, th.MaxScannedRows))
+		} else {
+			h = append(h, fmt.Sprintf("reads a whole table whose row count is unknown, so it may exceed the "+
+				"limit of %d rows: filter on an indexed column, or ask an administrator to run ANALYZE "+
+				"on the table", th.MaxScannedRows))
+		}
 	}
 	if p.ScanType == ScanFull {
 		h = append(h, "add a filter on an indexed column or add LIMIT")

@@ -65,8 +65,14 @@ func randomBase(t *testing.T, r *rand.Rand, cat introspect.Catalog) *config.Conf
 			}
 		}
 		b.WriteString("]")
-		if len(tb.PrimaryKey()) > 0 {
+		if len(tb.PrimaryKey()) > 0 && r.IntN(5) != 0 {
 			b.WriteString(", primaryKey: [id]")
+		}
+		if r.IntN(5) == 0 {
+			b.WriteString(", uniqueKeys: [[id]]")
+		}
+		if r.IntN(6) == 0 {
+			b.WriteString(", kind: view")
 		}
 		b.WriteString("}\n")
 		if r.IntN(2) == 0 {
@@ -103,10 +109,14 @@ func randomPlan(r *rand.Rand) Plan {
 		p.Fields = []FieldRule{{Columns: []string{"*phone*", "email"}, Exclude: r.IntN(2) == 0, Mask: "phone"}}
 	}
 	if r.IntN(2) == 0 {
-		p.Sync = &SyncRule{Add: r.IntN(2) == 0, Remove: r.IntN(2) == 0, HideNew: r.IntN(2) == 0}
+		p.Sync = &SyncRule{Add: r.IntN(2) == 0, Remove: r.IntN(2) == 0, HideNew: r.IntN(2) == 0,
+			Keys: r.IntN(2) == 0}
 	}
 	if r.IntN(4) == 0 {
 		p.Exclude = []string{"shop.public.orders"}
+	}
+	if r.IntN(5) == 0 {
+		p.Scope.Entities = []string{"shop.public.orders", "shop.sales.users"}
 	}
 	return p
 }

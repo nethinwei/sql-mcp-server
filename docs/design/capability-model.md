@@ -20,8 +20,8 @@
 | PostgreSQL `pooler: transaction` | `x/providers/postgres/postgres.go` | 不设置 `statement_timeout`，原生超时消失；驱动的 cancel request 只在 pooler 转发时生效（见下） |
 | DSN 自带 `statement_timeout` / `max_execution_time` / `ob_query_timeout` | 各 provider `Open` | 不再注入，`=0` 即关闭原生超时 |
 | DSN 自带 `sql_safe_updates=0` | `x/providers/mysql/adapter.go` | 无键写入的原生兜底关闭 |
-| MySQL 写语句 | MySQL 语义 | `max_execution_time` 只作用于只读 SELECT |
-| MySQL / OceanBase context 取消 | go-sql-driver | 关闭连接，服务端语句可能继续执行 |
+| MySQL 写语句 | MySQL 语义 | `max_execution_time` 只作用于只读 SELECT；v0.1.20 起由 `KILL QUERY` 在请求截止时停止（见 D1） |
+| MySQL / OceanBase context 取消 | go-sql-driver | 只关闭连接，服务端语句可能继续执行；MySQL 直连时另由 `KILL QUERY` 停止 |
 
 此外：EXPLAIN ANALYZE 支持经类型断言另行判断（`x/bootstrap` 的 `planners`）；
 [兼容矩阵](../provider-compatibility.md)手写，三库“连接级 timeout”仍为“未独立验证”。
@@ -62,7 +62,7 @@ type Evidence string // "db_verified" | "core_verified" | "declared" | "external
 type Claim struct {
     Strength Strength
     Evidence Evidence
-    Reason   string // 降级或依赖外部配置时的原因，进入告警与报告
+    Reason   reason.Reason // 提供方式或降级原因，进入告警与报告（见“原因”）
 }
 
 type Key string
@@ -93,13 +93,36 @@ type Profile map[Key]Claim
   `Reason` 写明来源。transaction pooler 不保留 `statement_timeout`，cancel request 也只在
   pooler 转发时才到达数据库（pgbouncer 会转发，但未测试），因此与 MySQL 同口径，定为
   `best_effort`，`cost.requireNativeLimits` 下拒绝加载。
-- MySQL：`max_execution_time` 由服务注入时读 `enforced`、写 `unsupported`
-  （MySQL 语义）；DSN 覆盖或 transaction pooler（会话变量不保证保留）时读降为
-  `best_effort`。
+- MySQL：`max_execution_time` 由服务注入时读 `enforced`；DSN 覆盖或 transaction pooler
+  （会话变量不保证保留）时读降为 `best_effort`。写由 `KILL QUERY` 在请求截止时停止
+  （v0.1.20 起），直连时 `enforced`，不受 DSN 覆盖影响；经 transaction pooler 时
+  `unsupported`（见 D1）。
 - OceanBase：`ob_query_timeout` 作用于全部语句；服务注入时读写 `enforced`，DSN 覆盖
   或 transaction pooler 时 `best_effort`。
 - `sql_safe_updates`：服务注入或 DSN 设为 `1`/`ON` 时 `enforced`，DSN 设为 `0`/`OFF` 时
   `unsupported`，DSN 设为其他无法判定的值或经 transaction pooler 时 `best_effort`。
+
+### 原因（`core/reason`，v0.1.20 起）
+
+能力的原因、连接权限的原因、限制所依赖的工作（读、写、过程、逃生通道）以及发布前判定的
+提示，都是 `reason.Reason{Code, Params, Parts, Text}`：
+
+- `Code` 是稳定的编码（如 `timeout.mysqlWritePooled`、`privilege.missing`），
+  全部登记在 `core/reason/codes.go`，每个编码有一个带 `{占位符}` 的英文模板；
+- `Params` 是占位符的取值（变量名、权限名、驱动错误原文等）；`Parts` 是由另一个原因填充的
+  占位符（如判定提示中的 `{cause}`、`{use}`、`{strength}`），不再嵌套；
+- `Text` 是填好的英文原文，日志、CLI、MCP、兼容矩阵与 GraphQL 原有的 `reason`/`use`/
+  `warnings` 字段照旧输出它。
+
+管理 API 另以 `reasonDetail`、`useDetail`、`Validation.notices`、`PlanException.reasonDetail`
+返回结构化的原因；控制台按 `reasons.<code>` 经 vue-i18n 显示 zh-CN/en，部分先各自翻译再填入，
+未知编码回退 `Text`。`core/reason/testdata/codes.json` 是编码与英文模板的清单
+（`go test ./core/reason -run TestCodesFixture -update` 重新生成），控制台测试据此核对每个编码
+在 zh-CN 与 en 中都有文案、且占位符一致。
+
+新增一个原因：在 `codes.go` 加常量与英文模板，在产生它的地方用 `reason.New`（或带部分的
+`reason.Compose`），重新生成清单，再在 `web/admin/src/i18n` 的 zh-CN 与 en 中加
+`reasons.<code>`；漏掉任一步测试即失败。
 
 ## 判定位置
 
@@ -144,7 +167,9 @@ fail closed。**
 写连接的 `limit.timeout.write`，以及写后读（`readAfterWrite`）或读写事务开启时写连接的
 `limit.timeout.read`；有人能执行过程时（被授予 execute，过程 `trustedProcedure`，经
 `execute_entity` 或自己的工具暴露）执行连接的 `limit.timeout.write`；`tools.executeSql`
-开启时逃生通道连接的读写两项。`limit.unkeyedWrite` 只报告：核心层 WriteGuard 已是
+开启时逃生通道连接的读写两项，其中写一项在该连接的账号不能写时不报告（v0.1.20 起：
+服务器处于 `read_only`，或 MySQL `SHOW GRANTS` 显示只有读权限；有授予的角色或无法判断时
+照旧报告）。`limit.unkeyedWrite` 只报告：核心层 WriteGuard 已是
 等价强制。
 
 配置 `cost.requireNativeLimits`（默认 `false`，可热重载）：
@@ -168,11 +193,16 @@ fail closed。**
 - 三库 integration（`Test*StatementTimeout`）：PostgreSQL 断言注入的
   `statement_timeout` 停住读写、DSN 覆盖为 0 时 cancel request 使语句离开
   `pg_stat_activity` 且写入未生效；MySQL 断言 `max_execution_time` 停住读、
-  `sql_safe_updates` 拒绝无键 UPDATE；OceanBase 断言 `ob_query_timeout` 停住读写且写入
+  `sql_safe_updates` 拒绝无键 UPDATE，并由 `TestMySQLWriteTimeoutKillsTheStatement`、
+  `TestMySQLLockWaitingWriteIsStopped` 断言超时的慢 UPDATE（直接与预编译）在库中被停止并
+  回滚、行锁立即释放、等锁的 UPDATE 在锁释放后不再生效；OceanBase 断言 `ob_query_timeout` 停住读写且写入
   未生效、`sql_safe_updates` 拒绝无键 UPDATE。
 - 判定本身（DSN 覆盖、pooler）由各 provider 的 `TestLimits` 锁定；严格模式与依赖判定由
   `x/bootstrap` 的 `TestNativeLimitIssuesFollowTheRoutedWork`、
-  `TestRequireNativeLimitsRefusesTheConfiguration` 锁定。
+  `TestRequireNativeLimitsRefusesTheConfiguration` 锁定；逃生通道只读账号的判定由
+  `TestReadOnlyEscapeConnectionNeedsNoWriteTimeout`、`TestCannotWrite`、MySQL 的
+  `TestGrantsWrite` 与 integration `TestMySQLReadOnlyEscapeAccountNeedsNoWriteTimeout`
+  （只读与可写账号各一）锁定。
 - 兼容矩阵的 Provider 能力表由 `go generate ./x/providers/all` 生成，
   `internal/capgen` 的测试发现过期或漏列驱动即失败。
 
@@ -215,10 +245,15 @@ fail closed。**
 
 ## 评审决议
 
-- **D1 MySQL / OceanBase 写超时不做核心层 `KILL QUERY`**：服务无法保证连接账号有
-  `PROCESS` 或等价权限，做了也只能是 `best_effort`，不改变强度判定。因此
-  `limit.timeout.write` 在 MySQL 上为 `unsupported`（OceanBase 由 `ob_query_timeout`
-  覆盖）；严格模式下 MySQL 数据源只要有人能写入或执行过程（或开启了逃生通道）即不能
-  加载，`Reason` 提示写超时只能由 DBA 侧配置保证。文档如实说明，不另设绕过开关。
+- **D1 MySQL 写超时由 provider 发送 `KILL QUERY`**（v0.1.20 修订，此前判为
+  `unsupported`）：与 PostgreSQL 在请求截止时发送 cancel request 对等。每条连接建立时读取
+  `CONNECTION_ID()`；语句的 context 先于语句结束时，经另一条连接执行
+  `KILL QUERY <线程号>`（限时 2 秒，失败只记日志），该连接此后不再复用。同一账号停止自己
+  的线程不需要 `PROCESS` 或 `CONNECTION_ADMIN`。MySQL 的线程号在服务器运行期间单调递增、
+  不复用，迟到的 `KILL QUERY` 只会落到同一线程或落空。覆盖实体写入、存储过程与逃生通道
+  （都经同一连接池）。经 transaction pooler 时连接读到的线程号对应的是借出的后端会话，
+  `KILL QUERY` 可能停掉其他客户端的语句，因此不发送，写仍为 `unsupported`。OceanBase 由
+  `ob_query_timeout` 覆盖全部语句，不需要 `KILL QUERY`。实现在 `x/providers/mysql/kill.go`，
+  核心层不变。
 - **D2 profile 不进入 MCP 侧**：只出现在启动告警、管理 API 与控制台；
   Agent 不据此决策，暴露反而泄漏部署细节。

@@ -104,12 +104,23 @@ func maskEmail(v any) any {
 	return s[:1] + redacted + s[at:]
 }
 
+// digitsMask replaces the middle of a phone or ID card number: a fixed
+// length, so the output does not tell the value's.
+const digitsMask = "****"
+
 // maskDigits keeps the first three and last four characters of a phone or ID
-// card number.
+// card number (11 characters or more), the first and last two of a shorter
+// one, never more than half of 8 to 10, and redacts a value under 8. It
+// counts characters, not bytes.
 func maskDigits(v any) any {
 	s, ok := coerceString(v)
-	if !ok || len(s) < 8 {
+	r := []rune(s)
+	switch {
+	case !ok || len(r) < 8:
 		return redacted
+	case len(r) < 11:
+		return string(r[:2]) + digitsMask + string(r[len(r)-2:])
+	default:
+		return string(r[:3]) + digitsMask + string(r[len(r)-4:])
 	}
-	return s[:3] + strings.Repeat("*", len(s)-7) + s[len(s)-4:]
 }

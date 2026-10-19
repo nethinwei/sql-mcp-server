@@ -147,7 +147,8 @@ func generate() (string, error) {
 			}
 			for _, k := range []dialect.Key{dialect.TimeoutRead, dialect.TimeoutWrite, dialect.UnkeyedWrite} {
 				c := profile.Claim(k)
-				if j > 0 && c == defaults[i].Claim(k) {
+				if d := defaults[i].Claim(k); j > 0 && c.Strength == d.Strength && c.Evidence == d.Evidence &&
+					c.Reason.Text == d.Reason.Text {
 					continue
 				}
 				fmt.Fprintf(&b, "| %s | %s | `%s` | `%s` | %s |\n", p.title, s.name, k, c.Strength, c.Reason)

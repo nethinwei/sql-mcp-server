@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"crypto/x509"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -25,6 +26,11 @@ func (f fakeUsers) UserByTokenHash(hash string) (bootstrap.UserIdentity, bool) {
 func (f fakeUsers) UserByName(name string) (bootstrap.UserIdentity, bool) {
 	id, ok := f[name]
 	return id, ok
+}
+
+// UserByCertificate: a certificate whose CN is a user's name is that user.
+func (f fakeUsers) UserByCertificate(leaf *x509.Certificate) (bootstrap.UserIdentity, bool) {
+	return f.UserByName(leaf.Subject.CommonName)
 }
 
 func testUsers() fakeUsers {

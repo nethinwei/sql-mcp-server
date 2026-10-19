@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/x509"
 	"net/http"
 	"strings"
 
@@ -17,6 +18,7 @@ import (
 type UserDirectory interface {
 	UserByTokenHash(hash string) (bootstrap.UserIdentity, bool)
 	UserByName(name string) (bootstrap.UserIdentity, bool)
+	UserByCertificate(leaf *x509.Certificate) (bootstrap.UserIdentity, bool)
 }
 
 const userHeader = "X-MCP-User"
@@ -89,7 +91,7 @@ func principalAuth(token string, users UserDirectory, channelAuthenticated bool,
 	shared := sha256.Sum256([]byte(token))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		presented, ok := bearerToken(r)
-		if !ok && token == "" && channelAuthenticated {
+		if !ok && (token == "" && channelAuthenticated || certUser(r)) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -196,4 +198,39 @@ func (s *sessionIdentityStore) sessionsFor(principals []string) []string {
 		}
 	}
 	return out
+}
+
+// certIdentity authenticates, under mTLS with users configured, a request
+// without a bearer token by its client certificate (verified by
+// requireClientCert): one matching a user's certSubjects calls as that user.
+// One matching none is refused when requireUser is set (clientIdentity
+// "user"), else it keeps the default identity. A trusted proxy's
+// certificate, or address, is exempt: it names its callers by headers.
+func certIdentity(
+	users UserDirectory, requireUser bool, proxy func(*http.Request) bool, next http.Handler,
+) http.Handler {
+	if users == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, bearer := bearerToken(r); bearer || proxy(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if id, ok := users.UserByCertificate(r.TLS.PeerCertificates[0]); ok {
+			next.ServeHTTP(w, r.WithContext(withUser(r.Context(), id, nil)))
+			return
+		}
+		if requireUser {
+			http.Error(w, "the client certificate names no user", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// certUser reports a request certIdentity authenticated as a user.
+func certUser(r *http.Request) bool {
+	s, ok := r.Context().Value(subjectCtxKey{}).(requestSubject)
+	return ok && s.user
 }

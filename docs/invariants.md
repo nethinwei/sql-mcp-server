@@ -40,7 +40,8 @@ YAML presence 解码位于 `x/configyaml`，不会把 `yaml.v3` 引入核心。
   有全局容量边界。
 - **I23** begin、commit、rollback 各自受 deadline；commit 失败必须尝试 rollback。
 - **I24** 不能将返回行数冒充实际扫描行数；跨方言只承诺 EXPLAIN 估算上限，并在
-  计划未知或 EXPLAIN 失败时 fail closed。
+  计划未知或 EXPLAIN 失败时 fail closed。表的行数未能测得的全表扫描读取行数未知，
+  在设置了扫描行数上限（`cost.maxScannedRows` 或预算 `maxEstimatedScannedRows`）时拒绝。
 - **I25** 多角色/直授合并时，每个返回的行和列都至少被一个授权项同时覆盖：
   只有覆盖请求所用全部字段的授权项参与行范围合并，没有单一授权项覆盖时拒绝
   （`AMBIGUOUS_FIELD_SCOPE`），不对字段与行分别取并集。
@@ -49,8 +50,9 @@ YAML presence 解码位于 `x/configyaml`，不会把 `yaml.v3` 引入核心。
 - **I27** 配置存储表（`smcp_` 前缀）不能被任何实体的 `source` 引用，也不出现在
   introspection 结果中。
 - **I28** 从 store 加载的 revision 必须先通过 content hash 校验与 store 模式密钥
-  规则，任一失败都保留当前快照；任一时刻至多一个 published revision，状态转换
-  以乐观并发串行化。
+  规则，任一失败都保留当前快照；任一时刻至多一个 published revision（store
+  schema 版本 6 起由数据库唯一约束保证），状态转换以乐观并发串行化，在必须存在的
+  锁行上执行，锁行缺失即失败。
 - **I29** 可信 SQL 逃生通道 `execute_sql` 只在 `tools.executeSql`、调用用户持有
   `sql:execute@<数据源>`、数据源声明 `sqlEscape` 三者同时成立时可见与可执行；其
   语句仍只由执行器（`pipeline.go`）调用数据库，timeout、结果行数 / 字节上限、预算与
@@ -73,7 +75,9 @@ MCP 工具是否在 tools/list 中还取决于全局 `tools` 开关；custom pro
 - **I13** engine/预算达到配置并发上限时拒绝新工作，不创建无界 goroutine。所有
   触达数据库的执行都在执行总线的某个通道上准入并共享 `rateLimit.ioPool`，非工具
   调用通道合计至多占一半；生产代码的 goroutine 与定时器只经 `core/bus` 启动，由
-  `internal/buscheck` 强制。
+  `internal/buscheck` 强制。例外是语句超时时的取消：PostgreSQL 驱动发送的取消请求与
+  MySQL 直连时经独立连接执行的 `KILL QUERY`（`context.AfterFunc` 触发，限时 2 秒，失败只记
+  日志）不是新准入的工作，不经总线。
 
 这些条目由包级单元测试、`go test -race` 和部分 MCP goleak e2e 覆盖；它们不
 构成对数据库 driver 或外部审计 sink 的形式化证明。
@@ -84,6 +88,16 @@ MCP 工具是否在 tools/list 中还取决于全局 `tools` 开关；custom pro
   `WriteGuard` 拒绝，除非精确命中 allow template；无任何有效谓词的写始终由
   工具层拒绝。
 - **I15** 的字段可见性检查同时覆盖读过滤和写目标，避免通过隐藏字段推断数据。
+- **I30** 写后的行仍在调用方的行范围内（WITH CHECK）：create 插入的行、update
+  修改后的行都必须满足 `授权项行范围的 OR AND tenantPolicy`。create 时调用方未提供、
+  而行范围以等值固定的列（通常是隐藏的租户列）由服务端按该值填入；调用方提供的值
+  使行越界即拒绝（`ROW_POLICY_VIOLATION`），不改写。update 把 `set` 代入行范围：
+  必然越界即拒绝，否则剩余条件并入 WHERE，越界的行不被修改。比较按
+  [IR 语义](design/ir-semantics.md)；无法精确判定（EXISTS、类型不可比、NULL 与
+  未知列混合）时拒绝。
+- **I31** update 默认不能修改标识行的列（主键，无主键时为第一个可标识行的唯一键），
+  实体显式 `allowKeyUpdate: true` 时才允许；codegen 拒绝无谓词的 UPDATE/DELETE 与
+  不赋值的 UPDATE，作为工具层之外的最后防线。
 
 MySQL/OceanBase 的 `sql_safe_updates` 是额外防线，不替代 I14。配置显式关闭
 `requirePKForWrite` 或加入 allow template 会缩小这项保证，必须经过安全评审。

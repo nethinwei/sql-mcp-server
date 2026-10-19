@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import { NAlert, NButton, NCheckbox, NModal, NSpace, NSpin, NTag, NText, useMessage } from 'naive-ui'
 import { ApiError, run } from '@/api/client'
 import { ApplyPlanMutation, PreviewPlanQuery } from '@/api/ops'
@@ -11,6 +12,7 @@ import type { Plan } from '@/lib/plan'
 import { createPreviewer } from '@/lib/planPreview'
 import PlanReport from './PlanReport.vue'
 import ChangeDrillDown from './ChangeDrillDown.vue'
+import { reasonText } from '@/lib/reasons'
 
 // Evaluates a plan on the server against the workspace and shows its report;
 // taking it puts its outcome into the workspace, where it is reviewed and
@@ -27,6 +29,7 @@ const emit = defineEmits<{ applied: [result: { added: string[]; changed: number;
 const { t } = useI18n()
 const ws = useWorkspace()
 const message = useMessage()
+const router = useRouter()
 
 const current = ref<Plan | null>(null)
 const previewer = createPreviewer<Proposal>(
@@ -69,11 +72,13 @@ const preview = computed(() => state.preview)
 const level = (l: string) => preview.value?.report.exceptions.filter((x) => x.level === l).length ?? 0
 const blocking = computed(() => level('block'))
 const toConfirm = computed(() => level('confirm'))
+// Changed counts the entities changed or removed and the principals changed.
 const changed = computed(() => (preview.value
-  ? preview.value.entities.length - preview.value.added.length + preview.value.roles.length + preview.value.users.length
+  ? preview.value.entities.length - preview.value.added.length + preview.value.removed.length +
+    preview.value.roles.length + preview.value.users.length
   : 0))
-const empty = computed(() => !!preview.value && !preview.value.entities.length && !preview.value.roles.length &&
-  !preview.value.users.length)
+const empty = computed(() => !!preview.value && !preview.value.entities.length && !preview.value.removed.length &&
+  !preview.value.roles.length && !preview.value.users.length)
 const fresh = computed(() => !!current.value && previewer.current(current.value, ws.contextKey))
 /** Why the outcome cannot be taken now, or null. */
 const blocked = computed(() => {
@@ -115,6 +120,12 @@ async function apply() {
   }
 }
 
+/** Leaves the preview for the entity an exception asks to fix. */
+function locate(entity: string) {
+  show.value = false
+  void router.push({ name: 'entity', params: { id: entity } })
+}
+
 const drilling = ref(false)
 const drillChange = ref<PlanReportPartsFragment['changes'][number] | null>(null)
 function drill(c: PlanReportPartsFragment['changes'][number]) {
@@ -137,11 +148,19 @@ function drill(c: PlanReportPartsFragment['changes'][number]) {
           <n-button text size="tiny" type="primary" @click="include(null)">{{ t('plan.includeAll') }}</n-button>
         </n-alert>
         <template v-if="preview">
-          <plan-report :report="preview.report" editable @exclude="exclude" @rename="rename" @drill="drill" />
+          <plan-report :report="preview.report" editable @exclude="exclude" @rename="rename" @drill="drill"
+            @locate="locate" />
+          <n-alert v-if="preview.removed.length" type="warning" :show-icon="false">
+            {{ t('plan.removedList', { n: preview.removed.length }) }}
+            <span class="excluded">
+              <n-tag v-for="id in preview.removed.slice(0, 20)" :key="id" size="small" class="mono">{{ id }}</n-tag>
+              <n-text v-if="preview.removed.length > 20" depth="3">{{ t('plan.more', { n: preview.removed.length - 20 }) }}</n-text>
+            </span>
+          </n-alert>
           <n-alert v-if="!preview.validation.ok" type="error" :title="t('plan.invalid')">{{ preview.validation.error }}</n-alert>
           <template v-else-if="!empty">
-            <n-alert v-if="preview.validation.warnings.length" type="warning" :show-icon="false">
-              <div v-for="w in preview.validation.warnings" :key="w">{{ w }}</div>
+            <n-alert v-if="preview.validation.notices.length" type="warning" :show-icon="false">
+              <div v-for="w in preview.validation.notices" :key="w.text">{{ reasonText(w) }}</div>
             </n-alert>
             <n-text depth="3">
               {{ preview.validation.restartRequired.length

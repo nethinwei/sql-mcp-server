@@ -119,6 +119,7 @@ func drift(e config.EntityConfig, t entity.Entity) (added, missing []string) {
 // lower-cased patterns and search text.
 type matcher struct {
 	datasources, refs map[string]bool
+	entities          map[string]bool
 	schemas, tables   globs
 	search            string
 	status            map[Status]bool
@@ -138,7 +139,7 @@ func set[T comparable](xs []T) map[T]bool {
 
 func (s Scope) compile() matcher {
 	return matcher{
-		datasources: set(s.Datasources), refs: set(s.Refs), schemas: compileGlobs(s.Schemas),
+		datasources: set(s.Datasources), refs: set(s.Refs), entities: set(s.Entities), schemas: compileGlobs(s.Schemas),
 		tables: compileGlobs(s.Tables), search: strings.ToLower(strings.TrimSpace(s.Search)), status: set(s.Status),
 		drift: s.Drift,
 	}
@@ -158,7 +159,12 @@ func (m matcher) table(datasource string, t entity.Entity) bool {
 
 // row checks the conditions on where the table stands.
 func (m matcher) row(r Row) bool {
-	return (m.status == nil || m.status[r.Status]) && (!m.drift || r.Drift())
+	return (m.status == nil || m.status[r.Status]) && (!m.drift || r.Drift()) && m.entity(r.Entity)
+}
+
+// entity checks the condition on the entity reading the table (nil: none).
+func (m matcher) entity(e *config.EntityConfig) bool {
+	return m.entities == nil || e != nil && m.entities[e.ID()]
 }
 
 // Unscanned lists, per datasource in scope, the listed schemas the scope

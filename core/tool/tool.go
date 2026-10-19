@@ -116,6 +116,10 @@ type Result struct {
 	// NextCursor, when set, is the cursor of the next page of an ordered
 	// read (see read_records orderBy).
 	NextCursor map[string]any
+	// Truncated says a write's or a procedure's rows were cut short: past the
+	// call's row limits or what the server holds in memory (the write took
+	// effect); or an execute_sql query's, at its row cap.
+	Truncated bool
 	// Grants lists covering grant IDs for audit; it is not sent to clients.
 	Grants []string
 }
@@ -498,11 +502,8 @@ func normalizeJSONValue(value any) (any, error) {
 			return integer, nil
 		}
 		if strings.ContainsAny(typed.String(), ".eE") {
-			floating, err := typed.Float64()
-			if err != nil {
-				return nil, fmt.Errorf("invalid JSON number %q", typed)
-			}
-			return floating, nil
+			// Kept exact: the column decides (see coerceNumber).
+			return typed, nil
 		}
 		return nil, fmt.Errorf("integer %q exceeds int64; encode it as a JSON string", typed)
 	case []any:

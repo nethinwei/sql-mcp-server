@@ -53,6 +53,26 @@ func runServerConformance(t *testing.T, spec Spec) {
 		dropTables(t, spec)
 		assertMigratesVersionFour(t, spec)
 	})
+	t.Run("LockRowRequired", func(t *testing.T) { assertLockRowRequired(t, freshStore(t, spec)) })
+	t.Run("OnePublished", func(t *testing.T) { assertOnePublished(t, freshStore(t, spec)) })
+	t.Run("PublishRaceLeavesOne", func(t *testing.T) { assertConcurrentPublish(t, freshStore(t, spec)) })
+	t.Run("RerunsItsDDL", func(t *testing.T) { assertRerunsItsDDL(t, freshStore(t, spec)) })
+	t.Run("MigrationRefusesTwoPublished", func(t *testing.T) {
+		dropTables(t, spec)
+		assertMigrationRefusesTwoPublished(t, spec)
+	})
+	t.Run("InitCompletesPartialMeta", func(t *testing.T) {
+		dropTables(t, spec)
+		assertInitCompletesPartialMeta(t, spec)
+	})
+	t.Run("ConcurrentInit", func(t *testing.T) {
+		dropTables(t, spec)
+		assertConcurrentInit(t, spec)
+	})
+	t.Run("MissingTableRefused", func(t *testing.T) {
+		dropTables(t, spec)
+		assertMissingTableRefused(t, spec)
+	})
 }
 
 // freshStore drops the store tables and initializes them again.
@@ -78,11 +98,7 @@ func dropTables(t *testing.T, spec Spec) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{
-		"smcp_revisions", "smcp_store_meta", "smcp_admin_accounts", "smcp_catalog_lists", "smcp_catalog_schemas",
-		"smcp_plan_templates", "smcp_plan_template_versions", "smcp_admin_tokens", "smcp_pending_states", "smcp_scan_batches",
-		"smcp_scan_batch_items", "smcp_pending_log", "smcp_workspaces", "smcp_workspace_log",
-	} {
+	for _, table := range storeTables {
 		if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
 			t.Fatal(err)
 		}

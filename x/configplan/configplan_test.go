@@ -8,6 +8,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	"github.com/nethinwei/sql-mcp-server/core/reason"
 	"github.com/nethinwei/sql-mcp-server/x/configedit"
 	"github.com/nethinwei/sql-mcp-server/x/configyaml"
 	"github.com/nethinwei/sql-mcp-server/x/revisionops"
@@ -257,7 +258,9 @@ func TestGrantExceptions(t *testing.T) {
 	t.Parallel()
 	base := decode(t, baseYAML)
 	in := Input{Base: base, Published: base, Sources: shop(), Review: true,
-		Denied: func(_, action string) (string, bool) { return "no privilege", action == "delete" }}
+		Denied: func(_, action string) (reason.Reason, bool) {
+			return reason.New(reason.PrivilegeMissing, "privilege", "DELETE"), action == "delete"
+		}}
 	p, err := Evaluate(in, Plan{
 		Scope: Scope{Tables: []string{"customers", "orders"}, Schemas: []string{"public"}}, Import: true,
 		Grants: []GrantRule{
@@ -280,9 +283,36 @@ func TestGrantExceptions(t *testing.T) {
 	if slices.ContainsFunc(got, func(s string) bool { return strings.HasPrefix(s, "denied shop.public.orders") }) {
 		t.Errorf("a new entity has no capability to check: %v", got)
 	}
+
 	g := p.Config.Users["alice"].Grants
 	if len(g) != 1 || !slices.Equal(g[0].Fields.Read, []string{"note"}) || g[0].Fields.Write != nil {
 		t.Fatalf("alice = %+v", g)
+	}
+}
+
+// An action the connection cannot run is explained by the server's reason,
+// which the console translates; its detail is the reason's English text.
+func TestDeniedGrantCarriesTheReason(t *testing.T) {
+	t.Parallel()
+	base := decode(t, baseYAML)
+	in := Input{Base: base, Published: base, Sources: shop(),
+		Denied: func(_, action string) (reason.Reason, bool) {
+			return reason.New(reason.PrivilegeMissing, "privilege", "DELETE"), action == "delete"
+		}}
+	p, err := Evaluate(in, Plan{
+		Scope:  Scope{Tables: []string{"customers"}, Schemas: []string{"public"}},
+		Grants: []GrantRule{{Principal: "user:alice", Actions: []string{"read", "delete"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(p.Report.Exceptions, func(x Exception) bool { return x.Kind == ExceptionDenied })
+	if i < 0 {
+		t.Fatalf("no denied exception in %v", kinds(p.Report.Exceptions))
+	}
+	if x := p.Report.Exceptions[i]; x.Detail != "delete: the account lacks the DELETE privilege" ||
+		x.Reason.Code != reason.PlanActionDenied || x.Reason.Parts["cause"].Code != reason.PrivilegeMissing {
+		t.Errorf("denied exception = %+v", x)
 	}
 }
 

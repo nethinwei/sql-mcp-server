@@ -106,8 +106,10 @@ cost:
 - `tools.executeSql: true` 要求 `audit.enabled: true`（`Validate` 检查）：没有
   审计 sink 的逃生通道不能存在，这是审计 `fail_closed` 在配置层的体现。
 - `cost.sqlEscape.estimate`：`required`（默认）时 EXPLAIN 失败即拒绝；`skip` 时不做
-  估算，只保留硬上限。这是路线图允许的唯一放宽；`cost.enabled: false` 对本入口
-  同样只关闭估算，不关闭硬上限（I17）。
+  估算，只保留硬上限。这是路线图允许的唯一放宽，且必须显式写出：`cost.enabled: false`
+  （没有 EXPLAIN）与 `required` 同时出现、且有数据源声明 `sqlEscape` 时校验失败；
+  provider 没有 EXPLAIN 而估算为 `required` 时装配失败（v0.1.20 起；此前两者都静默跳过
+  估算）。硬上限不随之关闭（I17）。
 
 字段同步：`schema:"…"` 标签、`core/config/fields.yaml`（中英文说明）、
 `go generate ./core/config`（`schema.json`、`spec_gen.go`、配置文档字段表）、

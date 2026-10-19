@@ -19,7 +19,7 @@ revision 保存在配置存储中（`serve --store`），加载链路完全相�
 密钥规则；见[运维指南](operations.md#配置存储)。
 
 配置中出现未知字段（包括拼写错误）时加载失败并报告行号，不会被静默忽略；
-行过滤（`rows`、`rowPolicies`、`tenantPolicy`）是自由结构，不受此限制。
+行过滤（`rows`、`rowPolicies`、`tenantPolicy`）按下文“行过滤”的结构单独校验。
 
 显式 `--transport`/`--addr`/`--role`/`--user` 优先于 `server` 中的同名字段。
 热重载不是 YAML 字段，通过 `serve --watch` 开启；标记“修改需重启”的字段在
@@ -41,14 +41,27 @@ DSN 中的 `${file:/path}` 必须是 `server.secrets.allowedRoots` 下的绝对�
 且符号链接不能逃逸允许根。启动与重载时自省各数据源：table/view 或已配置的字段在
 数据库中不存在的实体标记为不可用（工具对有权限的调用方返回 `ENTITY_UNAVAILABLE`，
 不生成 SQL），配置其余部分照常加载，日志告警 `entities unavailable`，控制台列出这些
-实体；额外的数据库列不报错，procedure 不参与 drift 检查。读取不到结构的数据源（不可达、
+实体；行过滤引用的列（可以不是字段）不存在时同样按缺列处理；额外的数据库列不报错，
+procedure 不参与 drift 检查。读取不到结构的数据源（不可达、
 自省超时）同样不阻塞配置：它的实体全部不可用（对调用方只说明“数据源不可达”），日志
 告警 `datasource unreachable`，`--watch` 时服务按退避重新装配，数据源恢复后自动可用。
 
-行过滤（`rowPolicies` 的一项、授权的 `rows`、`tenantPolicy`）写作
-`{op, field, value}` 或 `and`/`or` 组合，operator 与工具 filter 相同：`eq`、
-`ne`、`gt`、`gte`、`lt`、`lte`、`in`、`not_in`、`like`、`is_null`、
-`is_not_null`。`value` 可以引用 `${subject.x}`。
+行过滤（`rowPolicies` 的一项、授权的 `rows`、`tenantPolicy`）每一层恰好是以下之一：
+条件 `{op, field, value}`、`{and: [...]}`、`{or: [...]}`（列表非空）或
+`{not: {...}}`。operator 与工具 filter 相同：`eq`、`ne`、`gt`、`gte`、`lt`、
+`lte`、`in`、`not_in`、`like`、`is_null`、`is_not_null`；`is_null`/`is_not_null`
+不带 `value`，`in`/`not_in` 的 `value` 是非空的标量列表（至多 1000 项），其余
+operator 的 `value` 是标量。`value` 可以写 `${subject.x}`，请求时替换为调用方的
+subject 属性（`in`/`not_in` 时属性应为列表；列表中的单项也可以写占位符，列表属性展开为多项，
+缺失的属性为 NULL）。条件中多余的键、空的 `and`/`or`
+在校验时即拒绝。
+
+`field` 写**列名**，可以是未暴露为字段的列（例如不对 Agent 暴露的租户列），不能写
+字段的 `alias`；装配时检查该列在表中存在。写入同样受行过滤约束：新行必须仍在调用方的
+行范围内（见[授权模型](design/authorization-model.md#写入的行范围)）。
+
+字段的 `name` 与 `alias` 在同一实体内必须各自唯一：一个别名不能与其他字段的名称或别名
+相同（请求按名称或别名定位字段，重复会解析到错误的列）。
 
 ## 用户、角色与权限
 
@@ -100,7 +113,7 @@ PostgreSQL sampler 始终使用独立 read-only transaction 并 rollback，调�
 
 从单数据源升级到 `databases` 多数据源前，必须迁移 `allowTemplates` 和
 `rejectTemplates` 中的旧裸 SQL。每项应替换为 datasource 隔离的
-`fp:v2:<sha256>` fingerprint，或改成 `datasource:SQL`（例如
+`fp:v3:<sha256>` fingerprint，或改成 `datasource:SQL`（例如
 `primary:SELECT * FROM users`）。只要多数据源配置中仍存在裸 SQL，配置校验、
 启动装配和 reload 都会 fail-closed；reload 失败时继续保留旧运行快照。该检查
 同时覆盖 allow 和 reject，避免 allow 错误放行，也避免 reject 静默失效。
@@ -181,13 +194,14 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `pathPrefix` | 字符串 |  | 格式 `^(/[A-Za-z0-9._~-]+)+$`；修改需重启 | 网关把服务挂在此路径前缀下并从请求中剥掉它（如 /sql-mcp-server）；控制台的页面、Cookie 与重定向都带上它，网关无需改写响应。修改需重启。 |
 | `publicURL` | 字符串 |  | 格式 `^https?://[^\s/?#]+(/[^\s?#]*)?$` | 客户端访问 MCP 端点的完整外部地址（经网关或反向代理时填写，如 https://gw.example.com/sql-mcp/mcp）；控制台据此生成客户端接入配置，未设置时用控制台所在域名加 /mcp。为 https 时控制台会话 Cookie 带 Secure（代理终结 TLS 时）。 |
 | `role` | 字符串 |  |  | 没有用户身份的请求使用的默认角色；CLI --role 覆盖。 |
-| `auth.token` | 字符串 |  |  | 共享 bearer token，按字面读取（不做 ${ENV} 替换）。配置用户后各用户使用自己的 token。 |
+| `auth.token` | 字符串 |  |  | 共享 bearer token，按字面读取（不做 ${ENV} 替换）。监听非 loopback 地址时至少 32 字节（可用 openssl rand -hex 32 生成）。配置用户后各用户使用自己的 token。 |
 | `auth.trustProxyHeaders` | 布尔 |  |  | 信任代理传入的身份头（X-MCP-User / X-MCP-Role / X-MCP-Subject）；需要 trustedProxyCIDRs 或 trustedProxyCertSubjects 认定代理。 |
 | `auth.trustedProxyCIDRs` | 字符串列表 |  |  | 允许传入身份头的代理地址段。 |
 | `auth.trustedProxyCertSubjects` | 字符串列表 |  |  | mTLS 下允许传入身份头的代理客户端证书（叶证书 CN 或 DNS SAN，精确匹配）；其它客户端证书带身份头返回 403。 |
 | `auth.tls.cert` | 字符串 |  |  | TLS 证书文件路径。 |
 | `auth.tls.key` | 字符串 |  |  | TLS 私钥文件路径。 |
 | `auth.tls.clientCA` | 字符串 |  |  | 设置后开启 mTLS，要求并校验客户端证书。 |
+| `auth.tls.clientIdentity` | 字符串 | `"user"` | 可选 `user`、`default` | 配置了用户时，只出示客户端证书、不带 bearer token 的请求以谁的身份调用。user（默认）：证书须匹配某个用户的 certSubjects，否则拒绝（401）；default：使用默认身份（server.user 或 server.role，v0.1.20 之前的行为）。未配置用户时不起作用。受信代理的证书不受此限制。 |
 | `auth.tls` | 对象 |  |  | TLS / mTLS。cert 与 key 必须同时设置。 |
 | `auth` | 对象 |  |  | HTTP 认证。trustProxyHeaders、trustedProxyCIDRs 与非 loopback 的信任规则见 security.md。 |
 | `secrets.allowedRoots` | 字符串列表 | `["/run/secrets","/var/run/secrets"]` |  | 允许读取 secret 文件的根目录（绝对路径）；符号链接不能逃逸这些目录。 |
@@ -237,7 +251,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 
 ### `tools`：工具开关
 
-省略整个块时除 deleteRecord 外全部开启；一旦写出该块，未写的工具保持关闭。
+省略整个块时开启读取、聚合、过程与事务工具，写工具（createRecord、updateRecord、deleteRecord）关闭（v0.1.20 起；此前 createRecord、updateRecord 默认开启）；一旦写出该块，未写的工具保持关闭。
 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
@@ -264,7 +278,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `hardScore` | 整数 | `40` | 0–100 | 安全分低于它时直接拒绝。 |
 | `maxRows` | 整数 | `10000` | ≥ 1 | 读取 SQL 的外层 LIMIT。 |
 | `maxBytes` | 整数 | `16777216` | ≥ 1 | 单次响应的字节上限。 |
-| `maxScannedRows` | 整数 | `100000` | ≥ 0 | 语句预计读取的行数超过它即拒绝，不论是否用到索引；0 表示不限。读取行数取 EXPLAIN 中最大的行数估计（MySQL rows_examined_per_scan，PostgreSQL 与 OceanBase 各节点的行数），全表扫描时取表的行数。角色或用户的 limits.maxScannedRows 只能收紧；与预算 maxEstimatedScannedRows 同时生效。 |
+| `maxScannedRows` | 整数 | `100000` | ≥ 0 | 语句预计读取的行数超过它即拒绝，不论是否用到索引；0 表示不限。读取行数取 EXPLAIN 中最大的行数估计（MySQL rows_examined_per_scan，PostgreSQL 与 OceanBase 各节点的行数），全表扫描时取表的行数；表的行数未能测得的全表扫描读取行数未知，即拒绝（可对该表运行 ANALYZE）。角色或用户的 limits.maxScannedRows 只能收紧；与预算 maxEstimatedScannedRows 同时生效。 |
 | `maxINListSize` | 整数 | `256` | ≥ 1 | IN 列表最多元素数，关系展开也按它分批。 |
 | `maxFilterConditions` | 整数 | `32` | ≥ 1 | 一次请求最多过滤条件数。 |
 | `maxGroupByFields` | 整数 | `8` | ≥ 1 | 最多分组字段数。 |
@@ -279,8 +293,8 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `requireFreshStats` | 布尔 |  |  | 统计信息过旧时拒绝（未开启时只在评分中扣 15 分）。PostgreSQL 中过旧指被扫描的表既没被 ANALYZE 也没被 autovacuum 分析过，且大于 64 KiB；MySQL、OceanBase 不判断。 |
 | `queryTimeout` | 时长 | `"30s"` | ≥ 0 | 查询超时，0（不限）或不小于 100ms；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。 |
 | `requireNativeLimits` | 布尔 |  |  | 严格模式：数据源的连接无法在数据库侧把语句限制在 queryTimeout 内（能力不是 enforced）时，拒绝加载该配置，控制台校验也报错；关闭时只告警。 |
-| `allowTemplates` | 字符串列表 |  |  | 跳过估算的 SQL 模板：推荐 fp:v2:<sha256> 指纹；多数据源下精确 SQL 写成 datasource:SQL。不绕过安全检查。 |
-| `rejectTemplates` | 字符串列表 |  |  | 总是拒绝的 SQL 模板，写法同 allowTemplates。 |
+| `allowTemplates` | 字符串列表 |  |  | 受治理工具中跳过估算的 SQL 模板：推荐 fp:v3:<sha256> 指纹；多数据源下精确 SQL 写成 datasource:SQL。不绕过安全检查；不作用于 execute_sql（其估算见 cost.sqlEscape）。 |
+| `rejectTemplates` | 字符串列表 |  |  | 受治理工具中总是拒绝的 SQL 模板，写法同 allowTemplates。按精确文本或指纹匹配，不是 SQL 语义级黑名单；不作用于 execute_sql（逃生通道的边界是其连接账号的权限）。 |
 | `aqe.windowSize` | 整数 | `32` | ≥ 0 | 每个模板保留的反馈样本数。 |
 | `aqe.anomalyFactor` | 数字 | `3` | ≥ 0 | 实际与估算偏差超过该倍数视为异常。 |
 | `aqe.anomalyMinSamples` | 整数 | `5` | ≥ 0 | 判断异常前至少需要的样本数。 |
@@ -290,7 +304,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `aqe.timeout` | 时长 | `"1s"` | 0–5s | 采样超时，独立于主查询；启用采样时必须大于 0。 |
 | `aqe.maxFingerprints` | 整数 | `4096` | ≥ 1 | 全局最多跟踪的模板数。 |
 | `aqe` | 对象 |  |  | 基于实际执行反馈的自适应估算与可选的 EXPLAIN ANALYZE 采样。 |
-| `sqlEscape.estimate` | 字符串 | `"required"` | 可选 `required`、`skip` | required（默认）：每条语句先 EXPLAIN，无法估算（DDL、SET、SHOW 等）或超出阈值即拒绝；skip：不估算，只保留硬上限。 |
+| `sqlEscape.estimate` | 字符串 | `"required"` | 可选 `required`、`skip` | required（默认）：每条语句先 EXPLAIN，无法估算（DDL、SET、SHOW 等）或超出阈值即拒绝；skip：不估算，只保留硬上限。cost.enabled 为 false 或数据源没有 EXPLAIN 时，须显式写 skip，否则配置被拒绝。 |
 | `sqlEscape.metadata` | 字符串 | `"allow"` | 可选 `allow`、`refuse` | allow（默认）：query 模式下的单条 SHOW、DESCRIBE、DESC 语句不做 EXPLAIN 估算，只受硬上限约束（按语句开头识别，不解析 SQL）；refuse：与其他无法估算的语句一样，在 estimate 为 required 时拒绝。 |
 | `sqlEscape` | 对象 |  |  | execute_sql 的估算策略。超时、行数与字节上限、并发与预算是不可关闭的硬上限，这里只决定 EXPLAIN 估算。 |
 
@@ -333,7 +347,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `breakerCooldown` | 时长 | `"5s"` | ≥ 0 | 熔断后多久重试；冷却后只放行一个探测调用，成功才恢复。 |
 | `connMaxIdleTime` | 时长 | `"5m"` | ≥ 0 | 数据库连接最长空闲时间。 |
 | `connMaxLifetime` | 时长 | `"30m"` | ≥ 0 | 数据库连接最长存活时间。 |
-| `maxResultMemory` | 整数 | `268435456` | ≥ 0 | 进程同时在内存中持有的查询结果字节数上限（各调用合计，按读出的行计，调用结束释放），超出时调用以预算超限失败；默认 256 MiB。 |
+| `maxResultMemory` | 整数 | `268435456` | ≥ 0 | 进程同时在内存中持有的查询结果字节数上限（各调用合计，按读出的行计，调用结束释放），超出时读取以预算超限失败，写操作与过程（写已生效）只返回已读取的行并标记 truncated；默认 256 MiB。 |
 
 ### `mask`：脱敏
 
@@ -399,7 +413,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `routing.write` | 字符串 |  |  | 新增、修改、删除与读写事务使用的连接；不能是 replica。 |
 | `routing.execute` | 字符串 |  |  | 存储过程使用的连接；不能是 replica。 |
 | `routing` | 对象 |  |  | 各类动作使用的连接；只有一个连接时可省略。 |
-| `readAfterWrite` | 时长 |  | ≥ 0 | 同一会话写入后，在这段时间内的读取改走 write 连接，以便在副本上读到自己的写入；0 表示不切换。 |
+| `readAfterWrite` | 时长 |  | 0–1h | 同一会话写入后，在这段时间内的读取改走 write 连接，以便在副本上读到自己的写入；0 表示不切换，最长 1h。窗口内该会话的读取不与其他会话共享结果。 |
 | `sqlEscape.connection` | 字符串 |  | 必填；非空 | 逃生通道使用的连接名；该账号的数据库权限就是逃生通道的上限，服务不解析、不改写、不脱敏 SQL。建议使用独立账号。 |
 | `sqlEscape` | 对象 |  |  | 声明后该数据源允许可信 SQL 逃生通道（execute_sql）；省略即不允许，任何权限都不能对它执行任意 SQL。 |
 
@@ -441,12 +455,13 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `relationships.name` | 字符串 |  | 必填；非空 | 关系名，展开时使用。 |
 | `relationships.target` | 字符串 |  | 必填；非空 | 目标实体。引用实体可写 name、schema.name、datasource.name 或 datasource.schema.name，须只对应一个实体。 |
 | `relationships.cardinality` | 字符串 |  | 必填；可选 `one`、`one-to-one`、`belongs-to`、`many`、`one-to-many`、`has-many` | 基数；belongs-to/one 展开为单个对象，has-many/many 展开为列表。 |
-| `relationships.joinOn` | 映射（名称 → 字符串） |  | 必填 | 连接键：本实体字段 → 目标实体字段；多列外键写多对，全部相等才关联。 |
+| `relationships.joinOn` | 映射（名称 → 字符串） |  | 必填 | 连接键：本实体列名 → 目标实体列名（不能写字段别名）；多列外键写多对，全部相等才关联。 |
 | `relationships` | 对象列表 |  |  | 可展开的关系。当前只支持同数据源内的一层展开。 |
 | `tenantPolicy` | 自由对象 |  |  | 租户硬边界，语法同一条行过滤；对所有主体始终 AND，不参与多角色合并。引用的 ${subject.x} 缺失时匹配零行。 |
 | `params` | 字符串列表 |  |  | 存储过程参数的固定位置顺序；省略或空表示无参。 |
 | `affects` | 字符串列表 |  |  | 存储过程会写入的实体（须与过程同一数据源，引用写法同 grants），用于读缓存失效；省略时过程执行后失效该数据源的全部缓存。 |
 | `allowCascade` | 布尔 |  |  | 允许级联写入：删除本实体的行或修改其被引用列时，外键的 CASCADE、SET NULL、SET DEFAULT 会改写其他表的行。默认要求调用方对每个被级联的实体都有对应的删除或修改权限，且不带行范围限制；被级联的表未暴露为实体时拒绝。设为 true 则不做该检查，由管理员对级联负责。 |
+| `allowKeyUpdate` | 布尔 |  |  | 允许 update_records 修改标识行的列（主键；无主键时为第一个可标识行的唯一键）。默认拒绝：改主键会让引用它的行、缓存与审计记录失去对应，应先删除再创建。 |
 
 ### 定义 `role`
 
@@ -490,6 +505,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | --- | --- | --- | --- | --- |
 | `description` | 字符串 |  |  | 用户说明。 |
 | `tokenHash` | 字符串 |  | 格式 `^sha256:[0-9a-f]{64}$` | bearer token 的 sha256 hash，由 sql-mcp-server user token 生成；明文不进入配置。各用户之间、与 server.auth.token 之间不能重复。 |
+| `certSubjects` | 字符串列表 |  | 格式 `^(?i:cn\\|dns\\|uri\\|email):\S.*$` | 在 mTLS 下认证该用户的客户端证书：cn:<CN>、dns:<DNS SAN>、uri:<URI SAN，如 SPIFFE ID>、email:<邮件 SAN>。证书任一项匹配即为该用户；各用户之间不能重复，也不能是受信代理的证书主体。带 bearer token 的请求以 token 为准。 |
 | `roles` | 字符串列表 |  | 格式 `^[a-z0-9][a-z0-9_-]*$` | 用户拥有的角色，可以是顶层角色或实体级授权中出现的角色名。 |
 | `subject` | 自由对象 |  |  | 固定的主体属性，供 ${subject.x} 解析；优先于代理 X-MCP-Subject 中的同名属性。 |
 | `grants` | `grant` 列表 |  |  | 只给这个用户的直授授权。 |

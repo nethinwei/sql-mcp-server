@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/reason"
 )
 
 // principal is a role or user a grant rule names.
@@ -135,9 +136,9 @@ func (ev *evaluation) grantFor(rule GrantRule, t target) (config.GrantConfig, bo
 func (ev *evaluation) checkGrant(rule GrantRule, t target, actions []string) {
 	if ev.in.Denied != nil && !t.new {
 		for _, a := range actions {
-			if reason, denied := ev.in.Denied(t.id, a); denied {
-				ev.except(Exception{Kind: ExceptionDenied, Ref: t.row.Ref, Entity: t.id,
-					Detail: a + ": " + reason})
+			if why, denied := ev.in.Denied(t.id, a); denied {
+				r := reason.Compose(reason.PlanActionDenied, map[string]reason.Reason{"cause": why}, "action", a)
+				ev.except(Exception{Kind: ExceptionDenied, Ref: t.row.Ref, Entity: t.id, Detail: r.Text, Reason: r})
 			}
 		}
 	}

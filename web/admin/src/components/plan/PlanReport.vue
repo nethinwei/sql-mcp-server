@@ -7,6 +7,7 @@ import {
 import type { PlanReportPartsFragment } from '@/gql/graphql'
 import { useWorkspace } from '@/stores/workspace'
 import { download, toCSV } from '@/lib/selection'
+import { reasonText } from '@/lib/reasons'
 
 // What a plan covers, what it changes and the exceptions to look at, in
 // full: a change applied to many tables reads as one line and opens to the
@@ -22,9 +23,14 @@ const emit = defineEmits<{
   exclude: [refs: string[]]
   rename: [ref: string, name: string]
   drill: [change: Change]
+  locate: [entity: string]
 }>()
 const { t } = useI18n()
 const ws = useWorkspace()
+
+// Exceptions only an edit of the entity (or what names it) resolves: a link
+// leads there.
+const fixable = new Set(['referenced', 'keyReferenced', 'rowColumnMissing'])
 
 const short = (id?: string | null) => (id ? ws.entityIndex.shortName(id) || id : '')
 const levelOrder = { block: 0, confirm: 1, info: 2 } as Record<string, number>
@@ -43,6 +49,8 @@ function changeText(c: Change) {
     case 'syncAdd': return t('plan.change.syncAdd', { fields: c.fields, n })
     case 'syncRemove': return t('plan.change.syncRemove', { fields: c.fields, n })
     case 'removeTable': return t('plan.change.removeTable', { n })
+    case 'syncKeys': return t('plan.change.syncKeys', { n })
+    case 'syncKind': return t('plan.change.syncKind', { n })
   }
   return c.kind
 }
@@ -140,16 +148,19 @@ function exportExceptions() {
               <div class="item">
                 <span>
                   <span v-if="x.entity" class="mono">{{ x.entity.includes(':') ? x.entity : short(x.entity) }}</span>
-                  <n-text depth="3"> {{ t(`plan.exception.${x.kind}.${x.detail ? 'detail' : 'plain'}`, { detail: x.detail ?? '' }) }}</n-text>
+                  <n-text depth="3"> {{ t(`plan.exception.${x.kind}.${x.detail ? 'detail' : 'plain'}`,
+                    { detail: reasonText(x.reasonDetail, x.detail ?? '') }) }}</n-text>
                 </span>
-                <n-space v-if="editable && x.ref" :size="6" :wrap="false">
-                  <template v-if="x.kind === 'renamed'">
+                <n-space v-if="editable && (x.ref || x.entity)" :size="6" :wrap="false">
+                  <n-button v-if="x.entity && fixable.has(x.kind)" size="tiny" @click="emit('locate', x.entity)">
+                    {{ t('plan.locate') }}</n-button>
+                  <template v-if="x.kind === 'renamed' && x.ref">
                     <n-input v-model:value="renaming[x.ref]" size="tiny" class="rename" :placeholder="x.detail ?? ''" />
                     <n-button size="tiny" :disabled="!renaming[x.ref]" @click="emit('rename', x.ref, renaming[x.ref])">
                       {{ t('plan.rename') }}
                     </n-button>
                   </template>
-                  <n-button size="tiny" @click="emit('exclude', [x.ref])">{{ t('plan.excludeTable') }}</n-button>
+                  <n-button v-if="x.ref" size="tiny" @click="emit('exclude', [x.ref])">{{ t('plan.excludeTable') }}</n-button>
                 </n-space>
               </div>
             </n-list-item>

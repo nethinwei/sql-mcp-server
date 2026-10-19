@@ -545,7 +545,7 @@ func TestCommitFollowsWritesLikeAutocommit(t *testing.T) {
 	defer manager.Close()
 	writes := NewWriteTracker()
 	tc := Context{
-		Services: &Services{Transactions: manager, Registry: reg, Writes: writes},
+		Services: &Services{Transactions: manager, Registry: reg, Writes: writes, Sources: followingWrites("rw", "ro")},
 		Role:     "writer",
 		Session:  "s",
 	}
@@ -553,7 +553,7 @@ func TestCommitFollowsWritesLikeAutocommit(t *testing.T) {
 	if err := afterWrite(bg, tc, customers, token); err != nil {
 		t.Fatal(err)
 	}
-	if writes.Recent("s", "ro", time.Minute) {
+	if writes.Recent("s", "ro") {
 		t.Fatal("an uncommitted write routed reads")
 	}
 	input, _ := json.Marshal(map[string]string{"transaction": token})
@@ -561,7 +561,7 @@ func TestCommitFollowsWritesLikeAutocommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, datasource := range []string{"rw", "ro"} {
-		if !writes.Recent("s", datasource, time.Minute) {
+		if !writes.Recent("s", datasource) {
 			t.Errorf("reads through %s do not follow the committed write", datasource)
 		}
 	}

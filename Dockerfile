@@ -11,12 +11,14 @@ RUN corepack enable
 COPY web/admin/package.json web/admin/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY web/admin ./
-# Inputs outside web/admin: GraphQL codegen, the merge rules, and the config schema and shared
-# validation cases read by the type-checked tests.
+# Inputs outside web/admin: GraphQL codegen, the merge rules, the config schema, and the shared
+# validation cases and reason codes read by the type-checked tests (internal/dockercheck keeps
+# this list complete).
 COPY x/admin/graph/schema.graphqls x/admin/graph/planning.graphqls /src/x/admin/graph/
 COPY x/admin/configapp/testdata/merge_schema.json /src/x/admin/configapp/testdata/
 COPY core/config/schema.json /src/core/config/
 COPY core/config/testdata/rules.json core/config/testdata/entity_refs.json /src/core/config/testdata/
+COPY core/reason/testdata/codes.json /src/core/reason/testdata/
 RUN pnpm build
 
 FROM --platform=$BUILDPLATFORM golang:1.26.9-alpine AS build

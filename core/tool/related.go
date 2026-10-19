@@ -151,26 +151,10 @@ func (r related) field(f string) string {
 
 // renamed is p with its paths named as the IR names them.
 func (r related) renamed(p relalg.Predicate) relalg.Predicate {
-	switch pp := p.(type) {
-	case relalg.Condition:
-		pp.Field = r.field(pp.Field)
-		return pp
-	case relalg.And:
-		return relalg.And{Preds: r.renamedAll(pp.Preds)}
-	case relalg.Or:
-		return relalg.Or{Preds: r.renamedAll(pp.Preds)}
-	case relalg.Not:
-		return relalg.Not{P: r.renamed(pp.P)}
-	}
-	return p
-}
-
-func (r related) renamedAll(preds []relalg.Predicate) []relalg.Predicate {
-	out := make([]relalg.Predicate, len(preds))
-	for i, p := range preds {
-		out[i] = r.renamed(p)
-	}
-	return out
+	return relalg.MapConditions(p, func(c relalg.Condition) relalg.Condition {
+		c.Field = r.field(c.Field)
+		return c
+	})
 }
 
 // resolveExists resolves the exists groups of p, a filter on res: each to
@@ -189,7 +173,7 @@ func resolveExists(ctx context.Context, tc Context, res entity.Resolved, p relal
 				return nil, fmt.Errorf("%w: exists names %q, not a relationship of %q", ErrInvalidInput,
 					pp.Relation.Name, res.Entity.Name)
 			}
-			fields := conditionFields(pp.Predicate)
+			fields := relalg.Fields(pp.Predicate)
 			if relalg.HasExists(pp.Predicate) {
 				return nil, fmt.Errorf("%w: exists does not nest", ErrInvalidInput)
 			}
@@ -199,8 +183,12 @@ func resolveExists(ctx context.Context, tc Context, res entity.Resolved, p relal
 			}
 			join := relationJoin(r)
 			locals = append(locals, join.local...)
+			inner, err := coercePredicate(target.Entity, columnsPredicate(target.Entity, pp.Predicate))
+			if err != nil {
+				return nil, err
+			}
 			return relalg.Exists{Relation: target.Entity.Ref(), On: joinPairs(join),
-				Predicate: andPreds(columnsPredicate(target.Entity, pp.Predicate), g.RowFilter)}, nil
+				Predicate: andPreds(inner, g.RowFilter)}, nil
 		case relalg.And:
 			preds, err := walkAll(pp.Preds, walk)
 			return relalg.And{Preds: preds}, err
@@ -229,28 +217,4 @@ func walkAll(preds []relalg.Predicate, walk func(relalg.Predicate) (relalg.Predi
 		out[i] = q
 	}
 	return out, nil
-}
-
-// conditionFields are the fields p's conditions name, not crossing into an
-// EXISTS.
-func conditionFields(p relalg.Predicate) []string {
-	switch pp := p.(type) {
-	case relalg.Condition:
-		return []string{pp.Field}
-	case relalg.And:
-		return fieldsOfAll(pp.Preds)
-	case relalg.Or:
-		return fieldsOfAll(pp.Preds)
-	case relalg.Not:
-		return conditionFields(pp.P)
-	}
-	return nil
-}
-
-func fieldsOfAll(preds []relalg.Predicate) []string {
-	var out []string
-	for _, p := range preds {
-		out = append(out, conditionFields(p)...)
-	}
-	return out
 }

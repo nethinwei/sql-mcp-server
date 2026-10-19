@@ -40,6 +40,9 @@ server:
       cert: ""
       key: ""
       clientCA: "" # setting this enables mTLS and requires cert + key
+      # With users, a client certificate without a token must name a user
+      # (users.*.certSubjects); "default" serves it as the default identity.
+      clientIdentity: user
 
 # Use "database" for one legacy/default source, or "databases" for named sources.
 databases:
@@ -81,9 +84,10 @@ databases:
 tools:
   describeEntities: true
   readRecords: true
+  # The writing tools are off when the tools section is omitted.
   createRecord: true
   updateRecord: true
-  deleteRecord: false # safe default
+  deleteRecord: false
   executeEntity: true
   aggregateRecords: true
   beginTransaction: true
@@ -119,7 +123,7 @@ cost:
   sqlEscape:
     estimate: required # required | skip: EXPLAIN execute_sql statements first
     metadata: allow # allow | refuse: SHOW/DESCRIBE <table> without an estimate
-  # Prefer datasource-scoped fp:v2:<sha256> values from reviewed generated SQL.
+  # Prefer datasource-scoped fp:v3:<sha256> values from reviewed generated SQL.
   allowTemplates: []
   rejectTemplates: []
   aqe:
@@ -240,6 +244,8 @@ users:
     description: "Analyst of tenant-demo"
     # From `sql-mcp-server user token`; the plaintext never enters the config.
     tokenHash: "sha256:6d593566435e956df597c1110116613303484f8a21dfcdaefeeb87563a17d2f3"
+    # Under mTLS, a client certificate naming one of these is alice.
+    certSubjects: ["uri:spiffe://example.org/agent/alice"]
     roles: [analyst]
     subject: {tenant_id: tenant-demo} # wins over a proxy's X-MCP-Subject
     grants:
@@ -267,6 +273,8 @@ entities:
     # Cascading writes (foreign keys rewriting other tables) need delete or
     # update permission on every cascaded entity unless this is true.
     allowCascade: false
+    # update_records may not change the primary key unless this is true.
+    allowKeyUpdate: false
     mcp:
       dmlTools: true
       customTool: false

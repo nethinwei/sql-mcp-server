@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { NAutoComplete, NButton, NIcon, NRadioButton, NRadioGroup, NSelect, NText } from 'naive-ui'
+import { NAutoComplete, NButton, NCheckbox, NIcon, NRadioButton, NRadioGroup, NSelect, NText } from 'naive-ui'
 import { CloseOutline } from '@vicons/ionicons5'
-import { isCondition, ops, type Condition, type Filter, type Group, type Op } from '@/lib/filter'
+import { isCondition, isNegation, ops, type Condition, type Filter, type Group, type Op } from '@/lib/filter'
 
-const props = defineProps<{ group: Group; fields: string[]; subjectKeys: string[]; root?: boolean; disabled?: boolean }>()
-const emit = defineEmits<{ update: [value: Group]; remove: [] }>()
+const props = defineProps<{
+  group: Group; fields: string[]; subjectKeys: string[]; root?: boolean; disabled?: boolean; negated?: boolean
+}>()
+const emit = defineEmits<{ update: [value: Group]; remove: []; negate: [value: boolean] }>()
 const { t } = useI18n()
 
 const mode = computed(() => (props.group.or ? 'or' : 'and'))
@@ -21,6 +23,14 @@ function setItem(i: number, f: Filter) {
   const next = [...items.value]
   next[i] = f
   update(next)
+}
+/** A nested group as edited: a negation of one condition edits as a group of it. */
+function asGroup(f: Filter): Group {
+  const inner = isNegation(f) ? f.not : f
+  return isCondition(inner) || isNegation(inner) ? { and: [inner] } : inner
+}
+function setGroup(i: number, g: Group, negated: boolean) {
+  setItem(i, negated ? { not: g } : g)
 }
 function removeItem(i: number) {
   update(items.value.filter((_, j) => j !== i))
@@ -68,6 +78,8 @@ const valueOptions = computed(() =>
         <n-radio-button value="and">{{ t('filter.matchAll') }}</n-radio-button>
         <n-radio-button value="or">{{ t('filter.matchAny') }}</n-radio-button>
       </n-radio-group>
+      <n-checkbox v-if="!root" size="small" :checked="negated" :disabled="disabled"
+        @update:checked="(v: boolean) => emit('negate', v)">{{ t('filter.negate') }}</n-checkbox>
       <n-button v-if="!root && !disabled" size="tiny" quaternary @click="emit('remove')">{{ t('filter.removeGroup') }}</n-button>
     </div>
     <div v-for="(item, i) in items" :key="i" class="row">
@@ -85,8 +97,10 @@ const valueOptions = computed(() =>
           <template #icon><n-icon><close-outline /></n-icon></template>
         </n-button>
       </template>
-      <filter-group v-else :group="item as Group" :fields="fields" :subject-keys="subjectKeys" :disabled="disabled"
-        @update="(g: Group) => setItem(i, g)" @remove="removeItem(i)" />
+      <filter-group v-else :group="asGroup(item)" :negated="isNegation(item)" :fields="fields"
+        :subject-keys="subjectKeys" :disabled="disabled"
+        @update="(g: Group) => setGroup(i, g, isNegation(item))" @negate="(v: boolean) => setGroup(i, asGroup(item), v)"
+        @remove="removeItem(i)" />
     </div>
     <div v-if="!disabled" class="actions">
       <n-button size="small" dashed @click="update([...items, { op: 'eq', field: fields[0] ?? '', value: '' }])">

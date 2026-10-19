@@ -18,15 +18,15 @@ func TestLimits(t *testing.T) {
 		read, write, unkeyed dialect.Strength
 	}{
 		{"injected", "u:p@tcp(h)/db", providerregistry.Options{}, "",
-			dialect.Enforced, dialect.Unsupported, dialect.Enforced},
+			dialect.Enforced, dialect.Enforced, dialect.Enforced},
 		{"DSN timeout", "u:p@tcp(h)/db?max_execution_time=0", providerregistry.Options{}, "",
-			dialect.BestEffort, dialect.Unsupported, dialect.Enforced},
+			dialect.BestEffort, dialect.Enforced, dialect.Enforced},
 		{"DSN safe updates off", "u:p@tcp(h)/db?sql_safe_updates=0", providerregistry.Options{}, "",
-			dialect.Enforced, dialect.Unsupported, dialect.Unsupported},
+			dialect.Enforced, dialect.Enforced, dialect.Unsupported},
 		{"DSN safe updates on", "u:p@tcp(h)/db?sql_safe_updates=ON", providerregistry.Options{}, "",
-			dialect.Enforced, dialect.Unsupported, dialect.Enforced},
+			dialect.Enforced, dialect.Enforced, dialect.Enforced},
 		{"DSN safe updates not understood", "u:p@tcp(h)/db?sql_safe_updates=2", providerregistry.Options{}, "",
-			dialect.Enforced, dialect.Unsupported, dialect.BestEffort},
+			dialect.Enforced, dialect.Enforced, dialect.BestEffort},
 		{"pooler", "u:p@tcp(h)/db", pooled, "",
 			dialect.BestEffort, dialect.Unsupported, dialect.BestEffort},
 		{"oceanbase injected", "u:p@tcp(h)/db", providerregistry.Options{}, "ob_query_timeout",
@@ -48,7 +48,7 @@ func TestLimits(t *testing.T) {
 			t.Errorf("%s: read/write/unkeyed = %v, want %v", test.name, got, want)
 		}
 		for _, k := range []dialect.Key{dialect.TimeoutRead, dialect.TimeoutWrite, dialect.UnkeyedWrite} {
-			if p.Claim(k).Reason == "" {
+			if p.Claim(k).Reason.Text == "" {
 				t.Errorf("%s: %s has no reason", test.name, k)
 			}
 		}

@@ -19,6 +19,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	"github.com/nethinwei/sql-mcp-server/core/reason"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
@@ -222,8 +223,8 @@ func TestWorkspaceItemsReplaceAndNormalize(t *testing.T) {
 // set and plaintext secrets.
 func TestValidateRejectsForbiddenSettingsAndPlaintextSecrets(t *testing.T) {
 	for settings, want := range map[string]string{
-		`{"databases": {}}`:                    "datasources are managed by the CLI",
-		`{"server": {"auth": {"token": "x"}}}`: "plaintext secrets",
+		`{"databases": {}}`: "datasources are managed by the CLI",
+		`{"server": {"auth": {"token": "0123456789abcdef0123456789abcdef"}}}`: "plaintext secrets",
 	} {
 		_, c := planningHarness(t)
 		var read struct{ Workspace workspaceState }
@@ -551,7 +552,8 @@ func TestCapabilitiesAndValidationWarnings(t *testing.T) {
 	h := newHarness(t)
 	h.resolver.App.Capabilities = func() bootstrap.EntityCapabilities {
 		return bootstrap.EntityCapabilities{"shop.customers": {
-			entity.ActionRead:   {Privilege: introspect.PrivilegeDenied, Connection: "ro", Reason: "no SELECT"},
+			entity.ActionRead: {Privilege: introspect.PrivilegeDenied, Connection: "ro",
+				Reason: reason.New(reason.PrivilegeMissing, "privilege", "SELECT")},
 			entity.ActionUpdate: {Privilege: introspect.PrivilegeGranted, Connection: "rw", Columns: []string{"region"}},
 		}}
 	}
@@ -560,58 +562,30 @@ func TestCapabilitiesAndValidationWarnings(t *testing.T) {
 		Capabilities []struct {
 			Entity, Action, Privilege, Connection string
 			Columns                               []string
+			ReasonDetail                          *struct {
+				Code   string
+				Params map[string]string
+			}
 		}
 	}
-	mustPost(t, c, `{ capabilities { entity action privilege connection columns } }`, &caps)
+	mustPost(t, c, `{ capabilities { entity action privilege connection columns reasonDetail { code params } } }`,
+		&caps)
 	if len(caps.Capabilities) != 2 || caps.Capabilities[0].Action != "READ" ||
-		caps.Capabilities[0].Privilege != "DENIED" || caps.Capabilities[1].Columns[0] != "region" {
+		caps.Capabilities[0].Privilege != "DENIED" || caps.Capabilities[1].Columns[0] != "region" ||
+		caps.Capabilities[0].ReasonDetail == nil || caps.Capabilities[0].ReasonDetail.Code != "privilege.missing" ||
+		caps.Capabilities[0].ReasonDetail.Params["privilege"] != "SELECT" || caps.Capabilities[1].ReasonDetail != nil {
 		t.Fatalf("capabilities = %+v", caps.Capabilities)
 	}
-	var resp struct{ Validate struct{ Warnings []string } }
-	mustPost(t, c, `{ validate(revision: "1") { warnings } }`, &resp)
-	if len(resp.Validate.Warnings) != 1 || !strings.Contains(resp.Validate.Warnings[0], `connection "ro"`) {
-		t.Fatalf("warnings = %q", resp.Validate.Warnings)
-	}
-}
-
-// The serving connections' profiles and the limits they leave unenforced
-// reach a reader as the runtime reports them.
-func TestProviderCapabilities(t *testing.T) {
-	h := newHarness(t)
-	h.resolver.App.Profiles = func() ([]bootstrap.ConnectionProfile, []bootstrap.LimitIssue) {
-		degraded := dialect.Claim{Strength: dialect.BestEffort, Evidence: dialect.Declared, Reason: "the DSN sets it"}
-		return []bootstrap.ConnectionProfile{{Datasource: "shop", Connection: "ro", Profile: dialect.Profile{
-				dialect.TimeoutRead: degraded,
-			}}}, []bootstrap.LimitIssue{{
-				Datasource: "shop", Connection: "ro", Key: dialect.TimeoutRead, Claim: degraded, Use: "reads",
-			}}
-	}
 	var resp struct {
-		ProviderCapabilities struct {
-			Connections []struct {
-				Datasource, Connection string
-				Claims                 []struct{ Key, Strength, Evidence, Reason string }
-			}
-			Issues []struct{ Connection, Key, Use, Strength, Reason string }
+		Validate struct {
+			Warnings []string
+			Notices  []struct{ Code string }
 		}
 	}
-	mustPost(t, h.client(auth.PermRead), `{ providerCapabilities {
-		connections { datasource connection claims { key strength evidence reason } }
-		issues { connection key use strength reason } } }`, &resp)
-	got := resp.ProviderCapabilities
-	if len(got.Connections) != 1 || len(got.Connections[0].Claims) != len(dialect.Keys) {
-		t.Fatalf("connections = %+v", got.Connections)
-	}
-	for _, c := range got.Connections[0].Claims {
-		if c.Key == string(dialect.TimeoutRead) && (c.Strength != "BEST_EFFORT" || c.Reason != "the DSN sets it") {
-			t.Fatalf("timeout claim = %+v", c)
-		}
-		if c.Key == string(dialect.Returning) && c.Strength != "UNSUPPORTED" {
-			t.Fatalf("an unclaimed capability must read unsupported: %+v", c)
-		}
-	}
-	if len(got.Issues) != 1 || got.Issues[0].Use != "reads" || got.Issues[0].Strength != "BEST_EFFORT" {
-		t.Fatalf("issues = %+v", got.Issues)
+	mustPost(t, c, `{ validate(revision: "1") { warnings notices { code } } }`, &resp)
+	if len(resp.Validate.Warnings) != 1 || !strings.Contains(resp.Validate.Warnings[0], "connection ro ") ||
+		len(resp.Validate.Notices) != 1 || resp.Validate.Notices[0].Code != "validation.capabilityDenied" {
+		t.Fatalf("warnings = %q, notices = %+v", resp.Validate.Warnings, resp.Validate.Notices)
 	}
 }
 
@@ -624,19 +598,29 @@ func TestValidateReportsPlannedLimits(t *testing.T) {
 	h.resolver.App.PlannedLimits = func(cfg *config.Config) []bootstrap.LimitIssue {
 		judged = append(judged, cfg.Cost.RequireNativeLimits)
 		return []bootstrap.LimitIssue{{Datasource: "shop", Connection: "default", Key: dialect.TimeoutRead,
-			Use: "reads", Claim: dialect.Claim{Strength: dialect.BestEffort, Reason: "the DSN sets it"}}}
+			Use: reason.New(reason.UseReads), Claim: dialect.Claim{Strength: dialect.BestEffort,
+				Reason: reason.New(reason.DSNSetsTimeout, "variable", "statement_timeout")}}}
 	}
 	c := h.client(auth.PermAll)
+	type part struct{ Name, Code string }
 	var resp struct {
 		Validate struct {
 			Ok       bool
 			Error    *string
 			Warnings []string
+			Notices  []struct {
+				Code, Text string
+				Parts      []part
+			}
 		}
 	}
-	mustPost(t, c, `{ validate(revision: "1") { ok error warnings } }`, &resp)
-	if !resp.Validate.Ok || len(resp.Validate.Warnings) != 1 ||
-		!strings.Contains(resp.Validate.Warnings[0], "the DSN sets it") {
+	mustPost(t, c, `{ validate(revision: "1") { ok error warnings notices { code text parts { name code } } } }`, &resp)
+	v := resp.Validate
+	if !v.Ok || len(v.Warnings) != 1 || !strings.Contains(v.Warnings[0], "the DSN sets statement_timeout") ||
+		len(v.Notices) != 1 || v.Notices[0].Code != string(reason.LimitNotEnforced) || v.Notices[0].Text != v.Warnings[0] ||
+		!slices.Equal(v.Notices[0].Parts, []part{
+			{"cause", string(reason.DSNSetsTimeout)}, {"strength", "strength.bestEffort"}, {"use", "limitUse.reads"},
+		}) {
 		t.Fatalf("validation = %+v", resp.Validate)
 	}
 	strict, err := h.store.Create(context.Background(), revision.Draft{

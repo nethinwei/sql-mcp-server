@@ -34,6 +34,9 @@ func (c *Config) applyServerDefaults() {
 	if c.Server.SessionTimeout == 0 {
 		c.Server.SessionTimeout = 30 * time.Minute
 	}
+	if c.Server.Auth.TLS.ClientIdentity == "" {
+		c.Server.Auth.TLS.ClientIdentity = ClientIdentityUser
+	}
 }
 
 func (c *Config) applyDatabaseDefaults() {

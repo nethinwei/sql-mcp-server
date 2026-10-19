@@ -116,6 +116,9 @@ func (c *Config) normalizeUsers() error {
 		}
 		user.Roles = canonicalRoleList(user.Roles)
 		user.TokenHash = strings.ToLower(strings.TrimSpace(user.TokenHash))
+		for i, s := range user.CertSubjects {
+			user.CertSubjects[i] = CanonicalCertSubject(s)
+		}
 		for i := range user.Grants {
 			user.Grants[i].Actions = canonicalRoleList(user.Grants[i].Actions)
 		}
@@ -158,7 +161,7 @@ func (c *Config) validateAccess(databases map[string]DatabaseConfig) error {
 	entities := NewEntityRefs(c.Entities)
 	for _, e := range c.Entities {
 		if e.TenantPolicy != nil {
-			if _, err := ParseFilter(e.TenantPolicy); err != nil {
+			if err := validateRowFilter(e, e.TenantPolicy); err != nil {
 				return fmt.Errorf("config: entity %q tenant policy: %w", e.Name, err)
 			}
 		}
@@ -191,6 +194,9 @@ func (c *Config) validateUsers(entities EntityRefs, databases map[string]Databas
 		if err := validateUser(name, user, known, hashes, entities, databases); err != nil {
 			return err
 		}
+	}
+	if err := c.validateCertSubjects(); err != nil {
+		return err
 	}
 	if c.Server.User != "" {
 		user, ok := c.Users[c.Server.User]
@@ -303,7 +309,7 @@ func validateGrants(kind, owner string, grants []GrantConfig, entities EntityRef
 			}
 		}
 		if grant.Rows != nil {
-			if _, err := ParseFilter(grant.Rows); err != nil {
+			if err := validateRowFilter(e, grant.Rows); err != nil {
 				return fmt.Errorf("%s on entity %q rows: %w", where, grant.Entity, err)
 			}
 		}

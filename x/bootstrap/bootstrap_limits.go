@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,6 +12,8 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
+	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	"github.com/nethinwei/sql-mcp-server/core/reason"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 )
 
@@ -24,7 +27,14 @@ type LimitIssue struct {
 	Claim      dialect.Claim
 	// Use is the work relying on it: reads, writes, procedures or the SQL
 	// escape hatch.
-	Use string
+	Use reason.Reason
+}
+
+// Notice is the issue as validating a configuration reports it.
+func (i LimitIssue) Notice() reason.Reason {
+	return reason.Compose(reason.LimitNotEnforced,
+		map[string]reason.Reason{"use": i.Use, "strength": i.Claim.Strength.Reason(), "cause": i.Claim.Reason},
+		"datasource", i.Datasource, "connection", i.Connection, "key", string(i.Key))
 }
 
 func (i LimitIssue) String() string {
@@ -39,8 +49,8 @@ var ErrNativeLimits = errors.New(
 // checkNativeLimits refuses the configuration when cost.requireNativeLimits
 // is on and there is a LimitIssue; otherwise it warns about each, once for as
 // long as they stay the same in the process of shared.
-func checkNativeLimits(cfg *config.Config, connections Connections, shared *Shared) error {
-	issues := NativeLimitIssues(cfg, connections)
+func checkNativeLimits(cfg *config.Config, connections Connections, readOnly ReadOnly, shared *Shared) error {
+	issues := NativeLimitIssues(cfg, connections, readOnly)
 	lines := make([]string, len(issues))
 	for i, issue := range issues {
 		lines[i] = issue.String()
@@ -59,9 +69,10 @@ func checkNativeLimits(cfg *config.Config, connections Connections, shared *Shar
 
 // NativeLimitIssues lists, in a stable order, the statement timeouts the
 // work cfg routes to each of connections relies on but the connection does
-// not enforce (see limitIssues).
-func NativeLimitIssues(cfg *config.Config, connections Connections) []LimitIssue {
-	return limitIssues(cfg, func(datasource, connection string) (dialect.Profile, bool) {
+// not enforce (see limitIssues); readOnly are the connections known not to
+// write.
+func NativeLimitIssues(cfg *config.Config, connections Connections, readOnly ReadOnly) []LimitIssue {
+	return limitIssues(cfg, readOnly, func(datasource, connection string) (dialect.Profile, bool) {
 		p, ok := connections[datasource][connection]
 		if !ok {
 			return nil, false
@@ -70,20 +81,74 @@ func NativeLimitIssues(cfg *config.Config, connections Connections) []LimitIssue
 	})
 }
 
+// ReadOnly are the connections, by datasource and connection name, whose
+// account is known not to write: the server refuses writes (read_only, a
+// replica) or the account holds no privilege that writes.
+type ReadOnly map[string]map[string]bool
+
+// writeProbeTimeout bounds asking a connection whether it can write.
+const writeProbeTimeout = 5 * time.Second
+
+// readOnlyEscapes asks each SQL escape hatch connection, while the hatch is
+// on, whether its account can write: one that cannot needs no statement
+// timeout for writes. A connection that does not say is not read-only.
+func readOnlyEscapes(cfg *config.Config, connections Connections) ReadOnly {
+	out := ReadOnly{}
+	if !cfg.Tools.ExecuteSQL {
+		return out
+	}
+	for name, database := range cfg.Databases {
+		connection := database.SQLEscape.Connection
+		p := connections[name][connection]
+		if connection == "" || p == nil {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), writeProbeTimeout)
+		if cannotWrite(ctx, p.Introspector()) {
+			if out[name] == nil {
+				out[name] = map[string]bool{}
+			}
+			out[name][connection] = true
+		}
+		cancel()
+	}
+	return out
+}
+
+// cannotWrite reports a connection whose server refuses writes or whose
+// account holds no privilege that writes, as its introspector reports.
+func cannotWrite(ctx context.Context, i introspect.Introspector) bool {
+	inspect, ok := i.(introspect.PrivilegeInspector)
+	if !ok {
+		return false
+	}
+	if readOnly, err := inspect.ReadOnly(ctx); err == nil && readOnly {
+		return true
+	}
+	writes, ok := i.(introspect.WriteInspector)
+	if !ok {
+		return false
+	}
+	can, err := writes.CanWrite(ctx)
+	return err == nil && can == introspect.PrivilegeDenied
+}
+
 // limitIssues lists, in a stable order, the statement timeouts the work cfg
 // routes to each connection relies on but the connection, as profileOf
 // judges it, does not enforce: reads on the read connection; writes and
 // procedures, when some role or user may run them, on their routed
 // connections, with reads on the write connection too when reads follow
 // writes there (readAfterWrite, read-write transactions); and both on the SQL
-// escape hatch's connection while the hatch is on. A connection profileOf
-// does not know is skipped.
+// escape hatch's connection while the hatch is on (writes only if its account
+// can write: see readOnlyEscapes). A connection profileOf does not know is
+// skipped.
 func limitIssues(
-	cfg *config.Config, profileOf func(datasource, connection string) (dialect.Profile, bool),
+	cfg *config.Config, readOnly ReadOnly, profileOf func(datasource, connection string) (dialect.Profile, bool),
 ) []LimitIssue {
 	writes, procedures := writingDatasources(cfg)
 	var out []LimitIssue
-	need := func(datasource, connection string, key dialect.Key, use string) {
+	need := func(datasource, connection string, key dialect.Key, code reason.Code) {
+		use := reason.New(code)
 		p, ok := profileOf(datasource, connection)
 		if !ok {
 			return
@@ -94,19 +159,21 @@ func limitIssues(
 	}
 	for name, database := range cfg.Databases {
 		route := database.Route()
-		need(name, route.Read, dialect.TimeoutRead, "reads")
+		need(name, route.Read, dialect.TimeoutRead, reason.UseReads)
 		if writes[name] {
-			need(name, route.Write, dialect.TimeoutWrite, "writes")
+			need(name, route.Write, dialect.TimeoutWrite, reason.UseWrites)
 			if route.Write != route.Read && (database.ReadAfterWrite > 0 || cfg.Tools.BeginTransaction) {
-				need(name, route.Write, dialect.TimeoutRead, "reads after writes and in transactions")
+				need(name, route.Write, dialect.TimeoutRead, reason.UseReadsAfterWrite)
 			}
 		}
 		if procedures[name] {
-			need(name, route.Execute, dialect.TimeoutWrite, "procedures")
+			need(name, route.Execute, dialect.TimeoutWrite, reason.UseProcedures)
 		}
 		if cfg.Tools.ExecuteSQL && database.SQLEscape.Connection != "" {
-			need(name, database.SQLEscape.Connection, dialect.TimeoutRead, "the SQL escape hatch")
-			need(name, database.SQLEscape.Connection, dialect.TimeoutWrite, "the SQL escape hatch")
+			need(name, database.SQLEscape.Connection, dialect.TimeoutRead, reason.UseSQLEscape)
+			if !readOnly[name][database.SQLEscape.Connection] {
+				need(name, database.SQLEscape.Connection, dialect.TimeoutWrite, reason.UseSQLEscape)
+			}
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
@@ -180,7 +247,7 @@ func (a *App) LimitIssues() []LimitIssue {
 	if a.config == nil {
 		return nil
 	}
-	return NativeLimitIssues(a.config, a.Connections)
+	return NativeLimitIssues(a.config, a.Connections, a.readOnly)
 }
 
 // PlannedLimitIssues lists the hard limits cfg, a configuration not yet
@@ -191,9 +258,9 @@ func (a *App) LimitIssues() []LimitIssue {
 // connection of the same name instead.
 func (a *App) PlannedLimitIssues(cfg *config.Config) []LimitIssue {
 	if a.scanResolver == nil {
-		return NativeLimitIssues(cfg, a.Connections)
+		return NativeLimitIssues(cfg, a.Connections, a.readOnly)
 	}
-	return limitIssues(cfg, func(datasource, connection string) (dialect.Profile, bool) {
+	return limitIssues(cfg, a.plannedReadOnly(cfg), func(datasource, connection string) (dialect.Profile, bool) {
 		database := cfg.Databases[datasource]
 		c, ok := database.ConnectionsOrDSN()[connection]
 		if !ok {
@@ -202,7 +269,7 @@ func (a *App) PlannedLimitIssues(cfg *config.Config) []LimitIssue {
 		profile, err := plannedLimits(a.scanResolver, database.Driver, c, cfg.Cost.QueryTimeout)
 		if err != nil {
 			unknown := dialect.Claim{Strength: dialect.Unsupported, Evidence: dialect.Declared,
-				Reason: "cannot be judged before it is applied: " + err.Error()}
+				Reason: reason.New(reason.LimitUnjudged, "error", err.Error())}
 			return dialect.Profile{dialect.TimeoutRead: unknown, dialect.TimeoutWrite: unknown}, true
 		}
 		return profile, true
@@ -218,4 +285,26 @@ func plannedLimits(
 		return nil, err
 	}
 	return providerregistry.Limits(driver, dsn, providerregistry.Options{Timeout: timeout, Pooler: c.Pooler})
+}
+
+// plannedReadOnly are the serving read-only connections cfg keeps as they
+// are (the same DSN): a connection it changes is not known to be read-only.
+func (a *App) plannedReadOnly(cfg *config.Config) ReadOnly {
+	out := ReadOnly{}
+	if a.config == nil {
+		return out
+	}
+	for datasource, byName := range a.readOnly {
+		for connection := range byName {
+			was := a.config.Databases[datasource].ConnectionsOrDSN()[connection]
+			now, ok := cfg.Databases[datasource].ConnectionsOrDSN()[connection]
+			if ok && now.DSN == was.DSN && now.Pooler == was.Pooler {
+				if out[datasource] == nil {
+					out[datasource] = map[string]bool{}
+				}
+				out[datasource][connection] = true
+			}
+		}
+	}
+	return out
 }

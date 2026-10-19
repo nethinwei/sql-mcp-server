@@ -334,5 +334,8 @@ func scopeConditions(s configplan.Scope) []scopeCondition {
 	if len(s.Refs) > 0 {
 		add("refs", len(s.Refs), configplan.Scope{Refs: s.Refs})
 	}
+	if len(s.Entities) > 0 {
+		add("entities", len(s.Entities), configplan.Scope{Entities: s.Entities})
+	}
 	return out
 }

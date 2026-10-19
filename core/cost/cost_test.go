@@ -3,6 +3,7 @@ package cost_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -247,7 +248,7 @@ func TestValidateTemplateScopes(t *testing.T) {
 		reject []string
 		want   string
 	}{
-		{name: "fingerprints", allow: []string{"fp:v2:abc"}, reject: []string{"fp:v2:def"}},
+		{name: "fingerprints", allow: []string{"fp:v3:abc"}, reject: []string{"fp:v3:def"}},
 		{name: "scoped exact SQL", allow: []string{"primary:SELECT 1"}, reject: []string{"replica:SELECT bad"}},
 		{name: "bare allow", allow: []string{"SELECT 1"}, want: "allowTemplates"},
 		{name: "bare reject", reject: []string{"SELECT bad"}, want: "rejectTemplates"},
@@ -262,7 +263,7 @@ func TestValidateTemplateScopes(t *testing.T) {
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.want) ||
-				!strings.Contains(err.Error(), "fp:v2:<sha256>") ||
+				!strings.Contains(err.Error(), "fp:v3:<sha256>") ||
 				!strings.Contains(err.Error(), "primary:") {
 				t.Fatalf("cost.ValidateTemplateScopes() error = %v, want migration guidance for %s", err, tc.want)
 			}
@@ -270,6 +271,31 @@ func TestValidateTemplateScopes(t *testing.T) {
 	}
 	if err := cost.ValidateTemplateScopes([]string{"primary"}, []string{"SELECT 1"}, []string{"SELECT bad"}); err != nil {
 		t.Fatalf("single datasource compatibility error = %v", err)
+	}
+}
+
+// A fingerprint of an earlier version, or one not written bare, matches
+// nothing: a reject would stop rejecting. It is refused with one datasource
+// or several.
+func TestValidateTemplateScopesRefusesFingerprintsMatchingNothing(t *testing.T) {
+	t.Parallel()
+	for _, ds := range [][]string{{"primary"}, {"primary", "replica"}} {
+		stale := []struct{ allow, reject []string }{{allow: []string{"fp:v2:abc"}}, {reject: []string{"fp:v1:def"}}}
+		for _, c := range stale {
+			err := cost.ValidateTemplateScopes(ds, c.allow, c.reject)
+			if err == nil || !strings.Contains(err.Error(), "earlier version") || !strings.Contains(err.Error(), "fp:v3:") {
+				t.Fatalf("%v %v: error = %v, want an earlier-version fingerprint refused", ds, c, err)
+			}
+		}
+	}
+	for _, value := range []string{" fp:v2:abc", "fp:v3:abc ", "primary:fp:v2:abc", "primary: fp:v3:abc"} {
+		err := cost.ValidateTemplateScopes([]string{"primary"}, nil, []string{value})
+		if err == nil || !strings.Contains(err.Error(), "matches nothing") {
+			t.Fatalf("%q: error = %v, want it refused", value, err)
+		}
+	}
+	if fp := cost.Fingerprint("primary", "postgres", codegen.Compiled{SQL: "SELECT 1"}); !strings.HasPrefix(fp, "fp:v3:") {
+		t.Fatalf("Fingerprint = %q, want the fp:v3: prefix", fp)
 	}
 }
 
@@ -635,5 +661,28 @@ func TestEstimateReportsARefusedExplain(t *testing.T) {
 		if !errors.Is(err, refused) {
 			t.Fatalf("a refused EXPLAIN (%v) became %v", refused, err)
 		}
+	}
+}
+
+// A soft refusal reports the chain's last plan and score, and every hint,
+// not the ones current when the soft layer ran.
+func TestChainGateSoftDenyCarriesTheFinalDiagnosis(t *testing.T) {
+	t.Parallel()
+	early, late := cost.Plan{EstimatedRows: 1}, cost.Plan{EstimatedRows: 99}
+	g := cost.NewGate(
+		stubLayer{name: "soft", phase: cost.PhaseEstimate, decision: cost.Decision{
+			Soft: true, Plan: &early, Score: &cost.Score{Value: 50}, Hints: []string{"add LIMIT", "retry"},
+		}},
+		stubLayer{name: "later", decision: cost.Decision{
+			Allow: true, Bypass: true, Plan: &late, Score: &cost.Score{Value: 40}, Hints: []string{"retry", "narrow"},
+		}},
+	)
+	d, err := g.Check(context.Background(), codegen.Compiled{Kind: codegen.KindRead})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Allow || !d.Soft || d.Plan != &late || d.Score.Value != 40 || !d.Bypass ||
+		!slices.Equal(d.Hints, []string{"add LIMIT", "retry", "narrow"}) {
+		t.Fatalf("soft deny = %+v", d)
 	}
 }

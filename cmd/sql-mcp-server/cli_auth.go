@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/x509"
 	"log/slog"
 	"sync"
 
@@ -16,7 +17,7 @@ func httpAuth(cfg *config.Config, users mcpserver.UserDirectory) mcpserver.HTTPA
 	auth := mcpserver.HTTPAuth{
 		Token: a.Token, TrustProxyHeaders: a.TrustProxyHeaders, TrustedProxyCIDRs: a.TrustedProxyCIDRs,
 		TrustedProxyCertSubjects: a.TrustedProxyCertSubjects, TLSCert: a.TLS.Cert, TLSKey: a.TLS.Key,
-		ClientCA: a.TLS.ClientCA,
+		ClientCA: a.TLS.ClientCA, ClientIdentity: a.TLS.ClientIdentity,
 	}
 	if len(cfg.Users) > 0 {
 		auth.Users = users
@@ -94,5 +95,9 @@ func (checkedUsers) UserByTokenHash(string) (bootstrap.UserIdentity, bool) {
 }
 
 func (checkedUsers) UserByName(string) (bootstrap.UserIdentity, bool) {
+	return bootstrap.UserIdentity{}, false
+}
+
+func (checkedUsers) UserByCertificate(*x509.Certificate) (bootstrap.UserIdentity, bool) {
 	return bootstrap.UserIdentity{}, false
 }

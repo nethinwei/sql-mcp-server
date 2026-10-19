@@ -38,9 +38,10 @@
 - 人员登录（OIDC/OAuth2/本地密码，随管理面 4）；MCP 客户端 OAuth 2.1
   与 delegation chain（L7）；
 - 系统权限的实际效果（`sql:execute` 随管理面 2 生效，见
-  [SQL 逃生通道](sql-escape-hatch.md)；`admin:*` 随管理面 4）；
-- create 时校验写入值满足租户约束（现有 row policy 也不作用于 create，
-  保持现状，另行立项）。
+  [SQL 逃生通道](sql-escape-hatch.md)；`admin:*` 随管理面 4）。
+
+v0.1.20 起写入也受行范围约束（见“写入的行范围”），此前 create 不校验租户约束、
+update 可以把行改出行范围。
 
 ## 术语
 
@@ -92,7 +93,8 @@ entities:
 - `grants[].actions` 取值与现有实体动作相同：`read`、`create`、`update`、
   `delete`、`execute`、`aggregate`；
 - `fields.read` / `fields.write` 语义与现有 `fieldACL` 相同（按 name 或 alias
-  匹配，只能引用可见字段）；`rows` 语法与现有 `rowPolicies` 相同；
+  匹配，只能引用可见字段）；`rows` 语法与现有 `rowPolicies` 相同（条件、非空 `and`/`or`、`not`；`field` 写列名，
+可以是未暴露的列，装配时检查其存在，见[配置参考](../configuration.md#数据源与实体)）；
 - `tenantPolicy` 语法与 `rows` 相同；缺少对应 subject 属性时解析为 nil，
   匹配零行（与现有 `resolveSubject` 的 fail-closed 行为一致）；
 - 系统权限预留独立字段 `permissions: ["sql:execute@<datasource>", …]`；
@@ -153,6 +155,26 @@ filter 语义也会变复杂，因此不在本版范围。
   候选 grant 时，lint 会提示改用 `tenantPolicy`；
 - 用户配置的 `subject` 属性优先于可信代理 `X-MCP-Subject` 中的同名属性，
   代理不能改写已配置的租户。
+
+### 写入的行范围
+
+与 PostgreSQL 行安全策略的 `WITH CHECK` 同义：行范围（覆盖集内各授权项行范围的 OR，
+AND `tenantPolicy`）不只决定能读、能改哪些行，也约束写出的行（I30）。
+
+- **create**：先把调用方的值按列名放入新行；行范围中以等值固定的列（顶层 AND 中的
+  `field = 值`，通常是不暴露给调用方的租户列）若调用方未提供，由服务端填入该值
+  （与 Hasura 的 column preset 同理）。随后按 [IR 语义](ir-semantics.md)在服务端求值，
+  结果必须为真；为假、为 NULL，或依赖调用方没有提供的列（数据库默认值服务端看不到），
+  都返回 `ROW_POLICY_VIOLATION`，`constraints.fields` 只列出调用方可见的相关字段。
+  调用方提供的值不会被改写。
+- **update**：把 `set` 中的新值代入行范围。必然为假（例如把租户列改成别的租户、
+  把状态改成行范围排除的值）即拒绝；必然为真则不加条件；否则把剩余条件 AND 进
+  WHERE——旧行已满足行范围，新行满足当且仅当剩余条件成立，越界的行不被修改。
+- 服务端求值与数据库可能不同的地方：大小写不敏感的排序规则下，`ne`、`not_in`、`not`
+  的结果可能与数据库不同；类型不同的值（如字符串 `"7"` 与整数 `7`）视为不可比较，
+  按拒绝处理。行范围用与列类型一致的值书写即可避免。服务端只比较数字、字符串、布尔：
+  YAML 未加引号的日期（`2024-01-01`）解码成时间值，同样按拒绝处理，写成带引号的
+  字符串即可；`.nan`、`.inf` 在配置加载时即被拒绝（v0.1.20 起）。
 
 ### 其他维度
 

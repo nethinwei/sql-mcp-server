@@ -10,7 +10,8 @@ stdio 模式使用进程启动时的默认身份（`server.user`，未设置时�
 适合由本机 MCP 客户端管理的子进程。
 
 HTTP 支持共享 bearer token、每用户 token 和 mTLS。监听非 loopback 地址时，如果
-既无 token、也无已配置用户、也无 `clientCA`，服务拒绝启动；mTLS 还要求服务端证书和私钥。HTTP 请求体默认
+既无 token、也无已配置用户、也无 `clientCA`，服务拒绝启动；共享 token 短于 32 字节时
+同样拒绝启动（v0.1.20 起，`openssl rand -hex 32` 可生成）；mTLS 还要求服务端证书和私钥。HTTP 请求体默认
 限制为 4 MiB，header 默认限制为 1 MiB，并设置 header/idle timeout。
 CLI 地址默认值 `:8080` 会监听所有接口，属于非 loopback，因此选择 HTTP 且未
 指定 loopback 地址或认证时会 fail closed。
@@ -35,9 +36,18 @@ token 时使用默认身份；都不命中返回 401。没有共享 token 时，
 签发的证书只说明是调用方，不说明是代理。mTLS 下，其他证书不带身份头时按普通调用方
 处理，带身份头则返回 HTTP 403；CIDR 模式下，不在列表内的来源一律返回 403。可信网关
 仍必须删除外部同名 header、完成认证并重新注入身份。畸形的
-`X-MCP-Subject` JSON 返回 HTTP 400。`X-MCP-Role` 只能是角色名，含 `:` 的主体键
+`X-MCP-Subject` JSON 返回 HTTP 400；它的每个属性必须是字符串、数字、布尔、null 或由
+它们组成的列表，对象与嵌套列表同样返回 400（v0.1.20 起）。整数按 int64、其他数字按
+原文字取值，与配置中 `subject` 的同名属性取值一致，因此同一租户来自 header 或来自配置
+得到相同的缓存与并发作用域，并在行范围检查中按数字比较。`X-MCP-Role` 只能是角色名，含 `:` 的主体键
 （如 `user:alice`）返回 HTTP 400；通过导出的 `WithSubject` 注入同类值的自定义 transport
-得到的是不持有任何授权的主体。用户身份只能由用户 token 或 `X-MCP-User` 建立。
+得到的是不持有任何授权的主体。用户身份只能由用户 token、`X-MCP-User` 或客户端证书建立。
+
+mTLS 下，配置了用户时，只出示客户端证书、不带 bearer token 的请求按证书确定身份：证书的
+CN、DNS/URI（如 SPIFFE ID）/邮件 SAN 匹配某个用户的 `certSubjects` 即为该用户（匹配到
+多个用户视为未匹配）；未匹配时默认返回 HTTP 401（`server.auth.tls.clientIdentity: user`，
+v0.1.20 起；此前所有直连证书都使用默认身份），设为 `default` 恢复旧行为。受信代理的证书
+不受此限制，带 bearer token 的请求以 token 为准。
 配置用户时，可信代理还可以发送
 `X-MCP-User`：它必须指向启用用户，且不能与 `X-MCP-Role` 同时出现；用户配置的
 `subject` 属性覆盖代理注入的同名属性。已用用户 token 认证的请求如果再携带任何
@@ -67,10 +77,16 @@ session 关闭时绑定会同步清理。该绑定防止可信代理后的调用
 - `rowPolicies` 与用户 filter 以 AND 合并。`${subject.x}` 从请求 subject
   解析；属性缺失时生成 NULL 条件，因而不匹配普通行。
 - 实体 `tenantPolicy` 对所有主体始终 AND，不参与多角色合并。
+- 写入同样受行范围约束（WITH CHECK）：create 插入的行、update 修改后的行必须仍在
+  调用方的行范围内，否则返回 `ROW_POLICY_VIOLATION`；行范围以等值固定的隐藏列
+  （如租户列）在 create 时由服务端填入。update 默认不能修改主键，需实体显式
+  `allowKeyUpdate`。规则见[授权模型](design/authorization-model.md#写入的行范围)。
 - mask 在所有结果路径（包括 aggregate/procedure）返回前执行。mask 字段只允许
   投影，禁止用于 filter、cursor、group-by、aggregate 和写谓词，避免等值/LIKE
   盲测与统计侧信道。内置规则为 `email`、`phone`、`idcard`、`secret`；配置未知
-  规则会在启动时失败。
+  规则会在启动时失败。`phone`/`idcard` 按字符（非字节）保留 11 位及以上值的前 3、
+  后 4 位，8–10 位值的前 2、后 2 位，中间固定替换为 `****`（不泄露原值长度），
+  不足 8 位整体替换为 `***`（v0.1.20 起；此前中间星号数等于被遮字符数）。
 - `describe_entities` 按实体权限和字段 ACL 过滤；procedure 结果仅返回声明为
   visible 且获 `fieldACL.read` 许可的列，未声明列按 fail-closed 丢弃。
 - schema resource（摘要 `sql-mcp://schema` 与单实体 `sql-mcp://schema/{entity}`）按调用者的
@@ -94,8 +110,9 @@ update/delete 必须有用户 filter 或行级 filter。`requirePKForWrite` 默�
 不是按身份键等值定位单行的写由 `WriteGuard` 拒绝；allow fingerprint 不绕过该
 mandatory 保护。身份键是主键与能唯一定位一行的唯一键（列全部非空，且不是部分、
 表达式或前缀索引），表的身份键以数据库为准；视图、外部表上声明的键只用于读，不能
-让写入通过 `WriteGuard`；可延迟约束在事务内不算身份键。`delete_record` 默认不
-注册。MySQL 协议 provider 还会在 DSN 未显式指定时加入 `sql_safe_updates=1`。
+让写入通过 `WriteGuard`；可延迟约束在事务内不算身份键。省略 `tools` 时写工具
+（`create_record`、`update_record`、`delete_record`）都不注册（v0.1.20 起；此前
+`create_record`、`update_record` 默认注册），需要在 `tools` 中显式开启，且仍要求授权。MySQL 协议 provider 还会在 DSN 未显式指定时加入 `sql_safe_updates=1`。
 
 外键的 `CASCADE`、`SET NULL`、`SET DEFAULT` 会让一次写入改写其他表的行，并可能
 继续级联下去。删除（或修改被引用列）前，调用方必须对级联链上每一层的实体拥有对应
@@ -122,9 +139,10 @@ PostgreSQL 使用准确 Estimate；MySQL/OceanBase 默认在 EXPLAIN 失败、�
 statement timeout 生效；无法装配 EXPLAIN 的 provider 在启动时失败。
 
 数据库侧是否真的把语句停在 `queryTimeout` 按连接判定（[Provider 能力](provider-compatibility.md#provider-能力)）：
-服务注入的会话设置被 DSN 覆盖、经 transaction pooler，或 MySQL 的写语句
-（`max_execution_time` 只作用于 SELECT，取消请求只关闭连接）时，Go context 只约束
-调用方的等待，语句可能在数据库里继续执行。直连 PostgreSQL 时，请求超时由驱动发送
+服务注入的会话设置被 DSN 覆盖，或经 transaction pooler 时，Go context 只约束调用方的
+等待，语句可能在数据库里继续执行。MySQL 的 `max_execution_time` 只作用于 SELECT，写语句
+（含存储过程与逃生通道）在请求截止时由服务经另一条连接发送 `KILL QUERY` 停止并回滚
+（v0.1.20 起；经 transaction pooler 时不发送，见[能力模型设计](design/capability-model.md)）。直连 PostgreSQL 时，请求超时由驱动发送
 cancel request，语句仍在数据库侧终止；经 transaction pooler 时，cancel request 只有在
 pooler 转发时才生效（pgbouncer 会转发，但本项目未做测试），因此定级为 `best_effort`。
 `queryTimeout` 为 0（不限）或不小于 100ms。启动与热重载时，数据源依赖的语句超时（读、被
@@ -203,7 +221,12 @@ Agent 会看到它们。
 
 硬上限与受治理面相同且不可关闭：`cost.queryTimeout`、`cost.maxRows` 与预算的
 `maxReturnedRows`（到上限即截断并标 `truncated: true`，不报错）、`cost.maxBytes` 与预算的
-`maxReturnedBytes`、并发 / rate limit、session 预算。`cost.enabled: false` 只关闭估算。
+`maxReturnedBytes`、并发 / rate limit、session 预算。不做估算须显式写
+`cost.sqlEscape.estimate: skip`：`cost.enabled: false` 或 provider 没有 EXPLAIN 时仍为
+`required` 的配置被拒绝（v0.1.20 起，此前静默跳过估算）。`cost.allowTemplates` /
+`cost.rejectTemplates` 只作用于受治理工具，不作用于逃生通道：它们按精确文本或指纹匹配，
+可以原样写任意 SQL 的调用方改一个大小写或注释即可绕开，挡不住它；逃生通道的边界是连接账号
+的权限。
 估算默认必需（`cost.sqlEscape.estimate: required`）：每条语句先在逃生通道连接上
 EXPLAIN，按与闸门相同的阈值打分（软拒绝同样拒绝），EXPLAIN 失败的语句（DDL、`SET`、
 `SHOW`、语法错误、规划期报错）一律拒绝并回显数据库原文；不读表的语句（常量 `SELECT`、

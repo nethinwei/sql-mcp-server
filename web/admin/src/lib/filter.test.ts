@@ -15,10 +15,14 @@ describe('describeFilter', () => {
       and: [{ op: 'gt', field: 'amount', value: 100 }, { or: [{ op: 'eq', field: 'a', value: 1 }, { op: 'eq', field: 'b', value: 2 }] }],
     })).toBe('amount > 100 且 (a = 1 或 b = 2)')
     expect(describeFilter({ op: 'in', field: 'region', value: ['CN', 'SG'] })).toBe('region ∈ ["CN", "SG"]')
+    expect(describeFilter({
+      and: [{ op: 'eq', field: 'a', value: 1 }, { not: { or: [{ op: 'eq', field: 'b', value: 2 }, { op: 'is_null', field: 'c' }] } }],
+    })).toBe('a = 1 且 非(b = 2 或 c 为空)')
   })
 
   it('lists referenced fields', () => {
     expect(filterFields({ and: [{ op: 'eq', field: 'a', value: 1 }, { or: [{ op: 'eq', field: 'b', value: 2 }] }] }))
       .toEqual(['a', 'b'])
+    expect(filterFields({ not: { op: 'eq', field: 'c', value: 1 } })).toEqual(['c'])
   })
 })

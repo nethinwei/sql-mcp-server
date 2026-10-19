@@ -83,9 +83,12 @@ type App struct {
 	// (the process's when shared): WatchStore assembles the revision again.
 	Drift *tool.SchemaDrift
 	// Users maps an enabled user name to its identity; UserTokens maps a
-	// tokenHash to the user name. Both follow the snapshot on reload.
+	// tokenHash, and UserCerts a certificate subject (see
+	// config.CanonicalCertSubject), to the user name. They follow the
+	// snapshot on reload.
 	Users        map[string]UserIdentity
 	UserTokens   map[string]string
+	UserCerts    map[string]string
 	Limits       tool.Limits
 	Auditor      audit.Auditor
 	Hooks        *hook.Hooks
@@ -116,6 +119,9 @@ type App struct {
 	scanResolver  SecretResolver
 	stopAssessing context.CancelFunc
 	assessed      chan struct{}
+	// readOnly are the SQL escape hatch connections that cannot write (see
+	// readOnlyEscapes).
+	readOnly ReadOnly
 }
 
 // publishShared applies the App's configuration to the services it shares
@@ -517,12 +523,36 @@ func reconcileEntities(
 // unavailable (see entity.Entity.Unavailable).
 const TableMissing = "its table is missing from the database"
 
-// MissingTables are the entities of the App whose tables are missing.
-func (a *App) MissingTables() map[string]bool {
-	out := map[string]bool{}
-	for id, why := range a.Unavailable {
+// Missing is what an App found missing from the databases, by entity ID:
+// the entities whose tables are gone, and the fields and the other columns
+// their row scopes test (see entity.Entity.RowColumns) that their tables
+// lack. Entities of unreachable datasources are not known to miss anything.
+type Missing struct {
+	Tables             map[string]bool
+	Fields, RowColumns map[string][]string
+}
+
+// Missing reports what the App found missing from the databases.
+func (a *App) Missing() Missing {
+	out := Missing{Tables: map[string]bool{}, Fields: map[string][]string{}, RowColumns: map[string][]string{}}
+	if a.Registry == nil {
+		return out
+	}
+	for _, e := range a.Registry.Entities() {
+		why, ok := a.Unavailable[e.Name]
+		if !ok {
+			continue
+		}
 		if why == TableMissing {
-			out[id] = true
+			out.Tables[e.Name] = true
+			continue
+		}
+		for _, c := range e.Absent {
+			if slices.ContainsFunc(e.Attributes, func(a entity.Attribute) bool { return a.Name == c }) {
+				out.Fields[e.Name] = append(out.Fields[e.Name], c)
+			} else {
+				out.RowColumns[e.Name] = append(out.RowColumns[e.Name], c)
+			}
 		}
 	}
 	return out
@@ -541,6 +571,7 @@ func markUnavailable(datasource string, entities []entity.Entity, absent map[str
 			entities[i].Unavailable = TableMissing
 		default:
 			entities[i].Unavailable = "columns missing from the database: " + strings.Join(columns, ", ")
+			entities[i].Absent = columns
 		}
 	}
 	slog.Warn("entities unavailable: missing from the database (remove them or restore the tables)",

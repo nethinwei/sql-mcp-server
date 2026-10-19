@@ -110,12 +110,13 @@
 
 ```text
 Plan = { scope, import, grants, fields, sync, exclude, names }
-Evaluate(Input{Base, Published, Sources, Denied, Review}, Plan) → Proposal
-Proposal = { Config（Base 应用后）, Entities（新增或修改）, Added, Roles, Users, Report }
+Evaluate(Input{Base, Published, Sources, Denied, Review, Missing, MissingFields, MissingRowColumns}, Plan) → Proposal
+Proposal = { Config（Base 应用后）, Entities（新增或修改）, Added, Removed, Roles, Users, Report }
 ```
 
 - `scope`：`datasources`、`schemas`/`tables`（`*` `?` 通配，不区分大小写）、
-  `search`、`status`、`drift`、`refs`（显式表），条件取交集；
+  `search`、`status`、`drift`、`refs`（显式表）、`entities`（已配置实体的 ID，只选
+  它们的表，已不存在的表也按它判定），条件取交集；
 - `import`：为范围内未导入的表新增零权限实体。命名、序号与外键关系由
   `Candidates` 计算（与导入页同一份代码）：名称取表名，同一数据源同一库内被占用
   时加序号，`names` 可以指定；指向没有实体的表的外键不生成关系；
@@ -129,7 +130,17 @@ Proposal = { Config（Base 应用后）, Entities（新增或修改）, Added, R
   例外；`removeTables` 移除表已不存在的实体（所在库扫描过却没有该表，或运行中的服务
   发现缺表；未扫描的库不判定），连同指向它们的授权、关系与 `affects`
   （`configrefs.Retarget`，与控制台删除实体相同），`exclude` 中的表保留；
-- 顺序：导入 → 同步 → 字段规则 → 授权，因此字段规则覆盖同步新增的字段，同一方案
+  `keys`（v0.1.20 起）把表的主键与可标识行的唯一键设为扫描结果（`syncKeys`），把
+  实体的 table/view 类型设为扫描结果（`syncKind`）；视图保留配置中声明的键。键不再
+  包含的列仍被某个关系用作连接列时报告 `keyReferenced`（confirm），键变为空时报告
+  去掉写动作的 `noKey`。关系**只报告不修改**：配置不记录关系是否由外键导入，外键
+  没有对应关系时报告 `relationshipNew`，以导入命名方式命名（目标实体名或加序号）却
+  没有外键对应的关系报告 `relationshipStale`，均为 info；手写关系不受影响。
+  运行中的服务发现的缺列（`Input.MissingFields`）只用于范围内未扫描的表（扫描过的
+  表以扫描为准），同样生成 `syncRemove`；行范围引用而非字段的列缺失
+  （`Input.MissingRowColumns`）不能由同步修复，报告 `rowColumnMissing`（confirm），
+  需要管理员修改租户策略、行策略或授权行范围；
+- 顺序：导入 → 同步（先键与类型，再字段，最后移除不存在的表）→ 字段规则 → 授权，因此字段规则覆盖同步新增的字段，同一方案
   重复执行第二次没有任何修改（性质测试保证）；
 - 报告：范围内表数、排除数、所依据扫描的时间范围、按库计数、合并后的变化（同类
   变化一行，如“授予 role:analyst 读取 · 12 个实体”，可钻取到每个实体的前后差异）、
@@ -137,9 +148,10 @@ Proposal = { Config（Base 应用后）, Entities（新增或修改）, Added, R
   - `block`（阻断，不能加入工作区或保存草稿）：目前没有规则产生它，结果校验不
     通过时同样阻断；
   - `confirm`（需确认，控制台要求勾选“已核对”，MCP 要求 Agent 向管理员报告）：
-    `unknownUser`、`noFields`、`referenced`、`denied`、`review`，
-    以及去掉了写动作的 `noKey`；
-  - `info`（提示）：`renamed`、`sideEffects`、`relationshipDropped`、只读的
+    `unknownUser`、`noFields`、`referenced`、`denied`、`review`、`keyReferenced`、
+    `rowColumnMissing`，以及去掉了写动作的 `noKey`；
+  - `info`（提示）：`renamed`、`sideEffects`、`relationshipDropped`、`relationshipNew`、
+    `relationshipStale`、只读的
     `noKey`，以及 `qualified`：新增实体会让已有的简写引用（授权、关系目标、
     `affects`）指向多个实体时，方案把它们改成被引用实体的 ID，与控制台手工导入
     时自动限定引用的做法一致。

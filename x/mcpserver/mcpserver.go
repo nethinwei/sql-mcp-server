@@ -20,6 +20,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/nethinwei/sql-mcp-server/core/bus"
+	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
 	"github.com/nethinwei/sql-mcp-server/version"
@@ -155,11 +156,13 @@ func destructiveHint(info tool.Info) *bool {
 }
 
 // A call's structured result, which its text repeats as JSON: rows are
-// {"result": [...]} (with nextCursor when an ordered read has a next page),
-// and a tool returning one object returns it as is.
+// {"result": [...]} (with nextCursor when an ordered read has a next page,
+// truncated when a write's rows were cut short), and a tool returning one
+// object returns it as is.
 var (
 	rowsOutputSchema = json.RawMessage(`{"type":"object","properties":{"result":` +
-		`{"type":"array","items":{"type":"object"}},"nextCursor":{"type":"object"}},"required":["result"]}`)
+		`{"type":"array","items":{"type":"object"}},"nextCursor":{"type":"object"},` +
+		`"truncated":{"type":"boolean"}},"required":["result"]}`)
 	objectOutputSchema = json.RawMessage(`{"type":"object"}`)
 )
 
@@ -211,6 +214,9 @@ func toMCPResult(r tool.Result, info tool.Info) *mcp.CallToolResult {
 	rows := map[string]any{"result": r.Content}
 	if r.NextCursor != nil {
 		rows["nextCursor"] = r.NextCursor
+	}
+	if r.Truncated {
+		rows["truncated"] = true
 	}
 	var structured any = rows
 	if info.Object && len(r.Content) == 1 {
@@ -327,6 +333,9 @@ func parseSubjectHeader(raw string) (map[string]any, error) {
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		return nil, errInvalid
 	}
+	if err := tool.NormalizeSubject(attrs); err != nil {
+		return nil, fmt.Errorf("invalid X-MCP-Subject: %w", err)
+	}
 	return attrs, nil
 }
 
@@ -389,6 +398,9 @@ type HTTPAuth struct {
 	TLSCert                  string
 	TLSKey                   string
 	ClientCA                 string // PEM bundle; when set, require+verify a client cert (mTLS)
+	// ClientIdentity is config.ClientIdentityUser or ClientIdentityDefault:
+	// whether, with users, a client certificate naming no user is refused.
+	ClientIdentity string
 	// Users resolves configured users; nil means no users are configured.
 	// With users, bearer tokens may identify individual users and trusted
 	// proxies may send X-MCP-User.
@@ -435,26 +447,6 @@ func (c HTTPConfig) authConfigured() bool {
 	return c.Token != "" || c.mtlsEnabled() || c.Users != nil
 }
 
-// isLoopbackAddr reports whether a listen address binds only the loopback
-// interface. An empty host (e.g. ":8080") or a wildcard binds all interfaces
-// and is treated as non-loopback (exposed).
-func isLoopbackAddr(addr string) bool {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		host = addr
-	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		return false
-	}
-	if host == "localhost" {
-		return true
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback()
-	}
-	return false
-}
-
 // validateHTTPSecurity enforces fail-closed startup: a listener exposed beyond
 // loopback must configure authentication (token or mTLS); mTLS requires a
 // server certificate.
@@ -462,7 +454,10 @@ func validateHTTPSecurity(c HTTPConfig) error {
 	if (c.TLSCert == "") != (c.TLSKey == "") {
 		return errors.New("mcpserver: tls.cert and tls.key must be configured together")
 	}
-	if !isLoopbackAddr(c.Addr) && !c.authConfigured() {
+	if err := config.CheckSharedToken(c.Addr, c.Token); err != nil {
+		return fmt.Errorf("mcpserver: %w", err)
+	}
+	if !config.IsLoopbackAddr(c.Addr) && !c.authConfigured() {
 		return fmt.Errorf(
 			"mcpserver: refusing to serve on non-loopback address %q without authentication: "+
 				"configure users, server.auth.token or server.auth.tls.clientCA, or bind to 127.0.0.1",
@@ -515,6 +510,16 @@ func trustedProxy(networks []*net.IPNet, subjects []string, mtls bool, proxied, 
 	})
 }
 
+// fromProxy reports a request from a trusted proxy (by address or, under
+// mTLS, certificate), when proxy identity headers are trusted.
+func (c HTTPConfig) fromProxy(r *http.Request) bool {
+	if !c.TrustProxyHeaders {
+		return false
+	}
+	networks, _ := parseTrustedProxyCIDRs(c.TrustedProxyCIDRs)
+	return fromProxyAddress(networks, r) || fromProxyCertificate(c.TrustedProxyCertSubjects, r)
+}
+
 func fromProxyAddress(networks []*net.IPNet, r *http.Request) bool {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -526,13 +531,16 @@ func fromProxyAddress(networks []*net.IPNet, r *http.Request) bool {
 
 // fromProxyCertificate reports whether the leaf certificate of r's
 // connection (verified by requireClientCert) has a CN or DNS SAN in subjects.
+// A DNS name matches in any case, as DNS does.
 func fromProxyCertificate(subjects []string, r *http.Request) bool {
 	if len(subjects) == 0 || r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 		return false
 	}
 	leaf := r.TLS.PeerCertificates[0]
 	return slices.Contains(subjects, leaf.Subject.CommonName) ||
-		slices.ContainsFunc(leaf.DNSNames, func(name string) bool { return slices.Contains(subjects, name) })
+		slices.ContainsFunc(leaf.DNSNames, func(name string) bool {
+			return slices.ContainsFunc(subjects, func(s string) bool { return strings.EqualFold(s, name) })
+		})
 }
 
 func hasIdentityHeader(r *http.Request) bool {

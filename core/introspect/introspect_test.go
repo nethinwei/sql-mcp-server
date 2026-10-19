@@ -1,6 +1,7 @@
 package introspect
 
 import (
+	"reflect"
 	"slices"
 	"testing"
 
@@ -146,5 +147,25 @@ func TestCatalogIndexMatchesScan(t *testing.T) {
 	cat.Tables = append(cat.Tables, entity.Entity{Name: "events", Schema: "a"})
 	if _, ok := cat.Lookup("", "events"); !ok {
 		t.Fatal("a table added after indexing must still be found")
+	}
+}
+
+// A column a row scope tests must be in the table, even when no field exposes
+// it: a policy on a missing column would fail every call at the database.
+func TestReconcileRequiresTheColumnsRowScopesTest(t *testing.T) {
+	t.Parallel()
+	cat := Catalog{Default: "public", Tables: []entity.Entity{{Name: "orders", Schema: "public",
+		Attributes: []entity.Attribute{{Name: "id"}, {Name: "tenant_id"}}}}}
+	_, d := Reconcile([]entity.Entity{
+		{Name: "orders", Attributes: []entity.Attribute{{Name: "id"}}, RowColumns: []string{"tenant_id"}},
+	}, cat)
+	if len(d.Absent) != 0 {
+		t.Fatalf("an existing hidden column was reported absent: %+v", d)
+	}
+	_, d = Reconcile([]entity.Entity{
+		{Name: "orders", Attributes: []entity.Attribute{{Name: "id"}}, RowColumns: []string{"tenant", "id"}},
+	}, cat)
+	if !reflect.DeepEqual(d.Absent, map[string][]string{"orders": {"tenant"}}) {
+		t.Fatalf("absent = %v, want the missing policy column", d.Absent)
 	}
 }

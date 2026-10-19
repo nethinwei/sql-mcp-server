@@ -148,10 +148,26 @@ func (s *SQLStore) lock(ctx context.Context, tx *sql.Tx) error {
 	return s.bump(ctx, tx, metaPublishLock)
 }
 
-// bump adds one to a counter row, locking it for the rest of tx.
+// bump adds one to a counter row, locking it for the rest of tx. A missing
+// row would lock nothing: the store is corrupt.
 func (s *SQLStore) bump(ctx context.Context, tx *sql.Tx, key string) error {
-	_, err := s.exec(ctx, tx, "UPDATE smcp_store_meta SET meta_value = meta_value + 1 WHERE meta_key = ?", key)
-	return err
+	r, err := s.exec(ctx, tx, "UPDATE smcp_store_meta SET meta_value = meta_value + 1 WHERE meta_key = ?", key)
+	if err != nil {
+		return err
+	}
+	return oneRow(r, "store metadata row "+key)
+}
+
+// oneRow fails unless r changed exactly one row, what.
+func oneRow(r sql.Result, what string) error {
+	n, err := r.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return fmt.Errorf("%w: %s: %d rows changed, want 1", ErrStoreCorrupt, what, n)
+	}
+	return nil
 }
 
 func (s *SQLStore) allocateID(ctx context.Context, tx *sql.Tx) (int64, error) {
@@ -273,8 +289,11 @@ func (s *SQLStore) setState(
 		query = "UPDATE smcp_revisions SET state = ?, published_us = ? WHERE id = ?"
 		args = []any{string(state), toMicros(publishedAt), id}
 	}
-	_, err := s.exec(ctx, tx, query, args...)
-	return err
+	r, err := s.exec(ctx, tx, query, args...)
+	if err != nil {
+		return err
+	}
+	return oneRow(r, fmt.Sprintf("revision %d", id))
 }
 
 // Publish implements revision.Store.

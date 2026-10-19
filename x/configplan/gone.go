@@ -32,7 +32,7 @@ func GoneTables(sources []Source, base *config.Config, scope Scope, missing map[
 	var out []Gone
 	for _, e := range base.Entities {
 		ds := e.DatasourceName()
-		if e.Kind == "procedure" || m.datasources != nil && !m.datasources[ds] {
+		if e.Kind == "procedure" || m.datasources != nil && !m.datasources[ds] || !m.entity(&e) {
 			continue
 		}
 		table := entity.Entity{Schema: e.Schema, Source: e.PhysicalSource(), Description: e.Description}

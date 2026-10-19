@@ -44,6 +44,7 @@ Agent (MCP client)
 | 机器契约稳定性 | tool schema/错误码/Denial golden | `core/tool/testdata/contract.json`、[tool-contract.md](tool-contract.md) |
 | SQL 逃生通道边界 | 三条件矩阵、硬上限、审计故障注入、按用户列表、结构锁定（TM-013） | `core/tool/tool_execute_sql_test.go`、`x/mcpserver/execute_sql_test.go`、[design/sql-escape-hatch.md](design/sql-escape-hatch.md) |
 | Provider 能力与语句超时 | 按连接判定的能力声明（生成的兼容矩阵）、三库真实超时与无键写入兜底、跨库治理等价任务 | `x/providers/*/timeout_integration_test.go`、`internal/conformance/governance.go`、[provider-compatibility.md](provider-compatibility.md#provider-能力) |
+| 写入行范围 | create/update 的 WITH CHECK、隐藏租户列预填、主键默认不可改、部分求值与参考解释器差分（TM-015） | `core/tool/write_check_test.go`、`core/relalg/interp/check_test.go` |
 | 管理 API 越权 | 每个查询与变更在 16 种权限组合下的矩阵、会话/CSRF/上限（TM-014） | `x/admin/graph/authz_matrix_test.go`、`x/admin/admin_test.go` |
 | 六场景产品证明 | quickstart 文档 + 自动 smoke（release 链） | [quickstart.md](quickstart.md)、`internal/quickstartsmoke` |
 | 客户端接入 | 四客户端核对结论与边界声明 | [clients.md](clients.md) |

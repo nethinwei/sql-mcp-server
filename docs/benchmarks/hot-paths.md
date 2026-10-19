@@ -22,6 +22,7 @@ make bench-integration   # 真实 PostgreSQL/MySQL（需要 Docker）
 | `BenchmarkMCPPointRead` | `x/mcpserver` | in-memory MCP 会话的一次 `tools/call`（JSON-RPC + 上述路径） |
 | `BenchmarkAssemble300Entities` | `x/bootstrap` | 300 个实体的一次启动/热重载装配 |
 | `BenchmarkRuntimeAcquire` | `x/bootstrap` | 每个请求获取快照租约 |
+| `BenchmarkFairEventStoreEvictSmallEvents` | `x/mcpserver` | 事件存储满（1 MiB、64 字节事件）时每次追加淘汰一个事件：分散在 1000 个会话，或集中在一个会话的 100 个流 |
 | `BenchmarkReconcile` | `core/introspect` | 1000 个实体对 5000 张表对账（有无名称索引） |
 | `BenchmarkBuildSchemaImport` | `x/admin/graph` | 2000 张表的导入页组装 |
 | `Benchmark{PG,MySQL}Discover600Tables` | `x/providers/*`（integration） | 600 张表的元数据扫描 |
@@ -44,6 +45,13 @@ make bench-integration   # 真实 PostgreSQL/MySQL（需要 Docker）
 | MySQLDiscover600Tables | 14.5 ms | — | — |
 | PGTablePrivileges600Tables | 1.1 ms | — | — |
 | MySQLTablePrivileges600Tables | 0.58 ms | — | — |
+
+`FairEventStoreEvictSmallEvents`（2026-10-19，同一机器，Go 1.26.9，`-benchtime=20000x -count=5`
+取中位数）：v0.1.20 前每次淘汰遍历全部会话并重新累加最大会话所有流的字节数，分散 / 集中两种
+形状分别为 7.6 µs / 7.0 µs；改为按字节数维护的两级大顶堆后为 0.31 µs / 0.21 µs，淘汰代价
+O(log n)，与会话、流和事件的数量无关（余下开销主要是基准自身生成键的分配）。
+同日把流条目与每个事件的固定开销计入上限（空事件和长会话的流条目不再无界）后，基准按 SDK 的
+方式先 `Open` 再追加，Go 1.27.2 下为 0.32 µs / 0.16 µs。
 
 批量扫描前（逐表查询）同一 600 张表在本机零网络延迟下：PostgreSQL 0.98 s、
 MySQL 1.32 s，且随表数与网络往返线性增长。

@@ -48,8 +48,8 @@ server.auth:
   zh-CN: HTTP 认证。trustProxyHeaders、trustedProxyCIDRs 与非 loopback 的信任规则见 security.md。
   en: HTTP authentication. Trust rules for proxies and non-loopback listeners are in security.md.
 server.auth.token:
-  zh-CN: 共享 bearer token，按字面读取（不做 ${ENV} 替换）。配置用户后各用户使用自己的 token。
-  en: Shared bearer token, read literally (no ${ENV} expansion). Configured users use their own tokens.
+  zh-CN: 共享 bearer token，按字面读取（不做 ${ENV} 替换）。监听非 loopback 地址时至少 32 字节（可用 openssl rand -hex 32 生成）。配置用户后各用户使用自己的 token。
+  en: Shared bearer token, read literally (no ${ENV} expansion). At least 32 bytes on a listener beyond loopback (openssl rand -hex 32 makes one). Configured users use their own tokens.
 server.auth.trustProxyHeaders:
   zh-CN: 信任代理传入的身份头（X-MCP-User / X-MCP-Role / X-MCP-Subject）；需要 trustedProxyCIDRs 或 trustedProxyCertSubjects 认定代理。
   en: Trust identity headers (X-MCP-User / X-MCP-Role / X-MCP-Subject) from a proxy; needs trustedProxyCIDRs or trustedProxyCertSubjects to tell proxies.
@@ -71,6 +71,9 @@ server.auth.tls.key:
 server.auth.tls.clientCA:
   zh-CN: 设置后开启 mTLS，要求并校验客户端证书。
   en: Enables mTLS; client certificates are required and verified.
+server.auth.tls.clientIdentity:
+  zh-CN: 配置了用户时，只出示客户端证书、不带 bearer token 的请求以谁的身份调用。user（默认）：证书须匹配某个用户的 certSubjects，否则拒绝（401）；default：使用默认身份（server.user 或 server.role，v0.1.20 之前的行为）。未配置用户时不起作用。受信代理的证书不受此限制。
+  en: 'With users configured, who a request presenting a client certificate without a bearer token calls as. user (default): the certificate must match a user''s certSubjects, else it is refused (401); default: the default identity (server.user or server.role, the behavior before v0.1.20). No effect without users. Trusted proxies'' certificates are exempt.'
 
 database:
   zh-CN: 旧式单数据源配置，加载时迁移为名为 default 的数据源。需要 database 或至少一个 databases 项。
@@ -112,8 +115,8 @@ defs.database.routing.execute:
   zh-CN: 存储过程使用的连接；不能是 replica。
   en: Connection for procedure calls; not a replica.
 defs.database.readAfterWrite:
-  zh-CN: 同一会话写入后，在这段时间内的读取改走 write 连接，以便在副本上读到自己的写入；0 表示不切换。
-  en: For this long after a session writes, its reads use the write connection, so it reads its own writes despite replica lag; 0 disables it.
+  zh-CN: 同一会话写入后，在这段时间内的读取改走 write 连接，以便在副本上读到自己的写入；0 表示不切换，最长 1h。窗口内该会话的读取不与其他会话共享结果。
+  en: For this long after a session writes, its reads use the write connection, so it reads its own writes despite replica lag; 0 disables it, at most 1h. Within the window the session's reads share no results with other sessions.
 defs.database.sqlEscape:
   zh-CN: 声明后该数据源允许可信 SQL 逃生通道（execute_sql）；省略即不允许，任何权限都不能对它执行任意 SQL。
   en: Declares that the datasource admits the trusted SQL escape hatch (execute_sql); omitted, no permission runs SQL on it.
@@ -227,8 +230,8 @@ defs.entity.relationships.cardinality:
   zh-CN: 基数；belongs-to/one 展开为单个对象，has-many/many 展开为列表。
   en: Cardinality; belongs-to/one expand to an object, has-many/many to a list.
 defs.entity.relationships.joinOn:
-  zh-CN: 连接键：本实体字段 → 目标实体字段；多列外键写多对，全部相等才关联。
-  en: 'Join pairs: this entity''s field → the target''s field; a multi-column foreign key lists every pair, all of which must match.'
+  zh-CN: 连接键：本实体列名 → 目标实体列名（不能写字段别名）；多列外键写多对，全部相等才关联。
+  en: 'Join pairs: this entity''s column → the target''s column (not a field alias); a multi-column foreign key lists every pair, all of which must match.'
 defs.entity.tenantPolicy:
   zh-CN: 租户硬边界，语法同一条行过滤；对所有主体始终 AND，不参与多角色合并。引用的 ${subject.x} 缺失时匹配零行。
   en: Tenant boundary with row-filter syntax; always ANDed for every principal and never merged across roles. A missing ${subject.x} matches no rows.
@@ -238,6 +241,9 @@ defs.entity.params:
 defs.entity.allowCascade:
   zh-CN: '允许级联写入：删除本实体的行或修改其被引用列时，外键的 CASCADE、SET NULL、SET DEFAULT 会改写其他表的行。默认要求调用方对每个被级联的实体都有对应的删除或修改权限，且不带行范围限制；被级联的表未暴露为实体时拒绝。设为 true 则不做该检查，由管理员对级联负责。'
   en: 'Allow cascading writes: deleting this entity''s rows or updating their referenced columns makes foreign keys (CASCADE, SET NULL, SET DEFAULT) rewrite rows of other tables. By default the caller needs delete or update permission without a row scope on every cascaded entity, and a cascade into a table no entity exposes is rejected. true skips the check and leaves the cascade to the administrator.'
+defs.entity.allowKeyUpdate:
+  zh-CN: 允许 update_records 修改标识行的列（主键；无主键时为第一个可标识行的唯一键）。默认拒绝：改主键会让引用它的行、缓存与审计记录失去对应，应先删除再创建。
+  en: 'Lets update_records assign the columns that identify a row (the primary key, else the first unique key that identifies one). Refused by default: a changed key orphans the rows, cached reads and audit records that refer to it; delete the row and create it again instead.'
 defs.entity.affects:
   zh-CN: 存储过程会写入的实体（须与过程同一数据源，引用写法同 grants），用于读缓存失效；省略时过程执行后失效该数据源的全部缓存。
   en: Entities the procedure writes (on its datasource, referred to as in grants), for read-cache invalidation; when omitted, every cached read of the datasource is invalidated after it runs.
@@ -321,6 +327,9 @@ defs.user:
 defs.user.description:
   zh-CN: 用户说明。
   en: User description.
+defs.user.certSubjects:
+  zh-CN: 在 mTLS 下认证该用户的客户端证书：cn:<CN>、dns:<DNS SAN>、uri:<URI SAN，如 SPIFFE ID>、email:<邮件 SAN>。证书任一项匹配即为该用户；各用户之间不能重复，也不能是受信代理的证书主体。带 bearer token 的请求以 token 为准。
+  en: 'Client certificates that authenticate the user under mTLS: cn:<CN>, dns:<DNS SAN>, uri:<URI SAN, such as a SPIFFE ID> or email:<email SAN>. A certificate matching any of them is the user; each names one user and no trusted proxy. A request with a bearer token is the token''s.'
 defs.user.tokenHash:
   zh-CN: bearer token 的 sha256 hash，由 sql-mcp-server user token 生成；明文不进入配置。各用户之间、与 server.auth.token 之间不能重复。
   en: sha256 hash of the bearer token, from sql-mcp-server user token; the plaintext never enters the configuration. Must differ between users and from server.auth.token.
@@ -375,8 +384,8 @@ defs.user.limits.budget:
 
 tools:
   title: {zh-CN: '工具开关', en: 'Tool switches'}
-  zh-CN: 省略整个块时除 deleteRecord 外全部开启；一旦写出该块，未写的工具保持关闭。
-  en: Omitting the block enables every tool except deleteRecord; once the block is written, unlisted tools stay off.
+  zh-CN: 省略整个块时开启读取、聚合、过程与事务工具，写工具（createRecord、updateRecord、deleteRecord）关闭（v0.1.20 起；此前 createRecord、updateRecord 默认开启）；一旦写出该块，未写的工具保持关闭。
+  en: 'Omitting the block enables the reading, aggregating, procedure and transaction tools and leaves the writing tools (createRecord, updateRecord, deleteRecord) off (since v0.1.20; createRecord and updateRecord were on before); once the block is written, unlisted tools stay off.' 
 tools.describeEntities:
   zh-CN: 列出可访问的实体与字段。
   en: Lists the entities and fields the caller can access.
@@ -431,8 +440,8 @@ cost.maxBytes:
   zh-CN: 单次响应的字节上限。
   en: Response size cap in bytes.
 cost.maxScannedRows:
-  zh-CN: 语句预计读取的行数超过它即拒绝，不论是否用到索引；0 表示不限。读取行数取 EXPLAIN 中最大的行数估计（MySQL rows_examined_per_scan，PostgreSQL 与 OceanBase 各节点的行数），全表扫描时取表的行数。角色或用户的 limits.maxScannedRows 只能收紧；与预算 maxEstimatedScannedRows 同时生效。
-  en: Refuse a statement estimated to read more rows than this, whatever its access path; 0 is unlimited. The rows read are the largest row estimate of the EXPLAIN (MySQL rows_examined_per_scan, PostgreSQL and OceanBase each node's rows), and a full scan's table size. A role's or user's limits.maxScannedRows only tightens it; the budget's maxEstimatedScannedRows applies as well.
+  zh-CN: 语句预计读取的行数超过它即拒绝，不论是否用到索引；0 表示不限。读取行数取 EXPLAIN 中最大的行数估计（MySQL rows_examined_per_scan，PostgreSQL 与 OceanBase 各节点的行数），全表扫描时取表的行数；表的行数未能测得的全表扫描读取行数未知，即拒绝（可对该表运行 ANALYZE）。角色或用户的 limits.maxScannedRows 只能收紧；与预算 maxEstimatedScannedRows 同时生效。
+  en: Refuse a statement estimated to read more rows than this, whatever its access path; 0 is unlimited. The rows read are the largest row estimate of the EXPLAIN (MySQL rows_examined_per_scan, PostgreSQL and OceanBase each node's rows), and a full scan's table size; a full scan of a table whose size could not be measured reads an unknown number of rows and is refused (run ANALYZE on the table). A role's or user's limits.maxScannedRows only tightens it; the budget's maxEstimatedScannedRows applies as well.
 cost.maxINListSize:
   zh-CN: IN 列表最多元素数，关系展开也按它分批。
   en: Maximum IN-list size; relationship expansion batches by it.
@@ -476,11 +485,11 @@ cost.requireNativeLimits:
   zh-CN: 严格模式：数据源的连接无法在数据库侧把语句限制在 queryTimeout 内（能力不是 enforced）时，拒绝加载该配置，控制台校验也报错；关闭时只告警。
   en: Strict mode. Refuse the configuration when a datasource's connection cannot stop statements at queryTimeout on the database side (the capability is not enforced), and fail its validation in the console; off, it only warns.
 cost.allowTemplates:
-  zh-CN: 跳过估算的 SQL 模板：推荐 fp:v2:<sha256> 指纹；多数据源下精确 SQL 写成 datasource:SQL。不绕过安全检查。
-  en: SQL templates that skip estimation; prefer fp:v2:<sha256> fingerprints, and with several datasources write exact SQL as datasource:SQL. Safety checks still apply.
+  zh-CN: 受治理工具中跳过估算的 SQL 模板：推荐 fp:v3:<sha256> 指纹；多数据源下精确 SQL 写成 datasource:SQL。不绕过安全检查；不作用于 execute_sql（其估算见 cost.sqlEscape）。
+  en: SQL templates of the governed tools that skip estimation; prefer fp:v3:<sha256> fingerprints, and with several datasources write exact SQL as datasource:SQL. Safety checks still apply; execute_sql is not affected (see cost.sqlEscape for its estimate).
 cost.rejectTemplates:
-  zh-CN: 总是拒绝的 SQL 模板，写法同 allowTemplates。
-  en: SQL templates that are always rejected; same forms as allowTemplates.
+  zh-CN: 受治理工具中总是拒绝的 SQL 模板，写法同 allowTemplates。按精确文本或指纹匹配，不是 SQL 语义级黑名单；不作用于 execute_sql（逃生通道的边界是其连接账号的权限）。
+  en: SQL templates of the governed tools that are always rejected; same forms as allowTemplates. Matched by exact text or fingerprint, not a semantic SQL blocklist; execute_sql is not affected (the escape hatch is bounded by its connection's privileges).
 cost.aqe:
   zh-CN: 基于实际执行反馈的自适应估算与可选的 EXPLAIN ANALYZE 采样。
   en: Adaptive estimation from execution feedback, with optional EXPLAIN ANALYZE sampling.
@@ -512,8 +521,8 @@ cost.sqlEscape:
   zh-CN: execute_sql 的估算策略。超时、行数与字节上限、并发与预算是不可关闭的硬上限，这里只决定 EXPLAIN 估算。
   en: The estimate policy of execute_sql. Timeout, row and byte caps, concurrency and budgets are hard limits that cannot be switched off; this only decides the EXPLAIN estimate.
 cost.sqlEscape.estimate:
-  zh-CN: required（默认）：每条语句先 EXPLAIN，无法估算（DDL、SET、SHOW 等）或超出阈值即拒绝；skip：不估算，只保留硬上限。
-  en: 'required (the default): every statement is EXPLAINed first and refused when it cannot be estimated (DDL, SET, SHOW) or exceeds the thresholds; skip: no estimate, the hard limits alone.'
+  zh-CN: required（默认）：每条语句先 EXPLAIN，无法估算（DDL、SET、SHOW 等）或超出阈值即拒绝；skip：不估算，只保留硬上限。cost.enabled 为 false 或数据源没有 EXPLAIN 时，须显式写 skip，否则配置被拒绝。
+  en: 'required (the default): every statement is EXPLAINed first and refused when it cannot be estimated (DDL, SET, SHOW) or exceeds the thresholds; skip: no estimate, the hard limits alone. With cost.enabled false or a datasource without EXPLAIN, skip must be written out, or the configuration is refused.'
 cost.sqlEscape.metadata:
   zh-CN: allow（默认）：query 模式下的单条 SHOW、DESCRIBE、DESC 语句不做 EXPLAIN 估算，只受硬上限约束（按语句开头识别，不解析 SQL）；refuse：与其他无法估算的语句一样，在 estimate 为 required 时拒绝。
   en: 'allow (the default): a single SHOW, DESCRIBE or DESC statement in query mode runs without an EXPLAIN estimate, under the hard limits alone (recognized by how it begins; SQL is not parsed); refuse: refused like any statement EXPLAIN cannot estimate while estimate is required.'
@@ -610,10 +619,11 @@ rateLimit.breakerCooldown:
   zh-CN: 熔断后多久重试；冷却后只放行一个探测调用，成功才恢复。
   en: Time before retrying after the breaker opens; one probe call is then let through, and only its success closes it.
 rateLimit.maxResultMemory:
-  zh-CN: 进程同时在内存中持有的查询结果字节数上限（各调用合计，按读出的行计，调用结束释放），超出时调用以预算超限失败；默认 256 MiB。
+  zh-CN: 进程同时在内存中持有的查询结果字节数上限（各调用合计，按读出的行计，调用结束释放），超出时读取以预算超限失败，写操作与过程（写已生效）只返回已读取的行并标记 truncated；默认 256 MiB。
   en: >-
     Bytes of query results the process holds in memory at once (all calls together, counted as rows are read and
-    released when a call ends); a call past it fails as over budget. Default 256 MiB.
+    released when a call ends); a read past it fails as over budget, while a write or a procedure (which took
+    effect) returns the rows read so far, marked truncated. Default 256 MiB.
 rateLimit.connMaxIdleTime:
   zh-CN: 数据库连接最长空闲时间。
   en: Maximum idle time of a database connection.

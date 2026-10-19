@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/core/reason"
 )
 
 // Input is what a plan is evaluated against.
@@ -19,13 +20,18 @@ type Input struct {
 	Sources   []Source
 	// Denied reports an entity action the serving connections cannot run,
 	// with why; nil reports none.
-	Denied func(entity, action string) (reason string, denied bool)
+	Denied func(entity, action string) (why reason.Reason, denied bool)
 	// Review reports every new table a grant covers, as a recurring
 	// template's proposal needs.
 	Review bool
 	// Missing are the entities whose tables the serving configuration found
 	// missing, by ID (see GoneTables).
 	Missing map[string]bool
+	// MissingFields are, by entity ID, the configured fields whose columns
+	// the serving configuration found missing: a sync removes them without a
+	// newer scan. MissingRowColumns are the columns their row scopes test
+	// (not fields) found missing: no sync repairs those.
+	MissingFields, MissingRowColumns map[string][]string
 }
 
 // Proposal is the outcome of a plan.
@@ -83,6 +89,10 @@ const (
 	ChangeSyncRemove = "syncRemove"
 	// ChangeRemoveTable removes the entity of a table that is gone.
 	ChangeRemoveTable = "removeTable"
+	// ChangeSyncKeys sets an entity's keys to its table's; ChangeSyncKind
+	// its kind (table or view).
+	ChangeSyncKeys = "syncKeys"
+	ChangeSyncKind = "syncKind"
 )
 
 // Change summarizes one kind of change over the entities it applies to.
@@ -123,6 +133,18 @@ const (
 	ExceptionDenied = "denied"
 	// ExceptionReview: a new table enters an existing grant.
 	ExceptionReview = "review"
+	// ExceptionKeyReferenced: a relationship joins on a column the synced
+	// keys no longer include.
+	ExceptionKeyReferenced = "keyReferenced"
+	// ExceptionRowColumnMissing: a row scope (tenant policy, row policy,
+	// grant rows) tests a column the table lacks; the entity stays
+	// unavailable until the scope is fixed by hand.
+	ExceptionRowColumnMissing = "rowColumnMissing"
+	// ExceptionRelationshipNew: a foreign key no relationship follows.
+	ExceptionRelationshipNew = "relationshipNew"
+	// ExceptionRelationshipStale: a relationship named as imported ones are
+	// matches no foreign key; it may have been written by hand.
+	ExceptionRelationshipStale = "relationshipStale"
 )
 
 // Exception levels: what a reviewer has to do about an exception.
@@ -141,7 +163,8 @@ const (
 // levelOf is the level of an exception of kind with detail.
 func levelOf(kind, detail string) string {
 	switch kind {
-	case ExceptionRenamed, ExceptionSideEffects, ExceptionRelationshipDropped, ExceptionQualified:
+	case ExceptionRenamed, ExceptionSideEffects, ExceptionRelationshipDropped, ExceptionQualified,
+		ExceptionRelationshipNew, ExceptionRelationshipStale:
 		return LevelInfo
 	case ExceptionNoKey:
 		if detail == "" { // reads only: nothing left out
@@ -163,6 +186,9 @@ type Exception struct {
 	Entity string
 	// Detail names what the exception is about: a name, an action, a field.
 	Detail string
+	// Reason explains it, when the server does (an action denied): the
+	// console translates it, Detail is its English text.
+	Reason reason.Reason
 }
 
 // Evaluate applies p to in.Base. It does not validate the result: the
@@ -193,18 +219,13 @@ func Evaluate(in Input, p Plan) (Proposal, error) {
 			ev.report.ScannedTo = r.ScannedAt
 		}
 	}
-	if len(p.Scope.Refs) == 0 {
+	if len(p.Scope.Refs) == 0 && len(p.Scope.Entities) == 0 {
 		ev.report.Unscanned = Unscanned(in.Sources, p.Scope)
 	}
 	targets := ev.importTables(rows)
 	// Sync first, so the field rules cover the fields it adds.
 	if p.Sync != nil {
-		for _, t := range targets {
-			ev.sync(t)
-		}
-		if p.Sync.RemoveTables {
-			ev.removeGone(GoneTables(in.Sources, in.Base, p.Scope, in.Missing), exclude)
-		}
+		ev.syncAll(targets, exclude)
 	}
 	for _, t := range targets {
 		ev.applyFields(t)

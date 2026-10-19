@@ -85,8 +85,8 @@ func Retarget(ref string, before, after Index, moved map[string]string) (out str
 }
 
 // FilterFields lists the fields a row filter (decoded YAML or JSON) names:
-// a condition {op, field, value} names its field, and an and/or names those
-// of its items.
+// a condition {op, field, value} names its field, an and/or those of its
+// items, and a not those of its filter.
 func FilterFields(v any) []string {
 	f, ok := v.(map[string]any)
 	if !ok {
@@ -97,6 +97,9 @@ func FilterFields(v any) []string {
 			return []string{field}
 		}
 		return nil
+	}
+	if inner, ok := f["not"]; ok {
+		return FilterFields(inner)
 	}
 	var out []string
 	for _, key := range []string{"and", "or"} {

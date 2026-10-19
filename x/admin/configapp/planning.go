@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -16,8 +14,8 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	"github.com/nethinwei/sql-mcp-server/core/reason"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
-	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/configedit"
@@ -39,9 +37,9 @@ type planContext struct {
 	fingerprint string
 	baseHash    string
 	publishedID int64
-	// missing are the entities whose tables the serving configuration found
-	// missing (see configplan.GoneTables).
-	missing map[string]bool
+	// missing is what the serving configuration found missing (see
+	// configplan.GoneTables and configplan.Input).
+	missing bootstrap.Missing
 }
 
 // planContext reads the draft (default: the published configuration) and
@@ -64,7 +62,7 @@ func (r *Service) planContext(ctx context.Context, draft *Draft) (planContext, e
 	}
 	pc := planContext{
 		base: published, spec: spec, payload: rev.Payload, baseID: rev.ID, published: published, publishedID: rev.ID,
-		missing: r.missingTables(),
+		missing: r.missing(),
 	}
 	if draft != nil {
 		d, err := r.BuildDraft(ctx, *draft)
@@ -137,12 +135,12 @@ func DecodePlan(v any) (configplan.Plan, error) {
 }
 
 // denied reports the entity actions the serving connections cannot run.
-func denied(caps bootstrap.EntityCapabilities) func(string, string) (string, bool) {
-	return func(id, action string) (string, bool) {
+func denied(caps bootstrap.EntityCapabilities) func(string, string) (reason.Reason, bool) {
+	return func(id, action string) (reason.Reason, bool) {
 		a, known := entity.ParseAction(strings.ToLower(action))
 		c, ok := caps[id][a]
 		if !known || !ok || c.Privilege != introspect.PrivilegeDenied {
-			return "", false
+			return reason.Reason{}, false
 		}
 		return c.Reason, true
 	}
@@ -151,7 +149,7 @@ func denied(caps bootstrap.EntityCapabilities) func(string, string) (string, boo
 func (r *Service) planInput(pc planContext, review bool) configplan.Input {
 	return configplan.Input{
 		Base: pc.base, Published: pc.published, Sources: pc.sources, Denied: denied(r.capabilities()), Review: review,
-		Missing: pc.missing,
+		Missing: pc.missing.Tables, MissingFields: pc.missing.Fields, MissingRowColumns: pc.missing.RowColumns,
 	}
 }
 
@@ -160,8 +158,9 @@ func (r *Service) planInput(pc planContext, review bool) configplan.Input {
 // same ID means the same outcome and report.
 func planID(pc planContext, p configplan.Plan, review bool) string {
 	data, _ := json.Marshal(p)
+	missing, _ := json.Marshal(pc.missing) // maps marshal with sorted keys
 	sum := sha256.Sum256(fmt.Appendf(nil, "%s\x00%d\x00%s\x00%s\x00%d\x00%t\x00%s", data, pc.baseID, pc.baseHash,
-		pc.fingerprint, pc.publishedID, review, strings.Join(slices.Sorted(maps.Keys(pc.missing)), ",")))
+		pc.fingerprint, pc.publishedID, review, missing))
 	return hex.EncodeToString(sum[:12])
 }
 
@@ -176,7 +175,7 @@ func (r *Service) evaluate(ctx context.Context, pc planContext, p configplan.Pla
 	_, cfg, payload, err := configedit.ApplySpec(pc.spec, proposal.Edit())
 	if err != nil {
 		msg := err.Error()
-		out.Validation = &Validation{Error: &msg, RestartRequired: []string{}, Warnings: []string{}}
+		out.Validation = &Validation{Error: &msg, RestartRequired: []string{}, Warnings: []string{}, Notices: []Reason{}}
 		return out, nil
 	}
 	changes, err := r.RestartChanges(ctx, cfg)
@@ -184,8 +183,9 @@ func (r *Service) evaluate(ctx context.Context, pc planContext, p configplan.Pla
 		return nil, err
 	}
 	hash := revision.Hash(payload)
-	out.Validation = &Validation{Ok: true, ContentHash: &hash, RestartRequired: changes,
-		Warnings: kit.OrEmpty(bootstrap.CapabilityWarnings(cfg, r.capabilities()))}
+	list, warnings := notices(bootstrap.CapabilityWarnings(cfg, r.capabilities()))
+	out.Validation = &Validation{Ok: true, ContentHash: &hash, RestartRequired: changes, Warnings: warnings,
+		Notices: list}
 	out.changed, out.effect, err = r.changes(pc, payload)
 	return out, err
 }
