@@ -11,6 +11,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/hook"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
+	"github.com/nethinwei/sql-mcp-server/core/relalg"
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
@@ -353,6 +354,58 @@ func TestWritesRejectGeneratedColumns(t *testing.T) {
 	}
 	if executed {
 		t.Fatal("a write to a generated column reached the database")
+	}
+}
+
+// Without RETURNING the key reported is the inserted row's, by column: one
+// the caller wrote by its alias, and one the row scope pinned (a hidden
+// tenant column the caller left out).
+func TestInsertWithoutReturningReportsAliasedAndPinnedKeys(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		e      entity.Entity
+		values string
+		want   map[string]any
+	}{
+		"aliased": {
+			e: entity.Entity{Attributes: []entity.Attribute{{Name: "code", Alias: "key"}, {Name: "sku"}},
+				Keys: []entity.Key{{Name: "PRIMARY", Columns: []string{"code"}, Primary: true}}},
+			values: `{"key":"A-1","sku":"a"}`,
+			want:   map[string]any{"code": "A-1"},
+		},
+		"pinned": {
+			e: entity.Entity{
+				Attributes: []entity.Attribute{
+					{Name: "tenant_id"}, {Name: "id", Domain: entity.Domain{AutoIncrement: true, Default: true}}, {Name: "sku"},
+				},
+				Keys:         []entity.Key{{Name: "PRIMARY", Columns: []string{"tenant_id", "id"}, Primary: true}},
+				TenantPolicy: relalg.Condition{Field: "tenant_id", Op: relalg.OpEq, Value: int64(7)},
+			},
+			values: `{"sku":"a"}`,
+			want:   map[string]any{"tenant_id": int64(7), "id": int64(42)},
+		},
+	} {
+		e := c.e
+		e.Name, e.Source, e.MCP = "lines", "lines", entity.MCPFlags{DMLTools: true}
+		e.Role = entity.RoleAccess{entity.ActionCreate: {"w"}}
+		reg, _ := entity.NewRegistry([]entity.Entity{e})
+		db := &storetest.FakeDB{ExecFn: func(context.Context, string, ...any) (store.Result, error) {
+			return store.Result{LastInsertID: 42, RowsAffected: 1}, nil
+		}}
+		tc := Context{
+			Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+			Role:     "w", DB: db, Dialect: testdialect.MySQL{},
+		}
+		res, err := CreateTool{}.Run(context.Background(),
+			json.RawMessage(`{"entity":"lines","values":`+c.values+`}`), tc)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for column, v := range c.want {
+			if got := res.Content[0][column]; got != v {
+				t.Errorf("%s: row = %v, want %s = %v", name, res.Content[0], column, v)
+			}
+		}
 	}
 }
 

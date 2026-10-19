@@ -182,6 +182,10 @@ func TestExecuteSQLQueryRowsAndAudit(t *testing.T) {
 		end.DecisionID != begin.DecisionID {
 		t.Fatalf("end = %+v", end)
 	}
+	// The cut is the call's result's too, which its audit records.
+	if !res.Truncated || !strings.Contains(end.ResultSummary, "truncated") {
+		t.Fatalf("result truncated %v, end summary %q; want both to tell the cut", res.Truncated, end.ResultSummary)
+	}
 }
 
 type recordingMasker struct{}

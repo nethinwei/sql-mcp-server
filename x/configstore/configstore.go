@@ -68,8 +68,8 @@ type Resolver func(string) (string, error)
 
 // Open connects to an initialized store. It fails with ErrNotInitialized
 // when the tables or metadata rows are missing (an Init that stopped part
-// way), with ErrStoreCorrupt when a store with revisions lost one, and with
-// ErrNewerSchema on a newer layout.
+// way), with ErrStoreCorrupt when an initialized store lost a table or one
+// with revisions a metadata row, and with ErrNewerSchema on a newer layout.
 func Open(ctx context.Context, spec Spec, resolve Resolver) (*SQLStore, error) {
 	s, err := connect(spec, resolve)
 	if err != nil {
@@ -78,6 +78,9 @@ func Open(ctx context.Context, spec Spec, resolve Resolver) (*SQLStore, error) {
 	version, err := s.checkSchema(ctx)
 	if err == nil && version < SchemaVersion {
 		err = s.migrate(ctx, version)
+	}
+	if err == nil {
+		err = s.checkTables(ctx)
 	}
 	if err == nil {
 		var missing [][2]any
@@ -179,7 +182,7 @@ func (s *SQLStore) init(ctx context.Context) error {
 				return err
 			}
 		}
-		return s.initMeta(ctx)
+		return s.checkThenInitMeta(ctx)
 	}
 	if !errors.Is(err, ErrNotInitialized) {
 		return err
@@ -189,7 +192,40 @@ func (s *SQLStore) init(ctx context.Context) error {
 			return fmt.Errorf("configstore: create tables: %w", err)
 		}
 	}
+	return s.checkThenInitMeta(ctx)
+}
+
+// checkThenInitMeta writes the missing metadata rows of a store that has
+// every table: one that lost a table is corrupt, and creating it empty again
+// would hide what it lost.
+func (s *SQLStore) checkThenInitMeta(ctx context.Context) error {
+	if err := s.checkTables(ctx); err != nil {
+		return err
+	}
 	return s.initMeta(ctx)
+}
+
+// storeTables are the tables of the current schema (see storeMigrations).
+var storeTables = []string{
+	"smcp_revisions", "smcp_store_meta", "smcp_admin_accounts", "smcp_catalog_lists", "smcp_catalog_schemas",
+	"smcp_plan_templates", "smcp_plan_template_versions", "smcp_admin_tokens", "smcp_pending_states", "smcp_scan_batches",
+	"smcp_scan_batch_items", "smcp_pending_log", "smcp_workspaces", "smcp_workspace_log",
+}
+
+// checkTables fails with ErrStoreCorrupt on the first table of the current
+// schema the store lacks.
+func (s *SQLStore) checkTables(ctx context.Context) error {
+	for _, table := range storeTables {
+		rows, err := s.db.QueryContext(ctx, "SELECT 1 FROM "+table+" WHERE 1 = 0")
+		if err != nil {
+			if pingErr := s.db.PingContext(ctx); pingErr != nil {
+				return fmt.Errorf("configstore: connect: %w", pingErr)
+			}
+			return fmt.Errorf("%w: store table %s is missing (%v); restore it from a backup", ErrStoreCorrupt, table, err)
+		}
+		_ = rows.Close()
+	}
+	return nil
 }
 
 // missingMeta returns the metadata rows the store lacks, with their first

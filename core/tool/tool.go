@@ -118,7 +118,7 @@ type Result struct {
 	NextCursor map[string]any
 	// Truncated says a write's or a procedure's rows were cut short: past the
 	// call's row limits or what the server holds in memory (the write took
-	// effect).
+	// effect); or an execute_sql query's, at its row cap.
 	Truncated bool
 	// Grants lists covering grant IDs for audit; it is not sent to clients.
 	Grants []string

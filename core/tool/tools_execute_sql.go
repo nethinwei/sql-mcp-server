@@ -139,7 +139,7 @@ func (ExecuteSQLTool) Run(ctx context.Context, input json.RawMessage, tc Context
 		Content: []map[string]any{{
 			"columns": got.columns, "rows": got.rows, "rowCount": len(got.rows), "truncated": got.truncated,
 		}},
-		ReturnedRows: int64(len(got.rows)), Counted: true,
+		ReturnedRows: int64(len(got.rows)), Counted: true, Truncated: got.truncated,
 	}, nil
 }
 

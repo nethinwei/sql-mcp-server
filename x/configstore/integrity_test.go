@@ -3,6 +3,8 @@ package configstore
 import (
 	"context"
 	"errors"
+	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +22,26 @@ func TestSQLiteStoreIntegrity(t *testing.T) {
 	})
 	t.Run("InitCompletesPartialMeta", func(t *testing.T) { assertInitCompletesPartialMeta(t, sqliteSpec(t)) })
 	t.Run("ConcurrentInit", func(t *testing.T) { assertConcurrentInit(t, sqliteSpec(t)) })
+	t.Run("MissingTableRefused", func(t *testing.T) { assertMissingTableRefused(t, sqliteSpec(t)) })
+}
+
+// storeTables names every table the schema creates, of every dialect.
+func TestStoreTablesNameTheSchema(t *testing.T) {
+	create := regexp.MustCompile(`CREATE TABLE (?:IF NOT EXISTS )?(smcp_\w+)`)
+	for name, d := range dialects {
+		var created []string
+		for _, step := range d.migrations {
+			for _, ddl := range step {
+				for _, m := range create.FindAllStringSubmatch(ddl, -1) {
+					created = append(created, m[1])
+				}
+			}
+		}
+		slices.Sort(created)
+		if want := slices.Sorted(slices.Values(storeTables)); !slices.Equal(slices.Compact(created), want) {
+			t.Errorf("%s creates %v, storeTables has %v", name, created, want)
+		}
+	}
 }
 
 func draft(t *testing.T, store *SQLStore, payload string) revision.Revision {
@@ -184,6 +206,32 @@ func assertInitCompletesPartialMeta(t *testing.T, spec Spec) {
 	}
 	if _, err := Open(ctx, spec, nil); !errors.Is(err, ErrStoreCorrupt) {
 		t.Fatalf("Open on a store with revisions missing next_id: %v, want ErrStoreCorrupt", err)
+	}
+}
+
+// assertMissingTableRefused: a store that lost a table (only a backup has its
+// rows) is refused by Open and by Init, which does not create it empty again.
+func assertMissingTableRefused(t *testing.T, spec Spec) {
+	t.Helper()
+	ctx := context.Background()
+	if err := Init(ctx, spec, nil); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(ctx, spec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft(t, store, "a: 1\n")
+	if _, err := store.db.ExecContext(ctx, "DROP TABLE smcp_workspace_log"); err != nil {
+		t.Fatal(err)
+	}
+	_ = store.Close()
+	if _, err := Open(ctx, spec, nil); !errors.Is(err, ErrStoreCorrupt) ||
+		!strings.Contains(err.Error(), "smcp_workspace_log") {
+		t.Fatalf("Open without smcp_workspace_log: %v, want ErrStoreCorrupt naming it", err)
+	}
+	if err := Init(ctx, spec, nil); !errors.Is(err, ErrStoreCorrupt) {
+		t.Fatalf("Init without smcp_workspace_log: %v, want ErrStoreCorrupt", err)
 	}
 }
 

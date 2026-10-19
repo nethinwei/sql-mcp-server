@@ -191,6 +191,9 @@
 - 返回单个对象的工具直接给出该对象：`describe_entities`、`create_record`、
   `update_record`、`delete_record`、`begin_transaction`、`commit_transaction`、
   `rollback_transaction`、`execute_sql`。
+- `create_record` 的对象是新行的标识键（按列名；行范围预填的列也在内，没有 RETURNING 的数据库上
+  自增列取驱动的 last insert id）加 `rowsAffected`，没有 RETURNING 时另带 `lastInsertId`，截断时
+  另带 `truncated`。这三个名字是保留的：标识键列恰好同名时会被覆盖。
 
 `describe_entities` 不带 `entity` 时分页列出实体：
 `{"entities": [{name, id, description, datasource}], "total": n, "nextOffset": m}`；

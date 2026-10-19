@@ -14,45 +14,48 @@ import (
 func runInsert(ctx context.Context, tc Context, in createInput) (Result, error) {
 	ctx, tc, end := beginCall(ctx, tc, false, in.Transaction)
 	defer end()
-	st, err := prepareInsert(ctx, tc, in)
+	st, inserted, err := prepareInsert(ctx, tc, in)
 	if err != nil {
 		return Result{}, err
 	}
 	if st.tc.Dialect.Capabilities().Enforced(dialect.Returning) && len(st.res.Entity.PrimaryKey()) > 0 {
 		return insertWithReturning(ctx, st)
 	}
-	return insertWithExec(ctx, st, in)
+	return insertWithExec(ctx, st, inserted)
 }
 
-func prepareInsert(ctx context.Context, tc Context, in createInput) (statement, error) {
+// prepareInsert plans the insert of in and returns the row it inserts, by
+// column: the caller's values under their columns and those the row scope
+// pins.
+func prepareInsert(ctx context.Context, tc Context, in createInput) (statement, map[string]any, error) {
 	plan, _, err := planEntity(ctx, tc, in.Entity, entity.ActionCreate, nil)
 	if err != nil {
-		return statement{}, err
+		return statement{}, nil, err
 	}
 	res, tc := plan.res, plan.tc
 	keys := sortedKeys(in.Values)
 	if err := validateFields(res, keys...); err != nil {
-		return statement{}, err
+		return statement{}, nil, err
 	}
 	if err := validateWritable(res, keys...); err != nil {
-		return statement{}, err
+		return statement{}, nil, err
 	}
 	if err := distinctColumns(res.Entity, keys); err != nil {
-		return statement{}, err
+		return statement{}, nil, err
 	}
 	g, err := authorizeRequest(ctx, tc, rbac.Request{
 		Role: tc.Role, Subject: tc.Subject, Entity: in.Entity, Action: entity.ActionCreate,
 		WriteFields: keys,
 	})
 	if err != nil {
-		return statement{}, err
+		return statement{}, nil, err
 	}
 	if err := coerceValues(res.Entity, in.Values); err != nil {
-		return statement{}, err
+		return statement{}, nil, err
 	}
 	columns, tup, err := insertColumns(res.Entity, g.RowFilter, in.Values)
 	if err != nil {
-		return statement{}, err
+		return statement{}, nil, err
 	}
 	compiled, err := compile(
 		tc,
@@ -60,11 +63,15 @@ func prepareInsert(ctx context.Context, tc Context, in createInput) (statement, 
 		relalg.Insert{Target: res.Entity.Ref(), Columns: columns, Tuples: []relalg.Tuple{tup}},
 	)
 	if err != nil {
-		return statement{}, err
+		return statement{}, nil, err
 	}
 	st := newStatement(tc, res, g, admitInsert(compiled))
 	st.write = true
-	return st, nil
+	inserted := make(map[string]any, len(columns))
+	for i, column := range columns {
+		inserted[column] = tup[i]
+	}
+	return st, inserted, nil
 }
 
 func insertWithReturning(ctx context.Context, st statement) (Result, error) {
@@ -83,20 +90,20 @@ func insertWithReturning(ctx context.Context, st statement) (Result, error) {
 	return Result{Content: []map[string]any{row}}, nil
 }
 
-func insertWithExec(ctx context.Context, st statement, in createInput) (Result, error) {
+func insertWithExec(ctx context.Context, st statement, inserted map[string]any) (Result, error) {
 	r, err := st.exec(ctx)
 	if err != nil {
 		return Result{}, err
 	}
-	row := insertedKey(st.res.Entity, in.Values, r.LastInsertID)
+	row := insertedKey(st.res.Entity, inserted, r.LastInsertID)
 	st.present(row)
 	row["lastInsertId"], row["rowsAffected"] = r.LastInsertID, r.RowsAffected
 	return Result{Content: []map[string]any{row}}, nil
 }
 
 // insertedKey reports the identity key of a row inserted without RETURNING:
-// the values the caller supplied, and the auto-increment column from the
-// driver's last insert id.
+// its values in the inserted row (by column), and the auto-increment column
+// from the driver's last insert id.
 func insertedKey(e entity.Entity, values map[string]any, lastInsertID int64) map[string]any {
 	row := map[string]any{}
 	keys := e.IdentityKeys(true, false)
