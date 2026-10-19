@@ -249,7 +249,8 @@ Provider 适用范围使用以下口径：
   `X-MCP-Role: user:<name>`（或自定义 transport 的 `WithSubject`）冒充用户，拿到其授权与
   `sql:execute`，并绕过配置 subject 的覆盖；利用被删除/禁用用户的旧会话
   与在途事务继续访问。
-- **控制**：用户 token 只以 `sha256:` hash 保存，CLI 生成 256 bit 随机 token；监听
+- **控制**：mTLS 下配置了用户时，不带 token 的直连证书必须经 `certSubjects` 映射到唯一
+  用户，否则 401（v0.1.20 起，此前落到默认身份）；用户 token 只以 `sha256:` hash 保存，CLI 生成 256 bit 随机 token；监听
   非 loopback 地址时共享 token 至少 32 字节，配置校验与启动时按实际监听地址各检查一次
   （v0.1.20 起）；
   配置用户后，无共享 token 且非 mTLS/可信代理通道时必须携带用户 token；带用户
@@ -265,7 +266,8 @@ Provider 适用范围使用以下口径：
   `TestExecuteSQLRoleHeaderCannotImpersonateUser`（真实中间件链）；`x/bootstrap/bootstrap_access_test.go` 的吊销通知测试；
   `core/config/config_access_test.go` 的 tokenHash 与名称校验测试；`core/config/listen_test.go`
   的 `TestSharedTokenLength` 与 `x/mcpserver/http_test.go` 的 `TestValidateHTTPSecurity`（共享 token
-  长度）。
+  长度）；`x/mcpserver/cert_identity_test.go` 的 `TestCertIdentity`、`TestMTLSClientCertificateIdentity`
+  与 `x/bootstrap/bootstrap_access_test.go` 的 `TestUserByCertificate`（证书到用户的映射）。
 - **持续验证**：以上测试在默认单元测试中运行。
 - **剩余风险**：token 没有过期时间；共享 token 只检查长度，不检查熵；hash 未加盐，依赖 token 本身的高熵，人工设置
   低熵 token 会降低强度；`X-MCP-User` 的真实反向代理 e2e 仍未实现。

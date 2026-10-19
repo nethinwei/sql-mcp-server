@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
-  NAlert, NButton, NCard, NEmpty, NForm, NFormItem, NIcon, NInput, NPageHeader, NSelect, NSpace, NSwitch,
+  NAlert, NButton, NCard, NDynamicTags, NEmpty, NForm, NFormItem, NIcon, NInput, NPageHeader, NSelect, NSpace, NSwitch,
   NTag, NText, useDialog, useMessage,
 } from 'naive-ui'
 import { CloseOutline } from '@vicons/ionicons5'
@@ -155,6 +155,12 @@ onMounted(() => { if (route.query.token && editable.value && tokenState.value ==
         <secret-once v-if="newToken" :secret="newToken" :note="t('users.tokenOnce')" />
         <mcp-connect v-if="newToken" :token="newToken" />
       </n-space>
+    </n-card>
+
+    <n-card size="small" :title="t('users.certSubjects')">
+      <template #header-extra><n-text depth="3" class="hint">{{ t('users.certSubjectsHint') }}</n-text></template>
+      <n-dynamic-tags :value="user.certSubjects ?? []" :disabled="!editable"
+        @update:value="(v: string[]) => { if (user) user.certSubjects = v.map((s) => s.trim()).filter(Boolean) }" />
     </n-card>
 
     <n-card size="small" :title="t('users.subject')">

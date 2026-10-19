@@ -75,6 +75,7 @@ users:
   alice:
     description: BI agent
     tokenHash: sha256:1111111111111111111111111111111111111111111111111111111111111111
+    certSubjects: ["cn:alice", "uri:spiffe://example.org/agent/alice"]
     roles: [analyst]
     subject: {tenant: t1, level: 3}
     grants:

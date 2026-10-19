@@ -92,7 +92,7 @@ func TestChangedUsers(t *testing.T) {
 		}}
 	}
 	app := &App{config: base()}
-	app.Users, app.UserTokens = userDirectory(app.config)
+	app.Users, app.UserTokens, app.UserCerts = userDirectory(app.config)
 	cases := map[string]struct {
 		change func(*config.Config)
 		held   []string
@@ -101,6 +101,7 @@ func TestChangedUsers(t *testing.T) {
 		"removed": {func(c *config.Config) { delete(c.Users, "alice") }, []string{"alice"}},
 		"roles":   {setUser("alice", func(u *config.UserConfig) { u.Roles = nil }), []string{"alice"}},
 		"token":   {setUser("bob", func(u *config.UserConfig) { u.TokenHash = "x" }), []string{"bob"}},
+		"cert":    {setUser("bob", func(u *config.UserConfig) { u.CertSubjects = []string{"cn:bob"} }), []string{"bob"}},
 		"perms":   {setUser("bob", func(u *config.UserConfig) { u.Permissions = nil }), []string{"bob"}},
 		"text":    {setUser("bob", func(u *config.UserConfig) { u.Description = "x" }), nil},
 		"added":   {func(c *config.Config) { c.Users["carol"] = config.UserConfig{} }, nil},

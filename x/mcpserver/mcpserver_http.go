@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"github.com/nethinwei/sql-mcp-server/core/config"
 	"net/http"
 	"os"
 	"strconv"
@@ -86,6 +87,7 @@ func authenticated(cfg HTTPConfig, clientCAs *x509.CertPool, next http.Handler) 
 	handler = limitBody(cfg.MaxBodyBytes, cfg.BodyReadTimeout, handler)
 	handler = principalAuth(cfg.Token, cfg.Users, cfg.mtlsEnabled() || cfg.TrustProxyHeaders, handler)
 	if cfg.mtlsEnabled() {
+		handler = certIdentity(cfg.Users, cfg.ClientIdentity != config.ClientIdentityDefault, cfg.fromProxy, handler)
 		handler = requireClientCert(clientCAs, handler)
 	}
 	return handler

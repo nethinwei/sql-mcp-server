@@ -685,7 +685,7 @@ func applyAssembledAppConfig(app *App, cfg *config.Config) {
 	app.ToolFlags = cfg.Tools
 	app.DefaultRole = cfg.Server.Role
 	app.DefaultUser = cfg.Server.User
-	app.Users, app.UserTokens = userDirectory(cfg)
+	app.Users, app.UserTokens, app.UserCerts = userDirectory(cfg)
 	app.Limits = tool.Limits{
 		Timeout: cfg.Cost.QueryTimeout, MaxRows: cfg.Cost.MaxRows, MaxProcedureRows: cfg.Cost.MaxProcedureRows,
 		MaxReturnedBytes: cfg.Cost.MaxBytes, MaxINListSize: cfg.Cost.MaxINListSize,

@@ -40,6 +40,9 @@ server:
       cert: ""
       key: ""
       clientCA: "" # setting this enables mTLS and requires cert + key
+      # With users, a client certificate without a token must name a user
+      # (users.*.certSubjects); "default" serves it as the default identity.
+      clientIdentity: user
 
 # Use "database" for one legacy/default source, or "databases" for named sources.
 databases:
@@ -241,6 +244,8 @@ users:
     description: "Analyst of tenant-demo"
     # From `sql-mcp-server user token`; the plaintext never enters the config.
     tokenHash: "sha256:6d593566435e956df597c1110116613303484f8a21dfcdaefeeb87563a17d2f3"
+    # Under mTLS, a client certificate naming one of these is alice.
+    certSubjects: ["uri:spiffe://example.org/agent/alice"]
     roles: [analyst]
     subject: {tenant_id: tenant-demo} # wins over a proxy's X-MCP-Subject
     grants:

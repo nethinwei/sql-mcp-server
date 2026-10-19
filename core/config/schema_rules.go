@@ -52,16 +52,18 @@ var enums = map[string][]string{
 	"pooler":            {"transaction"},
 	"sqlEscapeEstimate": {SQLEscapeEstimateRequired, SQLEscapeEstimateSkip},
 	"sqlEscapeMetadata": {SQLEscapeMetadataAllow, SQLEscapeMetadataRefuse},
+	"clientIdentity":    {ClientIdentityUser, ClientIdentityDefault},
 	// Mask rules are the masker's; an unknown one would fail every startup.
 	"maskRule": mask.BuiltinRules(),
 }
 
 var patterns = map[string]*regexp.Regexp{
-	"accessName": regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`),
-	"driver":     regexp.MustCompile(`^[a-z][a-z0-9_-]*$`),
-	"tokenHash":  regexp.MustCompile(`^sha256:[0-9a-f]{64}$`),
-	"pathPrefix": regexp.MustCompile(`^(/[A-Za-z0-9._~-]+)+$`),
-	"httpURL":    regexp.MustCompile(`^https?://[^\s/?#]+(/[^\s?#]*)?$`),
+	"accessName":  regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`),
+	"driver":      regexp.MustCompile(`^[a-z][a-z0-9_-]*$`),
+	"tokenHash":   regexp.MustCompile(`^sha256:[0-9a-f]{64}$`),
+	"certSubject": regexp.MustCompile(`^(?i:cn|dns|uri|email):\S.*$`),
+	"pathPrefix":  regexp.MustCompile(`^(/[A-Za-z0-9._~-]+)+$`),
+	"httpURL":     regexp.MustCompile(`^https?://[^\s/?#]+(/[^\s?#]*)?$`),
 	// An entity is named datasource.schema.name, so none of them has a dot.
 	"pathSegment": regexp.MustCompile(`^[^.]+$`),
 }

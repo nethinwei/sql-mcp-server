@@ -71,6 +71,9 @@ server.auth.tls.key:
 server.auth.tls.clientCA:
   zh-CN: 设置后开启 mTLS，要求并校验客户端证书。
   en: Enables mTLS; client certificates are required and verified.
+server.auth.tls.clientIdentity:
+  zh-CN: 配置了用户时，只出示客户端证书、不带 bearer token 的请求以谁的身份调用。user（默认）：证书须匹配某个用户的 certSubjects，否则拒绝（401）；default：使用默认身份（server.user 或 server.role，v0.1.20 之前的行为）。未配置用户时不起作用。受信代理的证书不受此限制。
+  en: 'With users configured, who a request presenting a client certificate without a bearer token calls as. user (default): the certificate must match a user''s certSubjects, else it is refused (401); default: the default identity (server.user or server.role, the behavior before v0.1.20). No effect without users. Trusted proxies'' certificates are exempt.'
 
 database:
   zh-CN: 旧式单数据源配置，加载时迁移为名为 default 的数据源。需要 database 或至少一个 databases 项。
@@ -324,6 +327,9 @@ defs.user:
 defs.user.description:
   zh-CN: 用户说明。
   en: User description.
+defs.user.certSubjects:
+  zh-CN: 在 mTLS 下认证该用户的客户端证书：cn:<CN>、dns:<DNS SAN>、uri:<URI SAN，如 SPIFFE ID>、email:<邮件 SAN>。证书任一项匹配即为该用户；各用户之间不能重复，也不能是受信代理的证书主体。带 bearer token 的请求以 token 为准。
+  en: 'Client certificates that authenticate the user under mTLS: cn:<CN>, dns:<DNS SAN>, uri:<URI SAN, such as a SPIFFE ID> or email:<email SAN>. A certificate matching any of them is the user; each names one user and no trusted proxy. A request with a bearer token is the token''s.'
 defs.user.tokenHash:
   zh-CN: bearer token 的 sha256 hash，由 sql-mcp-server user token 生成；明文不进入配置。各用户之间、与 server.auth.token 之间不能重复。
   en: sha256 hash of the bearer token, from sql-mcp-server user token; the plaintext never enters the configuration. Must differ between users and from server.auth.token.

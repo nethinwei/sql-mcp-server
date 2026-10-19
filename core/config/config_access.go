@@ -116,6 +116,9 @@ func (c *Config) normalizeUsers() error {
 		}
 		user.Roles = canonicalRoleList(user.Roles)
 		user.TokenHash = strings.ToLower(strings.TrimSpace(user.TokenHash))
+		for i, s := range user.CertSubjects {
+			user.CertSubjects[i] = CanonicalCertSubject(s)
+		}
 		for i := range user.Grants {
 			user.Grants[i].Actions = canonicalRoleList(user.Grants[i].Actions)
 		}
@@ -191,6 +194,9 @@ func (c *Config) validateUsers(entities EntityRefs, databases map[string]Databas
 		if err := validateUser(name, user, known, hashes, entities, databases); err != nil {
 			return err
 		}
+	}
+	if err := c.validateCertSubjects(); err != nil {
+		return err
 	}
 	if c.Server.User != "" {
 		user, ok := c.Users[c.Server.User]

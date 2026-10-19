@@ -395,6 +395,9 @@ type HTTPAuth struct {
 	TLSCert                  string
 	TLSKey                   string
 	ClientCA                 string // PEM bundle; when set, require+verify a client cert (mTLS)
+	// ClientIdentity is config.ClientIdentityUser or ClientIdentityDefault:
+	// whether, with users, a client certificate naming no user is refused.
+	ClientIdentity string
 	// Users resolves configured users; nil means no users are configured.
 	// With users, bearer tokens may identify individual users and trusted
 	// proxies may send X-MCP-User.
@@ -502,6 +505,16 @@ func trustedProxy(networks []*net.IPNet, subjects []string, mtls bool, proxied, 
 			http.Error(w, "untrusted proxy", http.StatusForbidden)
 		}
 	})
+}
+
+// fromProxy reports a request from a trusted proxy (by address or, under
+// mTLS, certificate), when proxy identity headers are trusted.
+func (c HTTPConfig) fromProxy(r *http.Request) bool {
+	if !c.TrustProxyHeaders {
+		return false
+	}
+	networks, _ := parseTrustedProxyCIDRs(c.TrustedProxyCIDRs)
+	return fromProxyAddress(networks, r) || fromProxyCertificate(c.TrustedProxyCertSubjects, r)
 }
 
 func fromProxyAddress(networks []*net.IPNet, r *http.Request) bool {

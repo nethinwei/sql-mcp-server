@@ -2,7 +2,10 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -247,5 +250,37 @@ func TestRevocationSparesSessionsOpenedAfterIt(t *testing.T) {
 	runtime.retiring.Wait()
 	if writes.Wrote("old") || !writes.Wrote("new") {
 		t.Fatalf("old session rolled back = %v, new session kept = %v", !writes.Wrote("old"), writes.Wrote("new"))
+	}
+}
+
+func TestUserByCertificate(t *testing.T) {
+	uri, _ := url.Parse("spiffe://example.org/agent/etl")
+	cfg := &config.Config{Users: map[string]config.UserConfig{
+		"etl":  {CertSubjects: []string{"uri:spiffe://example.org/agent/etl"}},
+		"ann":  {CertSubjects: []string{"cn:Ann", "dns:ann.example.org", "email:ann@example.org"}},
+		"bob":  {CertSubjects: []string{"cn:shared"}},
+		"carl": {CertSubjects: []string{"dns:shared.example.org"}},
+		"off":  {CertSubjects: []string{"cn:off"}, Disabled: true},
+	}}
+	app := &App{}
+	app.Users, app.UserTokens, app.UserCerts = userDirectory(cfg)
+	for name, c := range map[string]struct {
+		leaf x509.Certificate
+		want string
+	}{
+		"URI SAN":           {x509.Certificate{URIs: []*url.URL{uri}}, "user:etl"},
+		"common name":       {x509.Certificate{Subject: pkix.Name{CommonName: "Ann"}}, "user:ann"},
+		"DNS SAN, any case": {x509.Certificate{DNSNames: []string{"ANN.example.org"}}, "user:ann"},
+		"email SAN":         {x509.Certificate{EmailAddresses: []string{"ann@example.org"}}, "user:ann"},
+		"common name case":  {x509.Certificate{Subject: pkix.Name{CommonName: "ann"}}, ""},
+		"two users is none": {x509.Certificate{Subject: pkix.Name{CommonName: "shared"},
+			DNSNames: []string{"shared.example.org"}}, ""},
+		"a disabled user":    {x509.Certificate{Subject: pkix.Name{CommonName: "off"}}, ""},
+		"no subject matches": {x509.Certificate{Subject: pkix.Name{CommonName: "nobody"}}, ""},
+	} {
+		id, ok := app.UserByCertificate(&c.leaf)
+		if id.Principal != c.want || ok != (c.want != "") {
+			t.Errorf("%s: %q, %v; want %q", name, id.Principal, ok, c.want)
+		}
 	}
 }

@@ -641,15 +641,16 @@ type ComplexityRoot struct {
 	}
 
 	User struct {
-		Description func(childComplexity int) int
-		Disabled    func(childComplexity int) int
-		Grants      func(childComplexity int) int
-		Limits      func(childComplexity int) int
-		Name        func(childComplexity int) int
-		Permissions func(childComplexity int) int
-		Roles       func(childComplexity int) int
-		Subject     func(childComplexity int) int
-		TokenHash   func(childComplexity int) int
+		CertSubjects func(childComplexity int) int
+		Description  func(childComplexity int) int
+		Disabled     func(childComplexity int) int
+		Grants       func(childComplexity int) int
+		Limits       func(childComplexity int) int
+		Name         func(childComplexity int) int
+		Permissions  func(childComplexity int) int
+		Roles        func(childComplexity int) int
+		Subject      func(childComplexity int) int
+		TokenHash    func(childComplexity int) int
 	}
 
 	UserToken struct {
@@ -3486,6 +3487,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.UnscannedSchemas.Schemas(childComplexity), true
 
+	case "User.certSubjects":
+		if e.ComplexityRoot.User.CertSubjects == nil {
+			break
+		}
+
+		return e.ComplexityRoot.User.CertSubjects(childComplexity), true
 	case "User.description":
 		if e.ComplexityRoot.User.Description == nil {
 			break
@@ -5074,6 +5081,8 @@ func (ec *executionContext) childFields_User(ctx context.Context, field graphql.
 		return ec.fieldContext_User_disabled(ctx, field)
 	case "tokenHash":
 		return ec.fieldContext_User_tokenHash(ctx, field)
+	case "certSubjects":
+		return ec.fieldContext_User_certSubjects(ctx, field)
 	case "limits":
 		return ec.fieldContext_User_limits(ctx, field)
 	}
@@ -17089,6 +17098,29 @@ func (ec *executionContext) fieldContext_User_tokenHash(_ context.Context, field
 	return graphql.NewScalarFieldContext("User", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _User_certSubjects(ctx context.Context, field graphql.CollectedField, obj *configapp.UserItem) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_User_certSubjects(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.CertSubjects, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_User_certSubjects(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("User", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _User_limits(ctx context.Context, field graphql.CollectedField, obj *configapp.UserItem) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -20617,7 +20649,7 @@ func (ec *executionContext) unmarshalInputUserInput(ctx context.Context, obj any
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"name", "description", "roles", "grants", "permissions", "subject", "disabled", "tokenHash", "limits"}
+	fieldsInOrder := [...]string{"name", "description", "roles", "grants", "permissions", "subject", "disabled", "tokenHash", "certSubjects", "limits"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -20680,6 +20712,13 @@ func (ec *executionContext) unmarshalInputUserInput(ctx context.Context, obj any
 				return it, err
 			}
 			it.TokenHash = data
+		case "certSubjects":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("certSubjects"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CertSubjects = data
 		case "limits":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("limits"))
 			data, err := ec.unmarshalOJSON2interface(ctx, v)
@@ -25918,6 +25957,11 @@ func (ec *executionContext) _User(ctx context.Context, sel ast.SelectionSet, obj
 		case "tokenHash":
 			out.Values[i] = ec._User_tokenHash(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "certSubjects":
+			out.Values[i] = ec._User_certSubjects(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
 		case "limits":

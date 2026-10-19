@@ -352,6 +352,8 @@ const en: typeof zh = {
     tokenOnce: 'This is the only time the token is shown. Give it to the caller to send as Authorization: Bearer <token>; it works after publishing.',
     revokeTitle: 'Revoke this user\'s token?',
     revokeBody: 'After publishing, clients with the old token are rejected immediately and their sessions are closed.',
+    certSubjects: 'Client certificates (mTLS)',
+    certSubjectsHint: 'A request presenting one of these certificates (without a token) calls as this user: cn:<CN>, dns:<name>, uri:<URI, such as a SPIFFE ID>, email:<address>.',
     subject: 'Subject attributes', subjectHint: '"current user.x" in row scopes and tenant boundaries comes from here, e.g. tenant_id.',
     attrName: 'Attribute', attrValue: 'Value', addAttr: 'Add attribute',
     grants: 'Direct grants', grantsHint: 'Extra access for this user only; prefer granting through roles.',

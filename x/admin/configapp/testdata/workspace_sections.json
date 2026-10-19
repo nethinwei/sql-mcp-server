@@ -218,6 +218,10 @@
   },
   "users": [
     {
+      "certSubjects": [
+        "cn:alice",
+        "uri:spiffe://example.org/agent/alice"
+      ],
       "description": "BI agent",
       "disabled": true,
       "grants": [

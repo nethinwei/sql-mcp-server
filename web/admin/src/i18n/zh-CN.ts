@@ -340,6 +340,8 @@ export default {
     tokenOnce: '这是唯一一次显示明文。复制后交给调用方，作为 HTTP 请求头 Authorization: Bearer <token> 使用；发布后生效。',
     revokeTitle: '撤销此用户的 token？',
     revokeBody: '发布后，持有旧 token 的客户端会立即被拒绝，进行中的会话也会被断开。',
+    certSubjects: '客户端证书（mTLS）',
+    certSubjectsHint: '出示这些证书之一（不带 token）即以该用户身份调用：cn:<CN>、dns:<域名>、uri:<URI，如 SPIFFE ID>、email:<邮箱>。',
     subject: '主体属性（subject）', subjectHint: '行范围与租户边界中的「当前用户.x」取自这里，例如 tenant_id。',
     attrName: '属性名', attrValue: '值', addAttr: '添加属性',
     grants: '直授权限', grantsHint: '只给这个用户的额外权限；通常优先通过角色授权。',

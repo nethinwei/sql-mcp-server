@@ -120,6 +120,25 @@ var accessRejectCases = []struct {
 		u.TokenHash = TokenHashPrefix + strings.Repeat("z", 64)
 		c.Users["Alice"] = u
 	}, "must match ^sha256:"},
+	{"malformed certificate subject", func(c *Config) {
+		u := c.Users["Alice"]
+		u.CertSubjects = []string{"subject:alice"}
+		c.Users["Alice"] = u
+	}, "must match"},
+	{"certificate subject of two users", func(c *Config) {
+		u := c.Users["Alice"]
+		u.CertSubjects = []string{"dns:agent.example.org"}
+		c.Users["Alice"] = u
+		c.Users["bob"] = UserConfig{CertSubjects: []string{"DNS:Agent.example.org"}}
+	}, "names users"},
+	{"certificate subject of a trusted proxy", func(c *Config) {
+		u := c.Users["Alice"]
+		u.CertSubjects = []string{"cn:gateway"}
+		c.Users["Alice"] = u
+		c.Server.Auth.TLS.ClientCA = "ca.pem"
+		c.Server.Auth.TrustedProxyCertSubjects = []string{"gateway"}
+	}, "trusted proxy"},
+	{"unknown client identity", func(c *Config) { c.Server.Auth.TLS.ClientIdentity = "anyone" }, "want one of"},
 	{"duplicate token hash", func(c *Config) {
 		c.Users["bob"] = UserConfig{TokenHash: TokenHash("alice-token")}
 	}, "collides"},

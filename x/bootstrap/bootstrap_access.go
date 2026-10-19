@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"crypto/x509"
 	"fmt"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
@@ -150,10 +151,12 @@ type UserIdentity struct {
 	Subject   map[string]any
 }
 
-// userDirectory returns enabled users by name and by tokenHash.
-func userDirectory(cfg *config.Config) (map[string]UserIdentity, map[string]string) {
-	users := make(map[string]UserIdentity, len(cfg.Users))
-	tokens := make(map[string]string, len(cfg.Users))
+// userDirectory returns enabled users by name, by tokenHash and by
+// certificate subject.
+func userDirectory(cfg *config.Config) (users map[string]UserIdentity, tokens, certs map[string]string) {
+	users = make(map[string]UserIdentity, len(cfg.Users))
+	tokens = make(map[string]string, len(cfg.Users))
+	certs = map[string]string{}
 	for name, user := range cfg.Users {
 		if user.Disabled {
 			continue
@@ -162,8 +165,56 @@ func userDirectory(cfg *config.Config) (map[string]UserIdentity, map[string]stri
 		if user.TokenHash != "" {
 			tokens[user.TokenHash] = name
 		}
+		for _, s := range user.CertSubjects {
+			certs[s] = name
+		}
 	}
-	return users, tokens
+	return users, tokens, certs
+}
+
+// CertSubjects are the users[].certSubjects forms a client certificate
+// presents: its common name and its DNS, URI and email SANs.
+func CertSubjects(leaf *x509.Certificate) []string {
+	var out []string
+	if leaf.Subject.CommonName != "" {
+		out = append(out, config.CanonicalCertSubject("cn:"+leaf.Subject.CommonName))
+	}
+	for _, name := range leaf.DNSNames {
+		out = append(out, config.CanonicalCertSubject("dns:"+name))
+	}
+	for _, uri := range leaf.URIs {
+		out = append(out, config.CanonicalCertSubject("uri:"+uri.String()))
+	}
+	for _, email := range leaf.EmailAddresses {
+		out = append(out, config.CanonicalCertSubject("email:"+email))
+	}
+	return out
+}
+
+// userByCert is the one user whose certSubjects the certificate matches; a
+// certificate matching none, or several users, is no user.
+func userByCert(certs map[string]string, leaf *x509.Certificate) (string, bool) {
+	found := ""
+	for _, s := range CertSubjects(leaf) {
+		name, ok := certs[s]
+		switch {
+		case !ok:
+		case found == "":
+			found = name
+		case found != name:
+			return "", false
+		}
+	}
+	return found, found != ""
+}
+
+// UserByCertificate returns the enabled user a client certificate names.
+func (a *App) UserByCertificate(leaf *x509.Certificate) (UserIdentity, bool) {
+	name, ok := userByCert(a.UserCerts, leaf)
+	if !ok {
+		return UserIdentity{}, false
+	}
+	return a.UserByName(name)
 }
 
 // UserByTokenHash returns the enabled user whose tokenHash matches.

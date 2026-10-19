@@ -38,7 +38,13 @@ token 时使用默认身份；都不命中返回 401。没有共享 token 时，
 仍必须删除外部同名 header、完成认证并重新注入身份。畸形的
 `X-MCP-Subject` JSON 返回 HTTP 400。`X-MCP-Role` 只能是角色名，含 `:` 的主体键
 （如 `user:alice`）返回 HTTP 400；通过导出的 `WithSubject` 注入同类值的自定义 transport
-得到的是不持有任何授权的主体。用户身份只能由用户 token 或 `X-MCP-User` 建立。
+得到的是不持有任何授权的主体。用户身份只能由用户 token、`X-MCP-User` 或客户端证书建立。
+
+mTLS 下，配置了用户时，只出示客户端证书、不带 bearer token 的请求按证书确定身份：证书的
+CN、DNS/URI（如 SPIFFE ID）/邮件 SAN 匹配某个用户的 `certSubjects` 即为该用户（匹配到
+多个用户视为未匹配）；未匹配时默认返回 HTTP 401（`server.auth.tls.clientIdentity: user`，
+v0.1.20 起；此前所有直连证书都使用默认身份），设为 `default` 恢复旧行为。受信代理的证书
+不受此限制，带 bearer token 的请求以 token 为准。
 配置用户时，可信代理还可以发送
 `X-MCP-User`：它必须指向启用用户，且不能与 `X-MCP-Role` 同时出现；用户配置的
 `subject` 属性覆盖代理注入的同名属性。已用用户 token 认证的请求如果再携带任何

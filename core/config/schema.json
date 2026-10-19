@@ -114,6 +114,16 @@
                   "description": "Enables mTLS; client certificates are required and verified.",
                   "x-description-zh-CN": "设置后开启 mTLS，要求并校验客户端证书。",
                   "type": "string"
+                },
+                "clientIdentity": {
+                  "description": "With users configured, who a request presenting a client certificate without a bearer token calls as. user (default): the certificate must match a user's certSubjects, else it is refused (401); default: the default identity (server.user or server.role, the behavior before v0.1.20). No effect without users. Trusted proxies' certificates are exempt.",
+                  "x-description-zh-CN": "配置了用户时，只出示客户端证书、不带 bearer token 的请求以谁的身份调用。user（默认）：证书须匹配某个用户的 certSubjects，否则拒绝（401）；default：使用默认身份（server.user 或 server.role，v0.1.20 之前的行为）。未配置用户时不起作用。受信代理的证书不受此限制。",
+                  "type": "string",
+                  "default": "user",
+                  "enum": [
+                    "user",
+                    "default"
+                  ]
                 }
               },
               "additionalProperties": false
@@ -1513,6 +1523,15 @@
           "x-description-zh-CN": "bearer token 的 sha256 hash，由 sql-mcp-server user token 生成；明文不进入配置。各用户之间、与 server.auth.token 之间不能重复。",
           "type": "string",
           "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "certSubjects": {
+          "description": "Client certificates that authenticate the user under mTLS: cn:\u003cCN\u003e, dns:\u003cDNS SAN\u003e, uri:\u003cURI SAN, such as a SPIFFE ID\u003e or email:\u003cemail SAN\u003e. A certificate matching any of them is the user; each names one user and no trusted proxy. A request with a bearer token is the token's.",
+          "x-description-zh-CN": "在 mTLS 下认证该用户的客户端证书：cn:\u003cCN\u003e、dns:\u003cDNS SAN\u003e、uri:\u003cURI SAN，如 SPIFFE ID\u003e、email:\u003c邮件 SAN\u003e。证书任一项匹配即为该用户；各用户之间不能重复，也不能是受信代理的证书主体。带 bearer token 的请求以 token 为准。",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(?i:cn|dns|uri|email):\\S.*$"
+          }
         },
         "roles": {
           "description": "The user's roles: top-level roles or role names used in entity-level access.",

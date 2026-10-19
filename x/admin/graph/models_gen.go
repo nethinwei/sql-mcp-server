@@ -427,15 +427,16 @@ type UnreachableDatasource struct {
 }
 
 type UserInput struct {
-	Name        string       `json:"name"`
-	Description *string      `json:"description,omitempty"`
-	Roles       []string     `json:"roles,omitempty"`
-	Grants      []GrantInput `json:"grants,omitempty"`
-	Permissions []string     `json:"permissions,omitempty"`
-	Subject     any          `json:"subject,omitempty"`
-	Disabled    *bool        `json:"disabled,omitempty"`
-	TokenHash   *string      `json:"tokenHash,omitempty"`
-	Limits      any          `json:"limits,omitempty"`
+	Name         string       `json:"name"`
+	Description  *string      `json:"description,omitempty"`
+	Roles        []string     `json:"roles,omitempty"`
+	Grants       []GrantInput `json:"grants,omitempty"`
+	Permissions  []string     `json:"permissions,omitempty"`
+	Subject      any          `json:"subject,omitempty"`
+	Disabled     *bool        `json:"disabled,omitempty"`
+	TokenHash    *string      `json:"tokenHash,omitempty"`
+	CertSubjects []string     `json:"certSubjects,omitempty"`
+	Limits       any          `json:"limits,omitempty"`
 }
 
 type UserToken struct {

@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"errors"
 	"log/slog"
 	"os"
@@ -98,6 +99,20 @@ func (r *Runtime) UserByTokenHash(hash string) (UserIdentity, bool) {
 		return UserIdentity{}, false
 	}
 	name, ok := app.UserTokens[hash]
+	if !ok {
+		return UserIdentity{}, false
+	}
+	return r.UserByName(name)
+}
+
+// UserByCertificate resolves a client certificate against the current
+// snapshot; a held user is not found.
+func (r *Runtime) UserByCertificate(leaf *x509.Certificate) (UserIdentity, bool) {
+	app := r.Current()
+	if app == nil {
+		return UserIdentity{}, false
+	}
+	name, ok := userByCert(app.UserCerts, leaf)
 	if !ok {
 		return UserIdentity{}, false
 	}

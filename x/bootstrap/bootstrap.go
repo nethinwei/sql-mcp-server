@@ -83,9 +83,12 @@ type App struct {
 	// (the process's when shared): WatchStore assembles the revision again.
 	Drift *tool.SchemaDrift
 	// Users maps an enabled user name to its identity; UserTokens maps a
-	// tokenHash to the user name. Both follow the snapshot on reload.
+	// tokenHash, and UserCerts a certificate subject (see
+	// config.CanonicalCertSubject), to the user name. They follow the
+	// snapshot on reload.
 	Users        map[string]UserIdentity
 	UserTokens   map[string]string
+	UserCerts    map[string]string
 	Limits       tool.Limits
 	Auditor      audit.Auditor
 	Hooks        *hook.Hooks

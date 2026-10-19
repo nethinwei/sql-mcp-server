@@ -52,10 +52,10 @@ func (r *Runtime) heldUser(name string) bool {
 }
 
 // changedUsers lists the users servable by app that next removes, disables or
-// gives other roles, subject, token, grants or permissions: a change that may
+// gives other roles, subject, token, certificates, grants or permissions: a change that may
 // narrow what they can do, held until it applies.
 func changedUsers(app *App, next *config.Config) map[string]bool {
-	users, tokens := userDirectory(next)
+	users, tokens, certs := userDirectory(next)
 	held := map[string]bool{}
 	for name, id := range app.Users {
 		if to, ok := users[name]; !ok || !slices.Equal(id.Roles, to.Roles) || !sameValue(id.Subject, to.Subject) {
@@ -70,13 +70,19 @@ func changedUsers(app *App, next *config.Config) map[string]bool {
 			held[name] = true
 		}
 	}
+	for subject, name := range app.UserCerts {
+		if certs[subject] != name {
+			held[name] = true
+		}
+	}
 	return held
 }
 
 // sameUser reports whether a and b define the same user, but for the
 // description.
 func sameUser(a, b config.UserConfig) bool {
-	return a.TokenHash == b.TokenHash && a.Disabled == b.Disabled && slices.Equal(a.Roles, b.Roles) &&
+	return a.TokenHash == b.TokenHash && slices.Equal(a.CertSubjects, b.CertSubjects) && a.Disabled == b.Disabled &&
+		slices.Equal(a.Roles, b.Roles) &&
 		slices.Equal(a.Permissions, b.Permissions) && sameValue(a.Subject, b.Subject) && sameValue(a.Grants, b.Grants)
 }
 

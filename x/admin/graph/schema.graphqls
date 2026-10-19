@@ -278,6 +278,8 @@ type User {
   disabled: Boolean
   "The sha256 hash of the user's bearer token (never the token); null when none."
   tokenHash: String
+  "Client certificates that are the user under mTLS: cn:, dns:, uri: or email: followed by the subject."
+  certSubjects: [String!]!
   "Limits tightening the global ones for the user's calls (users.<name>.limits); null when none."
   limits: JSON
 }
@@ -673,6 +675,7 @@ input UserInput {
   subject: JSON
   disabled: Boolean
   tokenHash: String
+  certSubjects: [String!]
   limits: JSON
 }
 

@@ -200,6 +200,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `auth.tls.cert` | 字符串 |  |  | TLS 证书文件路径。 |
 | `auth.tls.key` | 字符串 |  |  | TLS 私钥文件路径。 |
 | `auth.tls.clientCA` | 字符串 |  |  | 设置后开启 mTLS，要求并校验客户端证书。 |
+| `auth.tls.clientIdentity` | 字符串 | `"user"` | 可选 `user`、`default` | 配置了用户时，只出示客户端证书、不带 bearer token 的请求以谁的身份调用。user（默认）：证书须匹配某个用户的 certSubjects，否则拒绝（401）；default：使用默认身份（server.user 或 server.role，v0.1.20 之前的行为）。未配置用户时不起作用。受信代理的证书不受此限制。 |
 | `auth.tls` | 对象 |  |  | TLS / mTLS。cert 与 key 必须同时设置。 |
 | `auth` | 对象 |  |  | HTTP 认证。trustProxyHeaders、trustedProxyCIDRs 与非 loopback 的信任规则见 security.md。 |
 | `secrets.allowedRoots` | 字符串列表 | `["/run/secrets","/var/run/secrets"]` |  | 允许读取 secret 文件的根目录（绝对路径）；符号链接不能逃逸这些目录。 |
@@ -503,6 +504,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | --- | --- | --- | --- | --- |
 | `description` | 字符串 |  |  | 用户说明。 |
 | `tokenHash` | 字符串 |  | 格式 `^sha256:[0-9a-f]{64}$` | bearer token 的 sha256 hash，由 sql-mcp-server user token 生成；明文不进入配置。各用户之间、与 server.auth.token 之间不能重复。 |
+| `certSubjects` | 字符串列表 |  | 格式 `^(?i:cn\\|dns\\|uri\\|email):\S.*$` | 在 mTLS 下认证该用户的客户端证书：cn:<CN>、dns:<DNS SAN>、uri:<URI SAN，如 SPIFFE ID>、email:<邮件 SAN>。证书任一项匹配即为该用户；各用户之间不能重复，也不能是受信代理的证书主体。带 bearer token 的请求以 token 为准。 |
 | `roles` | 字符串列表 |  | 格式 `^[a-z0-9][a-z0-9_-]*$` | 用户拥有的角色，可以是顶层角色或实体级授权中出现的角色名。 |
 | `subject` | 自由对象 |  |  | 固定的主体属性，供 ${subject.x} 解析；优先于代理 X-MCP-Subject 中的同名属性。 |
 | `grants` | `grant` 列表 |  |  | 只给这个用户的直授授权。 |

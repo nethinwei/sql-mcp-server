@@ -109,6 +109,8 @@ type UserItem struct {
 	Subject     any         `json:"subject,omitempty"`
 	Disabled    *bool       `json:"disabled,omitempty"    merge:"unset"`
 	TokenHash   *string     `json:"tokenHash,omitempty"`
+	// CertSubjects name the client certificates that are the user (mTLS).
+	CertSubjects []string `json:"certSubjects"`
 	// Limits are as a role's.
 	Limits any `json:"limits,omitempty"`
 }
@@ -152,7 +154,8 @@ func SectionsOf(spec *config.Spec) (Sections, error) {
 		item := UserItem{
 			Name: name, Description: nonEmpty(u.Description), Roles: listOf([]string(u.Roles)),
 			Grants: grantItems(u.Grants), Permissions: listOf([]string(u.Permissions)), Disabled: u.Disabled,
-			TokenHash: nonEmpty(u.TokenHash), Limits: limitsOf(doc, "users", name),
+			TokenHash: nonEmpty(u.TokenHash), CertSubjects: listOf([]string(u.CertSubjects)),
+			Limits: limitsOf(doc, "users", name),
 		}
 		if len(u.Subject) > 0 {
 			item.Subject = u.Subject
@@ -445,7 +448,8 @@ func (u UserItem) spec() (configedit.User, error) {
 		return configedit.User{}, err
 	}
 	out := configedit.User{Name: u.Name, UserSpec: config.UserSpec{
-		Description: nonEmpty(u.Description), TokenHash: nonEmpty(u.TokenHash), Roles: listSpec(u.Roles),
+		Description: nonEmpty(u.Description), TokenHash: nonEmpty(u.TokenHash), CertSubjects: listSpec(u.CertSubjects),
+		Roles:  listSpec(u.Roles),
 		Grants: grants, Permissions: listSpec(u.Permissions), Disabled: onlyTrue(u.Disabled), Limits: limits,
 	}}
 	if u.Subject != nil {
