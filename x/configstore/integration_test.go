@@ -53,6 +53,13 @@ func runServerConformance(t *testing.T, spec Spec) {
 		dropTables(t, spec)
 		assertMigratesVersionFour(t, spec)
 	})
+	t.Run("LockRowRequired", func(t *testing.T) { assertLockRowRequired(t, freshStore(t, spec)) })
+	t.Run("OnePublished", func(t *testing.T) { assertOnePublished(t, freshStore(t, spec)) })
+	t.Run("PublishRaceLeavesOne", func(t *testing.T) { assertConcurrentPublish(t, freshStore(t, spec)) })
+	t.Run("MigrationRefusesTwoPublished", func(t *testing.T) {
+		dropTables(t, spec)
+		assertMigrationRefusesTwoPublished(t, spec)
+	})
 }
 
 // freshStore drops the store tables and initializes them again.

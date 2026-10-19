@@ -50,8 +50,9 @@ YAML presence 解码位于 `x/configyaml`，不会把 `yaml.v3` 引入核心。
 - **I27** 配置存储表（`smcp_` 前缀）不能被任何实体的 `source` 引用，也不出现在
   introspection 结果中。
 - **I28** 从 store 加载的 revision 必须先通过 content hash 校验与 store 模式密钥
-  规则，任一失败都保留当前快照；任一时刻至多一个 published revision，状态转换
-  以乐观并发串行化。
+  规则，任一失败都保留当前快照；任一时刻至多一个 published revision（store
+  schema 版本 6 起由数据库唯一约束保证），状态转换以乐观并发串行化，在必须存在的
+  锁行上执行，锁行缺失即失败。
 - **I29** 可信 SQL 逃生通道 `execute_sql` 只在 `tools.executeSql`、调用用户持有
   `sql:execute@<数据源>`、数据源声明 `sqlEscape` 三者同时成立时可见与可执行；其
   语句仍只由执行器（`pipeline.go`）调用数据库，timeout、结果行数 / 字节上限、预算与

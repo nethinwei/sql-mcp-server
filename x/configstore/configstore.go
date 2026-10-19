@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	// Database drivers for the supported store backends.
@@ -25,14 +26,18 @@ const TablePrefix = config.StoreTablePrefix
 // SchemaVersion is the store table layout this build understands. Version 2
 // added administrator accounts, version 3 the scanned catalog, plan templates
 // and administrator tokens, version 4 token scopes and scan batch items as
-// rows, version 5 administrators' workspaces.
-const SchemaVersion = 5
+// rows, version 5 administrators' workspaces, version 6 the database
+// constraint of at most one published revision.
+const SchemaVersion = 6
 
 // Errors returned when opening a store.
 var (
 	ErrInvalidSpec    = errors.New("configstore: invalid store spec")
 	ErrNotInitialized = errors.New("configstore: store is not initialized; run `sql-mcp-server store init`")
 	ErrNewerSchema    = errors.New("configstore: store schema is newer than this build")
+	// ErrStoreCorrupt is a store whose rows break its invariants: a missing
+	// lock or counter row, or more than one published revision.
+	ErrStoreCorrupt = errors.New("configstore: store is corrupt")
 )
 
 // Spec is a parsed "<driver>:<dsn>" store location.
@@ -83,6 +88,11 @@ func Open(ctx context.Context, spec Spec, resolve Resolver) (*SQLStore, error) {
 func (s *SQLStore) migrate(ctx context.Context, version int64) error {
 	for v := version + 1; v <= SchemaVersion; v++ {
 		err := s.withTx(ctx, func(tx *sql.Tx) error {
+			if check, ok := schemaChecks[v]; ok {
+				if err := check(ctx, s, tx); err != nil {
+					return err
+				}
+			}
 			for _, ddl := range s.dialect.migrations[v-1] {
 				if _, err := tx.ExecContext(ctx, ddl); err != nil {
 					return err
@@ -102,6 +112,30 @@ func (s *SQLStore) migrate(ctx context.Context, version int64) error {
 		}
 	}
 	return nil
+}
+
+// schemaChecks refuse a migration the store's rows would break; each runs in
+// the transaction of its version, before its DDL.
+var schemaChecks = map[int64]func(ctx context.Context, s *SQLStore, tx *sql.Tx) error{
+	6: onePublished,
+}
+
+// onePublished refuses a store holding more than one published revision,
+// which version 6 forbids, naming them and the repair.
+func onePublished(ctx context.Context, s *SQLStore, tx *sql.Tx) error {
+	ids, err := queryAll(ctx, s, tx, func(row scanner) (id int64, err error) {
+		return id, row.Scan(&id)
+	}, "SELECT id FROM smcp_revisions WHERE state = ? ORDER BY id", string(revision.StatePublished))
+	if err != nil || len(ids) <= 1 {
+		return err
+	}
+	list := make([]string, len(ids))
+	for i, id := range ids {
+		list[i] = strconv.FormatInt(id, 10)
+	}
+	return fmt.Errorf("%w: revisions %s are all published; keep the one the servers run and mark the others "+
+		"superseded (UPDATE smcp_revisions SET state = 'superseded' WHERE id IN (...)), then open the store again",
+		ErrStoreCorrupt, strings.Join(list, ", "))
 }
 
 // Init creates the store tables when absent; it is a no-op on an initialized

@@ -16,10 +16,25 @@ type dialect struct {
 	migrations [][]string
 }
 
-func storeMigrations(text, longText string) [][]string {
+func storeMigrations(text, longText string, onePublished []string) [][]string {
 	return [][]string{revisionDDL(text, longText), adminDDL(), slices.Concat(catalogDDL(longText), templatesDDL(longText),
-		tokensDDL(), pendingDDL(longText)), scopesAndItemsDDL(longText), workspacesDDL(longText)}
+		tokensDDL(), pendingDDL(longText)), scopesAndItemsDDL(longText), workspacesDDL(longText), onePublished}
 }
+
+// Schema version 6 has the database hold at most one published revision:
+// a partial unique index where there are partial indexes, otherwise a
+// unique index on a generated column that is NULL but for the published one.
+var (
+	partialOnePublished = []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS smcp_revisions_one_published ON smcp_revisions (state)
+			WHERE state = 'published'`,
+	}
+	generatedOnePublished = []string{
+		`ALTER TABLE smcp_revisions ADD COLUMN published_flag INT
+			AS (CASE WHEN state = 'published' THEN 1 ELSE NULL END) STORED`,
+		`CREATE UNIQUE INDEX smcp_revisions_one_published ON smcp_revisions (published_flag)`,
+	}
+)
 
 // catalogDDL is schema version 3, with planningDDL: the scanned catalog.
 func catalogDDL(longText string) []string {
@@ -200,23 +215,23 @@ var dialects = map[string]dialect{
 	"sqlite": {
 		driver:     "sqlite",
 		prepareDSN: sqliteDSN,
-		migrations: storeMigrations("TEXT", "TEXT"),
+		migrations: storeMigrations("TEXT", "TEXT", partialOnePublished),
 	},
 	"postgres": {
 		driver:     "pgx",
 		dollarArgs: true,
 		prepareDSN: identity,
-		migrations: storeMigrations("TEXT", "TEXT"),
+		migrations: storeMigrations("TEXT", "TEXT", partialOnePublished),
 	},
 	"mysql": {
 		driver:     "mysql",
 		prepareDSN: identity,
-		migrations: storeMigrations("TEXT", "LONGTEXT"),
+		migrations: storeMigrations("TEXT", "LONGTEXT", generatedOnePublished),
 	},
 	"oceanbase": {
 		driver:     "mysql",
 		prepareDSN: identity,
-		migrations: storeMigrations("TEXT", "LONGTEXT"),
+		migrations: storeMigrations("TEXT", "LONGTEXT", generatedOnePublished),
 	},
 }
 
