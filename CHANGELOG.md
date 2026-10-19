@@ -9,6 +9,55 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+## 0.1.20 - 2026-10-19
+
+加固版本，处理一次外部代码与设计 review 的全部结论，**有 breaking 变更**；升级步骤见
+[`docs/releases/v0.1.20.md`](docs/releases/v0.1.20.md#迁移)。
+
+### Breaking
+
+- 写入受行范围约束（WITH CHECK）：create 插入的行、update 修改后的行必须仍在调用方的行范围内，
+  否则返回新拒绝码 `ROW_POLICY_VIOLATION`；行范围以等值固定的隐藏列（如租户列）在 create 时由
+  服务端填入。此前 create 不应用租户策略，可插入其他租户的行。
+- 省略 `tools` 时写工具（`create_record`、`update_record`、`delete_record`）都不注册。
+- `update_record` 默认不能修改主键，实体 `allowKeyUpdate: true` 才允许；`set` 不能为空。
+- 非 loopback 监听的 `server.auth.token` 至少 32 字节。
+- 配置了用户时，mTLS 直连证书须经 `users[].certSubjects` 映射到用户，否则 401；
+  `server.auth.tls.clientIdentity: default` 恢复旧行为。
+- `cost.enabled: false` 且开启逃生通道时须写 `cost.sqlEscape.estimate: skip`；provider 不支持
+  EXPLAIN 时 `required` 装配失败。
+- 设置扫描上限时，表行数未测出的全表扫描被拒绝（`scannedRowsUnknown: true`）。
+- JSON 小数不再转为 float64：decimal 列按原文字传递，整数列收到小数返回 `INVALID_INPUT`。
+- `X-MCP-Subject` 的属性值只能是标量或标量列表。
+- `readAfterWrite` 上限 1 小时；行过滤的空 `and`/`or`、多余键、引用字段别名，以及重复的字段
+  别名在加载时拒绝。
+- `phone`/`idcard` 脱敏的中间部分固定为 `****`。
+
+### Added
+
+- MySQL 写超时在数据库侧强制：直连时超时的写语句、存储过程与 `execute_sql` 经 `KILL QUERY`
+  停止并回滚，`limit.timeout.write` 判为 enforced（经事务型连接池时仍为 unsupported）；逃生通道
+  账号不能写时不再告警写超时。
+- 服务端原因文本本地化：能力、限制、发布前判定与方案例外的原因带稳定 code 与参数，控制台按
+  code 显示 zh-CN/en；管理 API 新增 `reasonDetail`、`useDetail`、`Validation.notices`。
+- 控制台“同步实体”：实体列表一键把所选实体按数据库对齐（新增与删除字段、主键/唯一键、
+  表/视图类型、删除表已不存在的实体），先刷新元数据再预览方案；方案新增 `scope.entities`、
+  `sync.keys`、变更类型 `syncKeys`/`syncKind` 与例外 `keyReferenced`、`rowColumnMissing`、
+  `relationshipNew`、`relationshipStale`，GraphQL `PlanPreview.removed`。
+- `users[].certSubjects`、`server.auth.tls.clientIdentity`、实体 `allowKeyUpdate`；行过滤支持
+  `not`，`in` 列表中的项可写 `${subject.x}`。
+- 结果截断标记 `"truncated": true`（写入与过程结果超出 `rateLimit.maxResultMemory`）。
+
+### Fixed
+
+- 审计器关闭与写入并发时的 panic（send on closed channel）。
+- 行过滤引用的列在装配时检查是否存在；`FilterOf` 与 `ParseFilter` 可以往返。
+- 成本链软拒绝返回最终诊断；写后读隔离按窗口失效；关系展开按数值匹配连接键、拒绝空连接列。
+- 配置存储：锁行缺失时报错、数据库约束保证唯一 published（schema 6）、`store init` 与
+  MySQL/OceanBase 迁移可以重跑。
+- 管理端登录失败表有界且不丢失锁定；MCP 事件存储淘汰降为 O(log n)。
+- 控制台可以应用只删除实体的方案。
+
 ## 0.1.19 - 2026-10-17
 
 v0.1.18 的修复版本，无 breaking 变更；说明见
