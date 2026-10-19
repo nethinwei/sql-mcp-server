@@ -14,6 +14,8 @@ export interface Scope {
   status?: PlanStatus[]
   drift?: boolean
   refs?: string[]
+  /** The tables of these configured entities, by ID. */
+  entities?: string[]
 }
 
 export interface GrantRule {
@@ -37,6 +39,8 @@ export interface SyncRule {
   hideNew?: boolean
   /** Removes the entities whose tables are gone. */
   removeTables?: boolean
+  /** Sets keys and the table/view kind to the scan's; reports relationships. */
+  keys?: boolean
 }
 
 export interface Plan {
@@ -71,9 +75,10 @@ export function filterOf(s: Scope): CatalogFilter {
 
 /** A plan without empty parts, as templates keep it. */
 export function cleanPlan(p: Plan): Plan {
-  const sync = p.sync && (p.sync.add || p.sync.remove || p.sync.removeTables) ? clean({ ...p.sync }) : undefined
+  const sync = p.sync && (p.sync.add || p.sync.remove || p.sync.removeTables || p.sync.keys)
+    ? clean({ ...p.sync }) : undefined
   return clean({
-    scope: clean({ ...p.scope, refs: nonEmpty(p.scope.refs) }) as Scope,
+    scope: clean({ ...p.scope, refs: nonEmpty(p.scope.refs), entities: nonEmpty(p.scope.entities) }) as Scope,
     import: p.import || undefined,
     grants: nonEmpty(p.grants?.map((g) => clean({ ...g, fields: nonEmpty(g.fields) }) as GrantRule)),
     fields: nonEmpty(p.fields?.map((f) => clean({ ...f, types: nonEmpty(f.types), mask: f.mask || undefined }) as FieldRule)),

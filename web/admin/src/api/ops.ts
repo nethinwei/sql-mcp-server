@@ -261,6 +261,7 @@ export const PreviewPlanQuery = graphql(`
       planId
       report { ...PlanReportParts }
       added
+      removed
       entities { ...EntityParts }
       roles { name description grants { ...GrantParts } }
       users { name grants { ...GrantParts } }
