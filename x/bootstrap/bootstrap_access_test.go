@@ -233,7 +233,7 @@ func TestRevocationSparesSessionsOpenedAfterIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writes.Record("old", "shop")
+	writes.Record("old", "shop", time.Minute)
 	if err := runtime.Reload("disable bob"); err != nil {
 		t.Fatal(err)
 	}
@@ -241,8 +241,8 @@ func TestRevocationSparesSessionsOpenedAfterIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	sessions["user:bob"] = []string{"new"}
-	writes.Record("new", "shop")
-	writes.Record("old", "shop") // the running request writes once more
+	writes.Record("new", "shop", time.Minute)
+	writes.Record("old", "shop", time.Minute) // the running request writes once more
 	release()
 	runtime.retiring.Wait()
 	if writes.Wrote("old") || !writes.Wrote("new") {

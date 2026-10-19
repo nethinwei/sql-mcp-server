@@ -112,8 +112,8 @@ defs.database.routing.execute:
   zh-CN: 存储过程使用的连接；不能是 replica。
   en: Connection for procedure calls; not a replica.
 defs.database.readAfterWrite:
-  zh-CN: 同一会话写入后，在这段时间内的读取改走 write 连接，以便在副本上读到自己的写入；0 表示不切换。
-  en: For this long after a session writes, its reads use the write connection, so it reads its own writes despite replica lag; 0 disables it.
+  zh-CN: 同一会话写入后，在这段时间内的读取改走 write 连接，以便在副本上读到自己的写入；0 表示不切换，最长 1h。窗口内该会话的读取不与其他会话共享结果。
+  en: For this long after a session writes, its reads use the write connection, so it reads its own writes despite replica lag; 0 disables it, at most 1h. Within the window the session's reads share no results with other sessions.
 defs.database.sqlEscape:
   zh-CN: 声明后该数据源允许可信 SQL 逃生通道（execute_sql）；省略即不允许，任何权限都不能对它执行任意 SQL。
   en: Declares that the datasource admits the trusted SQL escape hatch (execute_sql); omitted, no permission runs SQL on it.

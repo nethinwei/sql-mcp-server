@@ -411,7 +411,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `routing.write` | 字符串 |  |  | 新增、修改、删除与读写事务使用的连接；不能是 replica。 |
 | `routing.execute` | 字符串 |  |  | 存储过程使用的连接；不能是 replica。 |
 | `routing` | 对象 |  |  | 各类动作使用的连接；只有一个连接时可省略。 |
-| `readAfterWrite` | 时长 |  | ≥ 0 | 同一会话写入后，在这段时间内的读取改走 write 连接，以便在副本上读到自己的写入；0 表示不切换。 |
+| `readAfterWrite` | 时长 |  | 0–1h | 同一会话写入后，在这段时间内的读取改走 write 连接，以便在副本上读到自己的写入；0 表示不切换，最长 1h。窗口内该会话的读取不与其他会话共享结果。 |
 | `sqlEscape.connection` | 字符串 |  | 必填；非空 | 逃生通道使用的连接名；该账号的数据库权限就是逃生通道的上限，服务不解析、不改写、不脱敏 SQL。建议使用独立账号。 |
 | `sqlEscape` | 对象 |  |  | 声明后该数据源允许可信 SQL 逃生通道（execute_sql）；省略即不允许，任何权限都不能对它执行任意 SQL。 |
 

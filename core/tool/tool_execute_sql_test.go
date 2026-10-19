@@ -198,6 +198,7 @@ func TestExecuteSQLExecAndInvalidation(t *testing.T) {
 		c := &recordingCache{}
 		tc.Cache = c
 		tc.Writes = NewWriteTracker()
+		tc.Sources = followingWrites("crm")
 		res, err := RunTool(context.Background(), ExecuteSQLTool{}, sqlInput(t, map[string]any{"mode": mode}), tc)
 		if err != nil {
 			t.Fatal(err)
@@ -207,9 +208,9 @@ func TestExecuteSQLExecAndInvalidation(t *testing.T) {
 				t.Fatalf("exec result = %+v, events %+v", res.Content, auditor.sync)
 			}
 		}
-		if c.invalidations != 1 || !tc.Writes.Recent("s1", "crm", time.Minute) {
+		if c.invalidations != 1 || !tc.Writes.Recent("s1", "crm") {
 			t.Fatalf("%s: invalidations %d, write recorded %v", mode, c.invalidations,
-				tc.Writes.Recent("s1", "crm", time.Minute))
+				tc.Writes.Recent("s1", "crm"))
 		}
 	}
 }

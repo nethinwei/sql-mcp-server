@@ -997,11 +997,12 @@
           "additionalProperties": false
         },
         "readAfterWrite": {
-          "description": "For this long after a session writes, its reads use the write connection, so it reads its own writes despite replica lag; 0 disables it.",
-          "x-description-zh-CN": "同一会话写入后，在这段时间内的读取改走 write 连接，以便在副本上读到自己的写入；0 表示不切换。",
+          "description": "For this long after a session writes, its reads use the write connection, so it reads its own writes despite replica lag; 0 disables it, at most 1h. Within the window the session's reads share no results with other sessions.",
+          "x-description-zh-CN": "同一会话写入后，在这段时间内的读取改走 write 连接，以便在副本上读到自己的写入；0 表示不切换，最长 1h。窗口内该会话的读取不与其他会话共享结果。",
           "type": "string",
           "x-format": "duration",
           "x-minimum": "0",
+          "x-maximum": "1h",
           "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
         },
         "sqlEscape": {

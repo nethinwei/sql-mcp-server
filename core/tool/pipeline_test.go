@@ -199,11 +199,16 @@ func TestWriteWithLostConnectionHasUnknownOutcome(t *testing.T) {
 	}}
 	writes := NewWriteTracker()
 	tc := Context{
-		Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Writes: writes},
-		Role:     "writer",
-		Session:  "s",
-		DB:       db,
-		Dialect:  testdialect.Postgres{},
+		Services: &Services{
+			Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Writes: writes,
+			Sources: map[string]DataSource{"default": {
+				DB: db, Dialect: testdialect.Postgres{}, ReadAfterWrite: time.Minute,
+			}},
+		},
+		Role:    "writer",
+		Session: "s",
+		DB:      db,
+		Dialect: testdialect.Postgres{},
 	}
 	in, _ := json.Marshal(updateInput{
 		Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: 1}}, Set: map[string]any{"email": "x"},

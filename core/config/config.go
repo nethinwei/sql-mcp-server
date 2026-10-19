@@ -104,7 +104,7 @@ type DatabaseConfig struct {
 	Routing     RoutingConfig `yaml:"routing,omitempty"     json:"routing,omitempty"`
 	// ReadAfterWrite routes a session's reads to the write connection for
 	// this long after it writes, so it reads its own writes on a replica.
-	ReadAfterWrite time.Duration `yaml:"readAfterWrite,omitempty" json:"readAfterWrite,omitempty" schema:"min=0"`
+	ReadAfterWrite time.Duration `yaml:"readAfterWrite,omitempty" json:"readAfterWrite,omitempty" schema:"min=0,max=1h"`
 	// SQLEscape, when set, admits the trusted SQL escape hatch (execute_sql)
 	// to this database on the connection it names; unset, no user may run
 	// SQL on it whatever their permissions. It hot-reloads like the other

@@ -31,7 +31,7 @@ func connectionFor(tc Context, source DataSource, action entity.Action) store.DB
 // read cache and singleflight, which other sessions fill from the read
 // connection (a replica may not have the write yet).
 func followsWrite(tc Context, source DataSource, datasource string) bool {
-	return source.ReadAfterWrite > 0 && tc.Writes.Recent(tc.Session, datasource, source.ReadAfterWrite)
+	return source.ReadAfterWrite > 0 && tc.Writes.Recent(tc.Session, datasource)
 }
 
 func orDB(db, fallback store.DB) store.DB {
@@ -69,62 +69,80 @@ func routeEntity(ctx context.Context, tc Context, e entity.Entity, action entity
 	return tc, nil
 }
 
-// WriteTracker remembers when each session last wrote to each datasource, so
-// its reads can follow its writes for a datasource's readAfterWrite window. A
+// WriteTracker remembers until when each session's reads of each datasource
+// follow its last write there (the datasource's readAfterWrite window). A
 // nil tracker records nothing.
 type WriteTracker struct {
-	mu   sync.Mutex
-	last map[string]map[string]time.Time
-	now  func() time.Time
+	mu        sync.Mutex
+	until     map[string]map[string]time.Time
+	now       func() time.Time
+	lastPrune time.Time
 }
 
-// maxTrackedWindow bounds how long a write is remembered.
-const maxTrackedWindow = time.Hour
+// maxTrackedWindow bounds how long a write is remembered; pruneInterval is
+// how often expired entries of every session are swept.
+const (
+	maxTrackedWindow = time.Hour
+	pruneInterval    = time.Minute
+)
 
 // NewWriteTracker returns an empty tracker.
 func NewWriteTracker() *WriteTracker {
-	return &WriteTracker{last: map[string]map[string]time.Time{}, now: time.Now}
+	return &WriteTracker{until: map[string]map[string]time.Time{}, now: time.Now}
 }
 
-// Record notes a write by session to datasource.
-func (w *WriteTracker) Record(session, datasource string) {
-	if w == nil {
+// Record notes a write by session to datasource, whose reads follow it for
+// window (at most maxTrackedWindow). A datasource without a window (its
+// reads never follow writes) records nothing.
+func (w *WriteTracker) Record(session, datasource string, window time.Duration) {
+	if w == nil || window <= 0 {
 		return
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	now := w.now()
-	byDatasource := w.last[session]
+	byDatasource := w.until[session]
 	if byDatasource == nil {
 		byDatasource = map[string]time.Time{}
-		w.last[session] = byDatasource
+		w.until[session] = byDatasource
 	}
-	byDatasource[datasource] = now
-	if len(w.last) > 4096 {
-		w.pruneLocked(now)
+	expire(byDatasource, now)
+	byDatasource[datasource] = now.Add(min(window, maxTrackedWindow))
+	if now.Sub(w.lastPrune) >= pruneInterval {
+		w.lastPrune = now
+		for s, d := range w.until {
+			if expire(d, now) == 0 {
+				delete(w.until, s)
+			}
+		}
 	}
 }
 
-// Recent reports whether session wrote to datasource within window.
-func (w *WriteTracker) Recent(session, datasource string, window time.Duration) bool {
+// Recent reports whether session's reads of datasource follow its write.
+func (w *WriteTracker) Recent(session, datasource string) bool {
 	if w == nil {
 		return false
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	at, ok := w.last[session][datasource]
-	return ok && w.now().Sub(at) < window
+	until, ok := w.until[session][datasource]
+	return ok && w.now().Before(until)
 }
 
-// Wrote reports whether session wrote anything recently enough to be
-// remembered.
+// Wrote reports whether any of session's reads follow its writes now.
 func (w *WriteTracker) Wrote(session string) bool {
 	if w == nil {
 		return false
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return len(w.last[session]) > 0
+	now := w.now()
+	for _, until := range w.until[session] {
+		if now.Before(until) {
+			return true
+		}
+	}
+	return false
 }
 
 // Forget drops a closed session.
@@ -134,18 +152,16 @@ func (w *WriteTracker) Forget(session string) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	delete(w.last, session)
+	delete(w.until, session)
 }
 
-func (w *WriteTracker) pruneLocked(now time.Time) {
-	for session, byDatasource := range w.last {
-		for datasource, at := range byDatasource {
-			if now.Sub(at) >= maxTrackedWindow {
-				delete(byDatasource, datasource)
-			}
-		}
-		if len(byDatasource) == 0 {
-			delete(w.last, session)
+// expire drops the windows of byDatasource that ended and returns how many
+// remain.
+func expire(byDatasource map[string]time.Time, now time.Time) int {
+	for datasource, until := range byDatasource {
+		if !now.Before(until) {
+			delete(byDatasource, datasource)
 		}
 	}
+	return len(byDatasource)
 }

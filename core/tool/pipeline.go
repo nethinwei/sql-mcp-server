@@ -375,7 +375,7 @@ func (st statement) failRaw(err error) error {
 // it changed is unknown, so every cached read of its database is dropped.
 func (st statement) settle(ctx context.Context, err error) error {
 	if st.raw {
-		st.tc.Writes.Record(st.tc.Session, st.tc.DataSource)
+		st.tc.Writes.Record(st.tc.Session, st.tc.DataSource, st.tc.Sources[st.tc.DataSource].ReadAfterWrite)
 		w := writeTargets(st.tc)
 		if followErr := applyWrite(st.tc, w, []CacheTarget{{Physical: w.database(st.tc.DataSource)}}); err == nil {
 			return followErr
