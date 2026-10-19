@@ -7,6 +7,7 @@ import { sourceIfRenamed } from '@/lib/names'
 import { applicable, capabilityOf, grantable, type CapabilityIndex } from '@/lib/capabilities'
 import type { GrantRow } from '@/lib/grants'
 import type { Action } from '@/gql/graphql'
+import { reasonText } from '@/lib/reasons'
 
 // One row of GrantMatrix: an entity's grant (or none). A row of its own so
 // that toggling a grant renders only the rows it changed (the matrix keeps
@@ -31,7 +32,9 @@ const has = (a: Action) => props.row.grant?.actions.includes(a) ?? false
 function capabilityHint(a: Action) {
   const c = cap(a)
   if (!c) return ''
-  if (c.privilege === 'DENIED') return t('grants.capDenied', { connection: c.connection, reason: c.reason ?? '' })
+  if (c.privilege === 'DENIED') {
+    return t('grants.capDenied', { connection: c.connection, reason: reasonText(c.reasonDetail, c.reason ?? '') })
+  }
   if (c.privilege === 'UNKNOWN') return t('grants.capUnknown', { connection: c.connection })
   if (c.columns?.length) return t('grants.capColumns', { connection: c.connection, columns: c.columns.join(', ') })
   return ''

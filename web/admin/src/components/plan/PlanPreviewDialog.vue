@@ -12,6 +12,7 @@ import type { Plan } from '@/lib/plan'
 import { createPreviewer } from '@/lib/planPreview'
 import PlanReport from './PlanReport.vue'
 import ChangeDrillDown from './ChangeDrillDown.vue'
+import { reasonText } from '@/lib/reasons'
 
 // Evaluates a plan on the server against the workspace and shows its report;
 // taking it puts its outcome into the workspace, where it is reviewed and
@@ -158,8 +159,8 @@ function drill(c: PlanReportPartsFragment['changes'][number]) {
           </n-alert>
           <n-alert v-if="!preview.validation.ok" type="error" :title="t('plan.invalid')">{{ preview.validation.error }}</n-alert>
           <template v-else-if="!empty">
-            <n-alert v-if="preview.validation.warnings.length" type="warning" :show-icon="false">
-              <div v-for="w in preview.validation.warnings" :key="w">{{ w }}</div>
+            <n-alert v-if="preview.validation.notices.length" type="warning" :show-icon="false">
+              <div v-for="w in preview.validation.notices" :key="w.text">{{ reasonText(w) }}</div>
             </n-alert>
             <n-text depth="3">
               {{ preview.validation.restartRequired.length

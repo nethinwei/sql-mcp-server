@@ -1,7 +1,9 @@
 import type zh from './zh-CN'
+import { reasonsEn } from './reasons'
 
 // English. The type annotation keeps the keys identical to zh-CN.ts.
 const en: typeof zh = {
+  reasons: reasonsEn,
   app: { title: 'MCP Console', subtitle: 'Admin console for the governed SQL gateway' },
   common: {
     cancel: 'Cancel', confirm: 'OK', save: 'Save', delete: 'Delete', add: 'Add', create: 'Create', remove: 'Remove',
@@ -104,6 +106,11 @@ const en: typeof zh = {
     limitIssue: '{connection}: {key} ({use}) is {strength}: {reason}',
     limits: 'Serving database-side guarantees: read timeout {read}, write timeout {write}, unkeyed-write refusal {unkeyed}',
     strength: { ENFORCED: 'enforced', BEST_EFFORT: 'best effort', UNSUPPORTED: 'none' },
+    capKey: {
+      write_returning: 'write read-back', cost_explain: 'EXPLAIN estimate', cost_explain_accurate: 'trusted estimates',
+      cost_explain_analyze: 'EXPLAIN ANALYZE sampling', limit_timeout_read: 'read timeout',
+      limit_timeout_write: 'write timeout', limit_unkeyedWrite: 'unkeyed write refusal',
+    },
     cliOnly: 'Datasources and connection strings can only be changed with the CLI, so credentials never pass through the console. Imported tables carry no permissions by default; you can grant them to roles as you add them.', scan: 'Scan',
     rescan: 'Rescan', searchTables: 'Search tables or descriptions',
     refreshSchemas: 'Refresh databases',

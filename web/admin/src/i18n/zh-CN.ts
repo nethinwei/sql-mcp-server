@@ -1,7 +1,10 @@
 // Simplified Chinese. en.ts must have exactly the same keys (type-checked).
 // vue-i18n reserves { } @ | $ in messages; values are passed as parameters.
 // en.ts uses '|' for singular/plural forms; Chinese needs only one form.
+import { reasonsZh } from './reasons'
+
 export default {
+  reasons: reasonsZh,
   app: { title: 'MCP 控制台', subtitle: '受治理的 SQL 网关管理后台' },
   common: {
     cancel: '取消', confirm: '确定', save: '保存', delete: '删除', add: '添加', create: '创建', remove: '删除',
@@ -102,6 +105,11 @@ export default {
     limitIssue: '{connection}：{key}（{use}）为 {strength}：{reason}',
     limits: '服务中的数据库侧保证：读超时 {read}，写超时 {write}，无键写入拒绝 {unkeyed}',
     strength: { ENFORCED: '强制', BEST_EFFORT: '尽力', UNSUPPORTED: '无' },
+    capKey: {
+      write_returning: '写入回读', cost_explain: 'EXPLAIN 估算', cost_explain_accurate: '估算可信',
+      cost_explain_analyze: 'EXPLAIN ANALYZE 采样', limit_timeout_read: '读超时', limit_timeout_write: '写超时',
+      limit_unkeyedWrite: '无键写入拒绝',
+    },
     cliOnly: '数据源与连接串只能用 CLI 修改（避免经后台写入凭据）。导入的表默认零权限，可以在加入工作区时直接授权给角色。', scan: '扫描', rescan: '重新扫描', searchTables: '搜索表名或说明',
     refreshSchemas: '刷新库列表',
     defaultSchema: '默认', notScanned: '未扫描', scannedMeta: '{count} 张表 · {at} 扫描',

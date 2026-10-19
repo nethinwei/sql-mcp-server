@@ -7,6 +7,7 @@ import {
 import type { PlanReportPartsFragment } from '@/gql/graphql'
 import { useWorkspace } from '@/stores/workspace'
 import { download, toCSV } from '@/lib/selection'
+import { reasonText } from '@/lib/reasons'
 
 // What a plan covers, what it changes and the exceptions to look at, in
 // full: a change applied to many tables reads as one line and opens to the
@@ -147,7 +148,8 @@ function exportExceptions() {
               <div class="item">
                 <span>
                   <span v-if="x.entity" class="mono">{{ x.entity.includes(':') ? x.entity : short(x.entity) }}</span>
-                  <n-text depth="3"> {{ t(`plan.exception.${x.kind}.${x.detail ? 'detail' : 'plain'}`, { detail: x.detail ?? '' }) }}</n-text>
+                  <n-text depth="3"> {{ t(`plan.exception.${x.kind}.${x.detail ? 'detail' : 'plain'}`,
+                    { detail: reasonText(x.reasonDetail, x.detail ?? '') }) }}</n-text>
                 </span>
                 <n-space v-if="editable && (x.ref || x.entity)" :size="6" :wrap="false">
                   <n-button v-if="x.entity && fixable.has(x.kind)" size="tiny" @click="emit('locate', x.entity)">

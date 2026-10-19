@@ -18,6 +18,7 @@ import { useSettingsEdits } from '@/stores/settingsEdits'
 import { DiffQuery, ValidateQuery, WorkspaceLogQuery } from '@/api/ops'
 import { draftsChanged } from '@/lib/draftFeed'
 import { can } from '@/api/session'
+import { reasonText, type ReasonLike } from '@/lib/reasons'
 
 const { t } = useI18n()
 const status = useStatus()
@@ -31,7 +32,7 @@ const checking = ref(false)
 const saving = ref(false)
 const error = ref<string | null>(null)
 const restart = ref<string[]>([])
-const warnings = ref<string[]>([])
+const warnings = ref<ReasonLike[]>([])
 const diff = ref('')
 const comment = ref('')
 
@@ -92,7 +93,7 @@ async function check() {
     if (mine !== seq) return
     error.value = v.ok ? null : v.error ?? t('review.validateFailed')
     restart.value = v.restartRequired
-    warnings.value = v.warnings
+    warnings.value = v.notices
     diff.value = d
     checkedContent.value = snap.content
   } catch (e) {
@@ -240,7 +241,7 @@ onMounted(check)
       <n-alert v-if="!checkStale && !error && !checking && warnings.length" type="warning"
         :title="t('review.capabilityTitle')">
         {{ t('review.capabilityBody') }}
-        <ul class="warnings"><li v-for="w in warnings" :key="w" class="mono">{{ w }}</li></ul>
+        <ul class="warnings"><li v-for="w in warnings" :key="w.text">{{ reasonText(w) }}</li></ul>
       </n-alert>
 
       <n-card size="small" :title="t('review.summaryTitle')">

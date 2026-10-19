@@ -6,7 +6,9 @@ import { useWorkspace } from '@/stores/workspace'
 import { useStatus } from '@/stores/status'
 import { run } from '@/api/client'
 import { ProviderCapabilitiesQuery } from '@/api/ops'
-import { emptyProviderCapabilities, issuesOf, limitsOf, type ProviderCapabilities } from '@/lib/providerCapabilities'
+import {
+  emptyProviderCapabilities, issueText, issuesOf, limitsOf, type ProviderCapabilities,
+} from '@/lib/providerCapabilities'
 import type { CatalogQuery } from '@/gql/graphql'
 
 // One card per datasource: what it is, how much of it was scanned and how
@@ -37,9 +39,7 @@ watch(() => status.server?.appliedRevision, async () => {
   }
 }, { immediate: true })
 const strength = (s: string) => t(`datasources.strength.${s}`)
-const issueLines = (ds: string) => issuesOf(caps.value, ds).map((i) => t('datasources.limitIssue', {
-  connection: i.connection, key: i.key, use: i.use, strength: strength(i.strength), reason: i.reason ?? '',
-}))
+const issueLines = (ds: string) => issuesOf(caps.value, ds).map(issueText)
 const limitsText = (ds: string, connection: string) => {
   const l = limitsOf(caps.value, ds, connection)
   return l && t('datasources.limits', { read: strength(l.read), write: strength(l.write), unkeyed: strength(l.unkeyed) })
