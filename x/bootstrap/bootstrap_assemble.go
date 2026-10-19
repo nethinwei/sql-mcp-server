@@ -46,7 +46,9 @@ type assembly struct {
 	shared *Shared
 	gs     guards
 	// providers are the read connections, by datasource.
-	providers   map[string]Provider
+	providers map[string]Provider
+	// readOnly are the SQL escape hatch connections that cannot write.
+	readOnly    ReadOnly
 	checked     checkedAssembly
 	feedback    cost.FeedbackStore
 	sources     map[string]tool.DataSource
@@ -79,7 +81,8 @@ func (a *assembly) check() (err error) {
 	if a.providers, err = readConnections(a.cfg, a.connections); err != nil {
 		return err
 	}
-	if err := checkNativeLimits(a.cfg, a.connections, a.shared); err != nil {
+	a.readOnly = readOnlyEscapes(a.cfg, a.connections)
+	if err := checkNativeLimits(a.cfg, a.connections, a.readOnly, a.shared); err != nil {
 		return err
 	}
 	b := sharedBus(a.shared)
@@ -156,6 +159,7 @@ func (a *assembly) app() *App {
 		TxBeginners:   a.txBeginners,
 		WriteTargets:  tool.BuildWriteTargets(checked.registry),
 		config:        cfg,
+		readOnly:      a.readOnly,
 	}
 	applyAssembledAppConfig(app, cfg)
 	app.attachProcess(cfg, a.shared)

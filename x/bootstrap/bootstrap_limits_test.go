@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"context"
 	"errors"
 	"sort"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
+	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/reason"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 )
@@ -111,7 +113,7 @@ func TestNativeLimitIssuesFollowTheRoutedWork(t *testing.T) {
 		if test.edit != nil {
 			test.edit(cfg)
 		}
-		got := issueKeys(NativeLimitIssues(cfg, conns))
+		got := issueKeys(NativeLimitIssues(cfg, conns, nil))
 		sort.Strings(got)
 		want := append([]string{}, test.want...)
 		sort.Strings(want)
@@ -232,5 +234,65 @@ func TestHardLimitWarningsAreLoggedWhenTheyChange(t *testing.T) {
 	var none *Shared
 	if first, again := none.unwarned("a"), none.unwarned("a"); !first || !again {
 		t.Fatal("without a Shared every assembly logs")
+	}
+}
+
+// An escape hatch connection whose account cannot write is not held to the
+// write timeout; one that can, or does not say, still is.
+func TestReadOnlyEscapeConnectionNeedsNoWriteTimeout(t *testing.T) {
+	t.Parallel()
+	conns := Connections{"main": {
+		"replica": limitedConnection(enforced, degraded), "rw": limitedConnection(enforced, degraded),
+		"ro": limitedConnection(enforced, degraded),
+	}}
+	cfg := limitsConfig()
+	cfg.Tools.ExecuteSQL = true
+	db := cfg.Databases["main"]
+	db.SQLEscape.Connection = "rw"
+	cfg.Databases["main"] = db
+	if got := issueKeys(NativeLimitIssues(cfg, conns, ReadOnly{"main": {"rw": true}})); len(got) != 0 {
+		t.Errorf("read-only escape connection: issues %q", got)
+	}
+	if got := issueKeys(NativeLimitIssues(cfg, conns, nil)); len(got) != 1 ||
+		got[0] != "rw limit.timeout.write the SQL escape hatch" {
+		t.Errorf("writable escape connection: issues %q", got)
+	}
+}
+
+// fakeInspector reports a fixed read-only state and write privilege.
+type fakeInspector struct {
+	introspect.Introspector
+	readOnly bool
+	write    introspect.Privilege
+	err      error
+}
+
+func (f fakeInspector) ReadOnly(context.Context) (bool, error) { return f.readOnly, f.err }
+func (f fakeInspector) TablePrivileges(context.Context, string, []string) (
+	map[string]introspect.TablePrivileges, error,
+) {
+	return nil, nil
+}
+func (f fakeInspector) ProcedurePrivilege(context.Context, string, string) (introspect.Privilege, error) {
+	return introspect.PrivilegeUnknown, nil
+}
+func (f fakeInspector) CanWrite(context.Context) (introspect.Privilege, error) { return f.write, f.err }
+
+func TestCannotWrite(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		i    introspect.Introspector
+		want bool
+	}{
+		"read_only server":                {fakeInspector{readOnly: true, write: introspect.PrivilegeGranted}, true},
+		"no write privilege":              {fakeInspector{write: introspect.PrivilegeDenied}, true},
+		"a write privilege":               {fakeInspector{write: introspect.PrivilegeGranted}, false},
+		"privileges not known":            {fakeInspector{write: introspect.PrivilegeUnknown}, false},
+		"the probe fails":                 {fakeInspector{write: introspect.PrivilegeDenied, err: errors.New("x")}, false},
+		"an introspector that cannot say": {nil, false},
+	} {
+		if got := cannotWrite(context.Background(), c.i); got != c.want {
+			t.Errorf("%s: cannotWrite = %v, want %v", name, got, c.want)
+		}
 	}
 }

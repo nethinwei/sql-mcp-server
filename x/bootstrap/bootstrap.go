@@ -119,6 +119,9 @@ type App struct {
 	scanResolver  SecretResolver
 	stopAssessing context.CancelFunc
 	assessed      chan struct{}
+	// readOnly are the SQL escape hatch connections that cannot write (see
+	// readOnlyEscapes).
+	readOnly ReadOnly
 }
 
 // publishShared applies the App's configuration to the services it shares
