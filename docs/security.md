@@ -223,7 +223,10 @@ Agent 会看到它们。
 `maxReturnedRows`（到上限即截断并标 `truncated: true`，不报错）、`cost.maxBytes` 与预算的
 `maxReturnedBytes`、并发 / rate limit、session 预算。不做估算须显式写
 `cost.sqlEscape.estimate: skip`：`cost.enabled: false` 或 provider 没有 EXPLAIN 时仍为
-`required` 的配置被拒绝（v0.1.20 起，此前静默跳过估算）。
+`required` 的配置被拒绝（v0.1.20 起，此前静默跳过估算）。`cost.allowTemplates` /
+`cost.rejectTemplates` 只作用于受治理工具，不作用于逃生通道：它们按精确文本或指纹匹配，
+可以原样写任意 SQL 的调用方改一个大小写或注释即可绕开，挡不住它；逃生通道的边界是连接账号
+的权限。
 估算默认必需（`cost.sqlEscape.estimate: required`）：每条语句先在逃生通道连接上
 EXPLAIN，按与闸门相同的阈值打分（软拒绝同样拒绝），EXPLAIN 失败的语句（DDL、`SET`、
 `SHOW`、语法错误、规划期报错）一律拒绝并回显数据库原文；不读表的语句（常量 `SELECT`、
