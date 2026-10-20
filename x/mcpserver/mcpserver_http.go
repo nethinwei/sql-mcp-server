@@ -206,15 +206,6 @@ func loadTLS(cfg HTTPConfig) (*tls.Config, error) {
 	return out, nil
 }
 
-// endStreamsAtShutdown ends the admin console's event streams when srv
-// shuts down: they last until the console leaves, and the shutdown would
-// wait for them.
-func endStreamsAtShutdown(srv *http.Server, admin http.Handler) {
-	if streams, ok := admin.(interface{ EndStreams() }); ok {
-		srv.RegisterOnShutdown(streams.EndStreams)
-	}
-}
-
 func serveHTTPWithShutdown(ctx context.Context, b *bus.Bus, srv *http.Server, tlsEnabled bool) error {
 	served := make(chan struct{})
 	defer close(served)
@@ -225,7 +216,7 @@ func serveHTTPWithShutdown(ctx context.Context, b *bus.Bus, srv *http.Server, tl
 		case <-served:
 			return
 		}
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			slog.Warn("http requests still running at shutdown; closing their connections", "err", err)
@@ -330,9 +321,10 @@ func ServeHTTP(ctx context.Context, s *mcp.Server, cfg HTTPConfig) error {
 	if err != nil {
 		return err
 	}
+	calls := &callsRunning{}
 	srv := &http.Server{
 		Addr:              h.cfg.Addr,
-		Handler:           h.handler(),
+		Handler:           calls.count(h.handler()),
 		ReadHeaderTimeout: h.cfg.ReadHeaderTimeout,
 		ReadTimeout:       h.cfg.ReadTimeout,
 		WriteTimeout:      h.cfg.WriteTimeout,
@@ -340,6 +332,7 @@ func ServeHTTP(ctx context.Context, s *mcp.Server, cfg HTTPConfig) error {
 		MaxHeaderBytes:    h.cfg.MaxHeaderBytes,
 	}
 	endStreamsAtShutdown(srv, h.cfg.Admin)
+	closeSessionsAtShutdown(srv, s, calls)
 	if h.cfg.tlsEnabled() {
 		srv.TLSConfig = &tls.Config{
 			MinVersion:         tls.VersionTLS12,
