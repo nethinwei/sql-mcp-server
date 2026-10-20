@@ -55,6 +55,8 @@ func setupPGAccounts(t *testing.T) (ro, rw string, cleanup func()) {
 		`GRANT SELECT ON locked.secrets TO app_ro`,
 		`CREATE FUNCTION locked.recalc() RETURNS integer LANGUAGE sql AS 'SELECT 1'`,
 		`GRANT EXECUTE ON FUNCTION locked.recalc() TO app_ro`,
+		// As managed services do: only the superuser reads the system identifier.
+		`REVOKE EXECUTE ON FUNCTION pg_control_system() FROM PUBLIC`,
 	} {
 		if _, err := admin.ExecContext(ctx, stmt); err != nil {
 			t.Fatalf("%s: %v", stmt, err)
@@ -184,6 +186,17 @@ func TestPGSchemaUsageGatesTables(t *testing.T) {
 	}
 	if p := privileges["secrets"]; p.Select == introspect.PrivilegeGranted {
 		t.Errorf("locked.secrets privileges = %+v, want SELECT not granted", p)
+	}
+	// The account may not read the system identifier: its server is named by
+	// its address instead.
+	var mayRead bool
+	if err := prov.DB().QueryRowContext(ctx,
+		`SELECT has_function_privilege('pg_control_system()', 'EXECUTE')`).Scan(&mayRead); err != nil || mayRead {
+		t.Fatalf("the account may read the system identifier (%v): the fallback is not tested", err)
+	}
+	if physical, err := prov.Introspector().(introspect.PhysicalNamer).Physical(ctx); err != nil ||
+		physical.Server == "" {
+		t.Errorf("physical = %+v, %v; want the server's address", physical, err)
 	}
 	execute, err := prov.Introspector().(introspect.PrivilegeInspector).ProcedurePrivilege(ctx, "locked", "recalc")
 	if err != nil {

@@ -12,9 +12,10 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 ### Breaking
 
 - PostgreSQL provider 只连接 PostgreSQL 11–18：PostgreSQL 10 及以下、19 及以上，以及 Hologres、
-  Greenplum、Redshift、CockroachDB、openGauss/GaussDB、YugabyteDB 等协议兼容库在连接时拒绝
-  （`postgres: unsupported server`）。此前它们按 PostgreSQL 16 的假设运行，结果半可用。每条新建的
-  连接都检查，读、写、过程与 SQL 逃生连接一视同仁；服务器原地升级或故障切换后，新连接重新判定。
+  Greenplum、Redshift、CockroachDB、openGauss/GaussDB、YugabyteDB（版本号含 `-YB-`）等协议
+  兼容库在连接时拒绝（`postgres: unsupported server`）。此前它们按 PostgreSQL 16 的假设运行，
+  结果半可用。每条新建的连接都检查，读、写、过程与 SQL 逃生连接一视同仁；服务器原地升级或
+  故障切换后，新连接重新判定。
 - PostgreSQL 传统继承（`INHERITS`）：有子表的父表按派生关系处理（同视图）。父表的主键与唯一键
   不覆盖子表的行，改为取实体配置中声明的键，只用于读取，不再用于写入安全。
 
@@ -29,9 +30,17 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   子表的级联与 trigger 现在同时计入它的每个祖先表。
 - PostgreSQL 的 `json`、`jsonb`、`xml` 值返回原文；此前驱动把它们读成字节，客户端得到 base64。
   `bytea` 仍是二进制。与 MySQL 共用同一个文本列处理（`sqladapter.TextRows`）。
-- PostgreSQL domain 的默认值计入列默认值（不再被当作必填而拒绝 create），domain 的 `NOT NULL`
-  计入唯一键的非空判断（建在其上的唯一索引可作为身份键）。
-- PostgreSQL 13 的 `Incremental Sort` 计为排序，14 的 `Tid Range Scan` 计为有界扫描（此前为未知）。
+- PostgreSQL domain 的默认值计入列默认值（不再被当作必填而拒绝 create）。唯一键的非空判断只认列
+  自身已验证的 `NOT NULL`：domain 的 `NOT NULL` 不保证已存储的行（外连接产生的 NULL 可以绕过），
+  PostgreSQL 18 的 `NOT VALID` 非空约束不检查已有行，建在这类列上的唯一索引不作为身份键。
+- PostgreSQL 直接定义在分区上的外键归到其分区表（多个分区同名的外键只计一次）；此前挂在分区名下，
+  分区表实体、目录与配置方案都看不到。
+- PostgreSQL DSN 显式设置的 `connect_timeout`（包括表示不限时的 `0`）与 `PGCONNECT_TIMEOUT` 不再被
+  10 秒默认值覆盖。
+- PostgreSQL 的 Hologres 识别只认内置或 `pg_catalog` 中的 `hg_version()`，普通 PostgreSQL 上同名的
+  用户函数不再使连接被拒绝。
+- PostgreSQL 13 的 `Incremental Sort` 计为排序，14 的 `Tid Range Scan` 计为顺序扫描（此前为未知；
+  ctid 范围可以覆盖整张表，不按有界的索引读取评分）。
 - PostgreSQL 11–13 扫描失败（`column "con.conname" must appear in the GROUP BY clause`）。
 - PostgreSQL 18 的 `EXPLAIN ANALYZE` 采样解析失败（`Actual Rows` 改为每次循环的平均值，带小数）。
 
@@ -44,8 +53,9 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 ### Changed
 
 - PostgreSQL：DSN 未设 `connect_timeout` 时连接限时 10 秒，无响应的地址不再让启动挂起；扫描出错时
-  报告是哪一步（如 `postgres: scan cascades: …`）；读不到服务器标识时以数据源名标识其关系并告警，
-  不再使装配失败。
+  报告是哪一步（如 `postgres: scan cascades: …`）；账号无权读取系统标识（`pg_control_system()`）时
+  以服务器地址标识，经 Unix socket 连接时以数据源名标识其关系并告警，不再使装配失败；其他错误
+  （连接中断、超时）仍使本轮装配失败，不降级为数据源名。
 - CI 与发布流水线对 PostgreSQL 11–18 每个大版本运行 provider integration（`SQL_MCP_PG_IMAGE`）。
 
 ## 0.1.20 - 2026-10-19

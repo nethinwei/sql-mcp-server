@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
@@ -38,6 +39,10 @@ func TestPGFoldsPartitionsIntoTheirTable(t *testing.T) {
 	if fks := byName["orders"].ForeignKeys; len(fks) != 1 {
 		t.Errorf("orders foreign keys = %+v, want one", fks)
 	}
+	if fks := byName["sales"].ForeignKeys; len(fks) != 1 || !slices.Equal(fks[0].Columns, []string{"region_id"}) ||
+		fks[0].RefRelation != "regions" {
+		t.Errorf("sales foreign keys = %+v, want its partitions' sales_region once", fks)
+	}
 	if !byName["tp"].SideEffects {
 		t.Error("tp has no side effects, though a trigger on its partition runs on its writes")
 	}
@@ -45,8 +50,8 @@ func TestPGFoldsPartitionsIntoTheirTable(t *testing.T) {
 }
 
 // createPGPartitions creates a foreign key referencing a partition, one of a
-// partitioned table (copied onto its partitions), and a trigger on a
-// partition.
+// partitioned table (copied onto its partitions), one defined on each
+// partition alone, and a trigger on a partition.
 func createPGPartitions(t *testing.T, ctx context.Context, prov bootstrap.Provider) {
 	t.Helper()
 	for _, stmt := range []string{
@@ -64,6 +69,13 @@ func createPGPartitions(t *testing.T, ctx context.Context, prov bootstrap.Provid
 		`CREATE TABLE orders_2026 PARTITION OF orders FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')`,
 		`INSERT INTO customers VALUES (1)`,
 		`INSERT INTO orders VALUES (1, '2026-06-01', 1)`,
+		// The same foreign key defined on each partition, not on the table.
+		`CREATE TABLE regions (id integer PRIMARY KEY)`,
+		`CREATE TABLE sales (id integer, at date, region_id integer, PRIMARY KEY (id, at)) PARTITION BY RANGE (at)`,
+		`CREATE TABLE sales_2026 PARTITION OF sales FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')`,
+		`CREATE TABLE sales_2027 PARTITION OF sales FOR VALUES FROM ('2027-01-01') TO ('2028-01-01')`,
+		`ALTER TABLE sales_2026 ADD CONSTRAINT sales_region FOREIGN KEY (region_id) REFERENCES regions`,
+		`ALTER TABLE sales_2027 ADD CONSTRAINT sales_region FOREIGN KEY (region_id) REFERENCES regions`,
 		// A trigger on a partition.
 		`CREATE TABLE tp (id integer, at date) PARTITION BY RANGE (at)`,
 		`CREATE TABLE tp1 PARTITION OF tp FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')`,

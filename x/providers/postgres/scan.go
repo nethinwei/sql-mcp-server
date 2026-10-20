@@ -153,12 +153,15 @@ func (i pgIntrospector) columns(query string) func(context.Context, *scanned, []
 // indexesSQL lists every valid index with its key parts as the database
 // prints them and, for a unique one (a unique constraint is backed by one; an
 // index may exist without a constraint), what decides whether it identifies a
-// row. INCLUDE columns (past indnkeyatts) are not key parts.
+// row. INCLUDE columns (past indnkeyatts) are not key parts. A key column is
+// NOT NULL only by a valid constraint of its own, which holds for the rows
+// stored: neither a domain's NOT NULL (an outer join's NULL passes it) nor a
+// NOT VALID one (PostgreSQL 18, attnotnull set over rows not checked) does.
 const indexesSQL = `SELECT tn.nspname, t.relname, c.relname, am.amname, i.indisunique, i.indisprimary,
 	        NOT i.indimmediate, COALESCE(pg_get_expr(i.indpred, i.indrelid, true), ''),
 	        i.indexprs IS NOT NULL OR bool_or(k.attnum = 0),
 	        COALESCE((to_jsonb(i) ->> 'indnullsnotdistinct')::boolean, false),
-	        bool_and(COALESCE(a.attnotnull OR dt.typnotnull, false)),
+	        bool_and(COALESCE(a.attnotnull AND nv.invalid IS NULL, false)),
 	        COALESCE(json_agg(a.attname ORDER BY k.ord) FILTER (WHERE a.attname IS NOT NULL), '[]')::text,
 	        json_agg(pg_get_indexdef(i.indexrelid, k.ord::int, true) ORDER BY k.ord)::text
 	 FROM pg_index i
@@ -168,7 +171,8 @@ const indexesSQL = `SELECT tn.nspname, t.relname, c.relname, am.amname, i.indisu
 	 JOIN pg_namespace tn ON tn.oid = t.relnamespace
 	 CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord)
 	 LEFT JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
-	 LEFT JOIN pg_type dt ON dt.oid = a.atttypid -- a domain's NOT NULL (typnotnull) holds for its columns
+	 LEFT JOIN LATERAL (SELECT true AS invalid FROM pg_constraint nn WHERE nn.conrelid = a.attrelid
+	   AND nn.contype = 'n' AND NOT nn.convalidated AND a.attnum = ANY (nn.conkey) LIMIT 1) nv ON true
 	 WHERE tn.nspname = ANY($1) AND i.indisvalid AND k.ord <= i.indnkeyatts
 	 GROUP BY i.indexrelid, tn.nspname, t.relname, c.relname, am.amname, i.indisunique, i.indisprimary,
 	          i.indimmediate, i.indpred, i.indrelid, i.indexprs IS NOT NULL, to_jsonb(i) ->> 'indnullsnotdistinct'
@@ -220,15 +224,19 @@ const inheritanceCTE = `WITH RECURSIVE ancestors (rel, anc) AS (
 	   JOIN pg_class p ON p.oid = a.anc AND NOT p.relispartition)
 	 `
 
-// foreignKeys reads foreign keys with columns in key order. A key referencing
-// a partition references its partitioned table; the copies of a partitioned
-// table's key on its partitions (conparentid) are left out.
+// foreignKeys reads foreign keys with columns in key order. Both relations
+// are taken at their partition root: a key of a partition is one of its
+// partitioned table (a name that several of its partitions give their own
+// keys is kept once), and a key referencing a partition references its
+// partitioned table; the copies of a partitioned table's key on its
+// partitions (conparentid) are left out.
 func (i pgIntrospector) foreignKeys(ctx context.Context, s *scanned, schemas []string) error {
 	return i.each(ctx,
 		inheritanceCTE+`SELECT n.nspname, cl.relname, con.conname, a.attname, rn.nspname, rc.relname, ra.attname,
 		        con.confdeltype::text, con.confupdtype::text
 		 FROM pg_constraint con
-		 JOIN pg_class cl ON cl.oid = con.conrelid
+		 LEFT JOIN partition_roots lr ON lr.rel = con.conrelid
+		 JOIN pg_class cl ON cl.oid = COALESCE(lr.root, con.conrelid)
 		 JOIN pg_namespace n ON n.oid = cl.relnamespace
 		 CROSS JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(col, refcol, ord)
 		 JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.col
@@ -237,6 +245,9 @@ func (i pgIntrospector) foreignKeys(ctx context.Context, s *scanned, schemas []s
 		 JOIN pg_namespace rn ON rn.oid = rc.relnamespace
 		 JOIN pg_attribute ra ON ra.attrelid = con.confrelid AND ra.attnum = k.refcol
 		 WHERE con.contype = 'f' AND con.conparentid = 0 AND n.nspname = ANY($1)
+		   AND NOT EXISTS (SELECT FROM pg_constraint o LEFT JOIN partition_roots olr ON olr.rel = o.conrelid
+		     WHERE o.contype = 'f' AND o.conparentid = 0 AND o.conname = con.conname AND o.oid < con.oid
+		       AND COALESCE(olr.root, o.conrelid) = COALESCE(lr.root, con.conrelid))
 		 ORDER BY n.nspname, cl.relname, con.conname, k.ord`,
 		schemas, func(rows *sql.Rows) error { return s.ScanForeignKeyColumn(rows, pgAction) })
 }

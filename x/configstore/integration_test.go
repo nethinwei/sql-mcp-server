@@ -18,6 +18,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/revision/revisiontest"
 	"github.com/nethinwei/sql-mcp-server/core/workspace"
 	"github.com/nethinwei/sql-mcp-server/core/workspace/workspacetest"
+	"github.com/nethinwei/sql-mcp-server/internal/pgimage"
 	"github.com/nethinwei/sql-mcp-server/x/catalog"
 	"github.com/nethinwei/sql-mcp-server/x/catalog/catalogtest"
 	"github.com/nethinwei/sql-mcp-server/x/revisionops/revisionopstest"
@@ -108,7 +109,7 @@ func dropTables(t *testing.T, spec Spec) {
 
 func TestPostgresStoreConformance(t *testing.T) {
 	ctx := context.Background()
-	container, err := tcpostgres.Run(ctx, "postgres:16-alpine",
+	container, err := tcpostgres.Run(ctx, pgimage.Image(),
 		tcpostgres.WithDatabase("store"), tcpostgres.WithUsername("test"), tcpostgres.WithPassword("test"),
 		tcpostgres.BasicWaitStrategies(),
 	)

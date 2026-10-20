@@ -23,12 +23,16 @@ const (
 var ErrUnsupportedServer = errors.New("postgres: unsupported server")
 
 // derivatives are the markers in version() of servers that speak the
-// PostgreSQL protocol but are not PostgreSQL.
-var derivatives = []string{"hologres", "greenplum", "redshift", "cockroachdb", "opengauss", "gaussdb", "yugabyte"}
+// PostgreSQL protocol but are not PostgreSQL. YugabyteDB names itself in the
+// version number (11.2-YB-2.6.1.0), not always in the rest.
+var derivatives = []string{
+	"hologres", "greenplum", "redshift", "cockroachdb", "opengauss", "gaussdb", "yugabyte", "-yb-",
+}
 
 // checkServer tells whether the server whose server_version_num is num and
 // version() is version is supported; hologres is whether it has Hologres's
-// hg_version() function.
+// hg_version() function: a built-in one (oid below FirstNormalObjectId) or
+// one in pg_catalog, neither of which a user's own function can be.
 func checkServer(num int, version string, hologres bool) error {
 	lower := strings.ToLower(version)
 	for _, d := range derivatives {
@@ -48,6 +52,11 @@ func checkServer(num int, version string, hologres bool) error {
 	return nil
 }
 
+// serverSQL reads what checkServer judges.
+const serverSQL = `SELECT current_setting('server_version_num')::int, version(),
+	EXISTS (SELECT FROM pg_proc WHERE proname = 'hg_version'
+	  AND (oid < 16384 OR pronamespace = 'pg_catalog'::regnamespace))`
+
 // checkConn checks the server of each connection as it is made, before
 // any statement uses it: every connection of the pool, whatever it serves
 // (reads, writes, procedures, raw SQL), and the server behind a connection
@@ -56,8 +65,7 @@ func checkConn(ctx context.Context, conn *pgx.Conn) error {
 	var num int
 	var version string
 	var hologres bool
-	if err := conn.QueryRow(ctx, `SELECT current_setting('server_version_num')::int, version(),
-		to_regproc('hg_version') IS NOT NULL`).Scan(&num, &version, &hologres); err != nil {
+	if err := conn.QueryRow(ctx, serverSQL).Scan(&num, &version, &hologres); err != nil {
 		return fmt.Errorf("postgres: read the server version: %w", err)
 	}
 	return checkServer(num, version, hologres)

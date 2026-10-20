@@ -4,6 +4,7 @@ package postgres_test
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/nethinwei/sql-mcp-server/core/entity"
@@ -40,9 +41,10 @@ func TestPGReturnsTextValuesAsText(t *testing.T) {
 }
 
 // A domain's default and NOT NULL are its columns': the database fills a
-// column of a defaulted domain, and a unique key on a NOT NULL domain
-// identifies rows. A comment stays on its column when an earlier one is
-// dropped.
+// column of a defaulted domain, and does not take NULL for one of a NOT NULL
+// domain on insert. But that NOT NULL does not hold for every stored row (an
+// outer join's NULL passes it), so a unique key on it identifies no row. A
+// comment stays on its column when an earlier one is dropped.
 func TestPGScansDomainsAndComments(t *testing.T) {
 	prov, cleanup := setupPG(t)
 	defer cleanup()
@@ -78,9 +80,40 @@ func TestPGScansDomainsAndComments(t *testing.T) {
 	if got := attrs["b"].Description; got != "the b column" {
 		t.Errorf("b's comment = %q, want %q", got, "the b column")
 	}
-	for _, k := range dom.Keys {
-		if k.Name == "dom_a" && k.Reason != "" {
-			t.Errorf("dom_a reason = %q, want a key (its column's domain is NOT NULL)", k.Reason)
+	i := slices.IndexFunc(dom.Keys, func(k entity.Key) bool { return k.Name == "dom_a" })
+	if i < 0 || dom.Keys[i].Reason != entity.KeyNullable {
+		t.Errorf("dom keys = %+v, want dom_a nullable (a domain's NOT NULL does not hold for stored rows)", dom.Keys)
+	}
+}
+
+// A NOT VALID NOT NULL constraint (PostgreSQL 18) sets attnotnull over rows it
+// has not checked: a unique key on its column identifies no row.
+func TestPGNotValidNotNullMakesNoKey(t *testing.T) {
+	prov, cleanup := setupPG(t)
+	defer cleanup()
+	ctx := context.Background()
+	var version int
+	if err := prov.DB().QueryRowContext(ctx, `SELECT current_setting('server_version_num')::int`).
+		Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version < 180000 {
+		t.Skip("NOT VALID NOT NULL constraints are PostgreSQL 18's")
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE nv (k integer)`, `INSERT INTO nv VALUES (NULL), (NULL)`,
+		`CREATE UNIQUE INDEX nv_k ON nv (k)`, `ALTER TABLE nv ADD CONSTRAINT nv_k_nn NOT NULL k NOT VALID`,
+	} {
+		if _, err := prov.ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
 		}
+	}
+	found, err := prov.Introspector().Discover(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(found, func(e entity.Entity) bool { return e.Name == "nv" })
+	if i < 0 || len(found[i].Keys) != 1 || found[i].Keys[0].Reason != entity.KeyNullable {
+		t.Fatalf("nv = %+v, want nv_k nullable", found)
 	}
 }

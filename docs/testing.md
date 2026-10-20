@@ -159,7 +159,12 @@ go test ./core/codegen -run='^$' -fuzz='^FuzzCompileNoInjectionAndQuoting$' -fuz
 ```sh
 go test -race -tags=integration -timeout 20m ./x/providers/...
 # 或 make test-integration
+SQL_MCP_PG_IMAGE=postgres:11-alpine make test-integration-postgres  # 指定 PostgreSQL 版本
 ```
+
+PostgreSQL 的 provider 与配置库集成测试使用 `SQL_MCP_PG_IMAGE` 指定的镜像，未设置时为
+`postgres:16-alpine`（`internal/pgimage`）。只验证 provider 拒绝不受支持服务器的测试固定用
+`postgres:10-alpine`，且只在默认镜像下运行一次。
 
 该通道包含三库 conformance 差分（`Test{PG,MySQL,OB}Conformance`）：同一
 IR 的 reference interpreter 结果与真实数据库执行结果比对，语义定义见
@@ -211,7 +216,9 @@ PostgreSQL/MySQL/OceanBase 或 MCP e2e 已在当前机器执行。
   build、`go test -race ./...`；
 - `coverage`：与 Makefile 共用核心包清单，真实检查合计至少 80.0%；
 - `security-fuzz`：Go 1.26.9 下分别运行四个有界、无 Docker 的安全 fuzz smoke；
-- `integration`：PostgreSQL、MySQL、OceanBase 三项 testcontainers matrix；
+- `integration`：testcontainers matrix，PostgreSQL 11 至 18 每个大版本各一项（经
+  `SQL_MCP_PG_IMAGE` 选镜像，provider 与配置库测试都在该版本上运行），以及 MySQL、
+  OceanBase 各一项；任一项失败不取消其余项；
 - `e2e`：PostgreSQL + in-memory 与真实 streamable HTTP 双传输 MCP client，
   覆盖协议边界上的工具发现、成本、RBAC/RLS/字段 ACL、脱敏、写保护、
   resource/prompt、事务、HTTP 认证/身份 header，以及拒绝契约 decision ID 与

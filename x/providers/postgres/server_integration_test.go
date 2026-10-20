@@ -59,3 +59,24 @@ func TestPGRefusesUnsupportedServersOnEveryConnection(t *testing.T) {
 		t.Fatalf("the refused write ran: table %v (%v)", table, err)
 	}
 }
+
+// A user's own function named like Hologres's hg_version() does not make
+// PostgreSQL pass for Hologres.
+func TestPGServesAServerWithAUserHgVersion(t *testing.T) {
+	dsn, stop := startPG(t)
+	defer stop()
+	prov, err := pgprov.New(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prov.Close() }()
+	if _, err := prov.ExecContext(context.Background(),
+		`CREATE FUNCTION public.hg_version() RETURNS text LANGUAGE sql AS 'SELECT ''3.0'''`); err != nil {
+		t.Fatal(err)
+	}
+	again, err := pgprov.New(dsn)
+	if err != nil {
+		t.Fatalf("PostgreSQL with a user's hg_version(): %v", err)
+	}
+	_ = again.Close()
+}

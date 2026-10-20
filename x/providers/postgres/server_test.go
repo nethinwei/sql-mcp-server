@@ -30,6 +30,7 @@ func TestCheckServer(t *testing.T) {
 		{80002, "PostgreSQL 8.0.2 on i686-pc-linux-gnu, Redshift 1.0.77467", false, false},
 		{130000, "CockroachDB CCL v24.1.0 (x86_64-pc-linux-gnu)", false, false},
 		{90204, "(openGauss 5.0.0 build a07d57c3) compiled at 2023-03-29", false, false},
+		{110002, "PostgreSQL 11.2-YB-2.6.1.0-b0 on x86_64-pc-linux-gnu, compiled by gcc 5.5.0, 64-bit", false, false},
 	} {
 		err := checkServer(c.num, c.version, c.hologres)
 		if c.ok != (err == nil) || err != nil && !errors.Is(err, ErrUnsupportedServer) {
@@ -52,5 +53,26 @@ func TestOpenGivesUpOnAnUnreachableServer(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("Open took %s, want it bounded by the connect timeout", elapsed)
+	}
+}
+
+// An explicit connect_timeout, 0 (no limit) too, is the DSN's; the default
+// bounds only a connection whose DSN sets none.
+func TestConnectTimeoutSet(t *testing.T) {
+	for dsn, set := range map[string]bool{
+		"postgres://u:p@h/db?connect_timeout=0":                    true,
+		"postgresql://u:p@h/db?sslmode=disable":                    false,
+		"host=h dbname=db connect_timeout = 0":                     true,
+		"host=h dbname=db application_name=x":                      false,
+		"host=h dbname=db my_connect_timeout=3":                    false,
+		"postgres://u:p@h/db?application_name=connect_timeout%3D1": false,
+	} {
+		if got := connectTimeoutSet(dsn); got != set {
+			t.Errorf("%q: %v, want %v", dsn, got, set)
+		}
+	}
+	t.Setenv("PGCONNECT_TIMEOUT", "0")
+	if !connectTimeoutSet("host=h") {
+		t.Error("PGCONNECT_TIMEOUT is not counted")
 	}
 }

@@ -313,8 +313,9 @@ func pgScanType(node string) cost.ScanType {
 	case strings.Contains(node, "Tid Scan"):
 		return cost.ScanPoint
 	case strings.Contains(node, "Tid Range Scan"):
-		// A bounded range of a table's row locations (PostgreSQL 14).
-		return cost.ScanIndex
+		// A range of a table's row locations (PostgreSQL 14), read in heap
+		// order: it may span the whole table, so it is no bounded index read.
+		return cost.ScanSeq
 	case node == "Result" || node == "Values Scan":
 		// No table is read: a constant SELECT, or the rows INSERT ... VALUES
 		// writes. A scan elsewhere in the plan still outranks it.

@@ -4,6 +4,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -25,6 +28,22 @@ var ErrPing = errors.New("postgres: ping failed")
 // connect_timeout: a server that never answers fails the open rather than
 // holding startup.
 var connectTimeout = 10 * time.Second
+
+// connectTimeoutKeyword finds connect_timeout in a keyword/value DSN.
+var connectTimeoutKeyword = regexp.MustCompile(`(^|\s)connect_timeout\s*=`)
+
+// connectTimeoutSet tells whether the DSN, or PGCONNECT_TIMEOUT, sets
+// connect_timeout: 0 there waits without limit, as in libpq, while pgx
+// parses an unset one as 0 too.
+func connectTimeoutSet(dsn string) bool {
+	if os.Getenv("PGCONNECT_TIMEOUT") != "" {
+		return true
+	}
+	if u, err := url.Parse(dsn); err == nil && (u.Scheme == "postgres" || u.Scheme == "postgresql") {
+		return u.Query().Has("connect_timeout")
+	}
+	return connectTimeoutKeyword.MatchString(dsn)
+}
 
 func init() {
 	providerregistry.Register("postgres", func(dsn string, opts providerregistry.Options) (provider.Provider, error) {
@@ -66,7 +85,7 @@ func Open(dsn string, opts providerregistry.Options) (*Provider, error) {
 	if cfg.RuntimeParams == nil {
 		cfg.RuntimeParams = map[string]string{}
 	}
-	if cfg.ConnectTimeout == 0 {
+	if !connectTimeoutSet(dsn) {
 		cfg.ConnectTimeout = connectTimeout
 	}
 	caps := limits(cfg.RuntimeParams, opts.Pooler)
