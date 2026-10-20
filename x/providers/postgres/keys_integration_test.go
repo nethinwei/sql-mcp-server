@@ -16,8 +16,20 @@ import (
 	pgprov "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
 
-func createPGAccounts(t *testing.T, ctx context.Context, prov *pgprov.Provider) {
+// createPGAccounts creates the accounts table; generated tells whether its
+// total_cents is a generated column, which PostgreSQL has from 12 on.
+func createPGAccounts(t *testing.T, ctx context.Context, prov *pgprov.Provider) (generated bool) {
 	t.Helper()
+	var version int
+	if err := prov.DB().QueryRowContext(ctx, `SELECT current_setting('server_version_num')::int`).
+		Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	generated = version >= 120000
+	totalCents := "total_cents integer"
+	if generated {
+		totalCents += " GENERATED ALWAYS AS (tenant * 100) STORED"
+	}
 	for _, stmt := range []string{
 		`CREATE TABLE accounts (
 		   id serial PRIMARY KEY,
@@ -25,7 +37,7 @@ func createPGAccounts(t *testing.T, ctx context.Context, prov *pgprov.Provider) 
 		   nickname text UNIQUE,
 		   code text NOT NULL,
 		   tenant integer NOT NULL,
-		   total_cents integer GENERATED ALWAYS AS (tenant * 100) STORED,
+		   ` + totalCents + `,
 		   deleted boolean NOT NULL DEFAULT false)`,
 		`CREATE UNIQUE INDEX accounts_code_live ON accounts (code) WHERE NOT deleted`,
 		`CREATE UNIQUE INDEX accounts_lower_email ON accounts (lower(email))`,
@@ -36,13 +48,14 @@ func createPGAccounts(t *testing.T, ctx context.Context, prov *pgprov.Provider) 
 			t.Fatalf("%s: %v", stmt, err)
 		}
 	}
+	return generated
 }
 
 func TestPGDiscoversKeysAndColumnAttributes(t *testing.T) {
 	prov, cleanup := setupPG(t)
 	defer cleanup()
 	ctx := context.Background()
-	createPGAccounts(t, ctx, prov)
+	generated := createPGAccounts(t, ctx, prov)
 	found, err := prov.Introspector().Discover(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +87,7 @@ func TestPGDiscoversKeysAndColumnAttributes(t *testing.T) {
 	if d := domains["id"]; !d.AutoIncrement || !d.Default || d.Required() {
 		t.Errorf("id = %+v", d)
 	}
-	if d := domains["total_cents"]; !d.Generated || d.Writable() {
+	if d := domains["total_cents"]; generated && (!d.Generated || d.Writable()) {
 		t.Errorf("total_cents = %+v", d)
 	}
 	if !domains["email"].Required() || domains["deleted"].Required() {
@@ -86,7 +99,7 @@ func TestPGWritesByUniqueKeyAndConstraintViolations(t *testing.T) {
 	prov, cleanup := setupPG(t)
 	defer cleanup()
 	ctx := context.Background()
-	createPGAccounts(t, ctx, prov)
+	generated := createPGAccounts(t, ctx, prov)
 	tc := pgAccountsApp(t, prov).ToolContext("w")
 	run := func(t tool.Tool, input map[string]any) error {
 		raw, _ := json.Marshal(input)
@@ -104,7 +117,8 @@ func TestPGWritesByUniqueKeyAndConstraintViolations(t *testing.T) {
 		t.Fatal("a nullable unique key must not admit an update")
 	}
 	if err := run(tool.UpdateTool{}, map[string]any{"entity": "accounts", "set": map[string]any{"total_cents": 1},
-		"filter": []map[string]any{{"field": "id", "op": "eq", "value": 1}}}); !errors.Is(err, tool.ErrInvalidInput) {
+		"filter": []map[string]any{{"field": "id", "op": "eq", "value": 1}}}); generated &&
+		!errors.Is(err, tool.ErrInvalidInput) {
 		t.Fatalf("writing a generated column: %v", err)
 	}
 	for input, want := range map[string][2]string{

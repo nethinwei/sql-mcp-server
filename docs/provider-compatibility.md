@@ -13,6 +13,10 @@
 - **未支持**：启动时拒绝或无实现；
 - **外部配置**：能力依赖 DBA/部署配置，本服务不代管。
 
+PostgreSQL 一列的“真实数据库验证”覆盖 PostgreSQL 11 至 18 每个大版本（CI 逐版本运行
+provider integration）。范围外的版本与 PostgreSQL 协议兼容库在连接时被拒绝，不适用
+本页任何结论，见[支持版本](supported-versions.md#数据库)。
+
 ## 功能
 
 | 能力 | PostgreSQL | MySQL | OceanBase | 证据 |

@@ -9,6 +9,21 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+### Breaking
+
+- PostgreSQL provider 只连接 PostgreSQL 11–18：PostgreSQL 10 及以下、19 及以上，以及 Hologres、
+  Greenplum、Redshift、CockroachDB、openGauss/GaussDB、YugabyteDB 等协议兼容库在连接时拒绝
+  （`postgres: unsupported server`）。此前它们按 PostgreSQL 16 的假设运行，结果半可用。
+
+### Fixed
+
+- PostgreSQL 11–13 扫描失败（`column "con.conname" must appear in the GROUP BY clause`）。
+- PostgreSQL 18 的 `EXPLAIN ANALYZE` 采样解析失败（`Actual Rows` 改为每次循环的平均值，带小数）。
+
+### Changed
+
+- CI 与发布流水线对 PostgreSQL 11–18 每个大版本运行 provider integration（`SQL_MCP_PG_IMAGE`）。
+
 ## 0.1.20 - 2026-10-19
 
 加固版本，处理一次外部代码与设计 review 的全部结论，**有 breaking 变更**；升级步骤见

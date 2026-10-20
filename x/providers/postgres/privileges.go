@@ -10,6 +10,9 @@ import (
 // ReadOnly implements introspect.PrivilegeInspector: a hot standby, or a
 // session whose transactions default to read-only.
 func (i pgIntrospector) ReadOnly(ctx context.Context) (bool, error) {
+	if err := i.gate.check(ctx); err != nil {
+		return false, err
+	}
 	var readOnly bool
 	err := i.db.QueryRowContext(ctx,
 		`SELECT pg_is_in_recovery() OR current_setting('default_transaction_read_only') = 'on'`).Scan(&readOnly)
@@ -22,6 +25,9 @@ func (i pgIntrospector) ReadOnly(ctx context.Context) (bool, error) {
 func (i pgIntrospector) TablePrivileges(
 	ctx context.Context, schema string, tables []string,
 ) (map[string]introspect.TablePrivileges, error) {
+	if err := i.gate.check(ctx); err != nil {
+		return nil, err
+	}
 	out := map[string]introspect.TablePrivileges{}
 	var partial []string
 	err := i.each(ctx,
@@ -88,6 +94,9 @@ func (i pgIntrospector) columnPrivileges(
 
 // ProcedurePrivilege implements introspect.PrivilegeInspector.
 func (i pgIntrospector) ProcedurePrivilege(ctx context.Context, schema, name string) (introspect.Privilege, error) {
+	if err := i.gate.check(ctx); err != nil {
+		return introspect.PrivilegeUnknown, err
+	}
 	var count int
 	var granted bool
 	err := i.db.QueryRowContext(ctx,

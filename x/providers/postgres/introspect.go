@@ -10,12 +10,16 @@ import (
 
 // pgIntrospector discovers entities from information_schema.
 type pgIntrospector struct {
-	db *sql.DB
+	db   *sql.DB
+	gate *serverGate
 }
 
 // Schemas implements introspect.SchemaLister: every schema except the system
 // ones, and the current schema (the first one of search_path that exists).
 func (i pgIntrospector) Schemas(ctx context.Context) ([]string, string, error) {
+	if err := i.gate.check(ctx); err != nil {
+		return nil, "", err
+	}
 	rows, err := i.db.QueryContext(ctx,
 		`SELECT schema_name FROM information_schema.schemata
 		 WHERE schema_name NOT IN ('pg_catalog', 'information_schema')
@@ -76,6 +80,9 @@ var pgAction = map[string]string{"c": entity.FKCascade, "n": entity.FKSetNull, "
 // server address, and to "" (unknown) over a Unix socket.
 func (i pgIntrospector) Physical(ctx context.Context) (introspect.Physical, error) {
 	var p introspect.Physical
+	if err := i.gate.check(ctx); err != nil {
+		return p, err
+	}
 	if err := i.db.QueryRowContext(ctx, `SELECT current_database()`).Scan(&p.Catalog); err != nil {
 		return p, err
 	}

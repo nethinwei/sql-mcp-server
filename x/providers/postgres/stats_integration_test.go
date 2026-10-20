@@ -5,6 +5,7 @@ package postgres_test
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 // Statistics are fresh once ANALYZE or autovacuum analyzed the table, or
@@ -44,6 +45,11 @@ func TestPGStatsFreshness(t *testing.T) {
 	}
 	if _, err := prov.ExecContext(ctx, `ANALYZE b.big`); err != nil {
 		t.Fatal(err)
+	}
+	// Up to PostgreSQL 14 the statistics collector learns of the ANALYZE
+	// asynchronously, a moment later.
+	for deadline := time.Now().Add(3 * time.Second); !fresh("b.big") && time.Now().Before(deadline); {
+		time.Sleep(100 * time.Millisecond)
 	}
 	if !fresh("b.big") || fresh("a.big") {
 		t.Error("analyzing b.big freshens it alone")

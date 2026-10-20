@@ -76,7 +76,7 @@ jobs:
         run: make test-fuzz-smoke
 
   integration:
-    name: integration (${{ matrix.db }})
+    name: integration (${{ matrix.db }}${{ matrix.pg && format(' {0}', matrix.pg) || '' }})
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -84,7 +84,18 @@ jobs:
       # evidence, and a transient failure is retried on its own.
       fail-fast: false
       matrix:
-        db: [postgres, mysql, oceanbase]
+        include:
+          # PostgreSQL on every supported version (docs/supported-versions.md).
+          - {db: postgres, pg: "11"}
+          - {db: postgres, pg: "12"}
+          - {db: postgres, pg: "13"}
+          - {db: postgres, pg: "14"}
+          - {db: postgres, pg: "15"}
+          - {db: postgres, pg: "16"}
+          - {db: postgres, pg: "17"}
+          - {db: postgres, pg: "18"}
+          - {db: mysql}
+          - {db: oceanbase}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -99,6 +110,8 @@ jobs:
           done
       - name: integration tests (testcontainers)
         run: make test-integration-${{ matrix.db }}
+        env:
+          SQL_MCP_PG_IMAGE: ${{ matrix.pg && format('postgres:{0}-alpine', matrix.pg) || '' }}
 
   console:
     name: admin console (type-check, test, build)

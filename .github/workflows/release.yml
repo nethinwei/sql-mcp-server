@@ -21,13 +21,24 @@ jobs:
       - run: make release-quality
 
   integration:
-    name: release integration (${{ matrix.db }})
+    name: release integration (${{ matrix.db }}${{ matrix.pg && format(' {0}', matrix.pg) || '' }})
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        db: [postgres, mysql, oceanbase]
+        include:
+          # PostgreSQL on every supported version (docs/supported-versions.md).
+          - {db: postgres, pg: "11"}
+          - {db: postgres, pg: "12"}
+          - {db: postgres, pg: "13"}
+          - {db: postgres, pg: "14"}
+          - {db: postgres, pg: "15"}
+          - {db: postgres, pg: "16"}
+          - {db: postgres, pg: "17"}
+          - {db: postgres, pg: "18"}
+          - {db: mysql}
+          - {db: oceanbase}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -41,6 +52,8 @@ jobs:
             echo "go mod download failed (attempt $attempt)"; sleep 15
           done
       - run: make test-integration-${{ matrix.db }}
+        env:
+          SQL_MCP_PG_IMAGE: ${{ matrix.pg && format('postgres:{0}-alpine', matrix.pg) || '' }}
 
   e2e:
     name: release e2e

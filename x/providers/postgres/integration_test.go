@@ -20,6 +20,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/tool"
 	"github.com/nethinwei/sql-mcp-server/internal/escapetest"
 	"github.com/nethinwei/sql-mcp-server/internal/numbertest"
+	"github.com/nethinwei/sql-mcp-server/internal/pgimage"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	pgprov "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
@@ -28,7 +29,7 @@ import (
 func startPG(t testing.TB) (string, func()) {
 	t.Helper()
 	ctx := context.Background()
-	container, err := postgres.Run(ctx, "postgres:16-alpine",
+	container, err := postgres.Run(ctx, pgimage.Image(),
 		postgres.WithDatabase("test"),
 		postgres.WithUsername("test"),
 		postgres.WithPassword("test"),

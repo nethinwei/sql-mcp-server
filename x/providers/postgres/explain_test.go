@@ -148,6 +148,22 @@ func TestParsePGExplainAnalyzeRecursivelyCountsRowsAndLoops(t *testing.T) {
 	}
 }
 
+// PostgreSQL 18 reports Actual Rows as an average per loop, with two
+// decimals: 0.50 rows over 4 loops is 2 rows.
+func TestParsePGExplainAnalyzeReadsFractionalRows(t *testing.T) {
+	t.Parallel()
+	raw := `[{"Plan":{"Node Type":"Nested Loop","Plan Rows":2,"Actual Rows":2.00,"Actual Loops":1,"Plans":[` +
+		`{"Node Type":"Index Scan","Plan Rows":1,"Actual Rows":0.50,"Actual Loops":4}` +
+		`]},"Execution Time":1.5}]`
+	p, err := parsePGExplainAnalyze([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.ActualRows != 4 {
+		t.Fatalf("ActualRows = %d, want 4", p.ActualRows)
+	}
+}
+
 func TestParsePGExplainAnalyzeRejectsInvalidPlans(t *testing.T) {
 	t.Parallel()
 	for _, raw := range []string{"not json", "[]"} {

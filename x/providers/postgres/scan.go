@@ -30,6 +30,9 @@ func (i pgIntrospector) each(
 // given schemas (by default the current one, where unqualified names resolve)
 // with their columns, keys, foreign keys and write effects.
 func (i pgIntrospector) Discover(ctx context.Context, sources []string) ([]entity.Entity, error) {
+	if err := i.gate.check(ctx); err != nil {
+		return nil, err
+	}
 	if len(sources) == 0 {
 		current, err := i.currentSchema(ctx)
 		if err != nil || current == "" {
@@ -202,7 +205,9 @@ func (i pgIntrospector) foreignKeys(ctx context.Context, s *scanned, schemas []s
 
 // cascadesSQL lists, by referenced relation, the foreign keys of other
 // relations whose actions write their rows when rows of the referenced one are
-// deleted or their key updated.
+// deleted or their key updated. It groups by every column it orders by:
+// PostgreSQL before 14 (whose catalogs have no primary keys) and the servers
+// of its lineage (Hologres) do not take con.conname as determined by con.oid.
 const cascadesSQL = `SELECT pn.nspname, pc.relname, cn.nspname, cc.relname, con.confdeltype::text,
 	        con.confupdtype::text, json_agg(pa.attname ORDER BY k.ord)::text, json_agg(fa.attname ORDER BY k.ord)::text
 	 FROM pg_constraint con
@@ -215,7 +220,8 @@ const cascadesSQL = `SELECT pn.nspname, pc.relname, cn.nspname, cc.relname, con.
 	 JOIN pg_attribute fa ON fa.attrelid = con.conrelid AND fa.attnum = k.fattnum
 	 WHERE con.contype = 'f' AND pn.nspname = ANY($1)
 	   AND (con.confdeltype IN ('c', 'n', 'd') OR con.confupdtype IN ('c', 'n', 'd'))
-	 GROUP BY con.oid, pn.nspname, pc.relname, cn.nspname, cc.relname, con.confdeltype, con.confupdtype
+	 GROUP BY con.oid, con.conname, pn.nspname, pc.relname, cn.nspname, cc.relname, con.confdeltype,
+	          con.confupdtype
 	 ORDER BY pn.nspname, pc.relname, cn.nspname, cc.relname, con.conname`
 
 func (i pgIntrospector) cascades(ctx context.Context, s *scanned, schemas []string) error {

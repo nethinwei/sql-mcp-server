@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ type pgExplainer struct {
 	// classify classifies the errors of EXPLAIN as those of statements, so
 	// the gate tells a schema change from a plan it could not get.
 	classify func(error) error
+	gate     *serverGate
 }
 
 // Explain implements cost.Explainer. It wraps the query in EXPLAIN and parses
@@ -33,6 +35,9 @@ type pgExplainer struct {
 // table (see statsFresh); VERBOSE names its schema. Any parse failure
 // degrades to ScanUnknown.
 func (e pgExplainer) Explain(ctx context.Context, query string, args []any) (cost.Plan, error) {
+	if err := e.gate.check(ctx); err != nil {
+		return cost.Plan{}, err
+	}
 	rows, err := e.db.QueryContext(ctx, "EXPLAIN (FORMAT JSON, VERBOSE) "+query, args...)
 	if err != nil {
 		return cost.Plan{}, e.classify(err)
@@ -140,7 +145,7 @@ type pgPlanNode struct {
 	Schema          string       `json:"Schema"` // with VERBOSE
 	TotalCost       float64      `json:"Total Cost"`
 	PlanRows        int64        `json:"Plan Rows"`
-	ActualRows      int64        `json:"Actual Rows"`
+	ActualRows      float64      `json:"Actual Rows"` // an average per loop since PostgreSQL 18
 	ActualLoops     int64        `json:"Actual Loops"`
 	SubplansRemoved int          `json:"Subplans Removed"`
 	Plans           []pgPlanNode `json:"Plans"`
@@ -157,6 +162,9 @@ type pgExplainRow struct {
 func (p *Provider) ExplainAnalyze(ctx context.Context, compiled codegen.Compiled) (plan cost.Plan, err error) {
 	if !compiled.ReadOnly {
 		return cost.Plan{}, ErrAnalyzeRequiresReadOnly
+	}
+	if err := p.gate.check(ctx); err != nil {
+		return cost.Plan{}, err
 	}
 	beginner := p.analyzeTx
 	if beginner == nil {
@@ -219,13 +227,15 @@ func parsePGExplainAnalyze(b []byte) (cost.Plan, error) {
 	if len(arr) == 0 {
 		return cost.Plan{ScanType: cost.ScanUnknown, Raw: b}, errors.New("postgres: empty EXPLAIN ANALYZE plan")
 	}
-	p.ActualRows = actualRowsProcessed(arr[0].Plan)
+	p.ActualRows = int64(math.Round(actualRowsProcessed(arr[0].Plan)))
 	p.ExecutionTime = time.Duration(arr[0].ExecutionTime * float64(time.Millisecond))
 	return p, nil
 }
 
-func actualRowsProcessed(node pgPlanNode) int64 {
-	rows := node.ActualRows * node.ActualLoops
+// actualRowsProcessed sums the rows of every node: its rows per loop (an
+// average, fractional since PostgreSQL 18) times its loops.
+func actualRowsProcessed(node pgPlanNode) float64 {
+	rows := node.ActualRows * float64(node.ActualLoops)
 	for _, child := range node.Plans {
 		rows += actualRowsProcessed(child)
 	}
