@@ -466,3 +466,34 @@ func TestRenamesSwappingNames(t *testing.T) {
 		t.Fatalf("renames = %v", renames)
 	}
 }
+
+// Renames chained in one write (analyst to lead, lead to viewer) move the
+// item on: the key between goes, and Reconcile is told of one rename, from
+// where the item came.
+func TestRenamesChainedInOneWrite(t *testing.T) {
+	e := newEnv(t)
+	lead := workspace.Ref{Kind: "role", Key: "lead"}
+	viewer := workspace.Ref{Kind: "role", Key: "viewer"}
+	var renames map[workspace.Ref]workspace.Ref
+	e.svc.Reconcile = func(_, after workspace.Snapshot, r map[workspace.Ref]workspace.Ref) (workspace.Snapshot, error) {
+		renames = r
+		return after, nil
+	}
+	asLead := map[string]any{"name": "lead", "description": "base", "grants": []any{}}
+	asViewer := map[string]any{"name": "viewer", "description": "base", "grants": []any{}}
+	st, err := e.svc.WriteItems(e.ctx, "root", "root", "edit", []Write{
+		{Ref: lead, Value: asLead, Previous: workspace.Missing, From: &analyst},
+		{Ref: viewer, Value: asViewer, Previous: workspace.Missing, From: &lead},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := st.Workspace.Items
+	if !workspace.IsMissing(items.Get(analyst)) || !workspace.IsMissing(items.Get(lead)) ||
+		!schema.Same(items.Get(viewer), asViewer) || len(st.Open) != 0 {
+		t.Fatalf("items = %v, conflicts %+v", items, st.Open)
+	}
+	if len(renames) != 1 || renames[viewer] != analyst {
+		t.Fatalf("renames = %v", renames)
+	}
+}

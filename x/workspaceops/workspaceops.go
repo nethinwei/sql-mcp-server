@@ -221,51 +221,95 @@ func (s Service) WriteItems(ctx context.Context, username, by, op string, writes
 }
 
 // batch applies writes at once over w's items: values holds what each ref
-// becomes (an item a rename replaces goes missing, unless the batch writes
-// it too: a swap, or its removal), read back by the writes that follow it in
-// the same batch; a write whose previous value is not the current one merges
-// with it, and found keeps what conflicted. A rename from an item the
-// workspace does not have (a retry of one done) is a write alone: what named
-// the item already follows it.
+// becomes, read back by the writes that follow it in the same batch; a
+// write whose previous value is not the current one merges with it, and
+// found keeps what conflicted. Renames are as batchState.rename has them.
 func (s Service) batch(w *workspace.Workspace, writes []Write) (
 	map[workspace.Ref]any, []workspace.Ref, map[workspace.Ref]workspace.Ref, []workspace.Conflict,
 ) {
 	var found []workspace.Conflict
-	refs := make([]workspace.Ref, 0, len(writes))
-	before, renames := w.Items, map[workspace.Ref]workspace.Ref{}
-	at, values := before.Index(), map[workspace.Ref]any{}
-	written := make(map[workspace.Ref]bool, len(writes))
+	b := newBatchState(w.Items, writes)
 	for _, wr := range writes {
-		written[wr.Ref] = true
-	}
-	current := func(ref workspace.Ref) any {
-		if v, ok := values[ref]; ok {
-			return v
-		}
-		if i, ok := at[ref]; ok {
-			return before[i].Value
-		}
-		return workspace.Missing
-	}
-	for _, wr := range writes {
-		if wr.From != nil && *wr.From != wr.Ref && !workspace.IsMissing(before.Get(*wr.From)) {
-			renames[wr.Ref] = *wr.From
-			if !written[*wr.From] && !workspace.IsMissing(current(*wr.From)) {
-				values[*wr.From] = workspace.Missing
-				refs = append(refs, *wr.From)
-			}
+		b.later[wr.Ref]--
+		if wr.From != nil && *wr.From != wr.Ref {
+			b.rename(wr.Ref, *wr.From)
 		}
 		value := wr.Value
-		if was := current(wr.Ref); !s.Schema.Same(was, wr.Previous) {
+		if was := b.current(wr.Ref); !s.Schema.Same(was, wr.Previous) {
 			var conflicts []workspace.ValueConflict
 			value, conflicts = s.Schema.Merge(wr.Previous, wr.Value, was, nil)
 			found = append(found, s.pinned(wr.Ref, conflicts, workspace.Source{Kind: workspace.SourceWorkspace,
 				By: w.UpdatedBy})...)
 		}
-		values[wr.Ref] = value
-		refs = append(refs, wr.Ref)
+		b.values[wr.Ref] = value
+		b.refs = append(b.refs, wr.Ref)
 	}
-	return values, refs, renames, found
+	return b.values, b.refs, b.renames, found
+}
+
+// batchState is a batch of writes being applied over before.
+type batchState struct {
+	before  workspace.Snapshot
+	at      map[workspace.Ref]int
+	values  map[workspace.Ref]any
+	refs    []workspace.Ref
+	renames map[workspace.Ref]workspace.Ref
+	// written are the refs the batch writes; later counts the writes of
+	// each still to come.
+	written map[workspace.Ref]bool
+	later   map[workspace.Ref]int
+}
+
+func newBatchState(before workspace.Snapshot, writes []Write) *batchState {
+	b := &batchState{before: before, at: before.Index(), values: map[workspace.Ref]any{},
+		refs: make([]workspace.Ref, 0, len(writes)), renames: map[workspace.Ref]workspace.Ref{},
+		written: make(map[workspace.Ref]bool, len(writes)), later: make(map[workspace.Ref]int, len(writes))}
+	for _, wr := range writes {
+		b.written[wr.Ref] = true
+		b.later[wr.Ref]++
+	}
+	return b
+}
+
+// current is what ref holds at this point of the batch.
+func (b *batchState) current(ref workspace.Ref) any {
+	if v, ok := b.values[ref]; ok {
+		return v
+	}
+	if i, ok := b.at[ref]; ok {
+		return b.before[i].Value
+	}
+	return workspace.Missing
+}
+
+// rename records the write of to as the rename of from, and vacates from:
+//   - an item of the workspace moves, and its key goes missing, unless the
+//     batch writes it too (a swap, or its removal);
+//   - an item an earlier write of the batch made (a chain: a to b, b to c)
+//     moves on: the rename is from where it came (c from a), and its key
+//     goes missing unless a later write takes it;
+//   - an item that is not there (a retry of a rename done) is a write
+//     alone: what named the item already follows it.
+func (b *batchState) rename(to, from workspace.Ref) {
+	switch {
+	case !workspace.IsMissing(b.before.Get(from)):
+		b.renames[to] = from
+		if b.written[from] || workspace.IsMissing(b.current(from)) {
+			return
+		}
+	case !workspace.IsMissing(b.current(from)):
+		if origin, ok := b.renames[from]; ok {
+			b.renames[to] = origin
+			delete(b.renames, from)
+		}
+		if b.later[from] > 0 {
+			return
+		}
+	default:
+		return
+	}
+	b.values[from] = workspace.Missing
+	b.refs = append(b.refs, from)
 }
 
 // renamesLast puts the renames after the other writes: the removal of the
