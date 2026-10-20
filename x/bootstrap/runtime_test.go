@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -171,6 +173,32 @@ func TestRuntimeWatchRetriesUnchangedContentAfterFailure(t *testing.T) {
 	}
 	cancel()
 	_ = runtime.Close()
+}
+
+// A file that keeps failing is assembled again after a growing delay, not
+// on every poll.
+func TestRuntimeWatchBacksOffAFailingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("one"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var builds atomic.Int32
+	runtime := NewRuntimeWithBuilder(&App{Provider: &fakeProvider{}}, func(string) (*App, error) {
+		builds.Add(1)
+		return nil, errors.New("broken")
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _ = runtime.Watch(ctx, path, time.Millisecond, nil) }()
+	time.Sleep(10 * time.Millisecond)
+	if err := os.WriteFile(path, []byte("two"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond) // 200 polls
+	cancel()
+	_ = runtime.Close()
+	if n := builds.Load(); n == 0 || n > 12 {
+		t.Fatalf("a failing file was built %d times in 200 polls", n)
+	}
 }
 
 func BenchmarkRuntimeAcquire(b *testing.B) {

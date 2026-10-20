@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/core/workspace"
 	"github.com/nethinwei/sql-mcp-server/internal/kit"
@@ -552,17 +553,18 @@ func (r *Service) ApplyPlan(ctx context.Context, in ApplyRequest) (*AppliedPlan,
 	return out, nil
 }
 
-// changes are the items a plan's outcome (payload) changes from what it was
+// changes are the items a plan's outcome (spec, canonical, as its payload
+// says) changes from what it was
 // evaluated against (pc), with their values after, and the effect:
 // the values it changes (item, path, value after), canonical, to compare
 // evaluations: a change made meanwhile to another value of the same item
 // leaves it as it was.
-func (r *Service) changes(pc planContext, payload []byte) (workspace.Snapshot, string, error) {
+func (r *Service) changes(pc planContext, spec *config.Spec) (workspace.Snapshot, string, error) {
 	before, err := itemsOfSpec(pc.spec)
 	if err != nil {
 		return nil, "", err
 	}
-	after, err := itemsOfPayload(payload)
+	after, err := itemsOfSpec(spec)
 	if err != nil {
 		return nil, "", err
 	}

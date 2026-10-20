@@ -44,9 +44,17 @@ func TestClassifySchemaChanges(t *testing.T) {
 			t.Errorf("%s: %v", c.code, err)
 		}
 	}
+	// Another error of the statement is its own, the driver's kept; one of
+	// the server's trouble passes through, counting against its health.
 	other := &pgconn.PgError{Code: "0A000", Message: "FOR UPDATE is not allowed with aggregate functions"}
-	if got := classify(other); got != error(other) {
-		t.Errorf("other errors must pass through: %v", got)
+	if got := classify(other); errors.Is(got, store.ErrStalePlan) || !errors.Is(got, store.ErrRejected) ||
+		!errors.Is(got, other) {
+		t.Errorf("a statement's own error: %v", got)
+	}
+	for _, code := range []string{"53300", "57P03", "58030", "XX000"} {
+		if server := (&pgconn.PgError{Code: code}); classify(server) != error(server) {
+			t.Errorf("%s: the server's trouble must pass through", code)
+		}
 	}
 }
 
@@ -89,5 +97,16 @@ func TestClassifyConnectionsNotMade(t *testing.T) {
 	}
 	if err := classify(&pgconn.PgError{Code: "57P03"}); errors.Is(err, store.ErrConnectionLost) {
 		t.Errorf("57P03: %v, which only a connection being made gets", err)
+	}
+}
+
+// A value its column cannot hold (data exception, class 22) is the caller's,
+// not the database's trouble.
+func TestClassifyInvalidValues(t *testing.T) {
+	t.Parallel()
+	for _, code := range []string{"22P02", "22007", "22008", "22003", "22001"} {
+		if err := classify(&pgconn.PgError{Code: code}); !errors.Is(err, store.ErrInvalidValue) {
+			t.Errorf("%s: %v", code, err)
+		}
 	}
 }

@@ -292,3 +292,47 @@ func TestProjectFieldsMatchesItsReference(t *testing.T) {
 		}
 	}
 }
+
+// An entity with no visible field is never read: there is nothing to
+// select, and a read of nothing would be every column, hidden ones too.
+func TestReadOfNoVisibleFieldIsRefused(t *testing.T) {
+	t.Parallel()
+	reg, err := entity.NewRegistry([]entity.Entity{{Name: "vault",
+		Attributes: []entity.Attribute{{Name: "secret", Excluded: true}},
+		Role:       entity.RoleAccess{entity.ActionRead: {"analyst"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec, err := NewRoleAuthorizer(reg).Authorize(context.Background(),
+		Request{Role: "analyst", Entity: "vault", Action: entity.ActionRead})
+	if err != nil || dec.Allowed {
+		t.Fatalf("decision = %+v, %v", dec, err)
+	}
+}
+
+// An aggregate that reads no field counts the rows of every grant: their
+// fields, which it does not read, narrow nothing.
+func TestAggregateOfNoFieldKeepsEveryGrantsRows(t *testing.T) {
+	t.Parallel()
+	reg, err := entity.NewRegistry([]entity.Entity{{Name: "orders",
+		Attributes: []entity.Attribute{{Name: "id"}, {Name: "amount"}, {Name: "region"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := func(v string) relalg.Predicate { return relalg.Condition{Field: "region", Op: relalg.OpEq, Value: v} }
+	grant := func(id, region string, fields ...string) Grant {
+		return Grant{ID: id, Actions: []entity.Action{entity.ActionAggregate},
+			Fields: &entity.FieldPermissions{Read: fields}, Rows: rows(region)}
+	}
+	a := NewGrantAuthorizer(reg, Policy{Roles: map[string]map[string][]Grant{"analyst": {"orders": {
+		grant("a1", "eu", "id", "amount"), grant("a2", "us", "id", "region"),
+	}}}})
+	dec, err := a.Authorize(context.Background(), Request{Role: "analyst", Entity: "orders",
+		Action: entity.ActionAggregate})
+	if err != nil || !dec.Allowed || len(dec.Grants) != 2 {
+		t.Fatalf("decision = %+v, %v", dec, err)
+	}
+	if _, or := dec.RowFilter.(relalg.Or); !or {
+		t.Fatalf("rows = %#v, want both grants' rows", dec.RowFilter)
+	}
+}

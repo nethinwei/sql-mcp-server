@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/testcontainers/testcontainers-go"
 	tcmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
@@ -24,8 +25,9 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
 )
 
-// startMySQL starts a MySQL container and returns its DSN.
-func startMySQL(t testing.TB) (string, func()) {
+// startMySQL starts a MySQL container, with the server options given, and
+// returns its DSN.
+func startMySQL(t testing.TB, options ...string) (string, func()) {
 	t.Helper()
 	ctx := context.Background()
 	container, err := tcstart.Run(ctx, func(publish tcstart.Publish) (*tcmysql.MySQLContainer, error) {
@@ -33,6 +35,7 @@ func startMySQL(t testing.TB) (string, func()) {
 			tcmysql.WithDatabase("test"),
 			tcmysql.WithUsername("test"),
 			tcmysql.WithPassword("test"),
+			testcontainers.WithCmdArgs(options...),
 			publish,
 		)
 	}, "3306/tcp", "33060/tcp")

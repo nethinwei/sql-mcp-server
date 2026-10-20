@@ -38,9 +38,16 @@ func TestClassifyConstraintViolations(t *testing.T) {
 			t.Errorf("%s: %+v", name, ce)
 		}
 	}
+	// Another error of the statement is its own, the driver's kept; one of
+	// the server's trouble passes through, counting against its health.
 	other := &mysqldriver.MySQLError{Number: 1064, Message: "You have an error in your SQL syntax"}
-	if got := classify(other); got != error(other) {
-		t.Errorf("other errors must pass through: %v", got)
+	var ce *store.ConstraintError
+	if got := classify(other); errors.As(got, &ce) || !errors.Is(got, store.ErrRejected) || !errors.Is(got, other) {
+		t.Errorf("a statement's own error: %v", got)
+	}
+	server := &mysqldriver.MySQLError{Number: 1040, Message: "Too many connections"}
+	if got := classify(server); got != error(server) {
+		t.Errorf("the server's trouble must pass through: %v", got)
 	}
 }
 
@@ -71,6 +78,17 @@ func TestClassifySchemaChanges(t *testing.T) {
 	t.Parallel()
 	for number, want := range map[uint16]error{1146: store.ErrMissingRelation, 1054: store.ErrMissingColumn} {
 		if err := classify(&mysqldriver.MySQLError{Number: number, Message: "gone"}); !errors.Is(err, want) {
+			t.Errorf("%d: %v", number, err)
+		}
+	}
+}
+
+// A value its column cannot hold is the caller's, not the database's
+// trouble.
+func TestClassifyInvalidValues(t *testing.T) {
+	t.Parallel()
+	for _, number := range []uint16{1264, 1265, 1292, 1365, 1366, 1367, 1406, 1411, 3140} {
+		if err := classify(&mysqldriver.MySQLError{Number: number}); !errors.Is(err, store.ErrInvalidValue) {
 			t.Errorf("%d: %v", number, err)
 		}
 	}

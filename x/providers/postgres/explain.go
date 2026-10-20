@@ -9,6 +9,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
@@ -24,7 +25,13 @@ var ErrAnalyzeRequiresReadOnly = errors.New("postgres: EXPLAIN ANALYZE requires 
 // pgExplainer estimates a plan by running EXPLAIN (FORMAT JSON).
 type pgExplainer struct {
 	pool *sqladapter.Pool
+	// fresh keeps the tables statsFresh found fresh, for statsTTL: every
+	// read of them asks, each time a query.
+	fresh *sync.Map
 }
+
+// statsTTL is how long statsFresh's answer for a table is kept.
+const statsTTL = time.Minute
 
 // Explain implements cost.Explainer. It wraps the query in EXPLAIN and parses
 // the JSON plan, walking the plan tree to detect sorts, temporary/hash nodes,
@@ -119,6 +126,22 @@ const smallTablePages = 8
 // statsFresh reports whether the statistics of the table schema.rel are
 // fresh (see statsFreshSQL).
 func (e pgExplainer) statsFresh(ctx context.Context, schema, rel string) bool {
+	key := schema + "\x00" + rel
+	if e.fresh != nil {
+		if at, ok := e.fresh.Load(key); ok && time.Since(at.(time.Time)) < statsTTL {
+			return true
+		}
+	}
+	got := e.queryStatsFresh(ctx, schema, rel)
+	// Only fresh is kept: a table once analyzed stays so, while one not yet
+	// is told at once when ANALYZE runs.
+	if e.fresh != nil && got && ctx.Err() == nil {
+		e.fresh.Store(key, time.Now())
+	}
+	return got
+}
+
+func (e pgExplainer) queryStatsFresh(ctx context.Context, schema, rel string) bool {
 	var fresh sql.NullBool
 	if err := e.pool.DB().QueryRowContext(ctx, statsFreshSQL, rel, schema, smallTablePages).Scan(&fresh); err != nil ||
 		!fresh.Valid {

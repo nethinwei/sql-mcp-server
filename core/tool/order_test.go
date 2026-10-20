@@ -164,6 +164,9 @@ func TestReadOrderByRules(t *testing.T) {
 		`{"entity":"orders","orderBy":[{"field":"region"}],"cursor":{"region":"a","id":null}}`,
 		`{"entity":"orders","orderBy":[{"field":"amount"}],"cursor":{"amount":1}}`,
 		`{"entity":"orders","distinct":true}`,
+		// Distinct rows of a masked field would count its values.
+		`{"entity":"orders","fields":["phone"],"distinct":true}`,
+		`{"entity":"orders","fields":["region","phone"],"distinct":true}`,
 		`{"entity":"orders","fields":["amount"],"distinct":true,"orderBy":[{"field":"region"}]}`,
 	} {
 		if _, err := readJSON(t, tc, input); !errors.Is(err, ErrInvalidInput) {

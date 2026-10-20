@@ -64,15 +64,25 @@ var (
 	ErrNotOwner = errors.New("catalog: the scan batch is not this run's")
 )
 
+// BatchRetention is how long a finished batch is kept: CreateBatch drops
+// the batches of its datasource finished longer ago, so that the batches
+// kept, which it reads, do not grow without end.
+const BatchRetention = 30 * 24 * time.Hour
+
 // BatchStore keeps scan batches.
 type BatchStore interface {
 	// CreateBatch creates b (its owner beating at b.Heartbeat) unless its
 	// datasource has maxOpen unfinished batches (ErrTooManyBatches), checking
 	// and creating in one step, so concurrent requests, of any process,
 	// cannot pass the bound together. A batch started before with b's
-	// RequestKey for the datasource is returned instead, with false.
+	// RequestKey for the datasource is returned instead, with false. The
+	// batches of the datasource finished BatchRetention before b started
+	// are dropped.
 	CreateBatch(ctx context.Context, b Batch, maxOpen int) (Batch, bool, error)
 	Batch(ctx context.Context, id string) (Batch, bool, error)
+	// BatchCanceled reports whether batch id was canceled (false when there
+	// is none), without reading its items.
+	BatchCanceled(ctx context.Context, id string) (bool, error)
 	// Batches lists the batches of datasource, newest first.
 	Batches(ctx context.Context, datasource string, limit int) ([]Batch, error)
 	// UnfinishedBatches lists every batch not finished.
@@ -106,6 +116,12 @@ func cloneBatch(b Batch) Batch {
 func (m *MemoryStore) CreateBatch(_ context.Context, b Batch, maxOpen int) (Batch, bool, error) {
 	m.batches.mu.Lock()
 	defer m.batches.mu.Unlock()
+	for id, other := range m.batches.all {
+		if other.Datasource == b.Datasource && !other.FinishedAt.IsZero() &&
+			other.FinishedAt.Before(b.StartedAt.Add(-BatchRetention)) {
+			delete(m.batches.all, id)
+		}
+	}
 	open := 0
 	for _, other := range m.batches.all {
 		if other.Datasource != b.Datasource {
@@ -133,6 +149,12 @@ func (m *MemoryStore) Batch(_ context.Context, id string) (Batch, bool, error) {
 	defer m.batches.mu.Unlock()
 	b, ok := m.batches.all[id]
 	return cloneBatch(b), ok, nil
+}
+
+func (m *MemoryStore) BatchCanceled(_ context.Context, id string) (bool, error) {
+	m.batches.mu.Lock()
+	defer m.batches.mu.Unlock()
+	return m.batches.all[id].Canceled, nil
 }
 
 func (m *MemoryStore) Batches(_ context.Context, datasource string, limit int) ([]Batch, error) {
@@ -201,6 +223,7 @@ func (m *MemoryStore) MoveItem(
 		return false, nil
 	}
 	b.Items = slices.Clone(b.Items)
+	item.NotBefore = item.NotBefore.Truncate(time.Microsecond) // as a store keeps it
 	b.Items[i] = item
 	m.batches.all[id] = b
 	return true, nil

@@ -103,8 +103,12 @@ func TestRevokedSessionIsClosed(t *testing.T) {
 	if got := revoke([]string{"user:alice"}); len(got) != 1 || got[0] != session.ID() {
 		t.Fatalf("revoked %v", got)
 	}
-	if open() != 0 {
-		t.Fatalf("open sessions after revoking = %d, want 0", open())
+	// Its binding is gone at once; it closes in the background, as its
+	// requests running end (they do not hold up the reload revoking it).
+	for deadline := time.Now().Add(5 * time.Second); open() != 0; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("open sessions after revoking = %d, want 0", open())
+		}
 	}
 }
 

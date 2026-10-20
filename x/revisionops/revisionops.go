@@ -44,18 +44,27 @@ func (e *ConflictError) Unwrap() error { return revision.ErrConflict }
 // are not written: they apply when it loads): a configuration the runtime would
 // refuse to load is never stored.
 func Normalize(spec *config.Spec) ([]byte, error) {
+	payload, _, err := NormalizeResolved(spec)
+	return payload, err
+}
+
+// NormalizeResolved is Normalize returning as well the configuration spec
+// resolves to, which it resolved to check it: a caller needing both does not
+// resolve it again (a configuration of thousands of entities takes long).
+func NormalizeResolved(spec *config.Spec) ([]byte, *config.Config, error) {
 	spec.Canonical()
 	cfg, err := config.Resolve(spec)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := bootstrap.ValidateStorePayload(cfg); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := bootstrap.CheckOffline(cfg); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return configyaml.EncodeSpec(spec)
+	payload, err := configyaml.EncodeSpec(spec)
+	return payload, cfg, err
 }
 
 func (s Service) audit(op string, rev revision.Revision, author string) {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -106,7 +107,7 @@ func Open(dsn string, opts providerregistry.Options) (*Provider, error) {
 	}
 
 	pool := sqladapter.New(db, sqladapter.TextRows(binaryTypes), classify)
-	p := &Provider{Base: sqladapter.NewBase(pool, Dialect{}, pgExplainer{pool: pool},
+	p := &Provider{Base: sqladapter.NewBase(pool, Dialect{}, pgExplainer{pool: pool, fresh: &sync.Map{}},
 		pgIntrospector{db: db}).WithLimits(caps)}
 	p.analyzeTx = p
 	return p, nil

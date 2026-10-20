@@ -292,3 +292,41 @@ func TestValidConfigurationsPassCheckOffline(t *testing.T) {
 		}
 	}
 }
+
+// laggingSummary reports the published revision as it was at summary while
+// the store has published another since.
+type laggingSummary struct {
+	revision.Store
+	summary revision.Revision
+}
+
+func (s laggingSummary) PublishedSummary(context.Context) (revision.Revision, error) {
+	return s.summary, nil
+}
+
+// A revision published between the summary a poll reads and the revision it
+// loads is the one that failed: it is the one reported stale.
+func TestWatchStoreReportsTheRevisionLoaded(t *testing.T) {
+	t.Parallel()
+	store := revision.NewMemoryStore(nil)
+	first := publishPayload(t, store, "ok-1")
+	runtime := NewRuntimeWithBuilder(&App{DefaultRole: "ok-1"}, nil)
+	defer runtime.Close()
+	build := func(rev revision.Revision) (*App, error) {
+		if string(rev.Payload) == "broken" {
+			return nil, errors.New("assemble failed")
+		}
+		return &App{DefaultRole: string(rev.Payload)}, nil
+	}
+	summary := publishPayload(t, store, "ok-2")
+	broken := publishPayload(t, store, "broken")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		_ = runtime.WatchStore(ctx, laggingSummary{store, summary}, first.ID, time.Millisecond, build, func(error) {})
+	}()
+	waitFor(t, func() bool { _, ok := runtime.Stale(); return ok })
+	if s, _ := runtime.Stale(); s.RevisionID != broken.ID {
+		t.Fatalf("stale revision = %d, want #%d (the one loaded), not #%d", s.RevisionID, broken.ID, summary.ID)
+	}
+}

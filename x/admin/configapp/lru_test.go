@@ -37,8 +37,8 @@ func TestLRU(t *testing.T) {
 	if !rebuilt {
 		t.Fatal("b was kept past the budget")
 	}
-	if v := c.get("huge", func() (int, int) { return 9, 100 }); v != 9 || len(c.entries) != 1 {
-		t.Fatalf("an entry past the budget alone: %d, %d entries", v, len(c.entries))
+	if v := c.get("huge", func() (int, int) { return 9, 100 }); v != 9 || c.order.Len() != 1 || len(c.byKey) != 1 {
+		t.Fatalf("an entry past the budget alone: %d, %d entries", v, c.order.Len())
 	}
 }
 

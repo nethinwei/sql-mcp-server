@@ -238,7 +238,7 @@ func TestTransactionCommitFailureRollsBackAndWrapsError(t *testing.T) {
 func TestTransactionToolsUseRequestContextAndTimeout(t *testing.T) {
 	t.Parallel()
 	e := entity.Entity{
-		Name: "users", DataSource: "default",
+		Name: "users", DataSource: "default", Attributes: []entity.Attribute{{Name: "id"}},
 		Role: entity.RoleAccess{entity.ActionRead: {"reader"}},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
@@ -378,7 +378,7 @@ func TestTransactionCacheInvalidatesOnlyAfterCommit(t *testing.T) {
 func TestBeginTransactionRequiresRoleAndDefaultsReadOnly(t *testing.T) {
 	t.Parallel()
 	e := entity.Entity{
-		Name: "users", DataSource: "default",
+		Name: "users", DataSource: "default", Attributes: []entity.Attribute{{Name: "id"}},
 		Role: entity.RoleAccess{entity.ActionRead: {"reader"}, entity.ActionCreate: {"writer"}},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
@@ -424,7 +424,8 @@ func TestBeginTransactionRequiresRoleAndDefaultsReadOnly(t *testing.T) {
 
 func TestBeginTransactionBindsResolvedDefaultDatasource(t *testing.T) {
 	t.Parallel()
-	e := entity.Entity{Name: "users", DataSource: "main", Role: entity.RoleAccess{entity.ActionRead: {"reader"}}}
+	e := entity.Entity{Name: "users", DataSource: "main", Attributes: []entity.Attribute{{Name: "id"}},
+		Role: entity.RoleAccess{entity.ActionRead: {"reader"}}}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	db := &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) {
 		return &storetest.FakeTx{}, nil

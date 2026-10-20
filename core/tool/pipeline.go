@@ -41,6 +41,12 @@ func authorizeRequest(ctx context.Context, tc Context, req rbac.Request) (grant,
 	if !dec.Allowed {
 		return grant{}, denyUnauthorized(dec)
 	}
+	if req.Action == entity.ActionRead && len(dec.Fields) == 0 {
+		// A read selects the fields it may return: none would be SELECT *,
+		// every column, hidden ones too. The authorizer refuses it; an
+		// authorizer that does not is refused here (fail closed).
+		return grant{}, denyUnauthorized(rbac.Decision{Reason: "no readable fields"})
+	}
 	if tc.Registry != nil {
 		if res, ok := tc.Registry.Resolve(req.Entity); ok && res.Entity.Unavailable != "" {
 			return grant{}, fmt.Errorf("%w: %q: %s", ErrEntityUnavailable, req.Entity, res.Entity.Unavailable)
@@ -113,22 +119,30 @@ func estimateSQL(ctx context.Context, tc Context, route EscapeRoute, sql string,
 		return gated{}, &UnestimableError{Cause: err}
 	}
 	dec := cost.Estimate{Threshold: route.Threshold.Tighten(tc.Tightening), FailClosed: true}.Evaluate(plan, nil)
+	if err := admitDecision(ctx, tc, dec); err != nil {
+		return gated{}, err
+	}
+	return gated{Compiled: compiled, plan: dec.Plan}, nil
+}
+
+// admitDecision reports the gate's decision (FireCostGate) and admits what
+// it allowed within the caller's scanned-row budget: the one way the
+// governed tools and the escape hatch judge a plan.
+func admitDecision(ctx context.Context, tc Context, dec cost.Decision) error {
 	verdict := "allow"
-	if !dec.Allow {
+	switch {
+	case dec.Allow:
+	case dec.Soft:
+		verdict = "soft"
+	default:
 		verdict = "hard"
-		if dec.Soft {
-			verdict = "soft"
-		}
 	}
 	estimated, score := dec.Estimate()
 	tc.Hooks.FireCostGate(ctx, estimated, score, verdict)
 	if !dec.Allow {
-		return gated{}, toExceededError(dec)
+		return toExceededError(dec)
 	}
-	if err := checkScannedBudget(tc, dec.Plan); err != nil {
-		return gated{}, err
-	}
-	return gated{Compiled: compiled, plan: dec.Plan}, nil
+	return checkScannedBudget(tc, dec.Plan)
 }
 
 // checkScannedBudget holds a plan the cost gate allowed to the caller's
@@ -233,7 +247,7 @@ func (st statement) queryRaw(ctx context.Context) (out rawRows, err error) {
 		if err := rows.Scan(pointers...); err != nil {
 			return rawRows{}, st.fail(err)
 		}
-		if err := st.tc.results.add(rowOf(out.columns, values)); errors.Is(err, errResultCut) {
+		if err := st.tc.results.addValues(values); errors.Is(err, errResultCut) {
 			out.truncated = true
 			break
 		} else if err != nil {
@@ -245,15 +259,6 @@ func (st statement) queryRaw(ctx context.Context) (out rawRows, err error) {
 		return rawRows{}, st.fail(err)
 	}
 	return out, nil
-}
-
-// rowOf is values under columns, as the meter counts a row.
-func rowOf(columns []string, values []any) map[string]any {
-	row := make(map[string]any, len(columns))
-	for i, c := range columns {
-		row[c] = values[i]
-	}
-	return row
 }
 
 // admitted refuses a statement made without an authorization or without SQL

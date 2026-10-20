@@ -118,7 +118,7 @@ func (c *fieldRefs) entity(named config.EntityConfig, e EntityItem) {
 		switch u.Kind {
 		case configrefs.UseFieldACL, configrefs.UseRowPolicy:
 			c.add(u.Entity, u.Field, "legacyAccess", eid, "")
-		default: // relationship, primaryKey, uniqueKey, tenantPolicy
+		default: // relationship, primaryKey, uniqueKey, tenantPolicy, and any other, by its kind
 			c.add(u.Entity, u.Field, u.Kind, eid, "")
 		}
 	})

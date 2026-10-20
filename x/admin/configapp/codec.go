@@ -12,7 +12,6 @@ import (
 	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/configedit"
-	"github.com/nethinwei/sql-mcp-server/x/configyaml"
 )
 
 // A configuration as workspace items is its Sections, item by item: each
@@ -171,15 +170,6 @@ func itemsOfSpec(spec *config.Spec) (workspace.Snapshot, error) {
 		return nil, err
 	}
 	return itemsOfSections(sections)
-}
-
-// itemsOfPayload are the items of a payload, as it says.
-func itemsOfPayload(payload []byte) (workspace.Snapshot, error) {
-	spec, err := configyaml.DecodeSpec(payload)
-	if err != nil {
-		return nil, err
-	}
-	return itemsOfSpec(spec)
 }
 
 // edit is items as an edit of a base revision.

@@ -139,16 +139,15 @@ func parseOBExplain(b []byte) (cost.Plan, error) {
 	return plan, nil
 }
 
-// obScanType maps an OceanBase operator (or MySQL access_type in the fallback
-// path) to a ScanType.
+// obScanType maps an OceanBase operator to a ScanType (a MySQL-compatible
+// plan is parsed as MySQL's: see parseOBExplain).
 func obScanType(op string) cost.ScanType {
 	switch {
-	case strings.Contains(op, "FULL SCAN") || strings.EqualFold(op, "ALL"):
+	case strings.Contains(op, "FULL SCAN"):
 		return cost.ScanFull
-	case strings.Contains(op, "GET") || strings.EqualFold(op, "const") ||
-		strings.EqualFold(op, "eq_ref") || strings.EqualFold(op, "system"):
+	case strings.Contains(op, "GET"):
 		return cost.ScanPoint
-	case strings.Contains(op, "INDEX") || strings.Contains(op, "RANGE") || strings.EqualFold(op, "ref"):
+	case strings.Contains(op, "INDEX") || strings.Contains(op, "RANGE"):
 		return cost.ScanIndex
 	}
 	return cost.ScanUnknown

@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -189,5 +190,32 @@ func TestDiff(t *testing.T) {
 	}
 	if len(schema.Diff(js(t, `{"a":1,"description":""}`), js(t, `{"a":1}`))) != 0 {
 		t.Fatal("unset optional text differs")
+	}
+}
+
+// A pinned conflict on a list element that has since been grouped with
+// another of its key (a second grant on one entity) cannot take the other
+// side's value: which element it replaces is not known. Resolving it so is
+// refused, the workspace untouched; keeping the workspace's value resolves it.
+func TestResolveTheirsThroughAGroupIsRefused(t *testing.T) {
+	ref := Ref{Kind: "role", Key: "r"}
+	snap := func(s string) Snapshot { return Snapshot{{Ref: ref, Value: js(t, s)}} }
+	old := snap(`{"name":"r","grants":[{"entity":"x","actions":["READ"]}]}`)
+	local := snap(`{"name":"r","grants":[{"entity":"x","actions":["READ","UPDATE"]}]}`)
+	next := snap(`{"name":"r","grants":[{"entity":"x","actions":["READ","DELETE"]}]}`)
+	now, cs := schema.Replay(old, local, next, Source{Kind: SourceDraft, ID: "1"}, true)
+	if len(cs) != 1 || !cs[0].Pinned {
+		t.Fatalf("conflicts = %+v", cs)
+	}
+	grouped := `{"name":"r","grants":[{"entity":"x","actions":["READ","UPDATE"],"readFields":["id"]},` +
+		`{"entity":"x","actions":["READ"]}]}`
+	now = now.With(ref, js(t, grouped))
+	got, left, err := schema.Resolve(now, next, cs, cs[0].ID, true)
+	if !errors.Is(err, ErrUnplaceable) || !schema.Same(got.Get(ref), js(t, grouped)) || len(left) != 1 {
+		t.Fatalf("theirs: %v, item %s, left %v", err, show(got.Get(ref)), left)
+	}
+	if got, _, err := schema.Resolve(now, next, cs, cs[0].ID, false); err != nil ||
+		!schema.Same(got.Get(ref), js(t, grouped)) {
+		t.Fatalf("mine: %v, item %s", err, show(got.Get(ref)))
 	}
 }

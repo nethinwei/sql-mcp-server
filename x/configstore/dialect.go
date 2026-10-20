@@ -31,6 +31,10 @@ type dialect struct {
 	// PostgreSQL, and two Inits would write the same metadata rows. SQLite
 	// serializes its writers itself.
 	lockInit func(ctx context.Context, conn *sql.Conn) (unlock func(), err error)
+	// published finds the published revision by the index that holds at
+	// most one (see partialOnePublished, generatedOnePublished): a server
+	// reads it every poll.
+	published string
 }
 
 // initLockKey names the store's Init lock (PostgreSQL takes a number).
@@ -288,6 +292,7 @@ var dialects = map[string]dialect{
 		prepareDSN:     sqliteDSN,
 		migrations:     storeMigrations("TEXT", "TEXT", partialOnePublished),
 		alreadyApplied: sqliteAlreadyApplied,
+		published:      partialPublished,
 	},
 	"postgres": {
 		driver:         "pgx",
@@ -296,24 +301,39 @@ var dialects = map[string]dialect{
 		migrations:     storeMigrations("TEXT", "TEXT", partialOnePublished),
 		alreadyApplied: postgresAlreadyApplied,
 		lockInit:       postgresLockInit,
+		published:      partialPublished,
 	},
-	"mysql": {
-		driver:         "mysql",
-		prepareDSN:     identity,
-		migrations:     storeMigrations("TEXT", "LONGTEXT", generatedOnePublished),
-		alreadyApplied: mysqlAlreadyApplied,
-		lockInit:       mysqlLockInit,
-	},
-	"oceanbase": {
-		driver:         "mysql",
-		prepareDSN:     identity,
-		migrations:     storeMigrations("TEXT", "LONGTEXT", generatedOnePublished),
-		alreadyApplied: mysqlAlreadyApplied,
-		lockInit:       mysqlLockInit,
-	},
+	"mysql":     mysqlStore,
+	"oceanbase": mysqlStore, // speaks MySQL's protocol and DDL
+}
+
+// partialPublished is what the partial index of the published revision
+// covers.
+const partialPublished = "state = 'published'"
+
+var mysqlStore = dialect{
+	driver:         "mysql",
+	prepareDSN:     mysqlDSN,
+	migrations:     storeMigrations("TEXT", "LONGTEXT", generatedOnePublished),
+	alreadyApplied: mysqlAlreadyApplied,
+	lockInit:       mysqlLockInit,
+	published:      "published_flag = 1", // the generated column, the unique index's
 }
 
 func identity(dsn string) string { return dsn }
+
+// mysqlDSN has MySQL report the rows an UPDATE matched, as PostgreSQL and
+// SQLite do, not only those whose values it changed: the store reads the
+// count as "found" (a heartbeat written twice in one microsecond is still
+// the owner's). A DSN that does not parse is left to fail when opened.
+func mysqlDSN(dsn string) string {
+	cfg, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		return dsn
+	}
+	cfg.ClientFoundRows = true
+	return cfg.FormatDSN()
+}
 
 // sqliteDSN turns a path into a modernc DSN that waits for the write lock
 // instead of failing with SQLITE_BUSY and uses WAL so readers (a polling

@@ -15,6 +15,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/engine"
 	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
+	"github.com/nethinwei/sql-mcp-server/core/store"
 )
 
 // TestDenialForSentinels pins the stable machine code and retryable flag for
@@ -227,5 +228,16 @@ func TestTransientDenials(t *testing.T) {
 		if !ok || d.Code != code || !d.Retryable || len(d.Hints) == 0 {
 			t.Errorf("%v: denial = %+v, %v; want %s", err, d, ok, code)
 		}
+	}
+}
+
+// A value the database refused for its field's type is the caller's to fix:
+// invalid input, without the database's message.
+func TestDenialForInvalidValue(t *testing.T) {
+	t.Parallel()
+	driver := errors.New(`invalid input syntax for type timestamp: "secret"`)
+	d, ok := DenialFor(WrapDBError(fmt.Errorf("%w: %w", store.ErrInvalidValue, driver)), "d")
+	if !ok || d.Code != CodeInvalidInput || strings.Contains(d.Reason, "secret") {
+		t.Fatalf("denial = %+v, %v", d, ok)
 	}
 }

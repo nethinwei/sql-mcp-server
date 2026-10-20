@@ -94,6 +94,9 @@ func (s *SQLStore) batches(ctx context.Context, query string, args ...any) ([]ca
 func (s *SQLStore) CreateBatch(ctx context.Context, b catalog.Batch, maxOpen int) (catalog.Batch, bool, error) {
 	var existing *catalog.Batch
 	err := s.locked(ctx, func(tx *sql.Tx) error {
+		if err := s.dropOldBatches(ctx, tx, b.Datasource, b.StartedAt.Add(-catalog.BatchRetention)); err != nil {
+			return err
+		}
 		if b.RequestKey != "" {
 			found, err := scanBatch(s.queryRow(ctx, tx, "SELECT "+batchColumns+
 				" FROM smcp_scan_batches WHERE datasource = ? AND request_key = ?", b.Datasource, b.RequestKey))
@@ -244,6 +247,29 @@ func (s *SQLStore) FinishBatch(ctx context.Context, id, owner string, at time.Ti
 		err = fmt.Errorf("configstore: finish scan batch: %w", err)
 	}
 	return err
+}
+
+// dropOldBatches drops the batches of datasource finished before, with their
+// items.
+func (s *SQLStore) dropOldBatches(ctx context.Context, tx *sql.Tx, datasource string, before time.Time) error {
+	old := "SELECT id FROM smcp_scan_batches WHERE datasource = ? AND finished_us > 0 AND finished_us < ?"
+	if _, err := s.exec(ctx, tx, "DELETE FROM smcp_scan_batch_items WHERE batch_id IN ("+old+")", datasource,
+		toMicros(before)); err != nil {
+		return err
+	}
+	_, err := s.exec(ctx, tx, "DELETE FROM smcp_scan_batches WHERE datasource = ? AND finished_us > 0 "+
+		"AND finished_us < ?", datasource, toMicros(before))
+	return err
+}
+
+// BatchCanceled implements catalog.BatchStore.
+func (s *SQLStore) BatchCanceled(ctx context.Context, id string) (bool, error) {
+	var canceled int
+	err := s.queryRow(ctx, s.db, "SELECT canceled FROM smcp_scan_batches WHERE id = ?", id).Scan(&canceled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return canceled != 0, err
 }
 
 // CancelBatch implements catalog.BatchStore.

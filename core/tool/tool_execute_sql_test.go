@@ -238,7 +238,7 @@ func TestExecuteSQLLimitsSurviveCostDisabled(t *testing.T) {
 	if err != nil || res.Content[0]["truncated"] != true || !deadline {
 		t.Fatalf("row cap and timeout must hold: %v %+v deadline=%v", err, res.Content, deadline)
 	}
-	tc.MaxReturnedBytes = 8
+	tc.MaxReturnedBytes = 4 // a row of the result: [1] and its separator
 	_, err = RunTool(context.Background(), ExecuteSQLTool{}, sqlInput(t, nil), tc)
 	if !errors.Is(err, budget.ErrExceeded) {
 		t.Fatalf("byte cap: %v", err)

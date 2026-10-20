@@ -445,9 +445,12 @@ func (s Service) Resolve(ctx context.Context, username, by, id string, theirs bo
 				ref = c.Ref
 			}
 		}
-		items, left, ok := s.Schema.Resolve(w.Items, base, w.Conflicts, id, theirs)
-		if !ok {
+		items, left, err := s.Schema.Resolve(w.Items, base, w.Conflicts, id, theirs)
+		if errors.Is(err, workspace.ErrNotOpen) {
 			return nil, workspace.LogEntry{}, ErrNoConflict
+		}
+		if err != nil {
+			return nil, workspace.LogEntry{}, err
 		}
 		w.Items, w.Conflicts = items, left
 		return nil, workspace.LogEntry{Op: "resolve", Items: []workspace.Ref{ref}}, nil

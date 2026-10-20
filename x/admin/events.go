@@ -90,7 +90,7 @@ func (f *publishedFeed) subscribe() (<-chan feedState, func()) {
 
 func (f *publishedFeed) read(ctx context.Context) feedState {
 	var out feedState
-	if rev, err := f.store.Published(ctx); err == nil {
+	if rev, err := f.store.PublishedSummary(ctx); err == nil { // its ID and author: not its payload
 		out.Published = publishedEvent{ID: strconv.FormatInt(rev.ID, 10), Author: rev.Author}
 	}
 	if seq, err := f.store.Sequence(ctx); err == nil {

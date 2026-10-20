@@ -3,12 +3,28 @@ package postgres
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/nethinwei/sql-mcp-server/core/store"
 )
+
+// healthClasses are the SQLSTATE classes of the database's own trouble:
+// insufficient resources (53), operator intervention (57), system (58),
+// configuration file (F0), foreign data wrapper (HV) and internal (XX)
+// errors. The others are a statement's own.
+var healthClasses = []string{"53", "57", "58", "F0", "HV", "XX"}
+
+// rejected marks err, of a statement the database refused with code, as
+// the statement's own unless its class tells of the database's health.
+func rejected(code string, err error) error {
+	if len(code) < 2 || slices.Contains(healthClasses, code[:2]) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", store.ErrRejected, err)
+}
 
 // constraintKinds maps integrity-violation SQLSTATEs to constraint kinds.
 var constraintKinds = map[string]string{
@@ -78,9 +94,12 @@ func classify(err error) error {
 	if pgErr.Code == "0A000" && strings.Contains(pgErr.Message, stalePlan) {
 		return fmt.Errorf("%w: %w", store.ErrStalePlan, err)
 	}
+	if strings.HasPrefix(pgErr.Code, "22") { // data exception: a value the statement was given
+		return fmt.Errorf("%w: %w", store.ErrInvalidValue, err)
+	}
 	kind, ok := constraintKinds[pgErr.Code]
 	if !ok {
-		return err
+		return rejected(pgErr.Code, err)
 	}
 	columns := detailColumns(pgErr.Detail)
 	if pgErr.ColumnName != "" {

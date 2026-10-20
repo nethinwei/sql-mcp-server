@@ -1,5 +1,7 @@
 package workspace
 
+import "errors"
+
 // Conflicts arise when changes are re-applied onto another side (Replay):
 // a newer published revision (an update), a draft taken in, or a write of
 // the same workspace made meanwhile. They stand until resolved, or until the
@@ -117,12 +119,25 @@ func (s Schema) Carry(pending, found []Conflict, now, base Snapshot, source *Sou
 	return out
 }
 
+// Errors of Resolve.
+var (
+	// ErrNotOpen: no open conflict has the ID given.
+	ErrNotOpen = errors.New("workspace: no such open conflict")
+	// ErrUnplaceable: the other side's value of a pinned conflict is of a
+	// list element that now shares its key with others (a second grant on
+	// one entity, say): which of them it replaces is not known, so it cannot
+	// be taken; the workspace's can be kept, or the list edited by hand.
+	ErrUnplaceable = errors.New("workspace: the other side's value is of a list element that now shares " +
+		"its key with others: keep yours, or edit the list by hand")
+)
+
 // Resolve resolves conflict id: mine keeps the workspace's value, theirs
 // takes the other side's (removing it when removed there). Its choice
 // decides the values under it on its side too; what now matches the other
-// side needs no choice. It returns the workspace and the conflicts left, or
-// false when id is not an open conflict.
-func (s Schema) Resolve(now, base Snapshot, cs []Conflict, id string, theirs bool) (Snapshot, []Conflict, bool) {
+// side needs no choice. It returns the workspace and the conflicts left;
+// ErrNotOpen when id is not an open conflict, ErrUnplaceable when the other
+// side's value cannot be put back.
+func (s Schema) Resolve(now, base Snapshot, cs []Conflict, id string, theirs bool) (Snapshot, []Conflict, error) {
 	var chosen Open
 	found := false
 	for _, c := range cs {
@@ -131,9 +146,14 @@ func (s Schema) Resolve(now, base Snapshot, cs []Conflict, id string, theirs boo
 		}
 	}
 	if !found {
-		return now, cs, false
+		return now, cs, ErrNotOpen
 	}
 	if theirs {
+		// A pinned conflict keeps its path (see View): one through a list
+		// element now grouped with others names none of them alone.
+		if chosen.Pinned && len(s.addressable(chosen.Path, now.Get(chosen.Ref))) < len(chosen.Path) {
+			return now, cs, ErrUnplaceable
+		}
 		item := s.SetAt(now.Get(chosen.Ref), chosen.Path, chosen.TheirsValue)
 		now = now.With(chosen.Ref, item)
 	}
@@ -145,5 +165,5 @@ func (s Schema) Resolve(now, base Snapshot, cs []Conflict, id string, theirs boo
 			left = append(left, c)
 		}
 	}
-	return now, left, true
+	return now, left, nil
 }

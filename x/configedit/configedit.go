@@ -73,11 +73,7 @@ func ApplySpec(base *config.Spec, edit Edit) (*config.Spec, *config.Config, []by
 	if err := applySections(&spec, edit); err != nil {
 		return nil, nil, nil, err
 	}
-	payload, err := revisionops.Normalize(&spec)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	cfg, err := config.Resolve(&spec)
+	payload, cfg, err := revisionops.NormalizeResolved(&spec)
 	if err != nil {
 		return nil, nil, nil, err
 	}

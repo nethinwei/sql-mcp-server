@@ -312,15 +312,9 @@ func (a *GrantAuthorizer) Authorize(_ context.Context, req Request) (Decision, e
 	if len(covering) == 0 {
 		return a.deniedFieldScope(req, candidates, readFields, writeFields, res.Attributes), nil
 	}
-	// Only actions that return rows project fields; a write is covered by the
-	// fields it reads and writes, not by fields it never returns.
-	var projected []string
-	if returnsRows(req.Action) {
-		projected = a.unionProjection(res.Attributes, req.Fields, covering)
-		covering = a.coveringGrants(covering, projected, nil, res.Attributes)
-		if len(covering) == 0 {
-			return a.ambiguousFieldScope(req, candidates, res.Attributes), nil
-		}
+	projected, covering, denied := a.project(req, res, candidates, covering)
+	if denied != nil {
+		return *denied, nil
 	}
 	filter, ids := effectiveRowFilter(covering, res.Entity.TenantPolicy)
 	return Decision{
@@ -329,6 +323,34 @@ func (a *GrantAuthorizer) Authorize(_ context.Context, req Request) (Decision, e
 		RowFilter: resolveSubject(filter, req.Subject),
 		Grants:    ids,
 	}, nil
+}
+
+// project is the projection of req, with the grants covering it, or why it
+// is denied. Only actions that return rows project fields; a write is
+// covered by the fields it reads and writes, not by fields it never
+// returns. A read returns its projection, so the grants covering it alone
+// serve it, and one of nothing is refused: no field is no statement (it is
+// never SELECT *). An aggregate returns what it reads: its projection only
+// tells which fields it may read, and narrows nothing (its rows would).
+func (a *GrantAuthorizer) project(req Request, res entity.Resolved, candidates, covering []Grant) (
+	[]string, []Grant, *Decision,
+) {
+	if !returnsRows(req.Action) {
+		return nil, covering, nil
+	}
+	projected := a.unionProjection(res.Attributes, req.Fields, covering)
+	if req.Action != entity.ActionRead {
+		return projected, covering, nil
+	}
+	if len(projected) == 0 {
+		return nil, nil, &Decision{Allowed: false, Reason: fmt.Sprintf("role %q has no readable fields", req.Role)}
+	}
+	covering = a.coveringGrants(covering, projected, nil, res.Attributes)
+	if len(covering) == 0 {
+		denied := a.ambiguousFieldScope(req, candidates, res.Attributes)
+		return nil, nil, &denied
+	}
+	return projected, covering, nil
 }
 
 func returnsRows(action entity.Action) bool {

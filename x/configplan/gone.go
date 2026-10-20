@@ -65,20 +65,23 @@ func scannedSchema(src Source, schema string) bool {
 // removeGone removes the entities of gone tables, but those excluded; the
 // references naming them go with them (see qualifyReferences).
 func (ev *evaluation) removeGone(gone []Gone, exclude map[string]bool) {
+	drop := map[string]bool{}
 	for _, g := range gone {
-		i, ok := ev.index[g.Entity]
-		if !ok || exclude[g.Ref] {
+		if _, ok := ev.index[g.Entity]; !ok || exclude[g.Ref] || drop[g.Entity] {
 			continue
 		}
-		ev.cfg.Entities = slices.Delete(ev.cfg.Entities, i, i+1)
-		for id, at := range ev.index {
-			if at > i {
-				ev.index[id] = at - 1
-			}
-		}
-		delete(ev.index, g.Entity)
+		drop[g.Entity] = true
 		delete(ev.changed, g.Entity)
 		ev.removed = append(ev.removed, g.Entity)
 		ev.summarize(Change{Kind: ChangeRemoveTable}, g.Entity, 0)
+	}
+	if len(drop) == 0 {
+		return
+	}
+	// Removed at once, then numbered again: thousands of tables may go.
+	ev.cfg.Entities = slices.DeleteFunc(ev.cfg.Entities, func(e config.EntityConfig) bool { return drop[e.ID()] })
+	clear(ev.index)
+	for i, e := range ev.cfg.Entities {
+		ev.index[e.ID()] = i
 	}
 }

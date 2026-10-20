@@ -194,9 +194,8 @@ func TestSharedReadsResumeAfterTheWindow(t *testing.T) {
 
 func TestReadOnlyTransactionsBeginOnTheReadConnection(t *testing.T) {
 	t.Parallel()
-	e := entity.Entity{Name: "users", DataSource: "main", Role: entity.RoleAccess{
-		entity.ActionRead: {"reader", "writer"}, entity.ActionCreate: {"writer"},
-	}}
+	e := entity.Entity{Name: "users", DataSource: "main", Attributes: []entity.Attribute{{Name: "id"}},
+		Role: entity.RoleAccess{entity.ActionRead: {"reader", "writer"}, entity.ActionCreate: {"writer"}}}
 	reg, _ := entity.NewRegistry([]entity.Entity{e})
 	var began []string
 	manager := NewTransactionManager(time.Minute, 4)

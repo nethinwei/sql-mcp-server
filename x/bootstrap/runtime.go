@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
@@ -276,6 +277,9 @@ func (r *Runtime) Watch(ctx context.Context, path string, interval time.Duration
 		return err
 	}
 	last, report := sha256.Sum256(data), reporter(onError)
+	// A configuration that keeps failing is assembled again after a growing
+	// delay, not on every poll; one edited again is tried at once.
+	retry := retryBackoff[[sha256.Size]byte]{base: cmp.Or(interval, time.Second)}
 	return poll(ctx, interval, time.Second, func() {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -283,10 +287,11 @@ func (r *Runtime) Watch(ctx context.Context, path string, interval time.Duration
 			return
 		}
 		sum := sha256.Sum256(data)
-		if sum == last {
+		if sum == last || !retry.due(sum, time.Now()) {
 			return
 		}
 		if err := r.Reload(path); err != nil {
+			retry.failed(sum, time.Now())
 			report(err)
 			r.holdLoaded(LoadBytes(data))
 			return

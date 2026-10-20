@@ -1,7 +1,7 @@
 package configapp
 
 import (
-	"slices"
+	"container/list"
 	"sync"
 )
 
@@ -12,8 +12,10 @@ type lru[V any] struct {
 	budget int
 	mu     sync.Mutex
 	used   int
-	// entries are the kept values, most recently used last.
-	entries []*lruEntry[V]
+	// order lists the kept entries, most recently used last; byKey finds
+	// each one's place in it.
+	order   *list.List
+	byKey   map[string]*list.Element
 	pending map[string]*lruCall[V]
 }
 
@@ -29,19 +31,18 @@ type lruCall[V any] struct {
 }
 
 func newLRU[V any](budget int) *lru[V] {
-	return &lru[V]{budget: budget, pending: map[string]*lruCall[V]{}}
+	return &lru[V]{budget: budget, order: list.New(), byKey: map[string]*list.Element{},
+		pending: map[string]*lruCall[V]{}}
 }
 
 // get returns the value of key, building it (with its weight) when it is
 // not kept; a negative weight is not kept (a build that failed).
 func (c *lru[V]) get(key string, build func() (V, int)) V {
 	c.mu.Lock()
-	for i, e := range c.entries {
-		if e.key == key {
-			c.entries = append(slices.Delete(c.entries, i, i+1), e)
-			c.mu.Unlock()
-			return e.value
-		}
+	if el, ok := c.byKey[key]; ok {
+		c.order.MoveToBack(el)
+		c.mu.Unlock()
+		return el.Value.(*lruEntry[V]).value
 	}
 	if call, ok := c.pending[key]; ok {
 		c.mu.Unlock()
@@ -71,10 +72,14 @@ func (c *lru[V]) get(key string, build func() (V, int)) V {
 // keep adds an entry, evicting the least recently used ones past the budget
 // (never the entry itself).
 func (c *lru[V]) keep(e *lruEntry[V]) {
-	c.entries = append(c.entries, e)
+	if old, ok := c.byKey[e.key]; ok {
+		c.used -= c.order.Remove(old).(*lruEntry[V]).weight
+	}
+	c.byKey[e.key] = c.order.PushBack(e)
 	c.used += e.weight
-	for c.used > c.budget && len(c.entries) > 1 {
-		c.used -= c.entries[0].weight
-		c.entries = c.entries[1:]
+	for c.used > c.budget && c.order.Len() > 1 {
+		oldest := c.order.Remove(c.order.Front()).(*lruEntry[V])
+		delete(c.byKey, oldest.key)
+		c.used -= oldest.weight
 	}
 }

@@ -176,7 +176,7 @@ func (r *Service) evaluate(ctx context.Context, pc planContext, p configplan.Pla
 	}
 	out := &Preview{PlanID: planID(pc, p, review), Plan: p, Review: review, Proposal: proposal, Base: pc.base,
 		Report: toPlanReport(proposal.Report)}
-	_, cfg, payload, err := configedit.ApplySpec(pc.spec, proposal.Edit())
+	spec, cfg, payload, err := configedit.ApplySpec(pc.spec, proposal.Edit())
 	if err != nil {
 		msg := err.Error()
 		out.Validation = &Validation{Error: &msg, RestartRequired: []string{}, Warnings: []string{}, Notices: []Reason{}}
@@ -190,6 +190,6 @@ func (r *Service) evaluate(ctx context.Context, pc planContext, p configplan.Pla
 	list, warnings := notices(bootstrap.CapabilityWarnings(cfg, r.capabilities()))
 	out.Validation = &Validation{Ok: true, ContentHash: &hash, RestartRequired: changes, Warnings: warnings,
 		Notices: list}
-	out.changed, out.effect, err = r.changes(pc, payload)
+	out.changed, out.effect, err = r.changes(pc, spec)
 	return out, err
 }

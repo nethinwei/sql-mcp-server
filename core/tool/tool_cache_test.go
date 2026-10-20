@@ -209,3 +209,16 @@ func fmtCounted(m *resultMeter) [2]int64 {
 	rows, bytes := m.counted()
 	return [2]int64{rows, bytes}
 }
+
+// A row of the escape hatch is counted as it is returned, a list of values:
+// columns sharing a name count each.
+func TestRawRowsCountEveryColumn(t *testing.T) {
+	t.Parallel()
+	m := &resultMeter{}
+	if err := m.addValues([]any{int64(1), "a long value"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, bytes := m.counted(); bytes != int64(len(`[1,"a long value"]`))+1 {
+		t.Fatalf("counted %d bytes", bytes)
+	}
+}

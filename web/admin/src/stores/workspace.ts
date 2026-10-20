@@ -59,7 +59,6 @@ interface State extends Sections {
   basePublished: string | null
   baseHash: string
   datasources: Datasource[]
-  /** Users that had a token in the base revision. */
   /** Each user's token hash in the base revision ('' or absent: no token). */
   baseTokens: Record<string, string>
   baseline: string

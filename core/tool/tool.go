@@ -68,17 +68,25 @@ type classified struct{ kind, cause error }
 
 func (e *classified) Error() string        { return e.kind.Error() }
 func (e *classified) Unwrap() error        { return e.cause }
-func (e *classified) Is(target error) bool { return target == e.kind }
+func (e *classified) Is(target error) bool { return errors.Is(e.kind, target) }
+
+// errValueType is a value the database refused for its field's type: the
+// caller's to fix, as invalid input.
+var errValueType = fmt.Errorf("%w: a value does not fit its field's type", ErrInvalidInput)
 
 // WrapDBError classifies a database driver error while preserving its cause:
-// a refused privilege becomes ErrDatasourceForbidden, anything else
-// ErrDatabase. Neither reports the driver message to clients.
+// a refused privilege becomes ErrDatasourceForbidden, a value its column
+// cannot hold invalid input (errValueType), anything else ErrDatabase. None
+// reports the driver message to clients.
 func WrapDBError(err error) error {
 	if err == nil || errors.Is(err, ErrDatabase) || errors.Is(err, ErrDatasourceForbidden) {
 		return err
 	}
 	if errors.Is(err, store.ErrPermissionDenied) {
 		return &classified{kind: ErrDatasourceForbidden, cause: err}
+	}
+	if errors.Is(err, store.ErrInvalidValue) {
+		return &classified{kind: errValueType, cause: err}
 	}
 	return &classified{kind: ErrDatabase, cause: err}
 }
@@ -642,18 +650,7 @@ func checkGateDetailed(
 		tc.Hooks.FireCostGate(ctx, cost.Plan{}, cost.Score{}, "hard")
 		return compiled, nil, err
 	}
-	plan, score := dec.Estimate()
-	verdict := "allow"
-	if dec.Soft {
-		verdict = "soft"
-	} else if !dec.Allow {
-		verdict = "hard"
-	}
-	tc.Hooks.FireCostGate(ctx, plan, score, verdict)
-	if !dec.Allow {
-		return compiled, dec.Plan, toExceededError(dec)
-	}
-	if err := checkScannedBudget(tc, dec.Plan); err != nil {
+	if err := admitDecision(ctx, tc, dec); err != nil {
 		return compiled, dec.Plan, err
 	}
 	if dec.Rewritten != nil {

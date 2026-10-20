@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
@@ -165,20 +166,30 @@ func withProxyIdentity(users UserDirectory, next http.Handler) http.Handler {
 }
 
 // revokeSessions drops the identity binding of every session bound to one of
-// the principals, reports each session as closed so its transactions roll
-// back, closes it in the transport (closeOpen) and returns them. The dropped
-// binding makes the session's next request fail.
-func revokeSessions(store *sessionIdentityStore, onClosed, closeOpen func(string)) func([]string) []string {
+// the principals and returns them; the dropped binding makes the session's
+// next request fail at once. Each is then reported closed, so its
+// transactions roll back, and closed in the transport (closeOpen), in the
+// background: closing waits for the session's requests running (a long
+// query), and the caller, a reload, holds what every reload waits for.
+func revokeSessions(
+	b *bus.Bus, store *sessionIdentityStore, onClosed, closeOpen func(string),
+) func([]string) []string {
 	return func(principals []string) []string {
 		sessions := store.sessionsFor(principals)
 		for _, session := range sessions {
 			store.close(session)
-			if onClosed != nil {
-				onClosed(session)
-			}
-			if closeOpen != nil {
-				closeOpen(session)
-			}
+		}
+		if len(sessions) > 0 && (onClosed != nil || closeOpen != nil) {
+			b.Go("close revoked sessions", func(context.Context) {
+				for _, session := range sessions {
+					if onClosed != nil {
+						onClosed(session)
+					}
+					if closeOpen != nil {
+						closeOpen(session)
+					}
+				}
+			})
 		}
 		return sessions
 	}

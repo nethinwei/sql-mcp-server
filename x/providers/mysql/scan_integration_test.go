@@ -133,3 +133,20 @@ func TestMySQLScanReadsIndexes(t *testing.T) {
 	}
 	t.Fatal("docs not found")
 }
+
+// With lower_case_table_names on, a schema named in another case than the
+// server reports it is scanned all the same.
+func TestDiscoverFoldsSchemaCase(t *testing.T) {
+	ctx := context.Background()
+	dsn, stop := startMySQL(t, "--lower-case-table-names=1")
+	defer stop()
+	prov := connectMySQLWithRetry(t, dsn)
+	defer func() { _ = prov.Close() }()
+	if _, err := prov.ExecContext(ctx, "CREATE TABLE items (id int PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := prov.Introspector().Discover(ctx, []string{"TEST"})
+	if err != nil || len(got) != 1 || got[0].Name != "items" {
+		t.Fatalf("discovered %+v, %v", got, err)
+	}
+}

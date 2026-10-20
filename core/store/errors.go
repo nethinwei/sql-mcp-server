@@ -52,6 +52,19 @@ var ErrConnectionLost = errors.New("store: connection lost during the statement"
 // Providers wrap driver errors with it.
 var ErrNotConnected = errors.New("store: no connection to the database could be made")
 
+// ErrInvalidValue marks a statement the database refused for a value the
+// caller gave: one its column's type cannot hold (text that is no number or
+// date, a number out of range, a string too long). It tells nothing of the
+// database's health. Providers wrap driver errors with it.
+var ErrInvalidValue = errors.New("store: a value does not fit its column")
+
+// ErrRejected marks a statement the database refused as written, for a
+// reason of the statement's own (its syntax, its types, a lock or deadlock
+// it met): not one telling of the database's health (out of connections,
+// memory or disk, shutting down, a broken connection), which providers leave
+// unmarked. Providers wrap driver errors with it.
+var ErrRejected = errors.New("store: the database refused the statement")
+
 // ErrMissingRelation and ErrMissingColumn mark a statement naming a table or
 // a column the database does not have (any more): its schema changed under a
 // running configuration. Providers wrap driver errors with them.

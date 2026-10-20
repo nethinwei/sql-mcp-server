@@ -241,10 +241,16 @@ func (r *Runner) written(br *batchRun, it catalog.BatchItem) (bool, error) {
 	for _, got := range b.Items {
 		if got.Schema == it.Schema {
 			return got.State == it.State && got.Error == it.Error && got.Attempts == it.Attempts &&
-				got.NotBefore.Equal(it.NotBefore), nil
+				sameInstant(got.NotBefore, it.NotBefore), nil
 		}
 	}
 	return false, nil
+}
+
+// sameInstant compares times as a store keeps them, to the microsecond: a
+// time read back has lost what was finer.
+func sameInstant(a, b time.Time) bool {
+	return a.IsZero() == b.IsZero() && a.UnixMicro() == b.UnixMicro()
 }
 
 // execute runs the items, a few at a time, each when its NotBefore comes,
@@ -316,7 +322,7 @@ func (r *Runner) beat(ctx context.Context, br *batchRun) {
 			br.stop()
 			return
 		}
-		if b, _, err := r.store.Batch(ctx, br.id); err == nil && b.Canceled {
+		if canceled, err := r.store.BatchCanceled(ctx, br.id); err == nil && canceled {
 			br.stop()
 			return
 		}
@@ -378,12 +384,21 @@ func (r *Runner) TakeOver(ctx context.Context, resolve Resolver) {
 		if claimed, err := r.store.ClaimBatch(ctx, b.ID, owner, now.Add(-r.opts.Stale), now); err != nil || !claimed {
 			continue
 		}
+		b.Owner, b.Heartbeat = owner, now
+		if b.Canceled {
+			// Canceled before its run ended: it ends now, not scanned again.
+			r.finish(&b, "canceled")
+			continue
+		}
 		work, err := resolve(ctx, b.Datasource)
+		if errors.Is(err, ErrGone) {
+			r.finish(&b, "datasource gone")
+			continue
+		}
 		if err != nil {
 			slog.Warn("scan batch not resumed", "batch", b.ID, "error", err.Error())
 			continue
 		}
-		b.Owner, b.Heartbeat = owner, now
 		if !r.requeueRunning(&b) {
 			// Left unfinished, as it was: taken over again once stale.
 			slog.Warn("scan batch not resumed: its running schemas could not be queued again", "batch", b.ID)
@@ -392,6 +407,23 @@ func (r *Runner) TakeOver(ctx context.Context, resolve Resolver) {
 		slog.Info("scan batch taken over", "batch", b.ID, "datasource", b.Datasource)
 		r.runBatch(b, work)
 	}
+}
+
+// ErrGone is the error of a Resolver for a datasource no longer configured:
+// its batches end (their items left canceled) instead of being taken over
+// again and again, counting against the open batches for good.
+var ErrGone = errors.New("leasing: the datasource is no longer configured")
+
+// finish ends a batch this process claimed without running it, its items
+// left canceled.
+func (r *Runner) finish(b *catalog.Batch, why string) {
+	ctx, cancel := r.storeContext()
+	defer cancel()
+	if err := r.store.FinishBatch(ctx, b.ID, b.Owner, r.opts.Now()); err != nil {
+		slog.Warn("scan batch not ended", "batch", b.ID, "why", why, "error", err.Error())
+		return
+	}
+	slog.Info("scan batch ended without running", "batch", b.ID, "why", why)
 }
 
 // requeueRunning moves the items the last owner was doing back to pending,

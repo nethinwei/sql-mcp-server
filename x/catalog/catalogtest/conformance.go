@@ -49,6 +49,7 @@ func Run(t *testing.T, newStore NewStore) {
 		"MoveItems":        testMoveItems,
 		"CreateBatchQuota": testCreateBatchQuota,
 		"Owned":            testOwned,
+		"BatchRetention":   testBatchRetention,
 	}
 	for name, fn := range cases {
 		t.Run(name, func(t *testing.T) { fn(t, newStore(t)) })
@@ -198,6 +199,32 @@ func create(t *testing.T, s catalog.Store, b catalog.Batch) {
 	}
 }
 
+// Creating a batch drops those of its datasource finished BatchRetention
+// before it started, items too; newer ones, unfinished ones and those of
+// other datasources stay.
+func testBatchRetention(t *testing.T, s catalog.Store) {
+	ctx := context.Background()
+	at := func(id, datasource string, started time.Time, finish bool) {
+		create(t, s, catalog.Batch{ID: id, Datasource: datasource, Owner: "p", StartedAt: started, Heartbeat: started,
+			Items: []catalog.BatchItem{item("a", catalog.ItemPending)}})
+		if finish {
+			if err := s.FinishBatch(ctx, id, "p", started); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	at("old", "ds", t0, true)
+	at("open", "ds", t0, false)
+	at("other", "ds2", t0, true)
+	at("recent", "ds", t0.Add(catalog.BatchRetention/2), true)
+	at("new", "ds", t0.Add(catalog.BatchRetention+time.Hour), false)
+	for id, kept := range map[string]bool{"old": false, "open": true, "other": true, "recent": true, "new": true} {
+		if _, ok, err := s.Batch(ctx, id); err != nil || ok != kept {
+			t.Errorf("batch %s kept = %v, want %v (%v)", id, ok, kept, err)
+		}
+	}
+}
+
 func testBatches(t *testing.T, s catalog.Store) {
 	ctx := context.Background()
 	b := catalog.Batch{ID: "b1", Datasource: "ds", StartedBy: "root", Owner: "p1", StartedAt: t0, Heartbeat: t0,
@@ -227,8 +254,17 @@ func testBatches(t *testing.T, s catalog.Store) {
 	if len(open) != 2 || open[0].ID != "b1" || open[1].ID != "b3" || len(open[0].Items) != 2 {
 		t.Fatalf("unfinished = %+v", open)
 	}
+	if canceled, err := s.BatchCanceled(ctx, "b1"); canceled || err != nil {
+		t.Fatalf("canceled before cancel: %v %v", canceled, err)
+	}
 	if err := s.CancelBatch(ctx, "b1"); err != nil {
 		t.Fatal(err)
+	}
+	if canceled, err := s.BatchCanceled(ctx, "b1"); !canceled || err != nil {
+		t.Fatalf("canceled after cancel: %v %v", canceled, err)
+	}
+	if canceled, err := s.BatchCanceled(ctx, "none"); canceled || err != nil {
+		t.Fatalf("canceled of no batch: %v %v", canceled, err)
 	}
 	if moved, err := s.MoveItem(ctx, "b1", "p1", t0.Add(time.Second), item("a", catalog.ItemRunning),
 		catalog.ItemPending); !moved || err != nil {

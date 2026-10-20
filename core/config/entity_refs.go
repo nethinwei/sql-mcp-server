@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/core/entity"
@@ -24,17 +25,21 @@ func (e EntityConfig) ID() string { return entity.ID(e.DataSource, e.Schema, e.N
 // one entity, so adding an entity can never silently change what an existing
 // reference names: the configuration fails validation instead.
 type EntityRefs struct {
-	byID  map[string]EntityConfig
-	byRef map[string][]EntityConfig
+	// entities are the entities indexed, a copy (the caller may change its
+	// own later); the maps hold positions in it, not copies of each.
+	entities []EntityConfig
+	byID     map[string]int
+	byRef    map[string][]int
 }
 
 // NewEntityRefs indexes entities; the last of several with one ID wins.
 func NewEntityRefs(entities []EntityConfig) EntityRefs {
-	r := EntityRefs{byID: map[string]EntityConfig{}, byRef: map[string][]EntityConfig{}}
-	for _, e := range entities {
-		r.byID[e.ID()] = e
+	r := EntityRefs{entities: slices.Clone(entities), byID: make(map[string]int, len(entities)),
+		byRef: make(map[string][]int, 2*len(entities))}
+	for i, e := range r.entities {
+		r.byID[e.ID()] = i
 		for _, ref := range entity.ReferencesOf(e.DataSource, e.Schema, e.Name) {
-			r.byRef[ref] = append(r.byRef[ref], e)
+			r.byRef[ref] = append(r.byRef[ref], i)
 		}
 	}
 	return r
@@ -42,18 +47,18 @@ func NewEntityRefs(entities []EntityConfig) EntityRefs {
 
 // Resolve returns the one entity ref names.
 func (r EntityRefs) Resolve(ref string) (EntityConfig, error) {
-	if e, ok := r.byID[ref]; ok {
-		return e, nil
+	if i, ok := r.byID[ref]; ok {
+		return r.entities[i], nil
 	}
 	switch matches := r.byRef[ref]; len(matches) {
 	case 0:
 		return EntityConfig{}, fmt.Errorf("%w %q", ErrUnknownEntity, ref)
 	case 1:
-		return matches[0], nil
+		return r.entities[matches[0]], nil
 	default:
 		ids := make([]string, len(matches))
-		for i, e := range matches {
-			ids[i] = e.ID()
+		for n, i := range matches {
+			ids[n] = r.entities[i].ID()
 		}
 		return EntityConfig{}, fmt.Errorf("%w %q: qualify it as one of %s", ErrAmbiguousEntity, ref,
 			strings.Join(ids, ", "))

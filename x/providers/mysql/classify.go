@@ -30,6 +30,24 @@ var timeouts = map[uint16]bool{3024: true, 4012: true}
 // column (1054) the database does not have; OceanBase reports the same.
 var schemaChanges = map[uint16]error{1146: store.ErrMissingRelation, 1054: store.ErrMissingColumn}
 
+// healthErrors are the errors of the database's own trouble: out of disk,
+// memory or connections, shutting down, a network error between servers,
+// an internal or unknown error, a statement interrupted. Others are a
+// statement's own (store.ErrRejected).
+var healthErrors = map[uint16]bool{
+	1021: true, 1037: true, 1038: true, 1040: true, 1041: true, 1053: true, 1105: true, 1114: true, 1135: true,
+	1152: true, 1153: true, 1154: true, 1155: true, 1156: true, 1157: true, 1158: true, 1159: true, 1160: true,
+	1161: true, 1180: true, 1181: true, 1203: true, 1317: true,
+}
+
+// invalidValues are the errors of a value its column cannot hold: out of
+// range (1264), truncated or incorrect (1265, 1292, 1366, 1367, 1411), too
+// long (1406), invalid JSON (3140), division by zero (1365); OceanBase
+// reports the same.
+var invalidValues = map[uint16]bool{
+	1264: true, 1265: true, 1292: true, 1365: true, 1366: true, 1367: true, 1406: true, 1411: true, 3140: true,
+}
+
 // classify turns an integrity violation into a *store.ConstraintError, a
 // refusal into store.ErrPermissionDenied, a statement its server-side timeout
 // stopped into store.ErrStatementTimeout, and a connection the driver found broken in the middle of a
@@ -52,6 +70,9 @@ func classify(err error) error {
 	if missing := schemaChanges[myErr.Number]; missing != nil {
 		return fmt.Errorf("%w: %w", missing, err)
 	}
+	if invalidValues[myErr.Number] {
+		return fmt.Errorf("%w: %w", store.ErrInvalidValue, err)
+	}
 	ce := &store.ConstraintError{Err: err}
 	switch myErr.Number {
 	case 1062:
@@ -72,7 +93,10 @@ func classify(err error) error {
 	case 3819:
 		ce.Kind = store.ConstraintCheck
 	default:
-		return err
+		if healthErrors[myErr.Number] {
+			return err
+		}
+		return fmt.Errorf("%w: %w", store.ErrRejected, err)
 	}
 	return ce
 }

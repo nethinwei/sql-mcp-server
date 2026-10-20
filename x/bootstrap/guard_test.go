@@ -96,6 +96,11 @@ func TestCancelledCallsDoNotCount(t *testing.T) {
 			t.Fatalf("%v counts against health", changed)
 		}
 	}
+	// Nor does a value the caller gave that its column cannot hold: any
+	// caller could otherwise open the breaker for everyone.
+	if countsAgainstHealth(fmt.Errorf("%w: 22P02", store.ErrInvalidValue)) {
+		t.Fatal("an invalid value counts against health")
+	}
 	// A statement the database stopped at its timeout counts: when the
 	// database slows down, timeouts are how it shows.
 	if !countsAgainstHealth(fmt.Errorf("%w: canceling statement", store.ErrStatementTimeout)) {

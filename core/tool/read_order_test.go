@@ -1,6 +1,9 @@
 package tool
 
 import (
+	"fmt"
+	"math/big"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,6 +56,26 @@ func TestFieldRulesOnlyThroughFieldUses(t *testing.T) {
 				!strings.Contains(line, "return validateUnmaskedFields(res, fields...) != nil") {
 				t.Errorf("%s: %s applied outside fieldUses: %s", file, m, strings.TrimSpace(line))
 			}
+		}
+	}
+}
+
+// decimalKey writes a decimal as big.Rat.RatString does, so a number keys
+// the same however it arrives.
+func TestDecimalKeyMatchesBigRat(t *testing.T) {
+	t.Parallel()
+	inputs := []string{"0", "-0", "+0.0", "12.50", "12.5", "-12.500", "007", ".5", "5.", "0.000001",
+		"999999999999999999", "123456789.123456789", "-0.0001", "1.", "+3", ".", "", "-", "1e5", "1.2.3", "a"}
+	rng := rand.New(rand.NewPCG(5, 6))
+	for range 2000 {
+		inputs = append(inputs, fmt.Sprintf("%s%d.%0*d", []string{"", "-", "+"}[rng.IntN(3)], rng.Int64N(1e9),
+			rng.IntN(9)+1, rng.Int64N(1e8)))
+	}
+	for _, in := range inputs {
+		got, ok := decimalKey(in)
+		r, valid := new(big.Rat).SetString(in)
+		if ok && (!valid || got != "n:"+r.RatString()) {
+			t.Fatalf("decimalKey(%q) = %q, big.Rat says %v %v", in, got, r, valid)
 		}
 	}
 }

@@ -64,8 +64,10 @@ func (ev *evaluation) entityUses(e config.EntityConfig, use func(id, field, wher
 			use(u.Entity, u.Field, "uniqueKeys")
 		case configrefs.UseRelationship:
 			use(u.Entity, u.Field, "relationship "+e.ID()+"."+u.Relationship)
-		default: // the tenant policy, entity-level access
+		case configrefs.UseTenantPolicy, configrefs.UseFieldACL, configrefs.UseRowPolicy:
 			use(u.Entity, u.Field, "access")
+		default: // a use this does not know: still one, named as it is
+			use(u.Entity, u.Field, u.Kind)
 		}
 	})
 }

@@ -31,14 +31,21 @@ func (StaticRule) Phase() Phase { return PhaseSafety }
 
 // Check implements Layer.
 func (s StaticRule) Check(_ context.Context, c codegen.Compiled) (Decision, error) {
-	if matchesBaseline(s.RejectTemplates, s.Datasource, s.DialectName, c, s.LegacyExactSQL) {
+	computed := ""
+	fp := func() string { // once for both lists
+		if computed == "" {
+			computed = Fingerprint(s.Datasource, s.DialectName, c)
+		}
+		return computed
+	}
+	if matchesTemplates(s.RejectTemplates, s.Datasource, c, s.LegacyExactSQL, fp) {
 		return Decision{Allow: false, Hints: []string{"query matches a rejected template"}}, nil
 	}
 	if s.PKWhitelist && c.IsKeyPoint {
 		p := Plan{ScanType: ScanPoint, StatsFresh: true}
 		return Decision{Allow: true, Bypass: true, Plan: &p, Score: ptrScore(ScorePlan(p))}, nil
 	}
-	if matchesBaseline(s.AllowTemplates, s.Datasource, s.DialectName, c, s.LegacyExactSQL) {
+	if matchesTemplates(s.AllowTemplates, s.Datasource, c, s.LegacyExactSQL, fp) {
 		return Decision{Allow: true, Bypass: true}, nil
 	}
 	return Decision{Allow: true}, nil

@@ -58,7 +58,7 @@ func sessionHandler(s *mcp.Server, cfg HTTPConfig) http.Handler {
 	// that are not browsers send no Origin and are unaffected.
 	handler = http.NewCrossOriginProtection().Handler(handler)
 	if cfg.RevokedPrincipals != nil {
-		cfg.RevokedPrincipals(revokeSessions(identities, cfg.OnSessionClosed, closeSession(s)))
+		cfg.RevokedPrincipals(revokeSessions(cfg.Bus, identities, cfg.OnSessionClosed, closeSession(s)))
 	}
 	return handler
 }

@@ -128,6 +128,19 @@ func (m *resultMeter) add(row map[string]any) error {
 	return m.addSized(1, int64(len(encoded))+1) // and its separator
 }
 
+// addValues counts a row of values, as an escape hatch query returns it (a
+// list: its columns may share a name).
+func (m *resultMeter) addValues(values []any) error {
+	if m == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return fmt.Errorf("encode a result row: %w", err)
+	}
+	return m.addSized(1, int64(len(encoded))+1) // and its separator
+}
+
 // addSized counts rows of n bytes in all (each with its separator) against
 // the call's limits: the rows of a read cached, counted as they were read.
 // Only a read's rows come at once: a write's are cut one at a time.

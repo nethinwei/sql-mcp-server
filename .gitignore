@@ -34,3 +34,4 @@ mem.pprof
 x/admin/ui/dist/app/
 web/admin/node_modules/
 web/admin/src/gql/
+.gocache/

@@ -222,7 +222,7 @@ func (r *Runtime) WatchStore(
 	report := reporter(onError)
 	r.applied.Store(current)
 	base := cmp.Or(interval, 5*time.Second)
-	retry, recheck := retryBackoff{base: base}, retryBackoff{base: base}
+	retry, recheck := retryBackoff[int64]{base: base}, retryBackoff[int64]{base: base}
 	return poll(ctx, interval, 5*time.Second, func() {
 		head, err := store.PublishedSummary(ctx)
 		if err != nil {
@@ -236,19 +236,19 @@ func (r *Runtime) WatchStore(
 		}
 		drifted := again && r.drift().Take()
 		rev, err := r.reloadPublished(ctx, store, build)
+		// The revision loaded is the one that failed: another may have been
+		// published since the summary was read.
+		failed := cmp.Or(rev.ID, head.ID)
+		if err != nil && drifted {
+			r.drift().Report()
+		}
 		switch {
-		case err != nil && again:
-			if drifted {
-				r.drift().Report()
-			}
+		case err != nil && failed == current:
 			recheck.failed(current, now)
 			report(fmt.Errorf("reassemble revision %d: %w", current, err))
 		case err != nil:
-			retry.failed(head.ID, now)
-			r.markStale(head.ID, err, report)
-			if rev.ID == head.ID {
-				r.holdLoaded(LoadRevision(rev))
-			}
+			retry.failed(failed, now)
+			r.revisionFailed(rev, failed, err, report)
 		default:
 			r.stale.Store(nil)
 			current = rev.ID
@@ -260,6 +260,15 @@ func (r *Runtime) WatchStore(
 			}
 		}
 	})
+}
+
+// revisionFailed records that revision id failed to apply and, when it was
+// loaded (rev), holds the users it changes (see holdChanged).
+func (r *Runtime) revisionFailed(rev revision.Revision, id int64, err error, report func(error)) {
+	r.markStale(id, err, report)
+	if rev.ID != 0 {
+		r.holdLoaded(LoadRevision(rev))
+	}
 }
 
 // reloadPublished reloads the published revision with build.
@@ -291,23 +300,25 @@ func (r *Runtime) drift() *tool.SchemaDrift {
 	return nil
 }
 
-// retryBackoff spaces the attempts at a revision that keeps failing.
-type retryBackoff struct {
+// retryBackoff spaces the attempts at what keeps failing: a revision, by its
+// ID, or a configuration file, by its content.
+type retryBackoff[K comparable] struct {
 	base    time.Duration
-	failing int64 // the revision that failed last; 0 for none
+	failing K    // what failed last
+	tried   bool // whether anything failed yet
 	delay   time.Duration
 	at      time.Time // when failing is tried next
 }
 
-// due reports whether revision id is to be tried at now.
-func (b *retryBackoff) due(id int64, now time.Time) bool {
-	return id != b.failing || !now.Before(b.at)
+// due reports whether id is to be tried at now.
+func (b *retryBackoff[K]) due(id K, now time.Time) bool {
+	return !b.tried || id != b.failing || !now.Before(b.at)
 }
 
-// failed records that revision id failed at now.
-func (b *retryBackoff) failed(id int64, now time.Time) {
-	if id != b.failing {
-		b.failing, b.delay = id, b.base
+// failed records that id failed at now.
+func (b *retryBackoff[K]) failed(id K, now time.Time) {
+	if !b.tried || id != b.failing {
+		b.failing, b.tried, b.delay = id, true, b.base
 	} else {
 		b.delay = min(b.delay*2, maxRetryDelay)
 	}

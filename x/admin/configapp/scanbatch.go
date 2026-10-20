@@ -162,7 +162,7 @@ func (r *Service) runnerFor(ctx context.Context, datasource string) (scanRunner,
 		return nil, err
 	}
 	if !hasDatasource(cfg, datasource) {
-		return nil, fmt.Errorf("unknown datasource %q", datasource)
+		return nil, fmt.Errorf("%w: unknown datasource %q", leasing.ErrGone, datasource)
 	}
 	src := sourceOf(cfg, datasource)
 	return func(schema string) func(context.Context) (struct{}, error) {

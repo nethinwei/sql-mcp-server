@@ -151,13 +151,22 @@ func matchesBaseline(
 	c codegen.Compiled,
 	allowLegacyExactSQL bool,
 ) bool {
+	return matchesTemplates(values, datasource, c, allowLegacyExactSQL, func() string {
+		return Fingerprint(datasource, dialectName, c)
+	})
+}
+
+// matchesTemplates is matchesBaseline with the fingerprint from fp, asked
+// only when there are templates: a check matching two lists asks once.
+func matchesTemplates(values []string, datasource string, c codegen.Compiled, allowLegacyExactSQL bool,
+	fp func() string,
+) bool {
 	if len(values) == 0 { // no templates, the default: nothing to fingerprint
 		return false
 	}
-	fp := Fingerprint(datasource, dialectName, c)
-	scopedSQL := strings.TrimSpace(datasource) + ":" + c.SQL
+	fingerprint, scopedSQL := fp(), strings.TrimSpace(datasource)+":"+c.SQL
 	for _, value := range values {
-		if value == fp || value == scopedSQL || allowLegacyExactSQL && value == c.SQL {
+		if value == fingerprint || value == scopedSQL || allowLegacyExactSQL && value == c.SQL {
 			return true
 		}
 	}

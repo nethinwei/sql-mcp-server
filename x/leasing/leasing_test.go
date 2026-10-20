@@ -366,3 +366,67 @@ func TestCloseDoesNotWaitForAHangingStore(t *testing.T) {
 		t.Fatal("closing waited for a store that hangs")
 	}
 }
+
+// The lost answer of the move putting a failed item back with its retry
+// time counts as made too: the time read back, to the microsecond a store
+// keeps, is the one written. The item is retried, not canceled.
+func TestLostAnswerOfARetry(t *testing.T) {
+	t.Parallel()
+	var moves atomic.Int32
+	store := lostAnswers{BatchStore: catalog.NewMemoryStore(), lose: func() bool { return moves.Add(1) == 2 }}
+	opts := quick
+	opts.Now = func() time.Time { return time.Now().Add(321 * time.Nanosecond) } // finer than a store keeps
+	r := New(store, opts)
+	t.Cleanup(r.Close)
+	var runs atomic.Int32
+	failsOnce := func(context.Context, string, string) (string, string) {
+		if runs.Add(1) == 1 {
+			return catalog.ItemFailed, "once"
+		}
+		return catalog.ItemDone, ""
+	}
+	got := waitFinished(t, store, start(t, r, failsOnce, "a").ID)
+	if got.Items[0].State != catalog.ItemDone || runs.Load() != 2 {
+		t.Fatalf("after a lost answer of a retry: %+v, worked %d times", got.Items, runs.Load())
+	}
+}
+
+// A batch canceled before its process stopped, or whose datasource is no
+// longer configured, ends when taken over: it is not scanned again, nor
+// left open for good.
+func TestTakeOverEndsCanceledAndOrphanedBatches(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		cancel  bool
+		resolve Resolver
+	}{
+		"canceled": {true, resolving(succeeds)},
+		"datasource gone": {false, func(context.Context, string) (Work, error) {
+			return nil, fmt.Errorf("%w: shop", ErrGone)
+		}},
+	} {
+		store := catalog.NewMemoryStore()
+		first := New(store, quick)
+		b := start(t, first, blocked, "a", "b")
+		time.Sleep(20 * time.Millisecond)
+		if tc.cancel {
+			if err := store.CancelBatch(context.Background(), b.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		first.Close()
+		var runs atomic.Int32
+		second := New(store, quick)
+		second.opts.Now = func() time.Time { return time.Now().Add(time.Minute) }
+		resolve := func(ctx context.Context, ds string) (Work, error) {
+			work, err := tc.resolve(ctx, ds)
+			return func(ctx context.Context, d, s string) (string, string) { runs.Add(1); return work(ctx, d, s) }, err
+		}
+		second.TakeOver(context.Background(), resolve)
+		got := batchState(t, store, b.ID)
+		second.Close()
+		if got.FinishedAt.IsZero() || runs.Load() != 0 {
+			t.Fatalf("%s: finished %v, scanned %d times: %+v", name, got.FinishedAt, runs.Load(), got.Items)
+		}
+	}
+}

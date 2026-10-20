@@ -121,7 +121,7 @@ func prepareReadPlan(ctx context.Context, tc Context, in readInput) (readPlan, e
 	if err != nil {
 		return readPlan{}, err
 	}
-	g, err := authorizeRequest(ctx, tc, req)
+	g, err := authorizeRead(ctx, tc, res, in, req)
 	if err != nil {
 		return readPlan{}, err
 	}
@@ -234,19 +234,32 @@ func cursorPredicate(e entity.Entity, cursor map[string]any) (relalg.Predicate, 
 	return keyset, cols, err
 }
 
+// authorizeRead authorizes a read; a distinct one compares the fields it
+// returns (the database tells rows apart by them), so none may be masked.
+func authorizeRead(ctx context.Context, tc Context, res entity.Resolved, in readInput, req rbac.Request) (
+	grant, error,
+) {
+	g, err := authorizeRequest(ctx, tc, req)
+	if err == nil && in.Distinct {
+		err = fieldUses{compared: g.Fields}.check(res)
+	}
+	return g, err
+}
+
 func readFieldNames(res entity.Resolved, in readInput) ([]string, []string, error) {
 	readFields := append(filterFields(in.Filter), in.Fields...)
 	projectionFields := append([]string(nil), in.Fields...)
 	for _, name := range in.Expand {
-		relation, ok := relationshipByName(res.Entity, name)
-		if !ok {
+		if _, ok := relationshipByName(res.Entity, name); !ok {
 			return nil, nil, fmt.Errorf("%w: unknown relationship %q", ErrInvalidInput, name)
 		}
-		for _, local := range slices.Sorted(maps.Keys(relation.JoinOn)) { // the SQL is the same for the same call
-			readFields = append(readFields, local)
-			if len(in.Fields) > 0 && !slices.Contains(projectionFields, local) {
-				projectionFields = append(projectionFields, local)
-			}
+	}
+	// The columns expansion joins on are read, and kept for it (st.keep),
+	// as one list (expandJoinColumns).
+	for _, local := range expandJoinColumns(res.Entity, in.Expand) {
+		readFields = append(readFields, local)
+		if len(in.Fields) > 0 && !slices.Contains(projectionFields, local) {
+			projectionFields = append(projectionFields, local)
 		}
 	}
 	return append(readFields, sortedKeys(in.Cursor)...), projectionFields, nil
@@ -293,9 +306,8 @@ func buildReadExpression(res entity.Resolved, in readInput, plan readPlan) relal
 		}
 		expr = relalg.Sort{Input: expr, OrderBy: order}
 	}
-	if len(plan.grant.Fields) > 0 {
-		expr = relalg.Project{Input: expr, Items: projectItems(res.Entity, plan.grant.Fields)}
-	}
+	expr = relalg.Project{Input: expr, Items: projectItems(res.Entity, plan.grant.Fields)} // never empty
+
 	if in.Distinct {
 		expr = relalg.Distinct{Input: expr}
 	}
@@ -305,8 +317,16 @@ func buildReadExpression(res entity.Resolved, in readInput, plan readPlan) relal
 	return expr
 }
 
+// cachesRead reports whether a read of in may be served from the cache and
+// stored in it, both ways alike: not in a transaction (it sees its own
+// writes), not expanded (expansion edits the rows), not following a write of
+// the session. What it reads decides too (see runRead: no relationships).
+func cachesRead(tc Context, in readInput) bool {
+	return tc.Cache != nil && in.Transaction == "" && len(in.Expand) == 0 && !tc.followsWrite
+}
+
 func readCacheHit(ctx context.Context, tc Context, in readInput, key cache.Key) (Result, error, bool) {
-	if tc.Cache == nil || in.Transaction != "" || len(in.Expand) > 0 || tc.followsWrite {
+	if !cachesRead(tc, in) {
 		return Result{}, nil, false
 	}
 	var cached []map[string]any
@@ -359,7 +379,7 @@ func countCached(tc Context, rows []map[string]any, size int64) error {
 }
 
 func storeReadCache(ctx context.Context, tc Context, in readInput, key cache.Key, stamp uint64, out []map[string]any) {
-	if tc.Cache == nil || in.Transaction != "" || len(in.Expand) > 0 || tc.followsWrite {
+	if !cachesRead(tc, in) {
 		return
 	}
 	_, size := tc.results.counted() // a read cached has no expansion: its rows are the call's
@@ -475,7 +495,9 @@ func joinKeyOf(values []any, decimal []bool) (key string, ok bool) {
 		switch x := v.(type) {
 		case nil:
 			return "", false
-		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		case int64:
+			parts[i] = "n:" + strconv.FormatInt(x, 10)
+		case int, int8, int16, int32, uint, uint8, uint16, uint32, uint64:
 			parts[i] = "n:" + fmt.Sprint(x)
 		case float32:
 			parts[i] = numberKey(strconv.FormatFloat(float64(x), 'g', -1, 32), x)
@@ -495,11 +517,60 @@ func joinKeyOf(values []any, decimal []bool) (key string, ok bool) {
 // numberKey is the key of the number text spells, as an exact fraction in
 // lowest terms; v's own key when text is not a finite number.
 func numberKey(text string, v any) string {
+	if key, ok := decimalKey(text); ok {
+		return key
+	}
 	r, ok := new(big.Rat).SetString(text)
 	if !ok {
 		return fmt.Sprintf("%T:%q", v, text)
 	}
 	return "n:" + r.RatString()
+}
+
+// decimalKey is numberKey of a plain decimal (an optional sign, digits, an
+// optional point and digits) of at most 18 digits, worked out without a
+// big.Rat, as big.Rat.RatString writes it: every row of an expansion keys
+// its decimal join values.
+func decimalKey(text string) (string, bool) {
+	s, negative := text, false
+	if len(s) > 0 && (s[0] == '-' || s[0] == '+') {
+		s, negative = s[1:], s[0] == '-'
+	}
+	whole, frac, _ := strings.Cut(s, ".")
+	digits := whole + frac
+	if digits == "" || len(digits) > 18 || whole == "" && frac == "" {
+		return "", false
+	}
+	var num int64
+	for _, c := range digits {
+		if c < '0' || c > '9' {
+			return "", false
+		}
+		num = num*10 + int64(c-'0')
+	}
+	den := int64(1)
+	for range frac {
+		den *= 10
+	}
+	g := gcd(num, den)
+	num, den = num/g, den/g
+	if negative && num != 0 {
+		num = -num
+	}
+	if den == 1 {
+		return "n:" + strconv.FormatInt(num, 10), true
+	}
+	return "n:" + strconv.FormatInt(num, 10) + "/" + strconv.FormatInt(den, 10), true
+}
+
+func gcd(a, b int64) int64 {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	if a == 0 {
+		return 1
+	}
+	return a
 }
 
 func textKey(s string, decimal bool) string {
@@ -612,9 +683,7 @@ func compileExpandBatch(
 	full := andPreds(predicate, g.RowFilter)
 	scan := relalg.Scan{Relation: target.Entity.Ref()}
 	expr := relalg.Expr(relalg.Select{Input: scan, Predicate: full})
-	if len(g.Fields) > 0 {
-		expr = relalg.Project{Input: expr, Items: relalg.ProjectFields(g.Fields)}
-	}
+	expr = relalg.Project{Input: expr, Items: relalg.ProjectFields(g.Fields)} // never empty (authorizeRequest)
 	compiled, err := compile(targetTC, target.Entity, expr, identityKeys(tc, target.Entity, false),
 		codegen.WithMaxINCardinality(max(len(tuples), effectiveMaxIN(targetTC))))
 	if err != nil {
