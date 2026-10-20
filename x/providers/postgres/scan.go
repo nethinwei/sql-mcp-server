@@ -185,40 +185,65 @@ func (i pgIntrospector) indexes(ctx context.Context, s *scanned, schemas []strin
 	})
 }
 
-// foreignKeys reads foreign keys with columns in key order.
+// partitionRootsCTE names, as partition_roots(rel, root), the partitioned
+// table each partition belongs to at the top. A partition's constraints and
+// triggers act on the writes to that table, the entity (partitions are not
+// listed, see tables). Only partitions are followed: a table inheriting
+// another the old way is a table of its own. PostgreSQL 11 has no
+// pg_partition_root.
+const partitionRootsCTE = `WITH RECURSIVE partition_up (rel, parent) AS (
+	   SELECT i.inhrelid, i.inhparent FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid
+	   WHERE c.relispartition
+	   UNION ALL
+	   SELECT u.rel, i.inhparent FROM partition_up u JOIN pg_class p ON p.oid = u.parent AND p.relispartition
+	   JOIN pg_inherits i ON i.inhrelid = u.parent),
+	 partition_roots (rel, root) AS (
+	   SELECT u.rel, u.parent FROM partition_up u JOIN pg_class p ON p.oid = u.parent AND NOT p.relispartition)
+	 `
+
+// foreignKeys reads foreign keys with columns in key order. A key referencing
+// a partition references its partitioned table; the copies of a partitioned
+// table's key on its partitions (conparentid) are left out.
 func (i pgIntrospector) foreignKeys(ctx context.Context, s *scanned, schemas []string) error {
 	return i.each(ctx,
-		`SELECT n.nspname, cl.relname, con.conname, a.attname, rn.nspname, rc.relname, ra.attname,
+		partitionRootsCTE+`SELECT n.nspname, cl.relname, con.conname, a.attname, rn.nspname, rc.relname, ra.attname,
 		        con.confdeltype::text, con.confupdtype::text
 		 FROM pg_constraint con
 		 JOIN pg_class cl ON cl.oid = con.conrelid
 		 JOIN pg_namespace n ON n.oid = cl.relnamespace
 		 CROSS JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(col, refcol, ord)
 		 JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.col
-		 JOIN pg_class rc ON rc.oid = con.confrelid
+		 LEFT JOIN partition_roots pr ON pr.rel = con.confrelid
+		 JOIN pg_class rc ON rc.oid = COALESCE(pr.root, con.confrelid)
 		 JOIN pg_namespace rn ON rn.oid = rc.relnamespace
 		 JOIN pg_attribute ra ON ra.attrelid = con.confrelid AND ra.attnum = k.refcol
-		 WHERE con.contype = 'f' AND n.nspname = ANY($1)
+		 WHERE con.contype = 'f' AND con.conparentid = 0 AND n.nspname = ANY($1)
 		 ORDER BY n.nspname, cl.relname, con.conname, k.ord`,
 		schemas, func(rows *sql.Rows) error { return s.ScanForeignKeyColumn(rows, pgAction) })
 }
 
 // cascadesSQL lists, by referenced relation, the foreign keys of other
 // relations whose actions write their rows when rows of the referenced one are
-// deleted or their key updated. It groups by every column it orders by:
-// PostgreSQL before 14 (whose catalogs have no primary keys) and the servers
-// of its lineage (Hologres) do not take con.conname as determined by con.oid.
-const cascadesSQL = `SELECT pn.nspname, pc.relname, cn.nspname, cc.relname, con.confdeltype::text,
+// deleted or their key updated. Both relations are taken at their partition
+// root: a key referencing a partition writes when rows of its partitioned
+// table are deleted, which the gate must then authorize (I-6); the copies of
+// a key on partitions (conparentid) are left out, or the writes would seem
+// to reach partitions no entity exposes. It groups by every column it orders
+// by: PostgreSQL before 14 (whose catalogs have no primary keys) does not
+// take con.conname as determined by con.oid.
+const cascadesSQL = partitionRootsCTE + `SELECT pn.nspname, pc.relname, cn.nspname, cc.relname, con.confdeltype::text,
 	        con.confupdtype::text, json_agg(pa.attname ORDER BY k.ord)::text, json_agg(fa.attname ORDER BY k.ord)::text
 	 FROM pg_constraint con
-	 JOIN pg_class cc ON cc.oid = con.conrelid
+	 LEFT JOIN partition_roots cr ON cr.rel = con.conrelid
+	 JOIN pg_class cc ON cc.oid = COALESCE(cr.root, con.conrelid)
 	 JOIN pg_namespace cn ON cn.oid = cc.relnamespace
-	 JOIN pg_class pc ON pc.oid = con.confrelid
+	 LEFT JOIN partition_roots pr ON pr.rel = con.confrelid
+	 JOIN pg_class pc ON pc.oid = COALESCE(pr.root, con.confrelid)
 	 JOIN pg_namespace pn ON pn.oid = pc.relnamespace
 	 CROSS JOIN LATERAL unnest(con.confkey, con.conkey) WITH ORDINALITY AS k(attnum, fattnum, ord)
 	 JOIN pg_attribute pa ON pa.attrelid = con.confrelid AND pa.attnum = k.attnum
 	 JOIN pg_attribute fa ON fa.attrelid = con.conrelid AND fa.attnum = k.fattnum
-	 WHERE con.contype = 'f' AND pn.nspname = ANY($1)
+	 WHERE con.contype = 'f' AND con.conparentid = 0 AND pn.nspname = ANY($1)
 	   AND (con.confdeltype IN ('c', 'n', 'd') OR con.confupdtype IN ('c', 'n', 'd'))
 	 GROUP BY con.oid, con.conname, pn.nspname, pc.relname, cn.nspname, cc.relname, con.confdeltype,
 	          con.confupdtype
@@ -244,12 +269,17 @@ func (i pgIntrospector) cascades(ctx context.Context, s *scanned, schemas []stri
 }
 
 // writeEffects marks the relations with user triggers or rewrite rules,
-// whose effects are unknown.
+// whose effects are unknown; one on a partition marks its partitioned table,
+// whose writes run it. Rules are pg_rules' (pg_rewrite but the views'
+// _RETURN rules).
 func (i pgIntrospector) writeEffects(ctx context.Context, s *scanned, schemas []string) error {
 	return i.each(ctx,
-		`SELECT n.nspname, c.relname FROM pg_trigger t
-		 JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
-		 WHERE NOT t.tgisinternal AND n.nspname = ANY($1)
-		 UNION SELECT schemaname, tablename FROM pg_rules WHERE schemaname = ANY($1)`,
+		partitionRootsCTE+`SELECT n.nspname, c.relname
+		 FROM (SELECT tgrelid AS rel FROM pg_trigger WHERE NOT tgisinternal
+		       UNION SELECT ev_class FROM pg_rewrite WHERE rulename <> '_RETURN') w
+		 LEFT JOIN partition_roots r ON r.rel = w.rel
+		 JOIN pg_class c ON c.oid = COALESCE(r.root, w.rel) JOIN pg_namespace n ON n.oid = c.relnamespace
+		 WHERE n.nspname = ANY($1)
+		 GROUP BY n.nspname, c.relname`,
 		schemas, s.ScanSideEffect)
 }

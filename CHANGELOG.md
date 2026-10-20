@@ -17,6 +17,10 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ### Fixed
 
+- **安全**：PostgreSQL 分区表的级联未计入授权。外键引用分区（而非分区表）时，级联挂在分区上，
+  删除分区表的行会经数据库级联删除未暴露表的数据而不经检查（违反 I-6）。分区上的外键、级联与
+  trigger 现在归到其分区表；分区表外键在分区上的副本不再计入，删除被引用行不再因
+  `cascades to <分区>, which no entity exposes` 被误拒；分区上的 trigger 让分区表带有写入副作用。
 - PostgreSQL 11–13 扫描失败（`column "con.conname" must appear in the GROUP BY clause`）。
 - PostgreSQL 18 的 `EXPLAIN ANALYZE` 采样解析失败（`Actual Rows` 改为每次循环的平均值，带小数）。
 
