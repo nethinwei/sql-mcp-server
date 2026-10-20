@@ -84,7 +84,9 @@ singleflight 共享给跟随者的结果；读缓存的条目大小也用计量�
 - `context.DeadlineExceeded`、`context.Canceled`。
 
 `driver.ErrBadConn` **不算**：按 `database/sql` 的约定，它表示语句尚未发出，并已在
-别的连接上重试过。数据库自身返回的错误也不算。
+别的连接上重试过。`store.ErrNotConnected` 也不算，并且优先于上面各项：provider 用它
+标记建连失败（PostgreSQL 的 `pgconn.ConnectError`、版本不受支持），此时语句没有发出，
+即使错误链里还有 `net.Error` 或超时。数据库自身返回的错误也不算。
 
 - 事务外的写入（update/delete/create/execute）遇到上述错误时，返回
   `OutcomeUnknownError`（`errors.Is(err, ErrOutcomeUnknown)`）。原因错误保留在错误链中

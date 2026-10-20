@@ -426,9 +426,13 @@ func outcomeUnknown(err error) error { return &classified{kind: ErrOutcomeUnknow
 // its connection broke or its deadline passed after it may have been sent. A
 // broken connection a driver reports before sending the statement
 // (driver.ErrBadConn, which database/sql retries on another connection) is
-// not uncertain, nor is any error the database itself returned.
+// not uncertain, nor is a connection that could not be made
+// (store.ErrNotConnected), nor any error the database itself returned.
 func uncertain(err error) bool {
 	var netErr net.Error
+	if errors.Is(err, store.ErrNotConnected) {
+		return false
+	}
 	return errors.Is(err, store.ErrConnectionLost) || errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.As(err, &netErr)
 }

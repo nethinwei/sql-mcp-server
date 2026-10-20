@@ -13,7 +13,10 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 - PostgreSQL provider 只连接 PostgreSQL 11–18：PostgreSQL 10 及以下、19 及以上，以及 Hologres、
   Greenplum、Redshift、CockroachDB、openGauss/GaussDB、YugabyteDB 等协议兼容库在连接时拒绝
-  （`postgres: unsupported server`）。此前它们按 PostgreSQL 16 的假设运行，结果半可用。
+  （`postgres: unsupported server`）。此前它们按 PostgreSQL 16 的假设运行，结果半可用。每条新建的
+  连接都检查，读、写、过程与 SQL 逃生连接一视同仁；服务器原地升级或故障切换后，新连接重新判定。
+- PostgreSQL 传统继承（`INHERITS`）：有子表的父表按派生关系处理（同视图）。父表的主键与唯一键
+  不覆盖子表的行，改为取实体配置中声明的键，只用于读取，不再用于写入安全。
 
 ### Fixed
 
@@ -21,6 +24,9 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   删除分区表的行会经数据库级联删除未暴露表的数据而不经检查（违反 I-6）。分区上的外键、级联与
   trigger 现在归到其分区表；分区表外键在分区上的副本不再计入，删除被引用行不再因
   `cascades to <分区>, which no entity exposes` 被误拒；分区上的 trigger 让分区表带有写入副作用。
+- **安全**：PostgreSQL 传统继承（`INHERITS`）的父表级联未计入授权。删除父表的行会删到子表的行，
+  引用子表的外键级联与子表的 trigger 随之执行，而父表实体不带这些级联与副作用（违反 I-6）。
+  子表的级联与 trigger 现在同时计入它的每个祖先表。
 - PostgreSQL 的 `json`、`jsonb`、`xml` 值返回原文；此前驱动把它们读成字节，客户端得到 base64。
   `bytea` 仍是二进制。与 MySQL 共用同一个文本列处理（`sqladapter.TextRows`）。
 - PostgreSQL domain 的默认值计入列默认值（不再被当作必填而拒绝 create），domain 的 `NOT NULL`
@@ -29,10 +35,11 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 - PostgreSQL 11–13 扫描失败（`column "con.conname" must appear in the GROUP BY clause`）。
 - PostgreSQL 18 的 `EXPLAIN ANALYZE` 采样解析失败（`Actual Rows` 改为每次循环的平均值，带小数）。
 
-- PostgreSQL：没有 schema `USAGE` 的表不再被发现，权限也不再显示为可读（此前表级授权显示
-  granted，查询却报 `permission denied for schema`）。
-- PostgreSQL：服务端在语句执行中结束会话（`57P01`–`57P03`、`08` 类）按连接中断处理，写入的结果
-  报告为未知（`OUTCOME_UNKNOWN`），与 MySQL 一致。
+- PostgreSQL：没有 schema `USAGE` 的表不再被发现，表与过程的权限也不再显示为可读或可执行（此前
+  表级授权或 `EXECUTE` 显示 granted，执行却报 `permission denied for schema`）。
+- PostgreSQL：服务端在语句执行中结束会话（`57P01`、`57P02`、`08` 类）按连接中断处理，写入的结果
+  报告为未知（`OUTCOME_UNKNOWN`），与 MySQL 一致。建连失败（包括 `57P03` 数据库正在启动、连接
+  超时、服务器版本不受支持）时语句未发出，不报告为结果未知（新增 `store.ErrNotConnected`）。
 
 ### Changed
 

@@ -10,9 +10,6 @@ import (
 // ReadOnly implements introspect.PrivilegeInspector: a hot standby, or a
 // session whose transactions default to read-only.
 func (i pgIntrospector) ReadOnly(ctx context.Context) (bool, error) {
-	if err := i.gate.check(ctx); err != nil {
-		return false, err
-	}
 	var readOnly bool
 	err := i.db.QueryRowContext(ctx,
 		`SELECT pg_is_in_recovery() OR current_setting('default_transaction_read_only') = 'on'`).Scan(&readOnly)
@@ -26,9 +23,6 @@ func (i pgIntrospector) ReadOnly(ctx context.Context) (bool, error) {
 func (i pgIntrospector) TablePrivileges(
 	ctx context.Context, schema string, tables []string,
 ) (map[string]introspect.TablePrivileges, error) {
-	if err := i.gate.check(ctx); err != nil {
-		return nil, err
-	}
 	out := map[string]introspect.TablePrivileges{}
 	var partial []string
 	err := i.each(ctx,
@@ -96,15 +90,14 @@ func (i pgIntrospector) columnPrivileges(
 		}, schema)
 }
 
-// ProcedurePrivilege implements introspect.PrivilegeInspector.
+// ProcedurePrivilege implements introspect.PrivilegeInspector. As for a
+// table, EXECUTE reaches nothing in a schema without USAGE.
 func (i pgIntrospector) ProcedurePrivilege(ctx context.Context, schema, name string) (introspect.Privilege, error) {
-	if err := i.gate.check(ctx); err != nil {
-		return introspect.PrivilegeUnknown, err
-	}
 	var count int
 	var granted bool
 	err := i.db.QueryRowContext(ctx,
-		`SELECT count(*), COALESCE(bool_and(has_function_privilege(p.oid, 'EXECUTE')), false)
+		`SELECT count(*), COALESCE(bool_and(has_schema_privilege(n.oid, 'USAGE')
+		        AND has_function_privilege(p.oid, 'EXECUTE')), false)
 		 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
 		 WHERE p.proname = $2 AND n.nspname = COALESCE(NULLIF($1, ''), current_schema())`,
 		schema, name).Scan(&count, &granted)

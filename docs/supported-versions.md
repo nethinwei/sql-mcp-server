@@ -26,7 +26,7 @@ MCP Registry 仍处于 preview；`server.json` schema 和 publisher 版本固定
 
 PostgreSQL 的 provider integration 在 CI 中对 11 至 18 每个大版本各运行一次
 （`SQL_MCP_PG_IMAGE` 选镜像，见 `.github/workflows/ci.yml`）。下限 11 来自
-`pg_index.indnkeyatts`。连接时 provider 读取 `server_version_num` 与 `version()`：
+`pg_index.indnkeyatts`。每建一条连接，provider 先读取 `server_version_num` 与 `version()`：
 PostgreSQL 10 及以下、19 及以上，以及说 PostgreSQL 协议但不是 PostgreSQL 的数据库
 （Hologres、Greenplum、Redshift、CockroachDB、openGauss/GaussDB、YugabyteDB 等）
 一律拒绝，不提供降级运行。这类数据库的目录、计划、事务与 `RETURNING` 语义不同，

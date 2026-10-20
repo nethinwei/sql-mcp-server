@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -227,6 +228,13 @@ func TestWriteWithLostConnectionHasUnknownOutcome(t *testing.T) {
 	}
 	if _, err := RunTool(context.Background(), UpdateTool{}, in, tc); errors.Is(err, ErrOutcomeUnknown) ||
 		!errors.Is(err, ErrDatabase) {
+		t.Fatalf("err = %v", err)
+	}
+	// Nor is a connection that could not be made, whatever its cause.
+	db.ExecFn = func(context.Context, string, ...any) (store.Result, error) {
+		return store.Result{}, fmt.Errorf("%w: %w", store.ErrNotConnected, context.DeadlineExceeded)
+	}
+	if _, err := RunTool(context.Background(), UpdateTool{}, in, tc); errors.Is(err, ErrOutcomeUnknown) {
 		t.Fatalf("err = %v", err)
 	}
 }

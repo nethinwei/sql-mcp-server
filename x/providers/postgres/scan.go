@@ -29,11 +29,10 @@ func (i pgIntrospector) each(
 
 // Discover implements introspect.Introspector. It lists the relations of the
 // given schemas (by default the current one, where unqualified names resolve)
-// with their columns, keys, foreign keys and write effects.
+// with their columns, keys, foreign keys and write effects. A table others
+// inherit from the old way is derived, as a view is: its rows include theirs,
+// which its keys do not cover (I-5), and a write to them changes it.
 func (i pgIntrospector) Discover(ctx context.Context, sources []string) ([]entity.Entity, error) {
-	if err := i.gate.check(ctx); err != nil {
-		return nil, err
-	}
 	if len(sources) == 0 {
 		current, err := i.currentSchema(ctx)
 		if err != nil || current == "" {
@@ -53,7 +52,7 @@ func (i pgIntrospector) Discover(ctx context.Context, sources []string) ([]entit
 	for _, t := range tables {
 		e := entity.Entity{
 			Name: t.name, Source: t.name, Schema: t.schema, Description: t.comment, Kind: pgKind(t.kind),
-			Derived: t.kind == "v" || t.kind == "m" || t.kind == "f",
+			Derived: t.kind == "v" || t.kind == "m" || t.kind == "f" || t.inherited,
 		}
 		s.Fill(tableKey{Schema: t.schema, Table: t.name}, &e)
 		entities = append(entities, e)
@@ -78,18 +77,24 @@ func (i pgIntrospector) scan(ctx context.Context, schemas []string) (*scanned, e
 	return s, nil
 }
 
-type pgTable struct{ schema, name, kind, comment string }
+type pgTable struct {
+	schema, name, kind, comment string
+	inherited                   bool // tables inherit from it the old way (INHERITS)
+}
 
 // tables lists the tables (plain, partitioned and foreign), views and
 // materialized views of schemas that the connection can see, the way
 // information_schema.tables does, in the schemas it may use (a table's own
 // grants reach nothing in a schema without USAGE). Partitions are skipped: their data is read
-// through the partitioned table, and exposing both would duplicate it. The
-// config store's own tables are skipped too.
+// through the partitioned table, and exposing both would duplicate it. A
+// table others inherit from the old way is listed, but as derived (see
+// Discover). The config store's own tables are skipped too.
 func (i pgIntrospector) tables(ctx context.Context, schemas []string) ([]pgTable, error) {
 	var out []pgTable
 	err := i.each(ctx,
-		`SELECT n.nspname, c.relname, c.relkind::text, COALESCE(obj_description(c.oid, 'pg_class'), '')
+		`SELECT n.nspname, c.relname, c.relkind::text, COALESCE(obj_description(c.oid, 'pg_class'), ''),
+		        EXISTS (SELECT FROM pg_inherits i JOIN pg_class k ON k.oid = i.inhrelid
+		                WHERE i.inhparent = c.oid AND NOT k.relispartition)
 		 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
 		 WHERE c.relkind IN ('r', 'p', 'f', 'v', 'm') AND NOT c.relispartition AND n.nspname = ANY($1)
 		   AND has_schema_privilege(n.oid, 'USAGE')
@@ -98,7 +103,7 @@ func (i pgIntrospector) tables(ctx context.Context, schemas []string) ([]pgTable
 		     OR has_any_column_privilege(c.oid, 'SELECT, INSERT, UPDATE, REFERENCES'))`,
 		schemas, func(rows *sql.Rows) error {
 			var t pgTable
-			if err := rows.Scan(&t.schema, &t.name, &t.kind, &t.comment); err != nil {
+			if err := rows.Scan(&t.schema, &t.name, &t.kind, &t.comment, &t.inherited); err != nil {
 				return err
 			}
 			if !config.IsStoreTable(t.name) {
@@ -198,20 +203,21 @@ func (i pgIntrospector) indexes(ctx context.Context, s *scanned, schemas []strin
 	})
 }
 
-// partitionRootsCTE names, as partition_roots(rel, root), the partitioned
-// table each partition belongs to at the top. A partition's constraints and
-// triggers act on the writes to that table, the entity (partitions are not
-// listed, see tables). Only partitions are followed: a table inheriting
-// another the old way is a table of its own. PostgreSQL 11 has no
-// pg_partition_root.
-const partitionRootsCTE = `WITH RECURSIVE partition_up (rel, parent) AS (
-	   SELECT i.inhrelid, i.inhparent FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid
-	   WHERE c.relispartition
-	   UNION ALL
-	   SELECT u.rel, i.inhparent FROM partition_up u JOIN pg_class p ON p.oid = u.parent AND p.relispartition
-	   JOIN pg_inherits i ON i.inhrelid = u.parent),
+// inheritanceCTE names, as ancestors(rel, anc), every relation each
+// relation inherits from, and, as partition_roots(rel, root), the
+// partitioned table each partition belongs to at the top. A partition's
+// constraints and triggers act on the writes to that table, the entity
+// (partitions are not listed, see tables). A table inheriting another the old
+// way (INHERITS) is a table of its own, but a write to any of its ancestors
+// reaches its rows too, and so its triggers and the foreign keys referencing
+// it (I-6). PostgreSQL 11 has no pg_partition_root.
+const inheritanceCTE = `WITH RECURSIVE ancestors (rel, anc) AS (
+	   SELECT inhrelid, inhparent FROM pg_inherits
+	   UNION
+	   SELECT a.rel, i.inhparent FROM ancestors a JOIN pg_inherits i ON i.inhrelid = a.anc),
 	 partition_roots (rel, root) AS (
-	   SELECT u.rel, u.parent FROM partition_up u JOIN pg_class p ON p.oid = u.parent AND NOT p.relispartition)
+	   SELECT a.rel, a.anc FROM ancestors a JOIN pg_class c ON c.oid = a.rel AND c.relispartition
+	   JOIN pg_class p ON p.oid = a.anc AND NOT p.relispartition)
 	 `
 
 // foreignKeys reads foreign keys with columns in key order. A key referencing
@@ -219,7 +225,7 @@ const partitionRootsCTE = `WITH RECURSIVE partition_up (rel, parent) AS (
 // table's key on its partitions (conparentid) are left out.
 func (i pgIntrospector) foreignKeys(ctx context.Context, s *scanned, schemas []string) error {
 	return i.each(ctx,
-		partitionRootsCTE+`SELECT n.nspname, cl.relname, con.conname, a.attname, rn.nspname, rc.relname, ra.attname,
+		inheritanceCTE+`SELECT n.nspname, cl.relname, con.conname, a.attname, rn.nspname, rc.relname, ra.attname,
 		        con.confdeltype::text, con.confupdtype::text
 		 FROM pg_constraint con
 		 JOIN pg_class cl ON cl.oid = con.conrelid
@@ -237,21 +243,24 @@ func (i pgIntrospector) foreignKeys(ctx context.Context, s *scanned, schemas []s
 
 // cascadesSQL lists, by referenced relation, the foreign keys of other
 // relations whose actions write their rows when rows of the referenced one are
-// deleted or their key updated. Both relations are taken at their partition
-// root: a key referencing a partition writes when rows of its partitioned
-// table are deleted, which the gate must then authorize (I-6); the copies of
-// a key on partitions (conparentid) are left out, or the writes would seem
-// to reach partitions no entity exposes. It groups by every column it orders
+// deleted or their key updated. The referencing relation is taken at its
+// partition root; a key is listed on the relation it references and on every
+// ancestor of that relation, whose deletes reach the referenced rows too: a
+// key referencing a partition writes when rows of its partitioned table are
+// deleted, one referencing a table inheriting another when rows of the
+// parent are, which the gate must then authorize (I-6). The copies of a key
+// on partitions (conparentid) are left out, or the writes would seem to reach
+// partitions no entity exposes. It groups by every column it orders
 // by: PostgreSQL before 14 (whose catalogs have no primary keys) does not
 // take con.conname as determined by con.oid.
-const cascadesSQL = partitionRootsCTE + `SELECT pn.nspname, pc.relname, cn.nspname, cc.relname, con.confdeltype::text,
+const cascadesSQL = inheritanceCTE + `SELECT pn.nspname, pc.relname, cn.nspname, cc.relname, con.confdeltype::text,
 	        con.confupdtype::text, json_agg(pa.attname ORDER BY k.ord)::text, json_agg(fa.attname ORDER BY k.ord)::text
 	 FROM pg_constraint con
 	 LEFT JOIN partition_roots cr ON cr.rel = con.conrelid
 	 JOIN pg_class cc ON cc.oid = COALESCE(cr.root, con.conrelid)
 	 JOIN pg_namespace cn ON cn.oid = cc.relnamespace
-	 LEFT JOIN partition_roots pr ON pr.rel = con.confrelid
-	 JOIN pg_class pc ON pc.oid = COALESCE(pr.root, con.confrelid)
+	 CROSS JOIN LATERAL (SELECT con.confrelid UNION SELECT anc FROM ancestors WHERE rel = con.confrelid) o(rel)
+	 JOIN pg_class pc ON pc.oid = o.rel
 	 JOIN pg_namespace pn ON pn.oid = pc.relnamespace
 	 CROSS JOIN LATERAL unnest(con.confkey, con.conkey) WITH ORDINALITY AS k(attnum, fattnum, ord)
 	 JOIN pg_attribute pa ON pa.attrelid = con.confrelid AND pa.attnum = k.attnum
@@ -282,16 +291,17 @@ func (i pgIntrospector) cascades(ctx context.Context, s *scanned, schemas []stri
 }
 
 // writeEffects marks the relations with user triggers or rewrite rules,
-// whose effects are unknown; one on a partition marks its partitioned table,
-// whose writes run it. Rules are pg_rules' (pg_rewrite but the views'
+// whose effects are unknown, and their ancestors, whose writes run them: one
+// on a partition marks its partitioned table, one on a table inheriting
+// another the old way marks that one too. Rules are pg_rules' (pg_rewrite but the views'
 // _RETURN rules).
 func (i pgIntrospector) writeEffects(ctx context.Context, s *scanned, schemas []string) error {
 	return i.each(ctx,
-		partitionRootsCTE+`SELECT n.nspname, c.relname
+		inheritanceCTE+`SELECT n.nspname, c.relname
 		 FROM (SELECT tgrelid AS rel FROM pg_trigger WHERE NOT tgisinternal
 		       UNION SELECT ev_class FROM pg_rewrite WHERE rulename <> '_RETURN') w
-		 LEFT JOIN partition_roots r ON r.rel = w.rel
-		 JOIN pg_class c ON c.oid = COALESCE(r.root, w.rel) JOIN pg_namespace n ON n.oid = c.relnamespace
+		 CROSS JOIN LATERAL (SELECT w.rel UNION SELECT anc FROM ancestors WHERE rel = w.rel) o(rel)
+		 JOIN pg_class c ON c.oid = o.rel JOIN pg_namespace n ON n.oid = c.relnamespace
 		 WHERE n.nspname = ANY($1)
 		 GROUP BY n.nspname, c.relname`,
 		schemas, s.ScanSideEffect)

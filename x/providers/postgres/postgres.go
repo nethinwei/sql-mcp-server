@@ -37,7 +37,6 @@ func init() {
 type Provider struct {
 	sqladapter.Base
 	analyzeTx store.TxBeginner
-	gate      *serverGate
 }
 
 // New opens a PostgreSQL database and pings it. The DSN uses the pgx driver
@@ -76,25 +75,21 @@ func Open(dsn string, opts providerregistry.Options) (*Provider, error) {
 	} else if _, configured := cfg.RuntimeParams["statement_timeout"]; !configured {
 		cfg.RuntimeParams["statement_timeout"] = strconv.FormatInt(opts.NativeTimeout().Milliseconds(), 10)
 	}
-	db := stdlib.OpenDB(*cfg)
-	gate := &serverGate{db: db}
+	db := stdlib.OpenDB(*cfg, stdlib.OptionAfterConnect(checkConn))
 	if !opts.Lazy {
 		if err := db.PingContext(opts.OpenContext()); err != nil {
 			_ = db.Close()
+			if errors.Is(err, ErrUnsupportedServer) {
+				return nil, err
+			}
 			return nil, fmt.Errorf("%w: %v", ErrPing, err)
-		}
-		// Opened lazily, the server is checked when first introspected or
-		// explained instead (see serverGate).
-		if err := gate.check(opts.OpenContext()); err != nil {
-			_ = db.Close()
-			return nil, err
 		}
 	}
 
-	explainer := pgExplainer{db: db, classify: classify, gate: gate}
+	explainer := pgExplainer{db: db, classify: classify}
 	pool := sqladapter.New(db, sqladapter.TextRows(binaryTypes), classify)
 	p := &Provider{Base: sqladapter.NewBase(pool, Dialect{}, explainer,
-		pgIntrospector{db: db, gate: gate}).WithLimits(caps), gate: gate}
+		pgIntrospector{db: db}).WithLimits(caps)}
 	p.analyzeTx = p
 	return p, nil
 }

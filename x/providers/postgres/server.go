@@ -2,17 +2,17 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // The servers this provider is built for are PostgreSQL itself, 11 (whose
 // pg_index has indnkeyatts) to 18. A server that speaks its protocol but is
 // of another kind differs in its catalogs, plans, transactions or RETURNING,
-// so it is refused when the provider first reaches it rather than served half
+// so its connections are refused (see checkConn) rather than served half
 // right; docs/supported-versions.md says the same.
 const (
 	minServerVersion = 110000
@@ -48,31 +48,17 @@ func checkServer(num int, version string, hologres bool) error {
 	return nil
 }
 
-// serverGate checks the server once. A refusal is kept; a probe that fails
-// (the server unreachable, say) is not, and the next call tries again.
-type serverGate struct {
-	db      *sql.DB
-	mu      sync.Mutex
-	checked bool
-	err     error
-}
-
-func (g *serverGate) check(ctx context.Context) error {
-	if g == nil {
-		return nil
-	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.checked {
-		return g.err
-	}
+// checkConn checks the server of each connection as it is made, before
+// any statement uses it: every connection of the pool, whatever it serves
+// (reads, writes, procedures, raw SQL), and the server behind a connection
+// made after a failover, a restart or an upgrade in place, is judged anew.
+func checkConn(ctx context.Context, conn *pgx.Conn) error {
 	var num int
 	var version string
 	var hologres bool
-	if err := g.db.QueryRowContext(ctx, `SELECT current_setting('server_version_num')::int, version(),
+	if err := conn.QueryRow(ctx, `SELECT current_setting('server_version_num')::int, version(),
 		to_regproc('hg_version') IS NOT NULL`).Scan(&num, &version, &hologres); err != nil {
 		return fmt.Errorf("postgres: read the server version: %w", err)
 	}
-	g.checked, g.err = true, checkServer(num, version, hologres)
-	return g.err
+	return checkServer(num, version, hologres)
 }

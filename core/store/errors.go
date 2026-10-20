@@ -45,6 +45,13 @@ var ErrStatementTimeout = errors.New("store: statement stopped at its timeout")
 // statement (driver.ErrBadConn) is not one.
 var ErrConnectionLost = errors.New("store: connection lost during the statement")
 
+// ErrNotConnected marks a statement that was never sent: no connection to
+// the database could be made for it (the server refused or did not answer
+// the connection, or is not one the provider serves), so it did not take
+// effect, whatever else the error wraps (a network error, a deadline).
+// Providers wrap driver errors with it.
+var ErrNotConnected = errors.New("store: no connection to the database could be made")
+
 // ErrMissingRelation and ErrMissingColumn mark a statement naming a table or
 // a column the database does not have (any more): its schema changed under a
 // running configuration. Providers wrap driver errors with them.

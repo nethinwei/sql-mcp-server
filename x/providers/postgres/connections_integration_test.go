@@ -50,9 +50,11 @@ func setupPGAccounts(t *testing.T) (ro, rw string, cleanup func()) {
 		`ALTER ROLE app_ro SET default_transaction_read_only = on`,
 		`CREATE TABLE salaries (id integer PRIMARY KEY, name text, amount integer)`,
 		`GRANT SELECT (id, name) ON salaries TO app_ro`,
-		// A table app_ro may read, in a schema it may not use.
+		// A table app_ro may read and a function it may run, in a schema it may not use.
 		`CREATE SCHEMA locked`, `CREATE TABLE locked.secrets (id integer PRIMARY KEY)`,
 		`GRANT SELECT ON locked.secrets TO app_ro`,
+		`CREATE FUNCTION locked.recalc() RETURNS integer LANGUAGE sql AS 'SELECT 1'`,
+		`GRANT EXECUTE ON FUNCTION locked.recalc() TO app_ro`,
 	} {
 		if _, err := admin.ExecContext(ctx, stmt); err != nil {
 			t.Fatalf("%s: %v", stmt, err)
@@ -156,8 +158,9 @@ func TestPGCapabilitiesAndRefusedWrites(t *testing.T) {
 	}
 }
 
-// A table in a schema the account may not use is out of its reach whatever
-// the table's own grants: it is neither discovered nor reported readable.
+// A table or a procedure in a schema the account may not use is out of its
+// reach whatever its own grants: the table is neither discovered nor
+// reported readable, the procedure not reported executable.
 func TestPGSchemaUsageGatesTables(t *testing.T) {
 	ro, _, cleanup := setupPGAccounts(t)
 	defer cleanup()
@@ -181,5 +184,12 @@ func TestPGSchemaUsageGatesTables(t *testing.T) {
 	}
 	if p := privileges["secrets"]; p.Select == introspect.PrivilegeGranted {
 		t.Errorf("locked.secrets privileges = %+v, want SELECT not granted", p)
+	}
+	execute, err := prov.Introspector().(introspect.PrivilegeInspector).ProcedurePrivilege(ctx, "locked", "recalc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execute == introspect.PrivilegeGranted {
+		t.Error("locked.recalc reported executable without USAGE on its schema")
 	}
 }

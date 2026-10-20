@@ -26,7 +26,6 @@ type pgExplainer struct {
 	// classify classifies the errors of EXPLAIN as those of statements, so
 	// the gate tells a schema change from a plan it could not get.
 	classify func(error) error
-	gate     *serverGate
 }
 
 // Explain implements cost.Explainer. It wraps the query in EXPLAIN and parses
@@ -35,9 +34,6 @@ type pgExplainer struct {
 // table (see statsFresh); VERBOSE names its schema. Any parse failure
 // degrades to ScanUnknown.
 func (e pgExplainer) Explain(ctx context.Context, query string, args []any) (cost.Plan, error) {
-	if err := e.gate.check(ctx); err != nil {
-		return cost.Plan{}, err
-	}
 	rows, err := e.db.QueryContext(ctx, "EXPLAIN (FORMAT JSON, VERBOSE) "+query, args...)
 	if err != nil {
 		return cost.Plan{}, e.classify(err)
@@ -162,9 +158,6 @@ type pgExplainRow struct {
 func (p *Provider) ExplainAnalyze(ctx context.Context, compiled codegen.Compiled) (plan cost.Plan, err error) {
 	if !compiled.ReadOnly {
 		return cost.Plan{}, ErrAnalyzeRequiresReadOnly
-	}
-	if err := p.gate.check(ctx); err != nil {
-		return cost.Plan{}, err
 	}
 	beginner := p.analyzeTx
 	if beginner == nil {
