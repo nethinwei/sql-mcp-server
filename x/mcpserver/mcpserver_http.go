@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -205,6 +206,15 @@ func loadTLS(cfg HTTPConfig) (*tls.Config, error) {
 	return out, nil
 }
 
+// endStreamsAtShutdown ends the admin console's event streams when srv
+// shuts down: they last until the console leaves, and the shutdown would
+// wait for them.
+func endStreamsAtShutdown(srv *http.Server, admin http.Handler) {
+	if streams, ok := admin.(interface{ EndStreams() }); ok {
+		srv.RegisterOnShutdown(streams.EndStreams)
+	}
+}
+
 func serveHTTPWithShutdown(ctx context.Context, b *bus.Bus, srv *http.Server, tlsEnabled bool) error {
 	served := make(chan struct{})
 	defer close(served)
@@ -217,7 +227,10 @@ func serveHTTPWithShutdown(ctx context.Context, b *bus.Bus, srv *http.Server, tl
 		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			slog.Warn("http requests still running at shutdown; closing their connections", "err", err)
+			_ = srv.Close()
+		}
 	})
 	var err error
 	if tlsEnabled {
@@ -326,6 +339,7 @@ func ServeHTTP(ctx context.Context, s *mcp.Server, cfg HTTPConfig) error {
 		IdleTimeout:       h.cfg.IdleTimeout,
 		MaxHeaderBytes:    h.cfg.MaxHeaderBytes,
 	}
+	endStreamsAtShutdown(srv, h.cfg.Admin)
 	if h.cfg.tlsEnabled() {
 		srv.TLSConfig = &tls.Config{
 			MinVersion:         tls.VersionTLS12,

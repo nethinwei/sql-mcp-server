@@ -231,7 +231,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `entities` | `entity` 列表 | `[{"name":"x","fields":[{"name":"x"}],"roles":{},"mcp":{"dmlTools":true},"relationships":[{"name":"","target":"","cardinality":"","joinOn":null}]}]` |  | 显式暴露给 Agent 的实体；可以为空。启动自省会拒绝数据库中缺失的表、视图或字段。 |
+| `entities` | `entity` 列表 |  |  | 显式暴露给 Agent 的实体；可以为空。启动自省会拒绝数据库中缺失的表、视图或字段。 |
 
 ### `roles`
 
@@ -329,6 +329,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `maxSize` | 整数 | `4096` | ≥ 0 | 最多缓存条目数。 |
 | `maxEntryRows` | 整数 | `10000` | ≥ 0 | 单条缓存最多行数；默认等于 cost.maxRows，启用结果缓存时必须大于 0。 |
 | `maxEntryBytes` | 整数 | `16777216` | ≥ 0 | 单条缓存最多字节数；默认等于 cost.maxBytes，启用结果缓存时必须大于 0。 |
+| `maxTotalBytes` | 整数 | `268435456` | ≥ 0 | 结果缓存所有条目合计最多字节数，超出时先淘汰最早过期的条目；默认 256 MiB（不小于 maxEntryBytes），启用结果缓存时不能小于 maxEntryBytes。 |
 | `preparedMaxSize` | 整数 |  | ≥ 0 | 预编译语句缓存条目数，与结果缓存相互独立；0 表示不缓存。 |
 
 ### `rateLimit`：限流与熔断

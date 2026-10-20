@@ -96,7 +96,7 @@ func insertWithExec(ctx context.Context, st statement, inserted map[string]any) 
 		return Result{}, err
 	}
 	row := insertedKey(st.res.Entity, inserted, r.LastInsertID)
-	st.present(row)
+	st.present(row, st.maskRules())
 	row["lastInsertId"], row["rowsAffected"] = r.LastInsertID, r.RowsAffected
 	return Result{Content: []map[string]any{row}}, nil
 }

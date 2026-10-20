@@ -653,8 +653,9 @@ func checkGateDetailed(
 	return compiled, dec.Plan, nil
 }
 
-func maskRow(m mask.Masker, attrs []entity.Attribute, row map[string]any) {
-	rules := make(map[string]string, len(attrs))
+// maskRules are the mask rules of attrs by the names rows key them by.
+func maskRules(attrs []entity.Attribute) map[string]string {
+	rules := map[string]string{}
 	for _, a := range attrs {
 		if a.Mask != "" {
 			// A field projected by its alias comes back by it (see projectItems).
@@ -663,6 +664,14 @@ func maskRow(m mask.Masker, attrs []entity.Attribute, row map[string]any) {
 				rules[a.Alias] = a.Mask
 			}
 		}
+	}
+	return rules
+}
+
+// maskRow masks the fields of row that rules (see maskRules) name.
+func maskRow(m mask.Masker, rules map[string]string, row map[string]any) {
+	if len(rules) == 0 {
+		return
 	}
 	for f, v := range row {
 		if rule, ok := rules[f]; ok {

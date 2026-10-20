@@ -28,17 +28,19 @@ make bench-integration   # 真实 PostgreSQL/MySQL（需要 Docker）
 | `Benchmark{PG,MySQL}Discover600Tables` | `x/providers/*`（integration） | 600 张表的元数据扫描 |
 | `Benchmark{PG,MySQL}TablePrivileges600Tables` | `x/providers/*`（integration） | 600 张表的连接权限探测 |
 
-## 基线（2026-10-09，Apple M5，10 核，Go 1.26）
+## 基线（Apple M5，10 核）
+
+前七项为 2026-10-20 用 Go 1.26.9（仓库固定的工具链）重测，其余为 2026-10-09（Go 1.26）。
 
 | Benchmark | 耗时/op | 内存/op | 分配次数/op |
 |---|---|---|---|
-| ReadToolPointLookup | 3.4 µs | 4.4 KB | 84 |
-| ReadToolHundredMaskedRows | 26 µs | 49 KB | 664 |
-| ToolPathPointRead | 19 µs | 17.7 KB | 225 |
-| ToolPathPointReadParallel | 4.1 µs | 8.8 KB | 117 |
-| MCPPointRead | 59 µs | 253 KB | 341 |
-| Assemble300Entities | 1.0 ms | 1.97 MB | 7364 |
-| RuntimeAcquire | 14 ns | 16 B | 1 |
+| ReadToolPointLookup | 4.7 µs | 5.9 KB | 109 |
+| ReadToolHundredMaskedRows | 47 µs | 61 KB | 1078 |
+| ToolPathPointRead | 26 µs | 21.7 KB | 284 |
+| ToolPathPointReadParallel | 7.0 µs | 11.3 KB | 155 |
+| MCPPointRead | 71 µs | 259 KB | 421 |
+| Assemble300Entities | 1.9 ms | 4.84 MB | 19626 |
+| RuntimeAcquire | 13 ns | 16 B | 1 |
 | Reconcile（无索引 / 有索引） | 35 ms / 0.71 ms | 45 MB / 4.0 MB | 5914 / 4912 |
 | BuildSchemaImport（2000 表） | 2.1 ms | 5.0 MB | 44104 |
 | PGDiscover600Tables | 39 ms | — | — |
@@ -53,6 +55,11 @@ O(log n)，与会话、流和事件的数量无关（余下开销主要是基准
 同日把流条目与每个事件的固定开销计入上限（空事件和长会话的流条目不再无界）后，基准按 SDK 的
 方式先 `Open` 再追加，Go 1.27.2 下为 0.32 µs / 0.16 µs。
 
+读取路径比 2026-10-09 多出的分配主要来自结果计量：每行先 `json.Marshal` 一次计字节数
+（`core/tool/results.go`，约 6 次分配/行），传输层再编码一次。2026-10-20 把脱敏规则表改为每条
+语句算一次、扫描缓冲改为每次查询复用一份后，`ReadToolHundredMaskedRows` 从 1276 降到 1078 次分配；
+计量与输出共用一次编码要改动传输层，相对数据库往返收益有限，暂不做。
+
 批量扫描前（逐表查询）同一 600 张表在本机零网络延迟下：PostgreSQL 0.98 s、
 MySQL 1.32 s，且随表数与网络往返线性增长。
 
@@ -61,11 +68,11 @@ MySQL 1.32 s，且随表数与网络往返线性增长。
 - **e2e 慢不是代码慢**：单个 e2e 测试中启动 PostgreSQL 容器占 95% 以上
   （1.3–1.9 s），装配约 30 ms，单次 MCP 调用 0.3–4 ms。e2e 套件改为共享一个
   容器、每个测试一个新数据库后，`make test-e2e` 从约 12 s 降到约 4 s。
-- **engine 的 goroutine 交接**：`ToolPathPointRead`（19 µs）比工具本身
-  （3.4 µs）多出的部分，CPU profile 显示约 70% 在 goroutine 唤醒
+- **engine 的 goroutine 交接**：`ToolPathPointRead`（26 µs）比工具本身
+  （4.7 µs）多出的部分，CPU profile 显示约 70% 在 goroutine 唤醒
   （`singleflight` 的 leader 在独立 goroutine 中执行，以便调用方取消时
-  不影响其他等待者）。并发下摊薄到 4.1 µs/op；相对毫秒级的真实数据库往返
+  不影响其他等待者）。并发下摊薄到 7.0 µs/op；相对毫秒级的真实数据库往返
   可以忽略，暂不改变该取消语义。
-- **MCP SDK 的 JSON 解码分配**：`MCPPointRead` 每次 253 KB 中约 91% 来自
+- **MCP SDK 的 JSON 解码分配**：`MCPPointRead` 每次约 259 KB 中约 91% 来自
   MCP SDK 内部 `segmentio/encoding` 解码器的缓冲分配（客户端与服务端各一
   半），本项目代码约占 4%。属于上游依赖，记录待跟进。

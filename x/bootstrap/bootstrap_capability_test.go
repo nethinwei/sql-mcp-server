@@ -1,9 +1,11 @@
 package bootstrap
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
@@ -57,5 +59,43 @@ func TestCapabilityWarnings(t *testing.T) {
 	if len(warnings) != 1 || !strings.Contains(warnings[0].Text, "update") || warnings[0].Params["connection"] != "ro" ||
 		warnings[0].Parts["cause"].Code != reason.PrivilegeReadOnlyServer {
 		t.Fatalf("warnings = %v, want only the granted update", warnings)
+	}
+}
+
+// writableInspector reports a writable server.
+type writableInspector struct{ introspect.PrivilegeInspector }
+
+func (writableInspector) ReadOnly(context.Context) (bool, error) { return false, nil }
+
+// A write connection that reads run on too (after writes, in transactions)
+// needs SELECT: an insert it may run is reported denied without it.
+func TestWritesNeedSelectWhereReadsFollow(t *testing.T) {
+	t.Parallel()
+	g, d := introspect.PrivilegeGranted, introspect.PrivilegeDenied
+	c := &connectionInspector{name: "rw", inspect: writableInspector{}, tables: map[string]introspect.TablePrivileges{
+		"public.orders": {Select: d, Insert: g, Update: d, Delete: d},
+	}}
+	orders := entity.Entity{Name: "orders", Schema: "public", Source: "orders"}
+	if got := assessAction(context.Background(), c, orders, entity.ActionCreate, false); got.Privilege != g {
+		t.Fatalf("insert alone = %+v", got)
+	}
+	got := assessAction(context.Background(), c, orders, entity.ActionCreate, true)
+	if got.Privilege != d || got.Reason.Code != reason.PrivilegeReadsBack {
+		t.Fatalf("insert where reads follow = %+v", got)
+	}
+}
+
+func TestReadsBack(t *testing.T) {
+	t.Parallel()
+	routed := config.DatabaseConfig{Connections: map[string]config.ConnectionConfig{"ro": {}, "rw": {}},
+		Routing: config.RoutingConfig{Read: "ro", Write: "rw", Execute: "rw"}}
+	cfg := &config.Config{Databases: map[string]config.DatabaseConfig{"default": routed}}
+	if readsBack(cfg, "default") {
+		t.Fatal("reads stay on the read connection")
+	}
+	routed.ReadAfterWrite = time.Second
+	cfg.Databases["default"] = routed
+	if !readsBack(cfg, "default") {
+		t.Fatal("reads after writes run on the write connection")
 	}
 }

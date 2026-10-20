@@ -32,6 +32,11 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 	ctx, tc, end := beginCall(ctx, tc, true, in.Transaction)
 	defer end()
 	start := time.Now()
+	// A read reads at most MaxRows rows (see cost.EnforceCap): its limit is
+	// that many, so a full page of them pages on (nextCursor).
+	if tc.MaxRows > 0 && (in.Limit == 0 || in.Limit > tc.MaxRows) {
+		in.Limit = tc.MaxRows
+	}
 	plan, err := prepareReadPlan(ctx, tc, in)
 	if err != nil {
 		return Result{}, err
@@ -327,9 +332,14 @@ func storeReadCache(ctx context.Context, tc Context, in readInput, key cache.Key
 	_, size := tc.results.counted() // a read cached has no expansion: its rows are the call's
 	rowsAllowed := tc.CacheMaxEntryRows <= 0 || len(out) <= tc.CacheMaxEntryRows
 	bytesAllowed := tc.CacheMaxEntryBytes <= 0 || size <= tc.CacheMaxEntryBytes
-	if rowsAllowed && bytesAllowed {
-		_ = tc.Cache.Set(ctx, key, out, stamp)
+	if !rowsAllowed || !bytesAllowed {
+		return
 	}
+	if sized, ok := tc.Cache.(cache.Sized[[]map[string]any]); ok {
+		_ = sized.SetSized(ctx, key, out, stamp, size)
+		return
+	}
+	_ = tc.Cache.Set(ctx, key, out, stamp)
 }
 
 // expandJoinColumns are the local columns the relationships expanded join

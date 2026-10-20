@@ -10,6 +10,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/reason"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
+	"github.com/nethinwei/sql-mcp-server/x/providers/sqladapter"
 )
 
 // Limits is what a MySQL connection to dsn opened with opts guarantees on
@@ -26,7 +27,11 @@ func LimitsFor(dsn string, opts providerregistry.Options, timeoutVariable string
 	if err != nil {
 		return nil, fmt.Errorf("mysql: parse dsn: %w", err)
 	}
-	return limits(cfg.Params, opts.Pooler, timeoutVariable), nil
+	params, err := sqladapter.SessionParams(cfg.Params)
+	if err != nil {
+		return nil, fmt.Errorf("mysql: parse dsn: %w", err)
+	}
+	return limits(params, opts.Pooler, timeoutVariable), nil
 }
 
 // limits judges the session settings NewAdapter injects against what params

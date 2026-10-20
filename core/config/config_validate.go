@@ -197,6 +197,9 @@ func (c *Config) validateRuntimeLimits() error {
 	if c.Cache.Enabled && (c.Cache.MaxSize <= 0 || c.Cache.MaxEntryRows <= 0 || c.Cache.MaxEntryBytes <= 0) {
 		return fmt.Errorf("config: enabled cache requires positive maxSize, maxEntryRows, and maxEntryBytes")
 	}
+	if c.Cache.Enabled && c.Cache.MaxTotalBytes < c.Cache.MaxEntryBytes {
+		return fmt.Errorf("config: cache.maxTotalBytes must hold an entry of cache.maxEntryBytes")
+	}
 	return nil
 }
 

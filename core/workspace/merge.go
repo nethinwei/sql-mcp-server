@@ -149,10 +149,17 @@ func (s Schema) normalize(v any, p string) any {
 // and pattern, so a subtree is serialized once however many of its ancestors
 // compare it (each level of a merge compares the values under it): a merge
 // costs the size of its inputs, not their size times their depth. The
-// inputs of one operation are not written to while it runs.
+// inputs of one operation are not written to while it runs. An entry holds
+// its value: values built during the operation (the groups of a keyed list)
+// may go, and their address must not name another value meanwhile.
 type comparer struct {
 	s    Schema
-	memo map[memoKey]string
+	memo map[memoKey]memoEntry
+}
+
+type memoEntry struct {
+	v   any
+	out string
 }
 
 // memoKey identifies a map or a list value at a pattern: a map by its
@@ -163,14 +170,14 @@ type memoKey struct {
 	n       int
 }
 
-func (s Schema) comparer() *comparer { return &comparer{s: s, memo: map[memoKey]string{}} }
+func (s Schema) comparer() *comparer { return &comparer{s: s, memo: map[memoKey]memoEntry{}} }
 
 // canonicalAt is the canonical JSON of v at pattern p.
 func (c *comparer) canonicalAt(p string, v any) string {
 	key, memoized := memoKeyOf(p, v)
 	if memoized {
-		if out, ok := c.memo[key]; ok {
-			return out
+		if e, ok := c.memo[key]; ok {
+			return e.out
 		}
 	}
 	n := c.s.normalize(v, p)
@@ -179,7 +186,7 @@ func (c *comparer) canonicalAt(p string, v any) string {
 	}
 	data, _ := json.Marshal(n)
 	if memoized {
-		c.memo[key] = string(data)
+		c.memo[key] = memoEntry{v: v, out: string(data)}
 	}
 	return string(data)
 }

@@ -330,3 +330,16 @@ func TestDecodeRejectsNonFiniteFilterValues(t *testing.T) {
 		}
 	}
 }
+
+// A configuration is one document: one following it (past a ---) is
+// refused rather than dropped; an empty one is no document.
+func TestDecodeSpecRefusesASecondDocument(t *testing.T) {
+	if _, err := DecodeSpec([]byte("version: \"1\"\n---\ntools:\n  readRecords: false\n")); err == nil {
+		t.Fatal("a second document was dropped silently")
+	}
+	for _, data := range []string{"---\nversion: \"1\"\n", "version: \"1\"\n---\n", "version: \"1\"\n...\n"} {
+		if _, err := DecodeSpec([]byte(data)); err != nil {
+			t.Errorf("%q: %v", data, err)
+		}
+	}
+}

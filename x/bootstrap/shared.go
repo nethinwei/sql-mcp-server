@@ -251,7 +251,7 @@ func (s *Shared) apply(app *App) {
 	s.callers.Update(keyLimits(app.callers))
 	s.results.SetCapacity(cfg.RateLimit.MaxResultMemory)
 	if cfg.Cache.Enabled {
-		s.cache.UpdateLimits(cfg.Cache.TTL, cfg.Cache.MaxSize)
+		s.cache.UpdateLimits(cfg.Cache.TTL, cfg.Cache.MaxSize, cfg.Cache.MaxTotalBytes)
 	}
 	for _, p := range app.allProviders() {
 		configurePool(p, cfg.RateLimit.IOPool, cfg.RateLimit.ConnMaxIdleTime, cfg.RateLimit.ConnMaxLifetime)

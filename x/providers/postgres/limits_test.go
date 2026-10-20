@@ -23,6 +23,8 @@ func TestLimits(t *testing.T) {
 			providerregistry.Options{}, dialect.Enforced},
 		{"DSN timeout", "postgres://u@h/db?statement_timeout=0", "the DSN sets", providerregistry.Options{},
 			dialect.Enforced},
+		{"DSN timeout in upper case", "postgres://u@h/db?Statement_Timeout=0", "the DSN sets",
+			providerregistry.Options{}, dialect.Enforced},
 		{"pooler", "postgres://u@h/db", "transaction pooler",
 			providerregistry.Options{Pooler: providerregistry.PoolerTransaction}, dialect.BestEffort},
 	}

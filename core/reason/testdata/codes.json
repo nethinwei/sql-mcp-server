@@ -15,6 +15,7 @@
   "privilege.filterNeedsSelect": "a filtered {privilege} also needs SELECT",
   "privilege.missing": "the account lacks the {privilege} privilege",
   "privilege.readOnlyServer": "the server is read-only",
+  "privilege.readsBack": "reads after writes run on this connection and need SELECT",
   "privilege.uncheckable": "the privilege could not be checked: {error}",
   "returning.insertReturning": "INSERT ... RETURNING",
   "returning.lastInsertId": "no RETURNING: exec + last insert id",

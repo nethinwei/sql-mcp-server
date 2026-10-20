@@ -82,8 +82,8 @@ func Open(dsn string, opts providerregistry.Options) (*Provider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("postgres: parse dsn: %w", err)
 	}
-	if cfg.RuntimeParams == nil {
-		cfg.RuntimeParams = map[string]string{}
+	if cfg.RuntimeParams, err = sqladapter.SessionParams(cfg.RuntimeParams); err != nil {
+		return nil, fmt.Errorf("postgres: parse dsn: %w", err)
 	}
 	if !connectTimeoutSet(dsn) {
 		cfg.ConnectTimeout = connectTimeout
@@ -120,7 +120,11 @@ func Limits(dsn string, opts providerregistry.Options) (dialect.Profile, error) 
 	if err != nil {
 		return nil, fmt.Errorf("postgres: parse dsn: %w", err)
 	}
-	return limits(cfg.RuntimeParams, opts.Pooler), nil
+	params, err := sqladapter.SessionParams(cfg.RuntimeParams)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: parse dsn: %w", err)
+	}
+	return limits(params, opts.Pooler), nil
 }
 
 // limits judges the timeouts against the DSN's own startup parameters. When

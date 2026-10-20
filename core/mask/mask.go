@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // redacted replaces any value a rule cannot mask by format, so a malformed or
@@ -101,7 +102,8 @@ func maskEmail(v any) any {
 	if !ok || at <= 0 {
 		return redacted
 	}
-	return s[:1] + redacted + s[at:]
+	_, first := utf8.DecodeRuneInString(s) // a character, not a byte of one
+	return s[:first] + redacted + s[at:]
 }
 
 // digitsMask replaces the middle of a phone or ID card number: a fixed

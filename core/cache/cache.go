@@ -76,10 +76,11 @@ func (c InvalidateOnly[T]) Invalidate(database, relation string) error {
 }
 
 type entry[T any] struct {
-	key Key
-	v   T
-	exp time.Time
-	at  int // position in the expiry heap
+	key  Key
+	v    T
+	exp  time.Time
+	at   int   // position in the expiry heap
+	size int64 // bytes, as SetSized was told
 }
 
 // expiries is a min-heap of entries by expiry.
@@ -104,14 +105,23 @@ func (h *expiries[T]) Pop() any {
 	return e
 }
 
+// Sized is a Cache bounding the bytes its entries hold: SetSized is Set of
+// a value of size bytes.
+type Sized[T any] interface {
+	SetSized(ctx context.Context, k Key, v T, stamp uint64, size int64) error
+}
+
 // TTLCache stores values with a TTL. Entries are indexed by database, so an
 // invalidation touches only that database's entries, and kept in a heap by
-// expiry, so Set drops the expired entries and, over the cap, the one closest
-// to expiry without scanning the others.
+// expiry, so Set drops the expired entries and, over the caps (entries, and
+// bytes of the entries stored with SetSized), the ones closest to expiry
+// without scanning the others.
 type TTLCache[T any] struct {
 	mu         sync.Mutex
 	ttl        time.Duration
 	maxSize    int
+	maxBytes   int64 // 0: no bound
+	bytes      int64
 	m          map[Key]*entry[T]
 	byDatabase map[string]map[Key]struct{}
 	expiry     expiries[T]
@@ -121,20 +131,31 @@ type TTLCache[T any] struct {
 // NewTTLCache returns a TTLCache. maxSize <= 0 uses a safe default capacity.
 func NewTTLCache[T any](ttl time.Duration, maxSize int) *TTLCache[T] {
 	c := &TTLCache[T]{m: map[Key]*entry[T]{}, byDatabase: map[string]map[Key]struct{}{}, stamps: map[string]uint64{}}
-	c.UpdateLimits(ttl, maxSize)
+	c.UpdateLimits(ttl, maxSize, 0)
 	return c
 }
 
-// UpdateLimits applies a new TTL to entries stored from now on and a new cap,
-// evicting the entries closest to expiry when the cap shrank.
-func (c *TTLCache[T]) UpdateLimits(ttl time.Duration, maxSize int) {
+// UpdateLimits applies a new TTL to entries stored from now on and new caps
+// (maxBytes 0: none), evicting the entries closest to expiry when a cap
+// shrank.
+func (c *TTLCache[T]) UpdateLimits(ttl time.Duration, maxSize int, maxBytes int64) {
 	if maxSize <= 0 {
 		maxSize = defaultMaxSize
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.ttl, c.maxSize = ttl, maxSize
-	for len(c.m) > c.maxSize {
+	c.ttl, c.maxSize, c.maxBytes = ttl, maxSize, max(maxBytes, 0)
+	c.evictLocked(0)
+}
+
+// evictLocked drops the entries closest to expiry until one more of size
+// bytes fits (none: until the cache is within its caps).
+func (c *TTLCache[T]) evictLocked(size int64) {
+	more := 0
+	if size > 0 {
+		more = 1
+	}
+	for len(c.expiry) > 0 && (len(c.m)+more > c.maxSize || c.maxBytes > 0 && c.bytes+size > c.maxBytes) {
 		c.removeLocked(c.expiry[0])
 	}
 }
@@ -163,10 +184,16 @@ func (c *TTLCache[T]) Stamp(database string) uint64 {
 
 // Set stores a value with the configured TTL unless k's database was
 // invalidated since stamp, evicting if over maxSize.
-func (c *TTLCache[T]) Set(_ context.Context, k Key, v T, stamp uint64) error {
+func (c *TTLCache[T]) Set(ctx context.Context, k Key, v T, stamp uint64) error {
+	return c.SetSized(ctx, k, v, stamp, 0)
+}
+
+// SetSized implements Sized: a value larger than the byte cap is not
+// stored.
+func (c *TTLCache[T]) SetSized(_ context.Context, k Key, v T, stamp uint64, size int64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.stamps[k.Database] != stamp {
+	if c.stamps[k.Database] != stamp || c.maxBytes > 0 && size > c.maxBytes {
 		return nil
 	}
 	now := time.Now()
@@ -174,14 +201,11 @@ func (c *TTLCache[T]) Set(_ context.Context, k Key, v T, stamp uint64) error {
 		c.removeLocked(c.expiry[0])
 	}
 	if e, ok := c.m[k]; ok {
-		e.v, e.exp = v, now.Add(c.ttl)
-		heap.Fix(&c.expiry, e.at)
-		return nil
+		c.removeLocked(e) // stored again below, as of now and of its size
 	}
-	if len(c.m) >= c.maxSize {
-		c.removeLocked(c.expiry[0])
-	}
-	e := &entry[T]{key: k, v: v, exp: now.Add(c.ttl)}
+	c.evictLocked(max(size, 1))
+	e := &entry[T]{key: k, v: v, exp: now.Add(c.ttl), size: size}
+	c.bytes += size
 	c.m[k] = e
 	heap.Push(&c.expiry, e)
 	if c.byDatabase[k.Database] == nil {
@@ -217,6 +241,7 @@ func (c *TTLCache[T]) DropGeneration(generation uint64) {
 }
 
 func (c *TTLCache[T]) removeLocked(e *entry[T]) {
+	c.bytes -= e.size
 	delete(c.m, e.key)
 	heap.Remove(&c.expiry, e.at)
 	if keys := c.byDatabase[e.key.Database]; keys != nil {

@@ -33,7 +33,6 @@ func (b *builder) flattenJoin(n relalg.Join, ctx *selectCtx) error {
 	}
 	b.joins[n.Alias] = true
 	ctx.joins = append(ctx.joins, n)
-	b.noteTable(n.Right.Name)
 	return nil
 }
 
@@ -96,7 +95,6 @@ func (b *builder) renderExists(e relalg.Exists) error {
 	b.exists++
 	alias := "x" + strconv.Itoa(b.exists)
 	b.sql.WriteString("EXISTS (SELECT 1 FROM " + b.qtable(e.Relation) + " AS " + b.qident(alias) + " WHERE ")
-	b.noteTable(e.Relation.Name)
 	if err := b.renderOn(alias, e.On, e.Predicate); err != nil {
 		return err
 	}

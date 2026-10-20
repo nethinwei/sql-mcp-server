@@ -287,7 +287,7 @@ func (s *singleflight) Do(
 	if c, ok := s.m[key]; ok {
 		c.waiters++
 		s.mu.Unlock()
-		return s.wait(ctx, c)
+		return s.wait(ctx, key, c)
 	}
 	baseCtx := context.WithoutCancel(ctx)
 	var runCtx context.Context
@@ -312,10 +312,13 @@ func (s *singleflight) Do(
 		s.mu.Unlock()
 		close(c.done)
 	}()
-	return s.wait(ctx, c)
+	return s.wait(ctx, key, c)
 }
 
-func (s *singleflight) wait(ctx context.Context, c *call) (any, error) {
+// wait waits for c, the call of key. The last waiter to leave cancels it,
+// and it leaves the map at once: a caller coming later starts a call of its
+// own instead of waiting for the one canceled.
+func (s *singleflight) wait(ctx context.Context, key string, c *call) (any, error) {
 	select {
 	case <-c.done:
 		return c.val, c.err
@@ -323,6 +326,9 @@ func (s *singleflight) wait(ctx context.Context, c *call) (any, error) {
 		s.mu.Lock()
 		c.waiters--
 		if c.waiters == 0 {
+			if s.m[key] == c {
+				delete(s.m, key)
+			}
 			c.cancel()
 		}
 		s.mu.Unlock()

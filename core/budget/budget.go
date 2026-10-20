@@ -80,6 +80,8 @@ type MemoryManager struct {
 	inflight  map[string]int
 	ttl       time.Duration
 	maxStates int
+	// lastSweep is when idle states were last swept (see pruneLocked).
+	lastSweep time.Time
 }
 
 // New returns a manager. Empty maps mean no additional rejection.
@@ -218,6 +220,10 @@ func normalizeReservation(reservation Reservation) Reservation {
 
 func (m *MemoryManager) acquireStateLocked(scope Scope, now time.Time) (*state, error) {
 	st := m.sessions[scope]
+	if st != nil && st.inflight == 0 && now.Sub(st.touched) >= m.ttl {
+		delete(m.sessions, scope) // idle past ttl: starts again, swept or not
+		st = nil
+	}
 	if st == nil {
 		if len(m.sessions) >= m.maxStates {
 			return nil, ErrExceeded
@@ -262,10 +268,16 @@ func (m *MemoryManager) newLease(
 	}
 }
 
+// pruneLocked drops the states idle for ttl, sweeping them at most every
+// quarter of it (a sweep reads every state, under the lock every call
+// takes), and the least recently used ones past maxStates.
 func (m *MemoryManager) pruneLocked(now time.Time) {
-	for scope, st := range m.sessions {
-		if st.inflight == 0 && now.Sub(st.touched) >= m.ttl {
-			delete(m.sessions, scope)
+	if now.Sub(m.lastSweep) >= m.ttl/4 {
+		m.lastSweep = now
+		for scope, st := range m.sessions {
+			if st.inflight == 0 && now.Sub(st.touched) >= m.ttl {
+				delete(m.sessions, scope)
+			}
 		}
 	}
 	for len(m.sessions) >= m.maxStates {

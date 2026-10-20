@@ -677,7 +677,9 @@ func newAssembleCache(cfg *config.Config, shared *Shared) cache.Cache[[]map[stri
 	if !cfg.Cache.Enabled {
 		return cache.NoopCache[[]map[string]any]{}
 	}
-	return cache.NewTTLCache[[]map[string]any](cfg.Cache.TTL, cfg.Cache.MaxSize)
+	c := cache.NewTTLCache[[]map[string]any](cfg.Cache.TTL, cfg.Cache.MaxSize)
+	c.UpdateLimits(cfg.Cache.TTL, cfg.Cache.MaxSize, cfg.Cache.MaxTotalBytes)
+	return c
 }
 
 func newAssembleMasker(cfg *config.Config, entities []entity.Entity) (mask.Masker, error) {

@@ -584,6 +584,9 @@ cache.maxEntryRows:
 cache.maxEntryBytes:
   zh-CN: 单条缓存最多字节数；默认等于 cost.maxBytes，启用结果缓存时必须大于 0。
   en: Maximum bytes per entry; defaults to cost.maxBytes and must be positive when the result cache is enabled.
+cache.maxTotalBytes:
+  zh-CN: 结果缓存所有条目合计最多字节数，超出时先淘汰最早过期的条目；默认 256 MiB（不小于 maxEntryBytes），启用结果缓存时不能小于 maxEntryBytes。
+  en: Maximum bytes of all result cache entries together; past it the entries closest to expiry go first. Defaults to 256 MiB (at least maxEntryBytes) and must hold one entry of maxEntryBytes when the result cache is enabled.
 cache.preparedMaxSize:
   zh-CN: 预编译语句缓存条目数，与结果缓存相互独立；0 表示不缓存。
   en: Prepared statement cache size, independent of the result cache; 0 disables it.

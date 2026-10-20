@@ -34,8 +34,8 @@ func NewAdapter(
 	if err != nil {
 		return nil, nil, fmt.Errorf("mysql: parse dsn: %w", err)
 	}
-	if cfg.Params == nil {
-		cfg.Params = map[string]string{}
+	if cfg.Params, err = sqladapter.SessionParams(cfg.Params); err != nil {
+		return nil, nil, fmt.Errorf("mysql: parse dsn: %w", err)
 	}
 	caps := limits(cfg.Params, opts.Pooler, oceanBaseVariable)
 	if _, ok := cfg.Params["sql_safe_updates"]; !ok {

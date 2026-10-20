@@ -86,6 +86,26 @@ func TestReadOrderByPagesWithNextCursor(t *testing.T) {
 	}
 }
 
+// A read asking for more rows than MaxRows, or for no limit, reads MaxRows
+// of them, and a full page of them pages on.
+func TestReadLimitPastMaxRowsPages(t *testing.T) {
+	t.Parallel()
+	tc, db := orderContext(t, []any{int64(7), int64(500), "2026-10-01"}, []any{int64(9), int64(500), "2026-09-30"})
+	tc.MaxRows = 2
+	for _, limit := range []string{`"limit":5,`, ``} {
+		res, err := readJSON(t, tc, `{"entity":"orders","fields":["amount"],`+limit+`"orderBy":[{"field":"amount"}]}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sql := db.Queries[len(db.Queries)-1].Query; !strings.HasSuffix(sql, " LIMIT 2") {
+			t.Errorf("%s: sql = %s", limit, sql)
+		}
+		if res.NextCursor == nil {
+			t.Errorf("%s: a page of MaxRows rows has no next cursor", limit)
+		}
+	}
+}
+
 // A nullable field sorts its NULLs last, and pages by them: after a value
 // come the greater ones and NULL, after NULL the rows of NULL with a greater
 // key. A masked field, an unknown direction and a field named twice are
@@ -97,7 +117,7 @@ func TestReadOrderByRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	if sql := db.Queries[0].Query; !strings.Contains(sql,
-		`ORDER BY CASE WHEN "region" IS NULL THEN 1 ELSE 0 END, "region" ASC, "id" ASC`) {
+		`ORDER BY "region" ASC NULLS LAST, "id" ASC`) {
 		t.Fatalf("sql = %s", sql)
 	}
 	for cursor, want := range map[string]string{
@@ -137,8 +157,18 @@ func TestReadDistinct(t *testing.T) {
 	if err != nil || res.NextCursor != nil {
 		t.Fatalf("%v %v", res.NextCursor, err)
 	}
-	want := `SELECT DISTINCT "region" FROM "orders" ORDER BY "region" DESC`
+	want := `SELECT DISTINCT "region" FROM "orders" ORDER BY "region" DESC NULLS LAST`
 	if sql := db.Queries[0].Query; !strings.Contains(sql, want) {
+		t.Fatalf("sql = %s", sql)
+	}
+	// Without NULLS LAST, a CASE on the selected column orders the NULLs.
+	tc.Dialect = testdialect.MySQL{}
+	if _, err := readJSON(t, tc, `{"entity":"orders","fields":["region"],"distinct":true,"limit":1,
+		"orderBy":[{"field":"region","dir":"desc"}]}`); err != nil {
+		t.Fatal(err)
+	}
+	want = "SELECT DISTINCT `region` FROM `orders` ORDER BY CASE WHEN `region` IS NULL THEN 1 ELSE 0 END, `region` DESC"
+	if sql := db.Queries[1].Query; !strings.Contains(sql, want) {
 		t.Fatalf("sql = %s", sql)
 	}
 }
@@ -190,8 +220,8 @@ func TestAggregateHavingOrderLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `SELECT "region", SUM("amount"), COUNT(DISTINCT "id") FROM "orders" WHERE "amount" > $1 GROUP BY "region" ` +
-		`HAVING (SUM("amount") >= $2 OR "region" = $3) ORDER BY CASE WHEN SUM("amount") IS NULL THEN 1 ELSE 0 END, ` +
-		`SUM("amount") DESC, CASE WHEN "region" IS NULL THEN 1 ELSE 0 END, "region" ASC LIMIT 3`
+		`HAVING (SUM("amount") >= $2 OR "region" = $3) ORDER BY SUM("amount") DESC NULLS LAST, ` +
+		`"region" ASC NULLS LAST LIMIT 3`
 	if sql := db.Queries[0].Query; sql != want {
 		t.Fatalf("sql = %s\nwant  %s", sql, want)
 	}

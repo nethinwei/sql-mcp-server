@@ -103,6 +103,9 @@ func shapeCases(schema string) []Case {
 	return []Case{
 		{Name: "projection-keeps-duplicates", Expr: projectCat},
 		{Name: "distinct-collapses-nulls", Expr: relalg.Distinct{Input: projectCat}},
+		{Name: "distinct-orders-nulls-last", Ordered: true, Expr: relalg.Distinct{Input: relalg.Project{
+			Input: relalg.Sort{Input: scan(schema), OrderBy: []relalg.OrderTerm{{Field: "cat", Dir: "asc", Nullable: true}}},
+			Items: []relalg.ProjectItem{{Field: "cat"}}}}},
 		{Name: "sort-limit-offset", Expr: relalg.Limit{Input: sorted, Count: 3, Offset: 2},
 			Ordered: true},
 		{Name: "offset-beyond-rows", Expr: relalg.Limit{Input: sorted, Count: 5, Offset: 50},

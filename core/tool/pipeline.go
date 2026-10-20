@@ -288,6 +288,7 @@ func (st statement) query(ctx context.Context) (out queried, err error) {
 		return queried{}, st.fail(err)
 	}
 	out.rows = make([]map[string]any, 0)
+	rules := st.maskRules()
 	for row, err := range store.IterNamed(rows, st.columns) {
 		if err != nil {
 			return queried{}, st.fail(err)
@@ -299,7 +300,7 @@ func (st statement) query(ctx context.Context) (out queried, err error) {
 			}
 			out.kept = append(out.kept, kept)
 		}
-		st.present(row)
+		st.present(row, rules)
 		err := errResultCut // a write's rows past its cap are cut: it already took effect
 		if st.rowCap <= 0 || int64(len(out.rows)) < st.rowCap {
 			err = st.tc.results.add(row)
@@ -334,8 +335,18 @@ func (st statement) exec(ctx context.Context) (store.Result, error) {
 	return r, st.settle(ctx, err)
 }
 
-// present shapes and masks a row of st's entity for the caller.
-func (st statement) present(row map[string]any) {
+// maskRules are the mask rules of st's rows (see present); nil without a
+// masker.
+func (st statement) maskRules() map[string]string {
+	if st.tc.Masker == nil {
+		return nil
+	}
+	return maskRules(st.res.Entity.Attributes)
+}
+
+// present shapes a row of st's entity for the caller and masks it by rules
+// (st.maskRules, read once for the rows of a statement).
+func (st statement) present(row map[string]any, rules map[string]string) {
 	if st.fields != nil {
 		for field := range row {
 			if !st.fields[field] {
@@ -344,7 +355,7 @@ func (st statement) present(row map[string]any) {
 		}
 	}
 	if st.tc.Masker != nil {
-		maskRow(st.tc.Masker, st.res.Entity.Attributes, row)
+		maskRow(st.tc.Masker, rules, row)
 	}
 }
 

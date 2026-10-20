@@ -535,6 +535,7 @@ type CacheConfig struct {
 	MaxSize         int           `yaml:"maxSize"         json:"maxSize" schema:"min=0"`
 	MaxEntryRows    int           `yaml:"maxEntryRows"    json:"maxEntryRows" schema:"min=0"`
 	MaxEntryBytes   int64         `yaml:"maxEntryBytes"   json:"maxEntryBytes" schema:"min=0"`
+	MaxTotalBytes   int64         `yaml:"maxTotalBytes"   json:"maxTotalBytes" schema:"min=0"`
 	PreparedMaxSize int           `yaml:"preparedMaxSize" json:"preparedMaxSize" schema:"min=0"`
 }
 

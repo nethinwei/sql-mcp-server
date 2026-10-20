@@ -100,9 +100,7 @@ func orderTerm(res entity.Resolved, in readInput, t orderJSON, rel related) (rel
 		return relalg.OrderTerm{}, false, fmt.Errorf("%w: a distinct read orders by fields it selects; %q is not one",
 			ErrInvalidInput, t.Field)
 	}
-	// A distinct read orders by its select list alone (PostgreSQL), so NULLs
-	// keep the database's place there.
-	return relalg.OrderTerm{Field: a.Name, Dir: dir, Nullable: a.Domain.Nullable && !in.Distinct}, false, nil
+	return relalg.OrderTerm{Field: a.Name, Dir: dir, Nullable: a.Domain.Nullable}, false, nil
 }
 
 func hasMaskedField(res entity.Resolved, fields []string) bool {

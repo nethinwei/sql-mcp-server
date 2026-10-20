@@ -151,6 +151,9 @@ func transactionPermissions(ctx context.Context, tc Context, datasource string) 
 			default:
 				canWrite = true
 			}
+			if canRead && canWrite {
+				return true, true, nil
+			}
 		}
 	}
 	return canRead, canWrite, nil

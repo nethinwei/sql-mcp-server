@@ -16,6 +16,9 @@ func (Dialect) QuoteIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 func (Dialect) Placeholder(i int) string { return "$" + strconv.Itoa(i+1) }
+
+// OrdersNullsLast implements dialect.NullsLast.
+func (Dialect) OrdersNullsLast() {}
 func (Dialect) Capabilities() dialect.Profile {
 	return dialect.Profile{
 		dialect.Returning: {Strength: dialect.Enforced, Evidence: dialect.CoreVerified,

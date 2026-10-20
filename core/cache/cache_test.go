@@ -171,15 +171,47 @@ func TestTTLCacheEvictsClosestToExpiry(t *testing.T) {
 	c := NewTTLCache[int](time.Hour, 2)
 	ctx := context.Background()
 	_ = c.Set(ctx, Key{SQL: "first"}, 1, 0)
-	c.UpdateLimits(2*time.Hour, 2)
+	c.UpdateLimits(2*time.Hour, 2, 0)
 	_ = c.Set(ctx, Key{SQL: "second"}, 2, 0)
 	_ = c.Set(ctx, Key{SQL: "third"}, 3, 0)
 	if _, ok := c.Get(ctx, Key{SQL: "first"}); ok {
 		t.Fatal("the entry closest to expiry must be evicted")
 	}
-	c.UpdateLimits(time.Hour, 1)
+	c.UpdateLimits(time.Hour, 1, 0)
 	if len(c.m) != 1 {
 		t.Fatalf("entries after shrinking the cap = %d", len(c.m))
+	}
+}
+
+// Entries stored with their size hold at most the byte cap: past it the
+// ones closest to expiry go, a value larger than the cap is not stored, and
+// a smaller cap evicts at once.
+func TestTTLCacheBoundsBytes(t *testing.T) {
+	t.Parallel()
+	c := NewTTLCache[int](time.Hour, 0)
+	c.UpdateLimits(time.Hour, 0, 100)
+	ctx := context.Background()
+	_ = c.SetSized(ctx, Key{SQL: "a"}, 1, 0, 60)
+	_ = c.SetSized(ctx, Key{SQL: "b"}, 2, 0, 30)
+	_ = c.SetSized(ctx, Key{SQL: "c"}, 3, 0, 40) // evicts a
+	if _, ok := c.Get(ctx, Key{SQL: "a"}); ok || c.bytes != 70 {
+		t.Fatalf("a kept, or bytes = %d", c.bytes)
+	}
+	_ = c.SetSized(ctx, Key{SQL: "huge"}, 4, 0, 101)
+	if _, ok := c.Get(ctx, Key{SQL: "huge"}); ok {
+		t.Fatal("a value larger than the cap was stored")
+	}
+	_ = c.SetSized(ctx, Key{SQL: "b"}, 5, 0, 10) // stored again, smaller
+	if c.bytes != 50 {
+		t.Fatalf("bytes after storing b again = %d", c.bytes)
+	}
+	c.UpdateLimits(time.Hour, 0, 20)
+	if c.bytes > 20 || len(c.m) != 1 {
+		t.Fatalf("after shrinking: bytes %d, entries %d", c.bytes, len(c.m))
+	}
+	_ = c.Invalidate("", "")
+	if c.bytes != 0 {
+		t.Fatalf("bytes after invalidating = %d", c.bytes)
 	}
 }
 

@@ -56,8 +56,10 @@ Provider differential conformance suite（`internal/conformance`）的唯一
 `Relation` 自己的列；不嵌套。codegen 在有 `Join` 或 `Exists` 时给主表起别名（`_`），所有列
 带限定；`Exists` 渲染为 `EXISTS (SELECT 1 FROM … AS xN WHERE …)`。
 
-`NULL` 排在最后的实现：codegen 对标记 `Nullable` 的排序项先按
-`CASE WHEN x IS NULL THEN 1 ELSE 0 END` 排序（三库一致）；未标记的项按数据库默认渲染，
+`NULL` 排在最后的实现：codegen 对标记 `Nullable` 的排序项，在支持的方言（PostgreSQL，
+`dialect.NullsLast`）上渲染为 `x ASC|DESC NULLS LAST`（升序仍能用索引排序，`SELECT DISTINCT`
+也允许），其余方言（MySQL、OceanBase）先按 `CASE WHEN x IS NULL THEN 1 ELSE 0 END` 排序；
+distinct 读同样标记（只能按已选字段排序，CASE 引用的也是已选列）。未标记的项按数据库默认渲染，
 由调用方保证该列不含 `NULL`（工具层按列的可空性标记），以免妨碍用索引排序。
 
 ## 聚合语义

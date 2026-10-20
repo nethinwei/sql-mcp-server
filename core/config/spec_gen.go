@@ -1875,6 +1875,7 @@ type CacheSpec struct {
 	MaxSize         *int           `yaml:"maxSize,omitempty" json:"maxSize,omitempty"`
 	MaxEntryRows    *int           `yaml:"maxEntryRows,omitempty" json:"maxEntryRows,omitempty"`
 	MaxEntryBytes   *int64         `yaml:"maxEntryBytes,omitempty" json:"maxEntryBytes,omitempty"`
+	MaxTotalBytes   *int64         `yaml:"maxTotalBytes,omitempty" json:"maxTotalBytes,omitempty"`
 	PreparedMaxSize *int           `yaml:"preparedMaxSize,omitempty" json:"preparedMaxSize,omitempty"`
 }
 
@@ -1895,6 +1896,9 @@ func (s CacheSpec) config() CacheConfig {
 	if s.MaxEntryBytes != nil {
 		out.MaxEntryBytes = *s.MaxEntryBytes
 	}
+	if s.MaxTotalBytes != nil {
+		out.MaxTotalBytes = *s.MaxTotalBytes
+	}
 	if s.PreparedMaxSize != nil {
 		out.PreparedMaxSize = *s.PreparedMaxSize
 	}
@@ -1911,6 +1915,7 @@ func (c CacheConfig) spec() CacheSpec {
 	out.MaxSize = set(c.MaxSize)
 	out.MaxEntryRows = set(c.MaxEntryRows)
 	out.MaxEntryBytes = set(c.MaxEntryBytes)
+	out.MaxTotalBytes = set(c.MaxTotalBytes)
 	out.PreparedMaxSize = set(c.PreparedMaxSize)
 	return out
 }

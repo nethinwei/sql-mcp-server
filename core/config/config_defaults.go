@@ -210,6 +210,9 @@ func (c *Config) applyCacheDefaults() {
 	if c.Cache.Enabled && c.Cache.MaxEntryBytes == 0 {
 		c.Cache.MaxEntryBytes = c.Cost.MaxBytes
 	}
+	if c.Cache.Enabled && c.Cache.MaxTotalBytes == 0 {
+		c.Cache.MaxTotalBytes = max(256<<20, c.Cache.MaxEntryBytes)
+	}
 }
 
 func (c *Config) applyTransactionDefaults() {

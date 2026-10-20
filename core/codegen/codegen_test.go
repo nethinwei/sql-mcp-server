@@ -154,9 +154,6 @@ func TestCompileUpdate(t *testing.T) {
 	if c.SQL != want {
 		t.Fatalf("got %q, want %q", c.SQL, want)
 	}
-	if len(c.AffectedTables) != 1 || c.AffectedTables[0] != "users" {
-		t.Fatalf("affected = %v", c.AffectedTables)
-	}
 }
 
 func TestCompileDelete(t *testing.T) {

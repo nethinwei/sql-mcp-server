@@ -43,6 +43,7 @@ const (
 	PrivilegeReadOnlyServer    Code = "privilege.readOnlyServer"
 	PrivilegeMissing           Code = "privilege.missing"
 	PrivilegeFilterNeedsSelect Code = "privilege.filterNeedsSelect"
+	PrivilegeReadsBack         Code = "privilege.readsBack"
 	PrivilegeUncheckable       Code = "privilege.uncheckable"
 
 	// How firmly a connection guarantees a capability.
@@ -96,6 +97,7 @@ var templates = map[Code]string{
 	PrivilegeReadOnlyServer:    "the server is read-only",
 	PrivilegeMissing:           "the account lacks the {privilege} privilege",
 	PrivilegeFilterNeedsSelect: "a filtered {privilege} also needs SELECT",
+	PrivilegeReadsBack:         "reads after writes run on this connection and need SELECT",
 	PrivilegeUncheckable:       "the privilege could not be checked: {error}",
 
 	StrengthEnforced:    "enforced",

@@ -91,12 +91,15 @@ func IterNamed(rows Rows, names []string) iter.Seq2[Row, error] {
 			yield(nil, err)
 			return
 		}
+		// One buffer for every row: a row's map takes the values scanned
+		// (database/sql copies the bytes it scans into an any).
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
 		for rows.Next() {
-			vals := make([]any, len(cols))
-			ptrs := make([]any, len(cols))
-			for i := range vals {
-				ptrs[i] = &vals[i]
-			}
+			clear(vals)
 			if err := rows.Scan(ptrs...); err != nil {
 				yield(nil, err)
 				return

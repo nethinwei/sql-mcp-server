@@ -182,20 +182,31 @@ func assessCapabilities(
 			return nil
 		})
 	}
-	return assessEntities(ctx, lane, entities, inspector)
+	return assessEntities(ctx, lane, entities, inspector, func(e entity.Entity) bool {
+		return readsBack(cfg, e.DatasourceName())
+	})
+}
+
+// readsBack reports whether reads run on the write connection of datasource
+// too, when it is not the read one: after writes (readAfterWrite) and in
+// read-write transactions.
+func readsBack(cfg *config.Config, datasource string) bool {
+	database := cfg.Databases[datasource]
+	route := database.Route()
+	return route.Write != route.Read && (database.ReadAfterWrite > 0 || cfg.Tools.BeginTransaction)
 }
 
 // assessEntities assesses each entity's actions on lane, an entity at a time.
 func assessEntities(
 	ctx context.Context, lane *bus.Lane, entities []entity.Entity,
-	inspector func(entity.Entity, entity.Action) *connectionInspector,
+	inspector func(entity.Entity, entity.Action) *connectionInspector, readsBack func(entity.Entity) bool,
 ) EntityCapabilities {
 	out := make(EntityCapabilities, len(entities))
 	for _, e := range entities {
 		out[e.Name] = map[entity.Action]Capability{}
 		_ = lane.Run(ctx, func(ctx context.Context) error {
 			for _, action := range entity.ActionsFor(e.Kind) {
-				out[e.Name][action] = assessAction(ctx, inspector(e, action), e, action)
+				out[e.Name][action] = assessAction(ctx, inspector(e, action), e, action, readsBack(e))
 			}
 			return nil
 		})
@@ -203,7 +214,11 @@ func assessEntities(
 	return out
 }
 
-func assessAction(ctx context.Context, c *connectionInspector, e entity.Entity, action entity.Action) Capability {
+// assessAction is what c may do of action on e; a write when reads run on
+// c too (readsBack) needs SELECT besides.
+func assessAction(
+	ctx context.Context, c *connectionInspector, e entity.Entity, action entity.Action, readsBack bool,
+) Capability {
 	capability := Capability{Connection: c.name}
 	if c.inspect == nil {
 		return capability
@@ -226,7 +241,12 @@ func assessAction(ctx context.Context, c *connectionInspector, e entity.Entity, 
 		capability.Reason = reason.New(reason.PrivilegeUncheckable, "error", err.Error())
 		return capability
 	}
-	return tableCapability(capability, tp, action)
+	capability = tableCapability(capability, tp, action)
+	if writes && readsBack && capability.Privilege != introspect.PrivilegeDenied &&
+		tp.Select == introspect.PrivilegeDenied && len(tp.Columns["select"]) == 0 {
+		capability.Privilege, capability.Reason = introspect.PrivilegeDenied, reason.New(reason.PrivilegeReadsBack)
+	}
+	return capability
 }
 
 // tableCapability maps table privileges to an action. An UPDATE or DELETE

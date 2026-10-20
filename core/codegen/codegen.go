@@ -31,14 +31,13 @@ const (
 // Compiled is the physical, executable product of a logical plan: the rendered
 // SQL, bound args, and metadata consumed by the cost gate, cache, and store.
 type Compiled struct {
-	Expr           relalg.Expr
-	Kind           Kind
-	SQL            string
-	Args           []any
-	IsKeyPoint     bool     // every column of an identity key matched by equality (gate whitelist)
-	PrimaryKey     []string // primary-key columns, when supplied via WithPrimaryKey
-	ReadOnly       bool
-	AffectedTables []string // tables touched by a write (cache invalidation)
+	Expr       relalg.Expr
+	Kind       Kind
+	SQL        string
+	Args       []any
+	IsKeyPoint bool     // every column of an identity key matched by equality (gate whitelist)
+	PrimaryKey []string // primary-key columns, when supplied via WithPrimaryKey
+	ReadOnly   bool
 	// capBase is the SQL of a rendered select before its LIMIT clause, the
 	// last clause, and capLimit/capOffset are that clause's (capLimit 0:
 	// none); see CapRows.
@@ -123,15 +122,14 @@ func (r Renderer) Compile(e relalg.Expr, opts ...CompileOption) (Compiled, error
 		return Compiled{}, err
 	}
 	c := Compiled{
-		Expr:           e,
-		Kind:           kindOf(e),
-		SQL:            b.sql.String(),
-		Args:           b.args,
-		ReadOnly:       b.readOnly,
-		AffectedTables: b.tables,
-		capBase:        b.capBase,
-		capLimit:       b.capLimit,
-		capOffset:      b.capOffset,
+		Expr:      e,
+		Kind:      kindOf(e),
+		SQL:       b.sql.String(),
+		Args:      b.args,
+		ReadOnly:  b.readOnly,
+		capBase:   b.capBase,
+		capLimit:  b.capLimit,
+		capOffset: b.capOffset,
 	}
 	c.PrimaryKey = cfg.pkCols
 	keys := cfg.identityKeys
@@ -170,7 +168,6 @@ type builder struct {
 	args             []any
 	ph               int
 	readOnly         bool
-	tables           []string
 	returningCols    []string // appended to INSERT when the dialect supports RETURNING
 	maxINCardinality int
 	// capBase, capLimit and capOffset: see Compiled.
@@ -229,15 +226,6 @@ func (b *builder) qtable(r relalg.RelationRef) string {
 		return b.qident(r.Schema) + "." + b.qident(r.Name)
 	}
 	return b.qident(r.Name)
-}
-
-func (b *builder) noteTable(name string) {
-	for _, t := range b.tables {
-		if t == name {
-			return
-		}
-	}
-	b.tables = append(b.tables, name)
 }
 
 // opSQL maps a relalg.Op to its SQL operator.

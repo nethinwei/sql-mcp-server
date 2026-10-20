@@ -168,6 +168,7 @@ cache:
   maxSize: 1000
   maxEntryRows: 10000
   maxEntryBytes: 16777216
+  maxTotalBytes: 268435456   # all entries together; past it the ones closest to expiry go
   preparedMaxSize: 128
 
 rateLimit:

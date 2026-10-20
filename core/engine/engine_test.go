@@ -499,3 +499,31 @@ func TestRunPassesTheBreakerUnderTheRateLimit(t *testing.T) {
 		t.Fatalf("a second run within the second passed the rate limit: %v", err)
 	}
 }
+
+// A call every waiter left is canceled, and a caller coming while it winds
+// down runs a call of its own instead of getting the canceled one's error.
+func TestSingleflightLateCallerAfterAllWaitersLeft(t *testing.T) {
+	t.Parallel()
+	e, _ := New(WithIOPool(2), WithMaxInflight(4))
+	ctx, cancel := context.WithCancel(context.Background())
+	started, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	defer close(release)
+	go func() {
+		_, _ = Submit(ctx, e, "late", func(ctx context.Context) (any, error) {
+			close(started)
+			<-ctx.Done()
+			close(canceled)
+			<-release // winds down slowly
+			return nil, ctx.Err()
+		})
+	}()
+	<-started
+	cancel()
+	<-canceled
+	late, stop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stop()
+	got, err := Submit(late, e, "late", func(context.Context) (any, error) { return "own", nil })
+	if err != nil || got != "own" {
+		t.Fatalf("late caller = %v, %v", got, err)
+	}
+}

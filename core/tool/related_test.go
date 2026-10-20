@@ -70,7 +70,7 @@ func TestReadAcrossRelationships(t *testing.T) {
 	want := `SELECT "_"."id", "_"."amount" FROM "orders" AS "_" LEFT JOIN "customers" AS "customer" ON ` +
 		`"customer"."id" = "_"."customer_id" AND "customer"."region" = $1 WHERE ("customer"."region" = $2 AND ` +
 		`EXISTS (SELECT 1 FROM "items" AS "x1" WHERE "x1"."order_id" = "_"."id" AND "x1"."sku" LIKE $3)) ` +
-		`ORDER BY CASE WHEN "customer"."region" IS NULL THEN 1 ELSE 0 END, "customer"."region" DESC, "_"."id" ASC LIMIT 5`
+		`ORDER BY "customer"."region" DESC NULLS LAST, "_"."id" ASC LIMIT 5`
 	if got := db.Queries[0].Query; got != want {
 		t.Fatalf("sql = %s\nwant  %s", got, want)
 	}
@@ -86,7 +86,7 @@ func TestAggregateByRelatedField(t *testing.T) {
 		"orderBy":[{"field":"sum_amount","dir":"desc"}],"limit":3}`), tc)
 	want := `SELECT "customer"."region", SUM("_"."amount") FROM "orders" AS "_" LEFT JOIN "customers" AS "customer" ON ` +
 		`"customer"."id" = "_"."customer_id" AND "customer"."region" = $1 GROUP BY "customer"."region" ` +
-		`ORDER BY CASE WHEN SUM("_"."amount") IS NULL THEN 1 ELSE 0 END, SUM("_"."amount") DESC LIMIT 3`
+		`ORDER BY SUM("_"."amount") DESC NULLS LAST LIMIT 3`
 	if got := db.Queries[0].Query; got != want {
 		t.Fatalf("sql = %s\nwant  %s", got, want)
 	}

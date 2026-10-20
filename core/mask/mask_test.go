@@ -13,6 +13,7 @@ func TestBuiltins(t *testing.T) {
 		want any
 	}{
 		{"email", "alice@example.com", "a***@example.com"},
+		{"email", "张三@example.com", "张***@example.com"},
 		{"phone", "13800138000", "138****8000"},
 		{"phone", int64(13800138000), "138****8000"},
 		{"idcard", "110101199001011234", "110****1234"},

@@ -145,8 +145,7 @@
                 "/var/run/secrets"
               ],
               "items": {
-                "type": "string",
-                "default": "/run/secrets"
+                "type": "string"
               }
             }
           },
@@ -190,28 +189,6 @@
       "description": "Entities exposed to agents; may be empty. Startup introspection rejects tables, views or fields missing from the database.",
       "x-description-zh-CN": "显式暴露给 Agent 的实体；可以为空。启动自省会拒绝数据库中缺失的表、视图或字段。",
       "type": "array",
-      "default": [
-        {
-          "name": "x",
-          "fields": [
-            {
-              "name": "x"
-            }
-          ],
-          "roles": {},
-          "mcp": {
-            "dmlTools": true
-          },
-          "relationships": [
-            {
-              "name": "",
-              "target": "",
-              "cardinality": "",
-              "joinOn": null
-            }
-          ]
-        }
-      ],
       "items": {
         "$ref": "#/$defs/entity"
       }
@@ -630,6 +607,13 @@
           "x-description-zh-CN": "单条缓存最多字节数；默认等于 cost.maxBytes，启用结果缓存时必须大于 0。",
           "type": "integer",
           "default": 16777216,
+          "minimum": 0
+        },
+        "maxTotalBytes": {
+          "description": "Maximum bytes of all result cache entries together; past it the entries closest to expiry go first. Defaults to 256 MiB (at least maxEntryBytes) and must hold one entry of maxEntryBytes when the result cache is enabled.",
+          "x-description-zh-CN": "结果缓存所有条目合计最多字节数，超出时先淘汰最早过期的条目；默认 256 MiB（不小于 maxEntryBytes），启用结果缓存时不能小于 maxEntryBytes。",
+          "type": "integer",
+          "default": 268435456,
           "minimum": 0
         },
         "preparedMaxSize": {

@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
 )
 
@@ -50,7 +51,6 @@ func (b *builder) flatten(e relalg.Expr, ctx *selectCtx) error {
 	switch n := e.(type) {
 	case relalg.Scan:
 		ctx.from, ctx.scanAlias = b.qtable(n.Relation), n.Alias
-		b.noteTable(n.Relation.Name)
 	case relalg.Select:
 		if err := b.flatten(n.Input, ctx); err != nil {
 			return err
@@ -217,19 +217,21 @@ func (b *builder) writeHavingClause(ctx *selectCtx) error {
 	return b.renderPredicate(ctx.having)
 }
 
-// writeOrderByClause orders by the terms; a nullable term first orders its
-// NULLs last, the same on every database (they default differently).
+// writeOrderByClause orders by the terms; a nullable term orders its NULLs
+// last, the same on every database (they default differently): with NULLS
+// LAST where the dialect has it, else by a CASE first.
 func (b *builder) writeOrderByClause(ctx *selectCtx) {
 	if len(ctx.order) == 0 {
 		return
 	}
+	_, nullsLast := b.dialect.(dialect.NullsLast)
 	b.sql.WriteString(" ORDER BY ")
 	for i, t := range ctx.order {
 		if i > 0 {
 			b.sql.WriteString(", ")
 		}
 		col := b.column(t.Field)
-		if t.Nullable {
+		if t.Nullable && !nullsLast {
 			b.sql.WriteString("CASE WHEN " + col + " IS NULL THEN 1 ELSE 0 END, ")
 		}
 		b.sql.WriteString(col)
@@ -237,6 +239,9 @@ func (b *builder) writeOrderByClause(ctx *selectCtx) {
 			b.sql.WriteString(" DESC")
 		} else {
 			b.sql.WriteString(" ASC")
+		}
+		if t.Nullable && nullsLast {
+			b.sql.WriteString(" NULLS LAST")
 		}
 	}
 }
@@ -412,7 +417,6 @@ func (b *builder) renderInsert(n relalg.Insert) error {
 			return fmt.Errorf("codegen: insert tuple has %d values for %d columns", len(tup), len(n.Columns))
 		}
 	}
-	b.noteTable(n.Target.Name)
 	b.sql.WriteString("INSERT INTO ")
 	b.sql.WriteString(b.qtable(n.Target))
 	if len(n.Columns) > 0 {
@@ -446,7 +450,6 @@ func (b *builder) renderUpdate(n relalg.Update) error {
 	if len(n.Set) == 0 || n.Predicate == nil {
 		return ErrUnboundedWrite
 	}
-	b.noteTable(n.Target.Name)
 	b.sql.WriteString("UPDATE ")
 	b.sql.WriteString(b.qtable(n.Target))
 	b.sql.WriteString(" SET ")
@@ -466,7 +469,6 @@ func (b *builder) renderDelete(n relalg.Delete) error {
 	if n.Predicate == nil {
 		return ErrUnboundedWrite
 	}
-	b.noteTable(n.Target.Name)
 	b.sql.WriteString("DELETE FROM ")
 	b.sql.WriteString(b.qtable(n.Target))
 	return b.renderWhere(n.Predicate)
@@ -481,7 +483,6 @@ func (b *builder) renderWhere(p relalg.Predicate) error {
 }
 
 func (b *builder) renderCall(n relalg.Call) error {
-	b.noteTable(n.Procedure.Name)
 	b.sql.WriteString("CALL ")
 	b.sql.WriteString(b.qtable(n.Procedure))
 	b.sql.WriteString("(")

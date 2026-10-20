@@ -49,6 +49,7 @@ export const reasonsZh = {
     readOnlyServer: '数据库处于只读状态',
     missing: '账号缺少 {privilege} 权限',
     filterNeedsSelect: '带过滤条件的 {privilege} 还需要 SELECT 权限',
+    readsBack: '写后读与事务内的读取也走这条连接，需要 SELECT 权限',
     uncheckable: '无法检查权限：{error}',
   },
   strength: {
@@ -112,6 +113,7 @@ export const reasonsEn: typeof reasonsZh = {
     readOnlyServer: 'the server is read-only',
     missing: 'the account lacks the {privilege} privilege',
     filterNeedsSelect: 'a filtered {privilege} also needs SELECT',
+    readsBack: 'reads after writes run on this connection and need SELECT',
     uncheckable: 'the privilege could not be checked: {error}',
   },
   strength: {

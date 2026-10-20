@@ -23,6 +23,8 @@ func TestLimits(t *testing.T) {
 			dialect.BestEffort, dialect.Enforced, dialect.Enforced},
 		{"DSN safe updates off", "u:p@tcp(h)/db?sql_safe_updates=0", providerregistry.Options{}, "",
 			dialect.Enforced, dialect.Enforced, dialect.Unsupported},
+		{"DSN names in upper case", "u:p@tcp(h)/db?SQL_SAFE_UPDATES=0&Max_Execution_Time=0", providerregistry.Options{},
+			"", dialect.BestEffort, dialect.Enforced, dialect.Unsupported},
 		{"DSN safe updates on", "u:p@tcp(h)/db?sql_safe_updates=ON", providerregistry.Options{}, "",
 			dialect.Enforced, dialect.Enforced, dialect.Enforced},
 		{"DSN safe updates not understood", "u:p@tcp(h)/db?sql_safe_updates=2", providerregistry.Options{}, "",
@@ -52,5 +54,14 @@ func TestLimits(t *testing.T) {
 				t.Errorf("%s: %s has no reason", test.name, k)
 			}
 		}
+	}
+}
+
+// A DSN setting a variable twice, in different cases, is refused: which one
+// the server applies last is unknown.
+func TestLimitsRefuseAVariableSetTwice(t *testing.T) {
+	t.Parallel()
+	if _, err := Limits("u:p@tcp(h)/db?sql_safe_updates=1&SQL_SAFE_UPDATES=0", providerregistry.Options{}); err == nil {
+		t.Fatal("a variable set twice was accepted")
 	}
 }
