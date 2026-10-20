@@ -220,7 +220,14 @@ func (c codec) Build(base revision.Revision, items workspace.Snapshot) ([]byte, 
 // overlays base key by key, so a section base has and the item does not is
 // removed (null), its default applying.
 func removeSettings(base *config.Spec, edit *configedit.Edit) {
-	for _, key := range settingsKeys(base) {
+	removeSettingsBut(settingsKeys(base), edit)
+}
+
+// removeSettingsBut removes (null) the sections of keys, those base has,
+// that edit does not set. The settings item of a configuration has the
+// keys settingsKeys finds in it (TestSettingsKeysAreTheItemKeys).
+func removeSettingsBut(keys []string, edit *configedit.Edit) {
+	for _, key := range keys {
 		if _, kept := edit.Settings[key]; !kept {
 			if edit.Settings == nil {
 				edit.Settings = map[string]any{}

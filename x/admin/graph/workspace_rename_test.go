@@ -23,7 +23,7 @@ func TestEditWorkspaceRenamesAnEntity(t *testing.T) {
 	mustPost(t, c, `mutation($in: WorkspaceEditInput!) { editWorkspace(input: $in) { version sections } }`, &edited,
 		client.Var("in", map[string]any{"items": []any{map[string]any{
 			"kind": "entity", "key": "shop.clients", "value": clients, "renamedFrom": "shop.customers",
-		}}}))
+		}, map[string]any{"kind": "entity", "key": "shop.customers", "value": nil, "previous": customers}}}))
 	entities := edited.EditWorkspace.Sections["entities"].([]any)
 	grants := edited.EditWorkspace.role("analyst")["grants"].([]any)
 	if len(entities) != 1 || entities[0].(map[string]any)["source"] != "customers" ||

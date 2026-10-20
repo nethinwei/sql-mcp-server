@@ -133,7 +133,7 @@ func (e Estimate) explainPlan(ctx context.Context, c codegen.Compiled) (Plan, er
 	if err != nil {
 		plan = Plan{ScanType: ScanUnknown, StatsFresh: false}
 	}
-	if e.Feedback != nil {
+	if _, off := e.Feedback.(NoopFeedbackStore); e.Feedback != nil && !off {
 		key := Fingerprint(e.Threshold.Datasource, e.Threshold.DialectName, c)
 		if stats, ok := e.Feedback.Stats(key); ok && stats.AverageRows > plan.EstimatedRows {
 			plan.EstimatedRows = stats.AverageRows
@@ -214,8 +214,8 @@ func (e EnforceCap) Check(_ context.Context, c codegen.Compiled) (Decision, erro
 // key the database enforces (primary or unique key)
 // is hard-rejected. This backstops databases whose row estimates are
 // unreliable (MySQL/OceanBase), where an unbounded WHERE could touch millions
-// of rows. Point writes are already bypassed by StaticRule's PK whitelist;
-// known-good bulk writes can be admitted via AllowTemplates after review.
+// of rows. It is an Enforcement layer: no template admits a write past it
+// (AllowTemplates only skips Estimate); cost.requirePKForWrite off does.
 type WriteGuard struct{}
 
 // Name implements Layer.
@@ -246,7 +246,6 @@ func (WriteGuard) Check(_ context.Context, c codegen.Compiled) (Decision, error)
 		Allow: false,
 		Hints: []string{
 			"scope the write with an equality filter on a primary or unique key (e.g. id = ...)",
-			"or add the exact statement to allowTemplates after review",
 		},
 	}, nil
 }

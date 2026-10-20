@@ -1,12 +1,14 @@
 package cost
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
 )
@@ -20,25 +22,54 @@ const fingerprintPrefix = "fp:v4:"
 
 // Fingerprint returns a stable baseline key derived from datasource, dialect,
 // normalized generated SQL, and bound parameter types. Values are deliberately
-// excluded.
+// excluded. It hashes as it reads: every governed statement is fingerprinted,
+// with up to thousands of arguments.
 func Fingerprint(datasource, dialectName string, c codegen.Compiled) string {
-	var b strings.Builder
-	b.WriteString(strings.ToLower(strings.TrimSpace(datasource)))
-	b.WriteByte('\n')
-	b.WriteString(strings.ToLower(strings.TrimSpace(dialectName)))
-	b.WriteByte('\n')
-	b.WriteString(strings.Join(strings.Fields(c.SQL), " "))
-	for _, arg := range c.Args {
-		b.WriteByte('\n')
-		if arg == nil {
-			b.WriteString("<nil>")
-			continue
+	h := sha256.New()
+	w := bufio.NewWriterSize(h, 512)
+	_, _ = w.WriteString(strings.ToLower(strings.TrimSpace(datasource)))
+	_ = w.WriteByte('\n')
+	_, _ = w.WriteString(strings.ToLower(strings.TrimSpace(dialectName)))
+	_ = w.WriteByte('\n')
+	first := true
+	for field := range strings.FieldsSeq(c.SQL) { // the SQL with its spaces collapsed
+		if !first {
+			_ = w.WriteByte(' ')
 		}
-		t := reflect.TypeOf(arg)
-		_, _ = fmt.Fprintf(&b, "%s/%s", t.PkgPath(), t.String())
+		_, _ = w.WriteString(field)
+		first = false
 	}
-	sum := sha256.Sum256([]byte(b.String()))
-	return fingerprintPrefix + hex.EncodeToString(sum[:])
+	for _, arg := range c.Args {
+		_ = w.WriteByte('\n')
+		_, _ = w.WriteString(argType(arg))
+	}
+	_ = w.Flush()
+	var sum [sha256.Size]byte
+	return fingerprintPrefix + hex.EncodeToString(h.Sum(sum[:0]))
+}
+
+// argType names the type of a bound argument as package path/type.
+func argType(arg any) string {
+	switch arg.(type) {
+	case nil:
+		return "<nil>"
+	case string:
+		return "/string"
+	case int64:
+		return "/int64"
+	case int:
+		return "/int"
+	case float64:
+		return "/float64"
+	case bool:
+		return "/bool"
+	case []byte:
+		return "/[]uint8"
+	case time.Time:
+		return "time/time.Time"
+	}
+	t := reflect.TypeOf(arg)
+	return t.PkgPath() + "/" + t.String()
 }
 
 // ValidateTemplateScopes rejects fingerprints of an earlier version, which
@@ -120,6 +151,9 @@ func matchesBaseline(
 	c codegen.Compiled,
 	allowLegacyExactSQL bool,
 ) bool {
+	if len(values) == 0 { // no templates, the default: nothing to fingerprint
+		return false
+	}
 	fp := Fingerprint(datasource, dialectName, c)
 	scopedSQL := strings.TrimSpace(datasource) + ":" + c.SQL
 	for _, value := range values {

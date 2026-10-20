@@ -89,10 +89,7 @@ func orderTerm(res entity.Resolved, in readInput, t orderJSON, rel related) (rel
 		}
 		return relalg.OrderTerm{Field: rel.field(t.Field), Dir: dir, Nullable: true}, true, nil
 	}
-	if err := validateFields(res, t.Field); err != nil {
-		return relalg.OrderTerm{}, false, err
-	}
-	if err := validateUnmaskedFields(res, t.Field); err != nil {
+	if err := (fieldUses{compared: []string{t.Field}}).check(res); err != nil {
 		return relalg.OrderTerm{}, false, err
 	}
 	a, _ := res.Entity.AttributeByName(t.Field)

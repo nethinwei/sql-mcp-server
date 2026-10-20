@@ -147,3 +147,13 @@ func TestNoopFeedbackStore(t *testing.T) {
 		t.Fatal("noop should miss")
 	}
 }
+
+// The zero value records with the default bounds.
+func TestZeroMemoryStoreRecords(t *testing.T) {
+	var s MemoryStore
+	s.Record(Feedback{Template: "a", ActualRows: 4})
+	s.Record(Feedback{Template: "b", ActualRows: 2})
+	if stats, ok := s.Stats("a"); !ok || stats.AverageRows != 4 {
+		t.Fatalf("stats = %+v %v", stats, ok)
+	}
+}

@@ -486,6 +486,7 @@ export default {
     noPublish: '你没有发布权限，只能保存为草稿。', saveDraft: '保存为草稿', saveAndPublish: '保存并发布',
     savedDraft: '已保存为草稿 #{id}，可在版本历史中发布',
     published: '已发布 #{id}，服务会自动热加载', publishedRestart: '已发布 #{id}，重启服务后完全生效',
+    publishedNotMoved: '已发布 #{id}，但工作区没能切换到该版本：请在工作区执行“更新”',
     confirmRestartTitle: '这些修改需要重启服务才能生效',
     confirmRestartBody: '{list}。发布后，运行中的实例会继续使用旧配置并标记为待重启，直到重启。',
     publishAnyway: '仍然发布',

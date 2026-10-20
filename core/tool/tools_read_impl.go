@@ -48,8 +48,10 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 	// A read across relationships is not cached: writes to their targets
 	// would not invalidate it.
 	cacheable := len(plan.rel.joins) == 0 && !relalg.HasExists(plan.full)
-	if cached, err, ok := readCacheHit(ctx, plan.tc, in, cacheKey); ok && cacheable {
-		return cached, err
+	if cacheable {
+		if cached, err, ok := readCacheHit(ctx, plan.tc, in, cacheKey); ok {
+			return cached, err
+		}
 	}
 	st.keep = expandJoinColumns(plan.res.Entity, in.Expand)
 	got, err := st.query(ctx)
@@ -107,11 +109,8 @@ func prepareReadPlan(ctx context.Context, tc Context, in readInput) (readPlan, e
 		return readPlan{}, err
 	}
 	readFields = append(readFields, locals...)
-	if err := validateFields(res, readFields...); err != nil {
-		return readPlan{}, err
-	}
 	predicateFields, _ := splitPaths(res.Entity, append(filterFields(in.Filter), sortedKeys(in.Cursor)...))
-	if err := validateUnmaskedFields(res, predicateFields...); err != nil {
+	if err := (fieldUses{read: readFields, compared: predicateFields}).check(res); err != nil {
 		return readPlan{}, err
 	}
 	req := rbac.Request{
@@ -243,7 +242,7 @@ func readFieldNames(res entity.Resolved, in readInput) ([]string, []string, erro
 		if !ok {
 			return nil, nil, fmt.Errorf("%w: unknown relationship %q", ErrInvalidInput, name)
 		}
-		for local := range relation.JoinOn {
+		for _, local := range slices.Sorted(maps.Keys(relation.JoinOn)) { // the SQL is the same for the same call
 			readFields = append(readFields, local)
 			if len(in.Fields) > 0 && !slices.Contains(projectionFields, local) {
 				projectionFields = append(projectionFields, local)
@@ -260,17 +259,21 @@ func compileReadQuery(ctx context.Context, plan readPlan, in readInput) (stateme
 	if err != nil {
 		return statement{}, "", cache.Key{}, err
 	}
-	planTemplate := cost.Fingerprint(tc.DataSource, tc.Dialect.Name(), compiled)
+	planTemplate := ""
+	if _, off := tc.Feedback.(cost.NoopFeedbackStore); tc.Feedback != nil && !off { // the feedback's key only
+		planTemplate = cost.Fingerprint(tc.DataSource, tc.Dialect.Name(), compiled)
+	}
 	sql, err := gateSQL(ctx, tc, compiled)
 	if err != nil {
 		err = withIndexHints(ctx, tc, res.Entity, err)
 		return statement{}, "", cache.Key{}, err
 	}
-	key := cache.Key{
-		Database: physicalDatabase(res.Entity), Relation: cacheRelation(res.Entity),
-		Datasource: res.Entity.DatasourceName(), Generation: tc.Generation,
-		SQL:  sql.SQL + "\x00expand=" + strings.Join(in.Expand, ","),
-		Args: argsKey(sql.Args), Scope: scopeKey(tc.Role, tc.Subject),
+	key := cache.Key{Database: physicalDatabase(res.Entity)}
+	if tc.Cache != nil { // the rest only finds an entry
+		key.Relation, key.Datasource, key.Generation = cacheRelation(res.Entity), res.Entity.DatasourceName(),
+			tc.Generation
+		key.SQL = sql.SQL + "\x00expand=" + strings.Join(in.Expand, ",")
+		key.Args, key.Scope = argsKey(sql.Args), scopeKey(tc.Role, tc.Subject)
 	}
 	return newStatement(tc, res, plan.grant, sql), planTemplate, key, nil
 }
@@ -306,14 +309,19 @@ func readCacheHit(ctx context.Context, tc Context, in readInput, key cache.Key) 
 	if tc.Cache == nil || in.Transaction != "" || len(in.Expand) > 0 || tc.followsWrite {
 		return Result{}, nil, false
 	}
-	cached, ok := tc.Cache.Get(ctx, key)
+	var cached []map[string]any
+	var size int64
+	ok := false
+	if sized, isSized := tc.Cache.(cache.Sized[[]map[string]any]); isSized {
+		cached, size, ok = sized.GetSized(ctx, key)
+	} else {
+		cached, ok = tc.Cache.Get(ctx, key)
+	}
 	if !ok {
 		return Result{}, nil, false
 	}
-	for _, row := range cached {
-		if err := tc.results.add(row); err != nil {
-			return Result{}, err, true
-		}
+	if err := countCached(tc, cached, size); err != nil {
+		return Result{}, err, true
 	}
 	returned, _ := tc.results.counted()
 	return Result{Content: cached, ReturnedRows: returned}, nil, true
@@ -333,6 +341,21 @@ func trimExpandedJoinFields(parent entity.Entity, in readInput, out []map[string
 			}
 		}
 	}
+}
+
+// countCached counts the rows of a read cached against the call's limits:
+// by the size they were stored with (see storeReadCache), not encoded again,
+// or one by one when it is not known.
+func countCached(tc Context, rows []map[string]any, size int64) error {
+	if size > 0 {
+		return tc.results.addSized(int64(len(rows)), size)
+	}
+	for _, row := range rows {
+		if err := tc.results.add(row); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func storeReadCache(ctx context.Context, tc Context, in readInput, key cache.Key, stamp uint64, out []map[string]any) {
@@ -358,7 +381,7 @@ func expandJoinColumns(parent entity.Entity, names []string) []string {
 	var columns []string
 	for _, name := range names {
 		relation, _ := relationshipByName(parent, name)
-		for local := range relation.JoinOn {
+		for _, local := range slices.Sorted(maps.Keys(relation.JoinOn)) {
 			if !slices.Contains(columns, local) {
 				columns = append(columns, local)
 			}
@@ -388,7 +411,7 @@ func expandOneRelationship(ctx context.Context, tc Context, parent entity.Entity
 	join := relationJoin(relation)
 	join.localDecimal = decimalColumns(parent, join.local)
 	join.targetDecimal = decimalColumns(target.Entity, join.target)
-	if err := validateFields(target, join.target...); err != nil {
+	if err := (fieldUses{read: join.target}).check(target); err != nil {
 		return err
 	}
 	if target.Entity.DataSource != parent.DataSource {

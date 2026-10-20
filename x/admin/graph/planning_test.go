@@ -62,6 +62,23 @@ const catalogQuery = `query($f: CatalogFilter!) { catalog(input: {filter: $f}) {
 	counts { all new workspace published drift }
 	tables { ref status entity missing hasKey referencedBy foreignKeys } coverage { datasource scanned listed } } }`
 
+// Each count is what its filter would show: by status among the drifted
+// tables, drifted among those of the status.
+func TestCatalogCountsPerFilter(t *testing.T) {
+	_, c := planningHarness(t)
+	var drifted catalogResponse
+	mustPost(t, c, catalogQuery, &drifted, client.Var("f", map[string]any{"drift": true}))
+	if counts := drifted.Catalog.Counts; drifted.Catalog.Total != 1 || counts.All != 1 || counts.New != 0 ||
+		counts.Published != 1 || counts.Drift != 1 {
+		t.Fatalf("drifted only = %+v", drifted.Catalog)
+	}
+	var fresh catalogResponse
+	mustPost(t, c, catalogQuery, &fresh, client.Var("f", map[string]any{"status": []string{"NEW"}}))
+	if fresh.Catalog.Counts.Drift != 0 {
+		t.Fatalf("new only = %+v", fresh.Catalog)
+	}
+}
+
 func TestCatalogAcrossStatuses(t *testing.T) {
 	_, c := planningHarness(t)
 	var all catalogResponse

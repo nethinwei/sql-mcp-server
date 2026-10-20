@@ -12,24 +12,32 @@ import (
 
 // syncAll syncs the entities of targets and those the serving configuration
 // found incomplete, keys first: whether a field can go depends on the keys
-// naming it, and what names a field is indexed once (see fieldUses).
-func (ev *evaluation) syncAll(targets []target, exclude map[string]bool) {
-	targets = append(slices.Clone(targets), ev.runtimeTargets(targets, exclude)...)
+// naming it, and what names a field is indexed once (see fieldUses). It
+// returns the targets left once gone tables are removed.
+func (ev *evaluation) syncAll(targets []target, exclude map[string]bool) []target {
+	all := append(slices.Clone(targets), ev.runtimeTargets(targets, exclude)...)
 	if ev.plan.Sync.Keys {
-		ev.syncStructure(targets)
+		ev.syncStructure(all)
 	}
-	for _, t := range targets {
+	for _, t := range all {
 		ev.sync(t)
 	}
-	for _, t := range targets {
+	for _, t := range all {
 		if columns := ev.in.MissingRowColumns[t.id]; len(columns) > 0 {
 			ev.except(Exception{Kind: ExceptionRowColumnMissing, Ref: t.row.Ref, Entity: t.id,
 				Detail: strings.Join(columns, ", ")})
 		}
 	}
-	if ev.plan.Sync.RemoveTables {
-		ev.removeGone(GoneTables(ev.in.Sources, ev.in.Base, ev.plan.Scope, ev.in.Missing), exclude)
+	if !ev.plan.Sync.RemoveTables {
+		return targets
 	}
+	ev.removeGone(GoneTables(ev.in.Sources, ev.in.Base, ev.plan.Scope, ev.in.Missing), exclude)
+	// A table scanned yet found missing by the serving configuration is
+	// gone too: the rules that follow no longer apply to it.
+	return slices.DeleteFunc(slices.Clone(targets), func(t target) bool {
+		_, ok := ev.index[t.id]
+		return !ok
+	})
 }
 
 // runtimeTargets are the entities in scope, but not among targets, that the

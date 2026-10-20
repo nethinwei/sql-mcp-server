@@ -32,6 +32,10 @@ type Input struct {
 	// newer scan. MissingRowColumns are the columns their row scopes test
 	// (not fields) found missing: no sync repairs those.
 	MissingFields, MissingRowColumns map[string][]string
+	// Index, when set, is NewIndex of Sources, Base and Published: the plans
+	// evaluated against them filter it rather than each resolve the entity
+	// of every table again.
+	Index *Index
 }
 
 // Proposal is the outcome of a plan.
@@ -198,7 +202,12 @@ func Evaluate(in Input, p Plan) (Proposal, error) {
 		return Proposal{}, err
 	}
 	ev := newEvaluation(in, p)
-	rows := Rows(in.Sources, in.Base, in.Published, p.Scope)
+	var rows []Row
+	if in.Index != nil {
+		rows = in.Index.Rows(p.Scope)
+	} else {
+		rows = Rows(in.Sources, in.Base, in.Published, p.Scope)
+	}
 	exclude := set(p.Exclude)
 	rows = slices.DeleteFunc(rows, func(r Row) bool {
 		excluded := exclude[r.Ref]
@@ -225,7 +234,7 @@ func Evaluate(in Input, p Plan) (Proposal, error) {
 	targets := ev.importTables(rows)
 	// Sync first, so the field rules cover the fields it adds.
 	if p.Sync != nil {
-		ev.syncAll(targets, exclude)
+		targets = ev.syncAll(targets, exclude)
 	}
 	for _, t := range targets {
 		ev.applyFields(t)

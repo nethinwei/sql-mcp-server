@@ -53,17 +53,20 @@ func (s *SQLStore) Workspace(ctx context.Context, username string) (workspace.Wo
 	return w, ok, err
 }
 
+// keep keeps a copy of w: the caller goes on editing its own.
 func (s *SQLStore) keep(w workspace.Workspace) {
-	s.workspaces.Store(w.Username, keptWorkspace{version: w.Version, updated: toMicros(w.UpdatedAt), w: w})
+	s.workspaces.Store(w.Username, keptWorkspace{version: w.Version, updated: toMicros(w.UpdatedAt), w: cloneLists(w)})
 }
 
-// copy is the kept workspace for a caller to edit: its items are shared
-// (values are never written to), its lists clipped so that appending to
-// them does not write into the kept ones.
-func (k keptWorkspace) copy() workspace.Workspace {
-	w := k.w
-	w.Items, w.Conflicts, w.Notes, w.Taken = slices.Clip(w.Items), slices.Clip(w.Conflicts), slices.Clip(w.Notes),
-		slices.Clip(w.Taken)
+// copy is the kept workspace for a caller to edit.
+func (k keptWorkspace) copy() workspace.Workspace { return cloneLists(k.w) }
+
+// cloneLists copies w's lists, which callers edit in place (removing a note
+// shifts the others), so that no two workspaces share one; the values in
+// them are shared, as they are never written to.
+func cloneLists(w workspace.Workspace) workspace.Workspace {
+	w.Items, w.Conflicts, w.Notes, w.Taken = slices.Clone(w.Items), slices.Clone(w.Conflicts), slices.Clone(w.Notes),
+		slices.Clone(w.Taken)
 	return w
 }
 
@@ -139,7 +142,7 @@ func (s *SQLStore) PutWorkspace(
 		return workspace.Workspace{}, fmt.Errorf("configstore: write workspace: %w", err)
 	}
 	s.keep(w)
-	return keptWorkspace{w: w}.copy(), nil
+	return w, nil
 }
 
 func encodeWorkspace(w workspace.Workspace) (string, string, error) {

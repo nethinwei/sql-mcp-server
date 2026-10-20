@@ -39,6 +39,10 @@ func Resolve(spec *Spec) (*Config, error) {
 	return &cfg, nil
 }
 
+// EntityOf is the entity s describes, as written: what it leaves unset is
+// zero, no default filled in.
+func EntityOf(s EntitySpec) EntityConfig { return s.config() }
+
 func ptr[T any](v T) *T { return &v }
 
 // set is v when it is not zero, else nil: a field of a configuration built in

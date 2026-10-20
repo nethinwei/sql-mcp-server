@@ -3,6 +3,7 @@ package catalog
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"slices"
 	"sync"
 	"time"
@@ -58,6 +59,7 @@ func (m *MemoryStore) CatalogList(_ context.Context, source string) (List, bool,
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l, ok := m.lists[source]
+	l.list.Schemas = slices.Clone(l.list.Schemas)
 	return l.list, ok, nil
 }
 
@@ -86,7 +88,7 @@ func (m *MemoryStore) CatalogSchemas(_ context.Context, source string, names []s
 	out := []Schema{}
 	for _, name := range names {
 		if s, ok := m.schemas[source][name]; ok {
-			out = append(out, s.schema)
+			out = append(out, cloneSchema(s.schema))
 		}
 	}
 	return out, nil
@@ -99,9 +101,21 @@ func (m *MemoryStore) PutCatalogSchemas(_ context.Context, source, datasource st
 		m.schemas[source] = map[string]memorySchema{}
 	}
 	for _, s := range schemas {
-		m.schemas[source][s.Name] = memorySchema{datasource, s}
+		m.schemas[source][s.Name] = memorySchema{datasource, cloneSchema(s)}
 	}
 	return nil
+}
+
+// cloneSchema copies s through JSON, as a store that serializes it does:
+// what is kept and what callers hold share nothing.
+func cloneSchema(s Schema) Schema {
+	data, err := json.Marshal(s)
+	var out Schema
+	if err == nil && json.Unmarshal(data, &out) == nil {
+		out.Name, out.ScannedAt = s.Name, s.ScannedAt
+		return out
+	}
+	return s
 }
 
 func (m *MemoryStore) PruneCatalog(_ context.Context, datasource, keep string, before time.Time) error {

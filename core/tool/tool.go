@@ -283,7 +283,7 @@ func RunTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Re
 	}
 	ctx = WithDecisionID(ctx, tc.DecisionID)
 	input, refErr := canonicalEntity(ctx, t, input, tc)
-	auditInput := audit.RedactInput(input, sensitiveFields(name, input, tc.Registry))
+	auditInput := auditInputOf(tc, name, input)
 	// BeforeTool fires ahead of budget acquisition so budget denials are also
 	// observable (span + decision.id); OnError fires before AfterTool so the
 	// error is recorded before the span ends.
@@ -413,6 +413,15 @@ func returnedRows(res Result) int64 {
 		return res.ReturnedRows
 	}
 	return int64(len(res.Content))
+}
+
+// auditInputOf is input as the audit event records it, redacted; nil without
+// an auditor, as only an audit event reads it.
+func auditInputOf(tc Context, name string, input json.RawMessage) json.RawMessage {
+	if tc.Auditor == nil {
+		return nil
+	}
+	return audit.RedactInput(input, sensitiveFields(name, input, tc.Registry))
 }
 
 func sensitiveFields(toolName string, input json.RawMessage, registry *entity.Registry) map[string]bool {
@@ -705,55 +714,6 @@ func sortedKeys(m map[string]any) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// validateFields rejects any field name that is not a visible attribute of the
-// entity (by name or alias). This closes a side channel where a filter, GROUP
-// BY, or write could reference an excluded/hidden column — e.g. filtering on a
-// masked salary to infer its value. Unknown and excluded fields are treated
-// identically so the error never reveals which columns exist.
-func validateFields(res entity.Resolved, fields ...string) error {
-	if len(fields) == 0 {
-		return nil
-	}
-	allowed := make(map[string]bool, len(res.Attributes)*2)
-	for _, a := range res.Attributes {
-		allowed[a.Name] = true
-		if a.Alias != "" {
-			allowed[a.Alias] = true
-		}
-	}
-	for _, f := range fields {
-		if !allowed[f] {
-			return fmt.Errorf("%w: unknown or inaccessible field %q", ErrInvalidInput, f)
-		}
-	}
-	return nil
-}
-
-// validateUnmaskedFields rejects masked fields in usages that can reveal or
-// compare their underlying values. It intentionally uses the same error as an
-// unknown field so callers cannot probe whether a field is masked.
-func validateUnmaskedFields(res entity.Resolved, fields ...string) error {
-	for _, f := range fields {
-		for _, a := range res.Attributes {
-			if (a.Name == f || a.Alias != "" && a.Alias == f) && a.Mask != "" {
-				return fmt.Errorf("%w: unknown or inaccessible field %q", ErrInvalidInput, f)
-			}
-		}
-	}
-	return nil
-}
-
-// validateWritable rejects writes to columns the database computes
-// (generated columns, identity ALWAYS) before they reach the database.
-func validateWritable(res entity.Resolved, fields ...string) error {
-	for _, f := range fields {
-		if a, ok := res.Entity.AttributeByName(f); ok && !a.Domain.Writable() {
-			return fmt.Errorf("%w: field %q is computed by the database and cannot be written", ErrInvalidInput, f)
-		}
-	}
-	return nil
 }
 
 func resolveDMLEntity(tc Context, name string) (entity.Resolved, error) {

@@ -103,19 +103,26 @@ func TestCancelledCallsDoNotCount(t *testing.T) {
 	}
 }
 
-// The bound on results held in memory says nothing of a connection's health:
-// changing it keeps every breaker's state.
-func TestResultMemoryChangeKeepsHealth(t *testing.T) {
-	failA, failB := true, false
-	s, a, _, cfg := guardedPair(t, &failA, &failB)
-	if err := query(a); err == nil {
-		t.Fatal("a failing query passed")
-	}
-	next := *cfg
-	next.RateLimit.MaxResultMemory *= 2
-	s.apply(&App{config: &next})
-	if err := query(a); !errors.Is(err, ratelimit.ErrCircuitOpen) {
-		t.Fatalf("changing the result memory reset a's breaker: %v", err)
+// The bound on results held in memory and the lifetimes of pooled
+// connections say nothing of a connection's health: changing them keeps
+// every breaker's state.
+func TestResultMemoryAndPoolChangesKeepHealth(t *testing.T) {
+	for name, change := range map[string]func(*config.RateLimitConfig){
+		"result memory":       func(r *config.RateLimitConfig) { r.MaxResultMemory *= 2 },
+		"connection idle":     func(r *config.RateLimitConfig) { r.ConnMaxIdleTime += time.Minute },
+		"connection lifetime": func(r *config.RateLimitConfig) { r.ConnMaxLifetime += time.Minute },
+	} {
+		failA, failB := true, false
+		s, a, _, cfg := guardedPair(t, &failA, &failB)
+		if err := query(a); err == nil {
+			t.Fatal("a failing query passed")
+		}
+		next := *cfg
+		change(&next.RateLimit)
+		s.apply(&App{config: &next})
+		if err := query(a); !errors.Is(err, ratelimit.ErrCircuitOpen) {
+			t.Fatalf("changing the %s reset a's breaker: %v", name, err)
+		}
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -429,14 +430,7 @@ func (r *Service) workspaceDraft(ctx context.Context, username string) (*Draft, 
 		// As committing it does (codec.Build): the settings the base has
 		// that the item does not are removed.
 		settings, _ := st.Base.Get(settingsRef).(map[string]any)
-		for key := range settings {
-			if _, kept := edit.Settings[key]; !kept {
-				if edit.Settings == nil {
-					edit.Settings = map[string]any{}
-				}
-				edit.Settings[key] = nil
-			}
-		}
+		removeSettingsBut(slices.Collect(maps.Keys(settings)), &edit)
 	}
 	return &Draft{Base: strconv.FormatInt(st.Workspace.Base, 10), Edit: edit}, st, err
 }

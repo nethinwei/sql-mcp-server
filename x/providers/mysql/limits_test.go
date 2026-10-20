@@ -2,6 +2,7 @@ package mysql
 
 import (
 	"testing"
+	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
@@ -9,7 +10,8 @@ import (
 
 func TestLimits(t *testing.T) {
 	t.Parallel()
-	pooled := providerregistry.Options{Pooler: providerregistry.PoolerTransaction}
+	timed := providerregistry.Options{Timeout: time.Second}
+	pooled := providerregistry.Options{Timeout: time.Second, Pooler: providerregistry.PoolerTransaction}
 	tests := []struct {
 		name                 string
 		dsn                  string
@@ -17,23 +19,23 @@ func TestLimits(t *testing.T) {
 		variable             string
 		read, write, unkeyed dialect.Strength
 	}{
-		{"injected", "u:p@tcp(h)/db", providerregistry.Options{}, "",
+		{"injected", "u:p@tcp(h)/db", timed, "",
 			dialect.Enforced, dialect.Enforced, dialect.Enforced},
-		{"DSN timeout", "u:p@tcp(h)/db?max_execution_time=0", providerregistry.Options{}, "",
+		{"DSN timeout", "u:p@tcp(h)/db?max_execution_time=0", timed, "",
 			dialect.BestEffort, dialect.Enforced, dialect.Enforced},
-		{"DSN safe updates off", "u:p@tcp(h)/db?sql_safe_updates=0", providerregistry.Options{}, "",
+		{"DSN safe updates off", "u:p@tcp(h)/db?sql_safe_updates=0", timed, "",
 			dialect.Enforced, dialect.Enforced, dialect.Unsupported},
-		{"DSN names in upper case", "u:p@tcp(h)/db?SQL_SAFE_UPDATES=0&Max_Execution_Time=0", providerregistry.Options{},
+		{"DSN names in upper case", "u:p@tcp(h)/db?SQL_SAFE_UPDATES=0&Max_Execution_Time=0", timed,
 			"", dialect.BestEffort, dialect.Enforced, dialect.Unsupported},
-		{"DSN safe updates on", "u:p@tcp(h)/db?sql_safe_updates=ON", providerregistry.Options{}, "",
+		{"DSN safe updates on", "u:p@tcp(h)/db?sql_safe_updates=ON", timed, "",
 			dialect.Enforced, dialect.Enforced, dialect.Enforced},
-		{"DSN safe updates not understood", "u:p@tcp(h)/db?sql_safe_updates=2", providerregistry.Options{}, "",
+		{"DSN safe updates not understood", "u:p@tcp(h)/db?sql_safe_updates=2", timed, "",
 			dialect.Enforced, dialect.Enforced, dialect.BestEffort},
 		{"pooler", "u:p@tcp(h)/db", pooled, "",
 			dialect.BestEffort, dialect.Unsupported, dialect.BestEffort},
-		{"oceanbase injected", "u:p@tcp(h)/db", providerregistry.Options{}, "ob_query_timeout",
+		{"oceanbase injected", "u:p@tcp(h)/db", timed, "ob_query_timeout",
 			dialect.Enforced, dialect.Enforced, dialect.Enforced},
-		{"oceanbase DSN timeout", "u:p@tcp(h)/db?ob_query_timeout=0", providerregistry.Options{}, "ob_query_timeout",
+		{"oceanbase DSN timeout", "u:p@tcp(h)/db?ob_query_timeout=0", timed, "ob_query_timeout",
 			dialect.BestEffort, dialect.BestEffort, dialect.Enforced},
 	}
 	for _, test := range tests {
@@ -63,5 +65,26 @@ func TestLimitsRefuseAVariableSetTwice(t *testing.T) {
 	t.Parallel()
 	if _, err := Limits("u:p@tcp(h)/db?sql_safe_updates=1&SQL_SAFE_UPDATES=0", providerregistry.Options{}); err == nil {
 		t.Fatal("a variable set twice was accepted")
+	}
+}
+
+// Without a timeout (cost.queryTimeout 0) the adapter opens, sets none, and
+// says so.
+func TestOpenWithoutATimeout(t *testing.T) {
+	t.Parallel()
+	for _, variable := range []string{"", "ob_query_timeout"} {
+		p, err := LimitsFor("u:p@tcp(h)/db", providerregistry.Options{}, variable)
+		if err != nil || p.Claim(dialect.TimeoutRead).Strength != dialect.Unsupported ||
+			p.Claim(dialect.UnkeyedWrite).Strength != dialect.Enforced {
+			t.Fatalf("%q: limits = %+v, %v", variable, p, err)
+		}
+		pool, caps, err := NewAdapter("u:p@tcp(h)/db", providerregistry.Options{Lazy: true}, variable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = pool.Close()
+		if c := caps.Claim(dialect.TimeoutWrite); c.Strength != dialect.Unsupported {
+			t.Fatalf("%q: timeout = %+v", variable, c)
+		}
 	}
 }

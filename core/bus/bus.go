@@ -8,6 +8,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -33,7 +34,9 @@ type Bus struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	mu     sync.Mutex
-	closed bool
+	// closed is set under mu, so that no task enters once it is; every
+	// call reads it, without the lock.
+	closed atomic.Bool
 	tasks  map[string]int
 	wg     sync.WaitGroup
 }
@@ -123,9 +126,7 @@ func (b *Bus) isClosed() bool {
 	if b == nil {
 		return false
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.closed
+	return b.closed.Load()
 }
 
 // Go runs fn as the background task name; fn's context ends on Close. It
@@ -179,7 +180,7 @@ func (b *Bus) AfterFunc(name string, d time.Duration, fn func()) (stop func() bo
 func (b *Bus) enter(name string) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.closed {
+	if b.closed.Load() {
 		return false
 	}
 	b.tasks[name]++
@@ -214,7 +215,7 @@ func (b *Bus) Close(ctx context.Context) error {
 		return nil
 	}
 	b.mu.Lock()
-	b.closed = true
+	b.closed.Store(true)
 	b.mu.Unlock()
 	b.cancel()
 	done := make(chan struct{})

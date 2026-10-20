@@ -48,9 +48,37 @@ func Run(t *testing.T, newStore NewStore) {
 		"ClaimBatches":     testClaimBatches,
 		"MoveItems":        testMoveItems,
 		"CreateBatchQuota": testCreateBatchQuota,
+		"Owned":            testOwned,
 	}
 	for name, fn := range cases {
 		t.Run(name, func(t *testing.T) { fn(t, newStore(t)) })
+	}
+}
+
+// What is put and what is read are the caller's own: editing them changes
+// nothing kept.
+func testOwned(t *testing.T, s catalog.Store) {
+	ctx := context.Background()
+	list := catalog.List{Schemas: []string{"a"}, ListedAt: t0}
+	schema := catalog.Schema{Name: "a", ScannedAt: t0, Tables: []catalog.Table{table("a", "t1")}}
+	if err := s.PutCatalogList(ctx, "src", "ds", list); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutCatalogSchemas(ctx, "src", "ds", []catalog.Schema{schema}); err != nil {
+		t.Fatal(err)
+	}
+	list.Schemas[0], schema.Tables[0].Columns[0].Name = "edited", "edited"
+	for range 2 {
+		got, _, err := s.CatalogList(ctx, "src")
+		if err != nil || got.Schemas[0] != "a" {
+			t.Fatalf("list = %+v, %v", got, err)
+		}
+		got.Schemas[0] = "edited"
+		schemas, err := s.CatalogSchemas(ctx, "src", []string{"a"})
+		if err != nil || len(schemas) != 1 || schemas[0].Tables[0].Columns[0].Name != "id" {
+			t.Fatalf("schemas = %+v, %v", schemas, err)
+		}
+		schemas[0].Tables[0].Columns[0].Name = "edited"
 	}
 }
 

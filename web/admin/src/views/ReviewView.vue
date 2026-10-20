@@ -169,6 +169,23 @@ async function save(publish: boolean) {
   } catch (e) {
     if (e instanceof WorkspaceSwitched) return
     if (e instanceof ApiError) {
+      if (e.code === 'NOT_MOVED' && e.extensions.published) {
+        // Published all the same, the workspace left on the revision before:
+        // it is moved on from here, or the administrator is told to.
+        const id = String(e.extensions.published)
+        void status.refresh()
+        draftsChanged.value++
+        let moved = false
+        try {
+          moved = await owned(() => workspace.follow(id), at)
+        } catch (err) {
+          if (err instanceof WorkspaceSwitched) return
+        }
+        if (moved) message.success(t(restart.value.length ? 'review.publishedRestart' : 'review.published', { id }))
+        else message.warning(t('review.publishedNotMoved', { id }))
+        void router.push({ name: 'revisions', query: { id } })
+        return
+      }
       if (e.code === 'CONFLICT' && e.extensions.published) return conflict(String(e.extensions.published))
       if (e.code === 'BEHIND') {
         await status.refresh()

@@ -56,38 +56,18 @@ func (ev *evaluation) fieldUses() map[string]map[string][]string {
 }
 
 func (ev *evaluation) entityUses(e config.EntityConfig, use func(id, field, where string)) {
-	id := e.ID()
-	for _, f := range e.PrimaryKey {
-		use(id, f, "primaryKey")
-	}
-	for _, k := range e.UniqueKeys {
-		for _, f := range k {
-			use(id, f, "uniqueKeys")
+	configrefs.FieldUses(e, ev.resolve, func(u configrefs.FieldUse) {
+		switch u.Kind {
+		case configrefs.UsePrimaryKey:
+			use(u.Entity, u.Field, "primaryKey")
+		case configrefs.UseUniqueKey:
+			use(u.Entity, u.Field, "uniqueKeys")
+		case configrefs.UseRelationship:
+			use(u.Entity, u.Field, "relationship "+e.ID()+"."+u.Relationship)
+		default: // the tenant policy, entity-level access
+			use(u.Entity, u.Field, "access")
 		}
-	}
-	for _, f := range configrefs.FilterFields(e.TenantPolicy) {
-		use(id, f, "access")
-	}
-	for _, policy := range e.RowPolicies {
-		for _, f := range configrefs.FilterFields(policy) {
-			use(id, f, "access")
-		}
-	}
-	for _, acl := range e.FieldACL {
-		for _, f := range slices.Concat(acl.Read, acl.Write) {
-			use(id, f, "access")
-		}
-	}
-	for _, r := range e.Relationships {
-		where := "relationship " + id + "." + r.Name
-		target, ok := ev.resolve(r.Target)
-		for local, remote := range r.JoinOn {
-			use(id, local, where)
-			if ok {
-				use(target, remote, where)
-			}
-		}
-	}
+	})
 }
 
 // fieldReferences lists what references a field of the entity id besides

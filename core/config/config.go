@@ -519,8 +519,8 @@ func (c CostConfig) Threshold() cost.Threshold {
 }
 
 // RequirePKForWriteOrDefault reports whether writes must be primary-key scoped.
-// A nil setting defaults to true (safe): a non-point UPDATE/DELETE is rejected
-// unless explicitly allowed via allowTemplates.
+// A nil setting defaults to true (safe): a non-point UPDATE/DELETE is rejected,
+// whatever allowTemplates lists (see cost.WriteGuard).
 func (c CostConfig) RequirePKForWriteOrDefault() bool {
 	if c.RequirePKForWrite != nil {
 		return *c.RequirePKForWrite

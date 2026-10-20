@@ -69,10 +69,7 @@ func (r *mutationResolver) CheckpointWorkspace(ctx context.Context, comment *str
 // CommitWorkspace is the resolver for the commitWorkspace field.
 func (r *mutationResolver) CommitWorkspace(ctx context.Context, input configapp.CommitInput) (*Revision, error) {
 	rev, err := r.App.CommitWorkspace(ctx, input)
-	if err != nil {
-		return nil, apiError(err)
-	}
-	return toRevision(rev), nil
+	return committed(ctx, rev, err)
 }
 
 // SavePlanTemplate is the resolver for the savePlanTemplate field.

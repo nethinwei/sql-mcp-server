@@ -13,6 +13,7 @@ package workspaceops
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 
@@ -70,6 +71,11 @@ var (
 	ErrBehind = errors.New("workspace: it builds on an older revision than the published one: update it first")
 	// ErrNoConflict: no open conflict has the ID given.
 	ErrNoConflict = errors.New("workspace: no such open conflict")
+	// ErrRenameAlone: a rename written without the removal of the item it
+	// renames, which says what its writer read of it; without that, a
+	// change made to it meanwhile would be lost.
+	ErrRenameAlone = errors.New("workspace: a rename must remove the item it renames in the same write, " +
+		"with the value read")
 )
 
 // attempts bounds how often an operation reads the workspace again when
@@ -182,7 +188,9 @@ func (s Service) apply(ctx context.Context, username, by string, fn change) (Sta
 
 // Write is an item written: its value (Missing removes it) and the value
 // its writer read (Missing: absent). From, when set, is the item it was
-// renamed or moved from, which it replaces (see Reconciler).
+// renamed or moved from, which it replaces (see Reconciler): the same
+// writes remove that item, with the value its writer read, unless it is
+// gone already (ErrRenameAlone).
 type Write struct {
 	Ref             workspace.Ref
 	Value, Previous any
@@ -202,6 +210,9 @@ func (s Service) WriteItems(ctx context.Context, username, by, op string, writes
 		workspace.Snapshot, workspace.LogEntry, error,
 	) {
 		before := w.Items
+		if err := renamesRemove(before, writes); err != nil {
+			return nil, workspace.LogEntry{}, err
+		}
 		values, refs, renames, found := s.batch(w, writes)
 		w.Items = before.Apply(values, refs)
 		var err error
@@ -310,6 +321,22 @@ func (b *batchState) rename(to, from workspace.Ref) {
 	}
 	b.values[from] = workspace.Missing
 	b.refs = append(b.refs, from)
+}
+
+// renamesRemove checks that each rename of an item still there comes with
+// a write of that item (its removal, or what takes its key): the value read
+// of it is what a change made meanwhile merges against.
+func renamesRemove(before workspace.Snapshot, writes []Write) error {
+	written := make(map[workspace.Ref]bool, len(writes))
+	for _, wr := range writes {
+		written[wr.Ref] = true
+	}
+	for _, wr := range writes {
+		if wr.From != nil && *wr.From != wr.Ref && !written[*wr.From] && !workspace.IsMissing(before.Get(*wr.From)) {
+			return fmt.Errorf("%w: %s %q", ErrRenameAlone, wr.From.Kind, wr.From.Key)
+		}
+	}
+	return nil
 }
 
 // renamesLast puts the renames after the other writes: the removal of the

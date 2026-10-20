@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/99designs/gqlgen/graphql"
+
 	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
@@ -53,6 +55,11 @@ func apiError(err error) error {
 	if errors.Is(err, workspaceops.ErrConflicts) {
 		return &gqlerror.Error{Message: err.Error(), Extensions: map[string]any{"code": "CONFLICTS"}}
 	}
+	var notMoved *workspaceops.NotMovedError
+	if errors.As(err, &notMoved) {
+		return &gqlerror.Error{Message: err.Error(), Extensions: map[string]any{
+			"code": "NOT_MOVED", "published": strconv.FormatInt(notMoved.Published.ID, 10)}}
+	}
 	if errors.Is(err, workspaceops.ErrBehind) {
 		return &gqlerror.Error{Message: err.Error(), Extensions: map[string]any{"code": "BEHIND"}}
 	}
@@ -61,6 +68,20 @@ func apiError(err error) error {
 		return &gqlerror.Error{Message: err.Error(), Extensions: map[string]any{"code": "CONFLICT"}}
 	}
 	return err
+}
+
+// committed answers a commit: a revision published whose workspace was not
+// moved onto it is the answer still, with the error beside it.
+func committed(ctx context.Context, rev revision.Revision, err error) (*Revision, error) {
+	var notMoved *workspaceops.NotMovedError
+	if errors.As(err, &notMoved) {
+		graphql.AddError(ctx, apiError(err))
+		return toRevision(rev), nil
+	}
+	if err != nil {
+		return nil, apiError(err)
+	}
+	return toRevision(rev), nil
 }
 
 func serverStatus(status func() RuntimeState) *ServerStatus {

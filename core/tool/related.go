@@ -71,10 +71,7 @@ func relatedTarget(ctx context.Context, tc Context, e entity.Entity, r entity.Re
 	if target.Entity.DataSource != e.DataSource {
 		return entity.Resolved{}, grant{}, fmt.Errorf("%w: cross-datasource relationship %q", ErrInvalidInput, r.Name)
 	}
-	if err := validateFields(target, fields...); err != nil {
-		return entity.Resolved{}, grant{}, err
-	}
-	if err := validateUnmaskedFields(target, fields...); err != nil {
+	if err := (fieldUses{compared: fields}).check(target); err != nil {
 		return entity.Resolved{}, grant{}, err
 	}
 	join := relationJoin(r)

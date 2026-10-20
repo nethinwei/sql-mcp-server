@@ -206,10 +206,13 @@ func (a *App) CloseContext(ctx context.Context) error {
 	if a.Transactions != nil && a.shared == nil { // shared ones outlive the App
 		a.Transactions.Close()
 	}
-	if a.Auditor != nil {
-		if closer, ok := a.Auditor.(interface{ Close() }); ok {
-			closer.Close()
+	switch closer := a.Auditor.(type) {
+	case interface{ CloseContext(context.Context) error }:
+		if err := closer.CloseContext(ctx); err != nil {
+			errs = append(errs, err)
 		}
+	case interface{ Close() }:
+		closer.Close()
 	}
 	for _, prepared := range a.Prepared {
 		if err := prepared.Close(); err != nil {

@@ -3,7 +3,9 @@ package config
 import (
 	"fmt"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
+	"maps"
 	"net"
+	"slices"
 	"strings"
 	"time"
 
@@ -458,7 +460,8 @@ func validateRelationshipJoin(
 		return fmt.Errorf("config: relationship %q requires at least one joinOn pair", relation.Name)
 	}
 	targetFields := configuredFields(target.Fields)
-	for local, targetField := range relation.JoinOn {
+	for _, local := range slices.Sorted(maps.Keys(relation.JoinOn)) { // the same error each time
+		targetField := relation.JoinOn[local]
 		if !localFields[local] {
 			return fmt.Errorf("config: relationship %q references unknown local field %q", relation.Name, local)
 		}

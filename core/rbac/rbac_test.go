@@ -2,7 +2,10 @@ package rbac
 
 import (
 	"context"
+	"fmt"
+	"math/rand/v2"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/nethinwei/sql-mcp-server/core/entity"
@@ -229,5 +232,63 @@ func TestResolveSubjectInLists(t *testing.T) {
 	}
 	if in.Value.([]any)[0] != "${subject.home}" {
 		t.Fatal("the stored policy was changed")
+	}
+}
+
+// Usable keeps only what the policy names: the roles and entity names a
+// caller makes up are answered, not kept.
+func TestUsableKeepsOnlyKnownPairs(t *testing.T) {
+	t.Parallel()
+	a := NewRoleAuthorizer(testRegistry(t))
+	if !a.Usable("reader", "users") || a.Usable("stranger", "users") || a.Usable("reader", "nothing") {
+		t.Fatal("answers")
+	}
+	kept := 0
+	a.usable.Range(func(any, any) bool { kept++; return true })
+	if kept != 1 {
+		t.Fatalf("%d answers kept, want the known pair only", kept)
+	}
+	a.granted.Range(func(k, _ any) bool {
+		if k.(candidatesKey).principal != "reader" {
+			t.Errorf("candidates kept for %+v", k)
+		}
+		return true
+	})
+}
+
+// projectFields keeps the requested fields a visible attribute names or
+// aliases, whichever way it looks them up.
+func TestProjectFieldsMatchesItsReference(t *testing.T) {
+	t.Parallel()
+	reference := func(visible []entity.Attribute, requested []string) []string {
+		out := []string{}
+		for _, f := range requested {
+			for _, a := range visible {
+				if a.Name == f || a.Alias != "" && a.Alias == f {
+					out = append(out, f)
+					break
+				}
+			}
+		}
+		return out
+	}
+	rng := rand.New(rand.NewPCG(3, 4))
+	name := func() string { return []string{"", "a", "b", "c", "d", "e"}[rng.IntN(6)] + fmt.Sprint(rng.IntN(30)) }
+	for range 2000 {
+		var visible []entity.Attribute
+		for range rng.IntN(40) {
+			alias := ""
+			if rng.IntN(3) == 0 {
+				alias = name()
+			}
+			visible = append(visible, entity.Attribute{Name: name(), Alias: alias})
+		}
+		requested := []string{""}
+		for range 1 + rng.IntN(30) {
+			requested = append(requested, name())
+		}
+		if got, want := projectFields(visible, requested), reference(visible, requested); !slices.Equal(got, want) {
+			t.Fatalf("projectFields(%v, %v) = %v, want %v", visible, requested, got, want)
+		}
 	}
 }

@@ -2,6 +2,7 @@
 package budget
 
 import (
+	"container/list"
 	"context"
 	"errors"
 	"sync"
@@ -64,6 +65,9 @@ type state struct {
 	reserved int64
 	touched  time.Time
 	closed   bool
+	// idle is the state's place among the idle ones (see MemoryManager.idle);
+	// nil while a call runs.
+	idle *list.Element
 }
 
 // MemoryManager is a process-local manager with role and tenant overrides.
@@ -80,8 +84,10 @@ type MemoryManager struct {
 	inflight  map[string]int
 	ttl       time.Duration
 	maxStates int
-	// lastSweep is when idle states were last swept (see pruneLocked).
-	lastSweep time.Time
+	// idle lists the scopes of the states no call runs in, least recently
+	// used first: those idle for ttl, and those a full table makes room
+	// from, are taken from its front.
+	idle *list.List
 }
 
 // New returns a manager. Empty maps mean no additional rejection.
@@ -99,7 +105,7 @@ func NewWithBounds(roles, tenants map[string]Limits, ttl time.Duration, maxState
 	}
 	return &MemoryManager{
 		roles: cloneLimits(roles), tenants: cloneLimits(tenants), sessions: map[Scope]*state{}, inflight: map[string]int{},
-		ttl: ttl, maxStates: maxStates,
+		ttl: ttl, maxStates: maxStates, idle: list.New(),
 	}
 }
 
@@ -192,6 +198,7 @@ func (m *MemoryManager) AcquireWithReservation(
 	if scope.Tenant != "" {
 		m.inflight[scope.Tenant]++
 	}
+	m.busyLocked(st)
 	st.inflight++
 	st.reserved += reservation.Cost
 	st.touched = now
@@ -218,20 +225,46 @@ func normalizeReservation(reservation Reservation) Reservation {
 	return reservation
 }
 
+// acquireStateLocked is scope's state, new when it has none: a full table
+// makes room by dropping the least recently used idle state (never scope's
+// own, which it has), and refuses when every state is in use.
 func (m *MemoryManager) acquireStateLocked(scope Scope, now time.Time) (*state, error) {
-	st := m.sessions[scope]
-	if st != nil && st.inflight == 0 && now.Sub(st.touched) >= m.ttl {
-		delete(m.sessions, scope) // idle past ttl: starts again, swept or not
-		st = nil
+	if st := m.sessions[scope]; st != nil {
+		return st, nil
 	}
-	if st == nil {
-		if len(m.sessions) >= m.maxStates {
+	if len(m.sessions) >= m.maxStates {
+		oldest := m.idle.Front()
+		if oldest == nil {
 			return nil, ErrExceeded
 		}
-		st = &state{touched: now}
-		m.sessions[scope] = st
+		m.dropLocked(oldest.Value.(Scope))
 	}
+	st := &state{touched: now}
+	m.sessions[scope] = st
+	m.idleLocked(scope, st)
 	return st, nil
+}
+
+// idleLocked lists scope's state among the idle ones, as the most recently
+// used.
+func (m *MemoryManager) idleLocked(scope Scope, st *state) {
+	st.idle = m.idle.PushBack(scope)
+}
+
+// busyLocked takes st off the idle states: a call runs in it.
+func (m *MemoryManager) busyLocked(st *state) {
+	if st.idle != nil {
+		m.idle.Remove(st.idle)
+		st.idle = nil
+	}
+}
+
+// dropLocked drops scope's state.
+func (m *MemoryManager) dropLocked(scope Scope) {
+	if st := m.sessions[scope]; st != nil {
+		m.busyLocked(st)
+		delete(m.sessions, scope)
+	}
 }
 
 func checkReservationLimits(limits Limits, st *state, reservation Reservation) error {
@@ -268,30 +301,15 @@ func (m *MemoryManager) newLease(
 	}
 }
 
-// pruneLocked drops the states idle for ttl, sweeping them at most every
-// quarter of it (a sweep reads every state, under the lock every call
-// takes), and the least recently used ones past maxStates.
+// pruneLocked drops the states idle for ttl: the first idle ones, as they
+// are listed by when they were last used.
 func (m *MemoryManager) pruneLocked(now time.Time) {
-	if now.Sub(m.lastSweep) >= m.ttl/4 {
-		m.lastSweep = now
-		for scope, st := range m.sessions {
-			if st.inflight == 0 && now.Sub(st.touched) >= m.ttl {
-				delete(m.sessions, scope)
-			}
+	for e := m.idle.Front(); e != nil; e = m.idle.Front() {
+		scope := e.Value.(Scope)
+		if now.Sub(m.sessions[scope].touched) < m.ttl {
+			return
 		}
-	}
-	for len(m.sessions) >= m.maxStates {
-		var oldestScope Scope
-		var oldest *state
-		for scope, st := range m.sessions {
-			if st.inflight == 0 && (oldest == nil || st.touched.Before(oldest.touched)) {
-				oldestScope, oldest = scope, st
-			}
-		}
-		if oldest == nil {
-			break
-		}
-		delete(m.sessions, oldestScope)
+		m.dropLocked(scope)
 	}
 }
 
@@ -307,7 +325,7 @@ func (m *MemoryManager) CloseSession(session string) {
 		if scope.Session == session {
 			st.cost = 0
 			if st.inflight == 0 {
-				delete(m.sessions, scope)
+				m.dropLocked(scope)
 			} else {
 				st.closed = true
 			}
@@ -346,8 +364,12 @@ func (l *lease) Complete(usage Usage) error {
 		}
 		st.touched = time.Now()
 		sessionCost := st.cost
-		if st.closed && st.inflight == 0 {
-			delete(l.manager.sessions, l.scope)
+		switch {
+		case st.inflight > 0:
+		case st.closed:
+			l.manager.dropLocked(l.scope)
+		default:
+			l.manager.idleLocked(l.scope, st)
 		}
 		l.manager.mu.Unlock()
 		maxEstimated := l.limits.MaxEstimatedScannedRows

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 
@@ -23,6 +24,7 @@ func Run(t *testing.T, newStore NewStore) {
 		"VersionChecked":  testVersionChecked,
 		"Log":             testLog,
 		"ConcurrentWrite": testConcurrentWrite,
+		"Owned":           testOwned,
 	} {
 		t.Run(name, func(t *testing.T) { fn(t, newStore(t)) })
 	}
@@ -62,6 +64,46 @@ func testRoundTrip(t *testing.T, s workspace.Store) {
 	if _, ok, _ := s.Workspace(ctx, "other"); ok {
 		t.Fatal("another administrator's workspace")
 	}
+}
+
+// The workspace written and those read are the caller's own: editing their
+// lists in place, as removing a note does, changes no other.
+func testOwned(t *testing.T, s workspace.Store) {
+	ctx := context.Background()
+	w := sample()
+	w.Notes = append(w.Notes, workspace.Note{Source: "agent", Text: "second"})
+	put, err := s.PutWorkspace(ctx, w, 0, workspace.LogEntry{Op: "apply"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _, err := s.Workspace(ctx, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = clone(want)
+	edit := func(w *workspace.Workspace) {
+		w.Notes = slices.Delete(w.Notes, 0, 1)
+		w.Taken[0], w.Items[0].Value, w.Conflicts[0].ID = 99, "edited", "edited"
+	}
+	edit(&w)
+	edit(&put)
+	for range 2 {
+		read, _, err := s.Workspace(ctx, "root")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(read, want) {
+			t.Fatalf("read = %+v\nwant  %+v", read, want)
+		}
+		edit(&read)
+	}
+}
+
+// clone copies w's lists.
+func clone(w workspace.Workspace) workspace.Workspace {
+	w.Items, w.Conflicts, w.Notes, w.Taken = slices.Clone(w.Items), slices.Clone(w.Conflicts), slices.Clone(w.Notes),
+		slices.Clone(w.Taken)
+	return w
 }
 
 // A write at a version other than the kept one fails, writing nothing.

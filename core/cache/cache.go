@@ -106,9 +106,11 @@ func (h *expiries[T]) Pop() any {
 }
 
 // Sized is a Cache bounding the bytes its entries hold: SetSized is Set of
-// a value of size bytes.
+// a value of size bytes, and GetSized is Get with the size it was stored
+// with (0 when stored with Set).
 type Sized[T any] interface {
 	SetSized(ctx context.Context, k Key, v T, stamp uint64, size int64) error
+	GetSized(ctx context.Context, k Key) (T, int64, bool)
 }
 
 // TTLCache stores values with a TTL. Entries are indexed by database, so an
@@ -161,7 +163,13 @@ func (c *TTLCache[T]) evictLocked(size int64) {
 }
 
 // Get returns the value if present and unexpired.
-func (c *TTLCache[T]) Get(_ context.Context, k Key) (T, bool) {
+func (c *TTLCache[T]) Get(ctx context.Context, k Key) (T, bool) {
+	v, _, ok := c.GetSized(ctx, k)
+	return v, ok
+}
+
+// GetSized implements Sized.
+func (c *TTLCache[T]) GetSized(_ context.Context, k Key) (T, int64, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.m[k]
@@ -170,9 +178,9 @@ func (c *TTLCache[T]) Get(_ context.Context, k Key) (T, bool) {
 			c.removeLocked(e)
 		}
 		var z T
-		return z, false
+		return z, 0, false
 	}
-	return e.v, true
+	return e.v, e.size, true
 }
 
 // Stamp implements Cache.

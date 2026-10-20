@@ -192,7 +192,9 @@ func (r *Runner) move(br *batchRun, it catalog.BatchItem, from ...string) bool {
 	wait := r.opts.MoveBackoff
 	failed := false
 	for try := 1; !br.lost.Load(); try++ {
-		moved, err := r.store.MoveItem(context.Background(), br.id, br.owner, r.opts.Now(), it, from...)
+		ctx, cancel := r.storeContext()
+		moved, err := r.store.MoveItem(ctx, br.id, br.owner, r.opts.Now(), it, from...)
+		cancel()
 		switch {
 		case err == nil && (moved || !failed):
 			return moved
@@ -203,12 +205,12 @@ func (r *Runner) move(br *batchRun, it catalog.BatchItem, from ...string) bool {
 			}
 			slog.Error("scan batch progress unknown: the run stops, the batch is taken over later",
 				"batch", br.id, "schema", it.Schema, "error", readErr.Error())
-		case errors.Is(err, catalog.ErrNotOwner):
+		case errors.Is(err, catalog.ErrNotOwner), r.ctx.Err() != nil: // another run owns it, or this process stops
 		case try < r.opts.MoveTries:
 			slog.Warn("scan batch progress not recorded, trying again", "batch", br.id, "schema", it.Schema,
 				"error", err.Error())
 			failed = true
-			time.Sleep(wait)
+			sleep(r.ctx, wait)
 			wait *= 2
 			continue
 		default:
@@ -221,9 +223,18 @@ func (r *Runner) move(br *batchRun, it catalog.BatchItem, from ...string) bool {
 	return false
 }
 
+// storeContext bounds a write of a run's progress: by the process stopping
+// (not the batch: a batch stopped settles what was left), and by Stale, past
+// which the run has lost the batch anyway.
+func (r *Runner) storeContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(r.ctx, r.opts.Stale)
+}
+
 // written reports whether the item of a batch is it, as a move wrote it.
 func (r *Runner) written(br *batchRun, it catalog.BatchItem) (bool, error) {
-	b, ok, err := r.store.Batch(context.Background(), br.id)
+	ctx, cancel := r.storeContext()
+	defer cancel()
+	b, ok, err := r.store.Batch(ctx, br.id)
 	if err != nil || !ok {
 		return false, cmp.Or(err, errors.New("the batch is gone"))
 	}
@@ -262,7 +273,9 @@ func (r *Runner) execute(ctx context.Context, br *batchRun, items []catalog.Batc
 	if r.ctx.Err() != nil || br.lost.Load() {
 		return // this process stops, or another runs the batch now
 	}
-	if err := r.store.FinishBatch(context.Background(), br.id, br.owner, r.opts.Now()); err != nil &&
+	finishing, cancel := r.storeContext()
+	defer cancel()
+	if err := r.store.FinishBatch(finishing, br.id, br.owner, r.opts.Now()); err != nil &&
 		!errors.Is(err, catalog.ErrNotOwner) {
 		slog.Warn("scan batch not finished", "batch", br.id, "error", err.Error())
 	}

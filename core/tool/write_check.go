@@ -94,22 +94,27 @@ func exactValues(e entity.Entity, row map[string]any) map[string]any {
 }
 
 // pinned are the columns scope requires to equal one value: its equality
-// conditions on a scalar, alone or ANDed at the top.
+// conditions on a scalar, alone or ANDed at any depth (the tenant policy
+// and a grant's rows are each ANDs of their own, ANDed together).
 func pinned(scope relalg.Predicate) map[string]any {
 	out := map[string]any{}
-	conds := []relalg.Predicate{scope}
-	if and, ok := scope.(relalg.And); ok {
-		conds = and.Preds
-	}
-	for _, p := range conds {
-		c, ok := p.(relalg.Condition)
-		if !ok || c.Op != relalg.OpEq || c.Value == nil {
-			continue
+	var walk func(relalg.Predicate)
+	walk = func(p relalg.Predicate) {
+		switch p := p.(type) {
+		case relalg.And:
+			for _, q := range p.Preds {
+				walk(q)
+			}
+		case relalg.Condition:
+			if p.Op != relalg.OpEq || p.Value == nil {
+				return
+			}
+			if _, list := p.Value.([]any); !list {
+				out[p.Field] = p.Value
+			}
 		}
-		if _, list := c.Value.([]any); !list {
-			out[c.Field] = c.Value
-		}
 	}
+	walk(scope)
 	return out
 }
 

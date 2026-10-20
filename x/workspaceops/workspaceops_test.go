@@ -303,6 +303,44 @@ func TestCommit(t *testing.T) {
 	}
 }
 
+// failingStore fails to write while fail is set.
+type failingStore struct {
+	workspace.Store
+	fail *bool
+}
+
+func (s failingStore) PutWorkspace(
+	ctx context.Context, w workspace.Workspace, expected int64, entry workspace.LogEntry,
+) (workspace.Workspace, error) {
+	if *s.fail {
+		return workspace.Workspace{}, errors.New("store down")
+	}
+	return s.Store.PutWorkspace(ctx, w, expected, entry)
+}
+
+// A commit published whose workspace cannot then be moved onto it says so,
+// with the revision: it is published, and the workspace still builds on the
+// one before.
+func TestCommitPublishedButNotMoved(t *testing.T) {
+	e := newEnv(t)
+	st := e.write("root", role("mine"), role("base"))
+	fail := false
+	e.svc.Store = failingStore{e.svc.Store, &fail}
+	e.codec.onBuild = func() { fail = true }
+	rev, err := e.svc.Commit(e.ctx, "root", "root", CommitRequest{Version: st.Workspace.Version, ExpectedPublished: 1})
+	var notMoved *NotMovedError
+	if !errors.As(err, &notMoved) || notMoved.Published.ID != rev.ID || rev.State != revision.StatePublished {
+		t.Fatalf("commit = %+v, %v", rev, err)
+	}
+	if published, _ := e.revs.Published(e.ctx); published.ID != rev.ID {
+		t.Fatalf("published = #%d, want #%d", published.ID, rev.ID)
+	}
+	fail = false
+	if w := e.read().Workspace; w.Base != 1 {
+		t.Fatalf("the workspace moved: %+v", w)
+	}
+}
+
 // A commit the published revision moved under fails, storing no draft.
 func TestCommitBehindThePublishedRevision(t *testing.T) {
 	e := newEnv(t)
@@ -349,8 +387,10 @@ func TestWriteReconcilesRenames(t *testing.T) {
 		return after.With(note, map[string]any{"name": "renames", "count": len(renames)}), nil
 	}
 	renamed := map[string]any{"name": "lead", "grants": []any{}}
-	st, err := e.svc.WriteItems(e.ctx, "root", "root", "edit",
-		[]Write{{Ref: lead, Value: renamed, Previous: workspace.Missing, From: &analyst}}, nil)
+	st, err := e.svc.WriteItems(e.ctx, "root", "root", "edit", []Write{
+		{Ref: lead, Value: renamed, Previous: workspace.Missing, From: &analyst},
+		{Ref: analyst, Value: workspace.Missing, Previous: role("base")},
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,6 +447,20 @@ func TestRenameKeepsAChangeMadeMeanwhile(t *testing.T) {
 	}
 }
 
+// A rename written alone, without the removal of the item it renames, is
+// refused while that item is there: what its writer read of it is not known,
+// so a change made to it meanwhile would be lost.
+func TestARenameAloneIsRefused(t *testing.T) {
+	e := newEnv(t)
+	lead := workspace.Ref{Kind: "role", Key: "lead"}
+	renamed := map[string]any{"name": "lead", "description": "base", "grants": []any{}}
+	_, err := e.svc.WriteItems(e.ctx, "root", "root", "edit",
+		[]Write{{Ref: lead, Value: renamed, Previous: workspace.Missing, From: &analyst}}, nil)
+	if !errors.Is(err, ErrRenameAlone) || e.read().Workspace.Version != 0 {
+		t.Fatalf("a rename alone: %v", err)
+	}
+}
+
 // A rename written again (a retry after its answer was lost) is a write
 // alone: the item it came from is gone already, so Reconcile is told of no
 // rename, which would read the item now at the new name as replaced.
@@ -420,8 +474,10 @@ func TestARenameWrittenAgainIsAWriteAlone(t *testing.T) {
 	}
 	renamed := map[string]any{"name": "lead", "description": "base", "grants": []any{}}
 	for range 2 {
-		if _, err := e.svc.WriteItems(e.ctx, "root", "root", "edit",
-			[]Write{{Ref: lead, Value: renamed, Previous: workspace.Missing, From: &analyst}}, nil); err != nil {
+		if _, err := e.svc.WriteItems(e.ctx, "root", "root", "edit", []Write{
+			{Ref: lead, Value: renamed, Previous: workspace.Missing, From: &analyst},
+			{Ref: analyst, Value: workspace.Missing, Previous: role("base")},
+		}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -484,6 +540,7 @@ func TestRenamesChainedInOneWrite(t *testing.T) {
 	st, err := e.svc.WriteItems(e.ctx, "root", "root", "edit", []Write{
 		{Ref: lead, Value: asLead, Previous: workspace.Missing, From: &analyst},
 		{Ref: viewer, Value: asViewer, Previous: workspace.Missing, From: &lead},
+		{Ref: analyst, Value: workspace.Missing, Previous: role("base")},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)

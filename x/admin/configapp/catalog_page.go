@@ -51,8 +51,9 @@ func scopeOf(f CatalogFilter) configplan.Scope {
 }
 
 // catalogRows lists the positions of the tables matching f in the index
-// they come from, with the counts by status of those matching it but for the
-// status.
+// they come from, with the counts of those matching it but for one
+// condition: by status, all of them but the status; drifted, all of them
+// but the drift (what each filter would show).
 func (s *Scans) catalogRows(pc planContext, f CatalogFilter) ([]int32, CatalogCounts, *configplan.Index) {
 	x := s.indexOf(pc)
 	scope := scopeOf(f)
@@ -68,6 +69,14 @@ func (s *Scans) catalogRows(pc planContext, f CatalogFilter) ([]int32, CatalogCo
 	var out []int32
 	for _, i := range matched {
 		row := x.At(i)
+		status := len(scope.Status) == 0 || slices.Contains(scope.Status, row.Status)
+		drift := !scope.Drift || row.Drift()
+		if status && row.Drift() {
+			counts.Drift++
+		}
+		if !drift {
+			continue
+		}
 		counts.All++
 		switch row.Status {
 		case configplan.StatusNew:
@@ -77,10 +86,7 @@ func (s *Scans) catalogRows(pc planContext, f CatalogFilter) ([]int32, CatalogCo
 		case configplan.StatusPublished:
 			counts.Published++
 		}
-		if row.Drift() {
-			counts.Drift++
-		}
-		if (len(scope.Status) == 0 || slices.Contains(scope.Status, row.Status)) && (!scope.Drift || row.Drift()) {
+		if status {
 			out = append(out, i)
 		}
 	}

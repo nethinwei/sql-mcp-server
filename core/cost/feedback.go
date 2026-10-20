@@ -89,6 +89,10 @@ func NewAdaptiveMemoryStoreWithBounds(
 // Record implements FeedbackStore.
 func (s *MemoryStore) Record(f Feedback) {
 	s.mu.Lock()
+	if s.m == nil { // the zero value: the default bounds
+		s.windowSize, s.maxKeys, s.anomalyFactor, s.anomalyMinSamples = 32, defaultMaxFingerprintKeys, 3, 5
+		s.m = map[string][]Feedback{}
+	}
 	previous, exists := s.m[f.Template]
 	if !exists {
 		if len(s.m) >= s.maxKeys {

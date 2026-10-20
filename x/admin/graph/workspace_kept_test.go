@@ -52,7 +52,7 @@ func TestKeptWorkspaceIsTheStoredOne(t *testing.T) {
 		"fields": customers["fields"]}
 	mustPost(t, c, editMutation, &map[string]any{}, client.Var("in", map[string]any{"items": []any{
 		map[string]any{"kind": "entity", "key": "shop.clients", "value": clients, "renamedFrom": "shop.customers"},
-	}}))
+		map[string]any{"kind": "entity", "key": "shop.customers", "value": nil, "previous": customers}}}))
 	h.checkpoint(t, c)
 	got, _, err := kept.Workspace(ctx, "root")
 	if err != nil {

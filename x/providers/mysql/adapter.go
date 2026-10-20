@@ -37,21 +37,21 @@ func NewAdapter(
 	if cfg.Params, err = sqladapter.SessionParams(cfg.Params); err != nil {
 		return nil, nil, fmt.Errorf("mysql: parse dsn: %w", err)
 	}
-	caps := limits(cfg.Params, opts.Pooler, oceanBaseVariable)
+	caps := limits(cfg.Params, opts, oceanBaseVariable)
 	if _, ok := cfg.Params["sql_safe_updates"]; !ok {
 		cfg.Params["sql_safe_updates"] = "1"
 	}
-	if opts.Timeout <= 0 {
-		return nil, nil, errors.New("mysql: statement timeout must be positive")
+	if opts.Timeout < 0 {
+		return nil, nil, errors.New("mysql: statement timeout must not be negative")
 	}
 	if opts.Pooler == providerregistry.PoolerTransaction {
 		cfg.InterpolateParams = true
 	}
-	if oceanBaseVariable == "" {
-		if _, ok := cfg.Params["max_execution_time"]; !ok {
-			cfg.Params["max_execution_time"] = strconv.FormatInt(opts.NativeTimeout().Milliseconds(), 10)
-		}
-	} else if _, ok := cfg.Params[oceanBaseVariable]; !ok {
+	// Without a timeout none is set (see providerregistry.Options.WithoutTimeout).
+	if _, ok := cfg.Params["max_execution_time"]; !ok && opts.Timeout > 0 && oceanBaseVariable == "" {
+		cfg.Params["max_execution_time"] = strconv.FormatInt(opts.NativeTimeout().Milliseconds(), 10)
+	}
+	if _, ok := cfg.Params[oceanBaseVariable]; !ok && opts.Timeout > 0 && oceanBaseVariable != "" {
 		cfg.Params[oceanBaseVariable] = strconv.FormatInt(opts.NativeTimeout().Microseconds(), 10)
 	}
 	connector, err := mysqldriver.NewConnector(cfg)

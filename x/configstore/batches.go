@@ -39,25 +39,42 @@ func scanBatch(row scanner) (catalog.Batch, error) {
 	return b, nil
 }
 
-func scanItem(row scanner) (catalog.BatchItem, error) {
-	var it catalog.BatchItem
+// batchItem is an item with the batch it is of.
+type batchItem struct {
+	batch string
+	item  catalog.BatchItem
+}
+
+func scanBatchItem(row scanner) (batchItem, error) {
+	var it batchItem
 	var notBefore int64
-	if err := row.Scan(&it.Schema, &it.State, &it.Error, &it.Attempts, &notBefore); err != nil {
-		return catalog.BatchItem{}, err
+	if err := row.Scan(&it.batch, &it.item.Schema, &it.item.State, &it.item.Error, &it.item.Attempts,
+		&notBefore); err != nil {
+		return batchItem{}, err
 	}
-	it.NotBefore = fromMicros(notBefore)
+	it.item.NotBefore = fromMicros(notBefore)
 	return it, nil
 }
 
-// withItems reads the items of each batch.
+// withItems reads the items of the batches, in one query.
 func (s *SQLStore) withItems(ctx context.Context, q execer, batches []catalog.Batch) error {
-	for i := range batches {
-		items, err := queryAll(ctx, s, q, scanItem,
-			"SELECT "+itemColumns+" FROM smcp_scan_batch_items WHERE batch_id = ? ORDER BY ordinal", batches[i].ID)
-		if err != nil {
-			return fmt.Errorf("configstore: read scan batch items: %w", err)
-		}
-		batches[i].Items = kit.OrEmpty(items)
+	if len(batches) == 0 {
+		return nil
+	}
+	ids := make([]any, len(batches))
+	at := make(map[string]int, len(batches))
+	for i, b := range batches {
+		ids[i], at[b.ID] = b.ID, i
+		batches[i].Items = []catalog.BatchItem{}
+	}
+	items, err := queryAll(ctx, s, q, scanBatchItem, "SELECT batch_id, "+itemColumns+
+		" FROM smcp_scan_batch_items WHERE batch_id IN ("+placeholders(len(ids))+") ORDER BY batch_id, ordinal", ids...)
+	if err != nil {
+		return fmt.Errorf("configstore: read scan batch items: %w", err)
+	}
+	for _, it := range items {
+		b := &batches[at[it.batch]]
+		b.Items = append(b.Items, it.item)
 	}
 	return nil
 }

@@ -75,6 +75,8 @@ provider integration）。范围外的版本与 PostgreSQL 协议兼容库在连
 | PostgreSQL | DSN 设置 `statement_timeout` | `limit.timeout.write` | `enforced` | a cancel request at the request deadline (the DSN sets its own statement_timeout) |
 | PostgreSQL | `pooler: transaction` | `limit.timeout.read` | `best_effort` | statement_timeout is a session setting a transaction pooler does not keep; a cancel request at the request deadline stops the statement only if the pooler forwards it |
 | PostgreSQL | `pooler: transaction` | `limit.timeout.write` | `best_effort` | statement_timeout is a session setting a transaction pooler does not keep; a cancel request at the request deadline stops the statement only if the pooler forwards it |
+| PostgreSQL | `cost.queryTimeout: 0` | `limit.timeout.read` | `unsupported` | none: cost.queryTimeout is 0, so no statement timeout is set (the database's and the account's own defaults still apply) |
+| PostgreSQL | `cost.queryTimeout: 0` | `limit.timeout.write` | `unsupported` | none: cost.queryTimeout is 0, so no statement timeout is set (the database's and the account's own defaults still apply) |
 | MySQL | 默认 | `limit.timeout.read` | `enforced` | max_execution_time just under cost.queryTimeout (SELECT only) |
 | MySQL | 默认 | `limit.timeout.write` | `enforced` | KILL QUERY at the request deadline (max_execution_time stops SELECT only) |
 | MySQL | 默认 | `limit.unkeyedWrite` | `enforced` | sql_safe_updates = 1 |
@@ -83,6 +85,8 @@ provider integration）。范围外的版本与 PostgreSQL 协议兼容库在连
 | MySQL | `pooler: transaction` | `limit.timeout.read` | `best_effort` | max_execution_time is a session setting a transaction pooler does not keep |
 | MySQL | `pooler: transaction` | `limit.timeout.write` | `unsupported` | max_execution_time stops SELECT only, and behind a transaction pooler a statement past its deadline cannot be stopped (KILL QUERY could reach another client's session): bound writes on the database side (DBA) |
 | MySQL | `pooler: transaction` | `limit.unkeyedWrite` | `best_effort` | sql_safe_updates is a session setting a transaction pooler does not keep |
+| MySQL | `cost.queryTimeout: 0` | `limit.timeout.read` | `unsupported` | none: cost.queryTimeout is 0, so no statement timeout is set (the database's and the account's own defaults still apply) |
+| MySQL | `cost.queryTimeout: 0` | `limit.timeout.write` | `unsupported` | none: cost.queryTimeout is 0, so no statement timeout is set (the database's and the account's own defaults still apply) |
 | OceanBase | 默认 | `limit.timeout.read` | `enforced` | ob_query_timeout just under cost.queryTimeout |
 | OceanBase | 默认 | `limit.timeout.write` | `enforced` | ob_query_timeout just under cost.queryTimeout |
 | OceanBase | 默认 | `limit.unkeyedWrite` | `enforced` | sql_safe_updates = 1 |
@@ -92,6 +96,8 @@ provider integration）。范围外的版本与 PostgreSQL 协议兼容库在连
 | OceanBase | `pooler: transaction` | `limit.timeout.read` | `best_effort` | ob_query_timeout is a session setting a transaction pooler does not keep |
 | OceanBase | `pooler: transaction` | `limit.timeout.write` | `best_effort` | ob_query_timeout is a session setting a transaction pooler does not keep |
 | OceanBase | `pooler: transaction` | `limit.unkeyedWrite` | `best_effort` | sql_safe_updates is a session setting a transaction pooler does not keep |
+| OceanBase | `cost.queryTimeout: 0` | `limit.timeout.read` | `unsupported` | none: cost.queryTimeout is 0, so no statement timeout is set (the database's and the account's own defaults still apply) |
+| OceanBase | `cost.queryTimeout: 0` | `limit.timeout.write` | `unsupported` | none: cost.queryTimeout is 0, so no statement timeout is set (the database's and the account's own defaults still apply) |
 <!-- END GENERATED: provider-capabilities -->
 
 ## 关键安全差异

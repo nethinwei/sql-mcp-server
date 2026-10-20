@@ -189,16 +189,24 @@ func (a *AsyncAuditor) Record(_ context.Context, e Event) error {
 func (a *AsyncAuditor) Dropped() int64 { return a.dropped.Load() }
 
 // Close stops accepting events and waits for the flusher to drain the queue.
-func (a *AsyncAuditor) Close() {
+func (a *AsyncAuditor) Close() { _ = a.CloseContext(context.Background()) }
+
+// CloseContext stops accepting events and waits for the flusher to drain
+// the queue, or for ctx: a sink that does not return leaves the flusher
+// draining on its own, and ctx's error is returned.
+func (a *AsyncAuditor) CloseContext(ctx context.Context) error {
 	a.mu.Lock()
-	if a.closed {
-		a.mu.Unlock()
-		return
+	if !a.closed {
+		a.closed = true
+		close(a.queue)
 	}
-	a.closed = true
-	close(a.queue)
 	a.mu.Unlock()
-	<-a.done
+	select {
+	case <-a.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (a *AsyncAuditor) isClosed() bool {

@@ -503,6 +503,25 @@ func TestAllowedCallStillRunsCallGuard(t *testing.T) {
 	}
 }
 
+// An allowed template skips the estimate only: a bulk write it names is
+// still refused by the write guard, whose hints name no template.
+func TestAllowedTemplateDoesNotPassTheWriteGuard(t *testing.T) {
+	t.Parallel()
+	write := codegen.Compiled{Kind: codegen.KindWrite, SQL: "UPDATE t SET x=1 WHERE y=2"}
+	g := cost.NewGateFromCapabilities(testdialect.MySQL{}.Capabilities(), nil, cost.Threshold{
+		RequirePKForWrite: true, LegacyExactSQL: true, AllowTemplates: []string{write.SQL},
+	}, nil)
+	d, err := g.Check(context.Background(), write)
+	if err != nil || d.Allow {
+		t.Fatalf("decision = %+v, %v", d, err)
+	}
+	for _, hint := range d.Hints {
+		if strings.Contains(hint, "allowTemplates") {
+			t.Fatalf("hint %q suggests a template, which cannot admit the write", hint)
+		}
+	}
+}
+
 func TestNewGateFromCapabilitiesWriteGuardMySQL(t *testing.T) {
 	t.Parallel()
 	// MySQL has no trustworthy cost.Estimate; cost.WriteGuard must still block non-PK

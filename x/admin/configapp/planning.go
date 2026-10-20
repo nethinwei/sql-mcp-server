@@ -147,10 +147,14 @@ func denied(caps bootstrap.EntityCapabilities) func(string, string) (reason.Reas
 }
 
 func (r *Service) planInput(pc planContext, review bool) configplan.Input {
-	return configplan.Input{
+	in := configplan.Input{
 		Base: pc.base, Published: pc.published, Sources: pc.sources, Denied: denied(r.capabilities()), Review: review,
 		Missing: pc.missing.Tables, MissingFields: pc.missing.Fields, MissingRowColumns: pc.missing.RowColumns,
 	}
+	if r.Scans != nil { // the tables indexed once for the plans of pc (and its catalog pages)
+		in.Index = r.Scans.indexOf(pc)
+	}
+	return in
 }
 
 // planID identifies a plan with what it is evaluated against (the base

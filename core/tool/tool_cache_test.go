@@ -172,3 +172,40 @@ func TestWriteTargetsAreCompact(t *testing.T) {
 		t.Errorf("datasources of the database = %q", got)
 	}
 }
+
+// A read cached is counted on a hit as it was when read, by the size stored
+// with it, against the same limits.
+func TestCacheHitCountsAsTheRead(t *testing.T) {
+	t.Parallel()
+	rows := []map[string]any{{"id": int64(1), "name": "a"}, {"id": int64(2), "name": "bé"}}
+	read := &resultMeter{}
+	for _, row := range rows {
+		if err := read.add(row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := cache.NewTTLCache[[]map[string]any](time.Minute, 0)
+	key := cache.Key{SQL: "q"}
+	storeReadCache(bg, Context{Services: &Services{Cache: c}, results: read}, readInput{}, key, 0, rows)
+	got, size, ok := c.GetSized(bg, key)
+	if _, bytes := read.counted(); !ok || size != bytes || len(got) != 2 {
+		t.Fatalf("stored %d bytes, read %d", size, bytes)
+	}
+	hit := &resultMeter{}
+	if err := countCached(Context{results: hit}, got, size); err != nil {
+		t.Fatal(err)
+	}
+	if fmtCounted(hit) != fmtCounted(read) {
+		t.Fatalf("a hit counts %v, the read %v", fmtCounted(hit), fmtCounted(read))
+	}
+	for name, m := range map[string]*resultMeter{"rows": {maxRows: 1}, "bytes": {maxBytes: size - 1}} {
+		if err := countCached(Context{results: m}, got, size); err == nil {
+			t.Fatalf("a hit past the call's %s passed", name)
+		}
+	}
+}
+
+func fmtCounted(m *resultMeter) [2]int64 {
+	rows, bytes := m.counted()
+	return [2]int64{rows, bytes}
+}

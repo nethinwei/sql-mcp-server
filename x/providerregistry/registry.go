@@ -11,6 +11,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/provider"
+	"github.com/nethinwei/sql-mcp-server/core/reason"
 )
 
 // ErrUnsupportedDriver is returned when no factory is registered for a driver.
@@ -18,7 +19,8 @@ var ErrUnsupportedDriver = errors.New("providerregistry: unsupported driver")
 
 // Options configures an opened provider.
 type Options struct {
-	// Timeout is the statement timeout the provider sets natively.
+	// Timeout is the statement timeout the provider sets natively; 0 sets
+	// none (see WithoutTimeout).
 	Timeout time.Duration
 	// Pooler is "transaction" when the connection goes through a
 	// transaction-mode pooler, which keeps no session state: the provider
@@ -51,6 +53,22 @@ func (o Options) OpenContext() context.Context {
 // no timeout at all on PostgreSQL.
 func (o Options) NativeTimeout() time.Duration {
 	return max(o.Timeout-min(o.Timeout/10, time.Second), time.Millisecond)
+}
+
+// NoTimeout is the claim on the statement timeouts of a connection opened
+// without one (Timeout 0, cost.queryTimeout 0): none is set, and nothing
+// stops a statement at a deadline but the database's own defaults.
+var NoTimeout = dialect.Claim{Strength: dialect.Unsupported, Evidence: dialect.Declared,
+	Reason: reason.New(reason.NoQueryTimeout)}
+
+// WithoutTimeout is p for a connection opened with opts: without a timeout
+// (Timeout 0), its timeout claims are NoTimeout.
+func (o Options) WithoutTimeout(p dialect.Profile) dialect.Profile {
+	if o.Timeout > 0 {
+		return p
+	}
+	p[dialect.TimeoutRead], p[dialect.TimeoutWrite] = NoTimeout, NoTimeout
+	return p
 }
 
 // PoolerTransaction is the transaction-mode pooler setting.

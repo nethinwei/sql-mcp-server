@@ -63,9 +63,14 @@ func written(t *testing.T, before workspace.Snapshot, set map[workspace.Ref]stri
 func mustReconcile(t *testing.T, before, after workspace.Snapshot, renames map[workspace.Ref]workspace.Ref,
 ) workspace.Snapshot {
 	t.Helper()
+	was, _ := json.Marshal([]workspace.Snapshot{before, after})
 	out, err := reconcile(before, after, renames)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// What it edits it copies: the snapshots it was given stay as they were.
+	if now, _ := json.Marshal([]workspace.Snapshot{before, after}); string(now) != string(was) {
+		t.Fatalf("reconcile edited its input:\nwas %s\nnow %s", was, now)
 	}
 	return out
 }

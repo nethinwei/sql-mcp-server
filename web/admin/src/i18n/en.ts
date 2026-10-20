@@ -498,6 +498,7 @@ const en: typeof zh = {
     noPublish: 'You may save drafts but not publish.', saveDraft: 'Save draft', saveAndPublish: 'Save & publish',
     savedDraft: 'Saved draft #{id}; publish it from the revision history',
     published: 'Published #{id}; the server reloads it automatically', publishedRestart: 'Published #{id}; it fully applies after a restart',
+    publishedNotMoved: 'Published #{id}, but the workspace was not moved onto it: update the workspace',
     confirmRestartTitle: 'These changes need a server restart',
     confirmRestartBody: '{list}. Running instances keep the old configuration and are marked stale until restarted.',
     publishAnyway: 'Publish anyway',

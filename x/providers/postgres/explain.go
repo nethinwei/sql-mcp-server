@@ -14,6 +14,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/x/providers/sqladapter"
 )
 
 // ErrAnalyzeRequiresReadOnly protects the provider boundary from executing
@@ -22,28 +23,21 @@ var ErrAnalyzeRequiresReadOnly = errors.New("postgres: EXPLAIN ANALYZE requires 
 
 // pgExplainer estimates a plan by running EXPLAIN (FORMAT JSON).
 type pgExplainer struct {
-	db *sql.DB
-	// classify classifies the errors of EXPLAIN as those of statements, so
-	// the gate tells a schema change from a plan it could not get.
-	classify func(error) error
+	pool *sqladapter.Pool
 }
 
 // Explain implements cost.Explainer. It wraps the query in EXPLAIN and parses
 // the JSON plan, walking the plan tree to detect sorts, temporary/hash nodes,
 // and partition pruning. Statistics freshness is probed for the scanned
-// table (see statsFresh); VERBOSE names its schema. Any parse failure
-// degrades to ScanUnknown.
+// table (see statsFresh); VERBOSE names its schema. A plan that does not
+// parse degrades to ScanUnknown; one that cannot be read is an error,
+// classified as the statement's (see sqladapter.Pool.Explain).
 func (e pgExplainer) Explain(ctx context.Context, query string, args []any) (cost.Plan, error) {
-	rows, err := e.db.QueryContext(ctx, "EXPLAIN (FORMAT JSON, VERBOSE) "+query, args...)
+	raw, err := e.pool.Explain(ctx, "EXPLAIN (FORMAT JSON, VERBOSE) "+query, args, "")
 	if err != nil {
-		return cost.Plan{}, e.classify(err)
+		return cost.Plan{}, err
 	}
-	defer func() { _ = rows.Close() }()
-	if !rows.Next() {
-		return cost.Plan{ScanType: cost.ScanUnknown}, nil
-	}
-	var raw string
-	if err := rows.Scan(&raw); err != nil {
+	if raw == "" {
 		return cost.Plan{ScanType: cost.ScanUnknown}, nil
 	}
 	p, root, err := parsePGExplain([]byte(raw))
@@ -99,7 +93,7 @@ func (e pgExplainer) tableRows(ctx context.Context, relations []string) (int64, 
 	slices.Sort(relations)
 	relations = slices.Compact(relations)
 	var found, rows int64
-	if err := e.db.QueryRowContext(ctx, tableRowsSQL, relations).Scan(&found, &rows); err != nil ||
+	if err := e.pool.DB().QueryRowContext(ctx, tableRowsSQL, relations).Scan(&found, &rows); err != nil ||
 		found != int64(len(relations)) {
 		return 0, false
 	}
@@ -126,7 +120,7 @@ const smallTablePages = 8
 // fresh (see statsFreshSQL).
 func (e pgExplainer) statsFresh(ctx context.Context, schema, rel string) bool {
 	var fresh sql.NullBool
-	if err := e.db.QueryRowContext(ctx, statsFreshSQL, rel, schema, smallTablePages).Scan(&fresh); err != nil ||
+	if err := e.pool.DB().QueryRowContext(ctx, statsFreshSQL, rel, schema, smallTablePages).Scan(&fresh); err != nil ||
 		!fresh.Valid {
 		// A probe that fails or finds no such table (a view, a foreign
 		// table) is permissive rather than blocking queries.

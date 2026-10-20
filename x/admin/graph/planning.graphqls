@@ -88,8 +88,10 @@ input WorkspaceItemInput {
   "The item as its writer read it; null: it was absent."
   previous: JSON
   """
-  For an entity or a role renamed or moved: the key it had. The item it
-  replaces is removed, and references to it follow (see docs/design/editing.md).
+  For an entity or a role renamed or moved: the key it had. References to
+  it follow (see docs/design/editing.md). The same input removes that item
+  (value null, previous as read), unless it is gone already: a change made
+  to it meanwhile then conflicts instead of being lost.
   """
   renamedFrom: String
 }
@@ -227,7 +229,10 @@ type CatalogPage {
   "Tables matching the filter."
   total: Int!
   tables: [CatalogRow!]!
-  "Tables by status, matching every condition but the status."
+  """
+  Tables by status, matching every condition but the status; drift counts
+  those matching every condition but the drift.
+  """
   counts: CatalogCounts!
   coverage: [CatalogCoverage!]!
 }

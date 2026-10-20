@@ -12,6 +12,19 @@ const maxAuditInputBytes = 4096
 // RedactInput removes values for configured sensitive fields and hashes
 // transaction handles before tool input is queued for persistence.
 func RedactInput(input json.RawMessage, sensitive map[string]bool) json.RawMessage {
+	if len(sensitive) == 0 && !bytes.Contains(input, []byte(`"transaction"`)) &&
+		!bytes.Contains(input, []byte(`\u`)) { // no key spelled with escapes either
+		// Nothing to redact: the input as it is, compacted, without decoding
+		// it (every call is audited, some with thousands of values).
+		var out bytes.Buffer
+		if err := json.Compact(&out, input); err != nil {
+			return json.RawMessage(`{"redacted":true}`)
+		}
+		if out.Len() > maxAuditInputBytes {
+			return json.RawMessage(`{"redacted":true,"reason":"input_too_large"}`)
+		}
+		return out.Bytes()
+	}
 	dec := json.NewDecoder(bytes.NewReader(input))
 	dec.UseNumber()
 	var value any

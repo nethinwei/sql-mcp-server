@@ -34,13 +34,7 @@ func prepareInsert(ctx context.Context, tc Context, in createInput) (statement, 
 	}
 	res, tc := plan.res, plan.tc
 	keys := sortedKeys(in.Values)
-	if err := validateFields(res, keys...); err != nil {
-		return statement{}, nil, err
-	}
-	if err := validateWritable(res, keys...); err != nil {
-		return statement{}, nil, err
-	}
-	if err := distinctColumns(res.Entity, keys); err != nil {
+	if err := (fieldUses{written: keys}).check(res); err != nil {
 		return statement{}, nil, err
 	}
 	g, err := authorizeRequest(ctx, tc, rbac.Request{
@@ -202,16 +196,7 @@ func checkAssignments(e entity.Entity, set map[string]any) error {
 }
 
 func validateUpdateFields(res entity.Resolved, in updateInput) error {
-	if err := validateFields(res, append(filterFields(in.Filter), sortedKeys(in.Set)...)...); err != nil {
-		return err
-	}
-	if err := validateUnmaskedFields(res, filterFields(in.Filter)...); err != nil {
-		return err
-	}
-	if err := distinctColumns(res.Entity, sortedKeys(in.Set)); err != nil {
-		return err
-	}
-	return validateWritable(res, sortedKeys(in.Set)...)
+	return fieldUses{compared: filterFields(in.Filter), written: sortedKeys(in.Set)}.check(res)
 }
 
 func prepareDelete(ctx context.Context, tc Context, in deleteInput) (statement, error) {
@@ -219,10 +204,7 @@ func prepareDelete(ctx context.Context, tc Context, in deleteInput) (statement, 
 	if err != nil {
 		return statement{}, err
 	}
-	if err := validateFields(plan.res, filterFields(in.Filter)...); err != nil {
-		return statement{}, err
-	}
-	if err := validateUnmaskedFields(plan.res, filterFields(in.Filter)...); err != nil {
+	if err := (fieldUses{compared: filterFields(in.Filter)}).check(plan.res); err != nil {
 		return statement{}, err
 	}
 	g, err := authorizeRequest(ctx, plan.tc, rbac.Request{

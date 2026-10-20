@@ -392,8 +392,8 @@
           "default": true
         },
         "requirePKForWrite": {
-          "description": "Writes must filter by primary key; not turned off by cost.enabled.",
-          "x-description-zh-CN": "写操作必须带主键条件；不随 cost.enabled 关闭。",
+          "description": "Writes must filter by primary key; not turned off by cost.enabled, nor bypassed by allowTemplates.",
+          "x-description-zh-CN": "写操作必须带主键条件；不随 cost.enabled 关闭，allowTemplates 也不能放行。",
           "type": "boolean",
           "default": true
         },
@@ -409,8 +409,8 @@
           "type": "boolean"
         },
         "queryTimeout": {
-          "description": "Query timeout, 0 (none) or at least 100ms; the database statement timeout is set a tenth shorter (at most a second), so the database stops the statement first.",
-          "x-description-zh-CN": "查询超时，0（不限）或不小于 100ms；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。",
+          "description": "Query timeout, 0 (none) or at least 100ms; the database statement timeout is set a tenth shorter (at most a second), so the database stops the statement first. At 0 calls have no deadline and no database statement timeout is set (the database's and the account's own defaults still apply); requireNativeLimits then refuses the configuration.",
+          "x-description-zh-CN": "查询超时，0（不限）或不小于 100ms；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。0 时请求没有时限，也不下发数据库语句超时（数据库与账号自身的默认值仍然生效），开启 requireNativeLimits 时拒绝该配置。",
           "type": "string",
           "x-format": "duration",
           "x-minimum": "0",

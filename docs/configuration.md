@@ -288,10 +288,10 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `rejectFullScan` | 布尔 | `true` |  | 拒绝全表扫描（表本身不超过 fullScanMaxRows 行的小表除外）。 |
 | `fullScanMaxRows` | 整数 | `1000` | ≥ 0 | 被全表扫描的表本身不超过此行数时（配置表、维表，包括被连接的），按索引扫描评分、不被 rejectFullScan 拒绝。按表的规模判断而不是计划的输出行数（PostgreSQL 取 pg_class 统计、MySQL 取 rows_examined_per_scan、OceanBase 取 EXPLAIN EXTENDED 的 table_rows），任何一张全表扫描的表得不到行数时都不豁免；0 表示全表扫描一律按全表扫描处理。 |
 | `whitelistPKPoint` | 布尔 | `true` |  | 主键点查询跳过估算（仍受结果上限约束）。 |
-| `requirePKForWrite` | 布尔 | `true` |  | 写操作必须带主键条件；不随 cost.enabled 关闭。 |
+| `requirePKForWrite` | 布尔 | `true` |  | 写操作必须带主键条件；不随 cost.enabled 关闭，allowTemplates 也不能放行。 |
 | `requireKnownScan` | 布尔 | `true` |  | 无法判断扫描方式时拒绝；MySQL/OceanBase 的 EXPLAIN 失败即拒绝。 |
 | `requireFreshStats` | 布尔 |  |  | 统计信息过旧时拒绝（未开启时只在评分中扣 15 分）。PostgreSQL 中过旧指被扫描的表既没被 ANALYZE 也没被 autovacuum 分析过，且大于 64 KiB；MySQL、OceanBase 不判断。 |
-| `queryTimeout` | 时长 | `"30s"` | ≥ 0 | 查询超时，0（不限）或不小于 100ms；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。 |
+| `queryTimeout` | 时长 | `"30s"` | ≥ 0 | 查询超时，0（不限）或不小于 100ms；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。0 时请求没有时限，也不下发数据库语句超时（数据库与账号自身的默认值仍然生效），开启 requireNativeLimits 时拒绝该配置。 |
 | `requireNativeLimits` | 布尔 |  |  | 严格模式：数据源的连接无法在数据库侧把语句限制在 queryTimeout 内（能力不是 enforced）时，拒绝加载该配置，控制台校验也报错；关闭时只告警。 |
 | `allowTemplates` | 字符串列表 |  |  | 受治理工具中跳过估算的 SQL 模板：推荐 fp:v4:<sha256> 指纹；多数据源下精确 SQL 写成 datasource:SQL。不绕过安全检查；不作用于 execute_sql（其估算见 cost.sqlEscape）。 |
 | `rejectTemplates` | 字符串列表 |  |  | 受治理工具中总是拒绝的 SQL 模板，写法同 allowTemplates。按精确文本或指纹匹配，不是 SQL 语义级黑名单；不作用于 execute_sql（逃生通道的边界是其连接账号的权限）。 |

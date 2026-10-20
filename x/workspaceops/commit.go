@@ -2,6 +2,7 @@ package workspaceops
 
 import (
 	"context"
+	"fmt"
 	"slices"
 
 	"github.com/nethinwei/sql-mcp-server/core/revision"
@@ -128,6 +129,21 @@ func (s Service) discard(ctx context.Context, id int64, by string) {
 	}
 }
 
+// NotMovedError is a commit published whose workspace could not then be
+// moved onto the revision: the revision serves, and the workspace still
+// builds on the one before, with its notes and drafts, until it is updated.
+type NotMovedError struct {
+	Published revision.Revision
+	Err       error
+}
+
+func (e *NotMovedError) Error() string {
+	return fmt.Sprintf("workspace: published as #%d, but the workspace was not moved onto it (update it): %v",
+		e.Published.ID, e.Err)
+}
+
+func (e *NotMovedError) Unwrap() error { return e.Err }
+
 // CommitRequest commits a workspace as it was read.
 type CommitRequest struct {
 	// Version is the workspace version reviewed; another one is
@@ -145,7 +161,8 @@ type CommitRequest struct {
 // *revisionops.ConflictError; the revision stored is discarded). The
 // workspace then builds on the new revision, keeping what was written to
 // it while committing; its notes are dropped and the drafts it saved or
-// took in, published with it, are discarded.
+// took in, published with it, are discarded. A workspace that cannot be
+// moved onto it is a *NotMovedError, with the revision published.
 func (s Service) Commit(ctx context.Context, username, by string, req CommitRequest) (revision.Revision, error) {
 	st, ok, err := s.Read(ctx, username)
 	if err != nil || !ok {
@@ -180,7 +197,7 @@ func (s Service) Commit(ctx context.Context, username, by string, req CommitRequ
 	}
 	committed := s.Schema.Changes(st.Base, snap.Items)
 	if err := s.moveAfterCommit(ctx, username, by, snap, published, committed); err != nil {
-		return published, err
+		return published, &NotMovedError{Published: published, Err: err}
 	}
 	for _, id := range append(slices.Clone(snap.Taken), snap.Checkpoint) {
 		if id != 0 && id != published.ID {

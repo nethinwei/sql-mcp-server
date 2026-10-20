@@ -85,8 +85,8 @@ MCP 工具是否在 tools/list 中还取决于全局 `tools` 开关；custom pro
 ## 写安全与字段隔离
 
 - **I14** `requirePKForWrite` 开启时，非完整主键点 update/delete 必须被
-  `WriteGuard` 拒绝，除非精确命中 allow template；无任何有效谓词的写始终由
-  工具层拒绝。
+  `WriteGuard` 拒绝；它属于 Enforcement 阶段，`allowTemplates` 不能使其放行
+  （模板只跳过 Estimate）。无任何有效谓词的写始终由工具层拒绝。
 - **I15** 的字段可见性检查同时覆盖读过滤和写目标，避免通过隐藏字段推断数据。
 - **I30** 写后的行仍在调用方的行范围内（WITH CHECK）：create 插入的行、update
   修改后的行都必须满足 `授权项行范围的 OR AND tenantPolicy`。create 时调用方未提供、

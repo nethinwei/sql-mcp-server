@@ -85,8 +85,10 @@ func (m *model) rename() {
 		return
 	}
 	m.log = append(m.log, fmt.Sprintf("rename %s → %s", from.Key, to.Key))
-	st, err := m.svc.WriteItems(m.ctx, "root", "root", "edit", []Write{{Ref: to,
-		Value: roleItem(to.Key, "renamed"), Previous: workspace.Missing, From: &from}}, nil)
+	st, err := m.svc.WriteItems(m.ctx, "root", "root", "edit", []Write{
+		{Ref: to, Value: roleItem(to.Key, "renamed"), Previous: workspace.Missing, From: &from},
+		{Ref: from, Value: workspace.Missing, Previous: items.Get(from)},
+	}, nil)
 	if err != nil {
 		m.fail("rename: %v", err)
 	}

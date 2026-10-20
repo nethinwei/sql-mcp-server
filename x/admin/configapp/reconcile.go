@@ -61,7 +61,7 @@ func reconcile(before, after workspace.Snapshot, renames map[workspace.Ref]works
 		if !ok {
 			continue
 		}
-		next := cloneJSON(v).(map[string]any)
+		next := editable(it.Kind, v)
 		if r.item(it.Ref, next) {
 			changed[it.Ref] = next
 		}
@@ -374,7 +374,7 @@ func (r reconciliation) pruneFields(out workspace.Snapshot) workspace.Snapshot {
 		if !ok {
 			continue
 		}
-		next := cloneJSON(v).(map[string]any)
+		next := editable(it.Kind, v)
 		if pruneGrants(idx, next, removed) {
 			pruned[it.Ref] = next
 		}
@@ -466,6 +466,28 @@ func text(v any, key string) string {
 
 // cloneJSON deep-copies decoded JSON, so editing the copy leaves the
 // snapshot it came from as it was.
+// edited are the keys of an item, by kind, whose values reconciling edits
+// in place (it sets others, as an entity's source, on the item itself).
+var edited = map[string][]string{
+	ItemRole:     {"grants"},
+	ItemUser:     {"grants", "roles"},
+	ItemEntity:   {"relationships", "affects", "legacyAccess"},
+	ItemSettings: {"budget"},
+}
+
+// editable is a copy of v, an item of kind, that reconciling may edit
+// without writing into v: the values it edits are copied deep, the others
+// (an entity's fields, the bulk of the workspace) shared.
+func editable(kind string, v map[string]any) map[string]any {
+	out := maps.Clone(v)
+	for _, key := range edited[kind] {
+		if val, ok := out[key]; ok {
+			out[key] = cloneJSON(val)
+		}
+	}
+	return out
+}
+
 func cloneJSON(v any) any {
 	switch x := v.(type) {
 	case map[string]any:

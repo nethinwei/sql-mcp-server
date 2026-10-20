@@ -136,6 +136,10 @@ func transactionPermissions(ctx context.Context, tc Context, datasource string) 
 			continue
 		}
 		for _, action := range entity.ActionsFor(e.Kind) {
+			reads := action == entity.ActionRead || action == entity.ActionAggregate
+			if reads && canRead || !reads && canWrite {
+				continue // known already: a datasource has thousands of entities
+			}
 			dec, err := authorize(ctx, tc, rbac.Request{
 				Role: tc.Role, Subject: tc.Subject, Entity: e.Name, Action: action,
 			})
@@ -145,12 +149,7 @@ func transactionPermissions(ctx context.Context, tc Context, datasource string) 
 			if !dec.Allowed {
 				continue
 			}
-			switch action {
-			case entity.ActionRead, entity.ActionAggregate:
-				canRead = true
-			default:
-				canWrite = true
-			}
+			canRead, canWrite = canRead || reads, canWrite || !reads
 			if canRead && canWrite {
 				return true, true, nil
 			}

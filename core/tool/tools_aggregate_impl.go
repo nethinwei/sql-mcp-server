@@ -61,10 +61,7 @@ func prepareAggregate(ctx context.Context, tc Context, in aggregateInput) (aggre
 		return aggregatePlan{}, err
 	}
 	aggFields = append(aggFields, locals...)
-	if err := validateFields(res, aggFields...); err != nil {
-		return aggregatePlan{}, err
-	}
-	if err := validateUnmaskedFields(res, aggFields...); err != nil {
+	if err := (fieldUses{compared: aggFields}).check(res); err != nil {
 		return aggregatePlan{}, err
 	}
 	g, err := authorizeRequest(ctx, tc, rbac.Request{

@@ -64,7 +64,7 @@ func fieldReferencesOf(s Sections, id string) []FieldReference {
 		c.grants("user", u.Name, u.Grants)
 	}
 	for i, e := range s.Entities {
-		c.entity(entities[i].ID(), e)
+		c.entity(entities[i], e)
 	}
 	slices.SortStableFunc(c.out, func(a, b FieldReference) int {
 		return slices.Index(fieldReferenceOrder, a.Kind) - slices.Index(fieldReferenceOrder, b.Kind)
@@ -104,52 +104,22 @@ func (c *fieldRefs) grants(kind, name string, grants []GrantItem) {
 	}
 }
 
-// entity are the references the entity with ID eid makes.
-func (c *fieldRefs) entity(eid string, e EntityItem) {
-	for _, rel := range e.Relationships {
-		joinOn, _ := rel.JoinOn.(map[string]any)
-		target, _ := c.index.IDOf(rel.Target)
-		for _, local := range kit.SortedKeys(joinOn) {
-			c.add(eid, local, "relationship", eid, "")
-			if field, ok := joinOn[local].(string); ok {
-				c.add(target, field, "relationship", eid, "")
-			}
+// entity are the references the entity named as named makes (see
+// configrefs.FieldUses); of one that does not read as an entity (a value
+// edited into a wrong shape), its keys only.
+func (c *fieldRefs) entity(named config.EntityConfig, e EntityItem) {
+	eid := named.ID()
+	if spec, err := e.spec(); err == nil {
+		named = config.EntityOf(spec)
+	} else {
+		named.PrimaryKey, named.UniqueKeys = e.PrimaryKey, e.UniqueKeys
+	}
+	configrefs.FieldUses(named, c.index.IDOf, func(u configrefs.FieldUse) {
+		switch u.Kind {
+		case configrefs.UseFieldACL, configrefs.UseRowPolicy:
+			c.add(u.Entity, u.Field, "legacyAccess", eid, "")
+		default: // relationship, primaryKey, uniqueKey, tenantPolicy
+			c.add(u.Entity, u.Field, u.Kind, eid, "")
 		}
-	}
-	for _, f := range e.PrimaryKey {
-		c.add(eid, f, "primaryKey", eid, "")
-	}
-	for _, k := range e.UniqueKeys {
-		for _, f := range k {
-			c.add(eid, f, "uniqueKey", eid, "")
-		}
-	}
-	for _, f := range configrefs.FilterFields(NormalizeJSON(e.TenantPolicy)) {
-		c.add(eid, f, "tenantPolicy", eid, "")
-	}
-	c.legacyAccess(eid, e.LegacyAccess)
-}
-
-// legacyAccess are the references of an entity's entity-level access: the
-// field lists of its fieldACL and the filters of its rowPolicies.
-func (c *fieldRefs) legacyAccess(eid string, access any) {
-	legacy, _ := access.(map[string]any)
-	acl, _ := legacy["fieldACL"].(map[string]any)
-	for _, role := range kit.SortedKeys(acl) {
-		lists, _ := acl[role].(map[string]any)
-		for _, list := range []string{"read", "write"} {
-			fields, _ := lists[list].([]any)
-			for _, f := range fields {
-				if field, ok := f.(string); ok {
-					c.add(eid, field, "legacyAccess", eid, "")
-				}
-			}
-		}
-	}
-	policies, _ := legacy["rowPolicies"].(map[string]any)
-	for _, role := range kit.SortedKeys(policies) {
-		for _, f := range configrefs.FilterFields(NormalizeJSON(policies[role])) {
-			c.add(eid, f, "legacyAccess", eid, "")
-		}
-	}
+	})
 }

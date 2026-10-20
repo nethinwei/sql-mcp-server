@@ -470,8 +470,8 @@ cost.whitelistPKPoint:
   zh-CN: 主键点查询跳过估算（仍受结果上限约束）。
   en: Primary-key point reads skip estimation (result caps still apply).
 cost.requirePKForWrite:
-  zh-CN: 写操作必须带主键条件；不随 cost.enabled 关闭。
-  en: Writes must filter by primary key; not turned off by cost.enabled.
+  zh-CN: 写操作必须带主键条件；不随 cost.enabled 关闭，allowTemplates 也不能放行。
+  en: Writes must filter by primary key; not turned off by cost.enabled, nor bypassed by allowTemplates.
 cost.requireKnownScan:
   zh-CN: 无法判断扫描方式时拒绝；MySQL/OceanBase 的 EXPLAIN 失败即拒绝。
   en: Reject when the scan type is unknown; on MySQL/OceanBase a failed EXPLAIN rejects.
@@ -479,8 +479,8 @@ cost.requireFreshStats:
   zh-CN: 统计信息过旧时拒绝（未开启时只在评分中扣 15 分）。PostgreSQL 中过旧指被扫描的表既没被 ANALYZE 也没被 autovacuum 分析过，且大于 64 KiB；MySQL、OceanBase 不判断。
   en: Reject when table statistics are stale (otherwise they only lower the score by 15). On PostgreSQL a scanned table is stale when neither ANALYZE nor autovacuum analyzed it and it is larger than 64 KiB; MySQL and OceanBase do not tell.
 cost.queryTimeout:
-  zh-CN: 查询超时，0（不限）或不小于 100ms；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。
-  en: Query timeout, 0 (none) or at least 100ms; the database statement timeout is set a tenth shorter (at most a second), so the database stops the statement first.
+  zh-CN: 查询超时，0（不限）或不小于 100ms；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。0 时请求没有时限，也不下发数据库语句超时（数据库与账号自身的默认值仍然生效），开启 requireNativeLimits 时拒绝该配置。
+  en: Query timeout, 0 (none) or at least 100ms; the database statement timeout is set a tenth shorter (at most a second), so the database stops the statement first. At 0 calls have no deadline and no database statement timeout is set (the database's and the account's own defaults still apply); requireNativeLimits then refuses the configuration.
 cost.requireNativeLimits:
   zh-CN: 严格模式：数据源的连接无法在数据库侧把语句限制在 queryTimeout 内（能力不是 enforced）时，拒绝加载该配置，控制台校验也报错；关闭时只告警。
   en: Strict mode. Refuse the configuration when a datasource's connection cannot stop statements at queryTimeout on the database side (the capability is not enforced), and fail its validation in the console; off, it only warns.

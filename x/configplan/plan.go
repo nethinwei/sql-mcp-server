@@ -133,6 +133,8 @@ func (p *Plan) Check() error {
 			errs = append(errs, fmt.Errorf("plan: unknown status %q", s))
 		}
 	}
+	// Normalized in copies: the plan may share its rules with the caller's.
+	p.Grants = slices.Clone(p.Grants)
 	for i := range p.Grants {
 		errs = append(errs, p.Grants[i].check())
 	}
@@ -159,6 +161,7 @@ func (g *GrantRule) check() error {
 	if len(g.Actions) == 0 {
 		return fmt.Errorf("plan: grant to %s needs actions", g.Principal)
 	}
+	g.Actions = slices.Clone(g.Actions)
 	for i, a := range g.Actions {
 		g.Actions[i] = strings.ToLower(a)
 		if !slices.Contains(grantable, g.Actions[i]) {

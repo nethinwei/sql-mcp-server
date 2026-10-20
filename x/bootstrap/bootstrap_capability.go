@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -45,6 +46,10 @@ func (a *App) assessInBackground(cfg *config.Config, connections Connections, en
 		defer cancel()
 		// A panic leaves the capabilities unknown; the bus logs it.
 		capabilities := assessCapabilities(ctx, b.Lane(bus.Background), cfg, connections, entities)
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			slog.Warn("the connections' privileges were not assessed in time: they stay unknown until the next reload",
+				"timeout", assessTimeout.String())
+		}
 		if ctx.Err() != nil {
 			return // closed, or timed out: the capabilities stay unknown
 		}

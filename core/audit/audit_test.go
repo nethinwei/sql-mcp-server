@@ -3,9 +3,11 @@ package audit
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -224,5 +226,30 @@ func TestAsyncAuditorRecordRacesClose(t *testing.T) {
 		}
 		a.Close()
 		wg.Wait()
+	}
+}
+
+// A sink that does not return bounds closing by the context, not forever;
+// once it returns, the queue drains.
+func TestAsyncAuditorCloseContextBoundsAStuckSink(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	var written atomic.Int64
+	a := NewAsyncAuditorWithClose(func(Event) error {
+		<-release
+		written.Add(1)
+		return nil
+	}, nil, 4)
+	for range 2 {
+		_ = a.Record(context.Background(), Event{Tool: "x"})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := a.CloseContext(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("close = %v", err)
+	}
+	close(release)
+	if err := a.CloseContext(context.Background()); err != nil || written.Load() != 2 {
+		t.Fatalf("close = %v, %d written", err, written.Load())
 	}
 }

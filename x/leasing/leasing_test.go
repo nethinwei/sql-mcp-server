@@ -333,3 +333,36 @@ func TestBusCloseStopsBatches(t *testing.T) {
 		t.Fatalf("closing the bus finished the batch: %+v", got)
 	}
 }
+
+// hangingMoves never answers a move until its context ends.
+type hangingMoves struct {
+	catalog.BatchStore
+	entered chan struct{}
+}
+
+func (h hangingMoves) MoveItem(ctx context.Context, _, _ string, _ time.Time, _ catalog.BatchItem, _ ...string,
+) (bool, error) {
+	select {
+	case h.entered <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return false, ctx.Err()
+}
+
+// A store that hangs does not hang closing: the writes of progress end with
+// the process.
+func TestCloseDoesNotWaitForAHangingStore(t *testing.T) {
+	t.Parallel()
+	store := hangingMoves{BatchStore: catalog.NewMemoryStore(), entered: make(chan struct{}, 1)}
+	r := New(store, quick)
+	start(t, r, succeeds, "a")
+	<-store.entered
+	closed := make(chan struct{})
+	go func() { r.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("closing waited for a store that hangs")
+	}
+}

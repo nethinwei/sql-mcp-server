@@ -68,16 +68,17 @@ func (s *Shared) unwarned(warnings string) bool {
 
 // rateLimits are the rate-limit settings, comparable.
 type rateLimits struct {
-	config.RateLimitConfig // Enabled and MaxResultMemory cleared
+	config.RateLimitConfig // Enabled, MaxResultMemory and the pool's lifetimes cleared
 	enabled                bool
 }
 
-// rateLimitsOf are cfg's rate limits, but for the result memory bound: it is
-// applied on its own (Shared.apply), and changing it must not reset the
+// rateLimitsOf are cfg's rate limits, but for the result memory bound and
+// the lifetimes of pooled connections: they are applied on their own
+// (Shared.apply, configurePool), and changing them must not reset the
 // connections' health.
 func rateLimitsOf(cfg *config.Config) rateLimits {
 	out := rateLimits{RateLimitConfig: cfg.RateLimit, enabled: cfg.RateLimit.EnabledOrDefault()}
-	out.Enabled, out.MaxResultMemory = nil, 0
+	out.Enabled, out.MaxResultMemory, out.ConnMaxIdleTime, out.ConnMaxLifetime = nil, 0, 0, 0
 	return out
 }
 
