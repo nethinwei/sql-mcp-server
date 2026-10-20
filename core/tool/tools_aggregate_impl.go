@@ -15,6 +15,7 @@ import (
 func runAggregate(ctx context.Context, tc Context, in aggregateInput) (Result, error) {
 	ctx, tc, end := beginCall(ctx, tc, true, in.Transaction)
 	defer end()
+	capped := capLimit(tc, &in.Limit)
 	plan, err := prepareAggregate(ctx, tc, in)
 	if err != nil {
 		return Result{}, err
@@ -31,6 +32,7 @@ func runAggregate(ctx context.Context, tc Context, in aggregateInput) (Result, e
 		Content:              got.rows,
 		ReturnedRows:         int64(len(got.rows)),
 		EstimatedScannedRows: st.sql.estimatedRows(),
+		Truncated:            capped && int64(len(got.rows)) >= in.Limit, // groups may be left past the cap
 	}, nil
 }
 

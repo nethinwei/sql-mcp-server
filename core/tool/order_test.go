@@ -100,9 +100,34 @@ func TestReadLimitPastMaxRowsPages(t *testing.T) {
 		if sql := db.Queries[len(db.Queries)-1].Query; !strings.HasSuffix(sql, " LIMIT 2") {
 			t.Errorf("%s: sql = %s", limit, sql)
 		}
-		if res.NextCursor == nil {
-			t.Errorf("%s: a page of MaxRows rows has no next cursor", limit)
+		if res.NextCursor == nil || res.Truncated {
+			t.Errorf("%s: a page of MaxRows rows: next cursor %v, truncated %v", limit, res.NextCursor, res.Truncated)
 		}
+	}
+	// Without an order to page by, MaxRows rows of more asked for are
+	// reported cut; as many as asked for, or fewer than MaxRows, are not.
+	for input, want := range map[string]bool{
+		`{"entity":"orders","fields":["amount"]}`:           true,
+		`{"entity":"orders","fields":["amount"],"limit":5}`: true,
+		`{"entity":"orders","fields":["amount"],"limit":2}`: false,
+		`{"entity":"orders","fields":["amount"],"limit":1}`: false,
+	} {
+		res, err := readJSON(t, tc, input)
+		if err != nil {
+			t.Fatal(input, err)
+		}
+		if res.Truncated != want {
+			t.Errorf("%s: truncated = %v, want %v", input, res.Truncated, want)
+		}
+	}
+	// So are groups of an aggregate.
+	tc.DB = &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return storetest.NewFakeRows([]string{"region", "count"}, []any{"CN", int64(1)}, []any{"US", int64(2)}), nil
+	}}
+	res, err := AggregateTool{}.Run(context.Background(), json.RawMessage(`{"entity":"orders","groupBy":["region"],
+		"aggregates":[{"func":"count"}]}`), tc)
+	if err != nil || !res.Truncated {
+		t.Fatalf("aggregate of MaxRows groups: truncated %v, %v", res.Truncated, err)
 	}
 }
 
@@ -198,6 +223,8 @@ func TestFilterGroups(t *testing.T) {
 		`[{"any":[{"field":"amount","op":"eq","value":1},{"all":[{"field":"amount","op":"eq","value":2},` +
 			`{"field":"amount","op":"eq","value":3}]}]}]`,
 		`[{"any":[{"field":"phone","op":"eq","value":"1"}]}]`,
+		`[{"field":"region","op":"eq","value":null}]`,
+		`[{"not":{"field":"region","op":"ne","value":null}}]`,
 	} {
 		if _, err := readJSON(t, tc, `{"entity":"orders","filter":`+filter+`}`); !errors.Is(err, ErrInvalidInput) {
 			t.Errorf("%s: err = %v", filter, err)

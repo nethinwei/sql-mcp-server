@@ -465,3 +465,32 @@ func TestCompileRefusesUnboundedWrites(t *testing.T) {
 		}
 	}
 }
+
+// A read chain renders as one SELECT only in the order SELECT applies its
+// clauses: one out of order would render as another query, and is refused.
+func TestCompileRefusesAChainOutOfOrder(t *testing.T) {
+	t.Parallel()
+	r := Renderer{Dialect: testdialect.Postgres{}}
+	scan := relalg.Scan{Relation: relalg.RelationRef{Name: "users"}}
+	where := relalg.Condition{Field: "id", Op: relalg.OpGt, Value: 1}
+	agg := relalg.Aggregate{Input: scan, GroupBy: []string{"dept"},
+		Aggregates: []relalg.AggCall{{Func: relalg.AggCount}}}
+	for name, expr := range map[string]relalg.Expr{
+		"a filter over a limit": relalg.Select{Input: relalg.Limit{Input: scan, Count: 5}, Predicate: where},
+		"two limits":            relalg.Limit{Input: relalg.Limit{Input: scan, Count: 5}, Count: 3},
+		"a projection over an aggregate": relalg.Project{Input: agg,
+			Items: []relalg.ProjectItem{{Field: "dept"}}},
+		"an order over a limit": relalg.Sort{Input: relalg.Limit{Input: scan, Count: 5},
+			OrderBy: []relalg.OrderTerm{{Field: "id", Dir: "asc"}}},
+	} {
+		if _, err := r.Compile(expr); !errors.Is(err, ErrUnsupportedExpr) {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+	ok := relalg.Limit{Input: relalg.Distinct{Input: relalg.Project{Input: relalg.Sort{
+		Input:   relalg.Select{Input: relalg.Select{Input: scan, Predicate: where}, Predicate: where},
+		OrderBy: []relalg.OrderTerm{{Field: "id", Dir: "asc"}}}, Items: []relalg.ProjectItem{{Field: "id"}}}}, Count: 5}
+	if _, err := r.Compile(ok); err != nil {
+		t.Fatalf("a chain in order: %v", err)
+	}
+}

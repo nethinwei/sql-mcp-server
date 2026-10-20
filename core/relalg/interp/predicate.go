@@ -197,18 +197,29 @@ func evalLike(left any, pattern any) (tri, error) {
 	return boolTri(re.MatchString(s)), nil
 }
 
+// likeRegexp is pattern as a regexp: % any sequence, _ one character, and
+// \ makes the character after it literal (the databases' default escape).
 func likeRegexp(pattern string) (*regexp.Regexp, error) {
 	var b strings.Builder
 	b.WriteString(`(?s)\A`)
+	escaped := false
 	for _, r := range pattern {
-		switch r {
-		case '%':
+		switch {
+		case escaped:
+			b.WriteString(regexp.QuoteMeta(string(r)))
+			escaped = false
+		case r == '\\':
+			escaped = true
+		case r == '%':
 			b.WriteString(".*")
-		case '_':
+		case r == '_':
 			b.WriteString(".")
 		default:
 			b.WriteString(regexp.QuoteMeta(string(r)))
 		}
+	}
+	if escaped { // a trailing \ is itself
+		b.WriteString(regexp.QuoteMeta(`\`))
 	}
 	b.WriteString(`\z`)
 	return regexp.Compile(b.String())

@@ -32,11 +32,7 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 	ctx, tc, end := beginCall(ctx, tc, true, in.Transaction)
 	defer end()
 	start := time.Now()
-	// A read reads at most MaxRows rows (see cost.EnforceCap): its limit is
-	// that many, so a full page of them pages on (nextCursor).
-	if tc.MaxRows > 0 && (in.Limit == 0 || in.Limit > tc.MaxRows) {
-		in.Limit = tc.MaxRows
-	}
+	capped := capLimit(tc, &in.Limit)
 	plan, err := prepareReadPlan(ctx, tc, in)
 	if err != nil {
 		return Result{}, err
@@ -68,12 +64,26 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 	trimOrderFields(plan.order, plan.res, in, got.rows)
 	recordReadFeedback(ctx, plan.tc, in.Entity, st.sql.Compiled, planTemplate, st.sql.plan,
 		int64(len(got.rows)), time.Since(start))
-	if next == nil && cacheable {
+	// Rows left past the cap that no cursor reaches are reported.
+	truncated := next == nil && capped && int64(len(got.rows)) >= in.Limit
+	if next == nil && !truncated && cacheable {
 		storeReadCache(ctx, plan.tc, in, cacheKey, stamp, got.rows)
 	}
 	returned, _ := plan.tc.results.counted()
 	return Result{Content: got.rows, ReturnedRows: returned, EstimatedScannedRows: st.sql.estimatedRows(),
-		NextCursor: next}, nil
+		NextCursor: next, Truncated: truncated}, nil
+}
+
+// capLimit bounds *limit by tc.MaxRows, the rows a read or an aggregate
+// returns at most (see cost.EnforceCap): a call asking for more, or for no
+// limit, reads that many, and reports whether it did (a full page of them
+// may not be all).
+func capLimit(tc Context, limit *int64) bool {
+	if tc.MaxRows <= 0 || *limit < 0 || *limit > 0 && *limit <= tc.MaxRows { // a negative one is refused later
+		return false
+	}
+	*limit = tc.MaxRows
+	return true
 }
 
 func prepareReadPlan(ctx context.Context, tc Context, in readInput) (readPlan, error) {

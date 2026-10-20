@@ -13,8 +13,10 @@ import (
 
 // fingerprintPrefix versions Fingerprint: what it hashes changed in v3, when
 // a decimal argument began binding as its text (a string) for its precision,
-// so a v2 key of a statement with one no longer matches.
-const fingerprintPrefix = "fp:v3:"
+// and in v4, when reads began carrying their row cap as their LIMIT and
+// PostgreSQL ordering NULLs last with NULLS LAST, so a key of an earlier
+// version may no longer match.
+const fingerprintPrefix = "fp:v4:"
 
 // Fingerprint returns a stable baseline key derived from datasource, dialect,
 // normalized generated SQL, and bound parameter types. Values are deliberately
@@ -68,9 +70,10 @@ func ValidateTemplateScopes(datasources, allowTemplates, rejectTemplates []strin
 			}
 			return fmt.Errorf(
 				"cost: %s entry %q is legacy bare SQL and is unsafe with multiple datasources; "+
-					"migrate it to fp:v3:<sha256> or prefix it with a datasource, for example %q",
+					"migrate it to %s<sha256> or prefix it with a datasource, for example %q",
 				templates.name,
 				value,
+				fingerprintPrefix,
 				names[0]+":"+value,
 			)
 		}
@@ -95,7 +98,7 @@ func validateFingerprintVersion(name string, values []string) error {
 				"(it names its datasource)", name, value, fp)
 		case !strings.HasPrefix(fp, fingerprintPrefix):
 			return fmt.Errorf("cost: %s entry %q is a fingerprint of an earlier version, which matches nothing; "+
-				"capture it again as fp:v3:<sha256> (decimal arguments now bind as text)", name, value)
+				"capture it again as %s<sha256> (reads now carry their row cap as LIMIT)", name, value, fingerprintPrefix)
 		}
 	}
 	return nil

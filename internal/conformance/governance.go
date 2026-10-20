@@ -23,7 +23,7 @@ const governedCategory = "a"
 // governanceConfig serves the fixture as entity "conf" to three roles: an
 // analyst limited to category a, without price and with name masked; a
 // scanner with every row; a writer. With gated, the cost gate rejects every
-// full scan, even of the 12-row fixture; otherwise only its mandatory layers
+// full scan, even of the 14-row fixture; otherwise only its mandatory layers
 // run.
 func governanceConfig(driver, schema string, gated bool) *config.Config {
 	cfg := &config.Config{

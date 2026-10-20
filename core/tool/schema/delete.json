@@ -47,7 +47,7 @@
                     ]
                 },
                 "value": {
-                    "description": "Value (array for in/not_in; omitted for is_null/is_not_null)"
+                    "description": "Value (array for in/not_in; omitted for is_null/is_not_null; not null: use is_null to find NULLs)"
                 },
                 "any": {
                     "type": "array",

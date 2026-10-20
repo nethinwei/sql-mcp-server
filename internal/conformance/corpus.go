@@ -52,6 +52,8 @@ func fixedCases(schema string) []Case {
 		}}),
 		selCase("like-prefix", schema, cond("name", relalg.OpLike, "%a")),
 		selCase("like-underscore", schema, cond("name", relalg.OpLike, "_eta")),
+		selCase("like-escaped-percent", schema, cond("name", relalg.OpLike, `a\%b`)),
+		selCase("like-escaped-underscore", schema, cond("name", relalg.OpLike, `a\_%`)),
 		selCase("decimal-comparison", schema, cond("price", relalg.OpGte, 2.5)),
 		selCase("range-and", schema, relalg.And{Preds: []relalg.Predicate{
 			cond("val", relalg.OpGte, int64(0)), cond("val", relalg.OpLte, int64(9)),

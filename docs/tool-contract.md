@@ -188,6 +188,10 @@
   约束，后者返回可重试的 `BUDGET_EXCEEDED`，诱导重复执行），审计事件的
   `resultSummary` 记录截断；
   `create_record` 的 RETURNING 行被截断时返回 `{"rowsAffected": 1, "truncated": true}`；
+  读取与聚合最多返回 `cost.maxRows` 行（调用者的 `limits.maxRows` 更严时取它）：`limit` 未写或
+  大于它时按它读取，有序读取满页给 `nextCursor` 续读；没有游标可续（`read_records` 未按可翻页的
+  `orderBy` 排序，或 `aggregate_records`）而恰好返回这么多行时另带 `"truncated": true`，表示之后
+  可能还有行；
 - 返回单个对象的工具直接给出该对象：`describe_entities`、`create_record`、
   `update_record`、`delete_record`、`begin_transaction`、`commit_transaction`、
   `rollback_transaction`、`execute_sql`。

@@ -76,7 +76,7 @@ func TestFingerprintStableAcrossValuesAndSensitiveToTypes(t *testing.T) {
 	) {
 		t.Fatal("datasources must not share fingerprints")
 	}
-	if len(a) < len("fp:v3:") || a[:len("fp:v3:")] != "fp:v3:" {
+	if len(a) < len("fp:v4:") || a[:len("fp:v4:")] != "fp:v4:" {
 		t.Fatalf("fingerprint version = %q, want v3", a)
 	}
 }

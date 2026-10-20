@@ -275,3 +275,24 @@ func TestInvalidIRRejected(t *testing.T) {
 		t.Fatalf("write expressions must be unsupported, got %v", err)
 	}
 }
+
+// In LIKE, \ makes the character after it literal (the databases' default
+// escape); a trailing one is itself.
+func TestLikeEscapes(t *testing.T) {
+	for pattern, cases := range map[string]map[string]bool{
+		`a\%b`:  {"a%b": true, "axb": false, "a%%b": false},
+		`a\_b%`: {"a_b": true, "a_bc": true, "axb": false},
+		`a\\b`:  {`a\b`: true, "ab": false},
+		`ab\`:   {`ab\`: true, "ab": false},
+	} {
+		re, err := likeRegexp(pattern)
+		if err != nil {
+			t.Fatal(pattern, err)
+		}
+		for s, want := range cases {
+			if re.MatchString(s) != want {
+				t.Errorf("%q LIKE %q = %v, want %v", s, pattern, !want, want)
+			}
+		}
+	}
+}

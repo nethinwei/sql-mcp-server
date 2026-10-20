@@ -248,7 +248,7 @@ func TestValidateTemplateScopes(t *testing.T) {
 		reject []string
 		want   string
 	}{
-		{name: "fingerprints", allow: []string{"fp:v3:abc"}, reject: []string{"fp:v3:def"}},
+		{name: "fingerprints", allow: []string{"fp:v4:abc"}, reject: []string{"fp:v4:def"}},
 		{name: "scoped exact SQL", allow: []string{"primary:SELECT 1"}, reject: []string{"replica:SELECT bad"}},
 		{name: "bare allow", allow: []string{"SELECT 1"}, want: "allowTemplates"},
 		{name: "bare reject", reject: []string{"SELECT bad"}, want: "rejectTemplates"},
@@ -263,7 +263,7 @@ func TestValidateTemplateScopes(t *testing.T) {
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.want) ||
-				!strings.Contains(err.Error(), "fp:v3:<sha256>") ||
+				!strings.Contains(err.Error(), "fp:v4:<sha256>") ||
 				!strings.Contains(err.Error(), "primary:") {
 				t.Fatalf("cost.ValidateTemplateScopes() error = %v, want migration guidance for %s", err, tc.want)
 			}
@@ -280,22 +280,22 @@ func TestValidateTemplateScopes(t *testing.T) {
 func TestValidateTemplateScopesRefusesFingerprintsMatchingNothing(t *testing.T) {
 	t.Parallel()
 	for _, ds := range [][]string{{"primary"}, {"primary", "replica"}} {
-		stale := []struct{ allow, reject []string }{{allow: []string{"fp:v2:abc"}}, {reject: []string{"fp:v1:def"}}}
+		stale := []struct{ allow, reject []string }{{allow: []string{"fp:v3:abc"}}, {reject: []string{"fp:v2:def"}}}
 		for _, c := range stale {
 			err := cost.ValidateTemplateScopes(ds, c.allow, c.reject)
-			if err == nil || !strings.Contains(err.Error(), "earlier version") || !strings.Contains(err.Error(), "fp:v3:") {
+			if err == nil || !strings.Contains(err.Error(), "earlier version") || !strings.Contains(err.Error(), "fp:v4:") {
 				t.Fatalf("%v %v: error = %v, want an earlier-version fingerprint refused", ds, c, err)
 			}
 		}
 	}
-	for _, value := range []string{" fp:v2:abc", "fp:v3:abc ", "primary:fp:v2:abc", "primary: fp:v3:abc"} {
+	for _, value := range []string{" fp:v2:abc", "fp:v4:abc ", "primary:fp:v2:abc", "primary: fp:v4:abc"} {
 		err := cost.ValidateTemplateScopes([]string{"primary"}, nil, []string{value})
 		if err == nil || !strings.Contains(err.Error(), "matches nothing") {
 			t.Fatalf("%q: error = %v, want it refused", value, err)
 		}
 	}
-	if fp := cost.Fingerprint("primary", "postgres", codegen.Compiled{SQL: "SELECT 1"}); !strings.HasPrefix(fp, "fp:v3:") {
-		t.Fatalf("Fingerprint = %q, want the fp:v3: prefix", fp)
+	if fp := cost.Fingerprint("primary", "postgres", codegen.Compiled{SQL: "SELECT 1"}); !strings.HasPrefix(fp, "fp:v4:") {
+		t.Fatalf("Fingerprint = %q, want the fp:v4: prefix", fp)
 	}
 }
 

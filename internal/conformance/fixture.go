@@ -58,6 +58,10 @@ func fixtureRows() []fixtureRow {
 		{10, "a", int64(-5), "", "kappa"},
 		{11, "b", int64(9), "4.25", "lambda"},
 		{12, nil, int64(2), "0.50", "mu"},
+		// LIKE's wildcards in a value (see like-escaped-*), with no val or
+		// price, so the averages stay as they are.
+		{13, nil, nil, "", "a%b"},
+		{14, nil, nil, "", "a_b"},
 	}
 }
 

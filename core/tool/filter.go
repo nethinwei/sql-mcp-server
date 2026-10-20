@@ -89,6 +89,11 @@ func filterPredicate(c condJSON, depth int, n *int) (relalg.Predicate, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
+	// A comparison with null holds for no row: it is a mistake for is_null.
+	if value == nil && op != relalg.OpIsNull && op != relalg.OpIsNotNull {
+		return nil, fmt.Errorf("%w: %s compares with null, which holds for no row; use is_null or is_not_null",
+			ErrInvalidInput, op)
+	}
 	return relalg.Condition{Field: c.Field, Op: op, Value: value}, nil
 }
 

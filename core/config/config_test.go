@@ -332,14 +332,14 @@ func TestValidateRejectsBareTemplatesWithMultipleDatasources(t *testing.T) {
 			err := cfg.Validate()
 			if err == nil || !strings.Contains(err.Error(), tc.want) ||
 				!strings.Contains(err.Error(), "legacy bare SQL") ||
-				!strings.Contains(err.Error(), "fp:v3:<sha256>") {
+				!strings.Contains(err.Error(), "fp:v4:<sha256>") {
 				t.Fatalf("Validate() error = %v, want clear %s migration error", err, tc.want)
 			}
 		})
 	}
 
 	cfg := base()
-	cfg.Cost.AllowTemplates = []string{"fp:v3:abc", "primary:SELECT 1"}
+	cfg.Cost.AllowTemplates = []string{"fp:v4:abc", "primary:SELECT 1"}
 	cfg.Cost.RejectTemplates = []string{"replica:SELECT bad"}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("scoped multi-datasource templates error = %v", err)

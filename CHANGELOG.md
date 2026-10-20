@@ -18,9 +18,40 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   故障切换后，新连接重新判定。
 - PostgreSQL 传统继承（`INHERITS`）：有子表的父表按派生关系处理（同视图）。父表的主键与唯一键
   不覆盖子表的行，改为取实体配置中声明的键，只用于读取，不再用于写入安全。
+- 成本模板 fingerprint 升为 `fp:v4:`：读取（`read_records`、`aggregate_records`）的 `limit` 未写或
+  大于 `cost.maxRows` 时，生成的 SQL 直接带 `LIMIT maxRows`；PostgreSQL 上按可空列排序改为
+  `NULLS LAST`。这些语句的 SQL 变了，旧 fingerprint 不再匹配，而失效的 `rejectTemplates` 会放行
+  原本拒绝的语句，因此配置中残留的 `fp:v3:` 值在加载时拒绝，需按本版本重新采集。`datasource:SQL`
+  与精确 SQL 形式的模板同样不再匹配这些语句，但无法自动识别，升级时请逐条复核。
+- `filter` 中 `eq`、`ne`、`gt`、`gte`、`lt`、`lte`、`like` 与 `null` 比较时返回 `INVALID_INPUT`
+  （此前不报错、永远返回 0 行）；判断 NULL 用 `is_null` / `is_not_null`。
+- 配置 YAML 只能有一个文档：`---` 之后还有内容时加载失败（此前静默丢弃）。
+
+### Added
+
+- `cache.maxTotalBytes`：结果缓存所有条目合计的字节上限（默认 256 MiB，不小于 `maxEntryBytes`），
+  超出时先淘汰最早过期的条目。
+- 读取与聚合的结果到 `cost.maxRows` 为止且无法续读时带 `truncated: true`；有序读取满页时给
+  `nextCursor`（此前 `limit` 大于 `maxRows` 时满页也没有游标，客户端会误以为结果完整）。
+- 开启 `readAfterWrite` 或读写事务时，启动检查也确认 write 连接有 SELECT 权限
+  （`privilege.readsBack`）。
 
 ### Fixed
 
+- 控制台：账号暂时读不到（存储故障、请求中断）时返回 503 并保留会话，只有账号被删、停用或改密才
+  登出；事件流约每 30 秒重读账号；登出前保存失败时停留在页面；切换基线时保留未写入的改名；
+  settings 只改键顺序不再显示已修改；读不到会话时提示而不是白屏。
+- 工作区：重试同一改名不再删掉引用；一次写入中的互换与链式改名（A→B→C）结果正确；预算条目的
+  改名不再依赖遍历顺序；三方合并的缓存不再因地址复用误判相等；同一方案写法顺序不同时 planId 相同；
+  删字段时的引用提示包含实体级 `fieldACL` 与 `rowPolicies`。
+- MySQL、OceanBase 与 PostgreSQL 的 DSN 参数名不区分大小写（如 `SQL_SAFE_UPDATES=0` 被识别）；
+  只差大小写的重复参数拒绝。
+- 关停时先等进行中的工具调用答复，再关闭 MCP 会话与控制台的事件流，不再等满 15 秒。
+- singleflight 的迟到调用不再收到已取消调用的 `context.Canceled`；非 ASCII 邮箱脱敏不再产生非法
+  UTF-8；预编译语句与开启事务的驱动错误参与分类；`schema.json` 不再把示例实体与 `allowedRoots`
+  的元素写成默认值。
+- codegen 拒绝节点顺序不合 SELECT 的 IR（如 `Limit` 之上的过滤、两层 `Limit`、聚合之上的投影），
+  不再生成语义不同的 SQL；参考解释器的 `LIKE` 支持 `\` 转义。
 - **安全**：PostgreSQL 分区表的级联未计入授权。外键引用分区（而非分区表）时，级联挂在分区上，
   删除分区表的行会经数据库级联删除未暴露表的数据而不经检查（违反 I-6）。分区上的外键、级联与
   trigger 现在归到其分区表；分区表外键在分区上的副本不再计入，删除被引用行不再因

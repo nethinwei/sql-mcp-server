@@ -423,8 +423,8 @@
           "type": "boolean"
         },
         "allowTemplates": {
-          "description": "SQL templates of the governed tools that skip estimation; prefer fp:v3:\u003csha256\u003e fingerprints, and with several datasources write exact SQL as datasource:SQL. Safety checks still apply; execute_sql is not affected (see cost.sqlEscape for its estimate).",
-          "x-description-zh-CN": "受治理工具中跳过估算的 SQL 模板：推荐 fp:v3:\u003csha256\u003e 指纹；多数据源下精确 SQL 写成 datasource:SQL。不绕过安全检查；不作用于 execute_sql（其估算见 cost.sqlEscape）。",
+          "description": "SQL templates of the governed tools that skip estimation; prefer fp:v4:\u003csha256\u003e fingerprints, and with several datasources write exact SQL as datasource:SQL. Safety checks still apply; execute_sql is not affected (see cost.sqlEscape for its estimate).",
+          "x-description-zh-CN": "受治理工具中跳过估算的 SQL 模板：推荐 fp:v4:\u003csha256\u003e 指纹；多数据源下精确 SQL 写成 datasource:SQL。不绕过安全检查；不作用于 execute_sql（其估算见 cost.sqlEscape）。",
           "type": "array",
           "items": {
             "type": "string"
