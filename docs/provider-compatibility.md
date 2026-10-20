@@ -107,10 +107,27 @@ provider integration）。范围外的版本与 PostgreSQL 协议兼容库在连
 [威胁模型](threat-model.md)，当前发布时点证据见
 [`v0.1.4` 发布说明](releases/v0.1.4.md)。
 
+## PostgreSQL 已知限制
+
+以下缺口已确认但未修复，均不影响受治理面的授权边界：
+
+- 序列化失败（`40001`）与死锁（`40P01`）按普通数据库错误返回，不标记为可重试；需要 core
+  增加可重试错误种类，MySQL 同样缺少；
+- 计划缓存失效（`cached plan must not change result type`）按英文消息识别，`lc_messages`
+  非英文时不会自动重试，按数据库错误返回；
+- 约束错误的 `fields` 按 `", "` 拆分 `Key (...)` 详情，列名本身含 `", "`（带引号的标识符）
+  时拆分不准；
+- `requireFreshStats` 只检查计划中第一个被扫描的表，多表计划中其他表的统计陈旧不会被发现；
+- 全表扫描的表大小取所涉各表中最大的一个，扫描多个分区时按最大分区计，低于实际总量；
+- 传统 `INHERITS` 的子表与父表同时被发现，未标记两者数据重叠（声明式分区不受影响）；
+- 列类型取自 `information_schema.columns.data_type`：数组只记为 `ARRAY`，enum 记为
+  `USER-DEFINED`，不含 numeric 精度。
+
 ## 验证命令
 
 ```sh
-make test-integration-postgres
+make test-integration-postgres                                  # PostgreSQL 16
+SQL_MCP_PG_IMAGE=postgres:11-alpine make test-integration-postgres   # 其他受支持版本
 make test-integration-mysql
 make test-integration-oceanbase
 make test-e2e
