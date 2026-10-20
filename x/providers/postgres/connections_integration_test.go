@@ -17,6 +17,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
 	"github.com/nethinwei/sql-mcp-server/internal/pgimage"
+	"github.com/nethinwei/sql-mcp-server/internal/tcstart"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	pgprov "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
@@ -26,8 +27,10 @@ import (
 func setupPGAccounts(t *testing.T) (ro, rw string, cleanup func()) {
 	t.Helper()
 	ctx := context.Background()
-	container, err := postgres.Run(ctx, pgimage.Image(), postgres.WithDatabase("test"),
-		postgres.WithUsername("test"), postgres.WithPassword("test"), postgres.BasicWaitStrategies())
+	container, err := tcstart.Run(ctx, func(publish tcstart.Publish) (*postgres.PostgresContainer, error) {
+		return postgres.Run(ctx, pgimage.Image(), postgres.WithDatabase("test"),
+			postgres.WithUsername("test"), postgres.WithPassword("test"), postgres.BasicWaitStrategies(), publish)
+	}, "5432/tcp")
 	if err != nil {
 		t.Fatalf("start postgres container: %v", err)
 	}

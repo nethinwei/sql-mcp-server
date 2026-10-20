@@ -19,6 +19,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/internal/escapetest"
 	"github.com/nethinwei/sql-mcp-server/internal/insertkeytest"
 	"github.com/nethinwei/sql-mcp-server/internal/numbertest"
+	"github.com/nethinwei/sql-mcp-server/internal/tcstart"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
 )
@@ -27,11 +28,14 @@ import (
 func startMySQL(t testing.TB) (string, func()) {
 	t.Helper()
 	ctx := context.Background()
-	container, err := tcmysql.Run(ctx, "mysql:8",
-		tcmysql.WithDatabase("test"),
-		tcmysql.WithUsername("test"),
-		tcmysql.WithPassword("test"),
-	)
+	container, err := tcstart.Run(ctx, func(publish tcstart.Publish) (*tcmysql.MySQLContainer, error) {
+		return tcmysql.Run(ctx, "mysql:8",
+			tcmysql.WithDatabase("test"),
+			tcmysql.WithUsername("test"),
+			tcmysql.WithPassword("test"),
+			publish,
+		)
+	}, "3306/tcp", "33060/tcp")
 	if err != nil {
 		t.Fatalf("start mysql container: %v", err)
 	}

@@ -19,6 +19,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/workspace"
 	"github.com/nethinwei/sql-mcp-server/core/workspace/workspacetest"
 	"github.com/nethinwei/sql-mcp-server/internal/pgimage"
+	"github.com/nethinwei/sql-mcp-server/internal/tcstart"
 	"github.com/nethinwei/sql-mcp-server/x/catalog"
 	"github.com/nethinwei/sql-mcp-server/x/catalog/catalogtest"
 	"github.com/nethinwei/sql-mcp-server/x/revisionops/revisionopstest"
@@ -109,10 +110,13 @@ func dropTables(t *testing.T, spec Spec) {
 
 func TestPostgresStoreConformance(t *testing.T) {
 	ctx := context.Background()
-	container, err := tcpostgres.Run(ctx, pgimage.Image(),
-		tcpostgres.WithDatabase("store"), tcpostgres.WithUsername("test"), tcpostgres.WithPassword("test"),
-		tcpostgres.BasicWaitStrategies(),
-	)
+	container, err := tcstart.Run(ctx, func(publish tcstart.Publish) (*tcpostgres.PostgresContainer, error) {
+		return tcpostgres.Run(ctx, pgimage.Image(),
+			tcpostgres.WithDatabase("store"), tcpostgres.WithUsername("test"), tcpostgres.WithPassword("test"),
+			tcpostgres.BasicWaitStrategies(),
+			publish,
+		)
+	}, "5432/tcp")
 	if err != nil {
 		t.Fatalf("start postgres container: %v", err)
 	}
@@ -126,9 +130,12 @@ func TestPostgresStoreConformance(t *testing.T) {
 
 func TestMySQLStoreConformance(t *testing.T) {
 	ctx := context.Background()
-	container, err := tcmysql.Run(ctx, "mysql:8",
-		tcmysql.WithDatabase("store"), tcmysql.WithUsername("test"), tcmysql.WithPassword("test"),
-	)
+	container, err := tcstart.Run(ctx, func(publish tcstart.Publish) (*tcmysql.MySQLContainer, error) {
+		return tcmysql.Run(ctx, "mysql:8",
+			tcmysql.WithDatabase("store"), tcmysql.WithUsername("test"), tcmysql.WithPassword("test"),
+			publish,
+		)
+	}, "3306/tcp", "33060/tcp")
 	if err != nil {
 		t.Fatalf("start mysql container: %v", err)
 	}
@@ -143,15 +150,21 @@ func TestMySQLStoreConformance(t *testing.T) {
 
 func TestOceanBaseStoreConformance(t *testing.T) {
 	ctx := context.Background()
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        "oceanbase/oceanbase-ce:4.3.5.6-106000012026040916",
-			ExposedPorts: []string{"2881/tcp"},
-			WaitingFor:   wait.ForListeningPort("2881/tcp").WithStartupTimeout(5 * time.Minute),
-			Env:          map[string]string{"MODE": "mini"},
-		},
-		Started: true,
-	})
+	container, err := tcstart.Run(ctx, func(publish tcstart.Publish) (testcontainers.Container, error) {
+		req := testcontainers.GenericContainerRequest{
+			ContainerRequest: testcontainers.ContainerRequest{
+				Image:        "oceanbase/oceanbase-ce:4.3.5.6-106000012026040916",
+				ExposedPorts: []string{"2881/tcp"},
+				WaitingFor:   wait.ForListeningPort("2881/tcp").WithStartupTimeout(5 * time.Minute),
+				Env:          map[string]string{"MODE": "mini"},
+			},
+			Started: true,
+		}
+		if err := tcstart.Apply(&req, publish); err != nil {
+			return nil, err
+		}
+		return testcontainers.GenericContainer(ctx, req)
+	}, "2881/tcp")
 	if err != nil {
 		t.Fatalf("start oceanbase container: %v", err)
 	}

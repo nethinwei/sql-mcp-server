@@ -13,6 +13,7 @@ import (
 	tcmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/internal/tcstart"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
 )
@@ -22,8 +23,10 @@ import (
 // issue for an account that can write, and none for one that cannot.
 func TestMySQLReadOnlyEscapeAccountNeedsNoWriteTimeout(t *testing.T) {
 	ctx := context.Background()
-	container, err := tcmysql.Run(ctx, "mysql:8", tcmysql.WithDatabase("test"),
-		tcmysql.WithUsername("test"), tcmysql.WithPassword("test"))
+	container, err := tcstart.Run(ctx, func(publish tcstart.Publish) (*tcmysql.MySQLContainer, error) {
+		return tcmysql.Run(ctx, "mysql:8", tcmysql.WithDatabase("test"),
+			tcmysql.WithUsername("test"), tcmysql.WithPassword("test"), publish)
+	}, "3306/tcp", "33060/tcp")
 	if err != nil {
 		t.Fatalf("start mysql container: %v", err)
 	}

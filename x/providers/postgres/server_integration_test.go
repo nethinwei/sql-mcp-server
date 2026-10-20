@@ -13,6 +13,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/internal/pgimage"
+	"github.com/nethinwei/sql-mcp-server/internal/tcstart"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 	pgprov "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
@@ -25,8 +26,10 @@ func TestPGRefusesUnsupportedServersOnEveryConnection(t *testing.T) {
 		t.Skip("the refusal does not depend on the supported version tested; it runs on the default image")
 	}
 	ctx := context.Background()
-	container, err := postgres.Run(ctx, "postgres:10-alpine", postgres.WithDatabase("test"),
-		postgres.WithUsername("test"), postgres.WithPassword("test"), postgres.BasicWaitStrategies())
+	container, err := tcstart.Run(ctx, func(publish tcstart.Publish) (*postgres.PostgresContainer, error) {
+		return postgres.Run(ctx, "postgres:10-alpine", postgres.WithDatabase("test"),
+			postgres.WithUsername("test"), postgres.WithPassword("test"), postgres.BasicWaitStrategies(), publish)
+	}, "5432/tcp")
 	if err != nil {
 		t.Fatalf("start postgres container: %v", err)
 	}
