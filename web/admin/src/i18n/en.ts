@@ -97,7 +97,7 @@ const en: typeof zh = {
     syncRefsHint: 'Grant field lists drop these fields too; highlighted references (relationships, primary key, tenant policy, row scopes) need manual edits or the publish check fails.',
     syncApply: 'Apply (add {added}, remove {removed})',
     ref: { role: 'role {name}', user: 'user {name}', relationship: 'relationship {name}', primaryKey: 'primary key', uniqueKey: 'unique key',
-      tenantPolicy: 'tenant policy' },
+      tenantPolicy: 'tenant policy', legacyAccess: 'entity-level access' },
     entityCount: '{count} entity | {count} entities',
     routing: 'read → {read}, write → {write}, execute → {execute}',
     readAfterWrite: 'reads follow writes for {d}',

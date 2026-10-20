@@ -6,6 +6,7 @@ package admin
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/99designs/gqlgen/graphql"
@@ -96,12 +98,15 @@ type Handler struct {
 	published *publishedFeed
 	// workspaces is nil when no store keeps workspaces.
 	workspaces *workspaceFeed
+	// ending is closed when the event streams end (EndStreams).
+	ending     chan struct{}
+	endStreams sync.Once
 }
 
 // New builds the admin handler.
 func New(cfg Config) *Handler {
 	h := &Handler{
-		cfg: cfg, sessions: newSessions(cfg.Now), logins: newLoginGate(maxConcurrentLogins),
+		cfg: cfg, sessions: newSessions(cfg.Now), logins: newLoginGate(maxConcurrentLogins), ending: make(chan struct{}),
 		scans:     configapp.NewScans(scanjobs.Options{Bus: cfg.Bus}, cfg.Catalog),
 		published: newPublishedFeed(cfg.Bus, cfg.Store, eventPollInterval),
 	}
@@ -223,9 +228,9 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 // currentSession restores the console after a reload: it returns the signed-in
 // account and the session's CSRF token, which cross-site pages cannot read.
 func (h *Handler) currentSession(w http.ResponseWriter, r *http.Request) {
-	sess, principal, ok := h.session(r)
-	if !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": auth.ErrUnauthorized.Error()})
+	sess, principal, err := h.session(r)
+	if err != nil {
+		refuseSession(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -235,7 +240,7 @@ func (h *Handler) currentSession(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(cookieName); err == nil {
-		if sess, ok := h.sessions.lookup(c.Value); ok && r.Header.Get(csrfHeader) == sess.csrf {
+		if sess, ok := h.sessions.lookup(c.Value); ok && sameToken(r.Header.Get(csrfHeader), sess.csrf) {
 			h.sessions.delete(c.Value)
 		}
 	}
@@ -246,43 +251,79 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// session resolves the request's session and re-reads its account, so a
-// disabled or deleted account, or one whose password changed, loses access on
-// its next request.
-
 // credentialTag fingerprints a password hash for comparison with a session.
 func credentialTag(passwordHash string) string {
 	sum := sha256.Sum256([]byte(passwordHash))
 	return hex.EncodeToString(sum[:])
 }
 
-func (h *Handler) session(r *http.Request) (session, auth.Principal, bool) {
+// sameToken compares a token a request presents with the one expected, in
+// constant time.
+func sameToken(got, want string) bool {
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+// errSignedOut: the request has no session, or its account no longer holds
+// it (deleted, disabled, or its password changed).
+var errSignedOut = auth.ErrUnauthorized
+
+// session resolves the request's session and re-reads its account, so a
+// disabled or deleted account, or one whose password changed, loses access on
+// its next request: errSignedOut, and the session is deleted. An account that
+// cannot be read now (the store failing, the request ending) is another
+// error, and the session stays.
+func (h *Handler) session(r *http.Request) (session, auth.Principal, error) {
 	c, err := r.Cookie(cookieName)
 	if err != nil {
-		return session{}, auth.Principal{}, false
+		return session{}, auth.Principal{}, errSignedOut
 	}
 	sess, ok := h.sessions.lookup(c.Value)
 	if !ok {
-		return session{}, auth.Principal{}, false
+		return session{}, auth.Principal{}, errSignedOut
 	}
-	account, err := h.cfg.Accounts.GetAdmin(r.Context(), sess.username)
-	if err != nil || account.Disabled || credentialTag(account.PasswordHash) != sess.credential {
+	principal, err := h.holder(r.Context(), sess)
+	if errors.Is(err, errSignedOut) {
 		h.sessions.delete(c.Value)
-		return session{}, auth.Principal{}, false
 	}
-	return sess, auth.Principal{Username: account.Username, Permissions: account.Permissions}, true
+	return sess, principal, err
+}
+
+// holder re-reads the account of sess: errSignedOut when it no longer holds
+// the session.
+func (h *Handler) holder(ctx context.Context, sess session) (auth.Principal, error) {
+	account, err := h.cfg.Accounts.GetAdmin(ctx, sess.username)
+	switch {
+	case errors.Is(err, configstore.ErrAdminNotFound):
+		return auth.Principal{}, errSignedOut
+	case err != nil:
+		return auth.Principal{}, err
+	case account.Disabled || credentialTag(account.PasswordHash) != sess.credential:
+		return auth.Principal{}, errSignedOut
+	}
+	return auth.Principal{Username: account.Username, Permissions: account.Permissions}, nil
+}
+
+// refuseSession answers a request whose session did not resolve: 401 when
+// signed out, else 503, as the session may serve the next request.
+func refuseSession(w http.ResponseWriter, err error) {
+	if errors.Is(err, errSignedOut) {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": auth.ErrUnauthorized.Error()})
+		return
+	}
+	slog.Warn("admin session not resolved", "err", err)
+	writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the account cannot be read now"})
 }
 
 // authenticated requires a session and, when checkCSRF is set, the session's
 // CSRF token in X-CSRF-Token.
 func (h *Handler) authenticated(checkCSRF bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sess, principal, ok := h.session(r)
-		if !ok {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": auth.ErrUnauthorized.Error()})
+		sess, principal, err := h.session(r)
+		if err != nil {
+			refuseSession(w, err)
 			return
 		}
-		if checkCSRF && r.Header.Get(csrfHeader) != sess.csrf {
+		if checkCSRF && !sameToken(r.Header.Get(csrfHeader), sess.csrf) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing or invalid " + csrfHeader})
 			return
 		}
@@ -291,8 +332,8 @@ func (h *Handler) authenticated(checkCSRF bool, next http.Handler) http.Handler 
 }
 
 func (h *Handler) playground(w http.ResponseWriter, r *http.Request) {
-	sess, _, ok := h.session(r)
-	if !ok {
+	sess, _, err := h.session(r)
+	if err != nil {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = io.WriteString(w, loginPage)
 		return

@@ -373,7 +373,8 @@ func TestFieldReferences(t *testing.T) {
 			{"name":"orders","primaryKey":["id"],"fields":[{"name":"id"},{"name":"customer_id"}],
 			 "relationships":[{"name":"customer","target":"customers","cardinality":"belongs-to",
 			   "joinOn":{"customer_id":"id"}}]},
-			{"name":"customers","fields":[{"name":"id"}]}],
+			{"name":"customers","fields":[{"name":"id"},{"name":"region"}],"legacyAccess":{
+			 "fieldACL":{"bi":{"read":["region"],"write":[]}},"rowPolicies":{"bi":{"op":"eq","field":"id","value":1}}}}],
 		"roles": [{"name":"analyst","grants":[{"entity":"orders","actions":["READ"],"fieldsRestricted":true,
 			"readFields":["id","customer_id"],"writeFields":[],"rows":{"op":"gt","field":"customer_id","value":0}}]}],
 		"users": [], "settings": {}}`), &s); err != nil {
@@ -397,8 +398,12 @@ func TestFieldReferences(t *testing.T) {
 		[]string{"role:analyst:fields", "primaryKey:default.orders:"}) {
 		t.Errorf("id = %v", got)
 	}
-	if got := refs("default.customers", "id"); !slices.Equal(got, []string{"relationship:default.orders:"}) {
+	if got := refs("default.customers", "id"); !slices.Equal(got,
+		[]string{"relationship:default.orders:", "legacyAccess:default.customers:"}) {
 		t.Errorf("customers.id = %v", got)
+	}
+	if got := refs("default.customers", "region"); !slices.Equal(got, []string{"legacyAccess:default.customers:"}) {
+		t.Errorf("customers.region = %v", got)
 	}
 }
 
@@ -439,5 +444,18 @@ func TestReconcileBudgetsFollowRolesAndUsers(t *testing.T) {
 	if string(got) != `{"budget":{"roles":{"bi":{"maxConcurrent":2}},"users":{"bob":{"maxConcurrent":3}}},`+
 		`"cost":{"maxRows":10}}` {
 		t.Fatalf("settings = %s", got)
+	}
+}
+
+// Budget entries renamed in a chain (a to b, b to c) or a swap all move,
+// whatever order the renames come in.
+func TestRenameKeysMovesAtOnce(t *testing.T) {
+	for range 20 {
+		section := map[string]any{"roles": map[string]any{"a": 1, "b": 2, "x": 3, "y": 4}}
+		renameKeys(section, "roles", map[string]string{"a": "b", "b": "c", "x": "y", "y": "x"})
+		got, _ := json.Marshal(section)
+		if string(got) != `{"roles":{"b":1,"c":2,"x":4,"y":3}}` {
+			t.Fatalf("roles = %s", got)
+		}
 	}
 }

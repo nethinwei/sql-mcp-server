@@ -13,7 +13,8 @@ import (
 // FieldReference is a place in the workspace naming a field of an entity:
 // a role or user (Via fields: a grant lists it, which removing the field
 // takes care of; rows: a grant filters by it, to fix first), or an entity's
-// relationship, primaryKey, uniqueKey or tenantPolicy (Name its ID).
+// relationship, primaryKey, uniqueKey, tenantPolicy or legacyAccess (its
+// entity-level fieldACL and rowPolicies; Name its ID).
 type FieldReference struct {
 	Field string  `json:"field"`
 	Kind  string  `json:"kind"`
@@ -44,7 +45,9 @@ func (r *Service) FieldReferences(ctx context.Context, entity string) ([]FieldRe
 	return fieldReferencesOf(sections, entity), nil
 }
 
-var fieldReferenceOrder = []string{"role", "user", "relationship", "primaryKey", "uniqueKey", "tenantPolicy"}
+var fieldReferenceOrder = []string{
+	"role", "user", "relationship", "primaryKey", "uniqueKey", "tenantPolicy", "legacyAccess",
+}
 
 func fieldReferencesOf(s Sections, id string) []FieldReference {
 	entities := make([]config.EntityConfig, 0, len(s.Entities))
@@ -106,9 +109,9 @@ func (c *fieldRefs) entity(eid string, e EntityItem) {
 	for _, rel := range e.Relationships {
 		joinOn, _ := rel.JoinOn.(map[string]any)
 		target, _ := c.index.IDOf(rel.Target)
-		for local, remote := range joinOn {
+		for _, local := range kit.SortedKeys(joinOn) {
 			c.add(eid, local, "relationship", eid, "")
-			if field, ok := remote.(string); ok {
+			if field, ok := joinOn[local].(string); ok {
 				c.add(target, field, "relationship", eid, "")
 			}
 		}
@@ -123,5 +126,30 @@ func (c *fieldRefs) entity(eid string, e EntityItem) {
 	}
 	for _, f := range configrefs.FilterFields(NormalizeJSON(e.TenantPolicy)) {
 		c.add(eid, f, "tenantPolicy", eid, "")
+	}
+	c.legacyAccess(eid, e.LegacyAccess)
+}
+
+// legacyAccess are the references of an entity's entity-level access: the
+// field lists of its fieldACL and the filters of its rowPolicies.
+func (c *fieldRefs) legacyAccess(eid string, access any) {
+	legacy, _ := access.(map[string]any)
+	acl, _ := legacy["fieldACL"].(map[string]any)
+	for _, role := range kit.SortedKeys(acl) {
+		lists, _ := acl[role].(map[string]any)
+		for _, list := range []string{"read", "write"} {
+			fields, _ := lists[list].([]any)
+			for _, f := range fields {
+				if field, ok := f.(string); ok {
+					c.add(eid, field, "legacyAccess", eid, "")
+				}
+			}
+		}
+	}
+	policies, _ := legacy["rowPolicies"].(map[string]any)
+	for _, role := range kit.SortedKeys(policies) {
+		for _, f := range configrefs.FilterFields(NormalizeJSON(policies[role])) {
+			c.add(eid, f, "legacyAccess", eid, "")
+		}
 	}
 }

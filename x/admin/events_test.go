@@ -15,6 +15,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/core/workspace"
+	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
 )
 
@@ -348,5 +349,38 @@ func TestNoWorkspaceFeed(t *testing.T) {
 		t.Fatal("a nil feed sends")
 	} else {
 		stop()
+	}
+}
+
+// An event stream re-reads its session's account every eventAccountChecks
+// checks: an account disabled meanwhile ends it, one not read now does not.
+func TestEventStreamEndsWithItsAccount(t *testing.T) {
+	f := newFixture(t)
+	store := &failingAccounts{Store: f.accounts}
+	f.h = New(Config{Store: f.h.cfg.Store, Accounts: store, Now: f.h.cfg.Now})
+	_, cookie, _ := f.login(t, "correct horse battery")
+	sess, _ := f.h.sessions.lookup(cookie.Value)
+	held := f.h.sessionHeld(context.Background(), cookie.Value, sess)
+	store.fail = true
+	for i := range eventAccountChecks {
+		if !held() {
+			t.Fatalf("check %d: an account not read now ended the stream", i)
+		}
+	}
+	store.fail = false
+	if _, err := f.accounts.MutateAdmins(context.Background(), func(all []accounts.Account) ([]accounts.Account, error) {
+		all[0].Disabled = true
+		return all, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for range eventAccountChecks - 1 {
+		held()
+	}
+	if held() {
+		t.Fatal("a disabled account kept its stream")
+	}
+	if f.h.sessions.alive(cookie.Value) {
+		t.Fatal("a disabled account kept its session")
 	}
 }

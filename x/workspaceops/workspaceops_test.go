@@ -406,3 +406,63 @@ func TestRenameKeepsAChangeMadeMeanwhile(t *testing.T) {
 		t.Fatal("the renamed item was not written")
 	}
 }
+
+// A rename written again (a retry after its answer was lost) is a write
+// alone: the item it came from is gone already, so Reconcile is told of no
+// rename, which would read the item now at the new name as replaced.
+func TestARenameWrittenAgainIsAWriteAlone(t *testing.T) {
+	e := newEnv(t)
+	lead := workspace.Ref{Kind: "role", Key: "lead"}
+	var renames []map[workspace.Ref]workspace.Ref
+	e.svc.Reconcile = func(_, after workspace.Snapshot, r map[workspace.Ref]workspace.Ref) (workspace.Snapshot, error) {
+		renames = append(renames, r)
+		return after, nil
+	}
+	renamed := map[string]any{"name": "lead", "description": "base", "grants": []any{}}
+	for range 2 {
+		if _, err := e.svc.WriteItems(e.ctx, "root", "root", "edit",
+			[]Write{{Ref: lead, Value: renamed, Previous: workspace.Missing, From: &analyst}}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(renames) != 2 || renames[0][lead] != analyst || len(renames[1]) != 0 {
+		t.Fatalf("renames = %v", renames)
+	}
+	if workspace.IsMissing(e.read().Workspace.Items.Get(lead)) {
+		t.Fatal("the renamed item is gone")
+	}
+}
+
+// Two items renamed to each other's names in one write swap: both stay, and
+// Reconcile is told of both renames.
+func TestRenamesSwappingNames(t *testing.T) {
+	e := newEnv(t)
+	lead := workspace.Ref{Kind: "role", Key: "lead"}
+	leadRole := map[string]any{"name": "lead", "description": "lead", "grants": []any{}}
+	if _, err := e.svc.WriteItems(e.ctx, "root", "root", "edit",
+		[]Write{{Ref: lead, Value: leadRole, Previous: workspace.Missing}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var renames map[workspace.Ref]workspace.Ref
+	e.svc.Reconcile = func(_, after workspace.Snapshot, r map[workspace.Ref]workspace.Ref) (workspace.Snapshot, error) {
+		renames = r
+		return after, nil
+	}
+	analystRole := e.analyst()
+	asLead := map[string]any{"name": "lead", "description": "base", "grants": []any{}}
+	asAnalyst := map[string]any{"name": "analyst", "description": "lead", "grants": []any{}}
+	st, err := e.svc.WriteItems(e.ctx, "root", "root", "edit", []Write{
+		{Ref: lead, Value: asLead, Previous: leadRole, From: &analyst},
+		{Ref: analyst, Value: asAnalyst, Previous: analystRole, From: &lead},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := st.Workspace.Items
+	if !schema.Same(items.Get(lead), asLead) || !schema.Same(items.Get(analyst), asAnalyst) || len(st.Open) != 0 {
+		t.Fatalf("items = %v, conflicts %+v", items, st.Open)
+	}
+	if renames[lead] != analyst || renames[analyst] != lead {
+		t.Fatalf("renames = %v", renames)
+	}
+}

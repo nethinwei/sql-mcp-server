@@ -318,8 +318,10 @@ function changesBetween(base: Sections, now: Sections): Change[] {
   ]
 }
 
+// The settings compare as written, whatever the order of their keys (as
+// the content does: see canonicalSections).
 function settingsChange(base: Sections['settings'], now: Sections['settings']): Change[] {
-  return JSON.stringify(base) === JSON.stringify(now) ? [] : [{ kind: 'settings', name: 'settings', type: 'modified' }]
+  return canonical(base) === canonical(now) ? [] : [{ kind: 'settings', name: 'settings', type: 'modified' }]
 }
 
 /**
@@ -539,7 +541,13 @@ export const useWorkspace = defineStore('workspace', {
           if (itemCanonical(it?.value) !== (was.values[ref] ?? canonical(undefined))) pending.set(ref, it)
         }
       }
-      if (baseData) this.apply(baseData, w.base)
+      if (baseData) {
+        // apply starts the renames afresh: the items renamed here and not
+        // written yet stay renamed, so they are written as renames.
+        const renamed = this.renamed
+        this.apply(baseData, w.base)
+        for (const [ref, origin] of Object.entries(renamed)) if (pending.get(ref)) this.renamed[ref] = origin
+      }
       const server = itemsOfList(w.items.items)
       const copy: Copy = { values: {}, raw: {} }
       for (const [ref, it] of server) setCopy(copy, ref, it.value)

@@ -158,10 +158,14 @@ const live = liveUpdates({
 })
 onMounted(async () => {
   window.addEventListener('beforeunload', onBeforeUnload)
+  // Until the workspace is first read, the pages show it loading, not empty.
+  ws.loading = !ws.copy
   try {
     nothingPublished.value = !(await sync.pull())
   } catch (e) {
     message.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    ws.loading = false
   }
   await poll()
   live.start()
@@ -174,8 +178,10 @@ onBeforeUnmount(() => {
 const userMenu = computed(() => [{ key: 'logout', label: t('layout.logout') }])
 async function onUserMenu(key: string) {
   if (key === 'logout') {
-    // What is edited here is saved first, while signed in.
-    await action(() => workspace.flush())
+    // What is edited here is saved first, while signed in; when it cannot
+    // be (the error is shown), the page stays signed in rather than lose it.
+    const saved = await action(async () => { await workspace.flush(); return true })
+    if (!saved) return
     await logout()
     leave()
   }

@@ -1,6 +1,7 @@
 package configapp
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -136,8 +137,9 @@ func reaches(who auth.Principal, p *Preview) error {
 }
 
 // normalized checks a plan and puts it in its normal form (actions lower
-// case, sorted and once each), within who's datasources: a preview and a save
-// of the same plan, however it was written, get the same plan ID.
+// case, sorted and once each; so are the sets of the scope and the tables
+// excluded), within who's datasources: a preview and a save of the same
+// plan, however it was written, get the same plan ID.
 func normalized(who auth.Principal, p *configplan.Plan) error {
 	p.Grants = slices.Clone(p.Grants) // Check rewrites them; the caller's stay as they are
 	for i := range p.Grants {
@@ -146,7 +148,20 @@ func normalized(who auth.Principal, p *configplan.Plan) error {
 	if err := p.Check(); err != nil {
 		return err
 	}
-	return within(who, &p.Scope)
+	if err := within(who, &p.Scope); err != nil {
+		return err
+	}
+	sc := &p.Scope
+	sc.Datasources, sc.Schemas, sc.Tables = setOf(sc.Datasources), setOf(sc.Schemas), setOf(sc.Tables)
+	sc.Status, sc.Refs, sc.Entities, p.Exclude = setOf(sc.Status), setOf(sc.Refs), setOf(sc.Entities), setOf(p.Exclude)
+	return nil
+}
+
+// setOf is a copy of s sorted, each value once.
+func setOf[T cmp.Ordered](s []T) []T {
+	out := slices.Clone(s)
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // confirmed checks that ids cover the exceptions to confirm of report and

@@ -379,3 +379,35 @@ func TestConfigMCPEndpointNeedsAToken(t *testing.T) {
 		t.Fatalf("a session cookie reached the endpoint: %d", rec.Code)
 	}
 }
+
+// failingAccounts fails to read accounts while fail is set.
+type failingAccounts struct {
+	accounts.Store
+	fail bool
+}
+
+func (a *failingAccounts) GetAdmin(ctx context.Context, username string) (accounts.Account, error) {
+	if a.fail {
+		return accounts.Account{}, context.Canceled
+	}
+	return a.Store.GetAdmin(ctx, username)
+}
+
+// An account that cannot be read now (the store failing, the request
+// ending) answers 503 and keeps the session: only an account gone,
+// disabled or with another password signs it out.
+func TestSessionSurvivesAnAccountNotReadNow(t *testing.T) {
+	f := newFixture(t)
+	store := &failingAccounts{Store: f.accounts}
+	f.h = New(Config{Store: f.h.cfg.Store, Accounts: store, Now: f.h.cfg.Now})
+	_, cookie, csrf := f.login(t, "correct horse battery")
+	ok := map[string]string{csrfHeader: csrf}
+	store.fail = true
+	if rec := f.do(http.MethodPost, "/admin/graphql", meQuery, ok, cookie); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("account not read: %d", rec.Code)
+	}
+	store.fail = false
+	if rec := f.do(http.MethodPost, "/admin/graphql", meQuery, ok, cookie); rec.Code != http.StatusOK {
+		t.Fatalf("the session was lost: %d %s", rec.Code, rec.Body)
+	}
+}

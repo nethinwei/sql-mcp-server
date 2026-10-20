@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -19,6 +20,9 @@ const (
 	// listens (publishes from other processes sharing the store arrive this
 	// way too), and how often a stream checks its session.
 	eventPollInterval = time.Second
+	// eventAccountChecks is every how many session checks a stream re-reads
+	// the session's account (disabled, or its password changed).
+	eventAccountChecks = 30
 	// eventKeepAlive keeps proxies from closing an idle stream.
 	eventKeepAlive    = 25 * time.Second
 	eventWriteTimeout = 10 * time.Second
@@ -126,17 +130,17 @@ func (f *publishedFeed) poll(ctx context.Context) {
 // newest revision's ID, whenever revisions change after it connected (a
 // draft saved anywhere); and a workspace event, with its version, whenever
 // the administrator's workspace changes elsewhere (an agent, another
-// console). The stream ends when the session does.
+// console). The stream ends when the session does, and when the server
+// shuts down (EndStreams).
 func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
-	_, who, ok := h.session(r)
-	if !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	sess, who, err := h.session(r)
+	if err != nil {
+		refuseSession(w, err)
 		return
 	}
 	cookie, _ := r.Cookie(cookieName)
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Accel-Buffering", "no")
+	held := h.sessionHeld(r.Context(), cookie.Value, sess)
+	eventStreamHeaders(w.Header())
 	events, stop := h.published.subscribe()
 	defer stop()
 	workspaces, stopWorkspaces := h.workspaces.subscribe(who.Username)
@@ -157,6 +161,8 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-h.ending:
+			return
 		case st := <-events:
 			if !s.send(write, st) {
 				return
@@ -170,12 +176,45 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-check.C:
-			if !h.sessions.alive(cookie.Value) {
+			if !held() {
 				return
 			}
 		}
 	}
 }
+
+// eventStreamHeaders are the headers of an event stream: not stored, nor
+// buffered by a proxy.
+func eventStreamHeaders(h http.Header) {
+	h.Set("Content-Type", "text/event-stream")
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Accel-Buffering", "no")
+}
+
+// sessionHeld reports, at each check of a stream, whether its session id
+// (sess) lasts: it has not expired, and at every eventAccountChecks-th check
+// its account is read again, as a request would. An account that cannot be
+// read now does not end it.
+func (h *Handler) sessionHeld(ctx context.Context, id string, sess session) func() bool {
+	checks := 0
+	return func() bool {
+		if !h.sessions.alive(id) {
+			return false
+		}
+		if checks++; checks%eventAccountChecks != 0 {
+			return true
+		}
+		if _, err := h.holder(ctx, sess); errors.Is(err, errSignedOut) {
+			h.sessions.delete(id)
+			return false
+		}
+		return true
+	}
+}
+
+// EndStreams ends the event streams: the server is shutting down, and would
+// otherwise wait for the consoles listening to leave.
+func (h *Handler) EndStreams() { h.endStreams.Do(func() { close(h.ending) }) }
 
 // eventWriter writes to an event stream and flushes, reporting whether the
 // console got it in time.

@@ -1,6 +1,7 @@
 package configapp
 
 import (
+	"maps"
 	"slices"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
@@ -145,25 +146,29 @@ func (r reconciliation) budgets(v map[string]any) bool {
 }
 
 // renameKeys moves the entries of section[key] named in names to their new
-// names, or drops them for "". An entry the new name already has stays.
+// names, or drops them for "". An entry the new name already has, and that
+// is not moved away itself, stays: the entries all move at once, so a chain
+// (a to b, b to c) or a swap moves each whatever the order.
 func renameKeys(section map[string]any, key string, names map[string]string) bool {
 	byName, ok := section[key].(map[string]any)
 	if !ok {
 		return false
 	}
-	changed := false
-	for from, to := range names {
-		limits, ok := byName[from]
-		if !ok {
-			continue
-		}
-		delete(byName, from)
-		changed = true
-		if _, taken := byName[to]; to != "" && !taken {
-			byName[to] = limits
+	moving := map[string]any{}
+	for from := range names {
+		if limits, ok := byName[from]; ok {
+			moving[from] = limits
+			delete(byName, from)
 		}
 	}
-	return changed
+	for _, from := range slices.Sorted(maps.Keys(moving)) {
+		if to := names[from]; to != "" {
+			if _, taken := byName[to]; !taken {
+				byName[to] = moving[from]
+			}
+		}
+	}
+	return len(moving) > 0
 }
 
 // retarget is what the existing reference ref becomes; keep is false when

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { adminBase } from './base'
-import { consolePage, isLeaving, leave, resyncSession, session } from './session'
+import { consolePage, isLeaving, leave, restoreSession, resyncSession, session } from './session'
 
 function signedInAs(username: string, csrfToken = 'old') {
   Object.assign(session, { ready: true, username, permissions: ['admin:*'], csrfToken })
@@ -72,5 +72,25 @@ describe('the ways out of a session', () => {
     const offending = files.filter((f) => f !== 'router.ts' &&
       /(push|replace)\(\{\s*name:\s*'login'/.test(readFileSync(join(root, f), 'utf8')))
     expect(offending).toEqual([])
+  })
+})
+
+// A session that cannot be read (the service unreachable or failing) is not
+// a sign-out: the first page load says so, and a page signed in stays so.
+describe('a session not read', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('restores as signed out but unavailable when the service is unreachable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch') }))
+    expect(await restoreSession()).toBe(false)
+    expect(session.ready).toBe(true)
+    expect(session.unavailable).toBe(true)
+  })
+
+  it('keeps this page signed in when the service fails to read the session', async () => {
+    signedInAs('root')
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 503 })))
+    await expect(resyncSession()).rejects.toThrow()
+    expect(session.username).toBe('root')
   })
 })

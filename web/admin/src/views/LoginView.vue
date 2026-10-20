@@ -3,7 +3,7 @@ import { ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { NAlert, NButton, NCard, NForm, NFormItem, NInput, NSpace } from 'naive-ui'
-import { consolePage, login } from '@/api/session'
+import { consolePage, login, session } from '@/api/session'
 import ThemeSwitch from '@/components/ThemeSwitch.vue'
 import LocaleSwitch from '@/components/LocaleSwitch.vue'
 import logo from '@/assets/logo.svg'
@@ -12,7 +12,8 @@ const { t } = useI18n()
 const route = useRoute()
 const username = ref('')
 const password = ref('')
-const error = ref('')
+// The page came here because the session could not be read: say so.
+const error = ref(session.unavailable ? t('network.unreachable') : '')
 const busy = ref(false)
 
 // Enter in the password field submits the form: one sign-in, going where the

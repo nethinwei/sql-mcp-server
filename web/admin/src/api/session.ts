@@ -9,6 +9,8 @@ export const session = reactive({
   username: '',
   permissions: [] as string[],
   csrfToken: '',
+  /** The session could not be read (the service unreachable or failing), as opposed to signed out. */
+  unavailable: false,
 })
 
 export type Permission = 'admin:read' | 'admin:write' | 'admin:publish' | 'admin:accounts'
@@ -31,9 +33,20 @@ function apply(body: SessionBody | null) {
   session.ready = true
 }
 
-/** Restores the session after a page load; false when signed out. */
+/**
+ * Restores the session after a page load; false when signed out, or when it
+ * could not be read (unavailable: the sign-in page says so).
+ */
 export async function restoreSession(): Promise<boolean> {
-  const res = await fetch(adminURL('session'), { credentials: 'same-origin' })
+  let res: Response
+  try {
+    res = await fetch(adminURL('session'), { credentials: 'same-origin' })
+  } catch {
+    apply(null)
+    session.unavailable = true
+    return false
+  }
+  session.unavailable = !res.ok && res.status !== 401
   apply(res.ok ? await res.json() : null)
   return res.ok
 }
@@ -51,6 +64,8 @@ export function resyncSession(): Promise<boolean> {
   resyncing ??= (async () => {
     const was = session.username
     const res = await fetch(adminURL('session'), { credentials: 'same-origin' })
+    // Not read now (the service failing): still signed in, as far as known.
+    if (!res.ok && res.status !== 401) throw new Error(t('network.unreachable'))
     const body = res.ok ? ((await res.json()) as SessionBody) : null
     const same = Boolean(body && was && body.username === was)
     apply(same ? body : null)

@@ -221,9 +221,12 @@ func (s Service) WriteItems(ctx context.Context, username, by, op string, writes
 }
 
 // batch applies writes at once over w's items: values holds what each ref
-// becomes (an item a rename replaces goes missing), read back by the writes
-// that follow it in the same batch; a write whose previous value is not the
-// current one merges with it, and found keeps what conflicted.
+// becomes (an item a rename replaces goes missing, unless the batch writes
+// it too: a swap, or its removal), read back by the writes that follow it in
+// the same batch; a write whose previous value is not the current one merges
+// with it, and found keeps what conflicted. A rename from an item the
+// workspace does not have (a retry of one done) is a write alone: what named
+// the item already follows it.
 func (s Service) batch(w *workspace.Workspace, writes []Write) (
 	map[workspace.Ref]any, []workspace.Ref, map[workspace.Ref]workspace.Ref, []workspace.Conflict,
 ) {
@@ -231,6 +234,10 @@ func (s Service) batch(w *workspace.Workspace, writes []Write) (
 	refs := make([]workspace.Ref, 0, len(writes))
 	before, renames := w.Items, map[workspace.Ref]workspace.Ref{}
 	at, values := before.Index(), map[workspace.Ref]any{}
+	written := make(map[workspace.Ref]bool, len(writes))
+	for _, wr := range writes {
+		written[wr.Ref] = true
+	}
 	current := func(ref workspace.Ref) any {
 		if v, ok := values[ref]; ok {
 			return v
@@ -241,9 +248,9 @@ func (s Service) batch(w *workspace.Workspace, writes []Write) (
 		return workspace.Missing
 	}
 	for _, wr := range writes {
-		if wr.From != nil && *wr.From != wr.Ref {
+		if wr.From != nil && *wr.From != wr.Ref && !workspace.IsMissing(before.Get(*wr.From)) {
 			renames[wr.Ref] = *wr.From
-			if !workspace.IsMissing(current(*wr.From)) {
+			if !written[*wr.From] && !workspace.IsMissing(current(*wr.From)) {
 				values[*wr.From] = workspace.Missing
 				refs = append(refs, *wr.From)
 			}

@@ -63,6 +63,16 @@ describe('workspace', () => {
     ]))
   })
 
+  it('treats settings written in another key order as unchanged', () => {
+    const ws = useWorkspace()
+    const data = loaded('7', { entities: [], roles: [], users: [] })
+    data.revision!.sections.settings = { cost: { maxRows: 20, maxBytes: 10 } }
+    ws.apply(data, '7')
+    ws.setSettings({ cost: { maxBytes: 10, maxRows: 20 } })
+    expect(ws.changes).toEqual([])
+    expect(ws.dirty).toBe(false)
+  })
+
   it('treats cleared optional text as unchanged', () => {
     const ws = seeded()
     ws.entity('default.orders')!.fields![0].alias = 'order_id'
@@ -271,5 +281,31 @@ describe('canonical', () => {
       .toBe(canonical({ name: 'id', fields: [{ name: 'a' }] }))
     expect(canonical({ name: 'o', mcp: { dmlTools: false } })).not.toBe(canonical({ name: 'o', mcp: {} }))
     expect(canonical({ cost: { description: '' } })).not.toBe(canonical({ cost: {} }))
+  })
+})
+
+// A role renamed here and not written yet stays a rename when the
+// workspace moves onto another base revision meanwhile: it is written with
+// renamedFrom, so what named the role follows it.
+describe('a rename across a change of base', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  it('is still written as a rename', () => {
+    const ws = useWorkspace()
+    const items = (base: string) => ({
+      base, version: 1, updatedBy: 'root', taken: [], checkpoint: null, conflicts: [], notes: [],
+      items: { complete: true, items: [
+        { kind: 'role', key: 'analyst', value: { name: 'analyst', grants: [] } },
+        { kind: 'settings', key: 'settings', value: {} },
+      ] },
+    })
+    ws.apply(loaded('1', { entities: [], roles: [{ name: 'analyst', grants: [] }], users: [] }), '1')
+    ws.take(items('1'))
+    ws.role('analyst')!.name = 'lead'
+    ws.rename('role', 'analyst', 'lead')
+    ws.take(items('2'), loaded('2', { entities: [], roles: [{ name: 'analyst', grants: [] }], users: [] }))
+    expect(ws.unsavedItems()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'role', key: 'lead', renamedFrom: 'analyst' }),
+    ]))
   })
 })
