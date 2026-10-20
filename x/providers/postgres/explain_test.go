@@ -67,6 +67,20 @@ func TestParsePGExplainSort(t *testing.T) {
 	}
 }
 
+// Nodes of later PostgreSQL versions: an Incremental Sort (13) sorts, and a
+// Tid Range Scan (14) reads a bounded range of a table's rows.
+func TestParsePGExplainLaterNodes(t *testing.T) {
+	t.Parallel()
+	p, _, err := parsePGExplain([]byte(`[{"Plan":{"Node Type":"Incremental Sort","Plan Rows":10,"Plans":[` +
+		`{"Node Type":"Tid Range Scan","Relation Name":"t","Plan Rows":10}]}}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.HasSort || p.ScanType != cost.ScanIndex {
+		t.Fatalf("plan = %+v, want a sort over a bounded scan", p)
+	}
+}
+
 func TestParsePGExplainUsesRiskiestNestedScanAndLargestRows(t *testing.T) {
 	t.Parallel()
 	raw := `[{"Plan":{"Node Type":"Nested Loop","Plan Rows":3,"Plans":[` +

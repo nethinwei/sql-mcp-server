@@ -280,7 +280,7 @@ func walkPlan(n pgPlanNode, p *cost.Plan) {
 		p.EstimatedRows = n.PlanRows
 	}
 	switch n.NodeType {
-	case "Sort":
+	case "Sort", "Incremental Sort":
 		p.HasSort = true
 	case "Materialize", "Hash":
 		// A hash or materialized input held in memory; that of a small
@@ -319,6 +319,9 @@ func pgScanType(node string) cost.ScanType {
 		return cost.ScanIndex
 	case strings.Contains(node, "Tid Scan"):
 		return cost.ScanPoint
+	case strings.Contains(node, "Tid Range Scan"):
+		// A bounded range of a table's row locations (PostgreSQL 14).
+		return cost.ScanIndex
 	case node == "Result" || node == "Values Scan":
 		// No table is read: a constant SELECT, or the rows INSERT ... VALUES
 		// writes. A scan elsewhere in the plan still outranks it.

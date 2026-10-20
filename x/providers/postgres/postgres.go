@@ -84,7 +84,8 @@ func Open(dsn string, opts providerregistry.Options) (*Provider, error) {
 	}
 
 	explainer := pgExplainer{db: db, classify: classify, gate: gate}
-	p := &Provider{Base: sqladapter.NewBase(sqladapter.New(db, nil, classify), Dialect{}, explainer,
+	pool := sqladapter.New(db, sqladapter.TextRows(binaryTypes), classify)
+	p := &Provider{Base: sqladapter.NewBase(pool, Dialect{}, explainer,
 		pgIntrospector{db: db, gate: gate}).WithLimits(caps), gate: gate}
 	p.analyzeTx = p
 	return p, nil
@@ -125,6 +126,10 @@ func limits(params map[string]string, pooler string) dialect.Profile {
 			Reason: reason.New(reason.UnkeyedGateOnly)},
 	}
 }
+
+// binaryTypes are the column types whose values are bytes; pgx scans json,
+// jsonb and xml into []byte too, which are text.
+var binaryTypes = map[string]bool{"BYTEA": true}
 
 // bootstrap sizes and pings the pool through DB(); keep it reachable (an
 // embedded field named DB would shadow it).

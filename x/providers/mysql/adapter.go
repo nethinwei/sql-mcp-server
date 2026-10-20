@@ -9,7 +9,6 @@ import (
 	mysqldriver "github.com/go-sql-driver/mysql"
 
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
-	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 	"github.com/nethinwei/sql-mcp-server/x/providers/sqladapter"
 )
@@ -69,44 +68,11 @@ func NewAdapter(
 			return nil, nil, fmt.Errorf("mysql: ping failed: %w", err)
 		}
 	}
-	return sqladapter.New(db, newTextRows, classify), caps, nil
+	return sqladapter.New(db, sqladapter.TextRows(binaryTypes), classify), caps, nil
 }
 
 // binaryTypes are the column types whose values are bytes, not text.
 var binaryTypes = map[string]bool{
 	"BINARY": true, "VARBINARY": true, "BIT": true, "GEOMETRY": true,
 	"BLOB": true, "TINYBLOB": true, "MEDIUMBLOB": true, "LONGBLOB": true,
-}
-
-// textRows returns text columns as strings. The driver scans them (and
-// DECIMAL) into []byte, which would otherwise serialize to clients as base64.
-type textRows struct {
-	*sql.Rows
-	binary []bool
-}
-
-func newTextRows(rows *sql.Rows) store.Rows { return &textRows{Rows: rows} }
-
-func (r *textRows) Scan(dest ...any) error {
-	if err := r.Rows.Scan(dest...); err != nil {
-		return err
-	}
-	if r.binary == nil {
-		types, err := r.ColumnTypes()
-		if err != nil {
-			return err
-		}
-		r.binary = make([]bool, len(types))
-		for i, t := range types {
-			r.binary[i] = binaryTypes[t.DatabaseTypeName()]
-		}
-	}
-	for i, d := range dest {
-		if p, ok := d.(*any); ok && i < len(r.binary) && !r.binary[i] {
-			if b, ok := (*p).([]byte); ok {
-				*p = string(b)
-			}
-		}
-	}
-	return nil
 }

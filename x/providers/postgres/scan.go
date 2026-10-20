@@ -104,17 +104,21 @@ func (i pgIntrospector) tables(ctx context.Context, schemas []string) ([]pgTable
 // columnsSQL reads columns from information_schema; matviewColumnsSQL reads
 // materialized views' columns from pg_attribute, since information_schema
 // leaves materialized views out. Both report the same type names, and whether
-// the database supplies a value (default), computes it (generated, identity
-// ALWAYS) or takes it from a sequence (serial, identity).
+// the database supplies a value (default: the column's or, for a column of a
+// domain, the domain's), computes it (generated, identity ALWAYS) or takes it
+// from a sequence (serial, identity). information_schema counts a domain's
+// NOT NULL in is_nullable, but not its default in column_default.
 const (
 	columnsSQL = `SELECT c.table_schema, c.table_name, c.column_name, c.data_type, c.is_nullable,
 		        COALESCE(col_description(r.oid, c.ordinal_position::int), ''),
-		        c.column_default IS NOT NULL OR c.is_identity = 'YES',
+		        c.column_default IS NOT NULL OR c.is_identity = 'YES' OR d.typdefault IS NOT NULL,
 		        c.is_generated = 'ALWAYS' OR COALESCE(c.identity_generation = 'ALWAYS', false),
 		        c.is_identity = 'YES' OR COALESCE(c.column_default LIKE 'nextval(%', false)
 		 FROM information_schema.columns c
 		 JOIN pg_namespace n ON n.nspname = c.table_schema
 		 JOIN pg_class r ON r.relnamespace = n.oid AND r.relname = c.table_name
+		 JOIN pg_attribute a ON a.attrelid = r.oid AND a.attname = c.column_name
+		 LEFT JOIN pg_type d ON d.oid = a.atttypid AND d.typtype = 'd'
 		 WHERE c.table_schema = ANY($1)
 		 ORDER BY c.table_schema, c.table_name, c.ordinal_position`
 	matviewColumnsSQL = `SELECT n.nspname, c.relname, a.attname, format_type(a.atttypid, NULL),
@@ -141,7 +145,7 @@ const indexesSQL = `SELECT tn.nspname, t.relname, c.relname, am.amname, i.indisu
 	        NOT i.indimmediate, COALESCE(pg_get_expr(i.indpred, i.indrelid, true), ''),
 	        i.indexprs IS NOT NULL OR bool_or(k.attnum = 0),
 	        COALESCE((to_jsonb(i) ->> 'indnullsnotdistinct')::boolean, false),
-	        bool_and(COALESCE(a.attnotnull, false)),
+	        bool_and(COALESCE(a.attnotnull OR dt.typnotnull, false)),
 	        COALESCE(json_agg(a.attname ORDER BY k.ord) FILTER (WHERE a.attname IS NOT NULL), '[]')::text,
 	        json_agg(pg_get_indexdef(i.indexrelid, k.ord::int, true) ORDER BY k.ord)::text
 	 FROM pg_index i
@@ -151,6 +155,7 @@ const indexesSQL = `SELECT tn.nspname, t.relname, c.relname, am.amname, i.indisu
 	 JOIN pg_namespace tn ON tn.oid = t.relnamespace
 	 CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord)
 	 LEFT JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+	 LEFT JOIN pg_type dt ON dt.oid = a.atttypid -- a domain's NOT NULL (typnotnull) holds for its columns
 	 WHERE tn.nspname = ANY($1) AND i.indisvalid AND k.ord <= i.indnkeyatts
 	 GROUP BY i.indexrelid, tn.nspname, t.relname, c.relname, am.amname, i.indisunique, i.indisprimary,
 	          i.indimmediate, i.indpred, i.indrelid, i.indexprs IS NOT NULL, to_jsonb(i) ->> 'indnullsnotdistinct'

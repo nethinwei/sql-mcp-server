@@ -21,6 +21,11 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   删除分区表的行会经数据库级联删除未暴露表的数据而不经检查（违反 I-6）。分区上的外键、级联与
   trigger 现在归到其分区表；分区表外键在分区上的副本不再计入，删除被引用行不再因
   `cascades to <分区>, which no entity exposes` 被误拒；分区上的 trigger 让分区表带有写入副作用。
+- PostgreSQL 的 `json`、`jsonb`、`xml` 值返回原文；此前驱动把它们读成字节，客户端得到 base64。
+  `bytea` 仍是二进制。与 MySQL 共用同一个文本列处理（`sqladapter.TextRows`）。
+- PostgreSQL domain 的默认值计入列默认值（不再被当作必填而拒绝 create），domain 的 `NOT NULL`
+  计入唯一键的非空判断（建在其上的唯一索引可作为身份键）。
+- PostgreSQL 13 的 `Incremental Sort` 计为排序，14 的 `Tid Range Scan` 计为有界扫描（此前为未知）。
 - PostgreSQL 11–13 扫描失败（`column "con.conname" must appear in the GROUP BY clause`）。
 - PostgreSQL 18 的 `EXPLAIN ANALYZE` 采样解析失败（`Actual Rows` 改为每次循环的平均值，带小数）。
 
