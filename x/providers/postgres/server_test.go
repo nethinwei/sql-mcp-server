@@ -3,6 +3,9 @@ package postgres
 import (
 	"errors"
 	"testing"
+	"time"
+
+	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 )
 
 // The provider serves PostgreSQL 11 to 18 and refuses the rest, including the
@@ -32,5 +35,22 @@ func TestCheckServer(t *testing.T) {
 		if c.ok != (err == nil) || err != nil && !errors.Is(err, ErrUnsupportedServer) {
 			t.Errorf("%d %q hologres=%v: %v, want ok=%v", c.num, c.version, c.hologres, err, c.ok)
 		}
+	}
+}
+
+// A server that does not answer (an unroutable address) fails the open within
+// the connect timeout instead of holding startup.
+func TestOpenGivesUpOnAnUnreachableServer(t *testing.T) {
+	saved := connectTimeout
+	connectTimeout = 300 * time.Millisecond
+	defer func() { connectTimeout = saved }()
+	start := time.Now()
+	_, err := Open("postgres://u:p@192.0.2.1:5432/db?sslmode=disable",
+		providerregistry.Options{Timeout: time.Second})
+	if !errors.Is(err, ErrPing) {
+		t.Fatalf("Open = %v, want ErrPing", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("Open took %s, want it bounded by the connect timeout", elapsed)
 	}
 }

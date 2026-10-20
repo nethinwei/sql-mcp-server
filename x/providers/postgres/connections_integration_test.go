@@ -50,6 +50,9 @@ func setupPGAccounts(t *testing.T) (ro, rw string, cleanup func()) {
 		`ALTER ROLE app_ro SET default_transaction_read_only = on`,
 		`CREATE TABLE salaries (id integer PRIMARY KEY, name text, amount integer)`,
 		`GRANT SELECT (id, name) ON salaries TO app_ro`,
+		// A table app_ro may read, in a schema it may not use.
+		`CREATE SCHEMA locked`, `CREATE TABLE locked.secrets (id integer PRIMARY KEY)`,
+		`GRANT SELECT ON locked.secrets TO app_ro`,
 	} {
 		if _, err := admin.ExecContext(ctx, stmt); err != nil {
 			t.Fatalf("%s: %v", stmt, err)
@@ -150,5 +153,33 @@ func TestPGCapabilitiesAndRefusedWrites(t *testing.T) {
 	denial, ok := tool.DenialFor(err, "d")
 	if !ok || denial.Code != tool.CodeDatasourceForbidden {
 		t.Fatalf("a write on a read-only account: denial = %+v (%v)", denial, err)
+	}
+}
+
+// A table in a schema the account may not use is out of its reach whatever
+// the table's own grants: it is neither discovered nor reported readable.
+func TestPGSchemaUsageGatesTables(t *testing.T) {
+	ro, _, cleanup := setupPGAccounts(t)
+	defer cleanup()
+	ctx := context.Background()
+	prov, err := pgprov.New(ro)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prov.Close() }()
+	found, err := prov.Introspector().Discover(ctx, []string{"locked"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 0 {
+		t.Errorf("discovered %d relations in a schema the account may not use", len(found))
+	}
+	privileges, err := prov.Introspector().(introspect.PrivilegeInspector).TablePrivileges(ctx, "locked",
+		[]string{"secrets"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := privileges["secrets"]; p.Select == introspect.PrivilegeGranted {
+		t.Errorf("locked.secrets privileges = %+v, want SELECT not granted", p)
 	}
 }

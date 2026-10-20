@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
@@ -62,11 +63,16 @@ func (i pgIntrospector) Discover(ctx context.Context, sources []string) ([]entit
 
 func (i pgIntrospector) scan(ctx context.Context, schemas []string) (*scanned, error) {
 	s := sqladapter.NewScanned()
-	for _, load := range []func(context.Context, *scanned, []string) error{
-		i.columns(columnsSQL), i.columns(matviewColumnsSQL), i.indexes, i.foreignKeys, i.cascades, i.writeEffects,
+	for _, load := range []struct {
+		name string
+		read func(context.Context, *scanned, []string) error
+	}{
+		{"columns", i.columns(columnsSQL)}, {"materialized view columns", i.columns(matviewColumnsSQL)},
+		{"indexes", i.indexes}, {"foreign keys", i.foreignKeys}, {"cascades", i.cascades},
+		{"triggers and rules", i.writeEffects},
 	} {
-		if err := load(ctx, s, schemas); err != nil {
-			return nil, err
+		if err := load.read(ctx, s, schemas); err != nil {
+			return nil, fmt.Errorf("postgres: scan %s: %w", load.name, err)
 		}
 	}
 	return s, nil
@@ -76,7 +82,8 @@ type pgTable struct{ schema, name, kind, comment string }
 
 // tables lists the tables (plain, partitioned and foreign), views and
 // materialized views of schemas that the connection can see, the way
-// information_schema.tables does. Partitions are skipped: their data is read
+// information_schema.tables does, in the schemas it may use (a table's own
+// grants reach nothing in a schema without USAGE). Partitions are skipped: their data is read
 // through the partitioned table, and exposing both would duplicate it. The
 // config store's own tables are skipped too.
 func (i pgIntrospector) tables(ctx context.Context, schemas []string) ([]pgTable, error) {
@@ -85,6 +92,7 @@ func (i pgIntrospector) tables(ctx context.Context, schemas []string) ([]pgTable
 		`SELECT n.nspname, c.relname, c.relkind::text, COALESCE(obj_description(c.oid, 'pg_class'), '')
 		 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
 		 WHERE c.relkind IN ('r', 'p', 'f', 'v', 'm') AND NOT c.relispartition AND n.nspname = ANY($1)
+		   AND has_schema_privilege(n.oid, 'USAGE')
 		   AND (pg_has_role(c.relowner, 'USAGE')
 		     OR has_table_privilege(c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
 		     OR has_any_column_privilege(c.oid, 'SELECT, INSERT, UPDATE, REFERENCES'))`,

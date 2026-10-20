@@ -21,7 +21,8 @@ func (i pgIntrospector) ReadOnly(ctx context.Context) (bool, error) {
 
 // TablePrivileges implements introspect.PrivilegeInspector: table-level
 // privileges of tables in one query, and the column-level ones of tables
-// lacking some table-level privilege in a second.
+// lacking some table-level privilege in a second. Without USAGE on the
+// schema none is granted, whatever the table's grants.
 func (i pgIntrospector) TablePrivileges(
 	ctx context.Context, schema string, tables []string,
 ) (map[string]introspect.TablePrivileges, error) {
@@ -31,9 +32,10 @@ func (i pgIntrospector) TablePrivileges(
 	out := map[string]introspect.TablePrivileges{}
 	var partial []string
 	err := i.each(ctx,
-		`SELECT c.relname, has_table_privilege(c.oid, 'SELECT'), has_table_privilege(c.oid, 'INSERT'),
-		        has_table_privilege(c.oid, 'UPDATE'), has_table_privilege(c.oid, 'DELETE')
+		`SELECT c.relname, u.ok AND has_table_privilege(c.oid, 'SELECT'), u.ok AND has_table_privilege(c.oid, 'INSERT'),
+		        u.ok AND has_table_privilege(c.oid, 'UPDATE'), u.ok AND has_table_privilege(c.oid, 'DELETE')
 		 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+		 CROSS JOIN LATERAL (SELECT has_schema_privilege(n.oid, 'USAGE') AS ok) u
 		 WHERE n.nspname = COALESCE(NULLIF($2, ''), current_schema()) AND c.relname = ANY($1)`,
 		tables, func(rows *sql.Rows) error {
 			var table string
@@ -62,9 +64,11 @@ func (i pgIntrospector) columnPrivileges(
 	ctx context.Context, schema string, tables []string, out map[string]introspect.TablePrivileges,
 ) error {
 	return i.each(ctx,
-		`SELECT c.relname, a.attname, has_column_privilege(a.attrelid, a.attnum, 'SELECT'),
-		        has_column_privilege(a.attrelid, a.attnum, 'INSERT'), has_column_privilege(a.attrelid, a.attnum, 'UPDATE')
+		`SELECT c.relname, a.attname, u.ok AND has_column_privilege(a.attrelid, a.attnum, 'SELECT'),
+		        u.ok AND has_column_privilege(a.attrelid, a.attnum, 'INSERT'),
+		        u.ok AND has_column_privilege(a.attrelid, a.attnum, 'UPDATE')
 		 FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+		 CROSS JOIN LATERAL (SELECT has_schema_privilege(n.oid, 'USAGE') AS ok) u
 		 WHERE n.nspname = COALESCE(NULLIF($2, ''), current_schema()) AND c.relname = ANY($1)
 		   AND a.attnum > 0 AND NOT a.attisdropped
 		 ORDER BY c.relname, a.attnum`,

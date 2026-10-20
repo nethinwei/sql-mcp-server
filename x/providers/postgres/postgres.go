@@ -21,6 +21,11 @@ import (
 // ErrPing is returned when the database is unreachable at open time.
 var ErrPing = errors.New("postgres: ping failed")
 
+// connectTimeout bounds a connection attempt whose DSN sets no
+// connect_timeout: a server that never answers fails the open rather than
+// holding startup.
+var connectTimeout = 10 * time.Second
+
 func init() {
 	providerregistry.Register("postgres", func(dsn string, opts providerregistry.Options) (provider.Provider, error) {
 		return Open(dsn, opts)
@@ -61,6 +66,9 @@ func Open(dsn string, opts providerregistry.Options) (*Provider, error) {
 	}
 	if cfg.RuntimeParams == nil {
 		cfg.RuntimeParams = map[string]string{}
+	}
+	if cfg.ConnectTimeout == 0 {
+		cfg.ConnectTimeout = connectTimeout
 	}
 	caps := limits(cfg.RuntimeParams, opts.Pooler)
 	if opts.Pooler == providerregistry.PoolerTransaction {

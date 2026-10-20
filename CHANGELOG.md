@@ -29,8 +29,16 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 - PostgreSQL 11–13 扫描失败（`column "con.conname" must appear in the GROUP BY clause`）。
 - PostgreSQL 18 的 `EXPLAIN ANALYZE` 采样解析失败（`Actual Rows` 改为每次循环的平均值，带小数）。
 
+- PostgreSQL：没有 schema `USAGE` 的表不再被发现，权限也不再显示为可读（此前表级授权显示
+  granted，查询却报 `permission denied for schema`）。
+- PostgreSQL：服务端在语句执行中结束会话（`57P01`–`57P03`、`08` 类）按连接中断处理，写入的结果
+  报告为未知（`OUTCOME_UNKNOWN`），与 MySQL 一致。
+
 ### Changed
 
+- PostgreSQL：DSN 未设 `connect_timeout` 时连接限时 10 秒，无响应的地址不再让启动挂起；扫描出错时
+  报告是哪一步（如 `postgres: scan cascades: …`）；读不到服务器标识时以数据源名标识其关系并告警，
+  不再使装配失败。
 - CI 与发布流水线对 PostgreSQL 11–18 每个大版本运行 provider integration（`SQL_MCP_PG_IMAGE`）。
 
 ## 0.1.20 - 2026-10-19

@@ -46,3 +46,19 @@ func TestClassifySchemaChanges(t *testing.T) {
 		t.Errorf("other errors must pass through: %v", got)
 	}
 }
+
+// A server that ends the session while a statement runs (an administrator's
+// termination, a shutdown or crash, a broken connection) leaves the
+// statement's outcome unknown, as a connection the driver lost does.
+func TestClassifyTerminatedSessions(t *testing.T) {
+	t.Parallel()
+	for _, code := range []string{"57P01", "57P02", "57P03", "08006", "08003", "08000"} {
+		if err := classify(&pgconn.PgError{Code: code}); !errors.Is(err, store.ErrConnectionLost) {
+			t.Errorf("%s: %v, want store.ErrConnectionLost", code, err)
+		}
+	}
+	if err := classify(&pgconn.PgError{Code: "57014"}); !errors.Is(err, store.ErrStatementTimeout) ||
+		errors.Is(err, store.ErrConnectionLost) {
+		t.Errorf("57014: %v, want a timeout only", err)
+	}
+}

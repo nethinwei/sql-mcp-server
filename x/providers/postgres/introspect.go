@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"log/slog"
 
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
@@ -77,7 +78,9 @@ var pgAction = map[string]string{"c": entity.FKCascade, "n": entity.FKSetNull, "
 
 // Physical implements introspect.PhysicalNamer. The cluster's system
 // identifier names the server; a role that cannot read it falls back to the
-// server address, and to "" (unknown) over a Unix socket.
+// server address, and to "" (unknown) over a Unix socket or when neither can
+// be read: the datasource then names its relations alone, rather than its
+// assembly failing.
 func (i pgIntrospector) Physical(ctx context.Context) (introspect.Physical, error) {
 	var p introspect.Physical
 	if err := i.gate.check(ctx); err != nil {
@@ -91,8 +94,12 @@ func (i pgIntrospector) Physical(ctx context.Context) (introspect.Physical, erro
 		return p, nil
 	}
 	var addr sql.NullString
-	err := i.db.QueryRowContext(ctx,
-		`SELECT host(inet_server_addr()) || ':' || inet_server_port()`).Scan(&addr)
+	if err := i.db.QueryRowContext(ctx,
+		`SELECT host(inet_server_addr()) || ':' || inet_server_port()`).Scan(&addr); err != nil {
+		slog.Warn("postgres: the server cannot be identified; its relations are named by the datasource",
+			"error", err.Error())
+		return p, nil
+	}
 	p.Server = addr.String
-	return p, err
+	return p, nil
 }

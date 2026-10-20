@@ -35,15 +35,26 @@ const stalePlan = "cached plan must not change result type"
 // by the cancel request a cancelled request sends.
 const queryCanceled = "57014"
 
+// sessionEnded tells a session the server ended while a statement ran: an
+// administrator's termination, a shutdown or crash (57P01-57P03), or a
+// broken connection (class 08). The statement may or may not have run.
+func sessionEnded(code string) bool {
+	return code == "57P01" || code == "57P02" || code == "57P03" || strings.HasPrefix(code, "08")
+}
+
 // classify turns an integrity violation into a *store.ConstraintError, a
 // refusal into store.ErrPermissionDenied, a cancelled statement into
-// store.ErrStatementTimeout, a missing table or column into
+// store.ErrStatementTimeout, a session the server ended into
+// store.ErrConnectionLost, a missing table or column into
 // store.ErrMissingRelation or store.ErrMissingColumn, and a stale cached plan
 // into store.ErrStalePlan.
 func classify(err error) error {
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {
 		return err
+	}
+	if sessionEnded(pgErr.Code) {
+		return fmt.Errorf("%w: %w", store.ErrConnectionLost, err)
 	}
 	if pgErr.Code == queryCanceled {
 		return fmt.Errorf("%w: %w", store.ErrStatementTimeout, err)
