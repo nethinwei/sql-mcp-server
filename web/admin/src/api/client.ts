@@ -24,7 +24,8 @@ export const client = new Client({
         if (status === 401) signIn()
         // Polling queries pick up the replacing session's token for the next
         // poll (run retries its own request).
-        if (status === 403) void resyncSession().then((same) => { if (!same) signIn() })
+        // A session not read now (the service failing) waits for the next poll.
+        if (status === 403) void resyncSession().then((same) => { if (!same) signIn() }, () => undefined)
       },
     }),
     cacheExchange,
@@ -69,7 +70,10 @@ export async function run<Data, Vars extends object>(
     ? await client.mutation(doc, variables).toPromise()
     : await client.query(doc, variables, { requestPolicy: 'network-only' }).toPromise()
   if ((result.error?.response as Response | undefined)?.status === 403 && !retried) {
-    if (await resyncSession()) return run(doc, variables, mutation, true)
+    const same = await resyncSession().catch(() => {
+      throw new ApiError(t('network.unreachable'), 'NETWORK') // still signed in, as far as known
+    })
+    if (same) return run(doc, variables, mutation, true)
     signIn()
     throw new ApiError(t('login.sessionReplaced'))
   }
