@@ -49,8 +49,30 @@ type MemoryStore struct {
 	anomalyMinSamples int
 	invalidator       PlanInvalidator
 	maxKeys           int
-	m                 map[string][]Feedback
+	m                 map[string]*window
 	keys              []string
+}
+
+// window is the latest samples of a fingerprint, at most its size: once
+// full, a sample takes the place of the oldest (next), not a copy of the
+// others.
+type window struct {
+	samples []Feedback
+	next    int
+}
+
+func (w *window) add(f Feedback, size int) {
+	if len(w.samples) < size {
+		w.samples = append(w.samples, f)
+		return
+	}
+	w.samples[w.next] = f
+	w.next = (w.next + 1) % len(w.samples)
+}
+
+// latest is the sample added last.
+func (w *window) latest() Feedback {
+	return w.samples[(w.next-1+len(w.samples))%len(w.samples)]
 }
 
 // NewMemoryStore returns an in-memory FeedbackStore with default bounds.
@@ -82,7 +104,7 @@ func NewAdaptiveMemoryStoreWithBounds(
 	}
 	return &MemoryStore{
 		windowSize: size, anomalyFactor: factor, anomalyMinSamples: minSamples,
-		invalidator: invalidator, maxKeys: maxKeys, m: map[string][]Feedback{},
+		invalidator: invalidator, maxKeys: maxKeys, m: map[string]*window{},
 	}
 }
 
@@ -91,9 +113,9 @@ func (s *MemoryStore) Record(f Feedback) {
 	s.mu.Lock()
 	if s.m == nil { // the zero value: the default bounds
 		s.windowSize, s.maxKeys, s.anomalyFactor, s.anomalyMinSamples = 32, defaultMaxFingerprintKeys, 3, 5
-		s.m = map[string][]Feedback{}
+		s.m = map[string]*window{}
 	}
-	previous, exists := s.m[f.Template]
+	w, exists := s.m[f.Template]
 	if !exists {
 		if len(s.m) >= s.maxKeys {
 			oldest := s.keys[0]
@@ -101,22 +123,19 @@ func (s *MemoryStore) Record(f Feedback) {
 			s.keys = s.keys[1:]
 		}
 		s.keys = append(s.keys, f.Template)
+		w = &window{}
+		s.m[f.Template] = w
 	}
 	anomalous := false
-	if len(previous) >= s.anomalyMinSamples {
+	if len(w.samples) >= s.anomalyMinSamples && len(w.samples) > 0 {
 		var total int64
-		for _, sample := range previous {
+		for _, sample := range w.samples {
 			total += sample.ActualRows
 		}
-		average := total / int64(len(previous))
+		average := total / int64(len(w.samples))
 		anomalous = average > 0 && float64(f.ActualRows) > float64(average)*s.anomalyFactor
 	}
-	samples := append([]Feedback(nil), previous...)
-	samples = append(samples, f)
-	if len(samples) > s.windowSize {
-		samples = append([]Feedback(nil), samples[len(samples)-s.windowSize:]...)
-	}
-	s.m[f.Template] = samples
+	w.add(f, s.windowSize)
 	invalidator := s.invalidator
 	s.mu.Unlock()
 	if anomalous && invalidator != nil {
@@ -128,17 +147,18 @@ func (s *MemoryStore) Record(f Feedback) {
 func (s *MemoryStore) Stats(template string) (Statistics, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	samples := s.m[template]
-	if len(samples) == 0 {
+	w := s.m[template]
+	if w == nil || len(w.samples) == 0 {
 		return Statistics{}, false
 	}
+	samples := w.samples
 	var rows int64
 	var duration time.Duration
 	for _, sample := range samples {
 		rows += sample.ActualRows
 		duration += sample.Duration
 	}
-	latest := samples[len(samples)-1]
+	latest := w.latest()
 	return Statistics{
 		Samples:       len(samples),
 		AverageRows:   rows / int64(len(samples)),

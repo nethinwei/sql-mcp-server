@@ -91,62 +91,67 @@ func (s Spec) config() Config {
 	return out
 }
 
-func (s *Spec) canonical() {
-	if s.Server != nil {
-		s.Server.canonical()
+func (s *Spec) canonical() (changed bool) {
+	if s.Server != nil && s.Server.canonical() {
+		changed = true
 	}
-	if s.Database != nil {
-		s.Database.canonical()
+	if s.Database != nil && s.Database.canonical() {
+		changed = true
 	}
 	for k, v := range s.Databases {
-		v.canonical()
-		s.Databases[k] = v
+		if v.canonical() {
+			s.Databases[k], changed = v, true
+		}
 	}
 	for k, v := range s.Entities {
-		v.canonical()
-		s.Entities[k] = v
+		if v.canonical() {
+			s.Entities[k], changed = v, true
+		}
 	}
 	for k, v := range s.Roles {
-		v.canonical()
-		s.Roles[k] = v
+		if v.canonical() {
+			s.Roles[k], changed = v, true
+		}
 	}
-	if len(s.Roles) == 0 {
-		s.Roles = nil
+	if s.Roles != nil && len(s.Roles) == 0 {
+		s.Roles, changed = nil, true
 	}
 	for k, v := range s.Users {
-		v.canonical()
-		s.Users[k] = v
+		if v.canonical() {
+			s.Users[k], changed = v, true
+		}
 	}
-	if len(s.Users) == 0 {
-		s.Users = nil
+	if s.Users != nil && len(s.Users) == 0 {
+		s.Users, changed = nil, true
 	}
-	if s.Tools != nil {
-		s.Tools.canonical()
+	if s.Tools != nil && s.Tools.canonical() {
+		changed = true
 	}
-	if s.Cost != nil {
-		s.Cost.canonical()
+	if s.Cost != nil && s.Cost.canonical() {
+		changed = true
 	}
-	if s.Budget != nil {
-		s.Budget.canonical()
+	if s.Budget != nil && s.Budget.canonical() {
+		changed = true
 	}
-	if s.Cache != nil {
-		s.Cache.canonical()
+	if s.Cache != nil && s.Cache.canonical() {
+		changed = true
 	}
-	if s.RateLimit != nil {
-		s.RateLimit.canonical()
+	if s.RateLimit != nil && s.RateLimit.canonical() {
+		changed = true
 	}
-	if s.Mask != nil {
-		s.Mask.canonical()
+	if s.Mask != nil && s.Mask.canonical() {
+		changed = true
 	}
-	if s.Audit != nil {
-		s.Audit.canonical()
+	if s.Audit != nil && s.Audit.canonical() {
+		changed = true
 	}
-	if s.Transactions != nil {
-		s.Transactions.canonical()
+	if s.Transactions != nil && s.Transactions.canonical() {
+		changed = true
 	}
-	if s.Execution != nil {
-		s.Execution.canonical()
+	if s.Execution != nil && s.Execution.canonical() {
+		changed = true
 	}
+	return changed
 }
 
 func (c Config) spec() Spec {
@@ -257,22 +262,23 @@ func (s ServerSpec) config() ServerConfig {
 	return out
 }
 
-func (s *ServerSpec) canonical() {
+func (s *ServerSpec) canonical() (changed bool) {
 	if s.PathPrefix != nil && *s.PathPrefix == *new(string) {
-		s.PathPrefix = nil
+		s.PathPrefix, changed = nil, true
 	}
 	if s.PublicURL != nil && *s.PublicURL == *new(string) {
-		s.PublicURL = nil
+		s.PublicURL, changed = nil, true
 	}
-	if s.Auth != nil {
-		s.Auth.canonical()
+	if s.Auth != nil && s.Auth.canonical() {
+		changed = true
 	}
-	if s.Secrets != nil {
-		s.Secrets.canonical()
+	if s.Secrets != nil && s.Secrets.canonical() {
+		changed = true
 	}
 	if s.User != nil && *s.User == *new(string) {
-		s.User = nil
+		s.User, changed = nil, true
 	}
+	return changed
 }
 
 func (c ServerConfig) spec() ServerSpec {
@@ -318,10 +324,11 @@ func (s AuthSpec) config() AuthConfig {
 	return out
 }
 
-func (s *AuthSpec) canonical() {
-	if s.TLS != nil {
-		s.TLS.canonical()
+func (s *AuthSpec) canonical() (changed bool) {
+	if s.TLS != nil && s.TLS.canonical() {
+		changed = true
 	}
+	return changed
 }
 
 func (c AuthConfig) spec() AuthSpec {
@@ -361,7 +368,8 @@ func (s TLSSpec) config() TLSConfig {
 	return out
 }
 
-func (s *TLSSpec) canonical() {
+func (s *TLSSpec) canonical() (changed bool) {
+	return changed
 }
 
 func (c TLSConfig) spec() TLSSpec {
@@ -384,7 +392,8 @@ func (s SecretsSpec) config() SecretsConfig {
 	return out
 }
 
-func (s *SecretsSpec) canonical() {
+func (s *SecretsSpec) canonical() (changed bool) {
+	return changed
 }
 
 func (c SecretsConfig) spec() SecretsSpec {
@@ -429,26 +438,28 @@ func (s DatabaseSpec) config() DatabaseConfig {
 	return out
 }
 
-func (s *DatabaseSpec) canonical() {
+func (s *DatabaseSpec) canonical() (changed bool) {
 	if s.DSN != nil && *s.DSN == *new(string) {
-		s.DSN = nil
+		s.DSN, changed = nil, true
 	}
 	for k, v := range s.Connections {
-		v.canonical()
-		s.Connections[k] = v
+		if v.canonical() {
+			s.Connections[k], changed = v, true
+		}
 	}
-	if len(s.Connections) == 0 {
-		s.Connections = nil
+	if s.Connections != nil && len(s.Connections) == 0 {
+		s.Connections, changed = nil, true
 	}
-	if s.Routing != nil {
-		s.Routing.canonical()
+	if s.Routing != nil && s.Routing.canonical() {
+		changed = true
 	}
 	if s.ReadAfterWrite != nil && *s.ReadAfterWrite == *new(time.Duration) {
-		s.ReadAfterWrite = nil
+		s.ReadAfterWrite, changed = nil, true
 	}
-	if s.SQLEscape != nil {
-		s.SQLEscape.canonical()
+	if s.SQLEscape != nil && s.SQLEscape.canonical() {
+		changed = true
 	}
+	return changed
 }
 
 func (c DatabaseConfig) spec() DatabaseSpec {
@@ -492,13 +503,14 @@ func (s ConnectionSpec) config() ConnectionConfig {
 	return out
 }
 
-func (s *ConnectionSpec) canonical() {
+func (s *ConnectionSpec) canonical() (changed bool) {
 	if s.Role != nil && *s.Role == *new(string) {
-		s.Role = nil
+		s.Role, changed = nil, true
 	}
 	if s.Pooler != nil && *s.Pooler == *new(string) {
-		s.Pooler = nil
+		s.Pooler, changed = nil, true
 	}
+	return changed
 }
 
 func (c ConnectionConfig) spec() ConnectionSpec {
@@ -530,16 +542,17 @@ func (s RoutingSpec) config() RoutingConfig {
 	return out
 }
 
-func (s *RoutingSpec) canonical() {
+func (s *RoutingSpec) canonical() (changed bool) {
 	if s.Read != nil && *s.Read == *new(string) {
-		s.Read = nil
+		s.Read, changed = nil, true
 	}
 	if s.Write != nil && *s.Write == *new(string) {
-		s.Write = nil
+		s.Write, changed = nil, true
 	}
 	if s.Execute != nil && *s.Execute == *new(string) {
-		s.Execute = nil
+		s.Execute, changed = nil, true
 	}
+	return changed
 }
 
 func (c RoutingConfig) spec() RoutingSpec {
@@ -563,7 +576,8 @@ func (s SQLEscapeSpec) config() SQLEscapeConfig {
 	return out
 }
 
-func (s *SQLEscapeSpec) canonical() {
+func (s *SQLEscapeSpec) canonical() (changed bool) {
+	return changed
 }
 
 func (c SQLEscapeConfig) spec() SQLEscapeSpec {
@@ -654,73 +668,77 @@ func (s EntitySpec) config() EntityConfig {
 	return out
 }
 
-func (s *EntitySpec) canonical() {
+func (s *EntitySpec) canonical() (changed bool) {
 	if s.Source != nil && *s.Source == *new(string) {
-		s.Source = nil
+		s.Source, changed = nil, true
 	}
 	if s.DataSource != nil && *s.DataSource == *new(string) {
-		s.DataSource = nil
+		s.DataSource, changed = nil, true
 	}
 	if s.Schema != nil && *s.Schema == *new(string) {
-		s.Schema = nil
+		s.Schema, changed = nil, true
 	}
 	if s.Kind != nil && *s.Kind == *new(string) {
-		s.Kind = nil
+		s.Kind, changed = nil, true
 	}
 	if s.Description != nil && *s.Description == *new(string) {
-		s.Description = nil
+		s.Description, changed = nil, true
 	}
-	if len(s.PrimaryKey) == 0 {
-		s.PrimaryKey = nil
+	if s.PrimaryKey != nil && len(s.PrimaryKey) == 0 {
+		s.PrimaryKey, changed = nil, true
 	}
-	if len(s.UniqueKeys) == 0 {
-		s.UniqueKeys = nil
+	if s.UniqueKeys != nil && len(s.UniqueKeys) == 0 {
+		s.UniqueKeys, changed = nil, true
 	}
 	for k, v := range s.Fields {
-		v.canonical()
-		s.Fields[k] = v
+		if v.canonical() {
+			s.Fields[k], changed = v, true
+		}
 	}
-	if len(s.Fields) == 0 {
-		s.Fields = nil
+	if s.Fields != nil && len(s.Fields) == 0 {
+		s.Fields, changed = nil, true
 	}
-	if s.Roles != nil {
-		s.Roles.canonical()
+	if s.Roles != nil && s.Roles.canonical() {
+		changed = true
 	}
 	for k, v := range s.FieldACL {
-		v.canonical()
-		s.FieldACL[k] = v
+		if v.canonical() {
+			s.FieldACL[k], changed = v, true
+		}
 	}
-	if len(s.FieldACL) == 0 {
-		s.FieldACL = nil
+	if s.FieldACL != nil && len(s.FieldACL) == 0 {
+		s.FieldACL, changed = nil, true
 	}
-	if s.MCP != nil {
-		s.MCP.canonical()
+	if s.MCP != nil && s.MCP.canonical() {
+		changed = true
 	}
-	if len(s.RowPolicies) == 0 {
-		s.RowPolicies = nil
+	if s.RowPolicies != nil && len(s.RowPolicies) == 0 {
+		s.RowPolicies, changed = nil, true
 	}
 	for k, v := range s.Relationships {
-		v.canonical()
-		s.Relationships[k] = v
+		if v.canonical() {
+			s.Relationships[k], changed = v, true
+		}
 	}
-	if len(s.Relationships) == 0 {
-		s.Relationships = nil
+	if s.Relationships != nil && len(s.Relationships) == 0 {
+		s.Relationships, changed = nil, true
 	}
-	if len(s.TenantPolicy) == 0 {
-		s.TenantPolicy = nil
+	if s.TenantPolicy != nil && len(s.TenantPolicy) == 0 {
+		s.TenantPolicy, changed = nil, true
 	}
-	if len(s.Params) == 0 {
-		s.Params = nil
+	if s.Params != nil && len(s.Params) == 0 {
+		s.Params, changed = nil, true
 	}
-	if len(s.Affects) == 0 {
-		s.Affects = nil
+	if s.Affects != nil && len(s.Affects) == 0 {
+		s.Affects, changed = nil, true
 	}
 	if s.AllowCascade != nil && *s.AllowCascade == *new(bool) {
-		s.AllowCascade = nil
+		s.AllowCascade, changed = nil, true
 	}
 	if s.AllowKeyUpdate != nil && *s.AllowKeyUpdate == *new(bool) {
-		s.AllowKeyUpdate = nil
+		s.AllowKeyUpdate, changed = nil, true
 	}
+	return changed
 }
 
 func (c EntityConfig) spec() EntitySpec {
@@ -795,19 +813,20 @@ func (s FieldSpec) config() FieldConfig {
 	return out
 }
 
-func (s *FieldSpec) canonical() {
+func (s *FieldSpec) canonical() (changed bool) {
 	if s.Alias != nil && *s.Alias == *new(string) {
-		s.Alias = nil
+		s.Alias, changed = nil, true
 	}
 	if s.Description != nil && *s.Description == *new(string) {
-		s.Description = nil
+		s.Description, changed = nil, true
 	}
 	if s.Mask != nil && *s.Mask == *new(string) {
-		s.Mask = nil
+		s.Mask, changed = nil, true
 	}
 	if s.Exclude != nil && *s.Exclude == *new(bool) {
-		s.Exclude = nil
+		s.Exclude, changed = nil, true
 	}
+	return changed
 }
 
 func (c FieldConfig) spec() FieldSpec {
@@ -841,25 +860,26 @@ func (s RoleSpec) config() RoleConfig {
 	return out
 }
 
-func (s *RoleSpec) canonical() {
-	if len(s.Read) == 0 {
-		s.Read = nil
+func (s *RoleSpec) canonical() (changed bool) {
+	if s.Read != nil && len(s.Read) == 0 {
+		s.Read, changed = nil, true
 	}
-	if len(s.Create) == 0 {
-		s.Create = nil
+	if s.Create != nil && len(s.Create) == 0 {
+		s.Create, changed = nil, true
 	}
-	if len(s.Update) == 0 {
-		s.Update = nil
+	if s.Update != nil && len(s.Update) == 0 {
+		s.Update, changed = nil, true
 	}
-	if len(s.Delete) == 0 {
-		s.Delete = nil
+	if s.Delete != nil && len(s.Delete) == 0 {
+		s.Delete, changed = nil, true
 	}
-	if len(s.Execute) == 0 {
-		s.Execute = nil
+	if s.Execute != nil && len(s.Execute) == 0 {
+		s.Execute, changed = nil, true
 	}
-	if len(s.Aggregate) == 0 {
-		s.Aggregate = nil
+	if s.Aggregate != nil && len(s.Aggregate) == 0 {
+		s.Aggregate, changed = nil, true
 	}
+	return changed
 }
 
 func (c RoleConfig) spec() RoleSpec {
@@ -886,13 +906,14 @@ func (s FieldACLSpec) config() FieldACLConfig {
 	return out
 }
 
-func (s *FieldACLSpec) canonical() {
-	if len(s.Read) == 0 {
-		s.Read = nil
+func (s *FieldACLSpec) canonical() (changed bool) {
+	if s.Read != nil && len(s.Read) == 0 {
+		s.Read, changed = nil, true
 	}
-	if len(s.Write) == 0 {
-		s.Write = nil
+	if s.Write != nil && len(s.Write) == 0 {
+		s.Write, changed = nil, true
 	}
+	return changed
 }
 
 func (c FieldACLConfig) spec() FieldACLSpec {
@@ -924,13 +945,14 @@ func (s MCPFlagsSpec) config() MCPFlags {
 	return out
 }
 
-func (s *MCPFlagsSpec) canonical() {
+func (s *MCPFlagsSpec) canonical() (changed bool) {
 	if s.CustomTool != nil && *s.CustomTool == *new(bool) {
-		s.CustomTool = nil
+		s.CustomTool, changed = nil, true
 	}
 	if s.TrustedProcedure != nil && *s.TrustedProcedure == *new(bool) {
-		s.TrustedProcedure = nil
+		s.TrustedProcedure, changed = nil, true
 	}
+	return changed
 }
 
 func (c MCPFlags) spec() MCPFlagsSpec {
@@ -966,7 +988,8 @@ func (s RelationshipSpec) config() RelationshipConfig {
 	return out
 }
 
-func (s *RelationshipSpec) canonical() {
+func (s *RelationshipSpec) canonical() (changed bool) {
+	return changed
 }
 
 func (c RelationshipConfig) spec() RelationshipSpec {
@@ -1004,23 +1027,25 @@ func (s RoleDefinitionSpec) config() RoleDefinition {
 	return out
 }
 
-func (s *RoleDefinitionSpec) canonical() {
+func (s *RoleDefinitionSpec) canonical() (changed bool) {
 	if s.Description != nil && *s.Description == *new(string) {
-		s.Description = nil
+		s.Description, changed = nil, true
 	}
 	for k, v := range s.Grants {
-		v.canonical()
-		s.Grants[k] = v
+		if v.canonical() {
+			s.Grants[k], changed = v, true
+		}
 	}
-	if len(s.Grants) == 0 {
-		s.Grants = nil
+	if s.Grants != nil && len(s.Grants) == 0 {
+		s.Grants, changed = nil, true
 	}
-	if len(s.Permissions) == 0 {
-		s.Permissions = nil
+	if s.Permissions != nil && len(s.Permissions) == 0 {
+		s.Permissions, changed = nil, true
 	}
-	if s.Limits != nil {
-		s.Limits.canonical()
+	if s.Limits != nil && s.Limits.canonical() {
+		changed = true
 	}
+	return changed
 }
 
 func (c RoleDefinition) spec() RoleDefinitionSpec {
@@ -1060,13 +1085,14 @@ func (s GrantSpec) config() GrantConfig {
 	return out
 }
 
-func (s *GrantSpec) canonical() {
-	if s.Fields != nil {
-		s.Fields.canonical()
+func (s *GrantSpec) canonical() (changed bool) {
+	if s.Fields != nil && s.Fields.canonical() {
+		changed = true
 	}
-	if len(s.Rows) == 0 {
-		s.Rows = nil
+	if s.Rows != nil && len(s.Rows) == 0 {
+		s.Rows, changed = nil, true
 	}
+	return changed
 }
 
 func (c GrantConfig) spec() GrantSpec {
@@ -1129,37 +1155,38 @@ func (s PrincipalLimitsSpec) config() PrincipalLimits {
 	return out
 }
 
-func (s *PrincipalLimitsSpec) canonical() {
+func (s *PrincipalLimitsSpec) canonical() (changed bool) {
 	if s.MaxRows != nil && *s.MaxRows == *new(int64) {
-		s.MaxRows = nil
+		s.MaxRows, changed = nil, true
 	}
 	if s.MaxBytes != nil && *s.MaxBytes == *new(int64) {
-		s.MaxBytes = nil
+		s.MaxBytes, changed = nil, true
 	}
 	if s.MaxScannedRows != nil && *s.MaxScannedRows == *new(int64) {
-		s.MaxScannedRows = nil
+		s.MaxScannedRows, changed = nil, true
 	}
 	if s.QueryTimeout != nil && *s.QueryTimeout == *new(time.Duration) {
-		s.QueryTimeout = nil
+		s.QueryTimeout, changed = nil, true
 	}
 	if s.SoftScore != nil && *s.SoftScore == *new(int) {
-		s.SoftScore = nil
+		s.SoftScore, changed = nil, true
 	}
 	if s.HardScore != nil && *s.HardScore == *new(int) {
-		s.HardScore = nil
+		s.HardScore, changed = nil, true
 	}
 	if s.RejectFullScan != nil && *s.RejectFullScan == *new(bool) {
-		s.RejectFullScan = nil
+		s.RejectFullScan, changed = nil, true
 	}
 	if s.RPS != nil && *s.RPS == *new(float64) {
-		s.RPS = nil
+		s.RPS, changed = nil, true
 	}
 	if s.MaxInflight != nil && *s.MaxInflight == *new(int) {
-		s.MaxInflight = nil
+		s.MaxInflight, changed = nil, true
 	}
-	if s.Budget != nil {
-		s.Budget.canonical()
+	if s.Budget != nil && s.Budget.canonical() {
+		changed = true
 	}
+	return changed
 }
 
 func (c PrincipalLimits) spec() PrincipalLimitsSpec {
@@ -1212,7 +1239,8 @@ func (s BudgetLimitsSpec) config() BudgetLimits {
 	return out
 }
 
-func (s *BudgetLimitsSpec) canonical() {
+func (s *BudgetLimitsSpec) canonical() (changed bool) {
+	return changed
 }
 
 func (c BudgetLimits) spec() BudgetLimitsSpec {
@@ -1266,38 +1294,40 @@ func (s UserSpec) config() UserConfig {
 	return out
 }
 
-func (s *UserSpec) canonical() {
+func (s *UserSpec) canonical() (changed bool) {
 	if s.Description != nil && *s.Description == *new(string) {
-		s.Description = nil
+		s.Description, changed = nil, true
 	}
 	if s.TokenHash != nil && *s.TokenHash == *new(string) {
-		s.TokenHash = nil
+		s.TokenHash, changed = nil, true
 	}
-	if len(s.CertSubjects) == 0 {
-		s.CertSubjects = nil
+	if s.CertSubjects != nil && len(s.CertSubjects) == 0 {
+		s.CertSubjects, changed = nil, true
 	}
-	if len(s.Roles) == 0 {
-		s.Roles = nil
+	if s.Roles != nil && len(s.Roles) == 0 {
+		s.Roles, changed = nil, true
 	}
-	if len(s.Subject) == 0 {
-		s.Subject = nil
+	if s.Subject != nil && len(s.Subject) == 0 {
+		s.Subject, changed = nil, true
 	}
 	for k, v := range s.Grants {
-		v.canonical()
-		s.Grants[k] = v
+		if v.canonical() {
+			s.Grants[k], changed = v, true
+		}
 	}
-	if len(s.Grants) == 0 {
-		s.Grants = nil
+	if s.Grants != nil && len(s.Grants) == 0 {
+		s.Grants, changed = nil, true
 	}
-	if len(s.Permissions) == 0 {
-		s.Permissions = nil
+	if s.Permissions != nil && len(s.Permissions) == 0 {
+		s.Permissions, changed = nil, true
 	}
 	if s.Disabled != nil && *s.Disabled == *new(bool) {
-		s.Disabled = nil
+		s.Disabled, changed = nil, true
 	}
-	if s.Limits != nil {
-		s.Limits.canonical()
+	if s.Limits != nil && s.Limits.canonical() {
+		changed = true
 	}
+	return changed
 }
 
 func (c UserConfig) spec() UserSpec {
@@ -1375,7 +1405,8 @@ func (s ToolFlagsSpec) config() ToolFlags {
 	return out
 }
 
-func (s *ToolFlagsSpec) canonical() {
+func (s *ToolFlagsSpec) canonical() (changed bool) {
+	return changed
 }
 
 func (c ToolFlags) spec() ToolFlagsSpec {
@@ -1590,13 +1621,14 @@ func (s CostSpec) config() CostConfig {
 	return out
 }
 
-func (s *CostSpec) canonical() {
-	if s.AQE != nil {
-		s.AQE.canonical()
+func (s *CostSpec) canonical() (changed bool) {
+	if s.AQE != nil && s.AQE.canonical() {
+		changed = true
 	}
-	if s.SQLEscape != nil {
-		s.SQLEscape.canonical()
+	if s.SQLEscape != nil && s.SQLEscape.canonical() {
+		changed = true
 	}
+	return changed
 }
 
 func (c CostConfig) spec() CostSpec {
@@ -1738,7 +1770,8 @@ func (s AQESpec) config() AQEConfig {
 	return out
 }
 
-func (s *AQESpec) canonical() {
+func (s *AQESpec) canonical() (changed bool) {
+	return changed
 }
 
 func (c AQEConfig) spec() AQESpec {
@@ -1787,7 +1820,8 @@ func (s SQLEscapeCostSpec) config() SQLEscapeCostConfig {
 	return out
 }
 
-func (s *SQLEscapeCostSpec) canonical() {
+func (s *SQLEscapeCostSpec) canonical() (changed bool) {
+	return changed
 }
 
 func (c SQLEscapeCostConfig) spec() SQLEscapeCostSpec {
@@ -1827,22 +1861,26 @@ func (s BudgetSpec) config() BudgetConfig {
 	return out
 }
 
-func (s *BudgetSpec) canonical() {
+func (s *BudgetSpec) canonical() (changed bool) {
 	for k, v := range s.Roles {
-		v.canonical()
-		s.Roles[k] = v
+		if v.canonical() {
+			s.Roles[k], changed = v, true
+		}
 	}
 	for k, v := range s.Tenants {
-		v.canonical()
-		s.Tenants[k] = v
+		if v.canonical() {
+			s.Tenants[k], changed = v, true
+		}
 	}
 	for k, v := range s.Users {
-		v.canonical()
-		s.Users[k] = v
+		if v.canonical() {
+			s.Users[k], changed = v, true
+		}
 	}
-	if len(s.Users) == 0 {
-		s.Users = nil
+	if s.Users != nil && len(s.Users) == 0 {
+		s.Users, changed = nil, true
 	}
+	return changed
 }
 
 func (c BudgetConfig) spec() BudgetSpec {
@@ -1905,7 +1943,8 @@ func (s CacheSpec) config() CacheConfig {
 	return out
 }
 
-func (s *CacheSpec) canonical() {
+func (s *CacheSpec) canonical() (changed bool) {
+	return changed
 }
 
 func (c CacheConfig) spec() CacheSpec {
@@ -1973,7 +2012,8 @@ func (s RateLimitSpec) config() RateLimitConfig {
 	return out
 }
 
-func (s *RateLimitSpec) canonical() {
+func (s *RateLimitSpec) canonical() (changed bool) {
+	return changed
 }
 
 func (c RateLimitConfig) spec() RateLimitSpec {
@@ -2007,7 +2047,8 @@ func (s MaskSpec) config() MaskConfig {
 	return out
 }
 
-func (s *MaskSpec) canonical() {
+func (s *MaskSpec) canonical() (changed bool) {
+	return changed
 }
 
 func (c MaskConfig) spec() MaskSpec {
@@ -2039,7 +2080,8 @@ func (s AuditSpec) config() AuditConfig {
 	return out
 }
 
-func (s *AuditSpec) canonical() {
+func (s *AuditSpec) canonical() (changed bool) {
+	return changed
 }
 
 func (c AuditConfig) spec() AuditSpec {
@@ -2087,7 +2129,8 @@ func (s TransactionSpec) config() TransactionConfig {
 	return out
 }
 
-func (s *TransactionSpec) canonical() {
+func (s *TransactionSpec) canonical() (changed bool) {
+	return changed
 }
 
 func (c TransactionConfig) spec() TransactionSpec {
@@ -2123,16 +2166,17 @@ func (s ExecutionSpec) config() ExecutionConfig {
 	return out
 }
 
-func (s *ExecutionSpec) canonical() {
-	if s.Admin != nil {
-		s.Admin.canonical()
+func (s *ExecutionSpec) canonical() (changed bool) {
+	if s.Admin != nil && s.Admin.canonical() {
+		changed = true
 	}
-	if s.Scan != nil {
-		s.Scan.canonical()
+	if s.Scan != nil && s.Scan.canonical() {
+		changed = true
 	}
-	if s.Background != nil {
-		s.Background.canonical()
+	if s.Background != nil && s.Background.canonical() {
+		changed = true
 	}
+	return changed
 }
 
 func (c ExecutionConfig) spec() ExecutionSpec {
@@ -2166,7 +2210,8 @@ func (s LaneSpec) config() LaneConfig {
 	return out
 }
 
-func (s *LaneSpec) canonical() {
+func (s *LaneSpec) canonical() (changed bool) {
+	return changed
 }
 
 func (c LaneConfig) spec() LaneSpec {

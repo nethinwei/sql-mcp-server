@@ -207,7 +207,6 @@ func (r *Runtime) reloadWith(build func() (*App, error)) error {
 		_ = next.Close()
 		return ErrRuntimeClosed
 	}
-	next.publishShared()
 	if err := publishReload(r, old, next, revokedPrincipals(old.app, next)); err != nil {
 		return err
 	}
@@ -238,6 +237,9 @@ func publishReload(r *Runtime, old *appSnapshot, next *App, revoked []string) er
 		_ = next.Close() // closed meanwhile
 		return ErrRuntimeClosed
 	}
+	// Its settings apply to the shared services once it serves: a reload
+	// the runtime closed under leaves them as the snapshots draining had them.
+	next.publishShared()
 	old.mu.Lock()
 	old.retired = true
 	old.cond.Broadcast()

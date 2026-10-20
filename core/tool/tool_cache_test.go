@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"testing"
 	"time"
@@ -220,5 +221,30 @@ func TestRawRowsCountEveryColumn(t *testing.T) {
 	}
 	if _, bytes := m.counted(); bytes != int64(len(`[1,"a long value"]`))+1 {
 		t.Fatalf("counted %d bytes", bytes)
+	}
+}
+
+// The rows a read stores are those later calls are served: neither the read
+// that stored them nor one served from them edits them after.
+func TestCachedRowsStayAsStored(t *testing.T) {
+	t.Parallel()
+	tc, db := orderContext(t, []any{int64(7), int64(500), "2026-10-01"})
+	c := cache.NewTTLCache[[]map[string]any](time.Minute, 0)
+	tc.Cache = c
+	input := json.RawMessage(`{"entity":"orders","fields":["amount","created_at"],"limit":5}`)
+	first, err := RunTool(context.Background(), ReadTool{}, input, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := json.Marshal(first.Content)
+	second, err := RunTool(context.Background(), ReadTool{}, input, tc)
+	if err != nil || len(db.Queries) != 1 {
+		t.Fatalf("not served from the cache: %v, %d queries", err, len(db.Queries))
+	}
+	if now, _ := json.Marshal(second.Content); string(now) != string(stored) {
+		t.Fatalf("served %s, stored %s", now, stored)
+	}
+	if now, _ := json.Marshal(first.Content); string(now) != string(stored) {
+		t.Fatalf("the stored rows changed: %s, were %s", now, stored)
 	}
 }

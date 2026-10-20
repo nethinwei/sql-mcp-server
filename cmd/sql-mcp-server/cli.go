@@ -16,7 +16,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"gopkg.in/yaml.v3"
 
-	"github.com/nethinwei/sql-mcp-server/core/audit"
 	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
@@ -218,12 +217,8 @@ func setupServeTelemetry(ctx context.Context, execution *bus.Bus) (*telemetry.Me
 
 func auditDroppedReader(runtime *bootstrap.Runtime) func() int64 {
 	return func() int64 {
-		current := runtime.Current()
-		if current == nil {
-			return 0
-		}
-		if async, ok := current.Auditor.(*audit.AsyncAuditor); ok {
-			return async.Dropped()
+		if current := runtime.Current(); current != nil {
+			return current.AuditDropped()
 		}
 		return 0
 	}

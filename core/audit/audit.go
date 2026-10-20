@@ -101,11 +101,22 @@ type AsyncAuditor struct {
 	durable   Durable
 	closeSink func() error
 	done      chan struct{}
-	dropped   atomic.Int64
+	// dropped counts the events dropped; it may be shared (CountDropsIn).
+	dropped *atomic.Int64
 	// mu orders Record's send before Close closes the queue: senders hold it
 	// shared, Close exclusively, so no send can reach a closed channel.
 	mu     sync.RWMutex
 	closed bool
+}
+
+// CountDropsIn counts the events a dropped in c, which may count those of
+// other auditors: a process's count does not start again with each auditor a
+// reload assembles. It is set before a is used.
+func (a *AsyncAuditor) CountDropsIn(c *atomic.Int64) *AsyncAuditor {
+	if c != nil {
+		a.dropped = c
+	}
+	return a
 }
 
 // Durably makes a record synchronously through d (its sink, typically) on
@@ -141,6 +152,7 @@ func NewAsyncAuditorOn(b *bus.Bus, sink Sink, closeSink func() error, queueSize 
 		queueSize = 1024
 	}
 	a := &AsyncAuditor{
+		dropped:   &atomic.Int64{},
 		queue:     make(chan Event, queueSize),
 		sink:      sink,
 		closeSink: closeSink,

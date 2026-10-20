@@ -56,7 +56,7 @@ func (r *Service) planContext(ctx context.Context, draft *Draft) (planContext, e
 	if err != nil {
 		return planContext{}, err
 	}
-	spec, published, err := bootstrap.LoadRevisionSpec(rev)
+	spec, published, err := r.RevisionSpec(rev.ID, func() (revision.Revision, error) { return rev, nil })
 	if err != nil {
 		return planContext{}, err
 	}

@@ -5,67 +5,16 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"slices"
 	"strconv"
-	"sync"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 )
 
-// configsKept bounds the configurations SelectConfig keeps parsed.
+// configsKept bounds the configurations kept parsed: built workspaces' (see
+// BuildDraft) and revisions' (see RevisionSpec).
 const configsKept = 8
-
-// configs keeps recently built workspace configurations, by their base and
-// the hash of their edit: building a workspace onto a large revision takes
-// a large part of a second, and the console asks for the same configuration
-// on every page (a revision's own is kept by RevisionSpec). The
-// configurations kept are shared: SelectConfig's callers only read them.
-type configs struct {
-	mu  sync.Mutex
-	all []keptConfig // most recently used last
-}
-
-type keptConfig struct {
-	key string
-	cfg *config.Config
-}
-
-func (c *configs) get(key string) (*config.Config, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	i := slices.IndexFunc(c.all, func(k keptConfig) bool { return k.key == key })
-	if i < 0 {
-		return nil, false
-	}
-	k := c.all[i]
-	c.all = append(slices.Delete(c.all, i, i+1), k)
-	return k.cfg, true
-}
-
-func (c *configs) put(key string, cfg *config.Config) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.all = slices.DeleteFunc(c.all, func(k keptConfig) bool { return k.key == key })
-	c.all = append(c.all, keptConfig{key: key, cfg: cfg})
-	if len(c.all) > configsKept {
-		c.all = c.all[len(c.all)-configsKept:]
-	}
-}
-
-// keep returns the configuration kept under key, or builds and keeps it.
-func (c *configs) keep(key string, build func() (*config.Config, error)) (*config.Config, error) {
-	if cfg, ok := c.get(key); ok {
-		return cfg, nil
-	}
-	cfg, err := build()
-	if err != nil {
-		return nil, err
-	}
-	c.put(key, cfg)
-	return cfg, nil
-}
 
 // draftKey names a workspace's configuration: its base and its edit.
 func draftKey(d Draft) (string, error) {

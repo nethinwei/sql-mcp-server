@@ -290,7 +290,7 @@ func (r *Runner) execute(ctx context.Context, br *batchRun, items []catalog.Batc
 // later queues it for a worker when its NotBefore comes, or at once when ctx
 // ends (the worker then lets it go).
 func (r *Runner) later(ctx context.Context, queue chan<- catalog.BatchItem, it catalog.BatchItem) {
-	wait := time.Until(it.NotBefore)
+	wait := it.NotBefore.Sub(r.opts.Now()) // by the clock that set it
 	if wait <= 0 {
 		queue <- it
 		return

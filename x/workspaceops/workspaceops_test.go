@@ -17,16 +17,21 @@ var schema = workspace.Schema{
 }
 
 // codec keeps a revision's items as its JSON payload; an item with
-// "invalid": true does not build. onBuild runs while building.
-type codec struct{ onBuild func() }
+// "invalid": true does not build. onBuild runs while building, onItems
+// (once) while reading a revision's items.
+type codec struct{ onBuild, onItems func() }
 
-func (codec) Items(rev revision.Revision) (workspace.Snapshot, error) {
+func (c *codec) Items(rev revision.Revision) (workspace.Snapshot, error) {
+	if f := c.onItems; f != nil {
+		c.onItems = nil
+		f()
+	}
 	var s workspace.Snapshot
 	err := json.Unmarshal(rev.Payload, &s)
 	return s, err
 }
 
-func (c codec) Build(_ revision.Revision, items workspace.Snapshot) ([]byte, error) {
+func (c *codec) Build(_ revision.Revision, items workspace.Snapshot) ([]byte, error) {
 	for _, it := range items {
 		if m, ok := it.Value.(map[string]any); ok && m["invalid"] == true {
 			return nil, errors.New("invalid")
@@ -552,5 +557,71 @@ func TestRenamesChainedInOneWrite(t *testing.T) {
 	}
 	if len(renames) != 1 || renames[viewer] != analyst {
 		t.Fatalf("renames = %v", renames)
+	}
+}
+
+// meanwhile runs once, after the published revision is read: another
+// request publishing and moving the workspace on in between.
+type meanwhile struct {
+	revision.Store
+	once func()
+}
+
+func (m *meanwhile) Published(ctx context.Context) (revision.Revision, error) {
+	rev, err := m.Store.Published(ctx)
+	if f := m.once; f != nil {
+		m.once = nil
+		f()
+	}
+	return rev, err
+}
+
+// A workspace is never moved back: a draft merged while another request
+// moved the workspace onto a newer publish merges onto that one; an update
+// to an older revision than its base, or a commit's move once a newer one
+// was followed, leaves its base where it is.
+func TestWorkspaceIsNeverMovedBack(t *testing.T) {
+	e := newEnv(t)
+	draft, err := e.revs.Create(e.ctx, revision.Draft{ParentID: 1, Payload: []byte(items(role("draft", "x")))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.write("root", role("mine"), role("base"))
+	var newer int64
+	m := &meanwhile{Store: e.revs, once: func() {
+		newer = e.publish(items(role("base", "y")))
+		if _, err := e.svc.Update(e.ctx, "root", "root", newer); err != nil {
+			t.Error(err)
+		}
+	}}
+	e.svc.Revisions = m
+	st, err := e.svc.MergeDraft(e.ctx, "root", "root", draft.ID)
+	if err != nil || st.Workspace.Base != newer {
+		t.Fatalf("merged onto #%d (%v), want #%d", st.Workspace.Base, err, newer)
+	}
+	if st, err := e.svc.Update(e.ctx, "root", "root", 1); err != nil || st.Workspace.Base != newer {
+		t.Fatalf("updated back to #%d (%v), want #%d", st.Workspace.Base, err, newer)
+	}
+}
+
+// A checkpoint whose workspace cannot then record it leaves no draft
+// behind: the draft it stored is discarded.
+func TestFailedCheckpointLeavesNoDraft(t *testing.T) {
+	e := newEnv(t)
+	e.write("root", role("mine"), role("base"))
+	fail := false
+	e.svc.Store = failingStore{e.svc.Store, &fail}
+	e.codec.onBuild = func() { fail = true }
+	if _, err := e.svc.Checkpoint(e.ctx, "root", "root", "share"); err == nil {
+		t.Fatal("the checkpoint was recorded")
+	}
+	all, err := e.revs.List(e.ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rev := range all {
+		if rev.State == revision.StateDraft {
+			t.Fatalf("draft #%d left behind", rev.ID)
+		}
 	}
 }

@@ -48,15 +48,27 @@ func isDecimalType(domainType string) bool {
 	return strings.HasPrefix(t, "numeric") || strings.HasPrefix(t, "decimal")
 }
 
-// coerceNumber converts v (a value, or a list of them) for column of e.
+// coerceNumber converts v (a value, or a list of them) for column of e. The
+// column's type is looked up once, at the first number: an IN list holds
+// thousands.
 func coerceNumber(e entity.Entity, column string, v any) (any, error) {
+	kind, known := exactNumber, false
+	numberKind := func() numberKind {
+		if !known {
+			if i := slices.IndexFunc(e.Attributes, func(a entity.Attribute) bool { return a.Name == column }); i >= 0 {
+				kind = numberKindOf(e.Attributes[i].Domain.Type)
+			}
+			known = true
+		}
+		return kind
+	}
+	return coerceAs(numberKind, column, v)
+}
+
+func coerceAs(kind func() numberKind, column string, v any) (any, error) {
 	switch x := v.(type) {
 	case json.Number:
-		kind := exactNumber
-		if i := slices.IndexFunc(e.Attributes, func(a entity.Attribute) bool { return a.Name == column }); i >= 0 {
-			kind = numberKindOf(e.Attributes[i].Domain.Type)
-		}
-		switch kind {
+		switch kind() {
 		case floatNumber:
 			f, err := x.Float64()
 			if err != nil {
@@ -70,7 +82,7 @@ func coerceNumber(e entity.Entity, column string, v any) (any, error) {
 	case []any:
 		out := make([]any, len(x))
 		for i, item := range x {
-			c, err := coerceNumber(e, column, item)
+			c, err := coerceAs(kind, column, item)
 			if err != nil {
 				return nil, err
 			}

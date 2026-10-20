@@ -1,10 +1,13 @@
 package mysql
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
+	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 )
 
@@ -86,5 +89,21 @@ func TestOpenWithoutATimeout(t *testing.T) {
 		if c := caps.Claim(dialect.TimeoutWrite); c.Strength != dialect.Unsupported {
 			t.Fatalf("%q: timeout = %+v", variable, c)
 		}
+	}
+}
+
+// A connection that cannot be made is that, not a statement whose
+// connection broke while it ran (its outcome unknown): nothing was sent.
+func TestUnreachableServerIsNotConnected(t *testing.T) {
+	t.Parallel()
+	pool, _, err := NewAdapter("u:p@tcp(127.0.0.1:1)/db?timeout=1s",
+		providerregistry.Options{Timeout: time.Second, Lazy: true}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	_, err = pool.ExecContext(context.Background(), "UPDATE t SET a = 1 WHERE id = 1")
+	if !errors.Is(err, store.ErrNotConnected) {
+		t.Fatalf("err = %v", err)
 	}
 }

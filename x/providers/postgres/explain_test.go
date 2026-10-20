@@ -276,3 +276,15 @@ func TestParsePGExplainReadsNoTable(t *testing.T) {
 		t.Errorf("Result over Seq Scan: ScanType = %v, want ScanFull", p.ScanType)
 	}
 }
+
+// A bitmap heap scan reads the heap pages its index condition matched,
+// maybe most of the table: worse than an index scan, though no full scan.
+func TestParsePGExplainBitmapHeapScan(t *testing.T) {
+	t.Parallel()
+	raw := `[{"Plan":{"Node Type":"Bitmap Heap Scan","Relation Name":"orders","Plan Rows":40000,` +
+		`"Plans":[{"Node Type":"Bitmap Index Scan","Plan Rows":40000}]}}]`
+	p, _, _ := parsePGExplain([]byte(raw))
+	if p.ScanType != cost.ScanSeq || p.EstimatedRows != 40000 {
+		t.Fatalf("plan = %+v, want ScanSeq", p)
+	}
+}

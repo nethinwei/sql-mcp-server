@@ -219,6 +219,9 @@ func registerReads(s *mcp.Server, app Service) {
 // diffPage is a page of a diff's lines.
 func diffPage(diff string, offset, limit int) map[string]any {
 	lines := strings.SplitAfter(diff, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" { // after the last newline: no line
+		lines = lines[:len(lines)-1]
+	}
 	if limit <= 0 {
 		limit = 400
 	}

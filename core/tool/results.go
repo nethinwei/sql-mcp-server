@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -121,11 +122,27 @@ func (m *resultMeter) add(row map[string]any) error {
 	if m == nil {
 		return nil
 	}
-	encoded, err := json.Marshal(row)
+	n, err := encodedSize(row)
 	if err != nil {
 		return fmt.Errorf("encode a result row: %w", err)
 	}
-	return m.addSized(1, int64(len(encoded))+1) // and its separator
+	return m.addSized(1, n)
+}
+
+// rowBuffers are the buffers rows are encoded into to be counted: a read
+// counts each of its rows, thousands.
+var rowBuffers = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+
+// encodedSize is the size of v encoded as JSON, and its separator (the
+// newline an encoder ends it with stands for it).
+func encodedSize(v any) (int64, error) {
+	buf := rowBuffers.Get().(*bytes.Buffer)
+	defer rowBuffers.Put(buf)
+	buf.Reset()
+	if err := json.NewEncoder(buf).Encode(v); err != nil {
+		return 0, err
+	}
+	return int64(buf.Len()), nil
 }
 
 // addValues counts a row of values, as an escape hatch query returns it (a
@@ -134,11 +151,11 @@ func (m *resultMeter) addValues(values []any) error {
 	if m == nil {
 		return nil
 	}
-	encoded, err := json.Marshal(values)
+	n, err := encodedSize(values)
 	if err != nil {
 		return fmt.Errorf("encode a result row: %w", err)
 	}
-	return m.addSized(1, int64(len(encoded))+1) // and its separator
+	return m.addSized(1, n)
 }
 
 // addSized counts rows of n bytes in all (each with its separator) against

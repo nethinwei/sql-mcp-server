@@ -22,6 +22,7 @@ func (ev *evaluation) syncAll(targets []target, exclude map[string]bool) []targe
 	for _, t := range all {
 		ev.sync(t)
 	}
+	ev.dropGrantFields()
 	for _, t := range all {
 		if columns := ev.in.MissingRowColumns[t.id]; len(columns) > 0 {
 			ev.except(Exception{Kind: ExceptionRowColumnMissing, Ref: t.row.Ref, Entity: t.id,

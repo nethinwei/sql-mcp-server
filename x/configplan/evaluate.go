@@ -270,6 +270,9 @@ type evaluation struct {
 	// added; uses indexes what names each field (see fieldUses).
 	refs *config.EntityRefs
 	uses map[string]map[string][]string
+	// dropped are the fields a sync removed, by entity ID (see
+	// dropGrantFields).
+	dropped map[string][]string
 }
 
 type compiledFieldRule struct {
@@ -288,7 +291,7 @@ func newEvaluation(in Input, p Plan) *evaluation {
 	ev := &evaluation{
 		in: in, plan: p, cfg: &cfg, index: map[string]int{}, imported: map[string]string{}, changed: map[string]bool{},
 		roles: map[string]bool{}, users: map[string]bool{}, changes: map[string]*Change{},
-		summarized: map[string]map[string]bool{},
+		summarized: map[string]map[string]bool{}, dropped: map[string][]string{},
 	}
 	for _, r := range p.Fields {
 		ev.fieldRules = append(ev.fieldRules, compiledFieldRule{r, compileGlobs(r.Columns), compileGlobs(r.Types)})

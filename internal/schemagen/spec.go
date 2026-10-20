@@ -192,8 +192,10 @@ func omitEmpty(f reflect.StructField) bool {
 // writeCanonical writes canonical, which unsets what is written but means
 // unset: a zero, or an empty list or map, where the struct omits it (an
 // older encoding wrote some), so two payloads saying the same compare equal.
+// It writes only what it changes, and reports whether it did: a spec
+// canonical already (as decoded) is only read, so callers may share it.
 func (g *specGen) writeCanonical(b *bytes.Buffer, t reflect.Type) {
-	fmt.Fprintf(b, "func (s *%s) canonical() {\n", specName(t))
+	fmt.Fprintf(b, "func (s *%s) canonical() (changed bool) {\n", specName(t))
 	for i := range t.NumField() {
 		f := t.Field(i)
 		yn := yamlName(f)
@@ -203,22 +205,28 @@ func (g *specGen) writeCanonical(b *bytes.Buffer, t reflect.Type) {
 		ft := f.Type
 		switch {
 		case isStruct(ft) || ft.Kind() == reflect.Pointer && isStruct(ft.Elem()):
-			fmt.Fprintf(b, "\tif s.%[1]s != nil {\n\t\ts.%[1]s.canonical()\n\t}\n", f.Name)
+			fmt.Fprintf(b, "\tif s.%[1]s != nil && s.%[1]s.canonical() {\n\t\tchanged = true\n\t}\n", f.Name)
 		case (ft.Kind() == reflect.Slice || ft.Kind() == reflect.Map) && isStruct(ft.Elem()):
-			fmt.Fprintf(b, "\tfor k, v := range s.%[1]s {\n\t\tv.canonical()\n\t\ts.%[1]s[k] = v\n\t}\n", f.Name)
+			fmt.Fprintf(b, "\tfor k, v := range s.%[1]s {\n\t\tif v.canonical() {\n\t\t\ts.%[1]s[k], changed = v, true\n"+
+				"\t\t}\n\t}\n", f.Name)
 			if omitEmpty(f) {
-				fmt.Fprintf(b, "\tif len(s.%[1]s) == 0 {\n\t\ts.%[1]s = nil\n\t}\n", f.Name)
+				writeUnsetEmpty(b, f.Name)
 			}
 		case (ft.Kind() == reflect.Slice || ft.Kind() == reflect.Map) && omitEmpty(f):
-			fmt.Fprintf(b, "\tif len(s.%[1]s) == 0 {\n\t\ts.%[1]s = nil\n\t}\n", f.Name)
+			writeUnsetEmpty(b, f.Name)
 		case ft.Kind() == reflect.Pointer || ft.Kind() == reflect.Slice || ft.Kind() == reflect.Map ||
 			ft.Kind() == reflect.Interface || !omitEmpty(f):
 		default:
-			fmt.Fprintf(b, "\tif s.%[1]s != nil && *s.%[1]s == *new(%[2]s) {\n\t\ts.%[1]s = nil\n\t}\n",
+			fmt.Fprintf(b, "\tif s.%[1]s != nil && *s.%[1]s == *new(%[2]s) {\n\t\ts.%[1]s, changed = nil, true\n\t}\n",
 				f.Name, goType(ft))
 		}
 	}
-	b.WriteString("}\n\n")
+	b.WriteString("\treturn changed\n}\n\n")
+}
+
+// writeUnsetEmpty unsets field when it is written empty.
+func writeUnsetEmpty(b *bytes.Buffer, field string) {
+	fmt.Fprintf(b, "\tif s.%[1]s != nil && len(s.%[1]s) == 0 {\n\t\ts.%[1]s, changed = nil, true\n\t}\n", field)
 }
 
 // writeConfig writes the conversion of a Spec into its struct before

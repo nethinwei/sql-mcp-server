@@ -1,14 +1,18 @@
 package mysql
 
 import (
+	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
+	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 	"github.com/nethinwei/sql-mcp-server/x/providers/sqladapter"
 )
@@ -54,10 +58,11 @@ func NewAdapter(
 	if _, ok := cfg.Params[oceanBaseVariable]; !ok && opts.Timeout > 0 && oceanBaseVariable != "" {
 		cfg.Params[oceanBaseVariable] = strconv.FormatInt(opts.NativeTimeout().Microseconds(), 10)
 	}
-	connector, err := mysqldriver.NewConnector(cfg)
+	base, err := mysqldriver.NewConnector(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
+	var connector driver.Connector = dialConnector{base}
 	if killsStatements(opts.Pooler, oceanBaseVariable) {
 		connector = newKillConnector(connector)
 	}
@@ -75,4 +80,28 @@ func NewAdapter(
 var binaryTypes = map[string]bool{
 	"BINARY": true, "VARBINARY": true, "BIT": true, "GEOMETRY": true,
 	"BLOB": true, "TINYBLOB": true, "MEDIUMBLOB": true, "LONGBLOB": true,
+}
+
+// dialConnector marks a connection that could not be made as such
+// (store.ErrNotConnected): the driver returns the network error of a dial,
+// a TLS handshake or a refused login bare, which would otherwise read as a
+// statement whose connection broke while it ran, its outcome unknown. A
+// driver.ErrBadConn is left as it is: database/sql tries another
+// connection for it.
+type dialConnector struct{ driver.Connector }
+
+func (c dialConnector) Connect(ctx context.Context) (driver.Conn, error) {
+	conn, err := c.Connector.Connect(ctx)
+	if err != nil && !errors.Is(err, driver.ErrBadConn) {
+		return nil, fmt.Errorf("%w: %w", store.ErrNotConnected, err)
+	}
+	return conn, err
+}
+
+// Close closes the driver's connector, when it has something to close.
+func (c dialConnector) Close() error {
+	if closer, ok := c.Connector.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
 }

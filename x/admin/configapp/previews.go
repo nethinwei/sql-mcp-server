@@ -57,7 +57,10 @@ type previews struct {
 func (k *previews) put(p *Preview) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	k.all = slices.DeleteFunc(k.all, func(o *Preview) bool { return o.PlanID == p.PlanID && o.owner == p.owner })
+	// Expired ones go too: a large import's preview holds a whole proposal.
+	k.all = slices.DeleteFunc(k.all, func(o *Preview) bool {
+		return o.PlanID == p.PlanID && o.owner == p.owner || p.at.Sub(o.at) >= previewTTL
+	})
 	k.all = append(k.all, p)
 	if len(k.all) > previewsKept {
 		k.all = k.all[len(k.all)-previewsKept:]
@@ -67,8 +70,9 @@ func (k *previews) put(p *Preview) {
 func (k *previews) get(id, owner string, now time.Time) (*Preview, bool) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	k.all = slices.DeleteFunc(k.all, func(p *Preview) bool { return now.Sub(p.at) >= previewTTL })
 	for i, p := range k.all {
-		if p.PlanID == id && p.owner == owner && now.Sub(p.at) < previewTTL {
+		if p.PlanID == id && p.owner == owner {
 			k.all = append(slices.Delete(k.all, i, i+1), p)
 			return p, true
 		}

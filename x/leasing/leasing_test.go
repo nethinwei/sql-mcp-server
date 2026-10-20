@@ -430,3 +430,24 @@ func TestTakeOverEndsCanceledAndOrphanedBatches(t *testing.T) {
 		}
 	}
 }
+
+// A retry waits its backoff by the runner's clock, which set it: a clock
+// ahead of the system's does not hold the item back by the difference.
+func TestRetryWaitsByTheRunnersClock(t *testing.T) {
+	t.Parallel()
+	store := catalog.NewMemoryStore()
+	opts := quick
+	opts.Now = func() time.Time { return time.Now().Add(time.Hour) }
+	r := New(store, opts)
+	t.Cleanup(r.Close)
+	var runs atomic.Int32
+	failsOnce := func(context.Context, string, string) (string, string) {
+		if runs.Add(1) == 1 {
+			return catalog.ItemFailed, "once"
+		}
+		return catalog.ItemDone, ""
+	}
+	if got := waitFinished(t, store, start(t, r, failsOnce, "a").ID); got.Items[0].State != catalog.ItemDone {
+		t.Fatalf("items = %+v", got.Items)
+	}
+}

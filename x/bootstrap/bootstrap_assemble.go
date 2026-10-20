@@ -8,6 +8,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/audit"
@@ -115,7 +116,7 @@ func (a *assembly) acquire() (err error) {
 	if a.engine, err = newAssembleEngine(cfg, a.shared); err != nil {
 		return err
 	}
-	if a.auditor, err = newAssembleAuditor(cfg, sharedBus(a.shared)); err != nil {
+	if a.auditor, err = newAssembleAuditor(cfg, a.shared); err != nil {
 		return err
 	}
 	a.cache = newAssembleCache(cfg, a.shared)
@@ -659,7 +660,7 @@ func newAssembleEngine(cfg *config.Config, shared *Shared) (*engine.Engine, erro
 	)
 }
 
-func newAssembleAuditor(cfg *config.Config, b *bus.Bus) (audit.Auditor, error) {
+func newAssembleAuditor(cfg *config.Config, shared *Shared) (audit.Auditor, error) {
 	if !cfg.Audit.Enabled || cfg.Audit.Path == "" {
 		return audit.NoopAuditor{}, nil
 	}
@@ -667,7 +668,12 @@ func newAssembleAuditor(cfg *config.Config, b *bus.Bus) (audit.Auditor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("assemble audit sink: %w", err)
 	}
-	return audit.NewAsyncAuditorOn(b, sink.Record, sink.Close, cfg.Audit.QueueSize).Durably(sink), nil
+	var dropped *atomic.Int64
+	if shared != nil {
+		dropped = &shared.auditDropped
+	}
+	return audit.NewAsyncAuditorOn(sharedBus(shared), sink.Record, sink.Close, cfg.Audit.QueueSize).
+		CountDropsIn(dropped).Durably(sink), nil
 }
 
 func newAssembleCache(cfg *config.Config, shared *Shared) cache.Cache[[]map[string]any] {

@@ -2,6 +2,7 @@ package workspaceops
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -26,6 +27,24 @@ func (s Service) MergeDraft(ctx context.Context, username, by string, draft int6
 	if err != nil {
 		return State{}, err
 	}
+	for attempt := 0; ; attempt++ {
+		// The published revision is read again when the workspace moved past
+		// it meanwhile: merging onto it would move the workspace back.
+		st, err := s.mergeDraft(ctx, username, by, d, from)
+		if !errors.Is(err, errPublishedMoved) || attempt == attempts-1 {
+			return st, err
+		}
+	}
+}
+
+// errPublishedMoved: the workspace builds on a revision published after the
+// one read.
+var errPublishedMoved = fmt.Errorf("%w: a newer revision was published", workspace.ErrChanged)
+
+func (s Service) mergeDraft(ctx context.Context, username, by string, d revision.Revision, from int64) (
+	State, error,
+) {
+	draft := d.ID
 	published, err := s.Revisions.Published(ctx)
 	if err != nil {
 		return State{}, err
@@ -44,6 +63,9 @@ func (s Service) MergeDraft(ctx context.Context, username, by string, draft int6
 	) {
 		if slices.Contains(w.Taken, draft) {
 			return nil, workspace.LogEntry{Op: "merge", Note: "#" + idOf(draft)}, nil
+		}
+		if w.Base > published.ID {
+			return nil, workspace.LogEntry{}, errPublishedMoved
 		}
 		onto, before := snaps[published.ID], w.Items
 		if w.Base != published.ID {
@@ -99,6 +121,7 @@ func (s Service) Checkpoint(ctx context.Context, username, by, comment string) (
 		return nil, workspace.LogEntry{Op: "checkpoint", Note: "#" + idOf(draft.ID)}, nil
 	})
 	if err != nil {
+		s.discard(ctx, draft.ID, by) // no workspace holds it: it would be offered to all as a draft
 		return revision.Revision{}, err
 	}
 	if earlier != 0 {
@@ -221,14 +244,18 @@ func (s Service) moveAfterCommit(ctx context.Context, username, by string, snap 
 	_, err = s.apply(ctx, username, by, func(w *workspace.Workspace, _ workspace.Snapshot) (
 		workspace.Snapshot, workspace.LogEntry, error,
 	) {
-		s.moveOnto(w, snap.Items, w.Items, next, published.ID)
+		var moved workspace.Snapshot
+		if w.Base <= published.ID { // else moved on past it already (a newer publish followed)
+			s.moveOnto(w, snap.Items, w.Items, next, published.ID)
+			moved = next
+		}
 		w.Notes = slices.DeleteFunc(w.Notes, func(n workspace.Note) bool { return slices.Contains(snap.Notes, n) })
 		w.Taken = slices.DeleteFunc(w.Taken, func(id int64) bool { return slices.Contains(snap.Taken, id) })
 		if w.Checkpoint == snap.Checkpoint {
 			w.Checkpoint = 0
 		}
 		w.CheckpointAt = 0
-		return next, workspace.LogEntry{Op: "commit", Items: committed, Note: "#" + idOf(published.ID)}, nil
+		return moved, workspace.LogEntry{Op: "commit", Items: committed, Note: "#" + idOf(published.ID)}, nil
 	})
 	return err
 }

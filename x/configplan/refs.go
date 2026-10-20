@@ -80,23 +80,32 @@ func (ev *evaluation) fieldReferences(id, field string) []string {
 	return out
 }
 
-// dropGrantField removes a field from the field lists of the grants on id.
-func (ev *evaluation) dropGrantField(id, field string) {
+// dropGrantFields removes the fields a sync removed (dropped) from the field
+// lists of the grants on their entities, in one pass over the grants: a
+// sync may remove thousands.
+func (ev *evaluation) dropGrantFields() {
+	if len(ev.dropped) == 0 {
+		return
+	}
 	for _, p := range ev.principals() {
 		grants := ev.grantsOf(p)
 		var out []config.GrantConfig
 		for i, g := range grants {
-			if g.Fields == nil || !slices.Contains(g.Fields.Read, field) && !slices.Contains(g.Fields.Write, field) {
+			if g.Fields == nil {
 				continue
 			}
-			if on, ok := ev.resolve(g.Entity); !ok || on != id {
+			on, ok := ev.resolve(g.Entity)
+			gone := ev.dropped[on]
+			if !ok || !slices.ContainsFunc(slices.Concat(g.Fields.Read, g.Fields.Write), func(f string) bool {
+				return slices.Contains(gone, f)
+			}) {
 				continue
 			}
 			if out == nil {
 				out = slices.Clone(grants)
 			}
 			without := func(fs []string) []string {
-				return slices.DeleteFunc(slices.Clone(fs), func(f string) bool { return f == field })
+				return slices.DeleteFunc(slices.Clone(fs), func(f string) bool { return slices.Contains(gone, f) })
 			}
 			out[i].Fields = &config.FieldACLConfig{Read: without(g.Fields.Read), Write: without(g.Fields.Write)}
 		}

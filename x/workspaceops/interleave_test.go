@@ -27,7 +27,9 @@ type model struct {
 	committed []int64
 	// dropped is the workspace version a reset dropped each draft taken in at.
 	dropped map[int64]int64
-	log     []string
+	// base is the revision the workspace was last seen to build on.
+	base int64
+	log  []string
 }
 
 type rng struct{ s uint32 }
@@ -103,7 +105,7 @@ func (m *model) rename() {
 // merge takes in a new draft of the published revision changing one item.
 func (m *model) merge() {
 	published, _ := m.revs.Published(m.ctx)
-	items, _ := (codec{}).Items(published)
+	items, _ := (&codec{}).Items(published)
 	key := keys[m.r.intn(len(keys))]
 	items = items.With(workspace.Ref{Kind: "role", Key: key}, roleItem(key, fmt.Sprintf("d%d", m.r.intn(5))))
 	payload, _ := json.Marshal(items)
@@ -111,7 +113,21 @@ func (m *model) merge() {
 	if err != nil {
 		m.t.Fatal(err)
 	}
+	if m.r.intn(3) == 0 { // others publish and update while it reads the revisions
+		m.codec.onItems = func() {
+			m.log = append(m.log, "  while merging:")
+			if m.r.intn(2) == 0 { // the workspace follows a newer publish
+				m.publishOther()
+				m.update()
+				return
+			}
+			for n := m.r.intn(3); n > 0; n-- {
+				m.step(false)
+			}
+		}
+	}
 	st, err := m.svc.MergeDraft(m.ctx, "root", "root", draft.ID)
+	m.codec.onItems = nil
 	if err != nil {
 		m.t.Fatalf("seed %d: merge: %v", m.seed, err)
 	}
@@ -123,7 +139,7 @@ func (m *model) merge() {
 // administrator); update then moves the workspace onto it.
 func (m *model) publishOther() {
 	published, _ := m.revs.Published(m.ctx)
-	items, _ := (codec{}).Items(published)
+	items, _ := (&codec{}).Items(published)
 	key := keys[m.r.intn(len(keys))]
 	items = items.With(workspace.Ref{Kind: "role", Key: key}, roleItem(key, fmt.Sprintf("p%d", m.r.intn(5))))
 	payload, _ := json.Marshal(items)
@@ -134,9 +150,11 @@ func (m *model) publishOther() {
 func (m *model) update() {
 	published, _ := m.revs.Published(m.ctx)
 	m.log = append(m.log, fmt.Sprintf("update #%d", published.ID))
-	if _, err := m.svc.Update(m.ctx, "root", "root", published.ID); err != nil {
+	st, err := m.svc.Update(m.ctx, "root", "root", published.ID)
+	if err != nil {
 		m.t.Fatalf("seed %d: update: %v", m.seed, err)
 	}
+	m.base = max(m.base, st.Workspace.Base) // seen, even in the middle of another operation
 }
 
 func (m *model) reset() {
@@ -244,6 +262,10 @@ func (m *model) fail(format string, args ...any) {
 func (m *model) check() {
 	m.t.Helper()
 	w := m.read().Workspace
+	if w.Base < m.base { // revisions are numbered as published
+		m.fail("the workspace moved back from #%d to #%d", m.base, w.Base)
+	}
+	m.base = w.Base
 	for id, at := range m.merged {
 		rev, _ := m.revs.Get(m.ctx, id)
 		published := m.published(id)

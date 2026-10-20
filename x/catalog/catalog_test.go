@@ -61,3 +61,19 @@ func TestFromCatalogSplitsBySchema(t *testing.T) {
 		t.Fatalf("catalog = %+v", got)
 	}
 }
+
+// A schema asked for in another case than the server names it is the
+// server's when names fold (MySQL's lower_case_table_names), kept under the
+// name asked; when they do not, it is another schema.
+func TestFromCatalogFoldsSchemaCase(t *testing.T) {
+	t.Parallel()
+	cat := introspect.Catalog{FoldCase: true, Tables: []entity.Entity{{Name: "items", Source: "items", Schema: "test"}}}
+	split := FromCatalog(cat, []string{"TEST"}, time.Unix(1, 0))
+	if len(split) != 1 || split[0].Name != "TEST" || len(split[0].Tables) != 1 {
+		t.Fatalf("folded = %+v", split)
+	}
+	cat.FoldCase = false
+	if split := FromCatalog(cat, []string{"TEST"}, time.Unix(1, 0)); len(split[0].Tables) != 0 {
+		t.Fatalf("case-sensitive = %+v", split)
+	}
+}

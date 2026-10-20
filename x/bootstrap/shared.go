@@ -29,9 +29,11 @@ import (
 // one database failing or slowing down is held back on its own).
 type Shared struct {
 	generation atomic.Uint64
-	cache      *cache.TTLCache[[]map[string]any]
-	bus        *bus.Bus
-	quota      *engine.Quota
+	// auditDropped counts the audit events every App of the process dropped.
+	auditDropped atomic.Int64
+	cache        *cache.TTLCache[[]map[string]any]
+	bus          *bus.Bus
+	quota        *engine.Quota
 	// The state of the process's calls, which outlives every configuration:
 	// open transactions, the sessions' budgets, the writes sessions follow,
 	// and the results calls hold. Publishing an App applies its limits to

@@ -157,3 +157,26 @@ func TestZeroMemoryStoreRecords(t *testing.T) {
 		t.Fatalf("stats = %+v %v", stats, ok)
 	}
 }
+
+// The window keeps the latest samples, as a list cut to its size would.
+func TestMemoryStoreWindowMatchesItsReference(t *testing.T) {
+	t.Parallel()
+	s := NewAdaptiveMemoryStoreWithBounds(4, 8, 3, 5, nil)
+	var reference []Feedback
+	for i := range 23 {
+		f := Feedback{Template: "q", ActualRows: int64(i*7%11 + 1), Duration: time.Duration(i), EstimatedRows: int64(i)}
+		s.Record(f)
+		if reference = append(reference, f); len(reference) > 4 {
+			reference = reference[1:]
+		}
+		stats, ok := s.Stats("q")
+		var rows int64
+		for _, r := range reference {
+			rows += r.ActualRows
+		}
+		if !ok || stats.Samples != len(reference) || stats.AverageRows != rows/int64(len(reference)) ||
+			stats.LatestRows != f.ActualRows || stats.EstimatedRows != f.EstimatedRows {
+			t.Fatalf("after %d: %+v, reference %+v", i, stats, reference)
+		}
+	}
+}

@@ -132,6 +132,19 @@ func (a *App) publishShared() {
 	}
 }
 
+// AuditDropped counts the audit events dropped for a full queue: by every
+// App of the process with shared services (it does not start again at a
+// reload), else by this App's auditor.
+func (a *App) AuditDropped() int64 {
+	if a.shared != nil {
+		return a.shared.auditDropped.Load()
+	}
+	if dropping, ok := a.Auditor.(interface{ Dropped() int64 }); ok {
+		return dropping.Dropped()
+	}
+	return 0
+}
+
 // Bus returns the execution bus the App runs on; nil for an App assembled
 // without shared services, whose work then runs unbounded by a bus.
 func (a *App) Bus() *bus.Bus {
@@ -185,6 +198,21 @@ func (a *App) ToolContextForSubject(role string, subject map[string]any) tool.Co
 	return tc
 }
 
+// stopAssessment cancels the assessment of capabilities and waits for it to
+// end with its queries, or for ctx: one stuck must not keep the rest open.
+func (a *App) stopAssessment(ctx context.Context) error {
+	if a.stopAssessing == nil {
+		return nil
+	}
+	a.stopAssessing()
+	select {
+	case <-a.assessed:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // CloseContext stops engine admission and drains all execution before rolling
 // back transactions and releasing audit/provider resources.
 func (a *App) CloseContext(ctx context.Context) error {
@@ -193,11 +221,10 @@ func (a *App) CloseContext(ctx context.Context) error {
 	if a.closed {
 		return nil
 	}
-	if a.stopAssessing != nil {
-		a.stopAssessing()
-		<-a.assessed
-	}
 	var errs []error
+	if err := a.stopAssessment(ctx); err != nil {
+		errs = append(errs, err)
+	}
 	if a.Engine != nil {
 		if err := a.Engine.Drain(ctx); err != nil {
 			errs = append(errs, err)

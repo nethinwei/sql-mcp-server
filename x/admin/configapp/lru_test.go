@@ -58,3 +58,35 @@ func TestLRUKeepsNoFailedBuild(t *testing.T) {
 		t.Fatalf("value %d after %d builds: an empty build (weight 0) is kept", v, builds)
 	}
 }
+
+// An expired preview is let go when previews are next stored or read, not
+// held until 32 newer ones push it out.
+func TestPreviewsLetExpiredOnesGo(t *testing.T) {
+	var k previews
+	t0 := time.Unix(1000, 0)
+	k.put(&Preview{PlanID: "a", owner: "root", at: t0})
+	k.put(&Preview{PlanID: "b", owner: "root", at: t0.Add(previewTTL)})
+	if len(k.all) != 1 || k.all[0].PlanID != "b" {
+		t.Fatalf("kept %d previews", len(k.all))
+	}
+	if _, ok := k.get("b", "root", t0.Add(2*previewTTL)); ok || len(k.all) != 0 {
+		t.Fatalf("an expired preview is served or kept: %d", len(k.all))
+	}
+}
+
+// The decoded schemas of a source no one reads any more are let go once
+// another is read sourceIdle later.
+func TestScansForgetIdleSources(t *testing.T) {
+	s := &Scans{cache: map[scanKey]keptSchema{}, usedAt: map[string]time.Time{}, built: map[string]builtCatalog{}}
+	t0 := time.Unix(1000, 0)
+	s.cache[scanKey{"old", "public"}], s.built["old"] = keptSchema{}, builtCatalog{}
+	s.forgetIdleLocked("old", t0)
+	s.forgetIdleLocked("new", t0.Add(sourceIdle/2))
+	if _, ok := s.cache[scanKey{"old", "public"}]; !ok {
+		t.Fatal("a source read lately was let go")
+	}
+	s.forgetIdleLocked("new", t0.Add(sourceIdle))
+	if _, ok := s.cache[scanKey{"old", "public"}]; ok || len(s.built) != 0 || len(s.usedAt) != 1 {
+		t.Fatalf("an idle source is kept: %d schemas, %d catalogs", len(s.cache), len(s.built))
+	}
+}

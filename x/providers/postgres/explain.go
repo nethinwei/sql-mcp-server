@@ -323,6 +323,13 @@ func pgScanType(node string) cost.ScanType {
 		// PostgreSQL Seq Scan reads the whole heap: treat as a full scan so
 		// RejectFullScan catches unfiltered queries.
 		return cost.ScanFull
+	case node == "Bitmap Heap Scan":
+		// The heap pages its bitmap index scans found: driven by an index,
+		// but as many pages as the index condition matches, maybe most of
+		// the table. Its child, a Bitmap Index Scan, is no bounded read of
+		// it, so the plan counts as worse than an index scan (a bitmap is
+		// also how an IN list of keys is read, so it is no full scan).
+		return cost.ScanSeq
 	case strings.Contains(node, "Index Only Scan"):
 		return cost.ScanIndex
 	case strings.Contains(node, "Index Scan"):

@@ -325,6 +325,10 @@ func cachesRead(tc Context, in readInput) bool {
 	return tc.Cache != nil && in.Transaction == "" && len(in.Expand) == 0 && !tc.followsWrite
 }
 
+// readCacheHit serves a read from the cache. The rows are the ones stored,
+// shared by every call served from them: nothing after a read edits its rows
+// (masking and trimming come before storeReadCache; a read that expands, which
+// edits them, is not cached). TestCachedRowsStayAsStored holds it.
 func readCacheHit(ctx context.Context, tc Context, in readInput, key cache.Key) (Result, error, bool) {
 	if !cachesRead(tc, in) {
 		return Result{}, nil, false
@@ -347,18 +351,18 @@ func readCacheHit(ctx context.Context, tc Context, in readInput, key cache.Key) 
 	return Result{Content: cached, ReturnedRows: returned}, nil, true
 }
 
+// trimExpandedJoinFields drops from out the columns read only to expand on
+// (not asked for), worked out once for all the rows.
 func trimExpandedJoinFields(parent entity.Entity, in readInput, out []map[string]any) {
 	if len(in.Fields) == 0 {
 		return
 	}
+	drop := slices.DeleteFunc(expandJoinColumns(parent, in.Expand), func(c string) bool {
+		return slices.Contains(in.Fields, c)
+	})
 	for _, row := range out {
-		for _, name := range in.Expand {
-			relation, _ := relationshipByName(parent, name)
-			for local := range relation.JoinOn {
-				if !slices.Contains(in.Fields, local) {
-					delete(row, local)
-				}
-			}
+		for _, c := range drop {
+			delete(row, c)
 		}
 	}
 }

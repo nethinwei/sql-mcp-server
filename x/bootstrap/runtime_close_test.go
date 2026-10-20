@@ -86,3 +86,19 @@ func TestRuntimeCloseDuringReloadClosesTheBuiltApp(t *testing.T) {
 		t.Fatalf("served = %v, built app closed %d times", runtime.Current() != nil, built.closed)
 	}
 }
+
+// A capability assessment that does not end when canceled bounds closing by
+// the context, and the rest is closed all the same.
+func TestCloseContextBoundsAStuckAssessment(t *testing.T) {
+	t.Parallel()
+	provider := &fakeProvider{}
+	app := &App{Provider: provider, stopAssessing: func() {}, assessed: make(chan struct{})}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := closeWithin(t, func() error { return app.CloseContext(ctx) }); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("close error = %v", err)
+	}
+	if provider.closed == 0 {
+		t.Fatal("the provider was left open")
+	}
+}

@@ -1,6 +1,7 @@
 package configplan
 
 import (
+	"encoding/json"
 	"reflect"
 	"slices"
 	"testing"
@@ -171,6 +172,31 @@ func TestEvaluateWithAnIndex(t *testing.T) {
 		got, err := Evaluate(in, p)
 		if err != nil || !reflect.DeepEqual(got, want) {
 			t.Fatalf("plan %d: with an index %+v, %v\nwithout %+v", i, got.Report, err, want.Report)
+		}
+	}
+}
+
+// Evaluating leaves the base as it is, whatever the plan does: the console
+// shares the configurations it evaluates plans against.
+func TestEvaluateLeavesTheBase(t *testing.T) {
+	t.Parallel()
+	base := decode(t, goneYAML)
+	was, _ := json.Marshal(base)
+	plans := []Plan{
+		{Import: true, Fields: []FieldRule{{Columns: []string{"*"}, Mask: "phone"}}},
+		{Sync: &SyncRule{Add: true, Remove: true, RemoveTables: true, Keys: true}},
+		{Grants: []GrantRule{{Principal: "role:analyst", Actions: []string{"read", "update"}, Fields: []string{"id"}}}},
+		{Grants: []GrantRule{{Principal: "user:alice", Actions: []string{"read"}}},
+			Fields: []FieldRule{{Columns: []string{"id"}, Exclude: true}}},
+	}
+	for i, p := range plans {
+		in := Input{Base: base, Published: base, Sources: shop(), Missing: map[string]bool{"shop.archive.old": true},
+			MissingFields: map[string][]string{"shop.public.customers": {"name"}}}
+		if _, err := Evaluate(in, p); err != nil {
+			t.Fatal(err)
+		}
+		if now, _ := json.Marshal(base); string(now) != string(was) {
+			t.Fatalf("plan %d changed the base:\n%s\nwas\n%s", i, now, was)
 		}
 	}
 }

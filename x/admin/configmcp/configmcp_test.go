@@ -513,3 +513,19 @@ func TestRetiredReadOnlyTokensAreRefused(t *testing.T) {
 		t.Fatal("a read-only token connected")
 	}
 }
+
+// A diff's lines are counted as there are: the newline ending the last one
+// starts no other.
+func TestDiffPageCountsItsLines(t *testing.T) {
+	t.Parallel()
+	page := diffPage("a\nb\n", 0, 0)
+	if page["total"] != 2 || page["diff"] != "a\nb\n" {
+		t.Fatalf("page = %+v", page)
+	}
+	if page := diffPage("a\nb", 1, 0); page["total"] != 2 || page["diff"] != "b" {
+		t.Fatalf("page = %+v", page)
+	}
+	if page := diffPage("", 0, 0); page["total"] != 0 {
+		t.Fatalf("page = %+v", page)
+	}
+}

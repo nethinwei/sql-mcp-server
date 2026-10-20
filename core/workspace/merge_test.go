@@ -219,3 +219,13 @@ func TestResolveTheirsThroughAGroupIsRefused(t *testing.T) {
 		t.Fatalf("mine: %v, item %s", err, show(got.Get(ref)))
 	}
 }
+
+// An item written null is removed, as one written Missing: whether it was
+// there or not, no item is null.
+func TestApplyNullRemoves(t *testing.T) {
+	a, b := Ref{Kind: "role", Key: "a"}, Ref{Kind: "role", Key: "b"}
+	s := Snapshot{{Ref: a, Value: js(t, `{"name":"a"}`)}}.Apply(map[Ref]any{a: nil, b: nil}, []Ref{a, b})
+	if len(s) != 0 {
+		t.Fatalf("snapshot = %+v", s)
+	}
+}

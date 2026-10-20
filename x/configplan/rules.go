@@ -139,7 +139,7 @@ func (ev *evaluation) sync(t target) {
 		}
 		e := ev.change(t)
 		e.Fields = slices.DeleteFunc(e.Fields, func(f config.FieldConfig) bool { return f.Name == field })
-		ev.dropGrantField(t.id, field)
+		ev.dropped[t.id] = append(ev.dropped[t.id], field) // out of the grants' lists after (dropGrantFields)
 		ev.summarize(Change{Kind: ChangeSyncRemove}, t.id, 1)
 	}
 }

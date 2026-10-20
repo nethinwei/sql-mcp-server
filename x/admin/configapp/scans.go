@@ -37,8 +37,12 @@ type Scans struct {
 	store catalog.Store
 	mu    sync.Mutex
 	cache map[scanKey]keptSchema
-	clock func() time.Time
-	last  time.Time
+	// usedAt is when each source's schemas were last read: those of a source
+	// no configuration reads any more (its datasource reconnected
+	// elsewhere) are let go after sourceIdle (see forgetIdle).
+	usedAt map[string]time.Time
+	clock  func() time.Time
+	last   time.Time
 	// batches runs the scan batches this process owns.
 	batches *leasing.Runner
 	// built caches each source's catalog by the versions of its schemas;
@@ -92,7 +96,8 @@ func NewScans(opts scanjobs.Options, store catalog.Store) *Scans {
 	}
 	s := &Scans{
 		bus: opts.Bus, pool: scanjobs.New[struct{}](opts), store: store, cache: map[scanKey]keptSchema{},
-		clock: time.Now, built: map[string]builtCatalog{},
+		usedAt: map[string]time.Time{},
+		clock:  time.Now, built: map[string]builtCatalog{},
 		indexes: newLRU[*configplan.Index](indexBudget), matches: newLRU[[]int32](matchBudget),
 	}
 	s.batches = leasing.New(store, leasing.Options{Now: s.now, Bus: opts.Bus})
@@ -169,6 +174,29 @@ func (s *Scans) list(
 
 // kept returns every kept schema of src by name, reading from the store only
 // the schemas scanned since the cache read them.
+// sourceIdle is how long the schemas of a source no one reads stay decoded.
+const sourceIdle = 30 * time.Minute
+
+// forgetIdleLocked records that source is read at now and lets go the
+// decoded schemas and catalogs of the sources not read for sourceIdle.
+func (s *Scans) forgetIdleLocked(source string, now time.Time) {
+	s.usedAt[source] = now
+	for id, at := range s.usedAt {
+		if now.Sub(at) < sourceIdle {
+			continue
+		}
+		delete(s.usedAt, id)
+		for k := range s.cache {
+			if k.source == id {
+				delete(s.cache, k)
+			}
+		}
+		s.builtMu.Lock()
+		delete(s.built, id)
+		s.builtMu.Unlock()
+	}
+}
+
 func (s *Scans) kept(ctx context.Context, src source) (map[string]keptSchema, error) {
 	versions, err := s.store.CatalogVersions(ctx, src.ID())
 	if err != nil {
@@ -177,6 +205,7 @@ func (s *Scans) kept(ctx context.Context, src source) (map[string]keptSchema, er
 	out := make(map[string]keptSchema, len(versions))
 	var stale []string
 	s.mu.Lock()
+	s.forgetIdleLocked(src.ID(), s.clock())
 	for _, v := range versions {
 		if c, ok := s.cache[scanKey{src.ID(), v.Name}]; ok && c.at.Equal(v.ScannedAt) {
 			out[v.Name] = c

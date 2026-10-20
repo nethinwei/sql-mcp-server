@@ -153,8 +153,13 @@ func (s Service) itemsOf(rev revision.Revision) (workspace.Snapshot, error) {
 }
 
 // change is what an operation does to a workspace it read: it edits w (and
-// may move it to another base, whose items it returns) and says what to log.
+// may move it to another base, whose items it returns) and says what to log;
+// errUnchanged when there is nothing to write.
 type change func(w *workspace.Workspace, base workspace.Snapshot) (workspace.Snapshot, workspace.LogEntry, error)
+
+// errUnchanged is a change that leaves the workspace as it is: apply writes
+// nothing and returns it as read.
+var errUnchanged = errors.New("workspace: unchanged")
 
 // apply runs fn on username's workspace and writes the result at the
 // version read, reading again when another write came between.
@@ -169,6 +174,9 @@ func (s Service) apply(ctx context.Context, username, by string, fn change) (Sta
 		}
 		read := w.Version
 		newBase, entry, err := fn(&w, base)
+		if errors.Is(err, errUnchanged) {
+			return s.state(w, base), nil
+		}
 		if err != nil {
 			return State{}, err
 		}
@@ -400,6 +408,9 @@ func (s Service) Update(ctx context.Context, username, by string, to int64) (Sta
 	return s.apply(ctx, username, by, func(w *workspace.Workspace, base workspace.Snapshot) (
 		workspace.Snapshot, workspace.LogEntry, error,
 	) {
+		if w.Base > to { // moved on meanwhile (another console followed a newer publish)
+			return nil, workspace.LogEntry{}, errUnchanged
+		}
 		changed := s.Schema.Changes(base, w.Items)
 		s.moveOnto(w, base, w.Items, next, to)
 		return next, workspace.LogEntry{Op: "update", Items: changed, Note: "#" + idOf(to)}, nil
@@ -407,7 +418,8 @@ func (s Service) Update(ctx context.Context, username, by string, to int64) (Sta
 }
 
 // moveOnto moves w onto revision to (items next), re-applying the changes
-// from old to local.
+// from old to local. Revisions are numbered as published, so a workspace is
+// never moved onto one older than its base: its callers see to it.
 func (s Service) moveOnto(w *workspace.Workspace, old, local, next workspace.Snapshot, to int64) {
 	src := workspace.Source{Kind: workspace.SourcePublished, ID: idOf(to)}
 	now, found := s.Schema.Replay(old, local, next, src, false)

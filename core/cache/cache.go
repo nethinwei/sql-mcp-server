@@ -119,20 +119,23 @@ type Sized[T any] interface {
 // bytes of the entries stored with SetSized), the ones closest to expiry
 // without scanning the others.
 type TTLCache[T any] struct {
-	mu         sync.Mutex
-	ttl        time.Duration
-	maxSize    int
-	maxBytes   int64 // 0: no bound
-	bytes      int64
-	m          map[Key]*entry[T]
-	byDatabase map[string]map[Key]struct{}
+	mu       sync.Mutex
+	ttl      time.Duration
+	maxSize  int
+	maxBytes int64 // 0: no bound
+	bytes    int64
+	m        map[Key]*entry[T]
+	// byDatabase indexes the entries by database and relation ("": derived
+	// data): invalidating a relation reads its entries and the derived ones.
+	byDatabase map[string]map[string]map[Key]struct{}
 	expiry     expiries[T]
 	stamps     map[string]uint64
 }
 
 // NewTTLCache returns a TTLCache. maxSize <= 0 uses a safe default capacity.
 func NewTTLCache[T any](ttl time.Duration, maxSize int) *TTLCache[T] {
-	c := &TTLCache[T]{m: map[Key]*entry[T]{}, byDatabase: map[string]map[Key]struct{}{}, stamps: map[string]uint64{}}
+	c := &TTLCache[T]{m: map[Key]*entry[T]{}, byDatabase: map[string]map[string]map[Key]struct{}{},
+		stamps: map[string]uint64{}}
 	c.UpdateLimits(ttl, maxSize, 0)
 	return c
 }
@@ -216,10 +219,15 @@ func (c *TTLCache[T]) SetSized(_ context.Context, k Key, v T, stamp uint64, size
 	c.bytes += size
 	c.m[k] = e
 	heap.Push(&c.expiry, e)
-	if c.byDatabase[k.Database] == nil {
-		c.byDatabase[k.Database] = map[Key]struct{}{}
+	relations := c.byDatabase[k.Database]
+	if relations == nil {
+		relations = map[string]map[Key]struct{}{}
+		c.byDatabase[k.Database] = relations
 	}
-	c.byDatabase[k.Database][k] = struct{}{}
+	if relations[k.Relation] == nil {
+		relations[k.Relation] = map[Key]struct{}{}
+	}
+	relations[k.Relation][k] = struct{}{}
 	return nil
 }
 
@@ -228,9 +236,11 @@ func (c *TTLCache[T]) Invalidate(database, relation string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.stamps[database]++
-	for k := range c.byDatabase[database] {
-		if relation == "" || k.Relation == "" || k.Relation == relation {
-			c.removeLocked(c.m[k])
+	for rel, keys := range c.byDatabase[database] {
+		if relation == "" || rel == "" || rel == relation {
+			for k := range keys {
+				c.removeLocked(c.m[k])
+			}
 		}
 	}
 	return nil
@@ -252,9 +262,14 @@ func (c *TTLCache[T]) removeLocked(e *entry[T]) {
 	c.bytes -= e.size
 	delete(c.m, e.key)
 	heap.Remove(&c.expiry, e.at)
-	if keys := c.byDatabase[e.key.Database]; keys != nil {
-		delete(keys, e.key)
-		if len(keys) == 0 {
+	if relations := c.byDatabase[e.key.Database]; relations != nil {
+		if keys := relations[e.key.Relation]; keys != nil {
+			delete(keys, e.key)
+			if len(keys) == 0 {
+				delete(relations, e.key.Relation)
+			}
+		}
+		if len(relations) == 0 {
 			delete(c.byDatabase, e.key.Database)
 		}
 	}

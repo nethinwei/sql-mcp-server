@@ -1,10 +1,13 @@
 package configedit
 
 import (
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/x/configyaml"
 )
 
 const hash = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
@@ -78,5 +81,30 @@ func TestApplyValidatesTheWholeResult(t *testing.T) {
 	}
 	if _, _, err := Apply([]byte(base), Edit{Settings: map[string]any{"cost": map[string]any{"maxRow": 1}}}); err == nil {
 		t.Fatal("unknown setting accepted")
+	}
+}
+
+// A base decoded once is shared by the edits applied to it at once (the
+// console's previews): they only read it, and leave it as it is.
+func TestApplySpecSharesItsBase(t *testing.T) {
+	t.Parallel()
+	shared, err := configyaml.DecodeSpec([]byte(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	was, _ := configyaml.EncodeSpec(shared)
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Go(func() {
+			edit := Edit{Entities: []config.EntitySpec{{Name: ptr(fmt.Sprintf("t%d", i)),
+				Fields: config.List[config.FieldSpec]{{Name: ptr("id")}}}}}
+			if _, _, _, err := ApplySpec(shared, edit); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	if now, _ := configyaml.EncodeSpec(shared); string(now) != string(was) {
+		t.Fatalf("the base changed:\n%s\nwas\n%s", now, was)
 	}
 }
