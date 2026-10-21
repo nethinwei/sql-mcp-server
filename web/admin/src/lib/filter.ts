@@ -38,6 +38,20 @@ const symbols: Record<Op, string> = {
   eq: '=', ne: '≠', gt: '>', gte: '≥', lt: '<', lte: '≤', in: '∈', not_in: '∉', like: '~', is_null: '', is_not_null: '',
 }
 
+/**
+ * The condition with operator op, its value fitted to the operator's arity:
+ * none, a list (a scalar becomes its only element) or a scalar (a list keeps
+ * its first element).
+ */
+export function withOp(c: Condition, op: Op): Condition {
+  const arity = ops.find((o) => o.value === op)?.arity
+  const next: Condition = { op, field: c.field }
+  if (arity === 0) return next
+  if (arity === 'list') next.value = Array.isArray(c.value) ? c.value : c.value === undefined ? [] : [c.value]
+  else next.value = Array.isArray(c.value) ? (c.value[0] ?? '') : c.value
+  return next
+}
+
 export function isCondition(f: Filter): f is Condition {
   return typeof (f as Condition).op === 'string'
 }

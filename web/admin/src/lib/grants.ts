@@ -38,3 +38,17 @@ export function setActionOn(
   }
   return list.filter((g) => g.actions.length > 0)
 }
+
+/**
+ * The position of grant in grants: the same object or else the only grant
+ * equal to it, so an editor opened on a grant still finds it after the list
+ * was replaced (a write of another administrator, an agent, a reload) and
+ * never writes another grant in its place. -1 when it is gone or ambiguous.
+ */
+export function locateGrant(grants: GrantInput[], grant: GrantInput): number {
+  const same = grants.indexOf(grant)
+  if (same >= 0) return same
+  const text = JSON.stringify(grant)
+  const equal = grants.flatMap((g, i) => (JSON.stringify(g) === text ? [i] : []))
+  return equal.length === 1 ? equal[0] : -1
+}

@@ -329,6 +329,7 @@ export default {
     },
     allFields: '全部字段', readCount: '读 {n}/{total}', writeCount: ' · 写 {n}',
     editorFields: '{entity} · 字段范围', editorRows: '{entity} · 行范围',
+    editorGone: '这条授权已被其他修改替换或删除，未保存。请取消后重新打开。',
     allVisible: '全部可见字段（含以后新增的字段）', onlySelected: '仅限选定字段', filterFields: '筛选字段',
     readable: '可读字段', writable: '可写字段',
   },

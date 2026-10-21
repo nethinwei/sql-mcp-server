@@ -339,6 +339,7 @@ const en: typeof zh = {
     },
     allFields: 'All fields', readCount: 'read {n}/{total}', writeCount: ' · write {n}',
     editorFields: '{entity} · fields', editorRows: '{entity} · rows',
+    editorGone: 'This grant was replaced or removed by another change; nothing was saved. Cancel and open it again.',
     allVisible: 'Every visible field (including fields added later)', onlySelected: 'Only selected fields',
     filterFields: 'Filter fields', readable: 'Readable fields', writable: 'Writable fields',
   },

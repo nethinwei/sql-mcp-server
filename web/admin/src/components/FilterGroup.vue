@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { NAutoComplete, NButton, NCheckbox, NIcon, NRadioButton, NRadioGroup, NSelect, NText } from 'naive-ui'
 import { CloseOutline } from '@vicons/ionicons5'
-import { isCondition, isNegation, ops, type Condition, type Filter, type Group, type Op } from '@/lib/filter'
+import { isCondition, isNegation, ops, withOp, type Condition, type Filter, type Group, type Op } from '@/lib/filter'
 
 const props = defineProps<{
   group: Group; fields: string[]; subjectKeys: string[]; root?: boolean; disabled?: boolean; negated?: boolean
@@ -60,10 +60,7 @@ function setValue(c: Condition, i: number, raw: string) {
   setItem(i, { ...c, value })
 }
 function setOp(c: Condition, i: number, op: Op) {
-  const arity = ops.find((o) => o.value === op)?.arity
-  const next: Condition = { op, field: c.field }
-  if (arity !== 0) next.value = arity === 'list' && !Array.isArray(c.value) ? (c.value === undefined ? [] : [c.value]) : c.value
-  setItem(i, next)
+  setItem(i, withOp(c, op))
 }
 const arityOf = (c: Condition) => ops.find((o) => o.value === c.op)?.arity
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { setActionOn } from './grants'
+import { locateGrant, setActionOn } from './grants'
 import type { GrantInput } from '@/gql/schema'
 
 const base: GrantInput[] = [
@@ -23,5 +23,21 @@ describe('setActionOn', () => {
   it('revokes from every grant and drops empty grants', () => {
     const out = setActionOn(base, ['orders'], 'READ', false)
     expect(out).toEqual([{ ...base[1], actions: ['AGGREGATE'] }])
+  })
+})
+
+describe('locateGrant', () => {
+  it('finds the grant itself, or its only equal copy after the list was replaced', () => {
+    expect(locateGrant(base, base[1])).toBe(1)
+    const reloaded = JSON.parse(JSON.stringify([base[1], base[0]])) as GrantInput[]
+    expect(locateGrant(reloaded, base[0])).toBe(1)
+    expect(locateGrant(reloaded, base[1])).toBe(0)
+  })
+
+  it('finds nothing when the grant is gone, changed or ambiguous', () => {
+    expect(locateGrant([base[1]], base[0])).toBe(-1)
+    expect(locateGrant([{ ...base[0], actions: ['READ', 'DELETE'] }], base[0])).toBe(-1)
+    const twice = JSON.parse(JSON.stringify([base[0], base[0]])) as GrantInput[]
+    expect(locateGrant(twice, base[0])).toBe(-1)
   })
 })

@@ -136,3 +136,189 @@ describe('summarize', () => {
     expect(s.fields).toEqual([{ entity: 'orders', shown: ['email'], hidden: ['amount'], masked: ['email'], unmasked: ['phone'] }])
   })
 })
+
+// Several users, roles and entities across two datasources, with grants,
+// legacy access, system permissions and a tenant policy all changing: the
+// summary computed once per configuration stays what it was per user.
+describe('summarize at scale', () => {
+  const entities = ['shop', 'crm'].flatMap((ds) => ['orders', 'refunds', 'customers'].map((name) => ({
+    name, datasource: ds, fields: [{ name: 'id' }, { name: 'region' }],
+    ...(name === 'customers' ? { tenantPolicy: { field: 'region' } } : {}),
+    ...(name === 'refunds' ? { legacyAccess: { roles: { read: ['Auditor', 'lead'], update: ['lead'] },
+      fieldACL: { auditor: { read: ['id'] } }, rowPolicies: { lead: { field: 'region', op: 'eq', value: 'CN' } } } } : {}),
+  })))
+  const before: Config = {
+    entities,
+    roles: [
+      { name: 'analyst', grants: [{ entity: 'shop.orders', actions: ['READ'] }, { entity: 'crm.customers', actions: ['READ'] }] },
+      { name: 'auditor', permissions: ['sql:execute@shop'] },
+      { name: 'lead', grants: [{ entity: 'shop.customers', actions: ['READ', 'UPDATE'] }] },
+    ],
+    users: [
+      { name: 'ann', roles: ['analyst'] },
+      { name: 'bob', roles: ['auditor', 'analyst'], grants: [{ entity: 'crm.orders', actions: ['READ'] }] },
+      { name: 'cy', roles: ['lead'] },
+      { name: 'dee', roles: ['analyst', 'lead'], subject: { region: 'CN' } },
+      { name: 'eve', roles: [], grants: [{ entity: 'shop.refunds', actions: ['READ'] }] },
+    ],
+  }
+  const after = clone(before)
+  after.roles[0].grants!.push({ entity: 'shop.refunds', actions: ['AGGREGATE'] })
+  after.roles[2].grants![0] = { entity: 'shop.customers', actions: ['READ'], fieldsRestricted: true, readFields: ['id'] }
+  after.users[0].roles = ['analyst', 'auditor']
+  after.users[2].disabled = true
+  after.users[3].subject = { region: 'US' }
+  after.users.push({ name: 'fay', roles: ['lead'], permissions: ['sql:execute@crm'] })
+  after.entities[5].tenantPolicy = { field: 'id' }
+  after.entities[1].legacyAccess = { roles: { read: ['lead'] } }
+
+  it('reports every change', () => {
+    expect(summarize(before, after)).toMatchInlineSnapshot(`
+      {
+        "boundaries": [
+          {
+            "entity": "crm.customers",
+            "kind": "tenantPolicy",
+            "users": [
+              "ann",
+              "bob",
+              "dee",
+            ],
+          },
+        ],
+        "entitiesAdded": [],
+        "entitiesRemoved": [],
+        "fields": [],
+        "users": [
+          {
+            "gained": [
+              {
+                "action": "AGGREGATE",
+                "entity": "shop.refunds",
+              },
+              {
+                "action": "SQL",
+                "entity": "shop",
+              },
+              {
+                "action": "READ",
+                "entity": "crm.refunds",
+              },
+            ],
+            "lost": [],
+            "rescoped": [],
+            "subjectChanged": false,
+            "user": "ann",
+          },
+          {
+            "gained": [
+              {
+                "action": "AGGREGATE",
+                "entity": "shop.refunds",
+              },
+            ],
+            "lost": [
+              {
+                "action": "READ",
+                "entity": "shop.refunds",
+              },
+            ],
+            "rescoped": [],
+            "subjectChanged": false,
+            "user": "bob",
+          },
+          {
+            "gained": [],
+            "lost": [
+              {
+                "action": "READ",
+                "entity": "shop.customers",
+              },
+              {
+                "action": "UPDATE",
+                "entity": "shop.customers",
+              },
+              {
+                "action": "READ",
+                "entity": "shop.refunds",
+              },
+              {
+                "action": "UPDATE",
+                "entity": "shop.refunds",
+              },
+              {
+                "action": "READ",
+                "entity": "crm.refunds",
+              },
+              {
+                "action": "UPDATE",
+                "entity": "crm.refunds",
+              },
+            ],
+            "rescoped": [],
+            "subjectChanged": false,
+            "user": "cy",
+          },
+          {
+            "gained": [
+              {
+                "action": "AGGREGATE",
+                "entity": "shop.refunds",
+              },
+            ],
+            "lost": [
+              {
+                "action": "UPDATE",
+                "entity": "shop.customers",
+              },
+              {
+                "action": "UPDATE",
+                "entity": "shop.refunds",
+              },
+            ],
+            "rescoped": [
+              {
+                "action": "READ",
+                "entity": "shop.customers",
+              },
+              {
+                "action": "READ",
+                "entity": "shop.refunds",
+              },
+            ],
+            "subjectChanged": true,
+            "user": "dee",
+          },
+          {
+            "gained": [
+              {
+                "action": "READ",
+                "entity": "shop.customers",
+              },
+              {
+                "action": "SQL",
+                "entity": "crm",
+              },
+              {
+                "action": "READ",
+                "entity": "shop.refunds",
+              },
+              {
+                "action": "READ",
+                "entity": "crm.refunds",
+              },
+              {
+                "action": "UPDATE",
+                "entity": "crm.refunds",
+              },
+            ],
+            "lost": [],
+            "rescoped": [],
+            "subjectChanged": false,
+            "user": "fay",
+          },
+        ],
+      }
+    `)
+  })
+})

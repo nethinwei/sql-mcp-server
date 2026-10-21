@@ -26,7 +26,6 @@ const pageSizes = [20, 50, 100, 200]
 const search = ref(param(route.query.q))
 const datasource = ref<string | null>(param(route.query.ds) || null)
 
-watchEffect(() => { void loadTableComments(ws.entities) })
 const description = (e: EntityInput) => e.description || tableComments(e)?.description || ''
 
 // A row is an entity, or the heading of the namespace (datasource · schema)
@@ -69,6 +68,10 @@ const rows = computed<Row[]>(() => {
   }
   return out
 })
+
+// Comments are read from the databases, so only for the entities shown. The
+// search matches the comments loaded so far.
+watchEffect(() => { void loadTableComments(rows.value.filter((r): r is EntityInput => !isHeading(r))) })
 
 const entityColumns = computed<DataTableColumns<EntityInput>>(() => [
   {

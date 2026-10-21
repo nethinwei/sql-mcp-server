@@ -20,6 +20,10 @@ interface EntityRef {
 
 const cache = reactive(new Map<string, TableComments | null>())
 const pending = new Set<string>()
+// When the tables of a failed request failed: they are asked for again only
+// after a while, not by every page that shows them.
+const failed = new Map<string, number>()
+const retryAfter = 60_000
 
 function ref(e: EntityRef) {
   return { datasource: e.datasource || 'default', schema: e.schema || null, table: e.source || e.name }
@@ -30,10 +34,14 @@ function key(e: EntityRef) {
   return `${r.datasource}\u0000${r.schema ?? ''}\u0000${r.table}`
 }
 
-/** Loads the comments of the entities not loaded yet, in one request. */
+/**
+ * Loads the comments of the entities not loaded yet, in one request. The
+ * server reads them from the databases, so callers pass the entities they
+ * show, not every entity.
+ */
 export async function loadTableComments(entities: EntityRef[]) {
   const missing = [...new Map(entities.map((e) => [key(e), e])).entries()]
-    .filter(([k]) => !cache.has(k) && !pending.has(k))
+    .filter(([k]) => !cache.has(k) && !pending.has(k) && !(Date.now() - (failed.get(k) ?? -Infinity) < retryAfter))
   if (!missing.length) return
   missing.forEach(([k]) => pending.add(k))
   try {
@@ -46,6 +54,8 @@ export async function loadTableComments(entities: EntityRef[]) {
     })
   } catch {
     // Comments only fill placeholders; without them the page still works.
+    const at = Date.now()
+    missing.forEach(([k]) => failed.set(k, at))
   } finally {
     missing.forEach(([k]) => pending.delete(k))
   }

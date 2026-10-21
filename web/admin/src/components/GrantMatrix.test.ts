@@ -10,7 +10,14 @@ import type { GrantInput } from '@/gql/schema'
 
 vi.mock('@/api/client', () => ({ run: () => Promise.reject(new Error('offline')) }))
 
-interface Matrix { pageRows: GrantRow[]; toggle: (row: GrantRow, action: string, on: boolean) => void }
+interface Matrix {
+  pageRows: GrantRow[]
+  toggle: (row: GrantRow, action: string, on: boolean) => void
+  openRows: (row: GrantRow) => void
+  saveEditor: () => void
+  draftRows: unknown
+  editorGone: boolean
+}
 
 function render(count: number, granted: number) {
   const entities = Array.from({ length: count }, (_, i) => ({ name: `t${i}`, datasource: 'shop', schema: `s${i % 3}` }))
@@ -45,5 +52,37 @@ describe('GrantMatrix', () => {
     matrix.toggle(matrix.pageRows[0], 'READ', false)
     await nextTick()
     expect(grants.value).toHaveLength(1)
+  })
+
+  // The row scope editor writes the grant it opened on, even when another
+  // write reordered the grants meanwhile, and nothing once it is gone.
+  it('saves the scope onto the grant edited, wherever it moved', async () => {
+    const { grants, matrix } = render(5, 3)
+    const row = matrix.pageRows.find((r) => r.grant?.entity === 's1.t1')!
+    matrix.openRows(row)
+    matrix.draftRows = { field: 'id', op: 'eq', value: 1 }
+    const [g0, g1, g2] = grants.value
+    grants.value = JSON.parse(JSON.stringify([g2, g0, g1])) as GrantInput[]
+    await nextTick()
+    matrix.saveEditor()
+    await nextTick()
+    expect(grants.value.map((g) => [g.entity, g.rows])).toEqual([
+      ['s2.t2', undefined], ['s0.t0', undefined], ['s1.t1', { field: 'id', op: 'eq', value: 1 }]])
+    expect(matrix.editorGone).toBe(false)
+  })
+
+  it('writes nothing when the grant edited was removed', async () => {
+    const { grants, matrix } = render(5, 3)
+    const row = matrix.pageRows.find((r) => r.grant?.entity === 's2.t2')!
+    matrix.openRows(row)
+    matrix.draftRows = { field: 'id', op: 'eq', value: 1 }
+    const left = grants.value.slice(0, 2)
+    grants.value = left
+    await nextTick()
+    matrix.saveEditor()
+    await nextTick()
+    expect(grants.value).toEqual(left)
+    expect(grants.value.every((g) => g.rows === undefined)).toBe(true)
+    expect(matrix.editorGone).toBe(true)
   })
 })

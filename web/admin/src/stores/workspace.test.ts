@@ -290,15 +290,16 @@ describe('canonical', () => {
 describe('a rename across a change of base', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
+  const items = (base: string) => ({
+    base, version: 1, updatedBy: 'root', taken: [], checkpoint: null, conflicts: [], notes: [],
+    items: { complete: true, items: [
+      { kind: 'role', key: 'analyst', value: { name: 'analyst', grants: [] } },
+      { kind: 'settings', key: 'settings', value: {} },
+    ] },
+  })
+
   it('is still written as a rename', () => {
     const ws = useWorkspace()
-    const items = (base: string) => ({
-      base, version: 1, updatedBy: 'root', taken: [], checkpoint: null, conflicts: [], notes: [],
-      items: { complete: true, items: [
-        { kind: 'role', key: 'analyst', value: { name: 'analyst', grants: [] } },
-        { kind: 'settings', key: 'settings', value: {} },
-      ] },
-    })
     ws.apply(loaded('1', { entities: [], roles: [{ name: 'analyst', grants: [] }], users: [] }), '1')
     ws.take(items('1'))
     ws.role('analyst')!.name = 'lead'
@@ -307,5 +308,21 @@ describe('a rename across a change of base', () => {
     expect(ws.unsavedItems()).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'role', key: 'lead', renamedFrom: 'analyst' }),
     ]))
+  })
+
+  // Reverting the item renamed brings it back under its key: the renamed
+  // copy is then written as an addition, not as a rename of it.
+  it('is dropped when the item renamed is reverted', () => {
+    const ws = useWorkspace()
+    ws.apply(loaded('1', { entities: [], roles: [{ name: 'analyst', grants: [] }], users: [] }), '1')
+    ws.take(items('1'))
+    ws.role('analyst')!.name = 'lead'
+    ws.rename('role', 'analyst', 'lead')
+    expect(ws.unsavedItems()).toEqual(expect.arrayContaining([expect.objectContaining({ renamedFrom: 'analyst' })]))
+    ws.revert({ kind: 'role', name: 'analyst' })
+    expect(ws.roles.map((r) => r.name).sort()).toEqual(['analyst', 'lead'])
+    const unsaved = ws.unsavedItems()
+    expect(unsaved.map((it) => it.key)).toEqual(['lead'])
+    expect(unsaved[0].renamedFrom).toBeUndefined()
   })
 })

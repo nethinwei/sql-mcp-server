@@ -704,7 +704,14 @@ export const useWorkspace = defineStore('workspace', {
       const restored = change.kind === 'entity' ? restore(this.entities, base.entities)
         : change.kind === 'role' ? restore(this.roles, base.roles)
           : restore(this.users, base.users)
-      if (!restored) {
+      if (restored) {
+        // The restored item is written as itself again: one renamed from it
+        // here is a new item, not a rename the server would apply to it.
+        const prefix = itemRef(change.kind, '')
+        for (const [ref, origin] of Object.entries(this.renamed)) {
+          if (origin === change.name && ref.startsWith(prefix)) delete this.renamed[ref]
+        }
+      } else {
         if (change.kind === 'entity') this.removeEntity(change.name)
         else if (change.kind === 'role') this.removeRole(change.name)
         else this.removeUser(change.name)

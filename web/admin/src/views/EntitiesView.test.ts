@@ -10,17 +10,19 @@ import { session } from '@/api/session'
 import type { EntityInput } from '@/gql/schema'
 import { useWorkspace } from '@/stores/workspace'
 
-vi.mock('@/api/client', () => ({ run: () => Promise.resolve({}) }))
+const run = vi.hoisted(() => vi.fn(() => Promise.resolve({})))
+vi.mock('@/api/client', () => ({ run }))
 
 const { default: EntitiesView } = await import('./EntitiesView.vue')
 
 const entity = (name: string) => ({ name, datasource: 'shop', fields: [] }) as unknown as EntityInput
 
-async function render(permissions: string[], query: Record<string, string> = {}) {
+async function render(permissions: string[], query: Record<string, string> = {},
+  entities = [entity('users'), entity('orders')]) {
   session.permissions = permissions
   const pinia = createPinia()
   setActivePinia(pinia)
-  useWorkspace().entities = [entity('users'), entity('orders')]
+  useWorkspace().entities = entities
   const blank = defineComponent({ render: () => null })
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/entities', name: 'entities', component: blank },
@@ -45,5 +47,16 @@ describe('EntitiesView entity sync', () => {
   })
   it('syncs what the search matches', async () => {
     expect(await render(['admin:write'], { q: 'ord' })).toContain('同步匹配的 1 个')
+  })
+})
+
+// Table comments are read from the databases: only those of the page shown.
+describe('EntitiesView table comments', () => {
+  it('are asked for the entities of the page', async () => {
+    run.mockClear()
+    await render(['admin:read'], {}, Array.from({ length: 120 }, (_, i) => entity(`page${String(i).padStart(3, '0')}`)))
+    const asked = (run.mock.calls as unknown as [unknown, { tables?: unknown[] }][])
+      .flatMap(([, vars]) => vars?.tables ?? [])
+    expect(asked).toHaveLength(50)
   })
 })

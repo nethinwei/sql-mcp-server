@@ -72,7 +72,9 @@ function writer(c: { kind: string; name: string }) {
 }
 
 const restartList = () => restart.value.join(t('common.listSep'))
-const summary = computed(() => summarize(JSON.parse(ws.baseline) as Config, ws.$state))
+// The baseline is parsed when it changes, not on every edit of the workspace.
+const baseline = computed(() => JSON.parse(ws.baseline) as Config)
+const summary = computed(() => summarize(baseline.value, ws.$state))
 
 // Validation, restart flags and the diff describe the content they were
 // computed for. Any change to the workspace (here, in the header change bar or
