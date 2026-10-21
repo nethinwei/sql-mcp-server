@@ -91,7 +91,7 @@ func authenticated(cfg HTTPConfig, clientCAs *x509.CertPool, next http.Handler) 
 	handler := next
 	if cfg.TrustProxyHeaders {
 		networks, _ := parseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
-		handler = trustedProxy(networks, cfg.TrustedProxyCertSubjects, cfg.mtlsEnabled(),
+		handler = trustedProxy(networks, cfg.TrustedProxyCertSubjects, cfg.Users, cfg.mtlsEnabled(),
 			withProxyIdentity(cfg.Users, handler), handler)
 	}
 	handler = limitBody(cfg.MaxBodyBytes, cfg.BodyReadTimeout, handler)

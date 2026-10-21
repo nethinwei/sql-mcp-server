@@ -347,6 +347,9 @@ func (r *queryResolver) AdminAccounts(ctx context.Context) ([]AdminAccount, erro
 
 // Config is the resolver for the config field.
 func (r *revisionResolver) Config(ctx context.Context, obj *Revision) (*Configuration, error) {
+	if err := readsContent(ctx); err != nil {
+		return nil, err
+	}
 	spec, cfg, err := r.App.RevisionSpec(obj.rev.ID, func() (revision.Revision, error) { return r.withPayload(ctx, obj) })
 	if err != nil {
 		return nil, err
@@ -359,11 +362,17 @@ func (r *revisionResolver) Config(ctx context.Context, obj *Revision) (*Configur
 
 // Sections is the resolver for the sections field.
 func (r *revisionResolver) Sections(ctx context.Context, obj *Revision) (any, error) {
+	if err := readsContent(ctx); err != nil {
+		return nil, err
+	}
 	return r.App.RevisionSections(obj.rev.ID, func() (revision.Revision, error) { return r.withPayload(ctx, obj) })
 }
 
 // Yaml is the resolver for the yaml field.
 func (r *revisionResolver) Yaml(ctx context.Context, obj *Revision) (string, error) {
+	if err := readsContent(ctx); err != nil {
+		return "", err
+	}
 	rev, err := r.withPayload(ctx, obj)
 	if err != nil {
 		return "", err

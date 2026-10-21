@@ -312,7 +312,7 @@ func (a *GrantAuthorizer) Authorize(_ context.Context, req Request) (Decision, e
 	if len(covering) == 0 {
 		return a.deniedFieldScope(req, candidates, readFields, writeFields, res.Attributes), nil
 	}
-	projected, covering, denied := a.project(req, res, candidates, covering)
+	projected, covering, denied := a.project(req, res, covering)
 	if denied != nil {
 		return *denied, nil
 	}
@@ -331,8 +331,10 @@ func (a *GrantAuthorizer) Authorize(_ context.Context, req Request) (Decision, e
 // returns. A read returns its projection, so the grants covering it alone
 // serve it, and one of nothing is refused: no field is no statement (it is
 // never SELECT *). An aggregate returns what it reads: its projection only
-// tells which fields it may read, and narrows nothing (its rows would).
-func (a *GrantAuthorizer) project(req Request, res entity.Resolved, candidates, covering []Grant) (
+// tells which fields it may read, and narrows nothing (its rows would). An
+// ambiguous projection's retry hint lists the scopes of the grants covering
+// the fields req reads, the ones that can serve a retry.
+func (a *GrantAuthorizer) project(req Request, res entity.Resolved, covering []Grant) (
 	[]string, []Grant, *Decision,
 ) {
 	if !returnsRows(req.Action) {
@@ -345,12 +347,12 @@ func (a *GrantAuthorizer) project(req Request, res entity.Resolved, candidates, 
 	if len(projected) == 0 {
 		return nil, nil, &Decision{Allowed: false, Reason: fmt.Sprintf("role %q has no readable fields", req.Role)}
 	}
-	covering = a.coveringGrants(covering, projected, nil, res.Attributes)
-	if len(covering) == 0 {
-		denied := a.ambiguousFieldScope(req, candidates, res.Attributes)
+	serving := a.coveringGrants(covering, projected, nil, res.Attributes)
+	if len(serving) == 0 {
+		denied := a.ambiguousFieldScope(req, covering, res.Attributes)
 		return nil, nil, &denied
 	}
-	return projected, covering, nil
+	return projected, serving, nil
 }
 
 func returnsRows(action entity.Action) bool {

@@ -42,11 +42,9 @@ type sessions struct {
 	mu   sync.Mutex
 	byID map[string]*session
 	// failures tracks at most maxTrackedLogins names, in byLast from the
-	// least recent failure; names it cannot track share overflow, so a
-	// flood of names neither grows it nor evicts a lockout still in force.
+	// least recent failure (failuresOf).
 	failures map[string]*loginFailures
 	byLast   *list.List
-	overflow loginFailures
 	now      func() time.Time
 }
 
@@ -57,7 +55,9 @@ type loginFailures struct {
 	// followed by maxLoginLockout without failures.
 	lockouts int
 	last     time.Time
-	elem     *list.Element
+	// known: the name is an account's.
+	known bool
+	elem  *list.Element
 }
 
 // quiet reports whether f no longer affects sign-ins: maxLoginLockout has
@@ -145,17 +145,21 @@ func (s *sessions) delete(id string) {
 	s.mu.Unlock()
 }
 
-// allowLogin reports whether username may attempt a sign-in now.
+// allowLogin reports whether username may attempt a sign-in now. A name the
+// table does not track is not gated, so a flood of unknown names cannot lock
+// an account out.
 func (s *sessions) allowLogin(username string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return !s.now().Before(s.failuresOf(username, false).lockedUntil)
+	f, tracked := s.failures[username]
+	return !tracked || !s.now().Before(f.lockedUntil)
 }
 
 // recordLogin tracks failures; maxLoginFailures in a row lock the name, for
 // loginLockout doubled with each lockout in a row up to maxLoginLockout, so
-// a slow guesser waiting each lockout out is slowed down further.
-func (s *sessions) recordLogin(username string, ok bool) {
+// a slow guesser waiting each lockout out is slowed down further. known
+// reports that username names an account.
+func (s *sessions) recordLogin(username string, ok, known bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if ok {
@@ -166,7 +170,10 @@ func (s *sessions) recordLogin(username string, ok bool) {
 		return
 	}
 	now := s.now()
-	f := s.failuresOf(username, true)
+	f := s.failuresOf(username, known)
+	if f == nil {
+		return
+	}
 	if now.After(f.lockedUntil.Add(maxLoginLockout)) {
 		f.lockouts = 0
 	}
@@ -176,32 +183,43 @@ func (s *sessions) recordLogin(username string, ok bool) {
 		f.lockouts++
 	}
 	f.last = now
-	if f.elem != nil {
-		s.byLast.MoveToBack(f.elem)
-	}
+	s.byLast.MoveToBack(f.elem)
 }
 
-// failuresOf returns username's failures: its own when tracked, or, with
-// track, when the table has room or a quiet name to evict for it; else the
-// shared overflow. The zero failures of an untracked name allow a sign-in
-// unless the table is full, when the overflow's lockout holds.
-func (s *sessions) failuresOf(username string, track bool) *loginFailures {
+// failuresOf returns username's failures, tracking it when the table has
+// room or a quiet name to evict for it, or, for an account (known), the
+// least recent name that is none: a flood of unknown names neither grows the
+// table nor evicts a lockout still in force, and accounts stay tracked. Nil
+// when the name cannot be tracked.
+func (s *sessions) failuresOf(username string, known bool) *loginFailures {
 	if f, tracked := s.failures[username]; tracked {
+		f.known = f.known || known
 		return f
 	}
 	if len(s.failures) >= maxTrackedLogins {
-		oldest := s.byLast.Front()
-		if oldest == nil || !s.failures[oldest.Value.(string)].quiet(s.now()) {
-			return &s.overflow
+		victim := s.evictable(known)
+		if victim == nil {
+			return nil
 		}
-		if track {
-			delete(s.failures, s.byLast.Remove(oldest).(string))
-		}
+		delete(s.failures, s.byLast.Remove(victim).(string))
 	}
-	if !track {
-		return &loginFailures{}
-	}
-	f := &loginFailures{elem: s.byLast.PushBack(username)}
+	f := &loginFailures{known: known, elem: s.byLast.PushBack(username)}
 	s.failures[username] = f
 	return f
+}
+
+// evictable returns the entry a new name may replace in a full table: the
+// least recent when quiet, else, for an account, the least recent name that
+// is none.
+func (s *sessions) evictable(known bool) *list.Element {
+	e := s.byLast.Front()
+	if e != nil && s.failures[e.Value.(string)].quiet(s.now()) {
+		return e
+	}
+	for ; known && e != nil; e = e.Next() {
+		if !s.failures[e.Value.(string)].known {
+			return e
+		}
+	}
+	return nil
 }

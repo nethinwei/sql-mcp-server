@@ -195,6 +195,13 @@ func testRollbackExplicit(t *testing.T, s revision.Store) {
 	if _, err := s.Rollback(ctx, b.ID, draft.ID, revision.Meta{}); !errors.Is(err, revision.ErrInvalidState) {
 		t.Fatalf("rollback to a draft err = %v", err)
 	}
+	discarded := mustCreate(t, s, "discarded\n")
+	if _, err := s.Discard(ctx, discarded.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Rollback(ctx, b.ID, discarded.ID, revision.Meta{}); !errors.Is(err, revision.ErrInvalidState) {
+		t.Fatalf("rollback to a discarded revision err = %v", err)
+	}
 	if _, err := s.Rollback(ctx, b.ID, 999, revision.Meta{}); !errors.Is(err, revision.ErrNotFound) {
 		t.Fatalf("rollback to a missing revision err = %v", err)
 	}

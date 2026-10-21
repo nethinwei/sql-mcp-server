@@ -18,10 +18,10 @@ var (
 )
 
 // Config is the top-level configuration. Version is the configuration contract
-// marker; the current value is "1" and loaders currently preserve it without
-// rejecting other values.
+// marker: "1", the current one, or unset, which means it; any other fails
+// validation, so a payload of an unknown contract is never loaded.
 type Config struct {
-	Version      string                    `yaml:"version"         json:"version"`
+	Version      string                    `yaml:"version"         json:"version" schema:"enum=@configVersion"`
 	Server       ServerConfig              `yaml:"server"          json:"server"`
 	Database     DatabaseConfig            `yaml:"database"        json:"database" schema:"nodefault"`
 	Databases    map[string]DatabaseConfig `yaml:"databases"       json:"databases" schema:"nodefault,keys=@pathSegment"`

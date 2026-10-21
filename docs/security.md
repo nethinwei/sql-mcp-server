@@ -33,7 +33,8 @@ token 时使用默认身份；都不命中返回 401。没有共享 token 时，
 `server.auth.trustProxyHeaders: true` 时才读取它们，而且只接受来自代理的请求：来源地址
 在 `trustedProxyCIDRs` 内，或者在 mTLS 下客户端叶证书的 CN / DNS SAN 列在
 `trustedProxyCertSubjects` 中。二者必须至少配置一项，单有 mTLS 不够：持有 clientCA
-签发的证书只说明是调用方，不说明是代理。mTLS 下，其他证书不带身份头时按普通调用方
+签发的证书只说明是调用方，不说明是代理。同时匹配某个用户 `certSubjects`（例如
+`uri:` / `email:` 主体，配置无法与代理名比较）的证书一律不算代理证书。mTLS 下，其他证书不带身份头时按普通调用方
 处理，带身份头则返回 HTTP 403；CIDR 模式下，不在列表内的来源一律返回 403。可信网关
 仍必须删除外部同名 header、完成认证并重新注入身份。畸形的
 `X-MCP-Subject` JSON 返回 HTTP 400；它的每个属性必须是字符串、数字、布尔、null 或由

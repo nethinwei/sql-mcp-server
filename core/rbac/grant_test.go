@@ -100,6 +100,29 @@ func TestGrantAuthorizerRejectsCrossGrantFieldRowCombination(t *testing.T) {
 	}
 }
 
+// The retry hint of an ambiguous projection lists only the grants that can
+// read the fields the request reads (its filter, here): a grant that cannot
+// serve the retry is no hint, and its scope does not make the entity reachable.
+func TestAmbiguousProjectionHintsOnlyCoveringGrants(t *testing.T) {
+	t.Parallel()
+	policy := alicePolicy(map[string][]Grant{
+		"a": {readGrant("a", []string{"id", "amount"}, nil)},
+		"b": {readGrant("b", []string{"id", "phone"}, nil)},
+		"c": {readGrant("c", []string{"region"}, nil)},
+	}, nil, "a", "b", "c")
+	a := NewGrantAuthorizer(grantRegistry(t, nil), policy)
+	dec, err := a.Authorize(context.Background(), Request{
+		Role: "user:alice", Entity: "customers", Action: entity.ActionRead, ReadFields: []string{"id"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{{"id", "amount"}, {"id", "phone"}}
+	if dec.Allowed || !reflect.DeepEqual(dec.FieldScopes, want) {
+		t.Fatalf("FieldScopes = %v (allowed %v), want %v", dec.FieldScopes, dec.Allowed, want)
+	}
+}
+
 func TestGrantAuthorizerUnrestrictedGrantWidensRowsNotTenant(t *testing.T) {
 	t.Parallel()
 	tenant := relalg.Condition{Field: "tenant_id", Op: relalg.OpEq, Value: "${subject.tenant_id}"}

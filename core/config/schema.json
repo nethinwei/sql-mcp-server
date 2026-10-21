@@ -18,9 +18,12 @@
     "version": {
       "title": "Config version",
       "x-title-zh-CN": "配置版本",
-      "description": "Configuration contract marker, currently \"1\"; loaders keep it without restricting it yet.",
-      "x-description-zh-CN": "配置契约版本标记，当前为 \"1\"；加载器保存但暂不限制取值。",
-      "type": "string"
+      "description": "Configuration contract marker, currently \"1\"; unset means \"1\". Any other value fails validation, so a configuration of an unknown contract is never loaded.",
+      "x-description-zh-CN": "配置契约版本标记，当前为 \"1\"，未写即 \"1\"；其他取值校验失败，不认识的契约不会被加载。",
+      "type": "string",
+      "enum": [
+        "1"
+      ]
     },
     "server": {
       "title": "Server (listen, auth, TLS)",

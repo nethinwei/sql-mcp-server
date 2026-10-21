@@ -443,13 +443,18 @@ func auditInputOf(tc Context, name string, input json.RawMessage) json.RawMessag
 
 // sensitiveFields are the masked fields of the entity input names, by name
 // and alias; of every entity it may name when it names several (an
-// ambiguous reference is still audited, redacted).
+// ambiguous reference is still audited, redacted); every field when it names
+// one that does not resolve (a typo, or an entity a reload removed).
 func sensitiveFields(toolName string, input json.RawMessage, registry *entity.Registry) map[string]bool {
 	if registry == nil {
 		return nil
 	}
+	matched := registry.Match(entityNameForTool(toolName, input, registry))
+	if len(matched) == 0 && namesEntity(input) {
+		return map[string]bool{audit.EveryField: true}
+	}
 	fields := make(map[string]bool)
-	for _, e := range registry.Match(entityNameForTool(toolName, input, registry)) {
+	for _, e := range matched {
 		for _, attribute := range e.Attributes {
 			if attribute.Mask == "" {
 				continue
@@ -461,6 +466,15 @@ func sensitiveFields(toolName string, input json.RawMessage, registry *entity.Re
 		}
 	}
 	return fields
+}
+
+// namesEntity reports whether input names an entity, as the built-in tools'
+// does in its entity key.
+func namesEntity(input json.RawMessage) bool {
+	var envelope struct {
+		Entity *string `json:"entity"`
+	}
+	return decodeEnvelope(input, &envelope) == nil && envelope.Entity != nil
 }
 
 func transactionFromInput(input json.RawMessage) string {

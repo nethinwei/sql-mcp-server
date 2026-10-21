@@ -115,6 +115,38 @@ func TestLoginSessionAndCSRF(t *testing.T) {
 	}
 }
 
+// A cross-site page can post a form or text/plain without a preflight: login
+// refuses them, and logout acts only for the session with its CSRF token.
+func TestLoginAndLogoutRefuseCrossSiteRequests(t *testing.T) {
+	f := newFixture(t)
+	body := `{"username":"root","password":"correct horse battery"}`
+	for _, ct := range []string{"text/plain", "application/x-www-form-urlencoded", "multipart/form-data", ""} {
+		rec := f.do(http.MethodPost, "/admin/login", body, map[string]string{"Content-Type": ct}, nil)
+		if rec.Code != http.StatusUnsupportedMediaType || rec.Header().Get("Set-Cookie") != "" {
+			t.Fatalf("login as %q = %d, cookie %q", ct, rec.Code, rec.Header().Get("Set-Cookie"))
+		}
+	}
+	json := map[string]string{"Content-Type": "application/json; charset=utf-8"}
+	if rec := f.do(http.MethodPost, "/admin/login", body, json, nil); rec.Code != http.StatusOK {
+		t.Fatalf("login with a JSON media type and parameters = %d", rec.Code)
+	}
+	_, cookie, csrf := f.login(t, "correct horse battery")
+	for name, c := range map[string]*http.Cookie{"no session": nil, "stale session": {Name: cookieName, Value: "x"}} {
+		rec := f.do(http.MethodPost, "/admin/logout", "", map[string]string{csrfHeader: csrf}, c)
+		if rec.Code != http.StatusUnauthorized || rec.Header().Get("Set-Cookie") != "" {
+			t.Fatalf("logout with %s = %d, cookie %q", name, rec.Code, rec.Header().Get("Set-Cookie"))
+		}
+	}
+	rec := f.do(http.MethodPost, "/admin/logout", "", nil, cookie)
+	if rec.Code != http.StatusForbidden || rec.Header().Get("Set-Cookie") != "" {
+		t.Fatalf("logout without the CSRF token = %d, cookie %q", rec.Code, rec.Header().Get("Set-Cookie"))
+	}
+	rec = f.do(http.MethodPost, "/admin/graphql", meQuery, map[string]string{csrfHeader: csrf}, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("a refused logout must keep the session: %d", rec.Code)
+	}
+}
+
 func TestLoginFailuresLockOut(t *testing.T) {
 	f := newFixture(t)
 	for i := 0; i < maxLoginFailures; i++ {

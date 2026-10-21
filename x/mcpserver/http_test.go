@@ -354,7 +354,7 @@ func TestTrustedProxyAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
-	handler := trustedProxy(networks, nil, false, next, next)
+	handler := trustedProxy(networks, nil, nil, false, next, next)
 	trusted := httptest.NewRequest(http.MethodPost, "/mcp", nil)
 	trusted.RemoteAddr = "10.2.3.4:1234"
 	rec := httptest.NewRecorder()
@@ -409,7 +409,7 @@ func TestTrustedProxyCertificate(t *testing.T) {
 			mark := func(name string) http.Handler {
 				return http.HandlerFunc(func(http.ResponseWriter, *http.Request) { served = name })
 			}
-			handler := trustedProxy(networks, []string{"gateway", "gw.internal"}, tc.mtls, mark("proxied"),
+			handler := trustedProxy(networks, []string{"gateway", "gw.internal"}, nil, tc.mtls, mark("proxied"),
 				mark("direct"))
 			req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
 			req.RemoteAddr, req.TLS = tc.remote, tc.tls
@@ -443,7 +443,7 @@ func TestTrustedProxyRejectsForgedIdentityFromUntrustedSource(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			reached := false
 			next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true })
-			handler := trustedProxy(networks, nil, false, withRequestSubject(next), next)
+			handler := trustedProxy(networks, nil, nil, false, withRequestSubject(next), next)
 			req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
 			req.RemoteAddr = "192.0.2.1:1234"
 			req.Header.Set("X-MCP-Role", tc.role)

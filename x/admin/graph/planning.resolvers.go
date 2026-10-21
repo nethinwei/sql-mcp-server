@@ -236,12 +236,26 @@ func (r *queryResolver) ScanBatches(ctx context.Context, datasource string) ([]c
 
 // Sections is the resolver for the sections field.
 func (r *workspaceResolver) Sections(ctx context.Context, obj *configapp.Workspace) (any, error) {
+	if err := readsContent(ctx); err != nil {
+		return nil, err
+	}
 	return obj.Sections()
 }
 
 // Items is the resolver for the items field.
 func (r *workspaceResolver) Items(ctx context.Context, obj *configapp.Workspace, since *int) (*configapp.WorkspaceItems, error) {
+	if err := readsContent(ctx); err != nil {
+		return nil, err
+	}
 	return r.App.WorkspaceItems(ctx, obj, since)
+}
+
+// Conflicts is the resolver for the conflicts field.
+func (r *workspaceResolver) Conflicts(ctx context.Context, obj *configapp.Workspace) ([]configapp.WorkspaceConflict, error) {
+	if err := readsContent(ctx); err != nil {
+		return nil, err
+	}
+	return obj.Conflicts, nil
 }
 
 // Workspace returns WorkspaceResolver implementation.

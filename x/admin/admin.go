@@ -12,6 +12,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strings"
 	"sync"
@@ -177,8 +178,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 // login verifies a local account and starts a session. Failures do not tell
 // unknown accounts from wrong passwords and lock a name after repeated
-// failures.
+// failures. The body must be declared JSON: a cross-site page can only send
+// form encodings or text/plain without a CORS preflight this handler never
+// grants, so it cannot sign a browser into another account.
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
+	if !isJSON(r) {
+		writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{"error": "expected Content-Type application/json"})
+		return
+	}
 	var in struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -204,7 +211,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ok := auth.VerifyPassword(account.PasswordHash, in.Password) && err == nil && !account.Disabled
-	h.sessions.recordLogin(username, ok)
+	h.sessions.recordLogin(username, ok, err == nil)
 	if !ok {
 		slog.Warn("admin sign-in rejected", "username", username)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid username or password"})
@@ -238,17 +245,35 @@ func (h *Handler) currentSession(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// logout ends the request's session. It acts only for a live session with its
+// CSRF token: any other request, a cross-site one included, leaves the cookie.
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(cookieName); err == nil {
-		if sess, ok := h.sessions.lookup(c.Value); ok && sameToken(r.Header.Get(csrfHeader), sess.csrf) {
-			h.sessions.delete(c.Value)
-		}
+	c, err := r.Cookie(cookieName)
+	if err != nil {
+		refuseSession(w, errSignedOut)
+		return
 	}
+	sess, ok := h.sessions.lookup(c.Value)
+	if !ok {
+		refuseSession(w, errSignedOut)
+		return
+	}
+	if !sameToken(r.Header.Get(csrfHeader), sess.csrf) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing or invalid " + csrfHeader})
+		return
+	}
+	h.sessions.delete(c.Value)
 	http.SetCookie(w, &http.Cookie{
 		Name: cookieName, Path: h.path("/admin"), HttpOnly: true, Secure: h.cfg.SecureCookie,
 		SameSite: http.SameSiteStrictMode, MaxAge: -1,
 	})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// isJSON reports whether r declares a JSON body.
+func isJSON(r *http.Request) bool {
+	media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return err == nil && media == "application/json"
 }
 
 // credentialTag fingerprints a password hash for comparison with a session.

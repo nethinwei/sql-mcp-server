@@ -493,14 +493,16 @@ func parseTrustedProxyCIDRs(values []string) ([]*net.IPNet, error) {
 }
 
 // trustedProxy serves a request from a trusted proxy (a source address in
-// networks, or a client certificate named in subjects) with proxied, which
+// networks, or a client certificate named in subjects and no user's) with proxied, which
 // reads its identity headers. Any other request is refused unless mTLS
 // authenticated its channel: then it is served with direct when it carries no
 // identity header, since holding a certificate does not make a caller a proxy.
-func trustedProxy(networks []*net.IPNet, subjects []string, mtls bool, proxied, direct http.Handler) http.Handler {
+func trustedProxy(
+	networks []*net.IPNet, subjects []string, users UserDirectory, mtls bool, proxied, direct http.Handler,
+) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case fromProxyAddress(networks, r) || fromProxyCertificate(subjects, r):
+		case fromProxyAddress(networks, r) || fromProxyCertificate(subjects, users, r):
 			proxied.ServeHTTP(w, r)
 		case mtls && !hasIdentityHeader(r):
 			direct.ServeHTTP(w, r)
@@ -518,8 +520,10 @@ func (c HTTPConfig) fromProxy() func(*http.Request) bool {
 		return func(*http.Request) bool { return false }
 	}
 	networks, _ := parseTrustedProxyCIDRs(c.TrustedProxyCIDRs)
-	subjects := c.TrustedProxyCertSubjects
-	return func(r *http.Request) bool { return fromProxyAddress(networks, r) || fromProxyCertificate(subjects, r) }
+	subjects, users := c.TrustedProxyCertSubjects, c.Users
+	return func(r *http.Request) bool {
+		return fromProxyAddress(networks, r) || fromProxyCertificate(subjects, users, r)
+	}
 }
 
 func fromProxyAddress(networks []*net.IPNet, r *http.Request) bool {
@@ -532,17 +536,25 @@ func fromProxyAddress(networks []*net.IPNet, r *http.Request) bool {
 }
 
 // fromProxyCertificate reports whether the leaf certificate of r's
-// connection (verified by requireClientCert) has a CN or DNS SAN in subjects.
-// A DNS name matches in any case, as DNS does.
-func fromProxyCertificate(subjects []string, r *http.Request) bool {
+// connection (verified by requireClientCert) has a CN or DNS SAN in subjects
+// and names none of users. A DNS name matches in any case, as DNS does. A
+// certificate that is a user's (by a URI or email SAN, say, which the
+// configuration cannot compare with a proxy's names) is never a proxy's: that
+// user would speak for others through the identity headers.
+func fromProxyCertificate(subjects []string, users UserDirectory, r *http.Request) bool {
 	if len(subjects) == 0 || r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 		return false
 	}
 	leaf := r.TLS.PeerCertificates[0]
-	return slices.Contains(subjects, leaf.Subject.CommonName) ||
+	named := slices.Contains(subjects, leaf.Subject.CommonName) ||
 		slices.ContainsFunc(leaf.DNSNames, func(name string) bool {
 			return slices.ContainsFunc(subjects, func(s string) bool { return strings.EqualFold(s, name) })
 		})
+	if !named || users == nil {
+		return named
+	}
+	_, user := users.UserByCertificate(leaf)
+	return !user
 }
 
 func hasIdentityHeader(r *http.Request) bool {

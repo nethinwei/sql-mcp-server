@@ -24,7 +24,11 @@ func CanonicalCertSubject(s string) string {
 
 // validateCertSubjects requires each certificate subject to name one user,
 // and no proxy: a certificate that is both a proxy's and a user's would let
-// that user speak for others through the identity headers.
+// that user speak for others through the identity headers. Only cn: and dns:
+// subjects can be compared with a proxy's names (a CN or DNS SAN); which
+// names a certificate of a uri: or email: subject also carries is the CA's
+// choice, so the server never trusts a certificate naming a user as a proxy's
+// (mcpserver.fromProxyCertificate).
 func (c *Config) validateCertSubjects() error {
 	owner := map[string]string{}
 	for _, name := range slices.Sorted(maps.Keys(c.Users)) {

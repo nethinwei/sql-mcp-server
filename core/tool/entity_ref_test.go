@@ -127,3 +127,31 @@ func TestAmbiguousReferenceIsAuditedRedacted(t *testing.T) {
 		t.Fatalf("audited %s", got)
 	}
 }
+
+// A call naming an entity that does not resolve (a typo, or one a reload
+// removed) cannot tell its masked fields: it is audited with every field
+// value redacted, ambiguous or unknown alike.
+func TestUnresolvedReferenceIsAuditedRedacted(t *testing.T) {
+	t.Parallel()
+	reg, err := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []string{
+		`{"entity":"patients","values":{"id":1,"ssn":"078-05-1120"}}`,
+		`{"entity":"","values":{"id":1,"ssn":"078-05-1120"}}`,
+		`{"entity":"patients","filter":[{"field":"ssn","op":"eq","value":"078-05-1120"}]}`,
+	} {
+		aud := &recorderAuditor{}
+		_, _ = RunTool(context.Background(), CreateTool{}, json.RawMessage(input),
+			Context{Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Auditor: aud},
+				Role: "writer"})
+		if len(aud.events) != 1 || strings.Contains(string(aud.events[0].Input), "078-05-1120") {
+			t.Fatalf("%s audited %+v", input, aud.events)
+		}
+	}
+	// A call naming no entity has no field values to tell apart: kept.
+	if got := sensitiveFields("list_entities", json.RawMessage(`{}`), reg); len(got) != 0 {
+		t.Fatalf("sensitive fields of a call naming no entity = %v", got)
+	}
+}

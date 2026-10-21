@@ -10,8 +10,8 @@
 
 version:
   title: {zh-CN: '配置版本', en: 'Config version'}
-  zh-CN: 配置契约版本标记，当前为 "1"；加载器保存但暂不限制取值。
-  en: Configuration contract marker, currently "1"; loaders keep it without restricting it yet.
+  zh-CN: 配置契约版本标记，当前为 "1"，未写即 "1"；其他取值校验失败，不认识的契约不会被加载。
+  en: Configuration contract marker, currently "1"; unset means "1". Any other value fails validation, so a configuration of an unknown contract is never loaded.
 
 server:
   title: {zh-CN: '服务（监听、认证、TLS）', en: 'Server (listen, auth, TLS)'}

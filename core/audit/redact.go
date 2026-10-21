@@ -9,6 +9,11 @@ import (
 
 const maxAuditInputBytes = 4096
 
+// EveryField, as a sensitive field, makes the value of every field
+// sensitive: for input naming an entity that does not resolve, whose masked
+// fields cannot be told.
+const EveryField = "*"
+
 // RedactInput removes values for configured sensitive fields and hashes
 // transaction handles before tool input is queued for persistence.
 func RedactInput(input json.RawMessage, sensitive map[string]bool) json.RawMessage {
@@ -45,7 +50,7 @@ func RedactInput(input json.RawMessage, sensitive map[string]bool) json.RawMessa
 func redactValue(value any, sensitive map[string]bool) {
 	switch node := value.(type) {
 	case map[string]any:
-		if field, ok := node["field"].(string); ok && sensitive[field] {
+		if field, ok := node["field"].(string); ok && (sensitive[field] || sensitive[EveryField]) {
 			if _, exists := node["value"]; exists {
 				node["value"] = "***"
 			}
@@ -60,7 +65,7 @@ func redactValue(value any, sensitive map[string]bool) {
 			case "values", "set", "cursor", "args":
 				if fields, ok := child.(map[string]any); ok {
 					for field := range fields {
-						if sensitive[field] {
+						if sensitive[field] || sensitive[EveryField] {
 							fields[field] = "***"
 						}
 					}

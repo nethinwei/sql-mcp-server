@@ -45,6 +45,7 @@ import (
 // absent object in the schema.
 
 var enums = map[string][]string{
+	"configVersion":     {"1"},
 	"transport":         {"stdio", "http"},
 	"entityKind":        {"table", "view", "procedure"},
 	"grantAction":       entity.ActionNames(),

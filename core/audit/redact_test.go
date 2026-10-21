@@ -42,3 +42,14 @@ func BenchmarkRedactInput(b *testing.B) {
 		_ = RedactInput(input, nil)
 	}
 }
+
+// EveryField redacts the value of every field, wherever input holds one.
+func TestRedactInputEveryField(t *testing.T) {
+	t.Parallel()
+	got := string(RedactInput(json.RawMessage(`{"entity":"x","values":{"a":"s1"},"set":{"b":"s2"},
+		"filter":[{"field":"c","op":"eq","value":"s3"}],"cursor":{"d":"s4"},"args":{"e":"s5"}}`),
+		map[string]bool{EveryField: true}))
+	if strings.ContainsAny(got, "12345") || !strings.Contains(got, `"entity":"x"`) {
+		t.Fatalf("redacted = %s", got)
+	}
+}

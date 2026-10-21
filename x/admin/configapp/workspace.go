@@ -401,7 +401,8 @@ func (r *Service) CommitWorkspace(ctx context.Context, in CommitInput) (revision
 		Comment: strings.TrimSpace(kit.Deref(in.Comment))})
 }
 
-// WorkspaceLog is the caller's workspace log, newest first.
+// WorkspaceLog is the caller's workspace log, newest first: at least one
+// entry and at most maxListed.
 func (r *Service) WorkspaceLog(ctx context.Context, limit *int) ([]WorkspaceLogEntry, error) {
 	who, err := auth.RequireUnlimited(ctx, auth.PermRead)
 	if err != nil {
@@ -411,7 +412,7 @@ func (r *Service) WorkspaceLog(ctx context.Context, limit *int) ([]WorkspaceLogE
 	if err != nil {
 		return nil, err
 	}
-	log, err := ops.Log(ctx, who.Username, kit.DerefInt(limit, 100))
+	log, err := ops.Log(ctx, who.Username, listLimit(kit.DerefInt(limit, 100)))
 	if err != nil {
 		return nil, err
 	}

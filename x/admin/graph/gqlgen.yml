@@ -48,6 +48,8 @@ models:
         resolver: true
       items:
         resolver: true
+      conflicts:
+        resolver: true
   Revision:
     model:
       - github.com/nethinwei/sql-mcp-server/x/admin/graph.Revision

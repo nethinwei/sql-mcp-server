@@ -14,6 +14,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
+	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
@@ -21,6 +22,14 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/workspaceops"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
+
+// readsContent requires admin:read for the fields that carry a
+// configuration (a revision's or a workspace's): the mutations that return
+// one, open to admin:write, must not read what admin:read gates.
+func readsContent(ctx context.Context) error {
+	_, err := auth.Require(ctx, auth.PermRead)
+	return err
+}
 
 // withPayload returns obj's revision, fetching the payload when obj came
 // from a payload-free listing.
