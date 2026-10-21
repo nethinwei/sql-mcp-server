@@ -677,8 +677,8 @@
           "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
         },
         "breakerThreshold": {
-          "description": "Consecutive failures that open the breaker; each database connection has its own, and calls the caller cancelled or statements the database refused for their data or privileges do not count.",
-          "x-description-zh-CN": "连续失败多少次后熔断；每个数据库连接各自熔断，调用方取消或数据库因数据、权限拒绝的语句不计入。",
+          "description": "Consecutive failures that open the breaker; each database connection has its own. Only the database's or the connection's own failures count (its statement timeouts included); calls the caller cancelled, and statements the database refused for their data, values, privileges, their own text (a syntax error) or a schema that changed, do not.",
+          "x-description-zh-CN": "连续失败多少次后熔断；每个数据库连接各自熔断。只计数据库或连接自身的故障（含数据库的语句超时）；调用方取消，以及数据库因数据、取值、权限、语句本身（如语法）或已变化的 schema 拒绝的语句不计入。",
           "type": "integer",
           "default": 5,
           "minimum": 0

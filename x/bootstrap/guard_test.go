@@ -13,6 +13,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
+	"github.com/nethinwei/sql-mcp-server/core/tool"
 )
 
 // guardedPair is shared services with two connections, a and b, whose
@@ -105,6 +106,25 @@ func TestCancelledCallsDoNotCount(t *testing.T) {
 	// database slows down, timeouts are how it shows.
 	if !countsAgainstHealth(fmt.Errorf("%w: canceling statement", store.ErrStatementTimeout)) {
 		t.Fatal("a database statement timeout must count against health")
+	}
+}
+
+// The engine's breaker (recordProviderFailure, on a tool's errors) and a
+// connection's (countsAgainstHealth, on the database's) count the same
+// database errors.
+func TestHealthRulesAgree(t *testing.T) {
+	t.Parallel()
+	for err, counts := range map[error]bool{
+		store.ErrRejected: false, store.ErrInvalidValue: false, store.ErrPermissionDenied: false,
+		store.ErrMissingRelation: false, store.ErrStalePlan: false, &store.ConstraintError{Kind: "unique"}: false,
+		store.ErrStatementTimeout: true, store.ErrInterrupted: true, store.ErrConnectionLost: true,
+		errors.New("out of memory"): true,
+	} {
+		wrapped := fmt.Errorf("%w: 42", err)
+		if countsAgainstHealth(wrapped) != counts || recordProviderFailure(tool.WrapDBError(wrapped)) != counts {
+			t.Errorf("%v: connection %v, engine %v, want %v", err, countsAgainstHealth(wrapped),
+				recordProviderFailure(tool.WrapDBError(wrapped)), counts)
+		}
 	}
 }
 

@@ -614,10 +614,12 @@ rateLimit.rttThreshold:
   zh-CN: 延迟超过该值时降低并发；0s 不触发。
   en: Reduce concurrency when latency exceeds this; 0s disables it.
 rateLimit.breakerThreshold:
-  zh-CN: 连续失败多少次后熔断；每个数据库连接各自熔断，调用方取消或数据库因数据、权限拒绝的语句不计入。
+  zh-CN: 连续失败多少次后熔断；每个数据库连接各自熔断。只计数据库或连接自身的故障（含数据库的语句超时）；调用方取消，以及数据库因数据、取值、权限、语句本身（如语法）或已变化的 schema 拒绝的语句不计入。
   en: >-
-    Consecutive failures that open the breaker; each database connection has its own, and calls the caller
-    cancelled or statements the database refused for their data or privileges do not count.
+    Consecutive failures that open the breaker; each database connection has its own. Only the database's or
+    the connection's own failures count (its statement timeouts included); calls the caller cancelled, and
+    statements the database refused for their data, values, privileges, their own text (a syntax error) or a
+    schema that changed, do not.
 rateLimit.breakerCooldown:
   zh-CN: 熔断后多久重试；冷却后只放行一个探测调用，成功才恢复。
   en: Time before retrying after the breaker opens; one probe call is then let through, and only its success closes it.

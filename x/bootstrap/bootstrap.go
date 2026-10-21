@@ -470,14 +470,15 @@ func AssembleWithProviders(cfg *config.Config, providers map[string]Provider) (*
 	return AssembleWithConnections(cfg, connections)
 }
 
-// recordProviderFailure reports whether err tells of the database's health
-// and so feeds the adaptive limit and the breaker. It counts only what the
-// database or the connection to it reported (fail closed: an error of any
-// other kind, such as a new business error, never opens the breaker); a
-// cancelled or timed-out call is the caller's doing. A statement the database
-// stopped at its own timeout counts: database slowness shows up as them.
+// recordProviderFailure reports whether err, a call's failure, tells of the
+// database's health and so feeds the engine's adaptive limit and breaker. It
+// counts only what the database or the connection to it reported (fail
+// closed: an error of any other kind, such as a new business error, never
+// opens the breaker), and of that only what countsAgainstHealth counts, the
+// policy a connection's own breaker applies: a statement the database
+// refused for itself (store.ErrRejected) or for the caller's data does not.
 func recordProviderFailure(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if err == nil || !countsAgainstHealth(err) {
 		return false
 	}
 	var netErr net.Error

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
@@ -302,8 +303,10 @@ func (g AggregateGuard) Check(_ context.Context, c codegen.Compiled) (Decision, 
 	if !g.RequirePredicate || c.Kind != codegen.KindAggregate {
 		return Decision{Allow: true}, nil
 	}
+	// Codegen bounded the IN lists by the configured limit, which may be
+	// past relalg's default: the predicate's shape is checked, not them.
 	p := codegen.PredicateOf(c.Expr)
-	if p != nil && relalg.ValidatePredicate(p) == nil {
+	if p != nil && relalg.ValidatePredicateWithMaxINCardinality(p, math.MaxInt) == nil {
 		return Decision{Allow: true}, nil
 	}
 	return Decision{Allow: false, Hints: []string{aggregatePredicateHint(c)}}, nil

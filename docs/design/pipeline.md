@@ -51,7 +51,9 @@ resolve → route → authorize → compile → gate → exec → mask → after
 
 脱敏顺序有一处调整。原先 read 在 expand 之后才对父行脱敏，因为连接需要用原值。
 现在执行器在脱敏前保留连接列的原值（`keep` 得到 `queried.kept`），expand 用这些
-原值分组；父行与子行都由各自的语句脱敏，结果与原先相同。
+原值分组；父行与子行都由各自的语句脱敏，结果与原先相同。连接列任一侧被脱敏时
+expand 与跨关系谓词一律拒绝（`fieldUses.compared`）：子行的连接列等于父行的原值，
+会把被脱敏的值带出来。
 
 ## 流式结果预算（`core/tool/results.go`）
 

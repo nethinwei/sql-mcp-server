@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/core/budget"
 	"github.com/nethinwei/sql-mcp-server/core/cache"
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
@@ -126,6 +127,8 @@ func prepareReadPlan(ctx context.Context, tc Context, in readInput) (readPlan, e
 	readFields = append(readFields, locals...)
 	predicateFields, _ := splitPaths(res.Entity, append(filterFields(in.Filter), sortedKeys(in.Cursor)...))
 	predicateFields = append(predicateFields, locals...) // a join on them compares their values
+	// so does expansion's: a child carries the target's equal value
+	predicateFields = append(predicateFields, expandJoinColumns(res.Entity, in.Expand)...)
 	if err := (fieldUses{read: readFields, compared: predicateFields}).check(res); err != nil {
 		return readPlan{}, err
 	}
@@ -455,7 +458,7 @@ func expandOneRelationship(ctx context.Context, tc Context, parent entity.Entity
 	join := relationJoin(relation)
 	join.localDecimal = decimalColumns(parent, join.local)
 	join.targetDecimal = decimalColumns(target.Entity, join.target)
-	if err := (fieldUses{read: join.target}).check(target); err != nil {
+	if err := (fieldUses{compared: join.target}).check(target); err != nil {
 		return err
 	}
 	if target.Entity.DataSource != parent.DataSource {
@@ -650,7 +653,13 @@ func queryExpandedChildren(
 		if err != nil {
 			return nil, err
 		}
+		// The batch has no LIMIT of its own: the gate caps it at the row
+		// limit, so a batch reaching it may have lost children.
+		st.rowCap = targetTC.MaxRows
 		children, err := st.query(ctx)
+		if err == nil && st.rowCap > 0 && int64(len(children.rows)) >= st.rowCap {
+			err = budget.ErrExceeded
+		}
 		if err != nil {
 			return nil, err
 		}

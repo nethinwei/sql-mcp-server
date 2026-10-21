@@ -247,6 +247,9 @@ func (st statement) queryRaw(ctx context.Context) (out rawRows, err error) {
 		if err := rows.Scan(pointers...); err != nil {
 			return rawRows{}, st.fail(err)
 		}
+		for i, v := range values {
+			values[i] = finite(v)
+		}
 		if err := st.tc.results.addValues(values); errors.Is(err, errResultCut) {
 			out.truncated = true
 			break
@@ -309,6 +312,9 @@ func (st statement) query(ctx context.Context) (out queried, err error) {
 	for row, err := range store.IterNamed(rows, st.columns) {
 		if err != nil {
 			return queried{}, st.fail(err)
+		}
+		for c, v := range row {
+			row[c] = finite(v)
 		}
 		if st.keep != nil {
 			kept := make(map[string]any, len(st.keep))
@@ -397,8 +403,10 @@ func (st statement) classify(err error) error {
 	if !st.write {
 		return WrapDBError(err)
 	}
-	if st.tc.Transaction == "" && uncertain(err) {
+	if st.tc.Transaction == "" && uncertain(err) || errors.Is(err, store.ErrInterrupted) {
 		// Inside a transaction nothing is committed yet; its commit tells.
+		// An interrupted procedure may have done part of its work, even
+		// inside one: retried, it would do it again.
 		return outcomeUnknown(err)
 	}
 	return writeError(st.res, err)
@@ -415,7 +423,7 @@ func (st statement) failRaw(err error) error {
 	switch {
 	case errors.Is(err, store.ErrPermissionDenied):
 		kind = ErrDatasourceForbidden
-	case errors.Is(err, store.ErrStatementTimeout):
+	case errors.Is(err, store.ErrStatementTimeout), errors.Is(err, store.ErrInterrupted):
 		kind = ErrStatementTimeout
 	}
 	return &RawDBError{Kind: kind, Cause: err}
@@ -460,12 +468,15 @@ func outcomeUnknown(err error) error { return &classified{kind: ErrOutcomeUnknow
 // not uncertain, nor is a connection that could not be made
 // (store.ErrNotConnected), nor a statement the database stopped at its
 // timeout (store.ErrStatementTimeout, rolled back, though a deadline passed
-// too), nor any error the database itself returned.
+// too), nor any error the database itself returned but an interruption
+// (store.ErrInterrupted: a procedure's earlier statements, or a commit, may
+// have taken effect).
 func uncertain(err error) bool {
 	var netErr net.Error
 	if errors.Is(err, store.ErrNotConnected) || errors.Is(err, store.ErrStatementTimeout) {
 		return false
 	}
-	return errors.Is(err, store.ErrConnectionLost) || errors.Is(err, io.ErrUnexpectedEOF) ||
+	return errors.Is(err, store.ErrConnectionLost) || errors.Is(err, store.ErrInterrupted) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.As(err, &netErr)
 }

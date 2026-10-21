@@ -461,6 +461,19 @@ func TestAggregateGuardRequiresPredicate(t *testing.T) {
 	if d, _ := guard.Check(context.Background(), filtered); !d.Allow {
 		t.Fatalf("filtered aggregate should pass: %+v", d)
 	}
+	// An IN list past relalg's default bound, within a larger configured
+	// cost.maxINListSize codegen enforced, is a predicate too.
+	values := make([]any, relalg.DefaultMaxINCardinality+1)
+	for i := range values {
+		values[i] = i
+	}
+	filtered.Expr = relalg.Aggregate{Input: relalg.Select{
+		Input:     relalg.Scan{Relation: relalg.RelationRef{Name: "events"}},
+		Predicate: relalg.Condition{Field: "tenant_id", Op: relalg.OpIn, Value: values},
+	}}
+	if d, _ := guard.Check(context.Background(), filtered); !d.Allow {
+		t.Fatalf("a long IN list should pass: %+v", d)
+	}
 }
 
 // TestAggregateGuardHintNamesExecutableRepair locks the v0.1.8 contract

@@ -90,7 +90,7 @@ func WrapDBError(err error) error {
 	if errors.Is(err, store.ErrPermissionDenied) {
 		return &classified{kind: ErrDatasourceForbidden, cause: err}
 	}
-	if errors.Is(err, store.ErrStatementTimeout) {
+	if errors.Is(err, store.ErrStatementTimeout) || errors.Is(err, store.ErrInterrupted) { // a read's: undone
 		return &classified{kind: ErrStatementTimeout, cause: err}
 	}
 	if errors.Is(err, store.ErrInvalidValue) {

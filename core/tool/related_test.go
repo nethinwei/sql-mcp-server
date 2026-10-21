@@ -136,8 +136,9 @@ func TestRelationshipRules(t *testing.T) {
 }
 
 // A masked join column is compared by any join the caller's request asks
-// for (a related field filtered or ordered by, an exists): refused, as the
-// field itself would be; expand still reads it (its kept original value).
+// for (a related field filtered or ordered by, an exists, an expansion,
+// whose children carry the target's equal value): refused, as the field
+// itself would be, on either side of the join.
 func TestMaskedJoinColumnIsCompared(t *testing.T) {
 	t.Parallel()
 	tc, _ := relatedContextOf(t, func(orders *entity.Entity) { orders.Attributes[1].Mask = "full" })
@@ -145,6 +146,21 @@ func TestMaskedJoinColumnIsCompared(t *testing.T) {
 		`{"entity":"orders","filter":[{"field":"customer.region","op":"eq","value":"CN"}]}`,
 		`{"entity":"orders","filter":[{"exists":"customer","filter":[]}]}`,
 		`{"entity":"orders","orderBy":[{"field":"customer.region"}],"limit":5}`,
+		`{"entity":"orders","expand":["customer"],"limit":5}`,
+		`{"entity":"orders","fields":["id"],"expand":["customer"],"limit":5}`,
+	} {
+		if _, err := (ReadTool{}).Run(context.Background(), json.RawMessage(input), tc); !errors.Is(err,
+			ErrInvalidInput) {
+			t.Errorf("%s: err = %v, want %v", input, err, ErrInvalidInput)
+		}
+	}
+	tc, _ = relatedContextOf(t, func(orders *entity.Entity) {
+		orders.Relations = append(orders.Relations, entity.Relationship{Name: "contact", Target: "customers",
+			Cardinality: "has-many", JoinOn: map[string]string{"note": "secret"}})
+	})
+	for _, input := range []string{
+		`{"entity":"orders","filter":[{"exists":"contact","filter":[]}]}`,
+		`{"entity":"orders","expand":["contact"],"limit":5}`,
 	} {
 		if _, err := (ReadTool{}).Run(context.Background(), json.RawMessage(input), tc); !errors.Is(err,
 			ErrInvalidInput) {
@@ -153,7 +169,7 @@ func TestMaskedJoinColumnIsCompared(t *testing.T) {
 	}
 	if _, err := (ReadTool{}).Run(context.Background(), json.RawMessage(
 		`{"entity":"orders","expand":["customer"],"limit":5}`), tc); err != nil {
-		t.Errorf("expand: %v", err)
+		t.Errorf("expand on unmasked columns: %v", err)
 	}
 }
 

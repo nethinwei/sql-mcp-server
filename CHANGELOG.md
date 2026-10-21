@@ -49,10 +49,19 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 - 开启 `readAfterWrite` 或读写事务时，启动检查也确认 write 连接有 SELECT 权限
   （`privilege.readsBack`）。
 - 拒绝码 `STATEMENT_TIMEOUT`（retryable，兼容新增）：数据库在自己的语句超时处停住并回滚的语句
-  （PostgreSQL 57014、MySQL 3024/1317、OceanBase 4012）此前是 `DATABASE_ERROR`（不可重试），写入还可能
-  因请求 deadline 同时到达被报告为 `OUTCOME_UNKNOWN`；与此前相同，它计入数据源熔断。
+  （PostgreSQL 57014、MySQL 3024、OceanBase 4012，以及读取被中断的 1317）此前是 `DATABASE_ERROR`
+  （不可重试），写入还可能因请求 deadline 同时到达被报告为 `OUTCOME_UNKNOWN`；与此前相同，它计入
+  数据源熔断。写入、存储过程调用或提交被中断（1317）报 `OUTCOME_UNKNOWN`：过程先前的语句可能已生效。
 
 ### Fixed
+
+- 任一侧连接列被脱敏的关系不能再用于 `expand`、跨关系过滤/排序与 `exists`（子行会带出与父行
+  相等的原值）；`expand` 一批子行达到 `cost.maxRows` 时读取以 `BUDGET_EXCEEDED` 失败，不再静默
+  丢弃子行；结果中的 NaN/±Infinity 以字符串返回，不再让调用失败。
+- 引擎与连接两处熔断计数统一为同一规则：数据库因语句本身、取值或已变化的 schema 拒绝的语句不计入。
+- MySQL/OceanBase：收到 KILL QUERY 的连接不再发送 COMMIT/ROLLBACK 或开始新事务；DSN 中只有
+  `clientFoundRows` 参数本身（不是密码里的同名文字）会关闭匹配行计数。
+- 聚合的谓词检查按配置的 `cost.maxINListSize` 而非默认 1000 判断 IN 列表。
 
 - 扫描批次的 `requestKey` 按发起的管理员区分：另一位管理员用同一个 key 会开始自己的批次；同一位管理员
   用同一个 key 请求不同的 schema 时报错（此前静默返回别人的或旧的批次，新 schema 永不扫描）。

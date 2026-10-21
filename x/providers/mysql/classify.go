@@ -23,10 +23,13 @@ var (
 var refusals = map[uint16]bool{1142: true, 1143: true, 1044: true, 1370: true, 1290: true}
 
 // timeouts are the errors of a statement its server-side timeout stopped:
-// MySQL's max_execution_time and OceanBase's ob_query_timeout, and a
-// statement interrupted (1317), as the KILL QUERY of one past its deadline
-// does (see killConn): the server rolls the statement back.
-var timeouts = map[uint16]bool{3024: true, 4012: true, 1317: true}
+// MySQL's max_execution_time and OceanBase's ob_query_timeout.
+var timeouts = map[uint16]bool{3024: true, 4012: true}
+
+// interrupted is the error of a statement interrupted as it ran, as the KILL
+// QUERY of one past its deadline does (see killConn): the server rolls the
+// statement back, but not what a procedure did before it.
+const interrupted = 1317
 
 // schemaChanges are the errors of a statement naming a table (1146) or a
 // column (1054) the database does not have; OceanBase reports the same.
@@ -67,7 +70,8 @@ var invalidValues = map[uint16]bool{
 
 // classify turns an integrity violation into a *store.ConstraintError, a
 // refusal into store.ErrPermissionDenied, a statement its server-side timeout
-// stopped into store.ErrStatementTimeout, and a connection the driver found broken in the middle of a
+// stopped into store.ErrStatementTimeout, one interrupted into
+// store.ErrInterrupted, and a connection the driver found broken in the middle of a
 // command (ErrInvalidConn; one broken before it is driver.ErrBadConn) into
 // store.ErrConnectionLost.
 func classify(err error) error {
@@ -80,6 +84,9 @@ func classify(err error) error {
 	}
 	if timeouts[myErr.Number] {
 		return fmt.Errorf("%w: %w", store.ErrStatementTimeout, err)
+	}
+	if myErr.Number == interrupted {
+		return fmt.Errorf("%w: %w", store.ErrInterrupted, err)
 	}
 	if refusals[myErr.Number] {
 		return fmt.Errorf("%w: %w", store.ErrPermissionDenied, err)

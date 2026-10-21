@@ -85,7 +85,7 @@ func NewAdapter(
 // a statement matched, as on PostgreSQL, not those it changed; and updates
 // and deletes without a key or a limit are refused (sql_safe_updates).
 func sessionDefaults(cfg *mysqldriver.Config, dsn string) {
-	if !strings.Contains(dsn, "clientFoundRows=") {
+	if !dsnSets(dsn, "clientFoundRows") {
 		cfg.ClientFoundRows = true
 	}
 	if _, ok := cfg.Params["sql_safe_updates"]; !ok {

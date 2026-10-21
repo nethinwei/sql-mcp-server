@@ -485,7 +485,9 @@ func TestReadToolRejectsHiddenFieldFilter(t *testing.T) {
 	}
 }
 
-func TestExpandUsesMaskedJoinFieldsInternally(t *testing.T) {
+// Expanding on a masked join column would return it in the children, equal
+// to the parent's original value: refused before anything runs.
+func TestExpandRefusesMaskedJoinFields(t *testing.T) {
 	t.Parallel()
 	parent := entity.Entity{
 		Name:       "users",
@@ -506,13 +508,9 @@ func TestExpandUsesMaskedJoinFieldsInternally(t *testing.T) {
 		MCP:        entity.MCPFlags{DMLTools: true},
 	}
 	reg, _ := entity.NewRegistry([]entity.Entity{parent, target})
-	queries := 0
 	db := &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
-		queries++
-		if queries == 1 {
-			return storetest.NewFakeRows([]string{"email"}, []any{"alice@example.com"}), nil
-		}
-		return storetest.NewFakeRows([]string{"id", "user_email"}, []any{int64(7), "alice@example.com"}), nil
+		t.Error("a query ran")
+		return storetest.NewFakeRows([]string{"email"}), nil
 	}}
 	tc := Context{
 		Role: "reader", Services: &Services{
@@ -520,17 +518,9 @@ func TestExpandUsesMaskedJoinFieldsInternally(t *testing.T) {
 			Sources: map[string]DataSource{"default": {DB: db, Dialect: testdialect.Postgres{}}},
 		},
 	}
-	result, err := (ReadTool{}).Run(context.Background(), json.RawMessage(`{"entity":"users","expand":["orders"]}`), tc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	children, ok := result.Content[0]["orders"].([]map[string]any)
-	if !ok || len(children) != 1 || children[0]["id"] != int64(7) {
-		t.Fatalf("expanded rows = %#v", result.Content)
-	}
-	if result.Content[0]["email"] != "a***@example.com" ||
-		children[0]["user_email"] != "a***@example.com" {
-		t.Fatalf("join fields were not safely masked: %#v", result.Content)
+	_, err := (ReadTool{}).Run(context.Background(), json.RawMessage(`{"entity":"users","expand":["orders"]}`), tc)
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("err = %v, want %v", err, ErrInvalidInput)
 	}
 }
 

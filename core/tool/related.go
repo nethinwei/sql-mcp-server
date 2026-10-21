@@ -23,8 +23,9 @@ import (
 //
 // The caller must read the fields it names of the target, and the target's
 // row policy applies to the rows it joins or finds; the relationship's own
-// columns are read of the entity. Masked fields are refused, as on the
-// entity; the target stays on the entity's datasource.
+// columns are read of the entity. Masked fields, and masked join columns
+// on either side, are refused, as on the entity; the target stays on the
+// entity's datasource.
 
 // related is what a request names of its entity's relationships: the joins
 // it needs, the entity's columns they read, and how the fields it named
@@ -71,10 +72,10 @@ func relatedTarget(ctx context.Context, tc Context, e entity.Entity, r entity.Re
 	if target.Entity.DataSource != e.DataSource {
 		return entity.Resolved{}, grant{}, fmt.Errorf("%w: cross-datasource relationship %q", ErrInvalidInput, r.Name)
 	}
-	if err := (fieldUses{compared: fields}).check(target); err != nil {
+	join := relationJoin(r)
+	if err := (fieldUses{compared: slices.Concat(fields, join.target)}).check(target); err != nil {
 		return entity.Resolved{}, grant{}, err
 	}
-	join := relationJoin(r)
 	// What it reads is all it uses: a default projection would ask for
 	// every field some grant reads.
 	used := append(slices.Clone(fields), join.target...)

@@ -138,3 +138,24 @@ func TestIOTimeoutDefaults(t *testing.T) {
 		}
 	}
 }
+
+// rowsAffected counts matched rows unless the DSN's own parameter says
+// otherwise: the text in a password is no parameter.
+func TestSessionDefaultsClientFoundRows(t *testing.T) {
+	t.Parallel()
+	for dsn, want := range map[string]bool{
+		"u:p@tcp(h)/db":                       true,
+		"u:p@tcp(h)/db?clientFoundRows=false": false,
+		"u:clientFoundRows=x@tcp(h)/db":       true, // in the password
+	} {
+		cfg, err := mysqldriver.ParseDSN(dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.Params = map[string]string{}
+		sessionDefaults(cfg, dsn)
+		if cfg.ClientFoundRows != want {
+			t.Errorf("%s: ClientFoundRows = %v, want %v", dsn, cfg.ClientFoundRows, want)
+		}
+	}
+}

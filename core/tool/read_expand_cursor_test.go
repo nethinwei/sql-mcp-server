@@ -108,3 +108,44 @@ func TestExpandedChildrenCountPerParentAgainstTheByteLimit(t *testing.T) {
 		t.Fatalf("err = %v, want %v", err, budget.ErrExceeded)
 	}
 }
+
+// An expansion's batch has no LIMIT of its own and the gate cuts it at the
+// row limit: a batch reaching the limit may have lost children, so the read
+// is refused rather than answered with parents missing them.
+func TestExpandedChildrenAtTheRowLimitAreRefused(t *testing.T) {
+	t.Parallel()
+	keyed := func(name string, fields ...string) entity.Entity {
+		e := entity.Entity{Name: name, Source: name, DataSource: "default",
+			Keys: []entity.Key{{Columns: []string{"id"}, Primary: true}},
+			Role: entity.RoleAccess{entity.ActionRead: {"reader"}}, MCP: entity.MCPFlags{DMLTools: true}}
+		for _, f := range append([]string{"id"}, fields...) {
+			e.Attributes = append(e.Attributes, entity.Attribute{Name: f})
+		}
+		return e
+	}
+	orders := keyed("orders")
+	orders.Relations = []entity.Relationship{{Name: "items", Target: "items", Cardinality: "has-many",
+		JoinOn: map[string]string{"id": "order_id"}}}
+	reg, _ := entity.NewRegistry([]entity.Entity{orders, keyed("items", "order_id")})
+	for children, want := range map[int]error{2: nil, 3: budget.ErrExceeded} {
+		db := &storetest.FakeDB{QueryFn: func(_ context.Context, query string, _ ...any) (store.Rows, error) {
+			if strings.Contains(query, `"items"`) {
+				var rows [][]any
+				for i := range children {
+					rows = append(rows, []any{int64(i), int64(1 + i%2)})
+				}
+				return storetest.NewFakeRows([]string{"id", "order_id"}, rows...), nil
+			}
+			return storetest.NewFakeRows([]string{"id"}, []any{int64(1)}, []any{int64(2)}), nil
+		}}
+		tc := Context{Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Services: &Services{
+			Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
+			Sources: map[string]DataSource{"default": {DB: db, Dialect: testdialect.Postgres{}}},
+		}}
+		tc.MaxRows = 3
+		input, _ := json.Marshal(readInput{Entity: "orders", Expand: []string{"items"}, Limit: 2})
+		if _, err := RunTool(context.Background(), ReadTool{}, input, tc); !errors.Is(err, want) {
+			t.Errorf("%d children: err = %v, want %v", children, err, want)
+		}
+	}
+}

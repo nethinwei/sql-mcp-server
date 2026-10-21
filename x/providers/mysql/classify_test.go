@@ -113,14 +113,19 @@ func TestClassifyOceanBaseTrouble(t *testing.T) {
 	}
 }
 
-// A statement its server-side timeout stopped, or interrupted (the KILL QUERY
-// of one past its deadline), was rolled back: a statement timeout.
+// A statement its server-side timeout stopped was rolled back: a statement
+// timeout. One interrupted (the KILL QUERY of one past its deadline) is not:
+// a procedure's earlier statements may have taken effect.
 func TestClassifyStatementTimeouts(t *testing.T) {
 	t.Parallel()
-	for _, number := range []uint16{3024, 4012, 1317} {
+	for _, number := range []uint16{3024, 4012} {
 		err := classify(&mysqldriver.MySQLError{Number: number, Message: "stopped"})
 		if !errors.Is(err, store.ErrStatementTimeout) {
 			t.Errorf("%d: %v", number, err)
 		}
+	}
+	err := classify(&mysqldriver.MySQLError{Number: 1317, Message: "Query execution was interrupted"})
+	if !errors.Is(err, store.ErrInterrupted) || errors.Is(err, store.ErrStatementTimeout) {
+		t.Errorf("1317: %v", err)
 	}
 }

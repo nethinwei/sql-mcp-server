@@ -9,6 +9,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -271,6 +272,82 @@ func TestStatementTimeoutIsRolledBack(t *testing.T) {
 		if errors.Is(err, ErrOutcomeUnknown) || !ok || denial.Code != CodeStatementTimeout || !denial.Retryable {
 			t.Errorf("%s: err = %v, denial = %+v", call.role, err, denial)
 		}
+	}
+}
+
+// A statement the database interrupted (MySQL 1317) undid a read, which
+// may be retried; a write, a procedure call or a commit may have taken
+// effect in part, so it reports an unknown outcome, not retryable.
+func TestInterruptedWritesHaveUnknownOutcomes(t *testing.T) {
+	t.Parallel()
+	e := testUsersEntity()
+	e.Role[entity.ActionUpdate] = []string{"writer"}
+	proc := entity.Entity{Name: "refresh", Source: "refresh", Kind: entity.KindProcedure,
+		Attributes: []entity.Attribute{{Name: "id"}}, Role: entity.RoleAccess{entity.ActionExecute: {"writer"}},
+		MCP: entity.MCPFlags{DMLTools: true, TrustedProcedure: true}}
+	reg, _ := entity.NewRegistry([]entity.Entity{e, proc})
+	interrupted := fmt.Errorf("%w: %w", store.ErrInterrupted, errors.New("Error 1317: interrupted"))
+	db := &storetest.FakeDB{
+		ExecFn:  func(context.Context, string, ...any) (store.Result, error) { return store.Result{}, interrupted },
+		QueryFn: func(context.Context, string, ...any) (store.Rows, error) { return nil, interrupted },
+	}
+	tc := Context{Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+		DB: db, Dialect: testdialect.Postgres{}}
+	update, _ := json.Marshal(updateInput{
+		Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: 1}}, Set: map[string]any{"email": "x"},
+	})
+	read, _ := json.Marshal(readInput{Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: 1}}})
+	for _, call := range []struct {
+		role  string
+		tool  Tool
+		input json.RawMessage
+		want  string
+	}{
+		{"reader", ReadTool{}, read, CodeStatementTimeout},
+		{"writer", UpdateTool{}, update, CodeOutcomeUnknown},
+		{"writer", ExecuteTool{}, json.RawMessage(`{"entity":"refresh"}`), CodeOutcomeUnknown},
+	} {
+		tc.Role = call.role
+		_, err := RunTool(context.Background(), call.tool, call.input, tc)
+		denial, _ := DenialFor(err, "d")
+		if denial.Code != call.want || denial.Retryable != (call.want == CodeStatementTimeout) {
+			t.Errorf("%T: err = %v, denial = %+v", call.tool, err, denial)
+		}
+	}
+	db.BeginFn = func(context.Context, *store.TxOptions) (store.Tx, error) {
+		return &uncertainCommitTx{err: interrupted}, nil
+	}
+	manager := NewTransactionManager(time.Minute, 0)
+	token, _ := manager.Begin(context.Background(), db, Caller{Session: "s", Role: "writer"}, "primary", nil)
+	if _, err := manager.Commit(context.Background(), token, Caller{Session: "s", Role: "writer"}); !errors.Is(err,
+		ErrOutcomeUnknown) {
+		t.Errorf("commit: %v", err)
+	}
+}
+
+// A non-finite float (PostgreSQL's NaN and infinities), which JSON cannot
+// carry, is read as the database writes it rather than failing the call.
+func TestNonFiniteFloatsReadAsText(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{Name: "points", Source: "points", Attributes: []entity.Attribute{{Name: "id"}, {Name: "x"}},
+		Role: entity.RoleAccess{entity.ActionRead: {"reader"}}, MCP: entity.MCPFlags{DMLTools: true}}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	db := &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return storetest.NewFakeRows([]string{"id", "x"}, []any{int64(1), math.NaN()},
+			[]any{int64(2), math.Inf(1)}, []any{int64(3), float32(math.Inf(-1))}, []any{int64(4), 1.5}), nil
+	}}
+	tc := Context{Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+		Role: "reader", DB: db, Dialect: testdialect.Postgres{}}
+	result, err := RunTool(context.Background(), ReadTool{}, json.RawMessage(`{"entity":"points"}`), tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []any
+	for _, row := range result.Content {
+		got = append(got, row["x"])
+	}
+	if want := []any{"NaN", "Infinity", "-Infinity", 1.5}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("x = %v, want %v", got, want)
 	}
 }
 

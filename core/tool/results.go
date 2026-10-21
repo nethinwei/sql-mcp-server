@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/nethinwei/sql-mcp-server/core/budget"
@@ -152,6 +153,29 @@ func (m *resultMeter) add(row map[string]any) error {
 		return fmt.Errorf("encode a result row: %w", err)
 	}
 	return m.addSized(1, n)
+}
+
+// finite is v with a non-finite float (PostgreSQL's NaN and infinities),
+// which JSON cannot carry, as the database writes it.
+func finite(v any) any {
+	var f float64
+	switch x := v.(type) {
+	case float64:
+		f = x
+	case float32:
+		f = float64(x)
+	default:
+		return v
+	}
+	switch {
+	case math.IsNaN(f):
+		return "NaN"
+	case math.IsInf(f, 1):
+		return "Infinity"
+	case math.IsInf(f, -1):
+		return "-Infinity"
+	}
+	return v
 }
 
 // rowBuffers are the buffers rows are encoded into to be counted: a read

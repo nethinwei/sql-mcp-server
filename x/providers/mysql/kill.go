@@ -216,11 +216,43 @@ func (c *killConn) Prepare(query string) (driver.Stmt, error) {
 }
 
 func (c *killConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
-	return c.conn.(driver.ConnBeginTx).BeginTx(ctx, opts)
+	if c.killed.Load() {
+		return nil, errKilled
+	}
+	tx, err := c.conn.(driver.ConnBeginTx).BeginTx(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return &killTx{tx: tx, c: c}, nil
 }
 
 //nolint:staticcheck // driver.Conn requires Begin; BeginTx is what database/sql calls.
-func (c *killConn) Begin() (driver.Tx, error) { return c.conn.Begin() }
+func (c *killConn) Begin() (driver.Tx, error) {
+	return c.BeginTx(context.Background(), driver.TxOptions{})
+}
+
+// killTx is a transaction of a killConn. Once a KILL QUERY was sent, it
+// sends neither COMMIT, which the KILL could interrupt, leaving the outcome
+// unknown, nor ROLLBACK: the connection is closed instead (IsValid), which
+// rolls the transaction back.
+type killTx struct {
+	tx driver.Tx
+	c  *killConn
+}
+
+func (t *killTx) Commit() error {
+	if t.c.killed.Load() {
+		return errKilled
+	}
+	return t.tx.Commit()
+}
+
+func (t *killTx) Rollback() error {
+	if t.c.killed.Load() {
+		return nil
+	}
+	return t.tx.Rollback()
+}
 
 func (c *killConn) Close() error { return c.conn.Close() }
 

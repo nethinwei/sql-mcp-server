@@ -72,7 +72,10 @@
      相关读缓存已按“已写入”失效；
    - `STATEMENT_TIMEOUT`（retryable，v0.1.21 起；此前为 `DATABASE_ERROR`，写入可能报
      `OUTCOME_UNKNOWN`）：数据库在自己的语句超时处停住并回滚了语句，没有生效；收窄请求或
-     稍后重试。`execute_sql` 的 `reason` 同样携带驱动原文。与此前相同，它计入数据源熔断；
+     稍后重试。`execute_sql` 的 `reason` 同样携带驱动原文。与此前相同，它计入数据源熔断。
+     语句执行中被中断（MySQL/OceanBase 1317，超过 deadline 时的 KILL QUERY）只对读取报
+     `STATEMENT_TIMEOUT`；写入、存储过程调用与提交报 `OUTCOME_UNKNOWN`（过程中先前的语句
+     可能已生效）；
    - `TRANSACTION_NOT_FOUND`：令牌对应的事务若在最近 10 分钟内结束，且请求来自同一会话
      与身份，`constraints.outcome` 给出结束方式：`committed`、`rolledBack`、`expired`
      或 `unknown`（提交结果未知）；其他调用方只得到不带 `constraints` 的未找到。`expired`
@@ -151,7 +154,8 @@
   `0.1`、超过 15 位有效数字的金额都按写出的值比较与写入。用于 `create_record` 的
   `values`、`update_record` 的 `set`、`filter`（含 `exists` 内）与 `cursor`；没有列可依
   的值（存储过程参数、`execute_sql` 的 `args`、关联字段与 `having` 的值）按原文字传递，
-  由数据库转换。此前小数一律转为 float64。
+  由数据库转换。此前小数一律转为 float64。结果中的非有限浮点数（PostgreSQL 的 `NaN`、
+  `Infinity`、`-Infinity`）JSON 无法表示，按数据库的写法以字符串返回（v0.1.21 起；此前调用失败）。
 - **排序与分页**（`read_records`）：`orderBy: [{field, dir}]`（`asc` 默认，最多 8 项），
   末尾自动补上实体的键使顺序确定；脱敏字段不能排序。NULL 一律排在最后（可空字段）。
   带 `limit` 且本页取满时，结果在 `result` 旁给出 `nextCursor`，下一页与相同的
@@ -163,9 +167,11 @@
   `belongs-to`）且连接列是目标实体的键；目标以左连接取得，调用方看不到或不存在的目标行
   表现为 NULL。`{"exists": "关系名", "filter": [...]}` 按任意关系过滤（目标中有满足条件的
   行），可放在 `not` 中；不嵌套。调用方必须能读目标中用到的字段，目标的行策略照常生效，
-  脱敏字段不能用；关系的连接列按本实体字段授权；目标须在同一数据源。`fields` 不能写
-  关联字段（读取关联行用 `expand`），聚合不能聚合关联字段，按关联字段排序时不给
-  `nextCursor`，写操作的 `filter` 不能用 `exists` 或关联字段。跨关系的读取不进结果缓存。
+  脱敏字段不能用；关系的连接列按本实体字段授权；任一侧连接列被脱敏的关系不能用于
+  跨关系过滤、排序、`exists` 或 `expand`（子行会带出与父行相等的原值）；目标须在同一
+  数据源。`fields` 不能写关联字段（读取关联行用 `expand`），聚合不能聚合关联字段，
+  按关联字段排序时不给 `nextCursor`，写操作的 `filter` 不能用 `exists` 或关联字段。
+  跨关系的读取不进结果缓存。
 - **去重**（`read_records`）：`distinct: true` 对 `fields` 去重；需要 `fields`，不能与
   `expand`、`cursor` 同用；排序字段须在 `fields` 中，NULL 的位置按数据库默认。
 - **索引**：`describe_entities` 带 `entity` 时给出 `indexes`：
@@ -198,7 +204,8 @@
   读取与聚合最多返回 `cost.maxRows` 行（调用者的 `limits.maxRows` 更严时取它）：`limit` 未写或
   大于它时按它读取，有序读取满页给 `nextCursor` 续读；没有游标可续（`read_records` 未按可翻页的
   `orderBy` 排序，或 `aggregate_records`）而恰好返回这么多行时另带 `"truncated": true`，表示之后
-  可能还有行；
+  可能还有行；`expand` 的一批子行同样以该上限为界，达到上限时整次读取以 `BUDGET_EXCEEDED`
+  失败（v0.1.21 起；此前超出的子行被静默丢弃），应缩小页大小后重试；
 - 返回单个对象的工具直接给出该对象：`describe_entities`、`create_record`、
   `update_record`、`delete_record`、`begin_transaction`、`commit_transaction`、
   `rollback_transaction`、`execute_sql`。

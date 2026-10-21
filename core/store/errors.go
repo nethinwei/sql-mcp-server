@@ -39,6 +39,13 @@ var ErrPermissionDenied = errors.New("store: permission denied")
 // Providers wrap driver errors with it.
 var ErrStatementTimeout = errors.New("store: statement stopped at its timeout")
 
+// ErrInterrupted marks a statement the database interrupted as it ran (the
+// KILL QUERY of one past its deadline): a single statement is rolled back,
+// but a procedure's earlier statements may have taken effect, so a write
+// interrupted may or may not have been carried out. Providers wrap driver
+// errors with it.
+var ErrInterrupted = errors.New("store: statement interrupted")
+
 // ErrConnectionLost marks a statement whose connection broke while it ran:
 // the database may or may not have carried it out. Providers wrap driver
 // errors with it. A broken connection a driver reports before sending the
