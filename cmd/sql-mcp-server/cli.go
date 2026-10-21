@@ -316,12 +316,13 @@ func serveTransport(
 		return err
 	case "http":
 		// The current snapshot's: a reload may have published another one.
-		if current := runtime.Current(); current != nil && current.Config() != nil {
+		current := runtime.Current()
+		if current != nil && current.Config() != nil {
 			cfg = current.Config()
 		}
 		auth := httpAuth(cfg, runtime)
 		return mcpserver.ServeHTTP(ctx, srv, mcpserver.HTTPConfig{
-			Bus: runtime.Current().Bus(), Addr: addr, HTTPAuth: auth, OnSessionClosed: runtime.RollbackSession,
+			Bus: current.Bus(), Addr: addr, HTTPAuth: auth, OnSessionClosed: runtime.RollbackSession,
 			SnapshotReady: runtime.SnapshotReady, DatabaseReady: runtime.DatabasesReady,
 			Metrics: metrics, RevokedPrincipals: runtime.OnRevokedPrincipals, SessionTimeout: cfg.Server.SessionTimeout,
 			Admin: adminHandler, AuthChanges: auths.follow(runtime),

@@ -215,6 +215,19 @@ func TestTTLCacheBoundsBytes(t *testing.T) {
 	}
 }
 
+// A value of no size fits a cache at its byte cap without evicting one.
+func TestTTLCacheSizelessValueAtTheByteCap(t *testing.T) {
+	t.Parallel()
+	c := NewTTLCache[int](time.Hour, 0)
+	c.UpdateLimits(time.Hour, 0, 100)
+	ctx := context.Background()
+	_ = c.SetSized(ctx, Key{SQL: "full"}, 1, 0, 100)
+	_ = c.Set(ctx, Key{SQL: "sizeless"}, 2, 0)
+	if _, ok := c.Get(ctx, Key{SQL: "full"}); !ok {
+		t.Fatal("a sizeless value evicted an entry at the byte cap")
+	}
+}
+
 // Removed entries leave no reference in the expiry heap's backing array, so
 // their values can be collected.
 func TestTTLCacheReleasesRemovedValues(t *testing.T) {

@@ -106,7 +106,7 @@ func (p *Provider) ExplainAnalyze(ctx context.Context, compiled codegen.Compiled
 	if beginner == nil {
 		beginner = p
 	}
-	tx, err := beginner.BeginTx(ctx, &store.TxOptions{ReadOnly: true})
+	tx, err := beginner.BeginTx(ctx, &store.TxOptions{Isolation: store.LevelDefault, ReadOnly: true})
 	if err != nil {
 		return cost.Plan{}, err
 	}

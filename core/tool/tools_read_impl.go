@@ -223,6 +223,10 @@ func readCursor(e entity.Entity, order readOrder, in readInput) (relalg.Predicat
 		return nil, nil, nil
 	}
 	p, err := orderCursor(order, in.Cursor)
+	if err != nil {
+		return nil, nil, err
+	}
+	p, err = coercePredicate(e, p) // as the key's cursor: numbers checked here, not by the database
 	return p, nil, err
 }
 

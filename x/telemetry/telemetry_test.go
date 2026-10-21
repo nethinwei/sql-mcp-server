@@ -53,6 +53,24 @@ func TestMetricsAuditDroppedReadsLiveValue(t *testing.T) {
 	}
 }
 
+// The drop counter's reader may be installed while a scrape reads it (the
+// race detector checks).
+func TestMetricsAuditDroppedSetWhileScraping(t *testing.T) {
+	t.Parallel()
+	m := NewMetrics()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 20 {
+			m.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/metrics", nil))
+		}
+	}()
+	for i := range 20 {
+		m.SetAuditDropped(func() int64 { return int64(i) })
+	}
+	<-done
+}
+
 func TestOutcomeClassification(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

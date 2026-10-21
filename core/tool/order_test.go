@@ -175,6 +175,28 @@ func TestReadOrderByRules(t *testing.T) {
 	}
 }
 
+// A cursor of an order has its numbers checked as the key's cursor does: a
+// fraction for an integer key is the caller's error, not the database's.
+func TestOrderCursorNumbersAreChecked(t *testing.T) {
+	t.Parallel()
+	tc, db := orderContext(t)
+	e := ordersEntity()
+	e.Attributes[0].Domain.Type = "bigint"
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	tc.Services = &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}
+	for _, input := range []string{
+		`{"entity":"orders","limit":1,"cursor":{"id":1.5}}`,
+		`{"entity":"orders","limit":1,"orderBy":[{"field":"region"}],"cursor":{"region":"CN","id":1.5}}`,
+	} {
+		if _, err := readJSON(t, tc, input); !errors.Is(err, ErrInvalidInput) {
+			t.Errorf("%s: err = %v", input, err)
+		}
+	}
+	if len(db.Queries) != 0 {
+		t.Fatalf("queried: %v", db.Queries)
+	}
+}
+
 // A distinct read selects distinct rows of its fields, ordered by them
 // without a key, and has no next cursor.
 func TestReadDistinct(t *testing.T) {

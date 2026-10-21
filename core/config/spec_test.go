@@ -176,3 +176,25 @@ func TestResolveLeavesTheSpec(t *testing.T) {
 		t.Fatalf("Resolve changed the Spec: %v %v", subjects, spec.Users["alice"].Roles)
 	}
 }
+
+// The containers a configuration and its Spec share: Resolve copies lists
+// and maps one level deep (normalizing replaces their elements, never what
+// is inside them), and SpecOf copies none.
+func TestSpecAndConfigShareInnerContainers(t *testing.T) {
+	cfg := Config{Entities: []EntityConfig{{
+		Name: "orders", Roles: RoleConfig{Read: []string{"ops"}}, UniqueKeys: [][]string{{"code"}},
+	}}}
+	spec := SpecOf(&cfg)
+	if spec.Entities[0].Roles.Read[0] = "dev"; cfg.Entities[0].Roles.Read[0] != "dev" {
+		t.Fatal("SpecOf copied a list")
+	}
+	resolved := spec.config()
+	resolved.Entities[0].Roles.Read[0] = "admin"
+	if got := spec.Entities[0].Roles.Read[0]; got != "dev" {
+		t.Fatalf("a list element written in the configuration reached the Spec: %q", got)
+	}
+	resolved.Entities[0].UniqueKeys[0][0] = "id"
+	if got := spec.Entities[0].UniqueKeys[0][0]; got != "id" {
+		t.Fatalf("an inner list was copied: %q", got)
+	}
+}

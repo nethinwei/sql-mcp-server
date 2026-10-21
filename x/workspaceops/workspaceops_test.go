@@ -268,6 +268,24 @@ func TestCheckpointWhileWriting(t *testing.T) {
 	}
 }
 
+// Saving again replaces the draft saved before in what the workspace holds:
+// Taken does not grow with every save.
+func TestCheckpointReplacesTheEarlierInTaken(t *testing.T) {
+	e := newEnv(t)
+	e.write("root", role("mine"), role("base"))
+	first, err := e.svc.Checkpoint(e.ctx, "root", "root", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := e.svc.Checkpoint(e.ctx, "root", "root", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := e.read().Workspace; !slices.Equal(w.Taken, []int64{second.ID}) || w.Checkpoint != second.ID {
+		t.Fatalf("after replacing #%d with #%d: %+v", first.ID, second.ID, w)
+	}
+}
+
 // A commit publishes the version reviewed and moves the workspace onto it,
 // keeping what was written meanwhile and discarding the drafts it held.
 func TestCommit(t *testing.T) {

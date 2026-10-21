@@ -148,10 +148,10 @@ func (a *App) AuditDropped() int64 {
 	return 0
 }
 
-// Bus returns the execution bus the App runs on; nil for an App assembled
-// without shared services, whose work then runs unbounded by a bus.
+// Bus returns the execution bus the App runs on; nil for no App, or one
+// assembled without shared services, whose work then runs unbounded by a bus.
 func (a *App) Bus() *bus.Bus {
-	if a.shared == nil {
+	if a == nil || a.shared == nil {
 		return nil
 	}
 	return a.shared.bus

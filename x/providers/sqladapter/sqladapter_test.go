@@ -44,3 +44,14 @@ func TestPrepareAndBeginClassifyErrors(t *testing.T) {
 		t.Errorf("begin: %v", err)
 	}
 }
+
+// Options naming no isolation level ask for the database's default, never
+// for dirty reads.
+func TestUnsetIsolationIsTheDefault(t *testing.T) {
+	if got := isolation(store.TxOptions{ReadOnly: true}.Isolation); got != sql.LevelDefault {
+		t.Fatalf("unset isolation = %v, want the default", got)
+	}
+	if got := isolation(store.LevelReadUncommitted); got != sql.LevelReadUncommitted {
+		t.Fatalf("read uncommitted = %v", got)
+	}
+}

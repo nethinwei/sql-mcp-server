@@ -33,8 +33,11 @@ type DB interface {
 type IsolationLevel uint8
 
 const (
+	// LevelDefault is the database's default level: the zero value, so that
+	// options naming no level ask for no particular one.
+	LevelDefault IsolationLevel = iota
 	// LevelReadUncommitted allows dirty reads.
-	LevelReadUncommitted IsolationLevel = iota
+	LevelReadUncommitted
 	// LevelReadCommitted is the default for most databases.
 	LevelReadCommitted
 	// LevelRepeatableRead prevents non-repeatable reads.

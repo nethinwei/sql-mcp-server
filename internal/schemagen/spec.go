@@ -277,7 +277,9 @@ func toConfig(name string, t reflect.Type) (string, error) {
 		return fmt.Sprintf("\tif s.%[1]s != nil {\n\t\tout.%[1]s = make(%[2]s, len(s.%[1]s))\n"+
 			"\t\tfor k, v := range s.%[1]s {\n\t\t\tout.%[1]s[k] = v.config()\n\t\t}\n\t}\n", name, goType(t)), nil
 	case t.Kind() == reflect.Slice:
-		// Copied: normalizing the configuration changes it in place, never the Spec.
+		// Copied one level deep: normalizing the configuration replaces the
+		// elements in place, never what is inside them, so inner lists and
+		// maps (uniqueKeys' keys, filters' values) stay shared with the Spec.
 		return fmt.Sprintf("\tout.%[1]s = slices.Clone(%[2]s(s.%[1]s))\n", name, goType(t)), nil
 	case t.Kind() == reflect.Map:
 		return fmt.Sprintf("\tout.%[1]s = maps.Clone(%[2]s(s.%[1]s))\n", name, goType(t)), nil
@@ -332,6 +334,7 @@ func toSpec(name string, t reflect.Type, cond string) string {
 		return fmt.Sprintf("\tif c.%[1]s != nil {\n\t\tout.%[1]s = make(%[2]s, len(c.%[1]s))\n"+
 			"\t\tfor k, v := range c.%[1]s {\n\t\t\tout.%[1]s[k] = v.spec()\n\t\t}\n\t}\n", name, specType(t))
 	case t.Kind() == reflect.Slice || t.Kind() == reflect.Map:
+		// Shared, not copied: SpecOf's Spec and the configuration alias it.
 		return fmt.Sprintf("\tout.%[1]s = %[2]s(c.%[1]s)\n", name, specType(t))
 	case t.Kind() == reflect.Interface:
 		return fmt.Sprintf("\tout.%[1]s = c.%[1]s\n", name)

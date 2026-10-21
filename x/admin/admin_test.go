@@ -380,7 +380,11 @@ func TestPlaygroundPathsUnderAGatewayPrefix(t *testing.T) {
 	_, cookie, _ := f.login(t, "correct horse battery")
 	// The endpoint is appended to location.host: it must be the absolute
 	// path under the prefix.
-	page := f.do(http.MethodGet, "/admin/playground", "", nil, cookie).Body.String()
+	rec := f.do(http.MethodGet, "/admin/playground", "", nil, cookie)
+	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "connect-src 'self'") {
+		t.Fatalf("the playground, holding the CSRF token, is served with policy %q", csp)
+	}
+	page := rec.Body.String()
 	if !strings.Contains(page, `const url = location.protocol + '//' + location.host + "/sql-mcp-server/admin/graphql";`) {
 		i := strings.Index(page, "location.host")
 		t.Fatalf("playground endpoint: %s", page[i:min(len(page), i+80)])

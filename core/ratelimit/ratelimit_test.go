@@ -172,3 +172,31 @@ func TestBreakerEarlierRequestsLeaveTheProbe(t *testing.T) {
 		t.Fatal("the probe's success did not close the breaker")
 	}
 }
+
+// A request let through before the breaker opened, ending after it closed
+// again, tells of the database as it was: its failure does not reopen it.
+func TestBreakerRequestsFromBeforeTheLastChangeCountNothing(t *testing.T) {
+	t.Parallel()
+	b := NewBreaker(1, 20*time.Millisecond)
+	earlier, err := b.Allow() // still running across the open and the close
+	if err != nil {
+		t.Fatal(err)
+	}
+	opener, _ := b.Allow()
+	b.Record(opener, false)
+	time.Sleep(30 * time.Millisecond)
+	probe, err := b.Allow()
+	if err != nil {
+		t.Fatalf("probe refused: %v", err)
+	}
+	b.Record(probe, true)
+	b.Record(earlier, false)
+	if b.IsOpen() {
+		t.Fatal("a failure let through before the breaker opened reopened it")
+	}
+	now, _ := b.Allow()
+	b.Record(now, false)
+	if !b.IsOpen() {
+		t.Fatal("a failure let through after the close did not open it")
+	}
+}

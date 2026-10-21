@@ -128,10 +128,10 @@ func TestPoolRunsOnTheScanLane(t *testing.T) {
 		return 0, ctx.Err()
 	}
 	running, _ := p.Start("a", block)
+	waitState(t, p, running.ID, Running) // out of the queue: b's place
 	if _, err := p.Start("b", block); err != nil {
 		t.Fatal(err)
 	}
-	waitState(t, p, running.ID, Running)
 	if _, err := p.Start("c", block); !errors.Is(err, ErrBusy) {
 		t.Fatalf("third job = %v, want ErrBusy", err)
 	}

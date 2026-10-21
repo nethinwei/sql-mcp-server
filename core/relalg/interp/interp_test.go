@@ -167,6 +167,17 @@ func TestSortLimitOffset(t *testing.T) {
 	wantIDs(t, res, 5, 3)
 }
 
+// TestLimitRefusesWhatCodegenRefuses keeps the oracle and the SQL apart on
+// no invalid limit: codegen refuses a limit below 1 and a negative offset.
+func TestLimitRefusesWhatCodegenRefuses(t *testing.T) {
+	for _, l := range []relalg.Limit{{Count: 0}, {Count: -1}, {Count: 1, Offset: -1}} {
+		l.Input = scanT()
+		if _, err := Eval(testDB(), l); err == nil {
+			t.Errorf("limit %d offset %d: evaluated, want refused", l.Count, l.Offset)
+		}
+	}
+}
+
 func globalAgg(pred relalg.Predicate, calls ...relalg.AggCall) relalg.Expr {
 	in := scanT()
 	if pred != nil {

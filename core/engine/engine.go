@@ -192,15 +192,15 @@ func (e *Engine) execute(ctx context.Context, fn func(context.Context) (any, err
 	limiter, breaker := e.quota.limiter.Load(), e.quota.breaker.Load()
 	record := false
 	if breaker != nil {
-		probe, allowErr := breaker.Allow()
+		ticket, allowErr := breaker.Allow()
 		if allowErr != nil {
 			return nil, allowErr
 		}
 		defer func() {
 			if record {
-				breaker.Record(probe, err == nil)
+				breaker.Record(ticket, err == nil)
 			} else {
-				breaker.Release(probe)
+				breaker.Release(ticket)
 			}
 		}()
 	}

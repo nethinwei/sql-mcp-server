@@ -148,7 +148,8 @@ func (b *Bus) Go(name string, fn func(context.Context)) bool {
 
 // Fork runs fn as the task name and marks it done on wg, for work a caller
 // waits for on wg. Once the bus is closed fn still runs, uncounted, so the
-// caller never waits for work that does not come.
+// caller never waits for work that does not come; its context is already
+// done, so the work can see the bus is closing and stop.
 func (b *Bus) Fork(wg *sync.WaitGroup, name string, fn func(context.Context)) {
 	wg.Add(1)
 	run := func(ctx context.Context) {
@@ -156,7 +157,7 @@ func (b *Bus) Fork(wg *sync.WaitGroup, name string, fn func(context.Context)) {
 		fn(ctx)
 	}
 	if !b.Go(name, run) {
-		go runTask(name, func() { run(context.Background()) })
+		go runTask(name, func() { run(b.ctx) })
 	}
 }
 

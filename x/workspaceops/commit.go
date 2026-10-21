@@ -117,6 +117,9 @@ func (s Service) Checkpoint(ctx context.Context, username, by, comment string) (
 		if w.Version == built.Version && w.Base == built.Base {
 			at = w.Version + 1
 		}
+		// The draft replaces the one saved before, discarded below: Taken
+		// grows by what was taken in, not by every save.
+		w.Taken = slices.DeleteFunc(w.Taken, func(id int64) bool { return id == earlier && id != 0 })
 		w.Checkpoint, w.CheckpointAt, w.Taken = draft.ID, at, append(w.Taken, draft.ID)
 		return nil, workspace.LogEntry{Op: "checkpoint", Note: "#" + idOf(draft.ID)}, nil
 	})

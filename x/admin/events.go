@@ -92,15 +92,23 @@ func (f *publishedFeed) subscribe() (<-chan feedState, func()) {
 	}
 }
 
-func (f *publishedFeed) read(ctx context.Context) feedState {
-	var out feedState
-	if rev, err := f.store.PublishedSummary(ctx); err == nil { // its ID and author: not its payload
+// read reads the state; ok is false when the store could not be read (no
+// published revision is a state: a fresh store's).
+func (f *publishedFeed) read(ctx context.Context) (out feedState, ok bool) {
+	ok = true
+	rev, err := f.store.PublishedSummary(ctx) // its ID and author: not its payload
+	switch {
+	case err == nil:
 		out.Published = publishedEvent{ID: strconv.FormatInt(rev.ID, 10), Author: rev.Author}
+	case !errors.Is(err, revision.ErrNoPublished):
+		ok = false
 	}
 	if seq, err := f.store.Sequence(ctx); err == nil {
 		out.Sequence = seq
+	} else {
+		ok = false
 	}
-	return out
+	return out, ok
 }
 
 // poll reads the state at once, for the listeners waiting for it, then
@@ -116,9 +124,9 @@ func (f *publishedFeed) poll(ctx context.Context) {
 			case <-tick.C:
 			}
 		}
-		next := f.read(ctx)
+		next, ok := f.read(ctx)
 		f.mu.Lock()
-		if ctx.Err() == nil && (first || next.Published.ID != "" && next != f.last) {
+		if ctx.Err() == nil && (first || ok && next != f.last) {
 			f.last, f.ready = next, true
 			for ch := range f.subs {
 				select { // a slow console gets the latest event, not every one

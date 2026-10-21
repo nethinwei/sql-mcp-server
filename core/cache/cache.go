@@ -150,16 +150,12 @@ func (c *TTLCache[T]) UpdateLimits(ttl time.Duration, maxSize int, maxBytes int6
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.ttl, c.maxSize, c.maxBytes = ttl, maxSize, max(maxBytes, 0)
-	c.evictLocked(0)
+	c.evictLocked(0, 0)
 }
 
-// evictLocked drops the entries closest to expiry until one more of size
-// bytes fits (none: until the cache is within its caps).
-func (c *TTLCache[T]) evictLocked(size int64) {
-	more := 0
-	if size > 0 {
-		more = 1
-	}
+// evictLocked drops the entries closest to expiry until more entries of size
+// bytes fit (none: until the cache is within its caps).
+func (c *TTLCache[T]) evictLocked(more int, size int64) {
 	for len(c.expiry) > 0 && (len(c.m)+more > c.maxSize || c.maxBytes > 0 && c.bytes+size > c.maxBytes) {
 		c.removeLocked(c.expiry[0])
 	}
@@ -214,7 +210,7 @@ func (c *TTLCache[T]) SetSized(_ context.Context, k Key, v T, stamp uint64, size
 	if e, ok := c.m[k]; ok {
 		c.removeLocked(e) // stored again below, as of now and of its size
 	}
-	c.evictLocked(max(size, 1))
+	c.evictLocked(1, size)
 	e := &entry[T]{key: k, v: v, exp: now.Add(c.ttl), size: size}
 	c.bytes += size
 	c.m[k] = e

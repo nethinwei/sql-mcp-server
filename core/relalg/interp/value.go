@@ -72,16 +72,12 @@ func boolCmp(a, b bool) int {
 	}
 }
 
-// compareForSort orders values inside Sort: NULL first (the spec leaves NULL
-// placement provider-defined; the equivalence corpus avoids NULL sort keys).
+// compareForSort compares two sort keys. evalSort places a NULL against a
+// non-NULL itself (NULLs last, the IR's semantics), so the only NULLs that
+// reach here come in pairs, and they tie.
 func compareForSort(a, b any) (int, error) {
-	switch {
-	case a == nil && b == nil:
+	if a == nil && b == nil {
 		return 0, nil
-	case a == nil:
-		return -1, nil
-	case b == nil:
-		return 1, nil
 	}
 	return compareValues(a, b)
 }

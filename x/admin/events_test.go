@@ -109,6 +109,35 @@ func TestEventsSignalNewRevisions(t *testing.T) {
 	}
 }
 
+// A store with no published revision yet still signals new revisions: no
+// published revision is a state, not a failed read.
+func TestEventsSignalRevisionsBeforeAnyPublish(t *testing.T) {
+	f := newFixture(t)
+	f.h.published = newPublishedFeed(nil, f.h.cfg.Store, 10*time.Millisecond)
+	ctx := context.Background()
+	srv := httptest.NewServer(f.h)
+	defer srv.Close()
+	_, cookie, _ := f.login(t, "correct horse battery")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/admin/events", nil)
+	req.AddCookie(cookie)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil || res.StatusCode != http.StatusOK {
+		t.Fatalf("stream = %v %v", res, err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	saving, stop := context.WithCancel(ctx)
+	defer stop()
+	go func() { // drafts until one lands after the state found on connecting
+		for saving.Err() == nil {
+			_, _ = f.h.cfg.Store.Create(saving, revision.Draft{Payload: []byte("x: 1\n"), Author: "root"})
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+	if got := nextEventData(t, bufio.NewScanner(res.Body)); !strings.HasPrefix(got, `{"sequence":`) {
+		t.Fatalf("event = %q, want a revisions event", got)
+	}
+}
+
 // A change of the signed-in administrator's workspace made elsewhere (an
 // agent applying a plan, another console) is signaled with its version; the
 // workspace as it was on connecting is not.

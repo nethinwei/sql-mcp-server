@@ -48,7 +48,9 @@ func legacyIgnored(spec *Spec) bool {
 }
 
 // Resolve is the configuration spec describes: its defaults filled in, and
-// validated.
+// validated. Its lists and maps are copies one level deep: what is inside
+// their elements (uniqueKeys' keys, filters' values) is spec's, not to be
+// changed.
 func Resolve(spec *Spec) (*Config, error) {
 	var cfg Config
 	if spec != nil {
@@ -91,7 +93,8 @@ func (s *Spec) Canonical() { s.canonical() }
 
 // SpecOf is the Spec of a configuration built in code, where a zero field
 // means unset (as before ApplyDefaults), or of one in effect, its defaults
-// then written out.
+// then written out. The Spec shares c's lists and maps: change neither
+// while the other is in use.
 func SpecOf(c *Config) *Spec {
 	s := c.spec()
 	return &s

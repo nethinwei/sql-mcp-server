@@ -90,7 +90,8 @@ func (c *Config) validateServerAuth() error {
 }
 
 func (c *Config) validateDatabases(databases map[string]DatabaseConfig) error {
-	for name, db := range databases {
+	for _, name := range slices.Sorted(maps.Keys(databases)) {
+		db := databases[name]
 		if !validDriverName(db.Driver) {
 			return fmt.Errorf("%w: %q in database %q", ErrInvalidDriver, db.Driver, name)
 		}
@@ -274,7 +275,8 @@ func (c *Config) validateEntity(e EntityConfig, refs EntityRefs) error {
 	if err := validateEntityFieldACL(e); err != nil {
 		return err
 	}
-	for role, policy := range e.RowPolicies {
+	for _, role := range slices.Sorted(maps.Keys(e.RowPolicies)) {
+		policy := e.RowPolicies[role]
 		if err := validateRowFilter(e, policy); err != nil {
 			return fmt.Errorf("config: entity %q row policy for role %q: %w", e.Name, role, err)
 		}
@@ -379,7 +381,8 @@ func visibleFieldNames(fields []FieldConfig) map[string]bool {
 
 func validateEntityFieldACL(e EntityConfig) error {
 	visibleFields := visibleFieldNames(e.Fields)
-	for role, acl := range e.FieldACL {
+	for _, role := range slices.Sorted(maps.Keys(e.FieldACL)) {
+		acl := e.FieldACL[role]
 		if duplicate, ok := firstDuplicate(acl.Read); ok {
 			return fmt.Errorf(
 				"config: entity %q field ACL for role %q has duplicate read field %q",
@@ -551,7 +554,8 @@ func (c *Config) normalizeEntityRoles(e *EntityConfig) error {
 	}
 
 	fieldACL := make(map[string]FieldACLConfig, len(e.FieldACL))
-	for role, acl := range e.FieldACL {
+	for _, role := range slices.Sorted(maps.Keys(e.FieldACL)) {
+		acl := e.FieldACL[role]
 		key := rbac.NormalizeRole(role)
 		if key == "" {
 			return fmt.Errorf("config: entity %q has an empty field ACL role", e.Name)
@@ -564,7 +568,8 @@ func (c *Config) normalizeEntityRoles(e *EntityConfig) error {
 	e.FieldACL = fieldACL
 
 	policies := make(RowPolicies, len(e.RowPolicies))
-	for role, policy := range e.RowPolicies {
+	for _, role := range slices.Sorted(maps.Keys(e.RowPolicies)) {
+		policy := e.RowPolicies[role]
 		key := rbac.NormalizeRole(role)
 		if key == "" {
 			return fmt.Errorf("config: entity %q has an empty row-policy role", e.Name)
@@ -580,7 +585,8 @@ func (c *Config) normalizeEntityRoles(e *EntityConfig) error {
 
 func (c *Config) normalizeBudgetRoles() error {
 	roles := make(map[string]BudgetLimits, len(c.Budget.Roles))
-	for role, limits := range c.Budget.Roles {
+	for _, role := range slices.Sorted(maps.Keys(c.Budget.Roles)) {
+		limits := c.Budget.Roles[role]
 		key := rbac.NormalizeRole(role)
 		if key == "" {
 			return fmt.Errorf("config: budget has an empty role")

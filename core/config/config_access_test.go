@@ -215,6 +215,29 @@ func TestValidateAccessRejectsInvalidConfig(t *testing.T) {
 	}
 }
 
+// A config with several errors in its maps reports the same first one every
+// time: the keys are checked in order, not in map order.
+func TestValidateReportsTheSameErrorEachTime(t *testing.T) {
+	t.Parallel()
+	var first string
+	for i := range 20 {
+		cfg := accessConfig()
+		cfg.Budget.Roles = map[string]BudgetLimits{}
+		for _, role := range []string{"ghost1", "ghost2", "ghost3", "ghost4", "ghost5", "ghost6"} {
+			cfg.Budget.Roles[role] = BudgetLimits{}
+		}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("unknown budget roles validated")
+		}
+		if i == 0 {
+			first = err.Error()
+		} else if err.Error() != first {
+			t.Fatalf("validation %d reported %q, first %q", i, err, first)
+		}
+	}
+}
+
 func TestValidateAccessAllowsLegacyColonRolesWithoutUsers(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{

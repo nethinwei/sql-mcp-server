@@ -361,7 +361,17 @@ func (h *Handler) authenticated(checkCSRF bool, next http.Handler) http.Handler 
 	})
 }
 
+// playgroundPolicy is the development playground's Content-Security-Policy:
+// GraphiQL loads from its CDN and runs an inline script (the console's policy
+// would refuse both), and the page, which holds the session's CSRF token,
+// talks to this server only and is framed by none.
+const playgroundPolicy = "default-src 'none'; script-src https://cdn.jsdelivr.net 'unsafe-inline'; " +
+	"style-src https://cdn.jsdelivr.net 'unsafe-inline'; font-src https://cdn.jsdelivr.net data:; " +
+	"img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+
 func (h *Handler) playground(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Security-Policy", playgroundPolicy)
+	w.Header().Set("Referrer-Policy", "no-referrer")
 	sess, _, err := h.session(r)
 	if err != nil {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
