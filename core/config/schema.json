@@ -171,8 +171,8 @@
     },
     "database": {
       "$ref": "#/$defs/database",
-      "description": "Legacy single datasource, migrated to the datasource named default. Either database or at least one databases entry is required.",
-      "x-description-zh-CN": "旧式单数据源配置，加载时迁移为名为 default 的数据源。需要 database 或至少一个 databases 项。"
+      "description": "Legacy single datasource, migrated to the datasource named default. Either database or at least one databases entry is required, not both.",
+      "x-description-zh-CN": "旧式单数据源配置，加载时迁移为名为 default 的数据源。需要 database 或至少一个 databases 项，两者不能同时设置。"
     },
     "databases": {
       "description": "Datasource name to connection.",

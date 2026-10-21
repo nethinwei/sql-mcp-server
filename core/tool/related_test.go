@@ -127,3 +127,44 @@ func TestRelationshipRules(t *testing.T) {
 		t.Errorf("update by exists: %v", err)
 	}
 }
+
+// An exists filter reads only the fields it compares and joins on: grants
+// of the target that differ in other fields do not make it ambiguous.
+func TestExistsReadsOnlyWhatItCompares(t *testing.T) {
+	t.Parallel()
+	orders := entity.Entity{Name: "orders", Source: "orders", MCP: entity.MCPFlags{DMLTools: true},
+		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
+		Attributes: []entity.Attribute{{Name: "id"}},
+		Relations: []entity.Relationship{{Name: "items", Target: "items", Cardinality: "has-many",
+			JoinOn: map[string]string{"id": "order_id"}}},
+	}
+	items := entity.Entity{Name: "items", Source: "items", MCP: entity.MCPFlags{DMLTools: true},
+		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
+		Attributes: []entity.Attribute{{Name: "id"}, {Name: "order_id"}, {Name: "sku"}, {Name: "qty"}},
+	}
+	reg, err := entity.NewRegistry([]entity.Entity{orders, items})
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := []entity.Action{entity.ActionRead}
+	policy := rbac.Policy{Roles: map[string]map[string][]rbac.Grant{"analyst": {
+		"orders": {{ID: "o", Actions: read}},
+		"items": {
+			{ID: "sku", Actions: read, Fields: &entity.FieldPermissions{Read: []string{"order_id", "sku"}}},
+			{ID: "qty", Actions: read, Fields: &entity.FieldPermissions{Read: []string{"order_id", "qty"}}},
+		},
+	}}}
+	db := &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return storetest.NewFakeRows([]string{"id"}), nil
+	}}
+	tc := Context{Services: &Services{Registry: reg, Authorizer: rbac.NewGrantAuthorizer(reg, policy)},
+		Role: "analyst", DB: db, Dialect: testdialect.Postgres{}}
+	if _, err := (ReadTool{}).Run(context.Background(), json.RawMessage(`{"entity":"orders",
+		"filter":[{"exists":"items","filter":[{"field":"sku","op":"eq","value":"A"}]}]}`), tc); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (ReadTool{}).Run(context.Background(), json.RawMessage(`{"entity":"orders",
+		"filter":[{"exists":"items","filter":[]}]}`), tc); err != nil {
+		t.Fatal(err)
+	}
+}

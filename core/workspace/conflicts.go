@@ -14,7 +14,12 @@ import "errors"
 // holds the other side's value already (for instance typed in by hand) or
 // removed what holds it (the item, a list element or object on the way).
 func (s Schema) View(now, base Snapshot, c Conflict) (Open, bool) {
-	item := now.Get(c.Ref)
+	return s.view(now.Get, base.Get, c)
+}
+
+// view is View, with the items of now and base looked up by nowAt and baseAt.
+func (s Schema) view(nowAt, baseAt func(Ref) any, c Conflict) (Open, bool) {
+	item := nowAt(c.Ref)
 	theirsItem := Missing
 	theirs := c.Theirs
 	if c.TheirsGone {
@@ -22,7 +27,7 @@ func (s Schema) View(now, base Snapshot, c Conflict) (Open, bool) {
 	}
 	path := c.Path
 	if !c.Pinned {
-		theirsItem = base.Get(c.Ref)
+		theirsItem = baseAt(c.Ref)
 		path = s.addressable(c.Path, item, theirsItem)
 	}
 	for i := range path {
@@ -44,12 +49,31 @@ func (s Schema) View(now, base Snapshot, c Conflict) (Open, bool) {
 // OpenConflicts are the conflicts that stand in now.
 func (s Schema) OpenConflicts(now, base Snapshot, cs []Conflict) []Open {
 	var out []Open
+	nowAt, baseAt := lookups(now, base, len(cs))
 	for _, c := range cs {
-		if o, ok := s.View(now, base, c); ok {
+		if o, ok := s.view(nowAt, baseAt, c); ok {
 			out = append(out, o)
 		}
 	}
 	return out
+}
+
+// lookups look up the items of now and base for n conflicts: by an index of
+// each past one, as a snapshot is walked to find an item.
+func lookups(now, base Snapshot, n int) (nowAt, baseAt func(Ref) any) {
+	if n <= 1 {
+		return now.Get, base.Get
+	}
+	at := func(snap Snapshot) func(Ref) any {
+		index := snap.Index()
+		return func(ref Ref) any {
+			if i, ok := index[ref]; ok {
+				return snap[i].Value
+			}
+			return Missing
+		}
+	}
+	return at(now), at(base)
 }
 
 // within reports whether c is on outer's value or one under it.
@@ -94,6 +118,7 @@ func (s Schema) Replay(old, local, next Snapshot, source Source, pinned bool) (S
 // base (unpinned) stands, after an update, against the newest base (source).
 func (s Schema) Carry(pending, found []Conflict, now, base Snapshot, source *Source) []Conflict {
 	var carried []Conflict
+	nowAt, baseAt := lookups(now, base, len(pending))
 	for _, p := range pending {
 		replaced := false
 		for _, f := range found {
@@ -102,7 +127,7 @@ func (s Schema) Carry(pending, found []Conflict, now, base Snapshot, source *Sou
 		if !p.Pinned && source != nil {
 			p.Source = *source
 		}
-		if o, ok := s.View(now, base, p); !replaced && ok {
+		if o, ok := s.view(nowAt, baseAt, p); !replaced && ok {
 			carried = append(carried, o.Conflict)
 		}
 	}

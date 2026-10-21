@@ -219,7 +219,7 @@ type rawRows struct {
 // queryRaw runs st, the escape hatch's query, and reads its rows as they
 // are, counted against the call's byte limit and cut at its row cap.
 func (st statement) queryRaw(ctx context.Context) (out rawRows, err error) {
-	if err := st.admitted(); err != nil {
+	if err := st.admitted(ctx); err != nil {
 		return rawRows{}, err
 	}
 	defer func() { err = st.settle(ctx, err) }()
@@ -262,12 +262,24 @@ func (st statement) queryRaw(ctx context.Context) (out rawRows, err error) {
 }
 
 // admitted refuses a statement made without an authorization or without SQL
-// (the zero grant or gated a failed step returns).
-func (st statement) admitted() error {
+// (the zero grant or gated a failed step returns). A write inside a
+// transaction records what it may change before it runs: a commit coming
+// between its end and its settling would otherwise leave the cached reads
+// it changed in place (a write that fails rolls the transaction back, and
+// what it recorded with it).
+func (st statement) admitted(ctx context.Context) error {
 	if !st.grant.Allowed || st.sql.SQL == "" {
 		return ErrUnauthorized
 	}
+	if st.transactional() {
+		return afterWrite(ctx, st.tc, st.res.Entity, st.tc.Transaction)
+	}
 	return nil
+}
+
+// transactional reports a governed write inside a transaction.
+func (st statement) transactional() bool {
+	return st.write && !st.raw && st.tc.Transaction != ""
 }
 
 // queried are a query's rows and, for each, the values of the statement's
@@ -282,7 +294,7 @@ type queried struct {
 // query runs st and reads its rows: shaped, masked and counted against the
 // call's limits, stopping at the first that crosses them.
 func (st statement) query(ctx context.Context) (out queried, err error) {
-	if err := st.admitted(); err != nil {
+	if err := st.admitted(ctx); err != nil {
 		return queried{}, err
 	}
 	defer func() { err = st.settle(ctx, err) }()
@@ -328,7 +340,7 @@ func (st statement) query(ctx context.Context) (out queried, err error) {
 
 // exec runs st, a statement without rows.
 func (st statement) exec(ctx context.Context) (store.Result, error) {
-	if err := st.admitted(); err != nil {
+	if err := st.admitted(ctx); err != nil {
 		return store.Result{}, err
 	}
 	r, err := retryStalePlan(st.tc, func() (store.Result, error) {
@@ -420,7 +432,7 @@ func (st statement) settle(ctx context.Context, err error) error {
 		}
 		return err
 	}
-	if !st.write {
+	if !st.write || st.transactional() { // recorded when admitted
 		return err
 	}
 	if followErr := afterWrite(ctx, st.tc, st.res.Entity, st.tc.Transaction); err == nil {

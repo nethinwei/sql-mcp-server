@@ -432,22 +432,23 @@ func auditInputOf(tc Context, name string, input json.RawMessage) json.RawMessag
 	return audit.RedactInput(input, sensitiveFields(name, input, tc.Registry))
 }
 
+// sensitiveFields are the masked fields of the entity input names, by name
+// and alias; of every entity it may name when it names several (an
+// ambiguous reference is still audited, redacted).
 func sensitiveFields(toolName string, input json.RawMessage, registry *entity.Registry) map[string]bool {
 	if registry == nil {
 		return nil
 	}
-	resolved, ok := registry.Resolve(entityNameForTool(toolName, input, registry))
-	if !ok {
-		return nil
-	}
 	fields := make(map[string]bool)
-	for _, attribute := range resolved.Attributes {
-		if attribute.Mask == "" {
-			continue
-		}
-		fields[attribute.Name] = true
-		if attribute.Alias != "" {
-			fields[attribute.Alias] = true
+	for _, e := range registry.Match(entityNameForTool(toolName, input, registry)) {
+		for _, attribute := range e.Attributes {
+			if attribute.Mask == "" {
+				continue
+			}
+			fields[attribute.Name] = true
+			if attribute.Alias != "" {
+				fields[attribute.Alias] = true
+			}
 		}
 	}
 	return fields

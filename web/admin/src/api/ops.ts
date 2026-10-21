@@ -386,6 +386,12 @@ export const ResetWorkspaceMutation = graphql(`
   mutation ResetWorkspace($to: ID!, $since: Int) { resetWorkspace(to: $to) { ...WorkspaceParts } }
 `)
 
+export const LoadRevisionMutation = graphql(`
+  mutation LoadRevision($to: ID!, $keep: Boolean!, $since: Int) {
+    loadRevision(to: $to, keep: $keep) { ...WorkspaceParts }
+  }
+`)
+
 export const MergeDraftMutation = graphql(`
   mutation MergeDraft($id: ID!, $since: Int) { mergeDraft(id: $id) { ...WorkspaceParts } }
 `)

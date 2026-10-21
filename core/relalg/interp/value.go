@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 )
 
@@ -24,8 +25,9 @@ func toRat(v any) (*big.Rat, bool) {
 	case int64:
 		return new(big.Rat).SetInt64(n), true
 	case float64:
-		r := new(big.Rat).SetFloat64(n)
-		return r, r != nil
+		// The number as written (a configuration's 0.1 is a tenth), not the
+		// binary fraction nearest it: distinct floats keep their order.
+		return new(big.Rat).SetString(strconv.FormatFloat(n, 'g', -1, 64))
 	case *big.Rat:
 		return n, n != nil
 	}

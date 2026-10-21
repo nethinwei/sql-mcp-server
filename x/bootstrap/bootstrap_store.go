@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -139,13 +140,23 @@ func ValidateStorePayload(cfg *config.Config) error {
 		return fmt.Errorf("%w: server.auth.token is set; use users with tokenHash instead", ErrPlaintextSecret)
 	}
 	for name, db := range cfg.Databases {
-		for connection, c := range db.ConnectionsOrDSN() {
-			for _, secret := range dsnSecrets(db.Driver, c.DSN) {
-				// An empty password is no credential (trust or peer authentication).
-				if secret.value != "" && !wholePlaceholderRe.MatchString(secret.value) {
-					return fmt.Errorf("%w: database %q connection %q DSN has a plaintext password; "+
-						"use ${ENV} or ${file:...}", ErrPlaintextSecret, name, connection)
-				}
+		if err := checkStoredDSNs("database "+strconv.Quote(name), db); err != nil {
+			return err
+		}
+	}
+	// The legacy section is stored as written, even where databases took its place.
+	return checkStoredDSNs("database section", cfg.Database)
+}
+
+// checkStoredDSNs refuses a plaintext password in the DSNs of db (what names
+// it in the error).
+func checkStoredDSNs(what string, db config.DatabaseConfig) error {
+	for connection, c := range db.ConnectionsOrDSN() {
+		for _, secret := range dsnSecrets(db.Driver, c.DSN) {
+			// An empty password is no credential (trust or peer authentication).
+			if secret.value != "" && !wholePlaceholderRe.MatchString(secret.value) {
+				return fmt.Errorf("%w: %s connection %q DSN has a plaintext password; "+
+					"use ${ENV} or ${file:...}", ErrPlaintextSecret, what, connection)
 			}
 		}
 	}
@@ -242,24 +253,40 @@ func (r *Runtime) WatchStore(
 		if err != nil && drifted {
 			r.drift().Report()
 		}
-		switch {
-		case err != nil && failed == current:
-			recheck.failed(current, now)
-			report(fmt.Errorf("reassemble revision %d: %w", current, err))
-		case err != nil:
-			retry.failed(failed, now)
-			r.revisionFailed(rev, failed, err, report)
-		default:
-			r.stale.Store(nil)
-			current = rev.ID
-			r.applied.Store(current)
-			if r.degraded() || drifted {
-				// A schema change found again soon is checked after a
-				// growing delay, not at every poll.
-				recheck.failed(current, now)
-			}
-		}
+		current = r.settleReload(rev, current, failed, drifted, err, &retry, &recheck, now, report)
 	})
+}
+
+// settleReload follows what reloading the published revision did (rev, err;
+// failed is the revision that failed) and returns the revision served.
+func (r *Runtime) settleReload(
+	rev revision.Revision, current, failed int64, drifted bool, err error,
+	retry, recheck *retryBackoff[int64], now time.Time, report func(error),
+) int64 {
+	switch {
+	case errors.Is(err, ErrReloadBacklog):
+		// Earlier snapshots still drain: no failure of the revision, tried
+		// again at the next poll, the users it changes held meanwhile.
+		if rev.ID != 0 && rev.ID != current {
+			r.holdLoaded(LoadRevision(rev))
+		}
+	case err != nil && failed == current:
+		recheck.failed(current, now)
+		report(fmt.Errorf("reassemble revision %d: %w", current, err))
+	case err != nil:
+		retry.failed(failed, now)
+		r.revisionFailed(rev, failed, err, report)
+	default:
+		r.stale.Store(nil)
+		current = rev.ID
+		r.applied.Store(current)
+		if r.degraded() || drifted {
+			// A schema change found again soon is checked after a
+			// growing delay, not at every poll.
+			recheck.failed(current, now)
+		}
+	}
+	return current
 }
 
 // revisionFailed records that revision id failed to apply and, when it was

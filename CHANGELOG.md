@@ -26,6 +26,11 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 - `filter` 中 `eq`、`ne`、`gt`、`gte`、`lt`、`lte`、`like` 与 `null` 比较时返回 `INVALID_INPUT`
   （此前不报错、永远返回 0 行）；判断 NULL 用 `is_null` / `is_not_null`。
 - 配置 YAML 只能有一个文档：`---` 之后还有内容时加载失败（此前静默丢弃）。
+- 配置同时写了旧式 `database:` 与 `databases:`（且两者不是同一数据源的导出形式）时加载失败
+  （此前 `database:` 被静默忽略，但其 DSN 仍随 revision 入库）。
+- `aggregate_records` 既无 `aggregates` 也无 `groupBy`、或 `sum`/`avg`/`min`/`max` 未写 `field` 时返回
+  `INVALID_INPUT`；`filter` 的 `in`/`not_in` 值必须是非空列表（此前到达数据库才失败或报内部错误）。
+- 管理 API `resetWorkspace`/`updateWorkspace` 只接受发布过的修订；载入任意修订改用新的 `loadRevision`。
 - 管理 API `editWorkspace`：带 `renamedFrom` 的改名，同一次写入必须同时写出旧项的删除（`value: null`，
   `previous` 为读到的旧值），旧项已不存在时除外；只发改名会被拒绝（此前旧项被直接删除，期间别人对它的
   修改静默丢失）。控制台本来就这样写，不受影响。
@@ -40,6 +45,20 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   （`privilege.readsBack`）。
 
 ### Fixed
+
+- 存储模式的密钥检查与 DSN 脱敏识别 `sslpassword`，并检查旧式 `database:` 段。
+- 配置文件改回正在服务的内容时释放失败修订暂停的用户；旧快照排空积压不再被当作修订失败
+  （不标记 stale、不退避）。
+- 批量配置方案重复应用不再产生重复 grant（YAML 与 JSON 的数值比较）；导入造成短引用歧义时先限定
+  引用再同步，字段修剪不再遗漏。
+- 控制台“载入工作区”：内容作为相对当前发布版本的修改载入，可以直接发布（此前基准变成被载入的
+  修订，无法提交；载入已丢弃的草稿后工作区卡死）。
+- `expand` 与 `orderBy` 同一连接列时满页仍给 `nextCursor`；实体引用歧义的调用审计时按全部候选实体
+  脱敏；事务内写入在执行前登记缓存失效目标；`exists`/关联字段只按用到的字段授权（不再误报
+  `AMBIGUOUS_FIELD_SCOPE`）；行策略中的小数（如 `0.1`）与 decimal 列精确比较；小表全扫描仍计入
+  `maxScannedRows`；prepared 语句计划失效后重新准备（缓存改为 LRU）。
+- 配置库升级 schema 时跨进程串行；OceanBase 内存/内部错误计入连接健康；PostgreSQL 统计探测失败
+  不再缓存为“新鲜”。
 
 - 控制台：账号暂时读不到（存储故障、请求中断）时返回 503 并保留会话，只有账号被删、停用或改密才
   登出；事件流约每 30 秒重读账号；登出前保存失败时停留在页面；切换基线时保留未写入的改名；

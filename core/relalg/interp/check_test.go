@@ -37,6 +37,11 @@ func TestCheck(t *testing.T) {
 			map[string]any{"status": "new"}, Holds, nil},
 		{"not of NULL is unknown", relalg.Not{P: tenant}, map[string]any{"tenant_id": nil}, Fails, nil},
 		{"not residual", relalg.Not{P: owner}, map[string]any{}, Depends, relalg.Not{P: owner}},
+		// A configuration's 0.1 is the decimal a column holds exactly.
+		{"decimal", relalg.Condition{Field: "rate", Op: relalg.OpEq, Value: 0.1},
+			map[string]any{"rate": big.NewRat(1, 10)}, Holds, nil},
+		{"decimal order", relalg.Condition{Field: "rate", Op: relalg.OpLt, Value: 0.1},
+			map[string]any{"rate": big.NewRat(1, 10)}, Fails, nil},
 	}
 	for _, c := range cases {
 		residual, verdict, err := Check(c.p, c.known)

@@ -73,7 +73,11 @@ func NewAdapter(
 			return nil, nil, fmt.Errorf("mysql: ping failed: %w", err)
 		}
 	}
-	return sqladapter.New(db, sqladapter.TextRows(binaryTypes), classify), caps, nil
+	classifier := classify
+	if oceanBaseVariable != "" {
+		classifier = classifyOceanBase
+	}
+	return sqladapter.New(db, sqladapter.TextRows(binaryTypes), classifier), caps, nil
 }
 
 // binaryTypes are the column types whose values are bytes, not text.

@@ -58,19 +58,28 @@ func sessionHandler(s *mcp.Server, cfg HTTPConfig) http.Handler {
 	// that are not browsers send no Origin and are unaffected.
 	handler = http.NewCrossOriginProtection().Handler(handler)
 	if cfg.RevokedPrincipals != nil {
-		cfg.RevokedPrincipals(revokeSessions(cfg.Bus, identities, cfg.OnSessionClosed, closeSession(s)))
+		cfg.RevokedPrincipals(revokeSessions(cfg.Bus, identities, cfg.OnSessionClosed, closeSessions(s)))
 	}
 	return handler
 }
 
-// closeSession closes the open session with the ID, which releases what the
-// transport holds for it; it then reports itself closed, which is idempotent.
-func closeSession(s *mcp.Server) func(string) {
-	return func(id string) {
+// closeSessions closes the open sessions with the IDs, in one pass over the
+// open sessions, which releases what the transport holds for them; each then
+// reports itself closed, which is idempotent.
+func closeSessions(s *mcp.Server) func([]string) {
+	return func(ids []string) {
+		closing := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			closing[id] = true
+		}
+		var open []*mcp.ServerSession
 		for ss := range s.Sessions() {
-			if ss.ID() == id {
-				_ = ss.Close()
+			if closing[ss.ID()] {
+				open = append(open, ss)
 			}
+		}
+		for _, ss := range open {
+			_ = ss.Close()
 		}
 	}
 }

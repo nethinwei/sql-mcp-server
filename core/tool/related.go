@@ -75,9 +75,12 @@ func relatedTarget(ctx context.Context, tc Context, e entity.Entity, r entity.Re
 		return entity.Resolved{}, grant{}, err
 	}
 	join := relationJoin(r)
+	// What it reads is all it uses: a default projection would ask for
+	// every field some grant reads.
+	used := append(slices.Clone(fields), join.target...)
 	g, err := authorizeRequest(ctx, tc, rbac.Request{
 		Role: tc.Role, Subject: tc.Subject, Entity: target.Entity.Name, Action: entity.ActionRead,
-		ReadFields: append(slices.Clone(fields), join.target...),
+		Fields: used, ReadFields: used,
 	})
 	return target, g, err
 }

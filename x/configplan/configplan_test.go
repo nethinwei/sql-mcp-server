@@ -348,3 +348,59 @@ func TestExceptionLevels(t *testing.T) {
 		}
 	}
 }
+
+// A plan applied again changes nothing, though the plan comes as JSON (its
+// row filter holds 7.0) and what it was applied to as YAML (7).
+func TestGrantWithRowsAppliesOnce(t *testing.T) {
+	t.Parallel()
+	base := decode(t, baseYAML)
+	plan, err := Decode([]byte(`{"scope": {"tables": ["customers"]}, "grants": [{"principal": "role:support",
+		"actions": ["read"], "fields": ["id"], "rows": {"field": "id", "op": "eq", "value": 7}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := evaluate(t, base, plan)
+	if grants := p.Roles["support"].Grants; len(grants) != 1 {
+		t.Fatalf("grants = %+v", grants)
+	}
+	// Applied, the configuration is stored as YAML.
+	stored, err := configyaml.Encode(valid(t, base, p))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again := evaluate(t, decode(t, string(stored)), plan); !again.Empty() {
+		t.Fatalf("granting again changes %+v", again.Roles["support"].Grants)
+	}
+}
+
+// A reference the tables imported make ambiguous names what it named before
+// anything resolves it: the fields a sync removes leave the grants naming
+// the entity by it.
+func TestImportQualifiesBeforeSync(t *testing.T) {
+	t.Parallel()
+	base := decode(t, `databases:
+  shop: {driver: postgres, dsn: "postgres://u@h/shop"}
+entities:
+  - name: orders
+    datasource: shop
+    schema: public
+    primaryKey: [id]
+    fields: [{name: id}, {name: customer_id}, {name: phone}, {name: note}, {name: gone}]
+roles:
+  analyst:
+    grants:
+      - entity: orders
+        actions: [read]
+        fields: {read: [id, gone]}
+`)
+	p := evaluate(t, base, Plan{Scope: Scope{Tables: []string{"orders"}}, Import: true,
+		Sync: &SyncRule{Remove: true}})
+	if !slices.Equal(p.Added, []string{"shop.sales.orders"}) {
+		t.Fatalf("added = %v", p.Added)
+	}
+	g := p.Config.Roles["analyst"].Grants
+	if len(g) != 1 || g[0].Entity == "orders" || !slices.Equal(g[0].Fields.Read, []string{"id"}) {
+		t.Fatalf("grants = %+v %+v", g, g[0].Fields)
+	}
+	valid(t, base, p)
+}

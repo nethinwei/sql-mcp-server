@@ -136,7 +136,7 @@ function rollback(id: string) {
 }
 function loadIntoWorkspace(id: string) {
   const go = () => action(async () => {
-    await workspace.reset(id)
+    await workspace.load(id, false)
     message.success(t('revisions.loaded', { id }))
   })
   if (!ws.dirty) return void go()
@@ -147,7 +147,7 @@ function loadIntoWorkspace(id: string) {
     positiveText: t('revisions.loadKeeping'),
     negativeText: t('revisions.loadDiscarding'),
     onPositiveClick: () => action(async () => {
-      await workspace.update(id)
+      await workspace.load(id, true)
       const n = ws.openConflicts.length
       if (n) message.warning(t('drafts.conflicts', { id, n }))
       else message.success(t('revisions.loaded', { id }))

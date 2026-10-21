@@ -5,8 +5,8 @@ import { NButton, useMessage, useNotification } from 'naive-ui'
 import type { TypedDocumentNode } from '@urql/vue'
 import { run } from '@/api/client'
 import {
-  CheckpointWorkspaceMutation, CommitWorkspaceMutation, EditWorkspaceMutation, FieldReferencesQuery, MergeDraftMutation,
-  ResetWorkspaceMutation, ResolveConflictMutation, UpdateWorkspaceMutation, WorkspaceQuery, WorkspaceStateQuery,
+  CheckpointWorkspaceMutation, CommitWorkspaceMutation, EditWorkspaceMutation, FieldReferencesQuery, LoadRevisionMutation,
+  MergeDraftMutation, ResetWorkspaceMutation, ResolveConflictMutation, UpdateWorkspaceMutation, WorkspaceQuery, WorkspaceStateQuery,
 } from '@/api/ops'
 import { can, session } from '@/api/session'
 import type { CommitInput, WorkspacePartsFragment } from '@/gql/graphql'
@@ -82,6 +82,12 @@ export const workspace = {
   update: (to: string) => operation(async () => (await run(UpdateWorkspaceMutation, { to, since: since() }, true)).updateWorkspace),
   /** Makes the workspace revision to as it is, dropping what was changed in it. */
   reset: (to: string) => operation(async () => (await run(ResetWorkspaceMutation, { to, since: since() }, true)).resetWorkspace),
+  /**
+   * Makes the content of revision to (any revision) the workspace, as changes
+   * to the published revision; keep re-applies what was changed here onto it.
+   */
+  load: (to: string, keep: boolean) =>
+    operation(async () => (await run(LoadRevisionMutation, { to, keep, since: since() }, true)).loadRevision),
   /** Takes draft id into the workspace. */
   mergeDraft: (id: string) => operation(async () => (await run(MergeDraftMutation, { id, since: since() }, true)).mergeDraft),
   /** Resolves a conflict: theirs takes the other side's value. */

@@ -59,6 +59,45 @@ func TestLRUKeepsNoFailedBuild(t *testing.T) {
 	}
 }
 
+// A build that failed as its caller's request ended is built again for
+// those that waited for it; another failure is their answer too.
+func TestLRUWaitersBuildAgainAfterTheCallerLeft(t *testing.T) {
+	for _, c := range []struct {
+		weight, builds int
+	}{{buildEnded, 2}, {-1, 1}} {
+		cache := newLRU[int](10)
+		started, release := make(chan struct{}), make(chan struct{})
+		var mu sync.Mutex
+		builds := 0
+		go cache.get("k", func() (int, int) {
+			mu.Lock()
+			builds++
+			mu.Unlock()
+			close(started)
+			<-release
+			return 0, c.weight
+		})
+		<-started
+		got := make(chan int)
+		go func() {
+			got <- cache.get("k", func() (int, int) {
+				mu.Lock()
+				builds++
+				mu.Unlock()
+				return 7, 1
+			})
+		}()
+		time.Sleep(50 * time.Millisecond) // the second waits for the first build
+		close(release)
+		v := <-got
+		mu.Lock()
+		if builds != c.builds || c.builds == 2 && v != 7 {
+			t.Errorf("weight %d: %d builds, value %d", c.weight, builds, v)
+		}
+		mu.Unlock()
+	}
+}
+
 // An expired preview is let go when previews are next stored or read, not
 // held until 32 newer ones push it out.
 func TestPreviewsLetExpiredOnesGo(t *testing.T) {

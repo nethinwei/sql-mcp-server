@@ -61,8 +61,9 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 	if err := expandRows(ctx, plan.tc, plan.res.Entity, got, in.Expand); err != nil {
 		return Result{}, err
 	}
-	trimExpandedJoinFields(plan.res.Entity, in, got.rows)
+	// The cursor first: an ordered field may be a join column the read adds.
 	next := nextCursor(plan.order, plan.res, in, got.rows)
+	trimExpandedJoinFields(plan.res.Entity, in, got.rows)
 	trimOrderFields(plan.order, plan.res, in, got.rows)
 	recordReadFeedback(ctx, plan.tc, in.Entity, st.sql.Compiled, planTemplate, st.sql.plan,
 		int64(len(got.rows)), time.Since(start))

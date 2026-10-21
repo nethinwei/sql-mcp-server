@@ -191,8 +191,14 @@ extend type Mutation {
   applyPlan(input: ApplyPlanInput!): AppliedPlan!
   "Moves the workspace onto revision to, re-applying what was changed in it."
   updateWorkspace(to: ID!): Workspace!
-  "Makes the workspace revision to as it is, dropping what was changed in it."
+  "Makes the workspace revision to (a published one) as it is, dropping what was changed in it."
   resetWorkspace(to: ID!): Workspace!
+  """
+  Makes the content of revision to (any revision) the workspace, as changes to
+  the published revision it then builds on; keep re-applies what was changed
+  in it onto to, a value both changed differently a conflict.
+  """
+  loadRevision(to: ID!, keep: Boolean! = false): Workspace!
   "Takes a draft into the workspace, onto the published revision."
   mergeDraft(id: ID!): Workspace!
   "Resolves a conflict: theirs takes the other side's value, else the workspace's stays."

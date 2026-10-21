@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -187,4 +190,69 @@ func TestCredentialResolvesWithinOneSnapshot(t *testing.T) {
 	}
 	close(stop)
 	<-done
+}
+
+// A configuration file edited back to the one serving releases the users a
+// failed edit held, and that edit, made again, is held again at once.
+func TestRevertedFileReleasesTheHold(t *testing.T) {
+	t.Parallel()
+	serving := usersPayload(map[string]bool{"alice": false, "bob": false})
+	failing := usersPayload(map[string]bool{"alice": false, "bob": true})
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(serving), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntimeWithBuilder(usersApp("alice", "bob"), func(string) (*App, error) {
+		return nil, errors.New("a datasource is unreachable")
+	})
+	defer runtime.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = runtime.Watch(ctx, path, time.Millisecond, nil) }()
+	bob := func() bool { _, ok := runtime.UserByTokenHash(config.TokenHash("bob")); return ok }
+	time.Sleep(20 * time.Millisecond) // the watcher read what serves
+	for range 2 {
+		if err := os.WriteFile(path, []byte(failing), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, func() bool { return !bob() })
+		if err := os.WriteFile(path, []byte(serving), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, bob)
+	}
+}
+
+// Earlier snapshots still draining fail no revision: it is not reported
+// stale, it is tried again at every poll rather than after a growing delay,
+// and the users it changes are held meanwhile.
+func TestReloadBacklogIsNoRevisionFailure(t *testing.T) {
+	t.Parallel()
+	store := revision.NewMemoryStore(nil)
+	first := publishPayload(t, store, usersPayload(map[string]bool{"alice": false, "bob": false}))
+	runtime := NewRuntimeWithBuilder(usersApp("alice", "bob"), nil)
+	defer runtime.Close()
+	var builds atomic.Int32
+	var drained atomic.Bool
+	build := func(revision.Revision) (*App, error) {
+		builds.Add(1)
+		if !drained.Load() {
+			return nil, ErrReloadBacklog
+		}
+		return usersApp("alice", "bob"), nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = runtime.WatchStore(ctx, store, first.ID, time.Millisecond, build, nil) }()
+	publishPayload(t, store, usersPayload(map[string]bool{"alice": false, "bob": true}))
+	waitFor(t, func() bool { _, ok := runtime.UserByTokenHash(config.TokenHash("bob")); return !ok })
+	time.Sleep(100 * time.Millisecond) // a growing delay from 1ms tries 7 times in 100ms
+	if n := builds.Load(); n < 20 {
+		t.Fatalf("built %d times in 100 polls: backed off", n)
+	}
+	if s, ok := runtime.Stale(); ok {
+		t.Fatalf("stale = %+v", s)
+	}
+	drained.Store(true)
+	waitFor(t, func() bool { _, ok := runtime.UserByName("bob"); return ok })
 }

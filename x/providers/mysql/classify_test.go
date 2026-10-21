@@ -93,3 +93,22 @@ func TestClassifyInvalidValues(t *testing.T) {
 		}
 	}
 }
+
+// OceanBase's errors of its own trouble count against its health; on
+// MySQL the same numbers are a statement's own.
+func TestClassifyOceanBaseTrouble(t *testing.T) {
+	t.Parallel()
+	for _, n := range []uint16{4013, 4016, 4030} {
+		err := &mysqldriver.MySQLError{Number: n}
+		if got := classifyOceanBase(err); errors.Is(got, store.ErrRejected) {
+			t.Errorf("OceanBase %d = %v, rejected", n, got)
+		}
+		if got := classify(err); !errors.Is(got, store.ErrRejected) {
+			t.Errorf("MySQL %d = %v, not rejected", n, got)
+		}
+	}
+	var ce *store.ConstraintError
+	if got := classifyOceanBase(&mysqldriver.MySQLError{Number: 1062}); !errors.As(got, &ce) {
+		t.Errorf("a duplicate key = %v", got)
+	}
+}

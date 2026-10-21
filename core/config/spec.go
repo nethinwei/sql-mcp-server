@@ -1,6 +1,9 @@
 package config
 
-import "reflect"
+import (
+	"errors"
+	"reflect"
+)
 
 //go:generate go run ../../internal/schemagen -root ../..
 
@@ -25,11 +28,33 @@ type Map[K comparable, V any] map[K]V
 // IsZero reports an unset map (omitted when encoded), not an empty one.
 func (m Map[K, V]) IsZero() bool { return m == nil }
 
+// ErrLegacyDatabase refuses a configuration writing both the legacy database
+// section and databases.
+var ErrLegacyDatabase = errors.New("config: database and databases are both set; move database into databases")
+
+// legacyIgnored reports a legacy database section databases take the place
+// of: ignored, yet kept in what is stored. A configuration in effect
+// written out (export, payloads stored before Specs) writes both, the same.
+func legacyIgnored(spec *Spec) bool {
+	if spec.Database == nil || len(spec.Databases) == 0 {
+		return false
+	}
+	legacy := spec.Database.config()
+	if isZero(legacy) {
+		return false
+	}
+	migrated, ok := spec.Databases["default"]
+	return len(spec.Databases) > 1 || !ok || !reflect.DeepEqual(migrated.config(), legacy)
+}
+
 // Resolve is the configuration spec describes: its defaults filled in, and
 // validated.
 func Resolve(spec *Spec) (*Config, error) {
 	var cfg Config
 	if spec != nil {
+		if legacyIgnored(spec) {
+			return nil, ErrLegacyDatabase
+		}
 		cfg = spec.config()
 	}
 	cfg.ApplyDefaults()

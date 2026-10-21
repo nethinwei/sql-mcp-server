@@ -134,12 +134,18 @@ func compileAggregate(ctx context.Context, plan aggregatePlan, in aggregateInput
 // does not change. An aggregate given twice would hide one of its columns
 // too.
 func aggregateCalls(aggregates []aggJSON, groupBy []string) ([]relalg.AggCall, []string, error) {
+	if len(aggregates) == 0 && len(groupBy) == 0 {
+		return nil, nil, fmt.Errorf("%w: aggregate computes aggregates, or groups by fields", ErrInvalidInput)
+	}
 	calls := make([]relalg.AggCall, 0, len(aggregates))
 	columns := append(make([]string, 0, len(groupBy)+len(aggregates)), groupBy...)
 	for _, a := range aggregates {
 		f := relalg.AggFunc(a.Func)
 		if !f.Valid() {
 			return nil, nil, fmt.Errorf("%w: aggregate func %q", ErrInvalidInput, a.Func)
+		}
+		if a.Field == "" && a.Func != string(relalg.AggCount) {
+			return nil, nil, fmt.Errorf("%w: %s aggregates a field: {func: %s, field}", ErrInvalidInput, a.Func, a.Func)
 		}
 		if a.Distinct && (a.Func != string(relalg.AggCount) || a.Field == "") {
 			return nil, nil, fmt.Errorf("%w: distinct counts a field: {func: count, field, distinct: true}",

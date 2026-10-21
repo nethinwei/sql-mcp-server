@@ -76,8 +76,8 @@ server.auth.tls.clientIdentity:
   en: 'With users configured, who a request presenting a client certificate without a bearer token calls as. user (default): the certificate must match a user''s certSubjects, else it is refused (401); default: the default identity (server.user or server.role, the behavior before v0.1.20). No effect without users. Trusted proxies'' certificates are exempt.'
 
 database:
-  zh-CN: 旧式单数据源配置，加载时迁移为名为 default 的数据源。需要 database 或至少一个 databases 项。
-  en: Legacy single datasource, migrated to the datasource named default. Either database or at least one databases entry is required.
+  zh-CN: 旧式单数据源配置，加载时迁移为名为 default 的数据源。需要 database 或至少一个 databases 项，两者不能同时设置。
+  en: Legacy single datasource, migrated to the datasource named default. Either database or at least one databases entry is required, not both.
 databases:
   zh-CN: 数据源名称到连接配置的映射。
   en: Datasource name to connection.

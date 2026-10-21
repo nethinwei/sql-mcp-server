@@ -211,11 +211,11 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 
 ### `database`
 
-旧式单数据源配置，加载时迁移为名为 default 的数据源。需要 database 或至少一个 databases 项。
+旧式单数据源配置，加载时迁移为名为 default 的数据源。需要 database 或至少一个 databases 项，两者不能同时设置。
 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `database` | `database` |  |  | 旧式单数据源配置，加载时迁移为名为 default 的数据源。需要 database 或至少一个 databases 项。 |
+| `database` | `database` |  |  | 旧式单数据源配置，加载时迁移为名为 default 的数据源。需要 database 或至少一个 databases 项，两者不能同时设置。 |
 
 ### `databases`
 

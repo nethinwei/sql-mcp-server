@@ -396,20 +396,23 @@ func (m *TransactionManager) finish(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	handle, err := m.lookup(ctx, token, caller, "", nil)
-	if err != nil {
-		return nil, err
-	}
-	m.mu.Lock()
-	if m.handles[token] != handle {
+	for {
+		handle, err := m.lookup(ctx, token, caller, "", nil)
+		if err != nil {
+			return nil, err
+		}
+		m.mu.Lock()
+		if m.handles[token] != handle {
+			// Ending meanwhile: looked up again, its outcome is waited for.
+			m.mu.Unlock()
+			continue
+		}
+		end := m.endingLocked(token, handle)
 		m.mu.Unlock()
-		return nil, m.endedError(token, caller)
+		outcome, targets, err := handle.finish(ctx, commit)
+		end(outcome)
+		return targets, err
 	}
-	end := m.endingLocked(token, handle)
-	m.mu.Unlock()
-	outcome, targets, err := handle.finish(ctx, commit)
-	end(outcome)
-	return targets, err
 }
 
 // finish commits or rolls back the transaction, and reports how it ended. A

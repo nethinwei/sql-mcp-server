@@ -1,7 +1,8 @@
 package configplan
 
 import (
-	"reflect"
+	"bytes"
+	"encoding/json"
 	"slices"
 	"strings"
 
@@ -153,8 +154,7 @@ func (ev *evaluation) checkGrant(rule GrantRule, t target, actions []string) {
 func mergeGrant(grants []config.GrantConfig, on []int, g config.GrantConfig) (int, bool) {
 	for _, i := range on {
 		have := grants[i]
-		if !reflect.DeepEqual(have.Fields, g.Fields) ||
-			!reflect.DeepEqual(normalizeRows(have.Rows), normalizeRows(g.Rows)) {
+		if !sameFields(have.Fields, g.Fields) || !sameRows(have.Rows, g.Rows) {
 			continue
 		}
 		missing := slices.DeleteFunc(
@@ -169,9 +169,23 @@ func mergeGrant(grants []config.GrantConfig, on []int, g config.GrantConfig) (in
 	return -1, false
 }
 
-func normalizeRows(rows config.FilterConfig) config.FilterConfig {
-	if len(rows) == 0 {
-		return nil
+// sameFields reports whether a and b name the same fields: none (every
+// field), or the same lists, an empty list the same as none written.
+func sameFields(a, b *config.FieldACLConfig) bool {
+	if a == nil || b == nil {
+		return a == b
 	}
-	return rows
+	return slices.Equal(a.Read, b.Read) && slices.Equal(a.Write, b.Write)
+}
+
+// sameRows reports whether a and b filter the same rows, compared as JSON:
+// a filter decoded from YAML holds 7 where one decoded from JSON (a plan)
+// holds 7.0. No filter and an empty one are the same.
+func sameRows(a, b config.FilterConfig) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return len(a) == len(b)
+	}
+	ja, errA := json.Marshal(a)
+	jb, errB := json.Marshal(b)
+	return errA == nil && errB == nil && bytes.Equal(ja, jb)
 }

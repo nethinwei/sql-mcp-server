@@ -37,6 +37,8 @@ func TestOnlyTheExecutorCallsTheDatabase(t *testing.T) {
 		"maskRow":      {"pipeline.go"},
 		"grant{}":      {"pipeline.go"},
 		"gated{}":      {"pipeline.go"},
+		// The one way past the cost gate: a single-row INSERT, by create_record.
+		"admitInsert": {"tools_write_impl.go"},
 	}
 	files, err := filepath.Glob("*.go")
 	if err != nil {
@@ -54,8 +56,8 @@ func TestOnlyTheExecutorCallsTheDatabase(t *testing.T) {
 	}
 }
 
-// databaseUses lists the calls to the database, to maskRow, and the grant
-// and gated literals of a file.
+// databaseUses lists the calls to the database, to maskRow and admitInsert,
+// and the grant and gated literals of a file.
 func databaseUses(t *testing.T, name string) []string {
 	t.Helper()
 	src, err := os.ReadFile(name)
@@ -76,7 +78,7 @@ func databaseUses(t *testing.T, name string) []string {
 					uses = append(uses, s)
 				}
 			case *ast.Ident:
-				if fn.Name == "maskRow" {
+				if fn.Name == "maskRow" || fn.Name == "admitInsert" {
 					uses = append(uses, fn.Name)
 				}
 			}

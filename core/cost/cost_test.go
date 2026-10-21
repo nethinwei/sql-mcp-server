@@ -668,6 +668,22 @@ func TestEstimateSmallTableFullScan(t *testing.T) {
 	}
 }
 
+// A small table read whole still counts its rows against the scanned-row
+// limit: taking the scan for an index scan does not shrink what it reads.
+func TestSmallTableFullScanCountsItsRows(t *testing.T) {
+	t.Parallel()
+	est := cost.Estimate{
+		Explainer: costtest.FakeExplainer{Plan: cost.Plan{
+			ScanType: cost.ScanFull, EstimatedRows: 1, TableRows: 600, TableSized: true, StatsFresh: true,
+		}},
+		Threshold: cost.Threshold{FullScanMaxRows: 1000, MaxScannedRows: 500, HardScore: 40, SoftScore: 60},
+	}
+	d, err := est.Check(context.Background(), codegen.Compiled{SQL: "SELECT * FROM t"})
+	if err != nil || d.Allow {
+		t.Fatalf("a 600-row scan under a 500-row limit: allow = %v, %v", d.Allow, err)
+	}
+}
+
 // An EXPLAIN the connection refused (its breaker open) is the call's error,
 // not an estimate to judge: the hold-back is reported as such, never as a
 // cost denial.

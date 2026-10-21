@@ -77,7 +77,15 @@ func Open(ctx context.Context, spec Spec, resolve Resolver) (*SQLStore, error) {
 	}
 	version, err := s.checkSchema(ctx)
 	if err == nil && version < SchemaVersion {
-		err = s.migrate(ctx, version)
+		// Processes opening an older store at once upgrade it one after
+		// another: each after the first finds it upgraded.
+		err = s.initLocked(ctx, func() error {
+			version, err := s.checkSchema(ctx)
+			if err == nil && version < SchemaVersion {
+				err = s.migrate(ctx, version)
+			}
+			return err
+		})
 	}
 	if err == nil {
 		err = s.checkTables(ctx)
@@ -159,19 +167,26 @@ func Init(ctx context.Context, spec Spec, resolve Resolver) error {
 		return err
 	}
 	defer func() { _ = s.db.Close() }()
-	if s.dialect.lockInit != nil {
-		conn, err := s.db.Conn(ctx)
-		if err != nil {
-			return fmt.Errorf("configstore: connect: %w", err)
-		}
-		defer func() { _ = conn.Close() }()
-		unlock, err := s.dialect.lockInit(ctx, conn)
-		if err != nil {
-			return fmt.Errorf("configstore: lock the store for init: %w", err)
-		}
-		defer unlock()
+	return s.initLocked(ctx, func() error { return s.init(ctx) })
+}
+
+// initLocked runs fn holding the store's init lock (see dialect.lockInit), which
+// processes sharing the store take one after another.
+func (s *SQLStore) initLocked(ctx context.Context, fn func() error) error {
+	if s.dialect.lockInit == nil {
+		return fn()
 	}
-	return s.init(ctx)
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("configstore: connect: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	unlock, err := s.dialect.lockInit(ctx, conn)
+	if err != nil {
+		return fmt.Errorf("configstore: lock the store: %w", err)
+	}
+	defer unlock()
+	return fn()
 }
 
 func (s *SQLStore) init(ctx context.Context) error {

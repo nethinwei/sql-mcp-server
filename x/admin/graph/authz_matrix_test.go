@@ -144,6 +144,7 @@ var requiredPermissions = map[string][]string{
 	"generateUserToken":   {auth.PermWrite},
 	"mergeDraft":          {auth.PermWrite},
 	"resetWorkspace":      {auth.PermWrite},
+	"loadRevision":        {auth.PermWrite},
 	"resolveConflict":     {auth.PermWrite},
 	"retryScanBatch":      {auth.PermWrite},
 	"savePlanTemplate":    {auth.PermWrite},

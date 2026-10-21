@@ -357,8 +357,11 @@ func (b *builder) aggregateCall(a relalg.AggCall) (string, error) {
 		return "", fmt.Errorf("%w: %q", relalg.ErrInvalidAggFunc, a.Func)
 	}
 	field := "*"
-	if a.Field != "" {
+	switch {
+	case a.Field != "":
 		field = b.col(a.Field)
+	case a.Func != relalg.AggCount: // only COUNT(*) has no field
+		return "", fmt.Errorf("%w: %s without a field", relalg.ErrInvalidAggFunc, a.Func)
 	}
 	if a.Distinct {
 		field = "DISTINCT " + field

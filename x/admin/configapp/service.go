@@ -179,7 +179,7 @@ func (r *Service) BuildDraft(ctx context.Context, d Draft) (Built, error) {
 	k := r.builds.get(key, func() (keptBuilt, int) {
 		built, err := r.buildDraft(ctx, d)
 		if err != nil {
-			return keptBuilt{err: err}, -1 // not kept: tried again
+			return keptBuilt{err: err}, failedWeight(err) // not kept: tried again
 		}
 		return keptBuilt{built: built}, 1
 	})

@@ -66,6 +66,9 @@ var (
 	ErrConflicts = errors.New("workspace: resolve the conflicts first")
 	// ErrNothingPublished: a workspace builds on the published configuration.
 	ErrNothingPublished = errors.New("workspace: nothing is published")
+	// ErrNeverPublished: a workspace builds on a revision that was published;
+	// a draft is loaded (see Load) or merged (see MergeDraft).
+	ErrNeverPublished = errors.New("workspace: the revision was never published: load it or merge it instead")
 	// ErrBehind: the workspace builds on an older revision than the
 	// published one; it commits only after an update (fast-forward only).
 	ErrBehind = errors.New("workspace: it builds on an older revision than the published one: update it first")
@@ -142,6 +145,28 @@ func (s Service) items(ctx context.Context, id int64) (workspace.Snapshot, error
 		return nil, err
 	}
 	return s.itemsOf(rev)
+}
+
+// publishedItems is items, refused for a revision never published: one a
+// workspace can build on.
+func (s Service) publishedItems(ctx context.Context, id int64) (workspace.Snapshot, error) {
+	if s.Cache != nil {
+		if items, ok := s.Cache.publishedItems(id); ok {
+			return items, nil
+		}
+	}
+	rev, err := s.Revisions.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if rev.State.Unpublished() {
+		return nil, fmt.Errorf("%w: #%d", ErrNeverPublished, id)
+	}
+	items, err := s.itemsOf(rev)
+	if err == nil && s.Cache != nil {
+		s.Cache.keep(keptItems{id: id, items: items, published: true})
+	}
+	return items, err
 }
 
 // itemsOf is rev's configuration as items, kept in the cache.
@@ -401,7 +426,7 @@ func (s Service) pinned(ref workspace.Ref, vcs []workspace.ValueConflict, src wo
 // one), re-applying what was changed here: a value both changed differently
 // keeps the workspace's, as a conflict against to.
 func (s Service) Update(ctx context.Context, username, by string, to int64) (State, error) {
-	next, err := s.items(ctx, to)
+	next, err := s.publishedItems(ctx, to)
 	if err != nil {
 		return State{}, err
 	}
@@ -427,11 +452,12 @@ func (s Service) moveOnto(w *workspace.Workspace, old, local, next workspace.Sna
 	w.Items, w.Base = now, to
 }
 
-// Reset makes username's workspace revision to as it is: what was changed
-// here, the conflicts and the notes are dropped, and so is the record of the
-// drafts taken in or saved from it (they are drafts still, offered again).
+// Reset makes username's workspace revision to (a published one) as it is:
+// what was changed here, the conflicts and the notes are dropped, and so is
+// the record of the drafts taken in or saved from it (they are drafts still,
+// offered again).
 func (s Service) Reset(ctx context.Context, username, by string, to int64) (State, error) {
-	next, err := s.items(ctx, to)
+	next, err := s.publishedItems(ctx, to)
 	if err != nil {
 		return State{}, err
 	}

@@ -228,6 +228,8 @@ func TestFilterGroups(t *testing.T) {
 		`[{"any":[{"field":"phone","op":"eq","value":"1"}]}]`,
 		`[{"field":"region","op":"eq","value":null}]`,
 		`[{"not":{"field":"region","op":"ne","value":null}}]`,
+		`[{"field":"region","op":"in","value":"CN"}]`,
+		`[{"field":"region","op":"not_in","value":[]}]`,
 	} {
 		if _, err := readJSON(t, tc, `{"entity":"orders","filter":`+filter+`}`); !errors.Is(err, ErrInvalidInput) {
 			t.Errorf("%s: err = %v", filter, err)
@@ -260,6 +262,9 @@ func TestAggregateHavingOrderLimit(t *testing.T) {
 		`{"entity":"orders","aggregates":[{"func":"count"}],"orderBy":[{"field":"amount"}]}`,
 		`{"entity":"orders","aggregates":[{"func":"sum","field":"amount","distinct":true}]}`,
 		`{"entity":"orders","aggregates":[{"func":"count","distinct":true}]}`,
+		`{"entity":"orders","aggregates":[{"func":"sum"}]}`,
+		`{"entity":"orders","aggregates":[]}`,
+		`{"entity":"orders"}`,
 	} {
 		if _, err := (AggregateTool{}).Run(context.Background(), json.RawMessage(input), tc); !errors.Is(err,
 			ErrInvalidInput) {

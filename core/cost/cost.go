@@ -143,13 +143,12 @@ func (p Plan) ScannedRows() int64 {
 // the output estimate does not tell; its count is then the output estimate,
 // a floor, and a scanned-rows limit refuses it.
 func (p Plan) ScannedRowsKnown() (int64, bool) {
-	if p.ScanType != ScanFull {
-		return p.EstimatedRows, true
-	}
 	if p.TableSized {
+		// Its full scans read their tables whole, those of small tables
+		// taken for index scans too (see smallTable).
 		return max(p.EstimatedRows, p.TableRows), true
 	}
-	return p.EstimatedRows, false
+	return p.EstimatedRows, p.ScanType != ScanFull
 }
 
 // OverScanLimit reports a plan reading more rows than limit allows (0 is no

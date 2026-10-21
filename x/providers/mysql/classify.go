@@ -40,6 +40,21 @@ var healthErrors = map[uint16]bool{
 	1161: true, 1180: true, 1181: true, 1203: true, 1317: true,
 }
 
+// oceanBaseHealthErrors are OceanBase's own errors of its trouble, beside
+// MySQL's: out of memory or past the tenant's limit (4013), an internal
+// error (4016), the MemStore full under writes (4030).
+var oceanBaseHealthErrors = map[uint16]bool{4013: true, 4016: true, 4030: true}
+
+// classifyOceanBase is classify, with OceanBase's errors of its trouble
+// counting against its health rather than taken for a statement's own.
+func classifyOceanBase(err error) error {
+	var myErr *mysqldriver.MySQLError
+	if errors.As(err, &myErr) && oceanBaseHealthErrors[myErr.Number] {
+		return err
+	}
+	return classify(err)
+}
+
 // invalidValues are the errors of a value its column cannot hold: out of
 // range (1264), truncated or incorrect (1265, 1292, 1366, 1367, 1411), too
 // long (1406), invalid JSON (3140), division by zero (1365); OceanBase

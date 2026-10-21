@@ -26,10 +26,11 @@ type dialect struct {
 	// (adding a column or an index): Init run again after it was interrupted,
 	// or a migration where DDL does not roll back (MySQL), then goes on.
 	alreadyApplied func(error) bool
-	// lockInit, when set, takes a lock that Inits of every process take on
-	// conn, held until unlock: concurrent CREATE TABLE IF NOT EXISTS fails on
-	// PostgreSQL, and two Inits would write the same metadata rows. SQLite
-	// serializes its writers itself.
+	// lockInit, when set, takes a lock that Inits and schema upgrades of
+	// every process take on conn, held until unlock: concurrent CREATE TABLE
+	// IF NOT EXISTS fails on PostgreSQL, two Inits would write the same
+	// metadata rows, and MySQL DDL does not roll back. SQLite serializes its
+	// writers itself.
 	lockInit func(ctx context.Context, conn *sql.Conn) (unlock func(), err error)
 	// published finds the published revision by the index that holds at
 	// most one (see partialOnePublished, generatedOnePublished): a server

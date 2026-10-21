@@ -132,24 +132,25 @@ func (e pgExplainer) statsFresh(ctx context.Context, schema, rel string) bool {
 			return true
 		}
 	}
-	got := e.queryStatsFresh(ctx, schema, rel)
+	got, answered := e.queryStatsFresh(ctx, schema, rel)
 	// Only fresh is kept: a table once analyzed stays so, while one not yet
-	// is told at once when ANALYZE runs.
-	if e.fresh != nil && got && ctx.Err() == nil {
+	// is told at once when ANALYZE runs. A probe that failed is asked again.
+	if e.fresh != nil && got && answered {
 		e.fresh.Store(key, time.Now())
 	}
 	return got
 }
 
-func (e pgExplainer) queryStatsFresh(ctx context.Context, schema, rel string) bool {
-	var fresh sql.NullBool
-	if err := e.pool.DB().QueryRowContext(ctx, statsFreshSQL, rel, schema, smallTablePages).Scan(&fresh); err != nil ||
-		!fresh.Valid {
-		// A probe that fails or finds no such table (a view, a foreign
-		// table) is permissive rather than blocking queries.
-		return true
+// queryStatsFresh probes the statistics of schema.rel, and whether the
+// database answered.
+func (e pgExplainer) queryStatsFresh(ctx context.Context, schema, rel string) (fresh, answered bool) {
+	var got sql.NullBool
+	if err := e.pool.DB().QueryRowContext(ctx, statsFreshSQL, rel, schema, smallTablePages).Scan(&got); err != nil {
+		// A probe that fails is permissive rather than blocking queries.
+		return true, false
 	}
-	return fresh.Bool
+	// No such table (a view, a foreign table): permissive too.
+	return !got.Valid || got.Bool, true
 }
 
 type pgPlanNode struct {

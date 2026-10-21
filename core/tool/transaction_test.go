@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/cache"
+	"github.com/nethinwei/sql-mcp-server/core/codegen"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
@@ -633,5 +634,53 @@ func TestTransactionLookupEndsWithTheCaller(t *testing.T) {
 		context.DeadlineExceeded,
 	) {
 		t.Fatalf("a lookup waited past its caller for the rollback: %v", err)
+	}
+}
+
+// hookTx runs exec as a statement runs in it.
+type hookTx struct {
+	storetest.FakeTx
+	exec func()
+}
+
+func (t *hookTx) ExecContext(context.Context, string, ...any) (store.Result, error) {
+	t.exec()
+	return store.Result{RowsAffected: 1}, nil
+}
+
+// A write inside a transaction records what it changes before it runs: a
+// commit coming once it ran, before it settled, invalidates it.
+func TestTransactionalWriteIsRecordedBeforeItRuns(t *testing.T) {
+	t.Parallel()
+	tx := &hookTx{}
+	db := &storetest.FakeDB{BeginFn: func(context.Context, *store.TxOptions) (store.Tx, error) { return tx, nil }}
+	users := entity.Entity{Name: "users", Source: "users", DataSource: "default", Relation: "db\x00users"}
+	reg, _ := entity.NewRegistry([]entity.Entity{users})
+	manager := NewTransactionManager(time.Minute, 2)
+	defer manager.Close()
+	caller := Caller{Role: "writer"}
+	token, err := manager.Begin(bg, db, caller, "default", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txDB, err := manager.DB(bg, token, caller, "default", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc := Context{Services: &Services{Transactions: manager, Registry: reg}, Role: "writer", DB: txDB,
+		Transaction: token}
+	tx.exec = func() {
+		manager.mu.Lock()
+		dirty := len(manager.handles[token].dirty)
+		manager.mu.Unlock()
+		if dirty == 0 {
+			t.Error("the write runs before what it changes is recorded")
+		}
+	}
+	st := newStatement(tc, entity.Resolved{Entity: users}, grant{rbac.Decision{Allowed: true}},
+		gated{Compiled: codegen.Compiled{SQL: "UPDATE users SET a = 1"}})
+	st.write = true
+	if _, err := st.exec(bg); err != nil {
+		t.Fatal(err)
 	}
 }

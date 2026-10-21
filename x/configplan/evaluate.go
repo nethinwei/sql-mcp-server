@@ -217,21 +217,15 @@ func Evaluate(in Input, p Plan) (Proposal, error) {
 		return excluded
 	})
 	ev.report.Matched = len(rows)
-	for _, r := range rows {
-		if r.ScannedAt.IsZero() {
-			continue
-		}
-		if ev.report.ScannedFrom.IsZero() || r.ScannedAt.Before(ev.report.ScannedFrom) {
-			ev.report.ScannedFrom = r.ScannedAt
-		}
-		if r.ScannedAt.After(ev.report.ScannedTo) {
-			ev.report.ScannedTo = r.ScannedAt
-		}
-	}
+	ev.reportScanned(rows)
 	if len(p.Scope.Refs) == 0 && len(p.Scope.Entities) == 0 {
 		ev.report.Unscanned = Unscanned(in.Sources, p.Scope)
 	}
 	targets := ev.importTables(rows)
+	// References of the base the tables imported made ambiguous are
+	// qualified before anything resolves them; those to the tables a sync
+	// removes go at the end.
+	ev.qualifyReferences()
 	// Sync first, so the field rules cover the fields it adds.
 	if p.Sync != nil {
 		targets = ev.syncAll(targets, exclude)
@@ -244,6 +238,21 @@ func Evaluate(in Input, p Plan) (Proposal, error) {
 	}
 	ev.qualifyReferences()
 	return ev.proposal(rows), nil
+}
+
+// reportScanned reports when the rows were scanned, the earliest and the latest.
+func (ev *evaluation) reportScanned(rows []Row) {
+	for _, r := range rows {
+		if r.ScannedAt.IsZero() {
+			continue
+		}
+		if ev.report.ScannedFrom.IsZero() || r.ScannedAt.Before(ev.report.ScannedFrom) {
+			ev.report.ScannedFrom = r.ScannedAt
+		}
+		if r.ScannedAt.After(ev.report.ScannedTo) {
+			ev.report.ScannedTo = r.ScannedAt
+		}
+	}
 }
 
 // evaluation is the state of one Evaluate.

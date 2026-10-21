@@ -2,6 +2,8 @@ package configapp
 
 import (
 	"container/list"
+	"context"
+	"errors"
 	"sync"
 )
 
@@ -28,6 +30,9 @@ type lruEntry[V any] struct {
 type lruCall[V any] struct {
 	done  chan struct{}
 	value V
+	// failed: the build failed for its caller alone (see buildEnded), so
+	// those waiting build it again.
+	failed bool
 }
 
 func newLRU[V any](budget int) *lru[V] {
@@ -35,20 +40,36 @@ func newLRU[V any](budget int) *lru[V] {
 		pending: map[string]*lruCall[V]{}}
 }
 
+// buildEnded is the weight of a build that failed as its caller's request
+// ended: not kept, and built again for those that waited for it.
+const buildEnded = -2
+
 // get returns the value of key, building it (with its weight) when it is
-// not kept; a negative weight is not kept (a build that failed).
+// not kept; a negative weight is not kept (a build that failed), its value
+// shared with those that waited for it but for buildEnded.
 func (c *lru[V]) get(key string, build func() (V, int)) V {
-	c.mu.Lock()
-	if el, ok := c.byKey[key]; ok {
-		c.order.MoveToBack(el)
-		c.mu.Unlock()
-		return el.Value.(*lruEntry[V]).value
-	}
-	if call, ok := c.pending[key]; ok {
+	for {
+		c.mu.Lock()
+		if el, ok := c.byKey[key]; ok {
+			c.order.MoveToBack(el)
+			c.mu.Unlock()
+			return el.Value.(*lruEntry[V]).value
+		}
+		call, ok := c.pending[key]
+		if !ok {
+			return c.build(key, build) // unlocks c.mu
+		}
 		c.mu.Unlock()
 		<-call.done
-		return call.value
+		if !call.failed {
+			return call.value
+		}
 	}
+}
+
+// build builds the value of key for the calls waiting for it; c.mu is held,
+// and unlocked once the build is registered.
+func (c *lru[V]) build(key string, build func() (V, int)) V {
 	call := &lruCall[V]{done: make(chan struct{})}
 	c.pending[key] = call
 	c.mu.Unlock()
@@ -59,6 +80,7 @@ func (c *lru[V]) get(key string, build func() (V, int)) V {
 		if weight > 0 {
 			c.keep(&lruEntry[V]{key: key, value: call.value, weight: weight})
 		}
+		call.failed = weight == buildEnded
 		c.mu.Unlock()
 		close(call.done)
 	}()
@@ -67,6 +89,15 @@ func (c *lru[V]) get(key string, build func() (V, int)) V {
 		weight = max(weight, 1)
 	}
 	return call.value
+}
+
+// failedWeight is the weight of a build that failed with err: buildEnded
+// when its caller's request ended.
+func failedWeight(err error) int {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return buildEnded
+	}
+	return -1
 }
 
 // keep adds an entry, evicting the least recently used ones past the budget

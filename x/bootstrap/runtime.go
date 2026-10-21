@@ -289,17 +289,37 @@ func (r *Runtime) Watch(ctx context.Context, path string, interval time.Duration
 			return
 		}
 		sum := sha256.Sum256(data)
-		if sum == last || !retry.due(sum, time.Now()) {
+		if sum == last {
+			if retry.tried || r.held.Load() != nil {
+				// Back to what serves: the users a failed edit held are
+				// released, and that edit, made again, is tried at once.
+				r.releaseHeld()
+				retry = retryBackoff[[sha256.Size]byte]{base: retry.base}
+			}
+			return
+		}
+		if !retry.due(sum, time.Now()) {
 			return
 		}
 		if err := r.Reload(path); err != nil {
-			retry.failed(sum, time.Now())
-			report(err)
+			// Earlier configurations still draining is no failure of this
+			// one: it is tried again at the next poll.
+			if !errors.Is(err, ErrReloadBacklog) {
+				retry.failed(sum, time.Now())
+				report(err)
+			}
 			r.holdLoaded(LoadBytes(data))
 			return
 		}
 		last = sum
 	})
+}
+
+// releaseHeld releases the users a configuration that did not apply held.
+func (r *Runtime) releaseHeld() {
+	r.reload.Lock() // after a hold being taken meanwhile
+	defer r.reload.Unlock()
+	r.held.Store(nil)
 }
 
 // poll runs tick every interval (def when interval is not positive) until

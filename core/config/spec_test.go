@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -136,6 +137,18 @@ func TestResolve(t *testing.T) {
 	}
 	if _, err := Resolve(nil); err == nil {
 		t.Fatal("a configuration without a database resolved")
+	}
+	legacy := &DatabaseSpec{Driver: ptr("postgres"), DSN: ptr("y")}
+	if _, err := Resolve(&Spec{Database: legacy, Databases: db}); !errors.Is(err, ErrLegacyDatabase) {
+		t.Fatalf("Resolve(database and databases) = %v, want ErrLegacyDatabase", err)
+	}
+	if cfg, err := Resolve(&Spec{Database: legacy}); err != nil || cfg.Databases["default"].DSN != "y" {
+		t.Fatalf("Resolve(the legacy database) = %+v, %v", cfg, err)
+	}
+	// A configuration in effect written out writes both, the same.
+	migrated := Map[string, DatabaseSpec]{"default": *legacy}
+	if _, err := Resolve(&Spec{Database: legacy, Databases: migrated}); err != nil {
+		t.Fatalf("Resolve(the legacy database migrated) = %v", err)
 	}
 }
 

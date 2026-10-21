@@ -66,7 +66,7 @@ func (r *Service) RevisionSpec(id int64, load func() (revision.Revision, error))
 		rev, err := load()
 		if err != nil {
 			loadErr = err
-			return keptSpec{err: err}, -1
+			return keptSpec{err: err}, failedWeight(err)
 		}
 		spec, cfg, err := bootstrap.LoadRevisionSpec(rev)
 		return keptSpec{spec: spec, cfg: cfg, err: err}, 1

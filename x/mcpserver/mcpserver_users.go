@@ -172,7 +172,7 @@ func withProxyIdentity(users UserDirectory, next http.Handler) http.Handler {
 // background: closing waits for the session's requests running (a long
 // query), and the caller, a reload, holds what every reload waits for.
 func revokeSessions(
-	b *bus.Bus, store *sessionIdentityStore, onClosed, closeOpen func(string),
+	b *bus.Bus, store *sessionIdentityStore, onClosed func(string), closeOpen func([]string),
 ) func([]string) []string {
 	return func(principals []string) []string {
 		sessions := store.sessionsFor(principals)
@@ -181,13 +181,13 @@ func revokeSessions(
 		}
 		if len(sessions) > 0 && (onClosed != nil || closeOpen != nil) {
 			b.Go("close revoked sessions", func(context.Context) {
-				for _, session := range sessions {
-					if onClosed != nil {
+				if onClosed != nil {
+					for _, session := range sessions {
 						onClosed(session)
 					}
-					if closeOpen != nil {
-						closeOpen(session)
-					}
+				}
+				if closeOpen != nil {
+					closeOpen(sessions)
 				}
 			})
 		}

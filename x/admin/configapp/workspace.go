@@ -339,6 +339,18 @@ func (r *Service) ResetWorkspace(ctx context.Context, to string) (*Workspace, er
 	})
 }
 
+// LoadIntoWorkspace makes revision to's content the caller's workspace, as
+// changes to the published revision; keep re-applies what they changed onto it.
+func (r *Service) LoadIntoWorkspace(ctx context.Context, to string, keep bool) (*Workspace, error) {
+	return r.workspaceOp(ctx, auth.PermWrite, func(ops workspaceops.Service, user string) (workspaceops.State, error) {
+		id, err := ParseID(to)
+		if err != nil {
+			return workspaceops.State{}, err
+		}
+		return ops.Load(ctx, user, user, id, keep)
+	})
+}
+
 // MergeDraft takes draft id into the caller's workspace.
 func (r *Service) MergeDraft(ctx context.Context, id string) (*Workspace, error) {
 	return r.workspaceOp(ctx, auth.PermWrite, func(ops workspaceops.Service, user string) (workspaceops.State, error) {

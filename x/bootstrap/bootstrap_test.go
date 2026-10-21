@@ -320,6 +320,8 @@ func TestRedactDSN(t *testing.T) {
 		{"postgres", "user=x password = secret host=db", "user=x password = *** host=db"},
 		{"postgres", "password='a b\\' c' host=db", "password=*** host=db"},
 		{"unknown", "host=db password = secret", "host=db password = ***"},
+		{"postgres", "postgres://u@h/db?sslpassword=secret", "postgres://u@h/db?sslpassword=***"},
+		{"postgres", "user=x sslpassword=secret host=db", "user=x sslpassword=*** host=db"},
 	}
 	for _, c := range cases {
 		if got := RedactDSN(c.driver, c.in); got != c.want {

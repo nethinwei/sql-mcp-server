@@ -16,6 +16,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
+	"github.com/nethinwei/sql-mcp-server/core/relalg"
 	"github.com/nethinwei/sql-mcp-server/core/store"
 )
 
@@ -88,6 +89,7 @@ var sentinelDenials = []struct {
 	{ErrEntityNotFound, CodeEntityNotFound, false},
 	{ErrEntityUnavailable, CodeEntityUnavailable, false},
 	{ErrInvalidInput, CodeInvalidInput, true},
+	{relalg.ErrINCardinality, CodeInvalidInput, true}, // a list past the codegen bound
 	{ErrDMLToolsDisabled, CodeDMLToolsDisabled, false},
 	{ErrUnsafeWrite, CodeUnsafeWrite, true},
 	{ErrDatasourceForbidden, CodeDatasourceForbidden, false},

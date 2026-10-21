@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"sync"
 )
 
@@ -62,6 +64,7 @@ func (d *PreparedDB) statement(ctx context.Context, query string) (*preparedEntr
 	d.mu.Lock()
 	if entry, ok := d.items[query]; ok {
 		entry.refs++
+		d.touchLocked(query) // the least recently used goes first
 		d.mu.Unlock()
 		return entry, true, nil
 	}
@@ -125,6 +128,30 @@ func (d *PreparedDB) finishPrepareSuccessLocked(
 	return entry, true, nil
 }
 
+// touchLocked makes query the most recently used; d.mu is held.
+func (d *PreparedDB) touchLocked(query string) {
+	if i := slices.Index(d.order, query); i >= 0 && i < len(d.order)-1 {
+		d.order = append(slices.Delete(d.order, i, i+1), query)
+	}
+}
+
+// failed drops the entry of query when err says its plan is stale: the
+// database keeps refusing a statement prepared before its table changed,
+// so the statement is prepared again when next run.
+func (d *PreparedDB) failed(query string, entry *preparedEntry, err error) {
+	if !errors.Is(err, ErrStalePlan) {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.items[query] != entry {
+		return
+	}
+	delete(d.items, query)
+	d.order = slices.DeleteFunc(d.order, func(q string) bool { return q == query })
+	d.retireLocked(entry)
+}
+
 func (d *PreparedDB) waitPrepare(ctx context.Context, call *prepareCall) (*preparedEntry, bool, error) {
 	select {
 	case <-call.done:
@@ -181,6 +208,7 @@ func (d *PreparedDB) QueryContext(ctx context.Context, query string, args ...any
 	if ok {
 		rows, err := entry.stmt.QueryContext(ctx, args...)
 		if err != nil {
+			d.failed(query, entry, err)
 			d.release(entry)
 			return nil, err
 		}
@@ -197,7 +225,11 @@ func (d *PreparedDB) ExecContext(ctx context.Context, query string, args ...any)
 	}
 	if ok {
 		defer d.release(entry)
-		return entry.stmt.ExecContext(ctx, args...)
+		r, err := entry.stmt.ExecContext(ctx, args...)
+		if err != nil {
+			d.failed(query, entry, err)
+		}
+		return r, err
 	}
 	return d.DB.ExecContext(ctx, query, args...)
 }

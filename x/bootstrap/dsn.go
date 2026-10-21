@@ -202,9 +202,11 @@ func keywordValue(dsn string, start int) (end int, value string, err error) {
 	return len(dsn), b.String(), nil
 }
 
+// isPasswordKey reports a setting holding a secret: the password, or
+// sslpassword, which decrypts the client key (pgx reads both).
 func isPasswordKey(key string) bool {
 	key = strings.ToLower(strings.TrimSpace(key))
-	return key == "password" || key == "pwd"
+	return key == "password" || key == "pwd" || key == "sslpassword"
 }
 
 func isSpace(c byte) bool {

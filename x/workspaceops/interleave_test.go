@@ -171,6 +171,27 @@ func (m *model) reset() {
 	}
 }
 
+// load loads a random revision (any state), sometimes keeping what was
+// changed; not keeping it drops the drafts taken in, as a reset does.
+func (m *model) load() {
+	all, _ := m.revs.List(m.ctx, 0)
+	to := all[m.r.intn(len(all))].ID
+	keep := m.r.intn(2) == 0
+	m.log = append(m.log, fmt.Sprintf("load #%d keep=%t", to, keep))
+	st, err := m.svc.Load(m.ctx, "root", "root", to, keep)
+	if err != nil {
+		m.t.Fatalf("seed %d: load: %v", m.seed, err)
+	}
+	if published, _ := m.revs.Published(m.ctx); st.Workspace.Base != published.ID {
+		m.fail("loaded onto #%d, published #%d", st.Workspace.Base, published.ID)
+	}
+	for id := range m.merged {
+		if _, done := m.dropped[id]; !keep && !done && !m.published(id) {
+			m.dropped[id] = st.Workspace.Version
+		}
+	}
+}
+
 // published is whether a commit's snapshot held draft (taken in before it,
 // and not dropped by a reset before it).
 func (m *model) published(draft int64) bool {
@@ -231,7 +252,7 @@ func (m *model) commit() {
 
 // step runs one random operation; commits only at the top level.
 func (m *model) step(top bool) {
-	switch n := m.r.intn(14); {
+	switch n := m.r.intn(15); {
 	case n < 1:
 		m.rename()
 	case n < 5:
@@ -248,6 +269,8 @@ func (m *model) step(top bool) {
 		m.checkpoint()
 	case n < 12:
 		m.reset()
+	case n < 13:
+		m.load()
 	default:
 		m.commit()
 	}

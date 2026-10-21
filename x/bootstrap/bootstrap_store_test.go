@@ -49,6 +49,9 @@ func TestValidateStorePayloadRejectsPlaintextSecrets(t *testing.T) {
 		// The driver grammar rejects these; every grammar is tried instead.
 		{"postgres", "app:hunter2@tcp(db:3306)/app"},
 		{"unknown", "host=db password = hunter2"},
+		// sslpassword decrypts the client key: a secret too.
+		{"postgres", "postgres://app@db/app?sslpassword=hunter2"},
+		{"postgres", "host=db sslpassword=hunter2"},
 	}
 	for _, c := range bad {
 		cfg := &config.Config{Databases: map[string]config.DatabaseConfig{"main": {Driver: c[0], DSN: c[1]}}}
@@ -60,6 +63,19 @@ func TestValidateStorePayloadRejectsPlaintextSecrets(t *testing.T) {
 	shared.Server.Auth.Token = "s3cret"
 	if err := ValidateStorePayload(shared); !errors.Is(err, ErrPlaintextSecret) {
 		t.Fatalf("shared token must be rejected: %v", err)
+	}
+}
+
+// The legacy database section is stored as written, beside databases too:
+// its secrets are refused there as well.
+func TestValidateStorePayloadChecksTheLegacySection(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Database:  config.DatabaseConfig{Driver: "postgres", DSN: "postgres://app:hunter2@db/app"},
+		Databases: map[string]config.DatabaseConfig{"main": {Driver: "postgres", DSN: "${DSN}"}},
+	}
+	if err := ValidateStorePayload(cfg); !errors.Is(err, ErrPlaintextSecret) {
+		t.Fatalf("a legacy section's password must be rejected: %v", err)
 	}
 }
 

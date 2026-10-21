@@ -252,7 +252,7 @@ func TestRevokeDoesNotWaitForTheSessionsClosing(t *testing.T) {
 	store := newSessionIdentityStore()
 	store.bind("s1", sessionIdentity{role: "user:alice"})
 	release, closed := make(chan struct{}), make(chan struct{})
-	closeOpen := func(string) { <-release; close(closed) }
+	closeOpen := func([]string) { <-release; close(closed) }
 	returned := make(chan []string, 1)
 	go func() { returned <- revokeSessions(nil, store, nil, closeOpen)([]string{"user:alice"}) }()
 	select {

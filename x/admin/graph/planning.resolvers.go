@@ -45,6 +45,12 @@ func (r *mutationResolver) ResetWorkspace(ctx context.Context, to string) (*conf
 	return w, apiError(err)
 }
 
+// LoadRevision is the resolver for the loadRevision field.
+func (r *mutationResolver) LoadRevision(ctx context.Context, to string, keep bool) (*configapp.Workspace, error) {
+	w, err := r.App.LoadIntoWorkspace(ctx, to, keep)
+	return w, apiError(err)
+}
+
 // MergeDraft is the resolver for the mergeDraft field.
 func (r *mutationResolver) MergeDraft(ctx context.Context, id string) (*configapp.Workspace, error) {
 	w, err := r.App.MergeDraft(ctx, id)
