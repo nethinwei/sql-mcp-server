@@ -134,18 +134,30 @@ func (b *Breaker) Release(probe uint64) {
 	}
 }
 
-// Record counts a request's outcome. A success closes the breaker; a failure
-// reopens a half-open one, and opens a closed one at threshold consecutive
-// failures.
-func (b *Breaker) Record(success bool) {
-	if success {
-		b.failures.Store(0)
-		b.openUntil.Store(0)
-		b.probe.Store(0)
+// Record counts a request's outcome, probe as Allow returned it. While
+// closed, a success resets the count of failures and a failure opens the
+// breaker at threshold consecutive ones. Once open, only the half-open
+// probe's outcome counts: its success closes the breaker, its failure
+// reopens it; a request let through before it opened tells of the database
+// as it was then, and changes nothing.
+func (b *Breaker) Record(probe uint64, success bool) {
+	if b.openUntil.Load() != 0 {
+		if probe == 0 || !b.probe.CompareAndSwap(probe, 0) {
+			return
+		}
+		if success {
+			b.failures.Store(0)
+			b.openUntil.Store(0)
+		} else {
+			b.openUntil.Store(time.Now().Add(b.cooldown).UnixNano())
+		}
 		return
 	}
-	f := b.failures.Add(1)
-	if f >= b.threshold || b.openUntil.Load() != 0 {
+	if success {
+		b.failures.Store(0)
+		return
+	}
+	if b.failures.Add(1) >= b.threshold {
 		b.openUntil.Store(time.Now().Add(b.cooldown).UnixNano())
 		b.probe.Store(0)
 	}

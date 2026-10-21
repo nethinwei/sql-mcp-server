@@ -278,8 +278,8 @@ func testBatches(t *testing.T, s catalog.Store) {
 // A request sent again with its key gets the batch it started.
 func testBatchRequestKeys(t *testing.T, s catalog.Store) {
 	ctx := context.Background()
-	b := catalog.Batch{ID: "b1", Datasource: "ds", RequestKey: "k1", StartedAt: t0, Items: []catalog.BatchItem{
-		item("a", catalog.ItemPending)}}
+	b := catalog.Batch{ID: "b1", Datasource: "ds", StartedBy: "alice", RequestKey: "k1", StartedAt: t0,
+		Items: []catalog.BatchItem{item("a", catalog.ItemPending)}}
 	create(t, s, b)
 	again := b
 	again.ID = "b2"
@@ -287,7 +287,12 @@ func testBatchRequestKeys(t *testing.T, s catalog.Store) {
 	if err != nil || created || got.ID != "b1" || len(got.Items) != 1 {
 		t.Fatalf("the same request again = %+v %v %v", got, created, err)
 	}
-	again.Datasource = "other"
+	// The key names a request of one administrator: another's starts a batch.
+	again.ID, again.StartedBy = "b3", "bob"
+	if _, created, _ := s.CreateBatch(ctx, again, 100); !created {
+		t.Fatal("another administrator's request got alice's batch")
+	}
+	again.ID, again.Datasource = "b4", "other"
 	if _, created, _ := s.CreateBatch(ctx, again, 100); !created {
 		t.Fatal("a key of another datasource")
 	}

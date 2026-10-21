@@ -61,7 +61,7 @@ func (h *health) enter() (done func(error), err error) {
 			switch {
 			case breaker == nil:
 			case counted:
-				breaker.Record(err == nil)
+				breaker.Record(probe, err == nil)
 			default:
 				breaker.Release(probe)
 			}

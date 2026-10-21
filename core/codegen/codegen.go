@@ -152,12 +152,24 @@ func kindOf(e relalg.Expr) Kind {
 	case relalg.Call:
 		return KindCall
 	}
-	for ok := true; ok; e, ok = relalg.Input(e) {
+	kind := KindRead
+	for {
 		if _, aggregate := e.(relalg.Aggregate); aggregate {
-			return KindAggregate
+			kind = KindAggregate
 		}
+		input, ok := relalg.Input(e)
+		if !ok {
+			break
+		}
+		e = input
 	}
-	return KindRead
+	// A read reads a relation; a node this does not know (one added to the
+	// IR and not here) is taken for a write, which the write guard checks,
+	// not let through as a read.
+	if _, scan := e.(relalg.Scan); !scan {
+		return KindWrite
+	}
+	return kind
 }
 
 // builder accumulates SQL text and bound args while tracking a placeholder

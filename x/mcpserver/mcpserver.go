@@ -510,14 +510,16 @@ func trustedProxy(networks []*net.IPNet, subjects []string, mtls bool, proxied, 
 	})
 }
 
-// fromProxy reports a request from a trusted proxy (by address or, under
-// mTLS, certificate), when proxy identity headers are trusted.
-func (c HTTPConfig) fromProxy(r *http.Request) bool {
+// fromProxy reports whether a request comes from a trusted proxy (by address
+// or, under mTLS, certificate), when proxy identity headers are trusted; the
+// networks are parsed once, not per request.
+func (c HTTPConfig) fromProxy() func(*http.Request) bool {
 	if !c.TrustProxyHeaders {
-		return false
+		return func(*http.Request) bool { return false }
 	}
 	networks, _ := parseTrustedProxyCIDRs(c.TrustedProxyCIDRs)
-	return fromProxyAddress(networks, r) || fromProxyCertificate(c.TrustedProxyCertSubjects, r)
+	subjects := c.TrustedProxyCertSubjects
+	return func(r *http.Request) bool { return fromProxyAddress(networks, r) || fromProxyCertificate(subjects, r) }
 }
 
 func fromProxyAddress(networks []*net.IPNet, r *http.Request) bool {

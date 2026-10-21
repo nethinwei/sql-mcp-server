@@ -71,6 +71,10 @@ func TestRevocationAppliesWhileTheRevisionFails(t *testing.T) {
 	if _, ok := runtime.UserByName("bob"); ok {
 		t.Fatal("a disabled user resolves by name")
 	}
+	// Nor through the snapshot (server.user, resolved there).
+	if _, ok := runtime.Current().UserByName("bob"); ok {
+		t.Fatal("a held user resolves through the serving snapshot")
+	}
 	if _, ok := runtime.UserByTokenHash(config.TokenHash("alice")); !ok {
 		t.Fatal("a user the revision keeps was held")
 	}

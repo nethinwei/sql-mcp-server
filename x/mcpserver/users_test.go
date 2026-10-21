@@ -199,7 +199,7 @@ func TestCallerIdentityUsesDefaultUser(t *testing.T) {
 	}
 	app.Users = nil
 	role, subject = callerIdentity(t.Context(), app)
-	if role != "user:alice" || subject != nil {
+	if role != forgedPrincipal || subject != nil {
 		t.Fatalf("removed default user must fail closed to a grant-less principal: %q %v", role, subject)
 	}
 	app.DefaultUser = ""

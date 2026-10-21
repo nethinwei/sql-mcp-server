@@ -51,12 +51,17 @@ func (s *Scans) startBatch(
 	for _, schema := range schemas {
 		b.Items = append(b.Items, catalog.BatchItem{Schema: schema, State: catalog.ItemPending})
 	}
-	got, _, err := s.batches.Start(ctx, b, batchOpen, s.work(run))
+	got, started, err := s.batches.Start(ctx, b, batchOpen, s.work(run))
 	if errors.Is(err, catalog.ErrTooManyBatches) {
 		return nil, fmt.Errorf("%s has %d scan batches running: wait for them or stop one", datasource, batchOpen)
 	}
 	if err != nil {
 		return nil, err
+	}
+	same := func(it catalog.BatchItem, s string) bool { return it.Schema == s }
+	if !started && !slices.EqualFunc(got.Items, schemas, same) {
+		// The key named another request: its batch would leave these schemas unscanned.
+		return nil, fmt.Errorf("request key %q started a batch of other schemas: send a new key", key)
 	}
 	return viewBatch(got), nil
 }

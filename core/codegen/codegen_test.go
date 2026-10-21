@@ -494,3 +494,25 @@ func TestCompileRefusesAChainOutOfOrder(t *testing.T) {
 		t.Fatalf("a chain in order: %v", err)
 	}
 }
+
+// A statement's kind follows its nodes: a chain of read nodes over a scan is
+// a read (an aggregate one if it aggregates), a write node a write, a call a
+// call.
+func TestKindOf(t *testing.T) {
+	t.Parallel()
+	scan := relalg.Scan{Relation: relalg.RelationRef{Name: "t"}}
+	for _, c := range []struct {
+		e    relalg.Expr
+		want Kind
+	}{
+		{scan, KindRead},
+		{relalg.Limit{Input: relalg.Sort{Input: scan}, Count: 1}, KindRead},
+		{relalg.Limit{Input: relalg.Aggregate{Input: scan}, Count: 1}, KindAggregate},
+		{relalg.Delete{}, KindWrite},
+		{relalg.Call{}, KindCall},
+	} {
+		if got := kindOf(c.e); got != c.want {
+			t.Errorf("kindOf(%T) = %v, want %v", c.e, got, c.want)
+		}
+	}
+}

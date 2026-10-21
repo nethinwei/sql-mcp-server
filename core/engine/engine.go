@@ -198,7 +198,7 @@ func (e *Engine) execute(ctx context.Context, fn func(context.Context) (any, err
 		}
 		defer func() {
 			if record {
-				breaker.Record(err == nil)
+				breaker.Record(probe, err == nil)
 			} else {
 				breaker.Release(probe)
 			}
@@ -303,14 +303,21 @@ func (s *singleflight) Do(
 	s.mu.Unlock()
 	go func() {
 		defer executions.Done()
+		defer func() {
+			// A panic past the tool's own recovery (classifying its error,
+			// the limits) ends the call, not the process.
+			if r := recover(); r != nil {
+				c.val, c.err = nil, fmt.Errorf("engine: panic recovered: %v", r)
+			}
+			cancel()
+			s.mu.Lock()
+			if s.m[key] == c {
+				delete(s.m, key)
+			}
+			s.mu.Unlock()
+			close(c.done)
+		}()
 		c.val, c.err = fn(runCtx)
-		cancel()
-		s.mu.Lock()
-		if s.m[key] == c {
-			delete(s.m, key)
-		}
-		s.mu.Unlock()
-		close(c.done)
 	}()
 	return s.wait(ctx, key, c)
 }

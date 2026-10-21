@@ -99,7 +99,8 @@ func (s *SQLStore) CreateBatch(ctx context.Context, b catalog.Batch, maxOpen int
 		}
 		if b.RequestKey != "" {
 			found, err := scanBatch(s.queryRow(ctx, tx, "SELECT "+batchColumns+
-				" FROM smcp_scan_batches WHERE datasource = ? AND request_key = ?", b.Datasource, b.RequestKey))
+				" FROM smcp_scan_batches WHERE datasource = ? AND request_key = ? AND started_by = ?",
+				b.Datasource, b.RequestKey, b.StartedBy))
 			if err == nil {
 				existing = &found
 				return nil

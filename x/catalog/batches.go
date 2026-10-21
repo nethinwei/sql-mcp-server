@@ -19,8 +19,9 @@ type Batch struct {
 	ID         string
 	Datasource string
 	StartedBy  string
-	// RequestKey names the request that started the batch: a request sent
-	// again with the same key gets the same batch.
+	// RequestKey names the request that started the batch: the same request
+	// sent again (with the same key, by the same administrator) gets the
+	// same batch.
 	RequestKey string
 	// Owner is one run of the batch, never reused: a takeover makes a new
 	// one.
@@ -127,7 +128,7 @@ func (m *MemoryStore) CreateBatch(_ context.Context, b Batch, maxOpen int) (Batc
 		if other.Datasource != b.Datasource {
 			continue
 		}
-		if b.RequestKey != "" && other.RequestKey == b.RequestKey {
+		if b.RequestKey != "" && other.RequestKey == b.RequestKey && other.StartedBy == b.StartedBy {
 			return cloneBatch(other), false, nil
 		}
 		if other.FinishedAt.IsZero() {

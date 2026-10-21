@@ -274,3 +274,27 @@ func TestRuntimeOnPublishStartsWithTheCurrentApp(t *testing.T) {
 		t.Fatalf("seen %d apps; want the current one, then the published one", len(seen))
 	}
 }
+
+// A publish callback that panics leaves the replaced snapshot retired all
+// the same: closed once its requests end, its connections not held.
+func TestReloadRetiresWhenACallbackPanics(t *testing.T) {
+	oldProvider := &fakeProvider{}
+	runtime := NewRuntimeWithBuilder(&App{Provider: oldProvider}, func(string) (*App, error) {
+		return &App{Provider: &fakeProvider{}}, nil
+	})
+	defer runtime.Close()
+	calls := 0
+	runtime.OnPublish(func(*App) {
+		if calls++; calls > 1 { // the call for the current one passes
+			panic("tools sync")
+		}
+	})
+	func() {
+		defer func() { _ = recover() }()
+		_ = runtime.Reload("ignored")
+	}()
+	runtime.retiring.Wait()
+	if oldProvider.closed != 1 {
+		t.Fatalf("old provider closed %d times", oldProvider.closed)
+	}
+}

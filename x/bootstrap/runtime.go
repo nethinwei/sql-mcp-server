@@ -139,6 +139,7 @@ func (r *Runtime) UserByName(name string) (UserIdentity, bool) {
 func NewRuntimeWithBuilder(app *App, build func(string) (*App, error)) *Runtime {
 	app.publishShared()
 	r := &Runtime{build: build}
+	app.held = r.heldUser
 	r.current.Store(newAppSnapshot(app))
 	return r
 }
@@ -233,6 +234,7 @@ func revokedPrincipals(old, next *App) []string {
 // leased old finish, transactions they opened in those sessions are rolled
 // back and old is closed.
 func publishReload(r *Runtime, old *appSnapshot, next *App, revoked []string) error {
+	next.held = r.heldUser
 	if !r.current.CompareAndSwap(old, newAppSnapshot(next)) {
 		_ = next.Close() // closed meanwhile
 		return ErrRuntimeClosed
@@ -244,15 +246,30 @@ func publishReload(r *Runtime, old *appSnapshot, next *App, revoked []string) er
 	old.retired = true
 	old.cond.Broadcast()
 	old.mu.Unlock()
-	r.onPublish.Lock()
-	for _, fn := range r.onPublish.fns {
-		fn(next)
-	}
-	r.onPublish.Unlock()
 	var sessions []string
+	// Retired however the callbacks end: one that panics must not leave the
+	// old snapshot open, its connections held.
+	defer retire(r, old, next, &sessions)
+	r.published(next)
 	if fn := r.revoked.Load(); fn != nil && len(revoked) > 0 {
 		sessions = (*fn)(revoked)
 	}
+	return nil
+}
+
+// published runs the callbacks of a publish (see OnPublish) for next.
+func (r *Runtime) published(next *App) {
+	r.onPublish.Lock()
+	defer r.onPublish.Unlock()
+	for _, fn := range r.onPublish.fns {
+		fn(next)
+	}
+}
+
+// retire closes old in the background once the requests that leased it
+// finish, rolling back the transactions they opened in sessions.
+func retire(r *Runtime, old *appSnapshot, next *App, revoked *[]string) {
+	sessions := *revoked
 	r.draining.Add(1)
 	next.Bus().Fork(&r.retiring, "retire snapshot", func(context.Context) {
 		defer r.draining.Add(-1)
@@ -268,7 +285,6 @@ func publishReload(r *Runtime, old *appSnapshot, next *App, revoked []string) er
 			slog.Warn("closing the replaced snapshot failed", "error", err.Error())
 		}
 	})
-	return nil
 }
 
 // Watch polls path for content changes and reloads it. Reload errors are

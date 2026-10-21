@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/budget"
+	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/engine"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/hook"
@@ -382,7 +383,7 @@ func TestRunToolPostExecutionLimitsDoNotFailWrites(t *testing.T) {
 // statement.
 func TestRunToolEndsTransactionsPastBreakerAndBudget(t *testing.T) {
 	breaker := ratelimit.NewBreaker(1, time.Hour)
-	breaker.Record(false)
+	breaker.Record(0, false)
 	eng, _ := engine.New(engine.WithIOPool(1), engine.WithBreaker(breaker))
 	spent := budget.New(map[string]budget.Limits{"writer": {MaxSessionCost: 1}}, nil)
 	lease, err := spent.Acquire(context.Background(), budget.Scope{Role: "writer", Session: "s"})
@@ -452,5 +453,26 @@ func TestRunToolEndsTransactionsUnderTheRateLimit(t *testing.T) {
 		ratelimit.ErrRateLimited,
 	) {
 		t.Fatalf("a second end within the second passed the rate limit: %v", err)
+	}
+}
+
+// panickingTool panics when run.
+type panickingTool struct{}
+
+func (panickingTool) Info() Info                    { return Info{Name: "panics", ReadOnly: true} }
+func (panickingTool) Enabled(config.ToolFlags) bool { return true }
+func (panickingTool) Run(context.Context, json.RawMessage, Context) (Result, error) {
+	panic("boom")
+}
+
+// Without an engine too, a tool that panics fails its call, which is
+// audited (and settles its budget) like any other.
+func TestRunToolRecoversWithoutAnEngine(t *testing.T) {
+	t.Parallel()
+	aud := &recorderAuditor{}
+	_, err := RunTool(context.Background(), panickingTool{}, json.RawMessage(`{}`),
+		Context{Services: &Services{Auditor: aud}, Role: "reader"})
+	if err == nil || len(aud.events) != 1 || aud.events[0].Allowed {
+		t.Fatalf("err = %v, events = %+v", err, aud.events)
 	}
 }

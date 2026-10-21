@@ -86,7 +86,10 @@ type App struct {
 	// tokenHash, and UserCerts a certificate subject (see
 	// config.CanonicalCertSubject), to the user name. They follow the
 	// snapshot on reload.
-	Users        map[string]UserIdentity
+	Users map[string]UserIdentity
+	// held reports a user its runtime holds (see holdChanged): one no
+	// lookup of this snapshot finds either, the default user included.
+	held         func(name string) bool
 	UserTokens   map[string]string
 	UserCerts    map[string]string
 	Limits       tool.Limits

@@ -37,7 +37,16 @@ var scanRisk = map[ScanType]int{ScanPoint: 0, ScanIndex: 1, ScanSeq: 2, ScanUnkn
 // Worse reports whether a is a riskier access than b. A plan reading several
 // tables (a join, or a table under a grouping or sorting step) is as risky
 // as its worst access.
-func Worse(a, b ScanType) bool { return scanRisk[a] > scanRisk[b] }
+func Worse(a, b ScanType) bool { return risk(a) > risk(b) }
+
+// risk is the place of t in scanRisk; a type it does not know is as risky as
+// an unknown scan.
+func risk(t ScanType) int {
+	if r, ok := scanRisk[t]; ok {
+		return r
+	}
+	return scanRisk[ScanUnknown]
+}
 
 // Plan is the normalized physical plan from an EXPLAIN. TotalCost is the
 // dialect-native cost (reference only); decisions rely on the normalized Score.
@@ -72,7 +81,7 @@ type Score struct {
 // the heart of cross-dialect comparability (PG cost vs MySQL cost vs SQLite
 // no-cost all map to the same scale).
 func ScorePlan(p Plan) Score {
-	v := 100
+	var v int
 	var factors []string
 	switch p.ScanType {
 	case ScanPoint:
@@ -84,7 +93,7 @@ func ScorePlan(p Plan) Score {
 	case ScanFull:
 		v = 20
 		factors = append(factors, "full table scan")
-	case ScanUnknown:
+	default: // ScanUnknown, or a type this does not know
 		v = 50
 		factors = append(factors, "unknown scan type")
 	}

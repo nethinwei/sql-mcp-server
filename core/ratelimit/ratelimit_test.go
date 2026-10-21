@@ -82,11 +82,11 @@ func TestBreakerOpensAndRecovers(t *testing.T) {
 	if _, err := b.Allow(); err != nil {
 		t.Fatal(err)
 	}
-	b.Record(false)
+	b.Record(0, false)
 	if b.IsOpen() {
 		t.Fatal("should not open after 1 failure")
 	}
-	b.Record(false)
+	b.Record(0, false)
 	if !b.IsOpen() {
 		t.Fatal("should open after threshold failures")
 	}
@@ -94,10 +94,11 @@ func TestBreakerOpensAndRecovers(t *testing.T) {
 		t.Fatalf("got %v, want ErrCircuitOpen", err)
 	}
 	time.Sleep(60 * time.Millisecond)
-	if _, err := b.Allow(); err != nil {
+	probe, err := b.Allow()
+	if err != nil {
 		t.Fatal("should allow after cooldown (half-open)")
 	}
-	b.Record(true)
+	b.Record(probe, true)
 	if b.IsOpen() {
 		t.Fatal("should close after success")
 	}
@@ -109,7 +110,7 @@ func TestBreakerOpensAndRecovers(t *testing.T) {
 func TestBreakerHalfOpenProbes(t *testing.T) {
 	t.Parallel()
 	b := NewBreaker(1, 20*time.Millisecond)
-	b.Record(false)
+	b.Record(0, false)
 	time.Sleep(30 * time.Millisecond)
 	probe, err := b.Allow()
 	if err != nil || probe == 0 {
@@ -119,18 +120,18 @@ func TestBreakerHalfOpenProbes(t *testing.T) {
 		t.Fatalf("a second request passed while probing: %v", err)
 	}
 	b.Release(probe)
-	if _, err := b.Allow(); err != nil {
+	if probe, err = b.Allow(); err != nil {
 		t.Fatalf("a released probe kept its place: %v", err)
 	}
-	b.Record(false)
+	b.Record(probe, false)
 	if _, err := b.Allow(); err != ErrCircuitOpen {
 		t.Fatalf("a failed probe must reopen: %v", err)
 	}
 	time.Sleep(30 * time.Millisecond)
-	if _, err := b.Allow(); err != nil {
+	if probe, err = b.Allow(); err != nil {
 		t.Fatal(err)
 	}
-	b.Record(true)
+	b.Record(probe, true)
 	for range 3 {
 		if _, err := b.Allow(); err != nil {
 			t.Fatalf("closed after a good probe: %v", err)
@@ -138,8 +139,9 @@ func TestBreakerHalfOpenProbes(t *testing.T) {
 	}
 }
 
-// A request let through before the probe, ending without a result while the
-// probe runs, leaves the probe its place: one probe at a time.
+// Requests let through before the breaker opened tell of the database as it
+// was: their outcomes, success or failure, change nothing once it is open,
+// and a cancelled one leaves the probe its place.
 func TestBreakerEarlierRequestsLeaveTheProbe(t *testing.T) {
 	t.Parallel()
 	b := NewBreaker(1, 20*time.Millisecond)
@@ -147,7 +149,11 @@ func TestBreakerEarlierRequestsLeaveTheProbe(t *testing.T) {
 	if err != nil || earlier != 0 {
 		t.Fatalf("closed breaker = %d, %v", earlier, err)
 	}
-	b.Record(false)
+	b.Record(0, false)
+	b.Record(earlier, true) // a success come back late
+	if !b.IsOpen() {
+		t.Fatal("a success let through before the breaker opened closed it")
+	}
 	time.Sleep(30 * time.Millisecond)
 	first, err := b.Allow()
 	if err != nil {
@@ -157,13 +163,12 @@ func TestBreakerEarlierRequestsLeaveTheProbe(t *testing.T) {
 	if _, err := b.Allow(); err != ErrCircuitOpen {
 		t.Fatalf("a second probe passed: %v", err)
 	}
-	b.Record(false) // another request failed: open again while the first probe runs
-	time.Sleep(30 * time.Millisecond)
-	if _, err := b.Allow(); err != nil {
-		t.Fatalf("the next probe refused: %v", err)
-	}
-	b.Release(first) // the first probe ends without a result
+	b.Record(0, false) // an earlier request failed while the probe runs
 	if _, err := b.Allow(); err != ErrCircuitOpen {
-		t.Fatalf("an earlier probe freed the next one's place: %v", err)
+		t.Fatalf("an earlier failure freed the probe's place: %v", err)
+	}
+	b.Record(first, true)
+	if b.IsOpen() {
+		t.Fatal("the probe's success did not close the breaker")
 	}
 }

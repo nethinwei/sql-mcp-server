@@ -332,7 +332,7 @@ func RunTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Re
 
 func invokeTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Result, error) {
 	if tc.Engine == nil {
-		return runTraced(ctx, t, input, tc)
+		return runRecovered(ctx, t, input, tc)
 	}
 	key, err := engineSubmitKey(ctx, t, input, tc)
 	if err != nil {
@@ -350,7 +350,7 @@ func invokeTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) 
 // back.
 func invokeDirect(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Result, error) {
 	if tc.Engine == nil {
-		return runTraced(ctx, t, input, tc)
+		return runRecovered(ctx, t, input, tc)
 	}
 	return engine.Run(ctx, tc.Engine, func(ctx context.Context) (Result, error) {
 		return runTraced(ctx, t, input, tc)
@@ -627,6 +627,17 @@ func (g *grantTrace) add(ids []string) {
 
 // runTraced runs the tool and attaches the covering grants to its result, so
 // singleflight followers sharing the result also audit them.
+// runRecovered is runTraced with a panic as the call's error, as the
+// engine's: the call still settles its budget lease and is audited.
+func runRecovered(ctx context.Context, t Tool, input json.RawMessage, tc Context) (res Result, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			res, err = Result{}, fmt.Errorf("tool: panic recovered: %v", r)
+		}
+	}()
+	return runTraced(ctx, t, input, tc)
+}
+
 func runTraced(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Result, error) {
 	trace := &grantTrace{}
 	res, err := t.Run(context.WithValue(ctx, grantTraceKey{}, trace), input, tc)

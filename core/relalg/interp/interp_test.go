@@ -2,6 +2,7 @@ package interp
 
 import (
 	"errors"
+	"math"
 	"math/big"
 	"testing"
 
@@ -162,6 +163,8 @@ func TestSortLimitOffset(t *testing.T) {
 	wantIDs(t, res, 3)
 	res = mustEval(t, relalg.Limit{Input: sorted, Count: 2, Offset: 99})
 	wantIDs(t, res)
+	res = mustEval(t, relalg.Limit{Input: sorted, Count: math.MaxInt64, Offset: 3}) // no overflow
+	wantIDs(t, res, 5, 3)
 }
 
 func globalAgg(pred relalg.Predicate, calls ...relalg.AggCall) relalg.Expr {

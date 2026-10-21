@@ -79,6 +79,22 @@ func TestSubmitPanicRecovered(t *testing.T) {
 	}
 }
 
+// A panic past the tool's own recovery (classifying its error) fails the
+// call and frees its key: the next call of the key runs.
+func TestSubmitPanicOutsideTheToolFreesItsKey(t *testing.T) {
+	t.Parallel()
+	e, _ := New(WithIOPool(1), WithMaxInflight(2), WithFailureClassifier(func(error) bool { panic("classify") }))
+	_, err := Submit(context.Background(), e, "k", func(context.Context) (any, error) { return nil, errors.New("x") })
+	if err == nil || !contains(err.Error(), "panic recovered") {
+		t.Fatalf("got %v, want panic-recovered error", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if v, err := Submit(ctx, e, "k", func(context.Context) (any, error) { return 1, nil }); err != nil || v != 1 {
+		t.Fatalf("the key after the panic = %v, %v", v, err)
+	}
+}
+
 func TestSubmitBreakerOpen(t *testing.T) {
 	t.Parallel()
 	b := ratelimit.NewBreaker(1, time.Second)
@@ -488,7 +504,7 @@ func contains(s, sub string) bool {
 func TestRunPassesTheBreakerUnderTheRateLimit(t *testing.T) {
 	t.Parallel()
 	breaker := ratelimit.NewBreaker(1, time.Hour)
-	breaker.Record(false)
+	breaker.Record(0, false)
 	e, _ := New(WithIOPool(1), WithBreaker(breaker), WithRPSLimiter(ratelimit.NewTokenBucket(1)))
 	if _, err := Run(context.Background(), e, func(context.Context) (any, error) { panic("boom") }); err == nil {
 		t.Fatal("a panic was not recovered")

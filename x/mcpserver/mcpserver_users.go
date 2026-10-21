@@ -58,7 +58,7 @@ func mergeSubject(header, configured map[string]any) map[string]any {
 
 // callerIdentity returns the request principal and subject. Requests without
 // an identity use server.user when configured (fail closed to a grant-less
-// principal if that user was removed), otherwise server.role.
+// principal if that user was removed or is held), otherwise server.role.
 func callerIdentity(ctx context.Context, app *bootstrap.App) (string, map[string]any) {
 	s, ok := ctx.Value(subjectCtxKey{}).(requestSubject)
 	if ok && s.role != "" {
@@ -70,7 +70,9 @@ func callerIdentity(ctx context.Context, app *bootstrap.App) (string, map[string
 	if app.DefaultUser != "" {
 		id, found := app.UserByName(app.DefaultUser)
 		if !found {
-			return bootstrap.UserPrincipal(app.DefaultUser), nil
+			// Removed, or held: the user's principal would hold the grants a
+			// held user keeps in the serving configuration.
+			return forgedPrincipal, nil
 		}
 		return id.Principal, mergeSubject(s.attrs, id.Subject)
 	}

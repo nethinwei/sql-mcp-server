@@ -265,8 +265,14 @@ func (s *Scans) catalogOf(ctx context.Context, src source) (introspect.Catalog, 
 		return b.cat, b.kept, nil
 	}
 	var cat introspect.Catalog
-	for _, kept := range all {
-		cat.Default, cat.FoldCase = kept.def, kept.foldCase
+	var newest time.Time
+	for _, name := range names {
+		kept := all[name]
+		// The connection's default schema and case as last scanned: the same
+		// whichever schema a map visits first.
+		if !kept.at.Before(newest) {
+			cat.Default, cat.FoldCase, newest = kept.def, kept.foldCase, kept.at
+		}
 		cat.Tables = append(cat.Tables, kept.tables...)
 	}
 	slices.SortFunc(cat.Tables, func(a, b entity.Entity) int {

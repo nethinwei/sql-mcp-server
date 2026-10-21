@@ -227,9 +227,9 @@ func evalLimit(db DB, n relalg.Limit) (relation, error) {
 	if start > int64(len(in.Rows)) {
 		start = int64(len(in.Rows))
 	}
-	end := start + n.Count
-	if n.Count < 0 || end > int64(len(in.Rows)) {
-		end = int64(len(in.Rows))
+	end := int64(len(in.Rows))
+	if n.Count >= 0 && n.Count < end-start { // no start + Count: it may overflow
+		end = start + n.Count
 	}
 	return relation{Cols: in.Cols, Rows: in.Rows[start:end], hidden: in.hidden}, nil
 }
