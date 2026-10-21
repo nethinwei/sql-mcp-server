@@ -21,7 +21,8 @@ import (
 func scansConfig(dsn string) *config.Config {
 	return &config.Config{
 		Databases: map[string]config.DatabaseConfig{"shop": {Driver: "postgres", DSN: dsn}},
-		Entities:  []config.EntityConfig{{Name: "accounts", DataSource: "shop", Schema: "crm"}},
+		Entities: []config.EntityConfig{{Name: "accounts", DataSource: "shop", Schema: "crm",
+			Fields: []config.FieldConfig{{Name: "id"}}}},
 	}
 }
 

@@ -32,14 +32,7 @@ func (ev *evaluation) fieldUses() map[string]map[string][]string {
 		return ev.uses
 	}
 	ev.uses = map[string]map[string][]string{}
-	use := func(id, field, where string) {
-		if ev.uses[id] == nil {
-			ev.uses[id] = map[string][]string{}
-		}
-		if !slices.Contains(ev.uses[id][field], where) {
-			ev.uses[id][field] = append(ev.uses[id][field], where)
-		}
-	}
+	use := func(id, field, where string) { addUse(ev.uses, id, field, where) }
 	for _, e := range ev.cfg.Entities {
 		ev.entityUses(e, use)
 	}
@@ -53,6 +46,16 @@ func (ev *evaluation) fieldUses() map[string]map[string][]string {
 		}
 	}
 	return ev.uses
+}
+
+// addUse records that where names field of the entity id, once.
+func addUse(uses map[string]map[string][]string, id, field, where string) {
+	if uses[id] == nil {
+		uses[id] = map[string][]string{}
+	}
+	if !slices.Contains(uses[id][field], where) {
+		uses[id][field] = append(uses[id][field], where)
+	}
 }
 
 func (ev *evaluation) entityUses(e config.EntityConfig, use func(id, field, where string)) {

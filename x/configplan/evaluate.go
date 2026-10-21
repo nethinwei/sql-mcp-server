@@ -121,8 +121,8 @@ const (
 	ExceptionNoKey = "noKey"
 	// ExceptionSideEffects: triggers or rules may write other tables.
 	ExceptionSideEffects = "sideEffects"
-	// ExceptionRelationshipDropped: a foreign key references a table that has
-	// no entity.
+	// ExceptionRelationshipDropped: a foreign key joins a table that has no
+	// entity, or whose entity has no field for a joined column.
 	ExceptionRelationshipDropped = "relationshipDropped"
 	// ExceptionQualified: an existing reference would name several entities
 	// once the plan adds its own; it is rewritten to the ID of the one it
@@ -141,6 +141,9 @@ const (
 	// ExceptionKeyReferenced: a relationship joins on a column the synced
 	// keys no longer include.
 	ExceptionKeyReferenced = "keyReferenced"
+	// ExceptionKeyNotField: a scanned key names a column the entity has no
+	// field for; the sync leaves the key out.
+	ExceptionKeyNotField = "keyNotField"
 	// ExceptionRowColumnMissing: a row scope (tenant policy, row policy,
 	// grant rows) tests a column the table lacks; the entity stays
 	// unavailable until the scope is fixed by hand.
@@ -251,22 +254,14 @@ func checkExcluded(in Input, refs []string) error {
 	if len(refs) == 0 {
 		return nil
 	}
-	var rows []Row
-	if in.Index != nil {
-		rows = in.Index.Rows(Scope{})
-	} else {
-		rows = Rows(in.Sources, in.Base, in.Published, Scope{})
-	}
-	known := make(map[string]bool, len(rows))
-	for _, r := range rows {
-		known[r.Ref] = true
-	}
+	scanned := scannedRefs(in)
+	gone := map[string]bool{}
 	for _, g := range GoneTables(in.Sources, in.Base, Scope{}, in.Missing) { // excluded from removal
-		known[g.Ref] = true
+		gone[g.Ref] = true
 	}
 	var unknown []string
 	for _, ref := range refs {
-		if !known[ref] {
+		if !scanned(ref) && !gone[ref] {
 			unknown = append(unknown, ref)
 		}
 	}
@@ -275,6 +270,21 @@ func checkExcluded(in Input, refs []string) error {
 			strings.Join(unknown, ", "))
 	}
 	return nil
+}
+
+// scannedRefs reports whether a table (by Ref) was scanned: one the index
+// has, or of the catalogs, without working out where each table stands.
+func scannedRefs(in Input) func(string) bool {
+	if in.Index != nil {
+		return in.Index.Has
+	}
+	refs := map[string]bool{}
+	for _, src := range in.Sources {
+		for _, t := range src.Catalog.Tables {
+			refs[Ref(src.Datasource, t.Schema, t.Source)] = true
+		}
+	}
+	return func(ref string) bool { return refs[ref] }
 }
 
 // reportScanned reports when the rows were scanned, the earliest and the latest.
@@ -313,9 +323,10 @@ type evaluation struct {
 	// fieldRules are the plan's field rules, compiled.
 	fieldRules []compiledFieldRule
 	// refs resolves references among the entities once the plan's are
-	// added; uses indexes what names each field (see fieldUses).
-	refs *config.EntityRefs
-	uses map[string]map[string][]string
+	// added; uses indexes what names each field (see fieldUses), joins the
+	// relationships joining on it (see joinsOn).
+	refs        *config.EntityRefs
+	uses, joins map[string]map[string][]string
 	// dropped are the fields a sync removed, by entity ID (see
 	// dropGrantFields).
 	dropped map[string][]string

@@ -8,6 +8,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
+	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 )
 
 // withStdin feeds input to commands that read a password from stdin.
@@ -70,5 +71,31 @@ func TestSecureCookie(t *testing.T) {
 		if got := secureCookie(cfg); got != tc.want {
 			t.Errorf("cert %q publicURL %q: Secure = %v", tc.cert, tc.publicURL, got)
 		}
+	}
+}
+
+// Whether the cookie is Secure follows a hot reload of server.publicURL,
+// which needs no restart.
+func TestSecureCookieFollowsReloads(t *testing.T) {
+	t.Parallel()
+	startup := &config.Config{}
+	next := &config.Config{}
+	next.ApplyDefaults()
+	next.Server.PublicURL = "https://gw.example.com/mcp"
+	app, err := bootstrap.AssembleWithProviders(next, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := bootstrap.NewRuntimeWithBuilder(&bootstrap.App{}, func(string) (*bootstrap.App, error) { return app, nil })
+	defer func() { _ = runtime.Close() }()
+	secure := liveSecureCookie(runtime, startup)
+	if secure() {
+		t.Fatal("Secure before the reload")
+	}
+	if err := runtime.Reload("ignored"); err != nil {
+		t.Fatal(err)
+	}
+	if !secure() {
+		t.Fatal("the cookie stays non-Secure after publicURL became https")
 	}
 }

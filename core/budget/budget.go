@@ -65,9 +65,21 @@ type state struct {
 	reserved int64
 	touched  time.Time
 	closed   bool
-	// idle is the state's place among the idle ones (see MemoryManager.idle);
-	// nil while a call runs.
-	idle *list.Element
+	// idle is the state's place among the idle ones (see MemoryManager.idle),
+	// and own among its principal's; nil while a call runs.
+	idle, own *list.Element
+}
+
+// principal is whose a state is: a role (the caller) in one tenant.
+type principal struct{ role, tenant string }
+
+func principalOf(scope Scope) principal { return principal{scope.Role, scope.Tenant} }
+
+// holder is a principal's share of the state table.
+type holder struct {
+	states int
+	// idle lists the principal's idle states, least recently used first.
+	idle *list.List
 }
 
 // MemoryManager is a process-local manager with role and tenant overrides.
@@ -85,9 +97,11 @@ type MemoryManager struct {
 	ttl       time.Duration
 	maxStates int
 	// idle lists the scopes of the states no call runs in, least recently
-	// used first: those idle for ttl, and those a full table makes room
-	// from, are taken from its front.
+	// used first: those idle for ttl are taken from its front.
 	idle *list.List
+	// holders are the principals' shares, which a full table makes room
+	// from (see victimLocked).
+	holders map[principal]*holder
 }
 
 // New returns a manager. Empty maps mean no additional rejection.
@@ -105,7 +119,7 @@ func NewWithBounds(roles, tenants map[string]Limits, ttl time.Duration, maxState
 	}
 	return &MemoryManager{
 		roles: cloneLimits(roles), tenants: cloneLimits(tenants), sessions: map[Scope]*state{}, inflight: map[string]int{},
-		ttl: ttl, maxStates: maxStates, idle: list.New(),
+		ttl: ttl, maxStates: maxStates, idle: list.New(), holders: map[principal]*holder{},
 	}
 }
 
@@ -198,7 +212,7 @@ func (m *MemoryManager) AcquireWithReservation(
 	if scope.Tenant != "" {
 		m.inflight[scope.Tenant]++
 	}
-	m.busyLocked(st)
+	m.busyLocked(scope, st)
 	st.inflight++
 	st.reserved += reservation.Cost
 	st.touched = now
@@ -226,44 +240,87 @@ func normalizeReservation(reservation Reservation) Reservation {
 }
 
 // acquireStateLocked is scope's state, new when it has none: a full table
-// makes room by dropping the least recently used idle state (never scope's
-// own, which it has), and refuses when every state is in use.
+// makes room by dropping an idle state (see victimLocked; never scope's own,
+// which it has), and refuses when there is none it may drop.
 func (m *MemoryManager) acquireStateLocked(scope Scope, now time.Time) (*state, error) {
 	if st := m.sessions[scope]; st != nil {
 		return st, nil
 	}
+	p := principalOf(scope)
 	if len(m.sessions) >= m.maxStates {
-		oldest := m.idle.Front()
-		if oldest == nil {
+		victim, ok := m.victimLocked(p)
+		if !ok {
 			return nil, ErrExceeded
 		}
-		m.dropLocked(oldest.Value.(Scope))
+		m.dropLocked(victim)
 	}
+	h := m.holders[p]
+	if h == nil {
+		h = &holder{idle: list.New()}
+		m.holders[p] = h
+	}
+	h.states++
 	st := &state{touched: now}
 	m.sessions[scope] = st
 	m.idleLocked(scope, st)
 	return st, nil
 }
 
+// victimLocked is the idle state a full table drops for a new state of p:
+// p's own least recently used one, else that of the principal holding the
+// most states, if it holds more than p. Opening sessions without end then
+// only drops the caller's own states, never another principal's (whose
+// session cost it would reset), while a principal new to a full table still
+// gets room from the largest share.
+func (m *MemoryManager) victimLocked(p principal) (Scope, bool) {
+	if h := m.holders[p]; h != nil && h.idle.Len() > 0 {
+		return h.idle.Front().Value.(Scope), true
+	}
+	var most *holder
+	for _, h := range m.holders {
+		if h.idle.Len() > 0 && (most == nil || h.states > most.states ||
+			h.states == most.states && m.lruLocked(h).Before(m.lruLocked(most))) {
+			most = h
+		}
+	}
+	if most == nil || m.holders[p] != nil && most.states <= m.holders[p].states {
+		return Scope{}, false
+	}
+	return most.idle.Front().Value.(Scope), true
+}
+
+// lruLocked is when h's least recently used idle state was last used.
+func (m *MemoryManager) lruLocked(h *holder) time.Time {
+	return m.sessions[h.idle.Front().Value.(Scope)].touched
+}
+
 // idleLocked lists scope's state among the idle ones, as the most recently
 // used.
 func (m *MemoryManager) idleLocked(scope Scope, st *state) {
 	st.idle = m.idle.PushBack(scope)
+	st.own = m.holders[principalOf(scope)].idle.PushBack(scope)
 }
 
-// busyLocked takes st off the idle states: a call runs in it.
-func (m *MemoryManager) busyLocked(st *state) {
+// busyLocked takes scope's state st off the idle states: a call runs in it.
+func (m *MemoryManager) busyLocked(scope Scope, st *state) {
 	if st.idle != nil {
 		m.idle.Remove(st.idle)
-		st.idle = nil
+		m.holders[principalOf(scope)].idle.Remove(st.own)
+		st.idle, st.own = nil, nil
 	}
 }
 
 // dropLocked drops scope's state.
 func (m *MemoryManager) dropLocked(scope Scope) {
 	if st := m.sessions[scope]; st != nil {
-		m.busyLocked(st)
+		m.busyLocked(scope, st)
 		delete(m.sessions, scope)
+		p := principalOf(scope)
+		if h := m.holders[p]; h.states <= 1 {
+			delete(m.holders, p)
+		} else {
+			h.states--
+		}
 	}
 }
 

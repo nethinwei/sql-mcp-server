@@ -234,7 +234,7 @@ func (r *Runtime) WatchStore(
 	r.applied.Store(current)
 	base := cmp.Or(interval, 5*time.Second)
 	retry, recheck := retryBackoff[int64]{base: base}, retryBackoff[int64]{base: base}
-	return poll(ctx, interval, 5*time.Second, func() {
+	return poll(ctx, interval, 5*time.Second, report, func() {
 		head, err := store.PublishedSummary(ctx)
 		if err != nil {
 			report(fmt.Errorf("store poll: %w", err))

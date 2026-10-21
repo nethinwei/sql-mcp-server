@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -296,5 +297,77 @@ func TestReloadRetiresWhenACallbackPanics(t *testing.T) {
 	runtime.retiring.Wait()
 	if oldProvider.closed != 1 {
 		t.Fatalf("old provider closed %d times", oldProvider.closed)
+	}
+}
+
+// A publish callback that panics neither fails the reload nor stops the
+// watcher: a later edit still applies.
+func TestRuntimeWatchSurvivesAPanickingPublishCallback(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("one"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	built := make(chan *App, 4)
+	initial := &App{Provider: &fakeProvider{}}
+	runtime := NewRuntimeWithBuilder(initial, func(string) (*App, error) {
+		app := &App{Provider: &fakeProvider{}}
+		built <- app
+		return app, nil
+	})
+	defer runtime.Close()
+	runtime.OnPublish(func(app *App) {
+		if app != initial {
+			panic("callback")
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = runtime.Watch(ctx, path, 5*time.Millisecond, nil) }()
+	for _, content := range []string{"two", "three"} {
+		time.Sleep(20 * time.Millisecond)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case app := <-built:
+			deadline := time.Now().Add(time.Second)
+			for runtime.Current() != app && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if runtime.Current() != app {
+				t.Fatalf("%s: the reload did not publish", content)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s: the watcher stopped", content)
+		}
+	}
+}
+
+// A tick that panics is reported, and the polling goes on.
+func TestPollSurvivesAPanickingTick(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reported := make(chan error, 1)
+	ticks := 0
+	go func() {
+		_ = poll(ctx, time.Millisecond, 0, func(err error) { reported <- err }, func() {
+			if ticks++; ticks == 1 {
+				panic("tick")
+			}
+			cancel()
+		})
+	}()
+	select {
+	case err := <-reported:
+		if !strings.Contains(err.Error(), "panic: tick") {
+			t.Fatalf("reported %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("a panicking tick was not reported")
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("polling stopped after a panicking tick")
 	}
 }

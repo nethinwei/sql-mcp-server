@@ -464,3 +464,31 @@ func TestRenameKeysMovesAtOnce(t *testing.T) {
 		}
 	}
 }
+
+// A role renamed onto a name a user already lists is listed once, whichever
+// comes first.
+func TestRoleNamesRenamedOntoAListedName(t *testing.T) {
+	r := reconciliation{roles: map[string]string{"a": "reader", "x": "y", "y": "x"}}
+	for _, c := range []struct{ in, want []any }{
+		{[]any{"a", "reader"}, []any{"reader"}},
+		{[]any{"reader", "a"}, []any{"reader"}},
+		{[]any{"x", "y"}, []any{"y", "x"}},
+	} {
+		if got, _ := r.roleNames(c.in); !slices.Equal(got, c.want) {
+			t.Errorf("roleNames(%v) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+// A budget entry renamed onto a name that has one replaces it, as the
+// entity-level access of a role renamed onto a taken name does.
+func TestRenameKeysReplacesWhatTheNewNameHad(t *testing.T) {
+	section := map[string]any{"roles": map[string]any{"a": 1, "b": 2}}
+	renameKeys(section, "roles", map[string]string{"a": "b"})
+	legacy := map[string]any{"legacyAccess": map[string]any{"fieldACL": map[string]any{"a": 1, "b": 2}}}
+	reconciliation{roles: map[string]string{"a": "b"}}.legacyRoles(legacy)
+	got, _ := json.Marshal([]any{section, legacy})
+	if string(got) != `[{"roles":{"b":1}},{"legacyAccess":{"fieldACL":{"b":1}}}]` {
+		t.Fatalf("got %s", got)
+	}
+}

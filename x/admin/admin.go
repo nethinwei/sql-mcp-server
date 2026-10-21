@@ -80,8 +80,10 @@ type Config struct {
 	// from requests (server.pathPrefix); pages, the cookie and redirects
 	// carry it.
 	PathPrefix string
-	// SecureCookie marks the session cookie Secure; set it when serving TLS.
-	SecureCookie bool
+	// SecureCookie reports, for each cookie set, whether it is Secure:
+	// whether browsers reach the console over HTTPS under the configuration
+	// served now. Nil: never.
+	SecureCookie func() bool
 	// Playground mounts GraphiQL at /admin/playground and enables GraphQL
 	// schema introspection. It is a development aid.
 	Playground bool
@@ -160,6 +162,9 @@ func New(cfg Config) *Handler {
 // gateway prefix.
 func (h *Handler) path(p string) string { return h.cfg.PathPrefix + p }
 
+// secureCookie reports whether the cookie set now is Secure.
+func (h *Handler) secureCookie() bool { return h.cfg.SecureCookie != nil && h.cfg.SecureCookie() }
+
 // Close stops the background schema scans.
 func (h *Handler) Close() {
 	h.scans.Close()
@@ -223,7 +228,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Value: id, Path: h.path("/admin"), HttpOnly: true, Secure: h.cfg.SecureCookie,
+		Name: cookieName, Value: id, Path: h.path("/admin"), HttpOnly: true, Secure: h.secureCookie(),
 		SameSite: http.SameSiteStrictMode, MaxAge: int(sessionAbsoluteTimeout.Seconds()),
 	})
 	slog.Info("admin signed in", "username", account.Username)
@@ -264,7 +269,7 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 	}
 	h.sessions.delete(c.Value)
 	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Path: h.path("/admin"), HttpOnly: true, Secure: h.cfg.SecureCookie,
+		Name: cookieName, Path: h.path("/admin"), HttpOnly: true, Secure: h.secureCookie(),
 		SameSite: http.SameSiteStrictMode, MaxAge: -1,
 	})
 	w.WriteHeader(http.StatusNoContent)

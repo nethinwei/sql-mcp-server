@@ -2,6 +2,7 @@ package configplan
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -422,5 +423,45 @@ func TestExcludingAnUnknownTableIsRefused(t *testing.T) {
 	plan.Exclude = []string{"shop.public.logs"}
 	if p := evaluate(t, base, plan); slices.Contains(p.Added, "shop.public.logs") {
 		t.Fatalf("an excluded table was imported: %v", p.Added)
+	}
+}
+
+// A foreign key on a column the configured entity at either end has no field
+// for becomes no relationship (it would not validate), and is reported.
+func TestImportDropsForeignKeysOnColumnsThatAreNotFields(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ configured, imported, want string }{
+		{"{name: customers, datasource: shop, schema: public, fields: [{name: name}]}",
+			"shop.public.orders", "shop.public.customers"},
+		{"{name: orders, datasource: shop, schema: public, fields: [{name: id}]}",
+			"shop.public.customers", "shop.public.orders"},
+	} {
+		base := decode(t, "databases:\n  shop: {driver: postgres, dsn: \"postgres://u@h/shop\"}\nentities:\n  - "+
+			c.configured+"\n")
+		p := evaluate(t, base, Plan{Scope: Scope{Refs: []string{c.imported}}, Import: true})
+		if r := entityOf(t, p, c.imported).Relationships; len(r) != 0 {
+			t.Fatalf("%s relationships = %+v", c.imported, r)
+		}
+		if !slices.Contains(kinds(p.Report.Exceptions), "relationshipDropped "+c.imported+" "+c.want) {
+			t.Fatalf("exceptions = %v", kinds(p.Report.Exceptions))
+		}
+		valid(t, base, p)
+	}
+}
+
+// A field rule filtering by type tests each field's column type, read once
+// a table; a field without a column of the table has none.
+func TestFieldRulesFilterByColumnType(t *testing.T) {
+	t.Parallel()
+	base := decode(t, baseYAML)
+	p := evaluate(t, base, Plan{Scope: Scope{Refs: []string{"shop.public.customers"}},
+		Fields: []FieldRule{{Columns: []string{"*"}, Types: []string{"text"}, Exclude: true},
+			{Columns: []string{"*"}, Types: []string{"big*"}, Mask: "hash"}}})
+	var got []string
+	for _, f := range entityOf(t, p, "shop.public.customers").Fields {
+		got = append(got, f.Name+":"+strconv.FormatBool(f.Exclude)+":"+f.Mask)
+	}
+	if want := []string{"id:false:hash", "name:true:", "legacy:true:", "gone:false:"}; !slices.Equal(got, want) {
+		t.Fatalf("fields = %v, want %v", got, want)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -595,3 +596,36 @@ func TestSnapshotReadinessMarksStaleRevision(t *testing.T) {
 
 // same is whether a session is bound to the identity looked up.
 func same(_, same bool) bool { return same }
+
+// Concurrent database probes share one run, and its result serves the
+// probes within the TTL: the unauthenticated endpoint cannot occupy the
+// connections tool calls need.
+func TestDatabaseProbesShareOneRun(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	release, down := make(chan struct{}), errors.New("down")
+	check := shareProbe(func(context.Context) error {
+		calls.Add(1)
+		<-release
+		return down
+	}, 50*time.Millisecond)
+	errs := make(chan error, 16)
+	for range 16 {
+		go func() { errs <- check(context.Background()) }()
+	}
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	for range 16 {
+		if err := <-errs; !errors.Is(err, down) {
+			t.Fatalf("probe = %v", err)
+		}
+	}
+	if err := check(context.Background()); !errors.Is(err, down) || calls.Load() != 1 {
+		t.Fatalf("probe = %v after %d runs, want the cached result of one", err, calls.Load())
+	}
+	time.Sleep(60 * time.Millisecond)
+	_ = check(context.Background())
+	if calls.Load() != 2 {
+		t.Fatalf("%d runs, want a stale result probed again", calls.Load())
+	}
+}

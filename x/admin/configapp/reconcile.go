@@ -146,9 +146,11 @@ func (r reconciliation) budgets(v map[string]any) bool {
 }
 
 // renameKeys moves the entries of section[key] named in names to their new
-// names, or drops them for "". An entry the new name already has, and that
-// is not moved away itself, stays: the entries all move at once, so a chain
-// (a to b, b to c) or a swap moves each whatever the order.
+// names, or drops them for "". A moved entry replaces one the new name
+// already has, as the role and user now holding the name are the renamed
+// ones (and as legacyRoles moves entity-level access): the entries all move
+// at once, so a chain (a to b, b to c) or a swap moves each whatever the
+// order.
 func renameKeys(section map[string]any, key string, names map[string]string) bool {
 	byName, ok := section[key].(map[string]any)
 	if !ok {
@@ -163,9 +165,7 @@ func renameKeys(section map[string]any, key string, names map[string]string) boo
 	}
 	for _, from := range slices.Sorted(maps.Keys(moving)) {
 		if to := names[from]; to != "" {
-			if _, taken := byName[to]; !taken {
-				byName[to] = moving[from]
-			}
+			byName[to] = moving[from]
 		}
 	}
 	return len(moving) > 0
@@ -279,18 +279,20 @@ func (r reconciliation) keepSource(ref workspace.Ref, v, prev map[string]any) bo
 	return true
 }
 
-// roleNames are names with renamed roles renamed and removed ones dropped.
+// roleNames are names with renamed roles renamed and removed ones dropped;
+// a role renamed onto a name the list already has is listed once.
 func (r reconciliation) roleNames(names []any) ([]any, bool) {
 	changed := false
 	next := make([]any, 0, len(names))
+	renamed := map[string]bool{} // names a rename put in next
 	for _, n := range names {
 		name, _ := n.(string)
 		to, ok := r.roles[name]
 		switch {
-		case !ok:
+		case !ok && !renamed[name]:
 			next = append(next, n)
-		case to != "":
-			next, changed = append(next, to), true
+		case to != "" && !slices.Contains(next, any(to)):
+			next, changed, renamed[to] = append(next, to), true, true
 		default:
 			changed = true
 		}

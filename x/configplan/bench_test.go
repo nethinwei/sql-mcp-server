@@ -2,6 +2,7 @@ package configplan
 
 import (
 	"fmt"
+	"runtime"
 	"testing"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
@@ -68,5 +69,32 @@ func BenchmarkEvaluateLargePlan(b *testing.B) {
 		if err != nil || len(p.Added) != 4500 {
 			b.Fatalf("added = %d, %v", len(p.Added), err)
 		}
+	}
+}
+
+// Checking a plan's exclusions reads the indexed tables' refs: it neither
+// copies the rows nor works out where each table stands again, and it
+// agrees with the check without an index.
+func TestCheckExcludedReadsTheIndexRefs(t *testing.T) {
+	sources, cfg := largeCatalog()
+	in := Input{Base: cfg, Published: cfg, Sources: sources}
+	refs := []string{"shop.db_000.t_001", "shop.db_499.t_099"}
+	if err := checkExcluded(in, append(refs, "shop.db_000.nope")); err == nil {
+		t.Fatal("an unknown exclusion was accepted")
+	}
+	in.Index = NewIndex(sources, cfg, cfg)
+	if err := checkExcluded(in, append(refs, "shop.db_000.nope")); err == nil {
+		t.Fatal("an unknown exclusion was accepted with an index")
+	}
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	if err := checkExcluded(in, refs); err != nil {
+		t.Fatal(err)
+	}
+	runtime.ReadMemStats(&after)
+	// The 50,000 rows alone take over 10 MB; the gone check reads the 5,000
+	// entities.
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 2<<20 {
+		t.Fatalf("checking exclusions allocated %d bytes", allocated)
 	}
 }

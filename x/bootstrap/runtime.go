@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"reflect"
@@ -257,13 +258,28 @@ func publishReload(r *Runtime, old *appSnapshot, next *App, revoked []string) er
 	return nil
 }
 
-// published runs the callbacks of a publish (see OnPublish) for next.
+// published runs the callbacks of a publish (see OnPublish) for next. One
+// that panics is logged, and the others still run: next serves already, and
+// the reload that published it succeeded.
 func (r *Runtime) published(next *App) {
 	r.onPublish.Lock()
 	defer r.onPublish.Unlock()
 	for _, fn := range r.onPublish.fns {
-		fn(next)
+		if err := recovered(func() { fn(next) }); err != nil {
+			slog.Error("a publish callback failed", "error", err.Error())
+		}
 	}
+}
+
+// recovered runs fn and returns the panic it raised, as an error.
+func recovered(fn func()) (err error) {
+	defer func() {
+		if v := recover(); v != nil {
+			err = fmt.Errorf("panic: %v", v)
+		}
+	}()
+	fn()
+	return nil
 }
 
 // retire closes old in the background once the requests that leased it
@@ -298,7 +314,7 @@ func (r *Runtime) Watch(ctx context.Context, path string, interval time.Duration
 	// A configuration that keeps failing is assembled again after a growing
 	// delay, not on every poll; one edited again is tried at once.
 	retry := retryBackoff[[sha256.Size]byte]{base: cmp.Or(interval, time.Second)}
-	return poll(ctx, interval, time.Second, func() {
+	return poll(ctx, interval, time.Second, report, func() {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			report(err)
@@ -339,8 +355,9 @@ func (r *Runtime) releaseHeld() {
 }
 
 // poll runs tick every interval (def when interval is not positive) until
-// ctx ends, and returns why it ended.
-func poll(ctx context.Context, interval, def time.Duration, tick func()) error {
+// ctx ends, and returns why it ended. A tick that panics is reported and
+// the polling goes on: nothing restarts a watcher that stopped.
+func poll(ctx context.Context, interval, def time.Duration, report func(error), tick func()) error {
 	if interval <= 0 {
 		interval = def
 	}
@@ -351,7 +368,9 @@ func poll(ctx context.Context, interval, def time.Duration, tick func()) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			tick()
+			if err := recovered(tick); err != nil {
+				report(fmt.Errorf("watch: %w", err))
+			}
 		}
 	}
 }

@@ -136,7 +136,8 @@ Proposal = { Config（Base 应用后）, Entities（新增或修改）, Added, R
   `keys`（v0.1.20 起）把表的主键与可标识行的唯一键设为扫描结果（`syncKeys`），把
   实体的 table/view 类型设为扫描结果（`syncKind`）；视图保留配置中声明的键。键不再
   包含的列仍被某个关系用作连接列时报告 `keyReferenced`（confirm），键变为空时报告
-  去掉写动作的 `noKey`。关系**只报告不修改**：配置不记录关系是否由外键导入，外键
+  去掉写动作的 `noKey`；键的列不是实体的字段（同步也不新增）时不同步该键，报告
+  `keyNotField`（confirm）。关系**只报告不修改**：配置不记录关系是否由外键导入，外键
   没有对应关系时报告 `relationshipNew`，以导入命名方式命名（目标实体名或加序号）却
   没有外键对应的关系报告 `relationshipStale`，均为 info；手写关系不受影响。
   运行中的服务发现的缺列（`Input.MissingFields`）只用于范围内未扫描的表（扫描过的
@@ -152,7 +153,7 @@ Proposal = { Config（Base 应用后）, Entities（新增或修改）, Added, R
     通过时同样阻断；
   - `confirm`（需确认，控制台要求勾选“已核对”，MCP 要求 Agent 向管理员报告）：
     `unknownUser`、`noFields`、`referenced`、`denied`、`review`、`keyReferenced`、
-    `rowColumnMissing`，以及去掉了写动作的 `noKey`；
+    `keyNotField`、`rowColumnMissing`，以及去掉了写动作的 `noKey`；
   - `info`（提示）：`renamed`、`sideEffects`、`relationshipDropped`、`relationshipNew`、
     `relationshipStale`、只读的
     `noKey`，以及 `qualified`：新增实体会让已有的简写引用（授权、关系目标、

@@ -8,6 +8,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
+	"github.com/nethinwei/sql-mcp-server/x/configrefs"
 )
 
 // syncAll syncs the entities of targets and those the serving configuration
@@ -149,13 +150,14 @@ func (ev *evaluation) syncKind(t target) {
 
 // syncKeys sets a table's keys to those scanned. A view keeps the keys
 // configured on it: it has none in the database, and the declared ones are
-// the administrator's.
+// the administrator's. A key on a column the entity has no field for (nor
+// gets from the sync) is left out and reported: a key names fields.
 func (ev *evaluation) syncKeys(t target) {
 	if t.row.Table.Kind == entity.KindView {
 		return
 	}
 	e := ev.entity(t)
-	primary, unique := t.row.Table.PrimaryKey(), IdentityUniqueKeys(t.row.Table)
+	primary, unique := ev.fieldKeys(t, t.row.Table.PrimaryKey(), IdentityUniqueKeys(t.row.Table))
 	if slices.Equal(e.PrimaryKey, primary) && sameKeys(e.UniqueKeys, unique) {
 		return
 	}
@@ -181,6 +183,31 @@ func (ev *evaluation) syncKeys(t target) {
 	}
 }
 
+// fieldKeys are the scanned keys of t whose columns are fields once the
+// sync adds its own; each other one is reported.
+func (ev *evaluation) fieldKeys(t target, primary []string, unique [][]string) ([]string, [][]string) {
+	fields := map[string]bool{}
+	for _, f := range ev.entity(t).Fields {
+		fields[f.Name] = true
+	}
+	if ev.plan.Sync.Add {
+		for _, c := range t.row.Added {
+			fields[c] = true
+		}
+	}
+	missing := func(key []string) bool {
+		if slices.ContainsFunc(key, func(c string) bool { return !fields[c] }) {
+			ev.except(Exception{Kind: ExceptionKeyNotField, Ref: t.row.Ref, Entity: t.id, Detail: strings.Join(key, ", ")})
+			return true
+		}
+		return false
+	}
+	if len(primary) > 0 && missing(primary) {
+		primary = nil
+	}
+	return primary, slices.DeleteFunc(unique, missing)
+}
+
 func keyColumns(primary []string, unique [][]string) []string {
 	out := slices.Clone(primary)
 	for _, k := range unique {
@@ -204,21 +231,20 @@ func sameKeys(a, b [][]string) bool {
 }
 
 // joinsOn lists the relationships joining on a column of the entity id, on
-// either side.
+// either side. They are indexed once: syncing keys changes no relationship.
+// (fieldUses is not, as it indexes keys too, which the sync is changing.)
 func (ev *evaluation) joinsOn(id, column string) []string {
-	var out []string
-	for _, e := range ev.cfg.Entities {
-		for _, r := range e.Relationships {
-			target, ok := ev.resolve(r.Target)
-			for local, remote := range r.JoinOn {
-				if e.ID() == id && local == column || ok && target == id && remote == column {
-					out = append(out, "relationship "+e.ID()+"."+r.Name)
-					break
+	if ev.joins == nil {
+		ev.joins = map[string]map[string][]string{}
+		for _, e := range ev.cfg.Entities {
+			configrefs.FieldUses(e, ev.resolve, func(u configrefs.FieldUse) {
+				if u.Kind == configrefs.UseRelationship {
+					addUse(ev.joins, u.Entity, u.Field, "relationship "+e.ID()+"."+u.Relationship)
 				}
-			}
+			})
 		}
 	}
-	return out
+	return ev.joins[id][column]
 }
 
 // reportRelationships reports the foreign keys no relationship of the
