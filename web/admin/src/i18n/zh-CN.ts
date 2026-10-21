@@ -444,7 +444,7 @@ export default {
   limits: {
     title: '资源限制', on: '开启',
     hint: '收紧全局限制：留空沿用全局值（占位文字），填写的值只能更严，超过全局值时按全局值。用户自己填写的项优先于其角色；多个角色时每项取最宽松的。',
-    unlimited: '不限', globalValue: '全局 {value}', duration: '时长格式如 500ms、5s、1m30s',
+    unlimited: '不限', globalValue: '全局 {value}', currentValue: '当前 {value}', duration: '时长格式如 500ms、5s、1m30s',
     budget: '会话预算', budgetHint: '每个 MCP 会话的累计额度；填写的项优先于「其他设置」中 budget.roles / budget.users 的同名项（占位文字为其当前值）。',
     fields: {
       maxRows: '单次最多行数', maxBytes: '单次最多字节', queryTimeout: '查询超时', softScore: '闸门软拒绝分数',

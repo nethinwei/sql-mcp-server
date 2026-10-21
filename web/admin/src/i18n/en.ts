@@ -456,7 +456,7 @@ const en: typeof zh = {
   limits: {
     title: 'Resource limits', on: 'On',
     hint: 'Tighten the global limits: an empty field keeps the global value (the placeholder); a value set can only be stricter, and one above the global value gets the global value. A user\'s own fields win over its roles\'; with several roles, each field is the most permissive of them.',
-    unlimited: 'Unlimited', globalValue: 'Global {value}', duration: 'A duration such as 500ms, 5s or 1m30s',
+    unlimited: 'Unlimited', globalValue: 'Global {value}', currentValue: 'Current {value}', duration: 'A duration such as 500ms, 5s or 1m30s',
     budget: 'Session budget', budgetHint: 'Totals per MCP session; a field set wins over the same one in budget.roles / budget.users under Other settings (the placeholder shows it).',
     fields: {
       maxRows: 'Rows per call', maxBytes: 'Bytes per call', queryTimeout: 'Query timeout', softScore: 'Gate soft score',

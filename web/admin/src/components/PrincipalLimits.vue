@@ -51,7 +51,7 @@ const legacyBudget = computed(() => {
 function placeholder(f: Field, budget = false): string {
   const v = budget ? legacyBudget.value[f.key] : f.global && globalOf(f.global)
   if (v === undefined || v === null || v === 0 || v === '' || v === '0s') return t('limits.unlimited')
-  return t('limits.globalValue', { value: String(v) })
+  return budget ? t('limits.currentValue', { value: String(v) }) : t('limits.globalValue', { value: String(v) })
 }
 function help(key: string, budget = false): string {
   const path = [props.kind === 'role' ? 'roles' : 'users', props.name, 'limits', ...(budget ? ['budget'] : []), key]
@@ -83,7 +83,7 @@ function set(key: string, v: unknown, budget = false) {
 <template>
   <div>
     <n-text depth="3" class="hint">{{ t('limits.hint') }}</n-text>
-    <n-grid :cols="4" :x-gap="12" responsive="screen" item-responsive class="grid">
+    <n-grid :cols="4" :x-gap="12" :y-gap="16" responsive="screen" item-responsive class="grid">
       <n-gi v-for="f in fields" :key="f.key" span="4 s:2 m:1">
         <n-form-item :show-feedback="invalid(f)" :validation-status="invalid(f) ? 'error' : undefined"
           :feedback="t('limits.duration')">
@@ -103,7 +103,7 @@ function set(key: string, v: unknown, budget = false) {
     </n-grid>
     <n-divider title-placement="left" class="divider">{{ t('limits.budget') }}</n-divider>
     <n-text depth="3" class="hint">{{ t('limits.budgetHint') }}</n-text>
-    <n-grid :cols="3" :x-gap="12" responsive="screen" item-responsive class="grid">
+    <n-grid :cols="3" :x-gap="12" :y-gap="16" responsive="screen" item-responsive class="grid">
       <n-gi v-for="f in budgetFields" :key="f.key" span="3 s:1">
         <n-form-item :show-feedback="invalid(f, true)" :validation-status="invalid(f, true) ? 'error' : undefined"
           :feedback="t('limits.duration')">
@@ -124,8 +124,8 @@ function set(key: string, v: unknown, budget = false) {
 </template>
 
 <style scoped>
-.hint { font-size: 12px; display: block; margin-bottom: 8px; }
-.grid { margin-top: 4px; }
+.hint { font-size: 12px; display: block; margin-bottom: 12px; }
+.grid { margin-top: 8px; }
 .full { width: 100%; }
-.divider { margin: 4px 0 8px; font-size: 13px; }
+.divider { margin: 20px 0 12px; font-size: 13px; }
 </style>

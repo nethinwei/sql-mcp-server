@@ -159,7 +159,7 @@ function loadIntoWorkspace(id: string) {
 
 <template>
   <n-empty v-if="!revisions.length && !list.fetching.value" :description="t('revisions.empty')" />
-  <n-grid v-else :cols="3" :x-gap="16" responsive="screen" item-responsive>
+  <n-grid v-else :cols="3" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
     <n-gi span="3 l:1">
       <n-card size="small" :title="t('revisions.list')" content-style="max-height: calc(100vh - 200px); overflow: auto">
         <n-timeline>

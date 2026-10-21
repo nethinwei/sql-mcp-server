@@ -311,7 +311,7 @@ const editingWrites = computed(() =>
         <template v-if="draftRestricted">
           <n-divider class="divider" />
           <n-input v-model:value="fieldFilter" size="small" :placeholder="t('grants.filterFields')" clearable class="field-filter" />
-          <n-grid :cols="editingWrites ? 2 : 1" :x-gap="24">
+          <n-grid :cols="editingWrites ? 2 : 1" :x-gap="24" :y-gap="16">
             <n-gi>
               <div class="col-head">
                 <n-text strong>{{ t('grants.readable') }}</n-text>
