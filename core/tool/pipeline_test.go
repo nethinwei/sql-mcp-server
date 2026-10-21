@@ -241,6 +241,39 @@ func TestWriteWithLostConnectionHasUnknownOutcome(t *testing.T) {
 	}
 }
 
+// A statement the database stopped at its timeout was rolled back, though
+// the request's deadline passed too: a write of it is no unknown outcome,
+// and a read or a write reports STATEMENT_TIMEOUT, retryable.
+func TestStatementTimeoutIsRolledBack(t *testing.T) {
+	t.Parallel()
+	e := testUsersEntity()
+	e.Role[entity.ActionUpdate] = []string{"writer"}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	timedOut := fmt.Errorf("%w: %w", store.ErrStatementTimeout, context.DeadlineExceeded)
+	db := &storetest.FakeDB{
+		ExecFn:  func(context.Context, string, ...any) (store.Result, error) { return store.Result{}, timedOut },
+		QueryFn: func(context.Context, string, ...any) (store.Rows, error) { return nil, timedOut },
+	}
+	tc := Context{Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+		DB: db, Dialect: testdialect.Postgres{}}
+	update, _ := json.Marshal(updateInput{
+		Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: 1}}, Set: map[string]any{"email": "x"},
+	})
+	read, _ := json.Marshal(readInput{Entity: "users", Filter: []condJSON{{Field: "id", Op: "eq", Value: 1}}})
+	for _, call := range []struct {
+		role  string
+		tool  Tool
+		input json.RawMessage
+	}{{"writer", UpdateTool{}, update}, {"reader", ReadTool{}, read}} {
+		tc.Role = call.role
+		_, err := RunTool(context.Background(), call.tool, call.input, tc)
+		denial, ok := DenialFor(err, "d")
+		if errors.Is(err, ErrOutcomeUnknown) || !ok || denial.Code != CodeStatementTimeout || !denial.Retryable {
+			t.Errorf("%s: err = %v, denial = %+v", call.role, err, denial)
+		}
+	}
+}
+
 type uncertainCommitTx struct {
 	storetest.FakeTx
 	err error

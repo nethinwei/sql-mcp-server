@@ -57,6 +57,7 @@ func currentContract(t *testing.T) contractSnapshot {
 		CodeAmbiguousFieldScope:   true,
 		CodeConstraintViolation:   true,
 		CodeOutcomeUnknown:        false,
+		CodeStatementTimeout:      true,
 	}
 	for _, m := range sentinelDenials {
 		codes[m.code] = m.retryable

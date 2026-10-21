@@ -112,3 +112,15 @@ func TestClassifyOceanBaseTrouble(t *testing.T) {
 		t.Errorf("a duplicate key = %v", got)
 	}
 }
+
+// A statement its server-side timeout stopped, or interrupted (the KILL QUERY
+// of one past its deadline), was rolled back: a statement timeout.
+func TestClassifyStatementTimeouts(t *testing.T) {
+	t.Parallel()
+	for _, number := range []uint16{3024, 4012, 1317} {
+		err := classify(&mysqldriver.MySQLError{Number: number, Message: "stopped"})
+		if !errors.Is(err, store.ErrStatementTimeout) {
+			t.Errorf("%d: %v", number, err)
+		}
+	}
+}

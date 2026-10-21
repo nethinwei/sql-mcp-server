@@ -59,6 +59,9 @@ var (
 	// ErrDatasourceForbidden is a statement the datasource's account may not
 	// run: a missing database privilege or a read-only server.
 	ErrDatasourceForbidden = errors.New("tool: the datasource connection is not permitted to do this")
+	// ErrStatementTimeout is a statement the database stopped at its own
+	// timeout (store.ErrStatementTimeout): it rolled the statement back.
+	ErrStatementTimeout = errors.New("tool: the database stopped the statement at its timeout and rolled it back")
 )
 
 // classified is a sentinel error (its kind, what clients and callers see)
@@ -75,15 +78,20 @@ func (e *classified) Is(target error) bool { return errors.Is(e.kind, target) }
 var errValueType = fmt.Errorf("%w: a value does not fit its field's type", ErrInvalidInput)
 
 // WrapDBError classifies a database driver error while preserving its cause:
-// a refused privilege becomes ErrDatasourceForbidden, a value its column
-// cannot hold invalid input (errValueType), anything else ErrDatabase. None
-// reports the driver message to clients.
+// a refused privilege becomes ErrDatasourceForbidden, a statement stopped at
+// the database's timeout ErrStatementTimeout, a value its column cannot hold
+// invalid input (errValueType), anything else ErrDatabase. None reports the
+// driver message to clients.
 func WrapDBError(err error) error {
-	if err == nil || errors.Is(err, ErrDatabase) || errors.Is(err, ErrDatasourceForbidden) {
+	if err == nil || errors.Is(err, ErrDatabase) || errors.Is(err, ErrDatasourceForbidden) ||
+		errors.Is(err, ErrStatementTimeout) {
 		return err
 	}
 	if errors.Is(err, store.ErrPermissionDenied) {
 		return &classified{kind: ErrDatasourceForbidden, cause: err}
+	}
+	if errors.Is(err, store.ErrStatementTimeout) {
+		return &classified{kind: ErrStatementTimeout, cause: err}
 	}
 	if errors.Is(err, store.ErrInvalidValue) {
 		return &classified{kind: errValueType, cause: err}

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -482,4 +483,40 @@ func TestMySQLInsertedKey(t *testing.T) {
 	prov, cleanup := setupMySQL(t)
 	defer cleanup()
 	insertkeytest.Run(t, "mysql", prov, "")
+}
+
+// A statement without arguments takes the text protocol, one with them the
+// binary one: the integers of the same columns read the same either way.
+func TestMySQLIntegersReadTheSameByEitherProtocol(t *testing.T) {
+	prov, cleanup := setupMySQL(t)
+	defer cleanup()
+	ctx := context.Background()
+	if _, err := prov.ExecContext(ctx, "CREATE TABLE counters (id bigint unsigned PRIMARY KEY, n int)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prov.ExecContext(ctx, "INSERT INTO counters VALUES (5, 7), (18446744073709551615, 8)"); err != nil {
+		t.Fatal(err)
+	}
+	read := func(query string, args ...any) [][]any {
+		rows, err := prov.QueryContext(ctx, query, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var out [][]any
+		for rows.Next() {
+			row := make([]any, 2)
+			if err := rows.Scan(&row[0], &row[1]); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, row)
+		}
+		return out
+	}
+	text := read("SELECT id, n FROM counters ORDER BY n")
+	binary := read("SELECT id, n FROM counters WHERE n > ? ORDER BY n", 0)
+	want := [][]any{{uint64(5), int64(7)}, {uint64(18446744073709551615), int64(8)}}
+	if !reflect.DeepEqual(text, want) || !reflect.DeepEqual(binary, want) {
+		t.Fatalf("text protocol %#v, binary %#v, want %#v", text, binary, want)
+	}
 }

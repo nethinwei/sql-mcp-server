@@ -76,8 +76,12 @@ func rankOf(e relalg.Expr) (rank int, repeats bool) {
 }
 
 // flatten flattens e, a read chain, into ctx, refusing a chain out of order
-// (see rankOf).
+// (see rankOf), and a selection without a predicate (it would render as a
+// WHERE and nothing).
 func (b *builder) flatten(e relalg.Expr, ctx *selectCtx) error {
+	if s, ok := e.(relalg.Select); ok && s.Predicate == nil {
+		return fmt.Errorf("%w: a selection without a predicate", ErrUnsupportedExpr)
+	}
 	if err := b.flattenNode(e, ctx); err != nil {
 		return err
 	}

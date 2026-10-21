@@ -65,6 +65,9 @@ const (
 	// failing and calls to it are held off for a while (circuit breaker).
 	CodeOverloaded            = "OVERLOADED"
 	CodeDatasourceUnavailable = "DATASOURCE_UNAVAILABLE"
+	// CodeStatementTimeout: the database stopped the statement at its own
+	// timeout and rolled it back; nothing took effect.
+	CodeStatementTimeout = "STATEMENT_TIMEOUT"
 )
 
 // transient are the errors of a call held back by load or a failing
@@ -183,6 +186,9 @@ func typedDenial(err error) (Denial, bool) {
 				"before deciding to retry"},
 		}, true
 	}
+	if errors.Is(err, ErrStatementTimeout) {
+		return statementTimeoutDenial(ErrStatementTimeout.Error()), true
+	}
 	var ended *TransactionEndedError
 	if errors.As(err, &ended) {
 		return Denial{
@@ -215,6 +221,14 @@ func typedDenial(err error) (Denial, bool) {
 		}, true
 	}
 	return Denial{}, false
+}
+
+// statementTimeoutDenial is the denial of a statement the database stopped
+// at its timeout: rolled back, so a retry cannot apply it twice.
+func statementTimeoutDenial(reason string) Denial {
+	return Denial{Code: CodeStatementTimeout, Reason: reason, Retryable: true,
+		Hints: []string{"the statement did not take effect: narrow the request (a more selective filter, " +
+			"fewer rows) or retry when the database is less busy"}}
 }
 
 // writeDenial maps a write refused for the values it writes.

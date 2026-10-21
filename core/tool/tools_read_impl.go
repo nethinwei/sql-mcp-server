@@ -54,6 +54,7 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 		}
 	}
 	st.keep = expandJoinColumns(plan.res.Entity, in.Expand)
+	_, before := plan.tc.results.counted()
 	got, err := st.query(ctx)
 	if err != nil {
 		return Result{}, err
@@ -63,8 +64,9 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 	}
 	// The cursor first: an ordered field may be a join column the read adds.
 	next := nextCursor(plan.order, plan.res, in, got.rows)
-	trimExpandedJoinFields(plan.res.Entity, in, got.rows)
-	trimOrderFields(plan.order, plan.res, in, got.rows)
+	if err := finishReadRows(plan, in, got.rows, before); err != nil {
+		return Result{}, err
+	}
 	recordReadFeedback(ctx, plan.tc, in.Entity, st.sql.Compiled, planTemplate, st.sql.plan,
 		int64(len(got.rows)), time.Since(start))
 	// Rows left past the cap that no cursor reaches are reported.
@@ -75,6 +77,18 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 	returned, _ := plan.tc.results.counted()
 	return Result{Content: got.rows, ReturnedRows: returned, EstimatedScannedRows: st.sql.estimatedRows(),
 		NextCursor: next, Truncated: truncated}, nil
+}
+
+// finishReadRows trims from rows what the read added to them for itself, and
+// counts the bytes an expansion repeats (see resultMeter.grow): before is
+// what the call had counted before the read.
+func finishReadRows(plan readPlan, in readInput, rows []map[string]any, before int64) error {
+	trimExpandedJoinFields(plan.res.Entity, in, rows)
+	trimOrderFields(plan.order, plan.res, in, rows)
+	if len(in.Expand) == 0 {
+		return nil
+	}
+	return plan.tc.results.grow(before, rows)
 }
 
 // capLimit bounds *limit by tc.MaxRows, the rows a read or an aggregate
@@ -111,6 +125,7 @@ func prepareReadPlan(ctx context.Context, tc Context, in readInput) (readPlan, e
 	}
 	readFields = append(readFields, locals...)
 	predicateFields, _ := splitPaths(res.Entity, append(filterFields(in.Filter), sortedKeys(in.Cursor)...))
+	predicateFields = append(predicateFields, locals...) // a join on them compares their values
 	if err := (fieldUses{read: readFields, compared: predicateFields}).check(res); err != nil {
 		return readPlan{}, err
 	}

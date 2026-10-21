@@ -70,6 +70,9 @@
    - `OUTCOME_UNKNOWN`（不可重试）：写入或提交执行期间连接中断或超时，数据库可能已经
      执行也可能没有；原样重试可能重复写入，应先读取受影响的行（或事务写过的内容）再决定；
      相关读缓存已按“已写入”失效；
+   - `STATEMENT_TIMEOUT`（retryable，v0.1.21 起；此前为 `DATABASE_ERROR`，写入可能报
+     `OUTCOME_UNKNOWN`）：数据库在自己的语句超时处停住并回滚了语句，没有生效；收窄请求或
+     稍后重试。`execute_sql` 的 `reason` 同样携带驱动原文。与此前相同，它计入数据源熔断；
    - `TRANSACTION_NOT_FOUND`：令牌对应的事务若在最近 10 分钟内结束，且请求来自同一会话
      与身份，`constraints.outcome` 给出结束方式：`committed`、`rolledBack`、`expired`
      或 `unknown`（提交结果未知）；其他调用方只得到不带 `constraints` 的未找到。`expired`

@@ -474,13 +474,15 @@ func AssembleWithProviders(cfg *config.Config, providers map[string]Provider) (*
 // and so feeds the adaptive limit and the breaker. It counts only what the
 // database or the connection to it reported (fail closed: an error of any
 // other kind, such as a new business error, never opens the breaker); a
-// cancelled or timed-out call is the caller's doing.
+// cancelled or timed-out call is the caller's doing. A statement the database
+// stopped at its own timeout counts: database slowness shows up as them.
 func recordProviderFailure(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 	var netErr net.Error
-	return errors.Is(err, tool.ErrDatabase) || errors.Is(err, driver.ErrBadConn) ||
+	return errors.Is(err, tool.ErrDatabase) || errors.Is(err, tool.ErrStatementTimeout) ||
+		errors.Is(err, driver.ErrBadConn) ||
 		errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &netErr)
 }
 

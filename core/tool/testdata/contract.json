@@ -618,6 +618,7 @@
     "OUTCOME_UNKNOWN": false,
     "OVERLOADED": true,
     "RATE_LIMITED": true,
+    "STATEMENT_TIMEOUT": true,
     "TRANSACTION_CAPACITY": true,
     "TRANSACTION_NOT_FOUND": false,
     "TRANSACTION_SCOPE": false,

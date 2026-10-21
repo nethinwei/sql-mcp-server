@@ -219,6 +219,23 @@ func (m *resultMeter) addSized(rows, n int64) error {
 	return nil
 }
 
+// grow counts the bytes rows encode to beyond the counted ones, before
+// what was counted when the call read them: a child expansion attaches is
+// counted once as read, but is encoded once per parent row naming it.
+func (m *resultMeter) grow(before int64, rows []map[string]any) error {
+	if m == nil {
+		return nil
+	}
+	n, err := encodedSize(rows)
+	if err != nil {
+		return fmt.Errorf("encode a result: %w", err)
+	}
+	if _, bytes := m.counted(); n > bytes-before {
+		return m.addSized(0, n-(bytes-before))
+	}
+	return nil
+}
+
 // counted returns the rows and bytes counted.
 func (m *resultMeter) counted() (rows, bytes int64) {
 	if m == nil {

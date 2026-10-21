@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nethinwei/sql-mcp-server/core/store"
 )
 
 // fakeDriver records the statements its connections run; "slow" runs until
@@ -138,5 +140,35 @@ func TestKillConnStopsAStatementReturningAtItsDeadline(t *testing.T) {
 			time.Sleep(time.Millisecond)
 		}
 		_ = connector.Close()
+	}
+}
+
+// A connection sent a KILL QUERY refuses its later statements, unsent: an
+// open transaction keeps it from the pool, and a late KILL QUERY would stop
+// the next one. The refusal is a statement timeout, not driver.ErrBadConn,
+// which database/sql would retry on another connection.
+func TestKilledConnRefusesLaterStatements(t *testing.T) {
+	t.Parallel()
+	d := &fakeDriver{}
+	connector := newKillConnector(d)
+	defer connector.Close()
+	raw, err := connector.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := raw.(*killConn)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _ = c.ExecContext(ctx, "slow", nil)
+	_, execErr := c.ExecContext(context.Background(), "next", nil)
+	_, queryErr := c.QueryContext(context.Background(), "next", nil)
+	_, prepareErr := c.PrepareContext(context.Background(), "next")
+	for _, err := range []error{execErr, queryErr, prepareErr} {
+		if !errors.Is(err, store.ErrStatementTimeout) || errors.Is(err, driver.ErrBadConn) {
+			t.Errorf("a statement on a killed connection: %v", err)
+		}
+	}
+	if slices.Contains(d.statements(), "next") {
+		t.Fatalf("a statement ran on a killed connection: %v", d.statements())
 	}
 }

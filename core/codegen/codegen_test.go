@@ -482,6 +482,7 @@ func TestCompileRefusesAChainOutOfOrder(t *testing.T) {
 			Items: []relalg.ProjectItem{{Field: "dept"}}},
 		"an order over a limit": relalg.Sort{Input: relalg.Limit{Input: scan, Count: 5},
 			OrderBy: []relalg.OrderTerm{{Field: "id", Dir: "asc"}}},
+		"a selection without a predicate": relalg.Select{Input: scan},
 	} {
 		if _, err := r.Compile(expr); !errors.Is(err, ErrUnsupportedExpr) {
 			t.Errorf("%s: err = %v", name, err)

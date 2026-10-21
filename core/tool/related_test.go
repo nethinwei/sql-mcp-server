@@ -20,6 +20,12 @@ import (
 // of region CN only (and not their phone), and the items.
 func relatedContext(t *testing.T) (Context, *storetest.FakeDB) {
 	t.Helper()
+	return relatedContextOf(t, func(*entity.Entity) {})
+}
+
+// relatedContextOf is relatedContext with orders changed by edit.
+func relatedContextOf(t *testing.T, edit func(orders *entity.Entity)) (Context, *storetest.FakeDB) {
+	t.Helper()
 	keyed := func(name string, fields ...string) entity.Entity {
 		e := entity.Entity{Name: name, Source: name, Keys: []entity.Key{{Columns: []string{"id"}, Primary: true}},
 			MCP: entity.MCPFlags{DMLTools: true}}
@@ -34,6 +40,7 @@ func relatedContext(t *testing.T) (Context, *storetest.FakeDB) {
 		{Name: "items", Target: "items", Cardinality: "has-many", JoinOn: map[string]string{"id": "order_id"}},
 		{Name: "buyer", Target: "customers", Cardinality: "belongs-to", JoinOn: map[string]string{"note": "region"}},
 	}
+	edit(&orders)
 	customers := keyed("customers", "region", "phone")
 	customers.Attributes = append(customers.Attributes, entity.Attribute{Name: "secret", Mask: "email"})
 	items := keyed("items", "order_id", "sku")
@@ -125,6 +132,28 @@ func TestRelationshipRules(t *testing.T) {
 	if _, err := (UpdateTool{}).Run(context.Background(), json.RawMessage(update), tc); !errors.Is(err,
 		ErrInvalidInput) || !strings.Contains(err.Error(), "exists") {
 		t.Errorf("update by exists: %v", err)
+	}
+}
+
+// A masked join column is compared by any join the caller's request asks
+// for (a related field filtered or ordered by, an exists): refused, as the
+// field itself would be; expand still reads it (its kept original value).
+func TestMaskedJoinColumnIsCompared(t *testing.T) {
+	t.Parallel()
+	tc, _ := relatedContextOf(t, func(orders *entity.Entity) { orders.Attributes[1].Mask = "full" })
+	for _, input := range []string{
+		`{"entity":"orders","filter":[{"field":"customer.region","op":"eq","value":"CN"}]}`,
+		`{"entity":"orders","filter":[{"exists":"customer","filter":[]}]}`,
+		`{"entity":"orders","orderBy":[{"field":"customer.region"}],"limit":5}`,
+	} {
+		if _, err := (ReadTool{}).Run(context.Background(), json.RawMessage(input), tc); !errors.Is(err,
+			ErrInvalidInput) {
+			t.Errorf("%s: err = %v, want %v", input, err, ErrInvalidInput)
+		}
+	}
+	if _, err := (ReadTool{}).Run(context.Background(), json.RawMessage(
+		`{"entity":"orders","expand":["customer"],"limit":5}`), tc); err != nil {
+		t.Errorf("expand: %v", err)
 	}
 }
 

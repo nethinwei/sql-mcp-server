@@ -102,6 +102,12 @@ func compileAggregate(ctx context.Context, plan aggregatePlan, in aggregateInput
 	for i, g := range in.GroupBy {
 		groupBy[i] = plan.rel.field(columnOf(res.Entity, g))
 		toIR.rename[g] = groupBy[i]
+		// The IR names a group by its column (an alias's): having and
+		// orderBy would take the aggregate of the same name for it.
+		if slices.ContainsFunc(calls, func(c relalg.AggCall) bool { return c.Name == groupBy[i] }) {
+			return statement{}, fmt.Errorf("%w: group-by field %q is the column %q, the name of an aggregate",
+				ErrInvalidInput, g, groupBy[i])
+		}
 	}
 	for i := range calls {
 		calls[i].Field = columnOf(res.Entity, calls[i].Field)

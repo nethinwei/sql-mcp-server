@@ -3,8 +3,11 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
+	"github.com/nethinwei/sql-mcp-server/core/budget"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
@@ -53,5 +56,55 @@ func TestExpandOrderedByItsJoinColumnPages(t *testing.T) {
 	}
 	if _, ok := result.Content[0]["id"]; ok {
 		t.Fatalf("the join column was not asked for: %v", result.Content[0])
+	}
+}
+
+// A child many parent rows name is counted once as it is read, but returned
+// once per parent: the result's byte limit holds for what is returned.
+func TestExpandedChildrenCountPerParentAgainstTheByteLimit(t *testing.T) {
+	t.Parallel()
+	orders := entity.Entity{
+		Name: "orders", Source: "orders", DataSource: "default",
+		Attributes: []entity.Attribute{{Name: "id"}, {Name: "team_id"}},
+		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
+		Relations: []entity.Relationship{{Name: "team", Target: "teams", Cardinality: "belongs-to",
+			JoinOn: map[string]string{"team_id": "id"}}},
+		Role: entity.RoleAccess{entity.ActionRead: {"reader"}},
+		MCP:  entity.MCPFlags{DMLTools: true},
+	}
+	teams := entity.Entity{
+		Name: "teams", Source: "teams", DataSource: "default",
+		Attributes: []entity.Attribute{{Name: "id"}, {Name: "bio"}},
+		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
+		Role:       entity.RoleAccess{entity.ActionRead: {"reader"}},
+		MCP:        entity.MCPFlags{DMLTools: true},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{orders, teams})
+	db := &storetest.FakeDB{QueryFn: func(_ context.Context, query string, _ ...any) (store.Rows, error) {
+		if strings.Contains(query, `"teams"`) {
+			return storetest.NewFakeRows([]string{"id", "bio"}, []any{int64(1), strings.Repeat("x", 200)}), nil
+		}
+		var rows [][]any
+		for i := range 30 {
+			rows = append(rows, []any{int64(i), int64(1)})
+		}
+		return storetest.NewFakeRows([]string{"id", "team_id"}, rows...), nil
+	}}
+	tc := Context{Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Services: &Services{
+		Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
+		Sources: map[string]DataSource{"default": {DB: db, Dialect: testdialect.Postgres{}}},
+	}}
+	input, _ := json.Marshal(readInput{Entity: "orders", Expand: []string{"team"}})
+	result, err := RunTool(context.Background(), ReadTool{}, input, tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(result.Content)
+	if result.ReturnedBytes < int64(len(encoded)) {
+		t.Fatalf("returned bytes = %d, the result encodes to %d", result.ReturnedBytes, len(encoded))
+	}
+	tc.MaxReturnedBytes = 3000 // the rows read are about 1 KB, returned about 7 KB
+	if _, err := RunTool(context.Background(), ReadTool{}, input, tc); !errors.Is(err, budget.ErrExceeded) {
+		t.Fatalf("err = %v, want %v", err, budget.ErrExceeded)
 	}
 }

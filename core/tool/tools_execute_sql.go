@@ -266,8 +266,8 @@ func (e *UnestimableError) Unwrap() error { return cost.ErrCostExceeded }
 // RawDBError is a database error of the escape hatch's statement, reported
 // with the driver's message: the caller holds the connection's whole
 // account, so the message adds nothing it could not see, and it is what
-// they are after. It is its Kind (ErrDatabase or ErrDatasourceForbidden) to
-// errors.Is and unwraps to the driver's error.
+// they are after. It is its Kind (ErrDatabase, ErrDatasourceForbidden or
+// ErrStatementTimeout) to errors.Is and unwraps to the driver's error.
 type RawDBError struct {
 	Kind  error
 	Cause error
@@ -299,6 +299,9 @@ func escapeDenial(err error) (Denial, bool) {
 	var raw *RawDBError
 	if !errors.As(err, &raw) {
 		return Denial{}, false
+	}
+	if raw.Kind == ErrStatementTimeout {
+		return statementTimeoutDenial(raw.Error()), true
 	}
 	code := CodeDatabaseError
 	if raw.Kind == ErrDatasourceForbidden {

@@ -23,8 +23,10 @@ var (
 var refusals = map[uint16]bool{1142: true, 1143: true, 1044: true, 1370: true, 1290: true}
 
 // timeouts are the errors of a statement its server-side timeout stopped:
-// MySQL's max_execution_time and OceanBase's ob_query_timeout.
-var timeouts = map[uint16]bool{3024: true, 4012: true}
+// MySQL's max_execution_time and OceanBase's ob_query_timeout, and a
+// statement interrupted (1317), as the KILL QUERY of one past its deadline
+// does (see killConn): the server rolls the statement back.
+var timeouts = map[uint16]bool{3024: true, 4012: true, 1317: true}
 
 // schemaChanges are the errors of a statement naming a table (1146) or a
 // column (1054) the database does not have; OceanBase reports the same.
@@ -32,12 +34,12 @@ var schemaChanges = map[uint16]error{1146: store.ErrMissingRelation, 1054: store
 
 // healthErrors are the errors of the database's own trouble: out of disk,
 // memory or connections, shutting down, a network error between servers,
-// an internal or unknown error, a statement interrupted. Others are a
-// statement's own (store.ErrRejected).
+// an internal or unknown error. Others are a statement's own
+// (store.ErrRejected).
 var healthErrors = map[uint16]bool{
 	1021: true, 1037: true, 1038: true, 1040: true, 1041: true, 1053: true, 1105: true, 1114: true, 1135: true,
 	1152: true, 1153: true, 1154: true, 1155: true, 1156: true, 1157: true, 1158: true, 1159: true, 1160: true,
-	1161: true, 1180: true, 1181: true, 1203: true, 1317: true,
+	1161: true, 1180: true, 1181: true, 1203: true,
 }
 
 // oceanBaseHealthErrors are OceanBase's own errors of its trouble, beside

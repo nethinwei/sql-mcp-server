@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	mysqldriver "github.com/go-sql-driver/mysql"
+
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
@@ -105,5 +107,34 @@ func TestUnreachableServerIsNotConnected(t *testing.T) {
 	_, err = pool.ExecContext(context.Background(), "UPDATE t SET a = 1 WHERE id = 1")
 	if !errors.Is(err, store.ErrNotConnected) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// The driver's I/O timeouts a DSN leaves unset are set: the dial's always,
+// a read timeout past the statement timeout when there is one. What the DSN
+// sets, even to 0, stays, and one parameter is not taken for another.
+func TestIOTimeoutDefaults(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		dsn           string
+		timeout       time.Duration
+		dial, readOut time.Duration
+	}{
+		{"u:p@tcp(h)/db", 0, dialTimeout, 0},
+		{"u:p@tcp(h)/db", 30 * time.Second, dialTimeout, 30*time.Second + dialTimeout},
+		{"u:p@tcp(h)/db?timeout=0", 30 * time.Second, 0, 30*time.Second + dialTimeout},
+		{"u:p@tcp(h)/db?readTimeout=5s", 30 * time.Second, dialTimeout, 5 * time.Second},
+		{"u:p@tcp(h)/db?writeTimeout=1s&timeout=2s", 0, 2 * time.Second, 0},
+		{"u:p?timeout=1@tcp(h)/db", 0, dialTimeout, 0}, // in the password
+	} {
+		cfg, err := mysqldriver.ParseDSN(c.dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ioTimeouts(cfg, c.dsn, providerregistry.Options{Timeout: c.timeout})
+		if cfg.Timeout != c.dial || cfg.ReadTimeout != c.readOut {
+			t.Errorf("%s (%v): timeout %v, readTimeout %v; want %v, %v", c.dsn, c.timeout, cfg.Timeout,
+				cfg.ReadTimeout, c.dial, c.readOut)
+		}
 	}
 }

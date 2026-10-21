@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/nethinwei/sql-mcp-server/core/store"
 )
 
 // A cancelled request only closes the client connection: the server runs
@@ -24,10 +26,19 @@ import (
 // runs (they count up), so a late KILL QUERY reaches the same thread or none.
 // A connection that was sent one is never used again: the driver discards
 // it when the cancel interrupted its statement, and IsValid reports it bad
-// otherwise (a KILL QUERY racing the statement's end).
+// otherwise (a KILL QUERY racing the statement's end). An open transaction
+// holds its connection out of the pool's reach, so the connection itself
+// refuses its later statements (errKilled): a late KILL QUERY would stop one.
 
 // killTimeout bounds a KILL QUERY; the statement's own deadline has passed.
 const killTimeout = 2 * time.Second
+
+// errKilled refuses a statement, unsent, on a connection sent a KILL QUERY.
+// It is a statement timeout, deterministic: not driver.ErrBadConn, which
+// database/sql would answer by running the statement on another connection,
+// outside the caller's transaction.
+var errKilled = fmt.Errorf("%w: the connection's last statement was stopped at its deadline, "+
+	"so it runs no other", store.ErrStatementTimeout)
 
 // killer opens connections that stop statements: it holds the pool those
 // KILL QUERY statements run on, opened on first use.
@@ -168,12 +179,18 @@ func (c *killConn) watch(ctx context.Context) (stop func()) {
 }
 
 func (c *killConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	if c.killed.Load() {
+		return nil, errKilled
+	}
 	stop := c.watch(ctx)
 	defer stop()
 	return c.conn.(driver.ExecerContext).ExecContext(ctx, query, args)
 }
 
 func (c *killConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if c.killed.Load() {
+		return nil, errKilled
+	}
 	stop := c.watch(ctx)
 	rows, err := c.conn.(driver.QueryerContext).QueryContext(ctx, query, args)
 	if err != nil {
@@ -184,6 +201,9 @@ func (c *killConn) QueryContext(ctx context.Context, query string, args []driver
 }
 
 func (c *killConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
+	if c.killed.Load() {
+		return nil, errKilled
+	}
 	s, err := c.conn.(driver.ConnPrepareContext).PrepareContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -247,12 +267,18 @@ func (s *killStmt) ColumnConverter(idx int) driver.ValueConverter {
 }
 
 func (s *killStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+	if s.c.killed.Load() {
+		return nil, errKilled
+	}
 	stop := s.c.watch(ctx)
 	defer stop()
 	return s.stmt.(driver.StmtExecContext).ExecContext(ctx, args)
 }
 
 func (s *killStmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
+	if s.c.killed.Load() {
+		return nil, errKilled
+	}
 	stop := s.c.watch(ctx)
 	rows, err := s.stmt.(driver.StmtQueryContext).QueryContext(ctx, args)
 	if err != nil {

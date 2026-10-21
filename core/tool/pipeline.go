@@ -412,8 +412,11 @@ func (st statement) failRaw(err error) error {
 		return outcomeUnknown(err)
 	}
 	kind := ErrDatabase
-	if errors.Is(err, store.ErrPermissionDenied) {
+	switch {
+	case errors.Is(err, store.ErrPermissionDenied):
 		kind = ErrDatasourceForbidden
+	case errors.Is(err, store.ErrStatementTimeout):
+		kind = ErrStatementTimeout
 	}
 	return &RawDBError{Kind: kind, Cause: err}
 }
@@ -455,10 +458,12 @@ func outcomeUnknown(err error) error { return &classified{kind: ErrOutcomeUnknow
 // broken connection a driver reports before sending the statement
 // (driver.ErrBadConn, which database/sql retries on another connection) is
 // not uncertain, nor is a connection that could not be made
-// (store.ErrNotConnected), nor any error the database itself returned.
+// (store.ErrNotConnected), nor a statement the database stopped at its
+// timeout (store.ErrStatementTimeout, rolled back, though a deadline passed
+// too), nor any error the database itself returned.
 func uncertain(err error) bool {
 	var netErr net.Error
-	if errors.Is(err, store.ErrNotConnected) {
+	if errors.Is(err, store.ErrNotConnected) || errors.Is(err, store.ErrStatementTimeout) {
 		return false
 	}
 	return errors.Is(err, store.ErrConnectionLost) || errors.Is(err, io.ErrUnexpectedEOF) ||

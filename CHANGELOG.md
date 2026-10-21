@@ -48,6 +48,9 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   `nextCursor`（此前 `limit` 大于 `maxRows` 时满页也没有游标，客户端会误以为结果完整）。
 - 开启 `readAfterWrite` 或读写事务时，启动检查也确认 write 连接有 SELECT 权限
   （`privilege.readsBack`）。
+- 拒绝码 `STATEMENT_TIMEOUT`（retryable，兼容新增）：数据库在自己的语句超时处停住并回滚的语句
+  （PostgreSQL 57014、MySQL 3024/1317、OceanBase 4012）此前是 `DATABASE_ERROR`（不可重试），写入还可能
+  因请求 deadline 同时到达被报告为 `OUTCOME_UNKNOWN`；与此前相同，它计入数据源熔断。
 
 ### Fixed
 
@@ -179,6 +182,16 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 - 并发预览共用同一份已解析配置时不再发生数据竞争（`Spec` 规范化只写入确实改动的部分）。
 - 配置 MCP 的 diff 分页行数不再多计末尾空行；审计丢弃计数跨重载累计，不再回退；扫描重试按注入的
   时钟等待。
+- 经关系过滤、排序或 `exists` 时，连接所用的本地列按“比较”检查：脱敏的外键列不能再借
+  `customer.name` 一类条件推出其值（`expand` 仍用保留的原值连接）。
+- `expand` 的子行被多个父行引用时按返回的次数计入 `cost.maxBytes` 与预算 `maxReturnedBytes`（此前
+  只计一次，结果可远超字节上限）。
+- `aggregate_records` 的分组字段若是别名、其列名与某个聚合列同名（如列 `count`），返回
+  `INVALID_INPUT`（此前 having/orderBy 静默按聚合计算）；IR 中谓词为空的 `Select` 在 codegen 拒绝。
+- MySQL/OceanBase：`BIGINT UNSIGNED` 列无论语句是否带参数（文本/二进制协议）都读为同一类型，此前
+  取值的 JSON 类型和 `expand` 的匹配随过滤条件变化；DSN 未设 `timeout` 时拨号限时 10 秒，配置了
+  语句超时且未设 `readTimeout` 时读超时为语句超时加 10 秒；被 KILL QUERY 的连接在事务内拒绝后续
+  语句（不发出），不再被迟到的 KILL 打断；1317（语句被中断）按语句超时而非数据库故障分类。
 
 ### Changed
 

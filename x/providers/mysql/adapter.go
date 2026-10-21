@@ -9,6 +9,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 
@@ -44,6 +45,7 @@ func NewAdapter(
 	}
 	caps := limits(cfg.Params, opts, oceanBaseVariable)
 	sessionDefaults(cfg, dsn)
+	ioTimeouts(cfg, dsn, opts)
 	if opts.Timeout < 0 {
 		return nil, nil, errors.New("mysql: statement timeout must not be negative")
 	}
@@ -76,7 +78,7 @@ func NewAdapter(
 	if oceanBaseVariable != "" {
 		classifier = classifyOceanBase
 	}
-	return sqladapter.New(db, sqladapter.TextRows(binaryTypes), classifier), caps, nil
+	return sqladapter.New(db, sqladapter.TypedTextRows(binaryTypes, unsignedTypes), classifier), caps, nil
 }
 
 // sessionDefaults sets what a DSN leaves unset: rowsAffected counts the rows
@@ -91,11 +93,47 @@ func sessionDefaults(cfg *mysqldriver.Config, dsn string) {
 	}
 }
 
+// dialTimeout bounds a connection attempt whose DSN sets no timeout: a
+// server that never answers its handshake fails the open rather than
+// holding startup or a reload (as PostgreSQL's connect_timeout default).
+const dialTimeout = 10 * time.Second
+
+// ioTimeouts sets what a DSN leaves unset of the driver's I/O timeouts: the
+// dial's (dialTimeout), and with a statement timeout a read timeout past it
+// by as much, so that a server that stops answering mid-statement breaks the
+// connection instead of holding it, while one stopping the statement (its
+// timeout, KILL QUERY) answers first.
+func ioTimeouts(cfg *mysqldriver.Config, dsn string, opts providerregistry.Options) {
+	if !dsnSets(dsn, "timeout") {
+		cfg.Timeout = dialTimeout
+	}
+	if !dsnSets(dsn, "readTimeout") && opts.Timeout > 0 {
+		cfg.ReadTimeout = opts.Timeout + dialTimeout
+	}
+}
+
+// dsnSets tells whether dsn sets the parameter name (exactly: timeout is not
+// readTimeout). The parameters follow the first ? after the DSN's last /, as
+// the driver reads them.
+func dsnSets(dsn, name string) bool {
+	_, params, _ := strings.Cut(dsn[strings.LastIndexByte(dsn, '/')+1:], "?")
+	for param := range strings.SplitSeq(params, "&") {
+		if key, _, _ := strings.Cut(param, "="); key == name {
+			return true
+		}
+	}
+	return false
+}
+
 // binaryTypes are the column types whose values are bytes, not text.
 var binaryTypes = map[string]bool{
 	"BINARY": true, "VARBINARY": true, "BIT": true, "GEOMETRY": true,
 	"BLOB": true, "TINYBLOB": true, "MEDIUMBLOB": true, "LONGBLOB": true,
 }
+
+// unsignedTypes are the column types the driver types by protocol (see
+// sqladapter.TypedTextRows); its other integers are int64 either way.
+var unsignedTypes = map[string]bool{"UNSIGNED BIGINT": true}
 
 // dialConnector marks a connection that could not be made as such
 // (store.ErrNotConnected): the driver returns the network error of a dial,

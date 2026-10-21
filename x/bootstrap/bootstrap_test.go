@@ -52,6 +52,7 @@ func TestRecordProviderFailureClassification(t *testing.T) {
 	}
 	for _, err := range []error{
 		tool.WrapDBError(errors.New("connection reset")), driver.ErrBadConn,
+		tool.WrapDBError(fmt.Errorf("%w: canceling statement", store.ErrStatementTimeout)),
 		fmt.Errorf("read: %w", io.ErrUnexpectedEOF), &net.OpError{Op: "dial", Err: errors.New("refused")},
 	} {
 		if !recordProviderFailure(err) {
