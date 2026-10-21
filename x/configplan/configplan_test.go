@@ -482,3 +482,34 @@ func TestFieldRulesFilterByColumnType(t *testing.T) {
 		t.Fatalf("fields = %v, want %v", got, want)
 	}
 }
+
+// A grant with a field wildcard follows the fields: once a column is added,
+// running the template again widens the grant it made instead of adding a
+// second, and running it once more changes nothing.
+func TestWildcardGrantFollowsAddedFields(t *testing.T) {
+	t.Parallel()
+	plan, err := Decode([]byte(`{"scope": {"tables": ["customers"]},
+		"grants": [{"principal": "role:support", "actions": ["read", "update"], "fields": ["*"]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(base *config.Config) (*config.Config, Proposal) {
+		p := evaluate(t, base, plan)
+		return valid(t, base, p), p
+	}
+	cfg, _ := run(decode(t, baseYAML))
+	for i := range cfg.Entities {
+		if cfg.Entities[i].ID() == "shop.public.customers" {
+			cfg.Entities[i].Fields = append(cfg.Entities[i].Fields, config.FieldConfig{Name: "mobile_phone"})
+		}
+	}
+	cfg, p := run(cfg)
+	grants := cfg.Roles["support"].Grants
+	if p.Empty() || len(grants) != 1 || !slices.Contains(grants[0].Fields.Read, "mobile_phone") ||
+		!slices.Equal(grants[0].Fields.Write, grants[0].Fields.Read) {
+		t.Fatalf("grants = %+v", grants)
+	}
+	if _, again := run(cfg); !again.Empty() {
+		t.Fatalf("running again changes %+v", again.Roles["support"].Grants)
+	}
+}

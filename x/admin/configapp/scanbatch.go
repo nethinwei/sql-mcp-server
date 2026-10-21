@@ -235,6 +235,28 @@ func (r *Service) ScanBatches(ctx context.Context, datasource string) ([]ScanBat
 	if err != nil {
 		return nil, err
 	}
+	return viewBatches(all), nil
+}
+
+// ScanBatchesWithItems lists the recent batches of a datasource as
+// ScanBatches does, with their items, in one store read.
+func (r *Service) ScanBatchesWithItems(ctx context.Context, datasource string) ([]ScanBatch, error) {
+	if _, err := auth.RequireDatasource(ctx, auth.PermWrite, datasource); err != nil {
+		return nil, err
+	}
+	scans, err := r.scans()
+	if err != nil {
+		return nil, err
+	}
+	all, err := scans.store.BatchesWithItems(ctx, datasource, batchList)
+	if err != nil {
+		return nil, err
+	}
+	return viewBatches(all), nil
+}
+
+// viewBatches shows batches, the running ones first.
+func viewBatches(all []catalog.Batch) []ScanBatch {
 	out := make([]ScanBatch, 0, len(all))
 	for _, b := range all {
 		out = append(out, *viewBatch(b))
@@ -243,7 +265,7 @@ func (r *Service) ScanBatches(ctx context.Context, datasource string) ([]ScanBat
 		out,
 		func(a, b ScanBatch) int { return boolRank(a.State != "running") - boolRank(b.State != "running") },
 	)
-	return out, nil
+	return out
 }
 
 // ScanBatch is batch id with its items.

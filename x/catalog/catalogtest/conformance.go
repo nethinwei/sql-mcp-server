@@ -317,6 +317,15 @@ func checkBatchLists(t *testing.T, s catalog.Store) {
 	if one, _ := s.Batches(ctx, "ds", 1); len(one) != 1 {
 		t.Fatalf("limit: %+v", one)
 	}
+	full, err := s.BatchesWithItems(ctx, "ds", 10)
+	b1, _, _ := s.Batch(ctx, "b1")
+	if err != nil || len(full) != 2 || full[0].ID != "b2" || full[0].Items == nil || len(full[0].Items) != 0 ||
+		!reflect.DeepEqual(full[1], b1) {
+		t.Fatalf("batches with items = %+v, %v", full, err)
+	}
+	if one, _ := s.BatchesWithItems(ctx, "ds", 1); len(one) != 1 || one[0].ID != "b2" {
+		t.Fatalf("limit with items: %+v", one)
+	}
 	open, _ := s.UnfinishedBatches(ctx)
 	if len(open) != 2 || open[0].ID != "b1" || open[1].ID != "b3" || open[0].Items != nil ||
 		!reflect.DeepEqual(open[0].Counts, counts) {

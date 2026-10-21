@@ -91,6 +91,9 @@ type BatchStore interface {
 	// Batches lists the batches of datasource, newest first, without their
 	// items (see Batch.Counts): a console polls it.
 	Batches(ctx context.Context, datasource string, limit int) ([]Batch, error)
+	// BatchesWithItems lists the batches of datasource as Batches does, with
+	// their items, in one read.
+	BatchesWithItems(ctx context.Context, datasource string, limit int) ([]Batch, error)
 	// UnfinishedBatches lists every batch not finished, without their items.
 	UnfinishedBatches(ctx context.Context) ([]Batch, error)
 	// ClaimBatch makes owner the owner of an unfinished batch whose heartbeat
@@ -174,12 +177,26 @@ func (m *MemoryStore) BatchCanceled(_ context.Context, id string) (bool, error) 
 }
 
 func (m *MemoryStore) Batches(_ context.Context, datasource string, limit int) ([]Batch, error) {
+	return m.listBatches(datasource, limit, header)
+}
+
+func (m *MemoryStore) BatchesWithItems(_ context.Context, datasource string, limit int) ([]Batch, error) {
+	return m.listBatches(datasource, limit, func(b Batch) Batch {
+		b = cloneBatch(b)
+		if b.Items == nil {
+			b.Items = []BatchItem{}
+		}
+		return b
+	})
+}
+
+func (m *MemoryStore) listBatches(datasource string, limit int, view func(Batch) Batch) ([]Batch, error) {
 	m.batches.mu.Lock()
 	defer m.batches.mu.Unlock()
 	out := []Batch{}
 	for _, b := range m.batches.all {
 		if b.Datasource == datasource {
-			out = append(out, header(b))
+			out = append(out, view(b))
 		}
 	}
 	slices.SortFunc(

@@ -243,7 +243,11 @@ func Evaluate(in Input, p Plan) (Proposal, error) {
 	for _, rule := range p.Grants {
 		ev.grant(rule, targets)
 	}
-	ev.qualifyReferences()
+	// What the plan wrote since names entities by ID: only the references
+	// to the tables a sync removed are left to go.
+	if len(ev.removed) > 0 {
+		ev.qualifyReferences()
+	}
 	return ev.proposal(rows), nil
 }
 

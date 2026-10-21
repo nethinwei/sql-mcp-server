@@ -4,8 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"reflect"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -163,6 +166,46 @@ func assertPending(t *testing.T, s *SQLStore) {
 	}
 	log, err := s.PendingLog(ctx, "drift:shop.a.b")
 	if err != nil || len(log) != 2 || log[0].Status != "ignored" || log[1].Owner != "root" {
+		t.Fatalf("log = %+v, %v", log, err)
+	}
+	assertConcurrentPendingPuts(t, s)
+}
+
+// Concurrent puts of one key (a recurring template's key is deterministic)
+// all succeed and leave one state, one the puts wrote.
+func assertConcurrentPendingPuts(t *testing.T, s *SQLStore) {
+	t.Helper()
+	statuses := []string{"open", "snoozed", "ignored", "open", "snoozed", "ignored", "open", "snoozed"}
+	errs := make(chan error, len(statuses))
+	var wg sync.WaitGroup
+	for i, status := range statuses {
+		wg.Go(func() {
+			_, err := s.PutPendingState(context.Background(), PendingState{Key: "template:7", Status: status,
+				Owner: fmt.Sprint("a", i), UpdatedBy: "root"})
+			errs <- err
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent put: %v", err)
+		}
+	}
+	all, err := s.PendingStates(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found []PendingState
+	for _, p := range all {
+		if p.Key == "template:7" {
+			found = append(found, p)
+		}
+	}
+	if len(found) != 1 || !slices.Contains(statuses, found[0].Status) {
+		t.Fatalf("states of template:7 = %+v", found)
+	}
+	if log, err := s.PendingLog(context.Background(), "template:7"); err != nil || len(log) == 0 {
 		t.Fatalf("log = %+v, %v", log, err)
 	}
 }

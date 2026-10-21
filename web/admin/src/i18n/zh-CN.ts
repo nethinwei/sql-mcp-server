@@ -247,7 +247,7 @@ export default {
     status: { open: '待处理', snoozed: '稍后处理', ignored: '已忽略' },
     unlisted: '这些数据源还没有列出过库，不知道里面有什么：{list}。', toScan: '去扫描',
     drift: '字段有差异的表', newTables: '未导入的表', unscanned: '未扫描的库', nothing: '没有待处理的事项',
-    edit: '编辑规则', review: '审核并加入工作区',
+    edit: '编辑规则', review: '审核并加入工作区', failed: '模板已无法执行，请编辑其规则：{error}',
     noTemplates: '没有需要审核的重复执行模板。把常用规则保存为重复执行的模板后，新表会出现在这里。', toPlans: '去设置',
     goneTables: '数据库中已不存在的表（{n}）',
     goneHint: '这些实体对应的表已被删除或改名：所在库的扫描没有找到它们，或运行中的服务发现缺表。调用它们会被拒绝，其余配置不受影响。移除时会一并删除指向它们的授权与关系，审核后发布生效。',

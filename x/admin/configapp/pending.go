@@ -122,13 +122,15 @@ func (r *Service) pendingPlans(
 		if !t.Recurring {
 			continue
 		}
-		p, err := DecodePlan(t.Plan)
+		proposal, err := r.evaluateTemplate(pc, t)
 		if err != nil {
-			return nil, err
-		}
-		proposal, err := configplan.Evaluate(r.planInput(pc, true), p)
-		if err != nil {
-			return nil, err
+			// A template that no longer evaluates (its exclusions name a
+			// table since dropped, ...) is reported, not the whole view.
+			msg := err.Error()
+			key := "template:" + t.Name + ":" + digest([]any{t.Version, msg})
+			out = append(out, PendingPlan{Key: key, Template: &t, Report: toPlanReport(configplan.Report{}),
+				Error: &msg, State: states[key]})
+			continue
 		}
 		unapplied := slices.ContainsFunc(
 			proposal.Report.Exceptions,
@@ -142,6 +144,14 @@ func (r *Service) pendingPlans(
 		out = append(out, PendingPlan{Key: key, Template: &t, Report: report, State: states[key]})
 	}
 	return out, nil
+}
+
+func (r *Service) evaluateTemplate(pc planContext, t PlanTemplate) (configplan.Proposal, error) {
+	p, err := DecodePlan(t.Plan)
+	if err != nil {
+		return configplan.Proposal{}, err
+	}
+	return configplan.Evaluate(r.planInput(pc, true), p)
 }
 
 var pendingStatuses = []string{"open", "snoozed", "ignored"}

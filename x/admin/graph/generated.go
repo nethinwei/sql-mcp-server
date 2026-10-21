@@ -358,6 +358,7 @@ type ComplexityRoot struct {
 	}
 
 	PendingPlan struct {
+		Error    func(childComplexity int) int
 		Key      func(childComplexity int) int
 		Report   func(childComplexity int) int
 		State    func(childComplexity int) int
@@ -2268,6 +2269,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.PendingGoneTable.State(childComplexity), true
 
+	case "PendingPlan.error":
+		if e.ComplexityRoot.PendingPlan.Error == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PendingPlan.Error(childComplexity), true
 	case "PendingPlan.key":
 		if e.ComplexityRoot.PendingPlan.Key == nil {
 			break
@@ -4719,6 +4726,8 @@ func (ec *executionContext) childFields_PendingPlan(ctx context.Context, field g
 		return ec.fieldContext_PendingPlan_template(ctx, field)
 	case "report":
 		return ec.fieldContext_PendingPlan_report(ctx, field)
+	case "error":
+		return ec.fieldContext_PendingPlan_error(ctx, field)
 	case "state":
 		return ec.fieldContext_PendingPlan_state(ctx, field)
 	}
@@ -12101,6 +12110,29 @@ func (ec *executionContext) fieldContext_PendingPlan_report(_ context.Context, f
 		},
 	}
 	return fc, nil
+}
+
+func (ec *executionContext) _PendingPlan_error(ctx context.Context, field graphql.CollectedField, obj *configapp.PendingPlan) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PendingPlan_error(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Error, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_PendingPlan_error(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PendingPlan", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _PendingPlan_state(ctx context.Context, field graphql.CollectedField, obj *configapp.PendingPlan) (ret graphql.Marshaler) {
@@ -23939,6 +23971,11 @@ func (ec *executionContext) _PendingPlan(ctx context.Context, sel ast.SelectionS
 		case "report":
 			out.Values[i] = ec._PendingPlan_report(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "error":
+			out.Values[i] = ec._PendingPlan_error(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
 		case "state":

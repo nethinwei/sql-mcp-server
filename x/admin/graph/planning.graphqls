@@ -474,6 +474,8 @@ type PendingPlan {
   key: String!
   template: PlanTemplate!
   report: PlanReport!
+  "Why the template no longer evaluates; its report is then empty."
+  error: String
   state: PendingState
 }
 

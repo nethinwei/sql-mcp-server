@@ -119,7 +119,9 @@ type PendingPlan struct {
 	Key      string        `json:"key"`
 	Template *PlanTemplate `json:"template"`
 	Report   *PlanReport   `json:"report"`
-	State    *PendingState `json:"state,omitempty"`
+	// Why the template no longer evaluates; its report is then empty.
+	Error *string       `json:"error,omitempty"`
+	State *PendingState `json:"state,omitempty"`
 }
 
 type PendingState struct {
@@ -264,7 +266,8 @@ type ScanBatch struct {
 	Canceled int    `json:"canceled"`
 	// Schemas waiting or scanning.
 	Pending int `json:"pending"`
-	// Items are nil in a list: ask for the batch (Service.ScanBatch).
+	// Items are nil in a list: ask for the batch (Service.ScanBatch), or
+	// list with them (Service.ScanBatchesWithItems).
 	Items      []ScanBatchItem `json:"items"`
 	StartedBy  string          `json:"startedBy"`
 	StartedAt  time.Time       `json:"startedAt"`

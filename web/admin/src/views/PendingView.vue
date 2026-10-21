@@ -156,10 +156,13 @@ const nothing = computed(() => pending.value && !plans.value.length && !drift.va
             <n-button size="small" @click="router.push({ name: 'plans', query: { template: p.template.name } })">
               {{ t('pending.edit') }}
             </n-button>
-            <n-button size="small" type="primary" @click="review(p.template.plan as Plan)">{{ t('pending.review') }}</n-button>
+            <n-button v-if="!p.error" size="small" type="primary" @click="review(p.template.plan as Plan)">
+              {{ t('pending.review') }}
+            </n-button>
           </div>
         </template>
-        <plan-report :report="p.report" />
+        <n-alert v-if="p.error" type="error" :show-icon="false">{{ t('pending.failed', { error: p.error }) }}</n-alert>
+        <plan-report v-else :report="p.report" />
       </n-card>
       <n-card v-if="gone.length" size="small" :title="t('pending.goneTables', { n: gone.length })">
         <template #header-extra>

@@ -10,7 +10,9 @@ import (
 // same for unknown accounts). At most maxConcurrentLogins attempts verify at
 // once and at most maxQueuedLogins wait, each for up to loginQueueWait; any
 // further attempt is rejected before doing work. This bounds memory and the
-// global attempt rate whatever names or connections a caller uses.
+// global attempt rate whatever names or connections a caller uses. Setting
+// a password (hashing, and verifying the current one) goes through the same
+// gate (accounts.Service.Gate).
 const (
 	maxConcurrentLogins = 2
 	maxQueuedLogins     = 16
@@ -26,9 +28,9 @@ func newLoginGate(concurrent int) *loginGate {
 	return &loginGate{slots: make(chan struct{}, concurrent)}
 }
 
-// enter waits for a verification slot; false means the caller must not
+// Enter waits for a verification slot; false means the caller must not
 // verify. A true result must be paired with leave.
-func (g *loginGate) enter(ctx context.Context) bool {
+func (g *loginGate) Enter(ctx context.Context) bool {
 	select {
 	case g.slots <- struct{}{}:
 		return true
@@ -49,6 +51,7 @@ func (g *loginGate) enter(ctx context.Context) bool {
 	}
 }
 
-func (g *loginGate) leave() {
+// Leave frees the slot Enter took.
+func (g *loginGate) Leave() {
 	<-g.slots
 }

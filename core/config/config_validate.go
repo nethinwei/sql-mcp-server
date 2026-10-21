@@ -127,7 +127,10 @@ func validateConnections(name string, db DatabaseConfig) error {
 		}
 	}
 	route := db.Route()
-	for action, conn := range map[string]string{"read": route.Read, "write": route.Write, "execute": route.Execute} {
+	for _, r := range []struct{ action, conn string }{
+		{"read", route.Read}, {"write", route.Write}, {"execute", route.Execute},
+	} {
+		action, conn := r.action, r.conn
 		target, ok := db.ConnectionsOrDSN()[conn]
 		switch {
 		case conn == "":
@@ -158,8 +161,8 @@ func (c *Config) validateSQLEscape(databases map[string]DatabaseConfig) error {
 	if c.Cost.EnabledOrDefault() || !c.Cost.SQLEscape.EstimateRequired() {
 		return nil
 	}
-	for name, db := range databases {
-		if db.SQLEscape.Enabled() {
+	for _, name := range slices.Sorted(maps.Keys(databases)) {
+		if databases[name].SQLEscape.Enabled() {
 			return fmt.Errorf("config: database %q admits execute_sql with cost.sqlEscape.estimate: required, "+
 				"but cost.enabled: false leaves no EXPLAIN to estimate with; set cost.sqlEscape.estimate: skip "+
 				"to run it under the hard limits alone, or enable cost", name)

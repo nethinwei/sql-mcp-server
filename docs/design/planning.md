@@ -193,7 +193,9 @@ Proposal = { Config（Base 应用后）, Entities（新增或修改）, Added, R
   写原因），每次变更写入 `smcp_pending_log`；情况变化（新匹配、新差异）后键随之
   变化，重新打开。未导入的表、未扫描的库、从未列出库的数据源只给出数量和跳转入口，
   没有处理状态。模板的方案在待处理中以审核方式预览（`previewPlan` 的 `review`），
-  授权覆盖的每张新表都作为需确认例外列出。
+  授权覆盖的每张新表都作为需确认例外列出。已无法执行的模板（如 `exclude` 指向已删除的表）
+  带 `error` 列出，不影响其他待处理项。字段通配（`fields: ["*"]` 等）的授权随表字段
+  变化更新同一条授权（操作与行过滤相同、原字段是新字段的子集），不追加新授权。
 - **配置 MCP**：`/admin/mcp`（Streamable HTTP，无状态），`Authorization: Bearer`
   使用管理员在控制台为每个客户端生成的令牌（`smcp_admin_tokens` 只存哈希；可命名、
   设有效期，记录最近使用时间，每人最多 20 个，单独吊销；过期、吊销或账号停用后
@@ -205,7 +207,8 @@ Proposal = { Config（Base 应用后）, Entities（新增或修改）, Added, R
   只在这些数据源内统计；同一管理员其他令牌或会话做的预览快照，只有其范围全在本令牌
   的数据源内才能读取；跨数据源的差异、模拟、版本列表、模板版本与待处理处理记录不可读）。工具：
   - `catalog_search`、`catalog_table`、`catalog_links`、`plan_scope`；
-  - `scan_schemas`（服务端扫描批次，默认扫描所有未扫描的库）、`scan_status`；
+  - `scan_schemas`（服务端扫描批次，默认扫描所有未扫描的库）、`scan_status`（一次读取
+    最近的批次及其各库状态，每批最多列 100 个库、未完成的在前，其余计入 `moreItems`）；
   - `plan_preview` 针对管理员的工作区（服务端保存的那一份，见下）预览，只返回摘要（`planId`、计数、按类与级别的例外数、需确认例外的
     ID、校验），接受 `review: true` 以审核方式列出授权覆盖的每张新表。预览结果按
     `planId` 为预览者保留 15 分钟（最近 32 个）：`plan_details` 只带 `planId`，

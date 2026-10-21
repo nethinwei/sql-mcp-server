@@ -262,10 +262,36 @@ func TestLoginGateRejectsExcessAttempts(t *testing.T) {
 	f.h.logins.queued.Store(0)
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		f.h.logins.leave()
+		f.h.logins.Leave()
 	}()
 	if rec, _, _ := f.login(t, "correct horse battery"); rec.Code != http.StatusOK {
 		t.Fatalf("queued sign-in = %d", rec.Code)
+	}
+}
+
+// Setting a password hashes it (and verifies the current one) through the
+// gate that bounds sign-ins.
+func TestPasswordChangeGoesThroughTheLoginGate(t *testing.T) {
+	f := newFixture(t)
+	_, cookie, csrf := f.login(t, "correct horse battery")
+	for range maxConcurrentLogins {
+		f.h.logins.slots <- struct{}{}
+	}
+	f.h.logins.queued.Store(maxQueuedLogins)
+	change := `{"query":"mutation { setAdminPassword(input: {username: \"root\", password: \"a brand new passphrase\", ` +
+		`currentPassword: \"correct horse battery\"}) { username } }"}`
+	headers := map[string]string{csrfHeader: csrf}
+	rec := f.do(http.MethodPost, "/admin/graphql", change, headers, cookie)
+	if !strings.Contains(rec.Body.String(), accounts.ErrBusy.Error()) {
+		t.Fatalf("a password change past the gate = %d %s", rec.Code, rec.Body)
+	}
+	f.h.logins.queued.Store(0)
+	for range maxConcurrentLogins {
+		f.h.logins.Leave()
+	}
+	if rec := f.do(http.MethodPost, "/admin/graphql", change, headers, cookie); strings.Contains(rec.Body.String(),
+		"errors") {
+		t.Fatalf("change password: %d %s", rec.Code, rec.Body)
 	}
 }
 

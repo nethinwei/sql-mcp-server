@@ -106,6 +106,12 @@ type Handler struct {
 	endStreams sync.Once
 }
 
+// accountService applies the account rules, hashing and verifying
+// passwords through the sign-in gate.
+func (h *Handler) accountService() accounts.Service {
+	return accounts.Service{Store: h.cfg.Accounts, Gate: h.logins}
+}
+
 // New builds the admin handler.
 func New(cfg Config) *Handler {
 	h := &Handler{
@@ -122,7 +128,7 @@ func New(cfg Config) *Handler {
 	}
 	app.WatchScanBatches()
 	cfg.Bus.Go("warm console caches", app.Warm)
-	resolver := &graph.Resolver{App: app, Accounts: accounts.Service{Store: cfg.Accounts}, Status: cfg.Status}
+	resolver := &graph.Resolver{App: app, Accounts: h.accountService(), Status: cfg.Status}
 	srv := handler.New(graph.NewExecutableSchema(graph.Config{Resolvers: resolver}))
 	srv.AddTransport(transport.POST{})
 	srv.Use(extension.FixedComplexityLimit(maxQueryComplexity))
@@ -204,11 +210,11 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": errLockedOut.Error()})
 		return
 	}
-	if !h.logins.enter(r.Context()) {
+	if !h.logins.Enter(r.Context()) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": errBusy.Error()})
 		return
 	}
-	defer h.logins.leave()
+	defer h.logins.Leave()
 	account, err := h.cfg.Accounts.GetAdmin(r.Context(), username)
 	if err != nil && !errors.Is(err, configstore.ErrAdminNotFound) {
 		slog.Error("admin sign-in lookup failed", "error", err.Error())

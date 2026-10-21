@@ -252,6 +252,7 @@ const en: typeof zh = {
     unlisted: 'These datasources never had their schemas listed, so what they hold is unknown: {list}.', toScan: 'Scan',
     drift: 'Tables whose fields differ', newTables: 'Tables not imported', unscanned: 'Schemas not scanned',
     nothing: 'Nothing pending', edit: 'Edit rules', review: 'Review and add',
+    failed: 'The template no longer evaluates; edit its rules: {error}',
     noTemplates: 'No recurring template has new matches. Save rules you use often as a recurring template and new tables appear here.',
     toPlans: 'Set up',
     goneTables: 'Tables no longer in the database ({n})',

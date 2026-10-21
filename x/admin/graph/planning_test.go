@@ -568,3 +568,30 @@ func TestPlanningPermissions(t *testing.T) {
 		}
 	}
 }
+
+// A recurring template that no longer evaluates (its exclusions name a
+// table since dropped) is reported with its error; the other pending work
+// is still listed.
+func TestPendingReportsATemplateThatNoLongerEvaluates(t *testing.T) {
+	h, c := planningHarness(t)
+	stale := configstore.PlanTemplate{Name: "stale", Recurring: true, Author: "root",
+		Plan: []byte(`{"scope": {"status": ["new"]}, "exclude": ["shop.public.dropped"], "import": true}`)}
+	if _, err := h.resolver.App.Plans.PutPlanTemplate(context.Background(), stale, 0); err != nil {
+		t.Fatal(err)
+	}
+	var pending struct {
+		Pending struct {
+			Plans []struct {
+				Template struct{ Name string }
+				Error    *string
+			}
+			Drift int
+		}
+	}
+	mustPost(t, c, `{ pending { plans { template { name } error } drift } }`, &pending)
+	pw := pending.Pending
+	if pw.Drift != 1 || len(pw.Plans) != 1 || pw.Plans[0].Template.Name != "stale" || pw.Plans[0].Error == nil ||
+		!strings.Contains(*pw.Plans[0].Error, "shop.public.dropped") {
+		t.Fatalf("pending = %+v", pw)
+	}
+}

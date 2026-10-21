@@ -3,10 +3,13 @@ package configmcp
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
+	"github.com/nethinwei/sql-mcp-server/x/catalog"
 )
 
 type scanIn struct {
@@ -37,20 +40,50 @@ func registerScans(s *mcp.Server, app Service) {
 			return app.StartScanBatch(ctx, configapp.ScanBatchInput{Datasource: in.Datasource, Schemas: schemas,
 				RequestKey: &in.RequestKey})
 		})
-	add(s, tool("scan_status", "Recent scan batches of a datasource, running ones first, with each schema's "+
-		"state and error.", true),
+	add(s, tool("scan_status", fmt.Sprintf("Recent scan batches of a datasource, running ones first, with "+
+		"the state and error of up to %d schemas each, those not done first (moreItems counts the rest).",
+		scanStatusItems), true),
 		func(ctx context.Context, in datasourceIn) (any, error) {
-			all, err := app.ScanBatches(ctx, in.Datasource)
+			all, err := app.ScanBatchesWithItems(ctx, in.Datasource)
 			if err != nil {
 				return nil, err
 			}
-			for i, b := range all { // listed without their items
-				full, err := app.ScanBatch(ctx, b.ID)
-				if err != nil {
-					return nil, err
-				}
-				all[i] = *full
+			out := make([]scanStatus, 0, len(all))
+			for _, b := range all {
+				out = append(out, statusOf(b))
 			}
-			return all, nil
+			return out, nil
 		})
+}
+
+// scanStatusItems bounds the items scan_status shows of a batch: a batch
+// may have thousands of schemas; its counts cover them all.
+const scanStatusItems = 100
+
+// scanStatus is a batch as scan_status shows it.
+type scanStatus struct {
+	configapp.ScanBatch
+	MoreItems int `json:"moreItems,omitempty"`
+}
+
+// statusOf keeps the first scanStatusItems items of b, those not done
+// first.
+func statusOf(b configapp.ScanBatch) scanStatus {
+	items := slices.Clone(b.Items)
+	slices.SortStableFunc(items, func(x, y configapp.ScanBatchItem) int {
+		return boolRank(x.State == catalog.ItemDone) - boolRank(y.State == catalog.ItemDone)
+	})
+	out := scanStatus{ScanBatch: b}
+	if len(items) > scanStatusItems {
+		out.MoreItems, items = len(items)-scanStatusItems, items[:scanStatusItems]
+	}
+	out.Items = items
+	return out
+}
+
+func boolRank(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

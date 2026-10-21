@@ -308,7 +308,7 @@ export const PendingQuery = graphql(`
   query Pending {
     pending {
       drift newTables unscannedSchemas unlistedDatasources
-      plans { key template { ...PlanTemplateParts } report { ...PlanReportParts } state { ...PendingStateParts } }
+      plans { key template { ...PlanTemplateParts } report { ...PlanReportParts } error state { ...PendingStateParts } }
       driftTables { key ref entity added missing state { ...PendingStateParts } }
       goneTables { key ref entity scanned state { ...PendingStateParts } }
     }
