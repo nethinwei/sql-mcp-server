@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -396,6 +397,34 @@ func TestOnlyExecuteSQLUsesRawStatements(t *testing.T) {
 			if strings.Contains(string(src), call) {
 				t.Errorf("%s uses %s; only execute_sql may", name, call)
 			}
+		}
+	}
+}
+
+// An interrupted statement (MySQL 1317) may have changed data whatever the
+// mode, a query CALLing a procedure as much as an exec: it is of unknown
+// outcome, not retryable. A statement stopped at its timeout keeps being one.
+func TestExecuteSQLInterruptedIsOfUnknownOutcome(t *testing.T) {
+	t.Parallel()
+	interrupted := fmt.Errorf("%w: %w", store.ErrInterrupted, errors.New("Error 1317: interrupted"))
+	timedOut := fmt.Errorf("%w: canceling statement", store.ErrStatementTimeout)
+	for _, c := range []struct {
+		mode string
+		err  error
+		want string
+	}{
+		{"query", interrupted, CodeOutcomeUnknown}, {"exec", interrupted, CodeOutcomeUnknown},
+		{"query", timedOut, CodeStatementTimeout}, {"exec", timedOut, CodeStatementTimeout},
+	} {
+		db := &storetest.FakeDB{
+			QueryFn: func(context.Context, string, ...any) (store.Rows, error) { return nil, c.err },
+			ExecFn:  func(context.Context, string, ...any) (store.Result, error) { return store.Result{}, c.err },
+		}
+		in := sqlInput(t, map[string]any{"mode": c.mode, "sql": "call refresh()"})
+		_, err := RunTool(context.Background(), ExecuteSQLTool{}, in, escapeContext(t, db, &durableRecorder{}))
+		d, _ := DenialFor(err, "")
+		if d.Code != c.want || d.Retryable != (c.want == CodeStatementTimeout) || len(db.Queries)+len(db.Execs) != 1 {
+			t.Errorf("%s, %v: denial = %+v (%v)", c.mode, c.err, d, err)
 		}
 	}
 }

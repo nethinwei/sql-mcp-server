@@ -474,16 +474,19 @@ func AssembleWithProviders(cfg *config.Config, providers map[string]Provider) (*
 // database's health and so feeds the engine's adaptive limit and breaker. It
 // counts only what the database or the connection to it reported (fail
 // closed: an error of any other kind, such as a new business error, never
-// opens the breaker), and of that only what countsAgainstHealth counts, the
-// policy a connection's own breaker applies: a statement the database
-// refused for itself (store.ErrRejected) or for the caller's data does not.
+// opens the breaker), a write's of unknown outcome included, and of that only
+// what countsAgainstHealth counts, the policy a connection's own breaker
+// applies: a statement the database refused for itself (store.ErrRejected) or
+// for the caller's data does not. Only an App assembled without Shared (tests,
+// embedders) has an engine breaker and limiter; a served App's engine has
+// neither, and health is each shared connection's alone (guard.go).
 func recordProviderFailure(err error) bool {
 	if err == nil || !countsAgainstHealth(err) {
 		return false
 	}
 	var netErr net.Error
 	return errors.Is(err, tool.ErrDatabase) || errors.Is(err, tool.ErrStatementTimeout) ||
-		errors.Is(err, driver.ErrBadConn) ||
+		errors.Is(err, tool.ErrOutcomeUnknown) || errors.Is(err, driver.ErrBadConn) ||
 		errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &netErr)
 }
 

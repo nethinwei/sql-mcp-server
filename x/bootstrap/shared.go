@@ -262,7 +262,9 @@ func (s *Shared) apply(app *App) {
 }
 
 // engine returns an engine on the shared quota, admitting calls on the bus's
-// Serve lane: the Apps of the process share its in-flight bound.
+// Serve lane: the Apps of the process share its in-flight bound. It has no
+// breaker nor adaptive limiter (recordProviderFailure then decides nothing):
+// each shared connection keeps its own health, across reloads.
 func (s *Shared) engine(*config.Config) (*engine.Engine, error) {
 	return engine.New(
 		engine.WithQuota(s.quota),

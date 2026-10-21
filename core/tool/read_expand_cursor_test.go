@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/nethinwei/sql-mcp-server/core/budget"
+	"github.com/nethinwei/sql-mcp-server/core/cost"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
@@ -109,9 +110,11 @@ func TestExpandedChildrenCountPerParentAgainstTheByteLimit(t *testing.T) {
 	}
 }
 
-// An expansion's batch has no LIMIT of its own and the gate cuts it at the
-// row limit: a batch reaching the limit may have lost children, so the read
-// is refused rather than answered with parents missing them.
+// An expansion's batch reads one row past the row limit: a batch of more
+// children than the limit is refused rather than answered with parents
+// missing them, one of exactly as many is complete. Only when the gate cut
+// the batch at the limit (cost.maxRows no larger than the caller's) can a
+// full batch not be told from a cut one, and it is refused.
 func TestExpandedChildrenAtTheRowLimitAreRefused(t *testing.T) {
 	t.Parallel()
 	keyed := func(name string, fields ...string) entity.Entity {
@@ -127,25 +130,38 @@ func TestExpandedChildrenAtTheRowLimitAreRefused(t *testing.T) {
 	orders.Relations = []entity.Relationship{{Name: "items", Target: "items", Cardinality: "has-many",
 		JoinOn: map[string]string{"id": "order_id"}}}
 	reg, _ := entity.NewRegistry([]entity.Entity{orders, keyed("items", "order_id")})
-	for children, want := range map[int]error{2: nil, 3: budget.ErrExceeded} {
+	input, _ := json.Marshal(readInput{Entity: "orders", Expand: []string{"items"}, Limit: 2})
+	looser, atTheLimit := cost.NewGate(cost.EnforceCap{HardRows: 10}), cost.NewGate(cost.EnforceCap{HardRows: 3})
+	for _, c := range []struct {
+		gate     cost.Gate // cost.maxRows; nil: none
+		children int
+		want     error
+		limit    string // the batch's
+	}{
+		{nil, 3, nil, " LIMIT 4"}, {nil, 4, budget.ErrExceeded, " LIMIT 4"}, {looser, 3, nil, " LIMIT 4"},
+		{looser, 4, budget.ErrExceeded, " LIMIT 4"}, {atTheLimit, 2, nil, " LIMIT 3"},
+		{atTheLimit, 3, budget.ErrExceeded, " LIMIT 3"},
+	} {
 		db := &storetest.FakeDB{QueryFn: func(_ context.Context, query string, _ ...any) (store.Rows, error) {
 			if strings.Contains(query, `"items"`) {
 				var rows [][]any
-				for i := range children {
+				for i := range c.children {
 					rows = append(rows, []any{int64(i), int64(1 + i%2)})
 				}
 				return storetest.NewFakeRows([]string{"id", "order_id"}, rows...), nil
 			}
 			return storetest.NewFakeRows([]string{"id"}, []any{int64(1)}, []any{int64(2)}), nil
 		}}
+		source := DataSource{DB: db, Dialect: testdialect.Postgres{}, Gate: c.gate}
 		tc := Context{Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Services: &Services{
-			Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg),
-			Sources: map[string]DataSource{"default": {DB: db, Dialect: testdialect.Postgres{}}},
+			Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Sources: map[string]DataSource{"default": source},
 		}}
-		tc.MaxRows = 3
-		input, _ := json.Marshal(readInput{Entity: "orders", Expand: []string{"items"}, Limit: 2})
-		if _, err := RunTool(context.Background(), ReadTool{}, input, tc); !errors.Is(err, want) {
-			t.Errorf("%d children: err = %v, want %v", children, err, want)
+		tc.MaxRows = 3 // the caller's
+		if _, err := RunTool(context.Background(), ReadTool{}, input, tc); !errors.Is(err, c.want) {
+			t.Errorf("%+v: err = %v", c, err)
+		}
+		if sql := db.Queries[len(db.Queries)-1].Query; !strings.HasSuffix(sql, c.limit) {
+			t.Errorf("%+v: %s", c, sql)
 		}
 	}
 }

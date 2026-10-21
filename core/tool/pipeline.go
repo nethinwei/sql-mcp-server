@@ -414,16 +414,18 @@ func (st statement) classify(err error) error {
 
 // failRaw classifies a database error of the escape hatch's statement,
 // keeping the driver's message: the caller holds the connection's whole
-// account, and the message is what they are after.
+// account, and the message is what they are after. An interrupted statement
+// is of unknown outcome whatever the mode: a query may CALL a procedure whose
+// earlier statements took effect.
 func (st statement) failRaw(err error) error {
-	if st.write && uncertain(err) {
+	if st.write && uncertain(err) || errors.Is(err, store.ErrInterrupted) {
 		return outcomeUnknown(err)
 	}
 	kind := ErrDatabase
 	switch {
 	case errors.Is(err, store.ErrPermissionDenied):
 		kind = ErrDatasourceForbidden
-	case errors.Is(err, store.ErrStatementTimeout), errors.Is(err, store.ErrInterrupted):
+	case errors.Is(err, store.ErrStatementTimeout):
 		kind = ErrStatementTimeout
 	}
 	return &RawDBError{Kind: kind, Cause: err}

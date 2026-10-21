@@ -138,10 +138,11 @@ func TestRelationshipRules(t *testing.T) {
 // A masked join column is compared by any join the caller's request asks
 // for (a related field filtered or ordered by, an exists, an expansion,
 // whose children carry the target's equal value): refused, as the field
-// itself would be, on either side of the join.
+// itself would be, on either side of the join, and before any query, as is
+// an expansion across datasources.
 func TestMaskedJoinColumnIsCompared(t *testing.T) {
 	t.Parallel()
-	tc, _ := relatedContextOf(t, func(orders *entity.Entity) { orders.Attributes[1].Mask = "full" })
+	tc, db := relatedContextOf(t, func(orders *entity.Entity) { orders.Attributes[1].Mask = "full" })
 	for _, input := range []string{
 		`{"entity":"orders","filter":[{"field":"customer.region","op":"eq","value":"CN"}]}`,
 		`{"entity":"orders","filter":[{"exists":"customer","filter":[]}]}`,
@@ -150,11 +151,11 @@ func TestMaskedJoinColumnIsCompared(t *testing.T) {
 		`{"entity":"orders","fields":["id"],"expand":["customer"],"limit":5}`,
 	} {
 		if _, err := (ReadTool{}).Run(context.Background(), json.RawMessage(input), tc); !errors.Is(err,
-			ErrInvalidInput) {
-			t.Errorf("%s: err = %v, want %v", input, err, ErrInvalidInput)
+			ErrInvalidInput) || len(db.Queries) != 0 {
+			t.Errorf("%s: err = %v, want %v before any query (%d ran)", input, err, ErrInvalidInput, len(db.Queries))
 		}
 	}
-	tc, _ = relatedContextOf(t, func(orders *entity.Entity) {
+	tc, db = relatedContextOf(t, func(orders *entity.Entity) {
 		orders.Relations = append(orders.Relations, entity.Relationship{Name: "contact", Target: "customers",
 			Cardinality: "has-many", JoinOn: map[string]string{"note": "secret"}})
 	})
@@ -163,9 +164,15 @@ func TestMaskedJoinColumnIsCompared(t *testing.T) {
 		`{"entity":"orders","expand":["contact"],"limit":5}`,
 	} {
 		if _, err := (ReadTool{}).Run(context.Background(), json.RawMessage(input), tc); !errors.Is(err,
-			ErrInvalidInput) {
-			t.Errorf("%s: err = %v, want %v", input, err, ErrInvalidInput)
+			ErrInvalidInput) || len(db.Queries) != 0 {
+			t.Errorf("%s: err = %v, want %v before any query (%d ran)", input, err, ErrInvalidInput, len(db.Queries))
 		}
+	}
+	elsewhere, db := relatedContextOf(t, func(orders *entity.Entity) { orders.DataSource = "elsewhere" })
+	if _, err := (ReadTool{}).Run(context.Background(), json.RawMessage(
+		`{"entity":"orders","expand":["customer"],"limit":5}`), elsewhere); !errors.Is(err, ErrInvalidInput) ||
+		len(db.Queries) != 0 {
+		t.Errorf("expand across datasources: err = %v, %d queries", err, len(db.Queries))
 	}
 	if _, err := (ReadTool{}).Run(context.Background(), json.RawMessage(
 		`{"entity":"orders","expand":["customer"],"limit":5}`), tc); err != nil {

@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -10,10 +11,13 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
+	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
+	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
+	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
 )
 
 // guardedPair is shared services with two connections, a and b, whose
@@ -111,20 +115,61 @@ func TestCancelledCallsDoNotCount(t *testing.T) {
 
 // The engine's breaker (recordProviderFailure, on a tool's errors) and a
 // connection's (countsAgainstHealth, on the database's) count the same
-// database errors.
+// database errors, whether a read, a write or a procedure call met them: a
+// write's are of unknown outcome or a constraint violation, not WrapDBError's.
 func TestHealthRulesAgree(t *testing.T) {
 	t.Parallel()
+	calls := healthCalls(t)
 	for err, counts := range map[error]bool{
 		store.ErrRejected: false, store.ErrInvalidValue: false, store.ErrPermissionDenied: false,
 		store.ErrMissingRelation: false, store.ErrStalePlan: false, &store.ConstraintError{Kind: "unique"}: false,
+		context.Canceled:          false,
 		store.ErrStatementTimeout: true, store.ErrInterrupted: true, store.ErrConnectionLost: true,
 		errors.New("out of memory"): true,
 	} {
 		wrapped := fmt.Errorf("%w: 42", err)
-		if countsAgainstHealth(wrapped) != counts || recordProviderFailure(tool.WrapDBError(wrapped)) != counts {
-			t.Errorf("%v: connection %v, engine %v, want %v", err, countsAgainstHealth(wrapped),
-				recordProviderFailure(tool.WrapDBError(wrapped)), counts)
+		if countsAgainstHealth(wrapped) != counts {
+			t.Errorf("%v: connection %v, want %v", err, countsAgainstHealth(wrapped), counts)
 		}
+		for name, call := range calls {
+			if failure := call(wrapped); recordProviderFailure(failure) != counts {
+				t.Errorf("%v: %s fails with %v, engine %v, want %v", err, name, failure, !counts, counts)
+			}
+		}
+	}
+}
+
+// healthCalls are a read, an update and a procedure call, each failing with
+// the database error it is given, as its tool reports it.
+func healthCalls(t *testing.T) map[string]func(error) error {
+	t.Helper()
+	users := entity.Entity{Name: "users", Source: "users", Attributes: []entity.Attribute{{Name: "id"}, {Name: "email"}},
+		Keys: []entity.Key{{Columns: []string{"id"}, Primary: true}}, MCP: entity.MCPFlags{DMLTools: true},
+		Role: entity.RoleAccess{entity.ActionRead: {"r"}, entity.ActionUpdate: {"r"}}}
+	proc := entity.Entity{Name: "refresh", Source: "refresh", Kind: entity.KindProcedure,
+		Attributes: []entity.Attribute{{Name: "id"}}, Role: entity.RoleAccess{entity.ActionExecute: {"r"}},
+		MCP: entity.MCPFlags{DMLTools: true, TrustedProcedure: true}}
+	reg, err := entity.NewRegistry([]entity.Entity{users, proc})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(tl tool.Tool, input string) func(error) error {
+		return func(dbErr error) error {
+			db := &storetest.FakeDB{
+				ExecFn:  func(context.Context, string, ...any) (store.Result, error) { return store.Result{}, dbErr },
+				QueryFn: func(context.Context, string, ...any) (store.Rows, error) { return nil, dbErr },
+			}
+			tc := tool.Context{Services: &tool.Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+				Role: "r", DB: db, Dialect: testdialect.Postgres{}}
+			_, err := tool.RunTool(context.Background(), tl, json.RawMessage(input), tc)
+			return err
+		}
+	}
+	return map[string]func(error) error{
+		"read": run(tool.ReadTool{}, `{"entity":"users"}`),
+		"update": run(tool.UpdateTool{},
+			`{"entity":"users","filter":[{"field":"id","op":"eq","value":1}],"set":{"email":"x"}}`),
+		"execute": run(tool.ExecuteTool{}, `{"entity":"refresh"}`),
 	}
 }
 

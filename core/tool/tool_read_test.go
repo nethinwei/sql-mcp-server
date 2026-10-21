@@ -766,9 +766,7 @@ func TestExpandRefusesARelationshipWithoutJoinColumns(t *testing.T) {
 		Name: "orders", Source: "orders", Attributes: []entity.Attribute{{Name: "id"}},
 		Relations: []entity.Relationship{{Name: "lines", Target: "lines"}},
 	}
-	err := expandOneRelationship(context.Background(), Context{}, parent,
-		queried{kept: []map[string]any{{"id": int64(1)}}, rows: []map[string]any{{"id": int64(1)}}}, "lines")
-	if !errors.Is(err, ErrInvalidInput) {
+	if err := checkExpansions(Context{}, parent, []string{"lines"}); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("err = %v, want ErrInvalidInput", err)
 	}
 }

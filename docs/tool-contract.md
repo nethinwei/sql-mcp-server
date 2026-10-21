@@ -73,9 +73,9 @@
    - `STATEMENT_TIMEOUT`（retryable，v0.1.21 起；此前为 `DATABASE_ERROR`，写入可能报
      `OUTCOME_UNKNOWN`）：数据库在自己的语句超时处停住并回滚了语句，没有生效；收窄请求或
      稍后重试。`execute_sql` 的 `reason` 同样携带驱动原文。与此前相同，它计入数据源熔断。
-     语句执行中被中断（MySQL/OceanBase 1317，超过 deadline 时的 KILL QUERY）只对读取报
-     `STATEMENT_TIMEOUT`；写入、存储过程调用与提交报 `OUTCOME_UNKNOWN`（过程中先前的语句
-     可能已生效）；
+     语句执行中被中断（MySQL/OceanBase 1317，超过 deadline 时的 KILL QUERY）只对受治理的
+     读取报 `STATEMENT_TIMEOUT`；写入、存储过程调用、提交与 `execute_sql`（任一 `mode`：
+     查询也可能 `CALL` 过程）报 `OUTCOME_UNKNOWN`（过程中先前的语句可能已生效）；
    - `TRANSACTION_NOT_FOUND`：令牌对应的事务若在最近 10 分钟内结束，且请求来自同一会话
      与身份，`constraints.outcome` 给出结束方式：`committed`、`rolledBack`、`expired`
      或 `unknown`（提交结果未知）；其他调用方只得到不带 `constraints` 的未找到。`expired`
@@ -204,8 +204,9 @@
   读取与聚合最多返回 `cost.maxRows` 行（调用者的 `limits.maxRows` 更严时取它）：`limit` 未写或
   大于它时按它读取，有序读取满页给 `nextCursor` 续读；没有游标可续（`read_records` 未按可翻页的
   `orderBy` 排序，或 `aggregate_records`）而恰好返回这么多行时另带 `"truncated": true`，表示之后
-  可能还有行；`expand` 的一批子行同样以该上限为界，达到上限时整次读取以 `BUDGET_EXCEEDED`
-  失败（v0.1.21 起；此前超出的子行被静默丢弃），应缩小页大小后重试；
+  可能还有行；`expand` 的一批子行同样以该上限为界，超过上限时整次读取以 `BUDGET_EXCEEDED`
+  失败（v0.1.21 起；此前超出的子行被静默丢弃；上限就是 `cost.maxRows` 时恰好达到也失败，
+  因为无法区分是否被截断），应缩小页大小后重试；
 - 返回单个对象的工具直接给出该对象：`describe_entities`、`create_record`、
   `update_record`、`delete_record`、`begin_transaction`、`commit_transaction`、
   `rollback_transaction`、`execute_sql`。

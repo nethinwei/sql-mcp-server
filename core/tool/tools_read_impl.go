@@ -125,11 +125,7 @@ func prepareReadPlan(ctx context.Context, tc Context, in readInput) (readPlan, e
 		return readPlan{}, err
 	}
 	readFields = append(readFields, locals...)
-	predicateFields, _ := splitPaths(res.Entity, append(filterFields(in.Filter), sortedKeys(in.Cursor)...))
-	predicateFields = append(predicateFields, locals...) // a join on them compares their values
-	// so does expansion's: a child carries the target's equal value
-	predicateFields = append(predicateFields, expandJoinColumns(res.Entity, in.Expand)...)
-	if err := (fieldUses{read: readFields, compared: predicateFields}).check(res); err != nil {
+	if err := checkReadUses(tc, res, in, readFields, locals); err != nil {
 		return readPlan{}, err
 	}
 	req := rbac.Request{
@@ -152,6 +148,43 @@ func prepareReadPlan(ctx context.Context, tc Context, in readInput) (readPlan, e
 		entityPlan: ep, projectionFields: req.Fields, order: order, rel: rel,
 		full: andPreds(andPreds(pred, g.RowFilter), keyset), keysetCols: keysetCols, grant: g,
 	}, nil
+}
+
+// checkReadUses refuses, before any query, a read of fields, or a comparison
+// of them, the caller may not make: those of its filter and cursor, of the
+// relationships it joins (locals) and of the expansions it asks for.
+func checkReadUses(tc Context, res entity.Resolved, in readInput, readFields, locals []string) error {
+	predicateFields, _ := splitPaths(res.Entity, append(filterFields(in.Filter), sortedKeys(in.Cursor)...))
+	predicateFields = append(predicateFields, locals...) // a join on them compares their values
+	// so does expansion's: a child carries the target's equal value
+	predicateFields = append(predicateFields, expandJoinColumns(res.Entity, in.Expand)...)
+	if err := (fieldUses{read: readFields, compared: predicateFields}).check(res); err != nil {
+		return err
+	}
+	return checkExpansions(tc, res.Entity, in.Expand)
+}
+
+// checkExpansions refuses an expansion its configuration rules out: one
+// joining on no field, on a target column the caller may not compare, or
+// across datasources.
+func checkExpansions(tc Context, parent entity.Entity, names []string) error {
+	for _, name := range names {
+		relation, _ := relationshipByName(parent, name)
+		if len(relation.JoinOn) == 0 {
+			return fmt.Errorf("%w: relationship %q joins on no field", ErrInvalidInput, name)
+		}
+		target, err := resolveDMLEntity(tc, relation.Target)
+		if err != nil {
+			return err
+		}
+		if err := (fieldUses{compared: relationJoin(relation).target}).check(target); err != nil {
+			return err
+		}
+		if target.Entity.DataSource != parent.DataSource {
+			return fmt.Errorf("%w: cross-datasource relationship %q", ErrInvalidInput, name)
+		}
+	}
+	return nil
 }
 
 // relate plans what a request names across res's relationships (paths, and
@@ -446,11 +479,10 @@ func expandRows(ctx context.Context, tc Context, parent entity.Entity, parents q
 	return nil
 }
 
+// expandOneRelationship expands parents by the relationship name, which
+// checkExpansions admitted.
 func expandOneRelationship(ctx context.Context, tc Context, parent entity.Entity, parents queried, name string) error {
 	relation, _ := relationshipByName(parent, name)
-	if len(relation.JoinOn) == 0 {
-		return fmt.Errorf("%w: relationship %q joins on no field", ErrInvalidInput, name)
-	}
 	target, err := resolveDMLEntity(tc, relation.Target)
 	if err != nil {
 		return err
@@ -458,12 +490,6 @@ func expandOneRelationship(ctx context.Context, tc Context, parent entity.Entity
 	join := relationJoin(relation)
 	join.localDecimal = decimalColumns(parent, join.local)
 	join.targetDecimal = decimalColumns(target.Entity, join.target)
-	if err := (fieldUses{compared: join.target}).check(target); err != nil {
-		return err
-	}
-	if target.Entity.DataSource != parent.DataSource {
-		return fmt.Errorf("%w: cross-datasource relationship %q", ErrInvalidInput, name)
-	}
 	targetTC, err := routeEntity(ctx, tc, target.Entity, entity.ActionRead)
 	if err != nil {
 		return err
@@ -649,15 +675,15 @@ func queryExpandedChildren(
 	batchSize := max(1, effectiveMaxIN(targetTC)/len(join.target))
 	for start := 0; start < len(tuples); start += batchSize {
 		stop := min(start+batchSize, len(tuples))
-		st, err := compileExpandBatch(ctx, tc, targetTC, target, relation, join, tuples[start:stop])
+		st, cut, err := compileExpandBatch(ctx, tc, targetTC, target, relation, join, tuples[start:stop])
 		if err != nil {
 			return nil, err
 		}
-		// The batch has no LIMIT of its own: the gate caps it at the row
-		// limit, so a batch reaching it may have lost children.
-		st.rowCap = targetTC.MaxRows
+		// The batch reads one row past the row limit, and the executor refuses
+		// it when that row arrives; a batch the gate cut shorter (at the row
+		// limit, which no caller's exceeds) may have lost children at it.
 		children, err := st.query(ctx)
-		if err == nil && st.rowCap > 0 && int64(len(children.rows)) >= st.rowCap {
+		if err == nil && cut && int64(len(children.rows)) >= st.rowCap {
 			err = budget.ErrExceeded
 		}
 		if err != nil {
@@ -696,6 +722,9 @@ func joinPredicate(columns []string, tuples [][]any) relalg.Predicate {
 	return relalg.Or{Preds: ors}
 }
 
+// compileExpandBatch plans the query of the children of tuples, bounded at
+// one row past targetTC's row limit (rowCap): cut reports that the gate
+// bounded it shorter, so that a batch reaching the limit may be incomplete.
 func compileExpandBatch(
 	ctx context.Context,
 	tc Context,
@@ -704,31 +733,34 @@ func compileExpandBatch(
 	relation entity.Relationship,
 	join joinColumns,
 	tuples [][]any,
-) (statement, error) {
+) (st statement, cut bool, err error) {
 	predicate := joinPredicate(join.target, tuples)
 	g, err := authorizeRequest(ctx, targetTC, rbac.Request{
 		Role: tc.Role, Subject: tc.Subject, Entity: relation.Target,
 		Action: entity.ActionRead, ReadFields: join.target, Predicate: predicate,
 	})
 	if err != nil {
-		return statement{}, err
+		return statement{}, false, err
 	}
 	full := andPreds(predicate, g.RowFilter)
 	scan := relalg.Scan{Relation: target.Entity.Ref()}
 	expr := relalg.Expr(relalg.Select{Input: scan, Predicate: full})
 	expr = relalg.Project{Input: expr, Items: relalg.ProjectFields(g.Fields)} // never empty (authorizeRequest)
+	if targetTC.MaxRows > 0 {
+		expr = relalg.Limit{Input: expr, Count: targetTC.MaxRows + 1}
+	}
 	compiled, err := compile(targetTC, target.Entity, expr, identityKeys(tc, target.Entity, false),
 		codegen.WithMaxINCardinality(max(len(tuples), effectiveMaxIN(targetTC))))
 	if err != nil {
-		return statement{}, err
+		return statement{}, false, err
 	}
 	sql, err := gateSQL(ctx, targetTC, compiled)
 	if err != nil {
-		return statement{}, err
+		return statement{}, false, err
 	}
-	st := newStatement(targetTC, target, g, sql)
-	st.keep = join.target
-	return st, nil
+	st = newStatement(targetTC, target, g, sql)
+	st.keep, st.rowCap = join.target, targetTC.MaxRows
+	return st, sql.SQL != compiled.SQL, nil
 }
 
 func attachExpandedChildren(
