@@ -186,7 +186,7 @@ func (c *Config) validateAccess(databases map[string]DatabaseConfig) error {
 func (c *Config) validateUsers(entities EntityRefs, databases map[string]DatabaseConfig) error {
 	known := c.knownRoles()
 	if len(c.Users) > 0 {
-		for role := range known {
+		for _, role := range slices.Sorted(maps.Keys(known)) {
 			if strings.Contains(role, ":") {
 				return fmt.Errorf("config: role %q must not contain ':' when users are configured", role)
 			}

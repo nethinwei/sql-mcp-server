@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { locateGrant, setActionOn } from './grants'
+import { grantsByEntity, locateGrant, setActionOn } from './grants'
 import type { GrantInput } from '@/gql/schema'
 import type { EntityIndex } from './entityRefs'
 
@@ -46,6 +46,33 @@ describe('setActionOn with an entity index', () => {
     ])
     expect(setActionOn(out, entities, 'DELETE', false, index)).toEqual([
       { entity: 'b', actions: ['READ'] }, { entity: 'a', actions: ['READ'] },
+    ])
+  })
+})
+
+describe('grantsByEntity', () => {
+  // The matrix and setActionOn bucket grants by this one rule.
+  const grants: GrantInput[] = [
+    { entity: 'orders', actions: ['READ'] },
+    { entity: 'ghost', actions: ['READ'] },
+    { entity: 'pg.orders', actions: ['DELETE'] },
+    { entity: 'refunds', actions: ['READ'] },
+  ]
+  const idOf = (ref: string) => (ref === 'ghost' ? undefined : ref.startsWith('pg.') ? ref : `pg.${ref}`)
+
+  it('buckets grants by resolved entity in order with their positions, skipping unresolved ones', () => {
+    const out = grantsByEntity(grants, idOf)
+    expect([...out.keys()]).toEqual(['pg.orders', 'pg.refunds'])
+    expect(out.get('pg.orders')).toEqual([{ grant: grants[0], index: 0 }, { grant: grants[2], index: 2 }])
+    expect(out.get('pg.refunds')).toEqual([{ grant: grants[3], index: 3 }])
+  })
+
+  it('leaves a grant naming no entity alone when an action is toggled', () => {
+    const index = { idOf, shortName: (id: string) => id.slice(3) } as unknown as EntityIndex
+    expect(setActionOn(grants, ['pg.orders'], 'READ', false, index)).toEqual([
+      { entity: 'ghost', actions: ['READ'] },
+      { entity: 'pg.orders', actions: ['DELETE'] },
+      { entity: 'refunds', actions: ['READ'] },
     ])
   })
 })

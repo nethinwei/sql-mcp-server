@@ -388,6 +388,8 @@ type ComplexityRoot struct {
 		Drift               func(childComplexity int) int
 		DriftTables         func(childComplexity int) int
 		GoneTables          func(childComplexity int) int
+		MoreDriftTables     func(childComplexity int) int
+		MoreGoneTables      func(childComplexity int) int
 		NewTables           func(childComplexity int) int
 		Plans               func(childComplexity int) int
 		UnlistedDatasources func(childComplexity int) int
@@ -2398,6 +2400,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.PendingWork.GoneTables(childComplexity), true
+	case "PendingWork.moreDriftTables":
+		if e.ComplexityRoot.PendingWork.MoreDriftTables == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PendingWork.MoreDriftTables(childComplexity), true
+	case "PendingWork.moreGoneTables":
+		if e.ComplexityRoot.PendingWork.MoreGoneTables == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PendingWork.MoreGoneTables(childComplexity), true
 	case "PendingWork.newTables":
 		if e.ComplexityRoot.PendingWork.NewTables == nil {
 			break
@@ -4788,6 +4802,10 @@ func (ec *executionContext) childFields_PendingWork(ctx context.Context, field g
 		return ec.fieldContext_PendingWork_unscannedSchemas(ctx, field)
 	case "unlistedDatasources":
 		return ec.fieldContext_PendingWork_unlistedDatasources(ctx, field)
+	case "moreDriftTables":
+		return ec.fieldContext_PendingWork_moreDriftTables(ctx, field)
+	case "moreGoneTables":
+		return ec.fieldContext_PendingWork_moreGoneTables(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type PendingWork", field.Name)
 }
@@ -12661,6 +12679,52 @@ func (ec *executionContext) _PendingWork_unlistedDatasources(ctx context.Context
 }
 func (ec *executionContext) fieldContext_PendingWork_unlistedDatasources(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("PendingWork", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _PendingWork_moreDriftTables(ctx context.Context, field graphql.CollectedField, obj *configapp.PendingWork) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PendingWork_moreDriftTables(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.MoreDriftTables, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PendingWork_moreDriftTables(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PendingWork", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _PendingWork_moreGoneTables(ctx context.Context, field graphql.CollectedField, obj *configapp.PendingWork) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PendingWork_moreGoneTables(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.MoreGoneTables, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PendingWork_moreGoneTables(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PendingWork", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
 func (ec *executionContext) _PlanChange_kind(ctx context.Context, field graphql.CollectedField, obj *configapp.PlanChange) (ret graphql.Marshaler) {
@@ -24182,6 +24246,16 @@ func (ec *executionContext) _PendingWork(ctx context.Context, sel ast.SelectionS
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "moreDriftTables":
+			out.Values[i] = ec._PendingWork_moreDriftTables(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "moreGoneTables":
+			out.Values[i] = ec._PendingWork_moreGoneTables(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -28406,11 +28480,11 @@ func (ec *executionContext) marshalNDraftRevision2ᚕgithubᚗcomᚋnethinweiᚋ
 	return ret
 }
 
-func (ec *executionContext) marshalNEntity2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItem(ctx context.Context, sel ast.SelectionSet, v configapp.EntityItem) graphql.Marshaler {
+func (ec *executionContext) marshalNEntity2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItem(ctx context.Context, sel ast.SelectionSet, v Entity) graphql.Marshaler {
 	return ec._Entity(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNEntity2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItemᚄ(ctx context.Context, sel ast.SelectionSet, v []configapp.EntityItem) graphql.Marshaler {
+func (ec *executionContext) marshalNEntity2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItemᚄ(ctx context.Context, sel ast.SelectionSet, v []Entity) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
@@ -29189,11 +29263,11 @@ func (ec *executionContext) marshalNRevisionState2githubᚗcomᚋnethinweiᚋsql
 	return v
 }
 
-func (ec *executionContext) marshalNRole2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItem(ctx context.Context, sel ast.SelectionSet, v configapp.RoleItem) graphql.Marshaler {
+func (ec *executionContext) marshalNRole2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItem(ctx context.Context, sel ast.SelectionSet, v Role) graphql.Marshaler {
 	return ec._Role(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNRole2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItemᚄ(ctx context.Context, sel ast.SelectionSet, v []configapp.RoleItem) graphql.Marshaler {
+func (ec *executionContext) marshalNRole2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItemᚄ(ctx context.Context, sel ast.SelectionSet, v []Role) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
@@ -29640,11 +29714,11 @@ func (ec *executionContext) marshalNUnscannedSchemas2ᚕgithubᚗcomᚋnethinwei
 	return ret
 }
 
-func (ec *executionContext) marshalNUser2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItem(ctx context.Context, sel ast.SelectionSet, v configapp.UserItem) graphql.Marshaler {
+func (ec *executionContext) marshalNUser2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItem(ctx context.Context, sel ast.SelectionSet, v User) graphql.Marshaler {
 	return ec._User(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNUser2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItemᚄ(ctx context.Context, sel ast.SelectionSet, v []configapp.UserItem) graphql.Marshaler {
+func (ec *executionContext) marshalNUser2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItemᚄ(ctx context.Context, sel ast.SelectionSet, v []User) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]

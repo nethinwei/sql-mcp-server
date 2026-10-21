@@ -92,7 +92,7 @@ type BatchStore interface {
 	// items (see Batch.Counts): a console polls it.
 	Batches(ctx context.Context, datasource string, limit int) ([]Batch, error)
 	// BatchesWithItems lists the batches of datasource as Batches does, with
-	// their items, in one read.
+	// their items; a batch pruned meanwhile may be listed without them.
 	BatchesWithItems(ctx context.Context, datasource string, limit int) ([]Batch, error)
 	// UnfinishedBatches lists every batch not finished, without their items.
 	UnfinishedBatches(ctx context.Context) ([]Batch, error)

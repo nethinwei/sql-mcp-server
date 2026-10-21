@@ -26,47 +26,17 @@ const (
 	itemsPerInsert = 200
 )
 
-// batchFields are where batchColumns scan into; done fills b from them.
-func batchFields(b *catalog.Batch) (dest []any, done func()) {
-	var started, finished, beat int64
-	var canceled int
-	return []any{&b.ID, &b.Datasource, &b.StartedBy, &b.RequestKey, &b.Owner, &started, &finished, &beat, &canceled},
-		func() {
-			b.StartedAt, b.FinishedAt, b.Heartbeat = fromMicros(started), fromMicros(finished), fromMicros(beat)
-			b.Canceled = canceled != 0
-		}
-}
-
 func scanBatch(row scanner) (catalog.Batch, error) {
 	var b catalog.Batch
-	dest, done := batchFields(&b)
-	if err := row.Scan(dest...); err != nil {
+	var started, finished, beat int64
+	var canceled int
+	if err := row.Scan(&b.ID, &b.Datasource, &b.StartedBy, &b.RequestKey, &b.Owner, &started, &finished, &beat,
+		&canceled); err != nil {
 		return catalog.Batch{}, err
 	}
-	done()
+	b.StartedAt, b.FinishedAt, b.Heartbeat = fromMicros(started), fromMicros(finished), fromMicros(beat)
+	b.Canceled = canceled != 0
 	return b, nil
-}
-
-// batchRow is a batch with one of its items, if it has any.
-type batchRow struct {
-	batch catalog.Batch
-	item  *catalog.BatchItem
-}
-
-func scanBatchRow(row scanner) (batchRow, error) {
-	var r batchRow
-	var schema, state, errText sql.NullString
-	var attempts, notBefore sql.NullInt64
-	dest, done := batchFields(&r.batch)
-	if err := row.Scan(append(dest, &schema, &state, &errText, &attempts, &notBefore)...); err != nil {
-		return batchRow{}, err
-	}
-	done()
-	if schema.Valid {
-		r.item = &catalog.BatchItem{Schema: schema.String, State: state.String, Error: errText.String,
-			Attempts: int(attempts.Int64), NotBefore: fromMicros(notBefore.Int64)}
-	}
-	return r, nil
 }
 
 // batchItem is an item with the batch it is of.
@@ -224,32 +194,19 @@ func (s *SQLStore) Batch(ctx context.Context, id string) (catalog.Batch, bool, e
 
 // Batches implements catalog.BatchStore.
 func (s *SQLStore) Batches(ctx context.Context, datasource string, limit int) ([]catalog.Batch, error) {
-	return s.batches(ctx, false, fmt.Sprintf("SELECT "+batchColumns+
-		" FROM smcp_scan_batches WHERE datasource = ? ORDER BY started_us DESC, id DESC LIMIT %d", max(limit, 0)), datasource)
+	return s.batches(ctx, false, latestBatches(limit), datasource)
 }
 
-// BatchesWithItems implements catalog.BatchStore in one statement: a batch
-// pruned meanwhile is read whole or not at all.
+// BatchesWithItems implements catalog.BatchStore in two statements: a batch
+// pruned between them is listed without items.
 func (s *SQLStore) BatchesWithItems(ctx context.Context, datasource string, limit int) ([]catalog.Batch, error) {
-	rows, err := queryAll(ctx, s, s.db, scanBatchRow, fmt.Sprintf("SELECT "+batchColumns+", "+itemColumns+
-		" FROM (SELECT "+batchColumns+" FROM smcp_scan_batches WHERE datasource = ?"+
-		" ORDER BY started_us DESC, id DESC LIMIT %d) b LEFT JOIN smcp_scan_batch_items i ON i.batch_id = b.id"+
-		" ORDER BY started_us DESC, id DESC, ordinal", max(limit, 0)), datasource)
-	if err != nil {
-		return nil, fmt.Errorf("configstore: read scan batches: %w", err)
-	}
-	out := []catalog.Batch{}
-	for _, r := range rows {
-		if len(out) == 0 || out[len(out)-1].ID != r.batch.ID {
-			r.batch.Items = []catalog.BatchItem{}
-			out = append(out, r.batch)
-		}
-		if r.item != nil {
-			b := &out[len(out)-1]
-			b.Items = append(b.Items, *r.item)
-		}
-	}
-	return out, nil
+	return s.batches(ctx, true, latestBatches(limit), datasource)
+}
+
+// latestBatches selects the limit latest batches of a datasource.
+func latestBatches(limit int) string {
+	return fmt.Sprintf("SELECT "+batchColumns+
+		" FROM smcp_scan_batches WHERE datasource = ? ORDER BY started_us DESC, id DESC LIMIT %d", max(limit, 0))
 }
 
 // UnfinishedBatches implements catalog.BatchStore.

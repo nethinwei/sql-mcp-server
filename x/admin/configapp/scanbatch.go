@@ -239,7 +239,7 @@ func (r *Service) ScanBatches(ctx context.Context, datasource string) ([]ScanBat
 }
 
 // ScanBatchesWithItems lists the recent batches of a datasource as
-// ScanBatches does, with their items, in one store read.
+// ScanBatches does, with their items.
 func (r *Service) ScanBatchesWithItems(ctx context.Context, datasource string) ([]ScanBatch, error) {
 	if _, err := auth.RequireDatasource(ctx, auth.PermWrite, datasource); err != nil {
 		return nil, err

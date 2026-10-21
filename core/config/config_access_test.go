@@ -255,7 +255,26 @@ func invalidConfigs() map[string]struct {
 			}
 			return cfg
 		}, `database "b"`},
+		"colon roles": {func() *Config {
+			cfg := accessConfig()
+			cfg.Entities[0].Roles.Read = []string{"a:1", "b:2", "c:3", "d:4", "e:5", "f:6"}
+			return cfg
+		}, `"a:1"`},
+		"relationship prefix": {relationshipPrefixConfig, `"rel.a"`},
 	}
+}
+
+// relationshipPrefixConfig has a relationship whose name prefixes several
+// fields.
+func relationshipPrefixConfig() *Config {
+	cfg := accessConfig()
+	cfg.Entities = append(cfg.Entities, EntityConfig{Name: "items"})
+	for _, f := range []string{"rel.a", "rel.b", "rel.c", "rel.d", "rel.e", "rel.f"} {
+		cfg.Entities[0].Fields = append(cfg.Entities[0].Fields, FieldConfig{Name: f})
+	}
+	cfg.Entities[0].Relationships = []RelationshipConfig{{Name: "rel", Target: "items",
+		JoinOn: map[string]string{"id": "id"}}}
+	return cfg
 }
 
 func TestValidateReportsTheSameErrorEachTime(t *testing.T) {

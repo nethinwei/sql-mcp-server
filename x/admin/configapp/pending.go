@@ -91,13 +91,8 @@ func (r *Service) Pending(ctx context.Context, against Against) (*PendingWork, e
 		}
 	}
 	scope := configplan.Scope{Datasources: f.Datasources}
-	for _, g := range configplan.GoneTables(pc.sources, pc.base, scope, pc.missing.Tables) {
-		if who.Allows(g.Datasource) {
-			key := "gone:" + g.Entity
-			out.GoneTables = append(out.GoneTables,
-				PendingGoneTable{Key: key, Ref: g.Ref, Entity: g.Entity, Scanned: g.Scanned, State: states[key]})
-		}
-	}
+	out.DriftTables, out.MoreDriftTables = firstPending(out.DriftTables)
+	out.GoneTables, out.MoreGoneTables = firstPending(pendingGone(pc, scope, who, states))
 	for _, schemas := range configplan.Unscanned(pc.sources, scope) {
 		out.UnscannedSchemas += len(schemas)
 	}
@@ -109,6 +104,46 @@ func (r *Service) Pending(ctx context.Context, against Against) (*PendingWork, e
 	out.Plans, err = r.pendingPlans(ctx, pc, states, who)
 	return out, err
 }
+
+// pendingGone lists the configured tables and views of scope whose tables
+// are gone.
+func pendingGone(
+	pc planContext, scope configplan.Scope, who auth.Principal, states map[string]*PendingState,
+) []PendingGoneTable {
+	out := []PendingGoneTable{}
+	for _, g := range configplan.GoneTables(pc.sources, pc.base, scope, pc.missing.Tables) {
+		if who.Allows(g.Datasource) {
+			key := "gone:" + g.Entity
+			out = append(out,
+				PendingGoneTable{Key: key, Ref: g.Ref, Entity: g.Entity, Scanned: g.Scanned, State: states[key]})
+		}
+	}
+	return out
+}
+
+// pendingTables bounds the drift and gone tables Pending lists: one
+// migration may touch thousands, and the configuration MCP hands the whole
+// answer to an agent; the counts cover them all.
+const pendingTables = 200
+
+// firstPending keeps the first pendingTables of items, those not handled
+// (open) first, and counts the rest.
+func firstPending[T interface{ pendingState() *PendingState }](items []T) ([]T, int) {
+	if len(items) <= pendingTables {
+		return items, 0
+	}
+	handled := func(x T) int {
+		if s := x.pendingState(); s != nil && s.Status != "open" {
+			return 1
+		}
+		return 0
+	}
+	slices.SortStableFunc(items, func(x, y T) int { return handled(x) - handled(y) })
+	return items[:pendingTables], len(items) - pendingTables
+}
+
+func (t PendingTable) pendingState() *PendingState     { return t.State }
+func (t PendingGoneTable) pendingState() *PendingState { return t.State }
 
 func (r *Service) pendingPlans(
 	ctx context.Context, pc planContext, states map[string]*PendingState, who auth.Principal,

@@ -243,4 +243,8 @@ jobs:
           curl -fsSLO https://github.com/modelcontextprotocol/registry/releases/download/v1.7.9/registry_1.7.9_checksums.txt
           sha256sum --check --ignore-missing registry_1.7.9_checksums.txt
           tar xzf mcp-publisher_linux_amd64.tar.gz mcp-publisher
-      - run: make release-metadata-check MCP_PUBLISHER=./mcp-publisher
+      # Checks the file's form against its own version; the tag workflow
+      # verifies the version.
+      - run: >-
+          make release-metadata-check MCP_PUBLISHER=./mcp-publisher
+          RELEASE_VERSION="$(python3 -c 'import json; print(json.load(open("server.json"))["version"])')"

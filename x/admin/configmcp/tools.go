@@ -177,7 +177,8 @@ func registerReads(s *mcp.Server, app Service) {
 	add(s, tool("plan_templates", "The saved plan templates.", true),
 		func(ctx context.Context, _ none) (any, error) { return app.PlanTemplates(ctx) })
 	add(s, tool("pending", "What waits for review: recurring templates with new matches or rules they cannot "+
-		"apply, tables whose fields differ from their columns, tables not imported and schemas never scanned.", true),
+		"apply, tables whose fields differ from their columns or are gone (up to 200 each, unhandled first; "+
+		"moreDriftTables/moreGoneTables count the rest), tables not imported and schemas never scanned.", true),
 		func(ctx context.Context, _ none) (any, error) { return app.Pending(ctx, agentsRead) })
 	add(s, tool("diff", "Unified diff between two revisions, a page of lines at a time; secrets are redacted.", true),
 		func(ctx context.Context, in diffIn) (any, error) {

@@ -8,7 +8,7 @@ import {
 import FilterBuilder from './FilterBuilder.vue'
 import GrantMatrixRow from './GrantMatrixRow.vue'
 import { type Filter } from '@/lib/filter'
-import { locateGrant, setActionOn, type GrantRow as Row } from '@/lib/grants'
+import { grantsByEntity, locateGrant, setActionOn, type GrantRow as Row } from '@/lib/grants'
 import { byNamespace } from '@/lib/names'
 import { EntityIndex, entityId } from '@/lib/entityRefs'
 import { grantable as grantableOn, indexCapabilities, type CapabilityIndex } from '@/lib/capabilities'
@@ -36,20 +36,9 @@ const onlyGranted = ref(props.modelValue.length > 0)
 
 // Grants name entities by reference; they are matched by the entity it names.
 const entityIndex = computed(() => new EntityIndex(props.entities))
-const grantedId = (g: GrantInput) => entityIndex.value.idOf(g.entity)
 
 // The grants of each entity, by entity ID, with their position in modelValue.
-const grantsById = computed(() => {
-  const out = new Map<string, { g: GrantInput; index: number }[]>()
-  props.modelValue.forEach((g, index) => {
-    const id = grantedId(g)
-    if (id === undefined) return
-    const list = out.get(id)
-    if (list) list.push({ g, index })
-    else out.set(id, [{ g, index }])
-  })
-  return out
-})
+const grantsById = computed(() => grantsByEntity(props.modelValue, (ref) => entityIndex.value.idOf(ref)))
 
 // The entities in order with their ID and namespace, kept while the
 // entities stay: toggling a grant does not sort them again.
@@ -88,7 +77,7 @@ const listed = computed<Row[][]>(() => {
       if (!onlyGranted.value) out.push([row({ entity, id, grant: null, index: -1, sub: 0, namespace })])
       continue
     }
-    out.push(grants.map(({ g, index }, sub) => row({ entity, id, grant: g, index, sub, namespace })))
+    out.push(grants.map(({ grant, index }, sub) => row({ entity, id, grant, index, sub, namespace })))
   }
   kept = next
   return out
@@ -156,7 +145,7 @@ const columnEntities = (action: Action) => [...new Set(rows.value.filter((r) => 
 const columnStates = computed(() => new Map(actions.map((action) => {
   const entities = columnEntities(action)
   const on = entities.filter((id) =>
-    (grantsById.value.get(id) ?? []).some(({ g }) => g.actions.includes(action))).length
+    (grantsById.value.get(id) ?? []).some(({ grant }) => grant.actions.includes(action))).length
   return [action, { checked: entities.length > 0 && on === entities.length, partial: on > 0 && on < entities.length,
     any: entities.length > 0 }]
 })))

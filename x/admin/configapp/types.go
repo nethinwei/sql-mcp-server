@@ -179,6 +179,9 @@ type PendingWork struct {
 	UnlistedDatasources []string `json:"unlistedDatasources"`
 	// Configured tables and views whose tables are gone.
 	GoneTables []PendingGoneTable `json:"goneTables"`
+	// The drift and gone tables past the first pendingTables listed.
+	MoreDriftTables int `json:"moreDriftTables"`
+	MoreGoneTables  int `json:"moreGoneTables"`
 }
 
 type PlanChange struct {
@@ -196,8 +199,10 @@ type PlanException struct {
 	// Identifies the exception within its plan: a draft is saved with each exception to confirm
 	// confirmed by its ID.
 	ID string `json:"id"`
-	// renamed, noKey, sideEffects, relationshipDropped, qualified, unknownUser,
-	// noFields, referenced, denied or review.
+	// renamed, noKey, sideEffects, relationshipDropped, relationshipNew,
+	// relationshipStale, qualified, unknownUser, noFields, grantFieldsEmptied,
+	// referenced, denied, review, keyReferenced, keyNotField or rowColumnMissing
+	// (docs/design/planning.md gives each one's level).
 	Kind string `json:"kind"`
 	// block (the proposal cannot be taken), confirm (taking it needs the
 	// exception acknowledged) or info.

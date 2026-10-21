@@ -18,6 +18,11 @@ VERSION ?= dev
 # The release being prepared is server.json's; release-bump takes the next
 # one explicitly.
 RELEASE_VERSION ?= $(shell $(PYTHON) -c 'import json; print(json.load(open("server.json"))["version"])')
+# release-version-named fails a target unless RELEASE_VERSION was named (on
+# the command line or in the environment): server.json's own would only check
+# the file against itself.
+release-version-named = @test "$(origin RELEASE_VERSION)" != file || \
+	{ echo "$@: name the version: make $@ RELEASE_VERSION=x.y.z" >&2; exit 1; }
 RELEASE_IMAGE ?= sql-mcp-server:release-preflight
 QUICKSTART_IMAGE ?= sql-mcp-server:quickstart-check
 VERSION_PACKAGE := github.com/nethinwei/sql-mcp-server/version.value
@@ -73,16 +78,16 @@ release-snapshot: release-check
 # Rewrite all pinned version references (server.json, examples, README GA
 # lines) in one idempotent pass; editorial files stay manual.
 release-bump:
-	@test "$(origin RELEASE_VERSION)" != file || \
-		{ echo "release-bump: name the new version: make release-bump RELEASE_VERSION=x.y.z" >&2; exit 1; }
+	$(release-version-named)
 	$(PYTHON) scripts/release/bump.py --version $(RELEASE_VERSION)
 
 # The checked-in server.json must already name RELEASE_VERSION (server and
 # package versions, OCI tag): verify it before rendering the release copy.
 # Name the version being released (make release-preflight-fast
-# RELEASE_VERSION=x.y.z): left unset it is read from server.json, which then
-# only checks the file against itself. The tag workflow verifies the tag.
+# RELEASE_VERSION=x.y.z); left unset it fails. CI names server.json's own to
+# check the file's form; the tag workflow verifies the tag.
 release-metadata-check:
+	$(release-version-named)
 	$(PYTHON) scripts/release/metadata.py verify --version $(RELEASE_VERSION) --file server.json
 	$(PYTHON) scripts/release/metadata.py render --version $(RELEASE_VERSION) \
 		--file server.json --output dist/server.json
@@ -151,6 +156,7 @@ docs-check:
 	$(GO) run ./internal/docscheck
 
 release-preflight-fast:
+	$(release-version-named)
 	$(MAKE) workflow-check
 	$(MAKE) release-snapshot
 	$(MAKE) release-metadata-check
@@ -158,6 +164,7 @@ release-preflight-fast:
 	$(MAKE) modelscope-check
 
 release-preflight:
+	$(release-version-named)
 	$(MAKE) ci-full
 	$(MAKE) web web-check
 	$(MAKE) smoke-protocol

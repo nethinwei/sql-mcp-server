@@ -478,7 +478,7 @@ func validateRelationshipName(e EntityConfig, name string, localFields map[strin
 		return fmt.Errorf("config: entity %q relationship %q: a name holds no '.' and is not _ or x<number>",
 			e.Name, name)
 	}
-	for field := range localFields {
+	for _, field := range slices.Sorted(maps.Keys(localFields)) {
 		if strings.HasPrefix(field, name+".") {
 			return fmt.Errorf("config: entity %q field %q reads as a field of relationship %q", e.Name, field, name)
 		}

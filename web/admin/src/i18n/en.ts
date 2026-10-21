@@ -257,6 +257,7 @@ const en: typeof zh = {
     noTemplates: 'No recurring template has new matches. Save rules you use often as a recurring template and new tables appear here.',
     toPlans: 'Set up',
     goneTables: 'Tables no longer in the database ({n})',
+    moreTables: '{n} more not listed; handle these first to see them.',
     goneHint: 'The tables of these entities were dropped or renamed: a scan of their schema missed them, or the running server found them missing. Calls to them are refused; the rest is unaffected. Removing them also removes the grants and relationships naming them; review and publish to apply.',
     goneScanned: 'Missed by a scan', goneRuntime: 'Missing at runtime', removeSelected: 'Remove selected from workspace ({n})',
   },

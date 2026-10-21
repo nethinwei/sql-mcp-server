@@ -19,9 +19,12 @@ jobs:
           go-version: "1.26.10"
           cache: true
       # server.json is released as checked in, with the tag's version: a
-      # tag it does not name fails here, before anything is built.
+      # tag it does not name fails here, before anything is built. An RC tag
+      # (vX.Y.Z-rc.N) names the release server.json holds (X.Y.Z).
       - name: verify server.json names the tag
-        run: python3 scripts/release/metadata.py verify --version "${GITHUB_REF_NAME#v}" --file server.json
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          python3 scripts/release/metadata.py verify --version "${VERSION%%-*}" --file server.json
       - run: make release-quality
 
   integration:
@@ -278,7 +281,7 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.value }}
         run: >-
-          python3 scripts/release/metadata.py verify --version "$VERSION" --file server.json &&
+          python3 scripts/release/metadata.py verify --version "${VERSION%%-*}" --file server.json &&
           python3 scripts/release/metadata.py render
           --version "$VERSION"
           --file server.json

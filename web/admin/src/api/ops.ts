@@ -307,7 +307,7 @@ export const PendingStatePartsFragment = graphql(`
 export const PendingQuery = graphql(`
   query Pending {
     pending {
-      drift newTables unscannedSchemas unlistedDatasources
+      drift newTables unscannedSchemas unlistedDatasources moreDriftTables moreGoneTables
       plans { key template { ...PlanTemplateParts } report { ...PlanReportParts } error state { ...PendingStateParts } }
       driftTables { key ref entity added missing state { ...PendingStateParts } }
       goneTables { key ref entity scanned state { ...PendingStateParts } }

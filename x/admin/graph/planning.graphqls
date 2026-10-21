@@ -410,8 +410,10 @@ type PlanException {
   """
   id: String!
   """
-  renamed, noKey, sideEffects, relationshipDropped, qualified, unknownUser,
-  noFields, referenced, denied or review.
+  renamed, noKey, sideEffects, relationshipDropped, relationshipNew,
+  relationshipStale, qualified, unknownUser, noFields, grantFieldsEmptied,
+  referenced, denied, review, keyReferenced, keyNotField or rowColumnMissing
+  (docs/design/planning.md gives each one's level).
   """
   kind: String!
   """
@@ -458,6 +460,10 @@ type PendingWork {
   unscannedSchemas: Int!
   "Datasources whose schemas were never listed: what they hold is unknown."
   unlistedDatasources: [String!]!
+  "Drift tables past the first 200 listed (those not handled first)."
+  moreDriftTables: Int!
+  "Gone tables past the first 200 listed (those not handled first)."
+  moreGoneTables: Int!
 }
 
 type PendingGoneTable {
