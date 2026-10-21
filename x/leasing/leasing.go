@@ -378,7 +378,8 @@ func sleep(ctx context.Context, d time.Duration) {
 
 // TakeOver runs the unfinished batches whose owner stopped beating: what
 // they did not do yet is done here, and the items they were doing again.
-// resolve says how to work a datasource as configured now.
+// resolve says how to work a datasource as configured now. The items of a
+// batch are read once it is claimed, not those of every batch others run.
 func (r *Runner) TakeOver(ctx context.Context, resolve Resolver) {
 	open, err := r.store.UnfinishedBatches(ctx)
 	if err != nil {
@@ -389,11 +390,10 @@ func (r *Runner) TakeOver(ctx context.Context, resolve Resolver) {
 		if r.Running(b.ID) {
 			continue
 		}
-		now, owner := r.opts.Now(), r.run()
-		if claimed, err := r.store.ClaimBatch(ctx, b.ID, owner, now.Add(-r.opts.Stale), now); err != nil || !claimed {
+		b, ok := r.claim(ctx, b.ID)
+		if !ok {
 			continue
 		}
-		b.Owner, b.Heartbeat = owner, now
 		if b.Canceled {
 			// Canceled before its run ended: it ends now, not scanned again.
 			r.finish(&b, "canceled")
@@ -416,6 +416,23 @@ func (r *Runner) TakeOver(ctx context.Context, resolve Resolver) {
 		slog.Info("scan batch taken over", "batch", b.ID, "datasource", b.Datasource)
 		r.runBatch(b, work)
 	}
+}
+
+// claim makes a new run of this process the owner of batch id when its
+// owner stopped beating, and reads it, items too; false when another owns
+// it or it could not be read (left claimed, taken over again once stale).
+func (r *Runner) claim(ctx context.Context, id string) (catalog.Batch, bool) {
+	now, owner := r.opts.Now(), r.run()
+	if claimed, err := r.store.ClaimBatch(ctx, id, owner, now.Add(-r.opts.Stale), now); err != nil || !claimed {
+		return catalog.Batch{}, false
+	}
+	b, ok, err := r.store.Batch(ctx, id)
+	if err != nil || !ok {
+		slog.Warn("scan batch claimed but not read", "batch", id, "error", err)
+		return catalog.Batch{}, false
+	}
+	b.Owner, b.Heartbeat = owner, now
+	return b, true
 }
 
 // ErrGone is the error of a Resolver for a datasource no longer configured:

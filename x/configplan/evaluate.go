@@ -318,8 +318,9 @@ type evaluation struct {
 	report   Report
 	changes  map[string]*Change
 	order    []string
-	// summarized tells which entities each change names, by change key.
-	summarized map[string]map[string]bool
+	// summarized tells which entities each change names, with the fields
+	// it counts of each, by change key.
+	summarized map[string]map[string]int
 	// fieldRules are the plan's field rules, compiled.
 	fieldRules []compiledFieldRule
 	// refs resolves references among the entities once the plan's are
@@ -329,7 +330,13 @@ type evaluation struct {
 	uses, joins map[string]map[string][]string
 	// dropped are the fields a sync removed, by entity ID (see
 	// dropGrantFields).
-	dropped map[string][]string
+	dropped map[string]droppedFields
+}
+
+// droppedFields are the fields a sync removed from the entity of a table.
+type droppedFields struct {
+	ref    string
+	fields []string
 }
 
 type compiledFieldRule struct {
@@ -348,7 +355,7 @@ func newEvaluation(in Input, p Plan) *evaluation {
 	ev := &evaluation{
 		in: in, plan: p, cfg: &cfg, index: map[string]int{}, imported: map[string]string{}, changed: map[string]bool{},
 		roles: map[string]bool{}, users: map[string]bool{}, changes: map[string]*Change{},
-		summarized: map[string]map[string]bool{}, dropped: map[string][]string{},
+		summarized: map[string]map[string]int{}, dropped: map[string]droppedFields{},
 	}
 	for _, r := range p.Fields {
 		ev.fieldRules = append(ev.fieldRules, compiledFieldRule{r, compileGlobs(r.Columns), compileGlobs(r.Types)})
@@ -394,11 +401,39 @@ func (ev *evaluation) summarize(c Change, entity string, fields int) {
 		ev.order = append(ev.order, key)
 	}
 	got.Fields += fields
-	if entity != "" && !ev.summarized[key][entity] {
-		if ev.summarized[key] == nil {
-			ev.summarized[key] = map[string]bool{}
-		}
-		ev.summarized[key][entity] = true
+	if entity == "" {
+		return
+	}
+	if ev.summarized[key] == nil {
+		ev.summarized[key] = map[string]int{}
+	}
+	if _, ok := ev.summarized[key][entity]; !ok {
 		got.Entities = append(got.Entities, entity)
 	}
+	ev.summarized[key][entity] += fields
+}
+
+// forget takes the entities of drop out of the report: the changes naming
+// them (a change left naming none goes) and their exceptions.
+func (ev *evaluation) forget(drop map[string]bool) {
+	ev.order = slices.DeleteFunc(ev.order, func(key string) bool {
+		c, named := ev.changes[key], ev.summarized[key]
+		if len(c.Entities) == 0 {
+			return false
+		}
+		c.Entities = slices.DeleteFunc(c.Entities, func(id string) bool {
+			if drop[id] {
+				c.Fields -= named[id]
+				delete(named, id)
+			}
+			return drop[id]
+		})
+		if len(c.Entities) > 0 {
+			return false
+		}
+		delete(ev.changes, key)
+		delete(ev.summarized, key)
+		return true
+	})
+	ev.report.Exceptions = slices.DeleteFunc(ev.report.Exceptions, func(x Exception) bool { return drop[x.Entity] })
 }

@@ -39,5 +39,18 @@ func registerScans(s *mcp.Server, app Service) {
 		})
 	add(s, tool("scan_status", "Recent scan batches of a datasource, running ones first, with each schema's "+
 		"state and error.", true),
-		func(ctx context.Context, in datasourceIn) (any, error) { return app.ScanBatches(ctx, in.Datasource) })
+		func(ctx context.Context, in datasourceIn) (any, error) {
+			all, err := app.ScanBatches(ctx, in.Datasource)
+			if err != nil {
+				return nil, err
+			}
+			for i, b := range all { // listed without their items
+				full, err := app.ScanBatch(ctx, b.ID)
+				if err != nil {
+					return nil, err
+				}
+				all[i] = *full
+			}
+			return all, nil
+		})
 }

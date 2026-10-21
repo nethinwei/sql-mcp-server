@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { ScanBatchesQuery, SchemaListQuery, StartScanBatchMutation } from '@/api/ops'
+import { ScanBatchesQuery, ScanBatchQuery, SchemaListQuery, StartScanBatchMutation } from '@/api/ops'
 
 // The server is a map from document to answer.
 const calls: [unknown, unknown][] = []
@@ -23,6 +23,16 @@ const listed = (source: string, schemas: string[], scanned: string[] = []) => ({
     schemas: schemas.map((name) => ({ name, scannedAt: scanned.includes(name) ? 'now' : null, tables: null })),
   },
 })
+
+// The server lists batches without their items and reads them per batch.
+const serve = (next: () => ReturnType<typeof batch>[]) => {
+  let current: ReturnType<typeof batch>[] = []
+  answer.set(ScanBatchesQuery, () => {
+    current = next()
+    return { scanBatches: current.map(({ items: _, ...header }) => header) }
+  })
+  answer.set(ScanBatchQuery, ({ id }) => ({ scanBatch: current.find((b) => b.id === id) }))
+}
 
 const batch = (id: string, state: string, items: [string, string][]) => ({
   id, datasource: 'shop', state, total: items.length, startedBy: 'root', startedAt: '', finishedAt: null,
@@ -77,7 +87,7 @@ describe('batches', () => {
       batch('b1', 'done', [['s1', 'done'], ['s2', 'failed']]),
     ]
     answer.set(StartScanBatchMutation, () => ({ startScanBatch: batch('b1', 'running', [['s1', 'pending'], ['s2', 'pending']]) }))
-    answer.set(ScanBatchesQuery, () => ({ scanBatches: [answers.shift() ?? answers[0]] }))
+    serve(() => [answers.shift() ?? answers[0]])
     answer.set(SchemaListQuery, () => listed('a', ['s1', 's2'], ['s1']))
     const version = scans.version
     await startBatch('shop', ['s1', 's2'])
@@ -88,9 +98,18 @@ describe('batches', () => {
   })
 
   it('reads the running batches again when the console comes back', async () => {
-    answer.set(ScanBatchesQuery, () => ({ scanBatches: [batch('b9', 'done', [['x', 'done']])] }))
+    serve(() => [batch('b9', 'done', [['x', 'done']])])
     answer.set(SchemaListQuery, () => listed('a', ['x'], ['x']))
     await followBatches('again')
     expect(scansOf('again').batches.map((b) => b.id)).toEqual(['b9'])
+    expect(batchState(scansOf('again'), 'x')).toEqual({ state: 'done', error: null })
+  })
+
+  it('reads the items of a finished batch once', async () => {
+    serve(() => [batch('b7', 'done', [['y', 'failed']])])
+    await followBatches('once')
+    await followBatches('once')
+    expect(calls.filter(([doc]) => doc === ScanBatchQuery)).toHaveLength(1)
+    expect(batchState(scansOf('once'), 'y')).toEqual({ state: 'failed', error: 'boom' })
   })
 })

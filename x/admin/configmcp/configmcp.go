@@ -48,6 +48,7 @@ type Service interface {
 	Previewed(ctx context.Context, planID string) (*configapp.Preview, error)
 	Revisions(ctx context.Context, limit int) ([]revision.Revision, error)
 	ScanBatches(ctx context.Context, datasource string) ([]configapp.ScanBatch, error)
+	ScanBatch(ctx context.Context, id string) (*configapp.ScanBatch, error)
 	SchemaList(ctx context.Context, datasource string, refresh bool) (*configapp.SchemaList, error)
 	Simulate(ctx context.Context, in configapp.SimulateRequest) (*configapp.Simulation, error)
 	StartScanBatch(ctx context.Context, in configapp.ScanBatchInput) (*configapp.ScanBatch, error)

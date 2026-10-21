@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -518,6 +519,19 @@ func TestScanBatches(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("batches = %+v", all)
 		}
+	}
+	// The list counts the items; they are read per batch when asked for.
+	type item struct{ Schema, State string }
+	var listed struct{ ScanBatches []struct{ Items []item } }
+	mustPost(t, c, `{ scanBatches(datasource: "shop") { items { schema state } } }`, &listed)
+	var one struct{ ScanBatch struct{ Items []item } }
+	if err := c.Post(`query($id: ID!) { scanBatch(id: $id) { items { schema state } } }`, &one,
+		client.Var("id", batch.StartScanBatch.ID)); err != nil {
+		t.Fatal(err)
+	}
+	want := []item{{"public", "done"}}
+	if !reflect.DeepEqual(listed.ScanBatches[0].Items, want) || !reflect.DeepEqual(one.ScanBatch.Items, want) {
+		t.Fatalf("items listed %+v, of the batch %+v", listed, one)
 	}
 	var retry map[string]any
 	err := c.Post(

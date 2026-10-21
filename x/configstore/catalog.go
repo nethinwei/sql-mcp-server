@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/internal/kit"
@@ -40,15 +42,11 @@ func (s *SQLStore) PutCatalogList(ctx context.Context, source, datasource string
 	if err != nil {
 		return err
 	}
-	return s.withTx(ctx, func(tx *sql.Tx) error {
-		if _, err := s.exec(ctx, tx, "DELETE FROM smcp_catalog_lists WHERE source_id = ?", source); err != nil {
-			return err
-		}
-		_, err := s.exec(ctx, tx,
-			"INSERT INTO smcp_catalog_lists (source_id, datasource, payload, listed_us) VALUES (?, ?, ?, ?)",
-			source, datasource, string(payload), toMicros(l.ListedAt))
-		return err
-	})
+	_, err = s.exec(ctx, s.db,
+		"INSERT INTO smcp_catalog_lists (source_id, datasource, payload, listed_us) VALUES (?, ?, ?, ?)"+
+			s.dialect.upsert([]string{"source_id"}, "datasource", "payload", "listed_us"),
+		source, datasource, string(payload), toMicros(l.ListedAt))
+	return err
 }
 
 // CatalogVersions implements catalog.Store.
@@ -102,20 +100,21 @@ func scanSchema(row scanner) (catalog.Schema, error) {
 	return sc, nil
 }
 
-// PutCatalogSchemas implements catalog.Store.
+// PutCatalogSchemas implements catalog.Store. Each schema is one upsert, in
+// the order of their names, so concurrent puts of the same schemas wait on
+// one another instead of failing on the key or deadlocking.
 func (s *SQLStore) PutCatalogSchemas(ctx context.Context, source, datasource string, schemas []catalog.Schema) error {
+	schemas = slices.SortedFunc(slices.Values(schemas),
+		func(a, b catalog.Schema) int { return strings.Compare(a.Name, b.Name) })
+	upsert := s.dialect.upsert([]string{"source_id", "schema_name"}, "datasource", "table_count", "payload", "scanned_us")
 	return s.withTx(ctx, func(tx *sql.Tx) error {
 		for _, sc := range schemas {
 			payload, err := json.Marshal(sc)
 			if err != nil {
 				return err
 			}
-			if _, err := s.exec(ctx, tx, "DELETE FROM smcp_catalog_schemas WHERE source_id = ? AND schema_name = ?",
-				source, sc.Name); err != nil {
-				return err
-			}
 			if _, err := s.exec(ctx, tx, "INSERT INTO smcp_catalog_schemas "+
-				"(source_id, schema_name, datasource, table_count, payload, scanned_us) VALUES (?, ?, ?, ?, ?, ?)",
+				"(source_id, schema_name, datasource, table_count, payload, scanned_us) VALUES (?, ?, ?, ?, ?, ?)"+upsert,
 				source, sc.Name, datasource, len(sc.Tables), string(payload), toMicros(sc.ScannedAt)); err != nil {
 				return err
 			}

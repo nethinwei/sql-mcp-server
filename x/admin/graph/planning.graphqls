@@ -172,8 +172,14 @@ extend type Query {
   drafts: [DraftRevision!]!
   "The signed-in administrator's tokens for the configuration MCP endpoint."
   mcpTokens: [McpToken!]!
-  "Recent schema scan batches of a datasource, running ones first."
+  """
+  Recent schema scan batches of a datasource, running ones first. Their items
+  are read per batch when asked for: a poll asks for the counts only and reads
+  the items of a batch with scanBatch.
+  """
   scanBatches(datasource: String!): [ScanBatch!]!
+  "A scan batch with its items."
+  scanBatch(id: ID!): ScanBatch!
 }
 
 extend type Mutation {

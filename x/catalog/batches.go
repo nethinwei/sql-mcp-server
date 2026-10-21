@@ -31,7 +31,11 @@ type Batch struct {
 	Heartbeat  time.Time
 	// Canceled asks the owner to stop.
 	Canceled bool
-	Items    []BatchItem
+	// Items are the batch's schemas, as Batch reads them; the lists
+	// (Batches, UnfinishedBatches) leave them out and count them by state
+	// in Counts instead.
+	Items  []BatchItem
+	Counts map[string]int
 }
 
 // Item states: an item goes from pending to running, and from running to
@@ -84,9 +88,10 @@ type BatchStore interface {
 	// BatchCanceled reports whether batch id was canceled (false when there
 	// is none), without reading its items.
 	BatchCanceled(ctx context.Context, id string) (bool, error)
-	// Batches lists the batches of datasource, newest first.
+	// Batches lists the batches of datasource, newest first, without their
+	// items (see Batch.Counts): a console polls it.
 	Batches(ctx context.Context, datasource string, limit int) ([]Batch, error)
-	// UnfinishedBatches lists every batch not finished.
+	// UnfinishedBatches lists every batch not finished, without their items.
 	UnfinishedBatches(ctx context.Context) ([]Batch, error)
 	// ClaimBatch makes owner the owner of an unfinished batch whose heartbeat
 	// is before staleBefore, or already owner's, beating at now; false when
@@ -111,6 +116,16 @@ type memoryBatches struct {
 
 func cloneBatch(b Batch) Batch {
 	b.Items = slices.Clone(b.Items)
+	return b
+}
+
+// header is b as the lists give it: its items counted by state.
+func header(b Batch) Batch {
+	b.Counts = map[string]int{}
+	for _, it := range b.Items {
+		b.Counts[it.State]++
+	}
+	b.Items = nil
 	return b
 }
 
@@ -164,7 +179,7 @@ func (m *MemoryStore) Batches(_ context.Context, datasource string, limit int) (
 	out := []Batch{}
 	for _, b := range m.batches.all {
 		if b.Datasource == datasource {
-			out = append(out, cloneBatch(b))
+			out = append(out, header(b))
 		}
 	}
 	slices.SortFunc(
@@ -180,7 +195,7 @@ func (m *MemoryStore) UnfinishedBatches(context.Context) ([]Batch, error) {
 	out := []Batch{}
 	for _, b := range m.batches.all {
 		if b.FinishedAt.IsZero() {
-			out = append(out, cloneBatch(b))
+			out = append(out, header(b))
 		}
 	}
 	slices.SortFunc(out, func(a, b Batch) int { return cmp.Compare(a.ID, b.ID) })

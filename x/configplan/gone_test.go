@@ -134,6 +134,46 @@ func TestRemovedTablesLeaveTheRulesThatFollow(t *testing.T) {
 	valid(t, base, p)
 }
 
+// A removed table leaves the report: neither the changes a sync made to it
+// before nor their exceptions are reported, only its removal.
+func TestRemovedTablesLeaveTheReport(t *testing.T) {
+	t.Parallel()
+	base := decode(t, goneYAML)
+	customers := "shop.public.customers"
+	names := func(p Proposal) (out []string) {
+		for _, c := range p.Report.Changes {
+			if slices.Contains(c.Entities, customers) {
+				out = append(out, c.Kind)
+			}
+		}
+		for _, x := range p.Report.Exceptions {
+			if x.Entity == customers {
+				out = append(out, x.Kind)
+			}
+		}
+		return out
+	}
+	sync := SyncRule{Keys: true, Add: true, Remove: true}
+	kept, err := Evaluate(Input{Base: base, Published: base, Sources: shop()}, Plan{Sync: &sync})
+	if err != nil || !slices.Contains(names(kept), ChangeSyncAdd) {
+		t.Fatalf("the sync reports no change of %s: %v %v", customers, names(kept), err)
+	}
+	sync.RemoveTables = true
+	missing := map[string]bool{customers: true}
+	p, err := Evaluate(Input{Base: base, Published: base, Sources: shop(), Missing: missing}, Plan{Sync: &sync})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := names(p); !slices.Equal(got, []string{ChangeRemoveTable}) {
+		t.Fatalf("the report names the removed %s as %v: %+v", customers, got, p.Report)
+	}
+	for _, c := range p.Report.Changes {
+		if len(c.Entities) == 0 && c.Kind != ChangeCreateRole {
+			t.Fatalf("a change names no entity: %+v", c)
+		}
+	}
+}
+
 // Evaluating a plan leaves the caller's plan as it was.
 func TestEvaluateLeavesThePlan(t *testing.T) {
 	t.Parallel()

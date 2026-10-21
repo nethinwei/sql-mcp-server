@@ -216,6 +216,23 @@ func TestSyncFollowsReferences(t *testing.T) {
 	}
 }
 
+// A grant whose every listed field a sync removes reads none of its entity:
+// the report asks to confirm it, naming the principal.
+func TestSyncEmptyingAGrantsFieldsIsReported(t *testing.T) {
+	t.Parallel()
+	base := decode(t, strings.Replace(baseYAML, "fields: {read: [id, gone]}", "fields: {read: [gone]}", 1))
+	p := evaluate(t, base, Plan{Scope: Scope{Drift: true}, Sync: &SyncRule{Remove: true}})
+	if got := kinds(p.Report.Exceptions); !slices.Equal(got, []string{"noFields shop.public.customers role:analyst"}) {
+		t.Fatalf("exceptions = %v", got)
+	}
+	if x := p.Report.Exceptions[0]; x.Level != LevelConfirm || x.Ref != "shop.public.customers" {
+		t.Fatalf("exception = %+v", x)
+	}
+	if fields := p.Config.Roles["analyst"].Grants[0].Fields; len(fields.Read) != 0 || len(fields.Write) != 0 {
+		t.Fatalf("fields = %+v", fields)
+	}
+}
+
 func TestNamesExclusionsAndAmbiguity(t *testing.T) {
 	t.Parallel()
 	base := decode(t, strings.Replace(baseYAML, "roles:", `  - name: orders

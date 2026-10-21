@@ -33,6 +33,7 @@ type ResolverRoot interface {
 	Mutation() MutationResolver
 	Query() QueryResolver
 	Revision() RevisionResolver
+	ScanBatch() ScanBatchResolver
 	Workspace() WorkspaceResolver
 }
 
@@ -479,6 +480,7 @@ type ComplexityRoot struct {
 		Published            func(childComplexity int) int
 		Revision             func(childComplexity int, id string) int
 		Revisions            func(childComplexity int, limit *int) int
+		ScanBatch            func(childComplexity int, id string) int
 		ScanBatches          func(childComplexity int, datasource string) int
 		SchemaList           func(childComplexity int, datasource string, refresh *bool) int
 		SchemaScan           func(childComplexity int, id string) int
@@ -823,11 +825,15 @@ type QueryResolver interface {
 	Drafts(ctx context.Context) ([]DraftRevision, error)
 	McpTokens(ctx context.Context) ([]configapp.McpToken, error)
 	ScanBatches(ctx context.Context, datasource string) ([]configapp.ScanBatch, error)
+	ScanBatch(ctx context.Context, id string) (*configapp.ScanBatch, error)
 }
 type RevisionResolver interface {
 	Config(ctx context.Context, obj *Revision) (*Configuration, error)
 	Sections(ctx context.Context, obj *Revision) (any, error)
 	Yaml(ctx context.Context, obj *Revision) (string, error)
+}
+type ScanBatchResolver interface {
+	Items(ctx context.Context, obj *configapp.ScanBatch) ([]configapp.ScanBatchItem, error)
 }
 type WorkspaceResolver interface {
 	Sections(ctx context.Context, obj *configapp.Workspace) (any, error)
@@ -2868,6 +2874,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.Revisions(childComplexity, args["limit"].(*int)), true
+	case "Query.scanBatch":
+		if e.ComplexityRoot.Query.ScanBatch == nil {
+			break
+		}
+
+		args, err := ec.field_Query_scanBatch_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.ScanBatch(childComplexity, args["id"].(string)), true
 	case "Query.scanBatches":
 		if e.ComplexityRoot.Query.ScanBatches == nil {
 			break
@@ -6095,6 +6112,20 @@ func (ec *executionContext) field_Query_revisions_args(ctx context.Context, rawA
 		return nil, err
 	}
 	args["limit"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_scanBatch_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNID2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["id"] = arg0
 	return args, nil
 }
 
@@ -15046,6 +15077,50 @@ func (ec *executionContext) fieldContext_Query_scanBatches(ctx context.Context, 
 	return fc, nil
 }
 
+func (ec *executionContext) _Query_scanBatch(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_scanBatch(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().ScanBatch(ctx, fc.Args["id"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *configapp.ScanBatch) graphql.Marshaler {
+			return ec.marshalNScanBatch2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐScanBatch(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_scanBatch(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ScanBatch(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_scanBatch_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query___type(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -15986,7 +16061,7 @@ func (ec *executionContext) _ScanBatch_items(ctx context.Context, field graphql.
 			return ec.fieldContext_ScanBatch_items(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.Items, nil
+			return ec.Resolvers.ScanBatch().Items(ctx, obj)
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []configapp.ScanBatchItem) graphql.Marshaler {
@@ -16000,8 +16075,8 @@ func (ec *executionContext) fieldContext_ScanBatch_items(_ context.Context, fiel
 	fc = &graphql.FieldContext{
 		Object:     "ScanBatch",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_ScanBatchItem(ctx, field)
 		},
@@ -25305,6 +25380,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "scanBatch":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_scanBatch(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "__type":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Query___type(ctx, field)
@@ -25759,62 +25856,95 @@ func (ec *executionContext) _ScanBatch(ctx context.Context, sel ast.SelectionSet
 		case "id":
 			out.Values[i] = ec._ScanBatch_id(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "datasource":
 			out.Values[i] = ec._ScanBatch_datasource(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "state":
 			out.Values[i] = ec._ScanBatch_state(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "total":
 			out.Values[i] = ec._ScanBatch_total(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "done":
 			out.Values[i] = ec._ScanBatch_done(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "failed":
 			out.Values[i] = ec._ScanBatch_failed(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "canceled":
 			out.Values[i] = ec._ScanBatch_canceled(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "pending":
 			out.Values[i] = ec._ScanBatch_pending(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "items":
-			out.Values[i] = ec._ScanBatch_items(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._ScanBatch_items(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
 			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "startedBy":
 			out.Values[i] = ec._ScanBatch_startedBy(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "startedAt":
 			out.Values[i] = ec._ScanBatch_startedAt(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "finishedAt":
 			out.Values[i] = ec._ScanBatch_finishedAt(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
@@ -28239,11 +28369,11 @@ func (ec *executionContext) marshalNDraftRevision2ᚕgithubᚗcomᚋnethinweiᚋ
 	return ret
 }
 
-func (ec *executionContext) marshalNEntity2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItem(ctx context.Context, sel ast.SelectionSet, v Entity) graphql.Marshaler {
+func (ec *executionContext) marshalNEntity2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItem(ctx context.Context, sel ast.SelectionSet, v configapp.EntityItem) graphql.Marshaler {
 	return ec._Entity(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNEntity2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItemᚄ(ctx context.Context, sel ast.SelectionSet, v []Entity) graphql.Marshaler {
+func (ec *executionContext) marshalNEntity2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐEntityItemᚄ(ctx context.Context, sel ast.SelectionSet, v []configapp.EntityItem) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
@@ -29022,11 +29152,11 @@ func (ec *executionContext) marshalNRevisionState2githubᚗcomᚋnethinweiᚋsql
 	return v
 }
 
-func (ec *executionContext) marshalNRole2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItem(ctx context.Context, sel ast.SelectionSet, v Role) graphql.Marshaler {
+func (ec *executionContext) marshalNRole2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItem(ctx context.Context, sel ast.SelectionSet, v configapp.RoleItem) graphql.Marshaler {
 	return ec._Role(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNRole2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItemᚄ(ctx context.Context, sel ast.SelectionSet, v []Role) graphql.Marshaler {
+func (ec *executionContext) marshalNRole2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐRoleItemᚄ(ctx context.Context, sel ast.SelectionSet, v []configapp.RoleItem) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
@@ -29473,11 +29603,11 @@ func (ec *executionContext) marshalNUnscannedSchemas2ᚕgithubᚗcomᚋnethinwei
 	return ret
 }
 
-func (ec *executionContext) marshalNUser2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItem(ctx context.Context, sel ast.SelectionSet, v User) graphql.Marshaler {
+func (ec *executionContext) marshalNUser2githubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItem(ctx context.Context, sel ast.SelectionSet, v configapp.UserItem) graphql.Marshaler {
 	return ec._User(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNUser2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItemᚄ(ctx context.Context, sel ast.SelectionSet, v []User) graphql.Marshaler {
+func (ec *executionContext) marshalNUser2ᚕgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐUserItemᚄ(ctx context.Context, sel ast.SelectionSet, v []configapp.UserItem) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]

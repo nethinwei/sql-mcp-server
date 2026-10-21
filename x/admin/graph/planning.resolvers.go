@@ -234,6 +234,24 @@ func (r *queryResolver) ScanBatches(ctx context.Context, datasource string) ([]c
 	return r.App.ScanBatches(ctx, datasource)
 }
 
+// ScanBatch is the resolver for the scanBatch field.
+func (r *queryResolver) ScanBatch(ctx context.Context, id string) (*configapp.ScanBatch, error) {
+	return r.App.ScanBatch(ctx, id)
+}
+
+// Items is the resolver for the items field.
+func (r *scanBatchResolver) Items(ctx context.Context, obj *configapp.ScanBatch) ([]configapp.ScanBatchItem, error) {
+	if obj.Items != nil {
+		return obj.Items, nil
+	}
+	// Listed without them: read the batch's.
+	b, err := r.App.ScanBatch(ctx, obj.ID)
+	if err != nil {
+		return nil, err
+	}
+	return b.Items, nil
+}
+
 // Sections is the resolver for the sections field.
 func (r *workspaceResolver) Sections(ctx context.Context, obj *configapp.Workspace) (any, error) {
 	if err := readsContent(ctx); err != nil {
@@ -258,7 +276,13 @@ func (r *workspaceResolver) Conflicts(ctx context.Context, obj *configapp.Worksp
 	return obj.Conflicts, nil
 }
 
+// ScanBatch returns ScanBatchResolver implementation.
+func (r *Resolver) ScanBatch() ScanBatchResolver { return &scanBatchResolver{r} }
+
 // Workspace returns WorkspaceResolver implementation.
 func (r *Resolver) Workspace() WorkspaceResolver { return &workspaceResolver{r} }
 
-type workspaceResolver struct{ *Resolver }
+type (
+	scanBatchResolver struct{ *Resolver }
+	workspaceResolver struct{ *Resolver }
+)

@@ -85,7 +85,8 @@ func (ev *evaluation) fieldReferences(id, field string) []string {
 
 // dropGrantFields removes the fields a sync removed (dropped) from the field
 // lists of the grants on their entities, in one pass over the grants: a
-// sync may remove thousands.
+// sync may remove thousands. A grant left with no field reads none of its
+// entity, which the report says.
 func (ev *evaluation) dropGrantFields() {
 	if len(ev.dropped) == 0 {
 		return
@@ -98,7 +99,7 @@ func (ev *evaluation) dropGrantFields() {
 				continue
 			}
 			on, ok := ev.resolve(g.Entity)
-			gone := ev.dropped[on]
+			gone := ev.dropped[on].fields
 			if !ok || !slices.ContainsFunc(slices.Concat(g.Fields.Read, g.Fields.Write), func(f string) bool {
 				return slices.Contains(gone, f)
 			}) {
@@ -111,6 +112,9 @@ func (ev *evaluation) dropGrantFields() {
 				return slices.DeleteFunc(slices.Clone(fs), func(f string) bool { return slices.Contains(gone, f) })
 			}
 			out[i].Fields = &config.FieldACLConfig{Read: without(g.Fields.Read), Write: without(g.Fields.Write)}
+			if len(out[i].Fields.Read) == 0 && len(out[i].Fields.Write) == 0 {
+				ev.except(Exception{Kind: ExceptionNoFields, Ref: ev.dropped[on].ref, Entity: on, Detail: p.String()})
+			}
 		}
 		if out != nil {
 			ev.setGrants(p, out)

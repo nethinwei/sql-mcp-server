@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -449,5 +450,43 @@ func TestRetryWaitsByTheRunnersClock(t *testing.T) {
 	}
 	if got := waitFinished(t, store, start(t, r, failsOnce, "a").ID); got.Items[0].State != catalog.ItemDone {
 		t.Fatalf("items = %+v", got.Items)
+	}
+}
+
+// readBatches records the batches whose items a store was asked for.
+type readBatches struct {
+	catalog.BatchStore
+	mu   sync.Mutex
+	read []string
+}
+
+func (r *readBatches) Batch(ctx context.Context, id string) (catalog.Batch, bool, error) {
+	r.mu.Lock()
+	r.read = append(r.read, id)
+	r.mu.Unlock()
+	return r.BatchStore.Batch(ctx, id)
+}
+
+// A takeover reads the items of the batch it claimed only: those of batches
+// others run stay unread.
+func TestTakeOverReadsTheItemsOfClaimedBatchesOnly(t *testing.T) {
+	t.Parallel()
+	store := &readBatches{BatchStore: catalog.NewMemoryStore()}
+	now := time.Now()
+	for id, beat := range map[string]time.Time{"stale": now.Add(-time.Hour), "live": now.Add(time.Hour)} {
+		b := catalog.Batch{ID: id, Datasource: "shop", Owner: "other", StartedAt: beat, Heartbeat: beat,
+			Items: items("a", "b")}
+		if _, created, err := store.CreateBatch(context.Background(), b, 4); err != nil || !created {
+			t.Fatalf("create %s: %v %v", id, created, err)
+		}
+	}
+	r := New(store, quick)
+	t.Cleanup(r.Close)
+	r.TakeOver(context.Background(), resolving(succeeds))
+	waitFinished(t, store.BatchStore, "stale")
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if !slices.Equal(store.read, []string{"stale"}) {
+		t.Fatalf("items read of %v, want of the claimed batch only", store.read)
 	}
 }

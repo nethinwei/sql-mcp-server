@@ -160,6 +160,7 @@ var requiredPermissions = map[string][]string{
 	"resolveConflict":     {auth.PermWrite},
 	"retryScanBatch":      {auth.PermWrite},
 	"savePlanTemplate":    {auth.PermWrite},
+	"scanBatch":           {auth.PermWrite},
 	"scanBatches":         {auth.PermWrite},
 	"schemaList":          {auth.PermWrite},
 	"schemaScan":          {auth.PermWrite},

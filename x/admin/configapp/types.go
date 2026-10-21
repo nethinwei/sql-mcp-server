@@ -263,7 +263,8 @@ type ScanBatch struct {
 	Failed   int    `json:"failed"`
 	Canceled int    `json:"canceled"`
 	// Schemas waiting or scanning.
-	Pending    int             `json:"pending"`
+	Pending int `json:"pending"`
+	// Items are nil in a list: ask for the batch (Service.ScanBatch).
 	Items      []ScanBatchItem `json:"items"`
 	StartedBy  string          `json:"startedBy"`
 	StartedAt  time.Time       `json:"startedAt"`

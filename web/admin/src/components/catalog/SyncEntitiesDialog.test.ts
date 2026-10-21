@@ -4,7 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import { defineComponent, h, nextTick, ref } from 'vue'
 import zh from '@/i18n/zh-CN'
-import { ScanBatchesQuery, SchemaListQuery, StartScanBatchMutation } from '@/api/ops'
+import { ScanBatchesQuery, ScanBatchQuery, SchemaListQuery, StartScanBatchMutation } from '@/api/ops'
 import type { EntityInput } from '@/gql/schema'
 import type { Plan } from '@/lib/plan'
 import { useStatus } from '@/stores/status'
@@ -90,7 +90,14 @@ describe('SyncEntitiesDialog', () => {
     vi.useFakeTimers()
     const states = ['running', 'running', 'done']
     answer.set(StartScanBatchMutation, () => ({ startScanBatch: batch('running') }))
-    answer.set(ScanBatchesQuery, () => ({ scanBatches: [batch(states.shift() ?? 'done')] }))
+    // Listed without items, read per batch.
+    let current = batch('running')
+    answer.set(ScanBatchesQuery, () => {
+      current = batch(states.shift() ?? 'done')
+      const { items: _, ...header } = current
+      return { scanBatches: [header] }
+    })
+    answer.set(ScanBatchQuery, () => ({ scanBatch: current }))
     const { show, plans } = render(entities)
     show.value = true
     await vi.runAllTimersAsync()

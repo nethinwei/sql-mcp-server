@@ -368,3 +368,21 @@ func (d dialect) rebind(query string) string {
 	}
 	return b.String()
 }
+
+// upsert is the clause that has an INSERT whose keys a row already has
+// write cols of that row instead: one statement, atomic under concurrent
+// writers, where a DELETE then INSERT would not see another transaction's
+// uncommitted row and fail on the key.
+func (d dialect) upsert(keys []string, cols ...string) string {
+	set := make([]string, len(cols))
+	if d.driver == "mysql" {
+		for i, c := range cols {
+			set[i] = c + " = VALUES(" + c + ")"
+		}
+		return " ON DUPLICATE KEY UPDATE " + strings.Join(set, ", ")
+	}
+	for i, c := range cols {
+		set[i] = c + " = excluded." + c
+	}
+	return " ON CONFLICT (" + strings.Join(keys, ", ") + ") DO UPDATE SET " + strings.Join(set, ", ")
+}

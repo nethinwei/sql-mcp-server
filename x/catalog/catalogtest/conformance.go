@@ -43,6 +43,7 @@ func Run(t *testing.T, newStore NewStore) {
 		"SchemasRoundTrip": testSchemasRoundTrip,
 		"Prune":            testPrune,
 		"DeleteSchemas":    testDeleteSchemas,
+		"ConcurrentPuts":   testConcurrentPuts,
 		"Batches":          testBatches,
 		"BatchRequestKeys": testBatchRequestKeys,
 		"ClaimBatches":     testClaimBatches,
@@ -134,6 +135,43 @@ func testSchemasRoundTrip(t *testing.T, s catalog.Store) {
 	}
 	if other, _ := s.CatalogVersions(ctx, "other"); len(other) != 0 {
 		t.Fatalf("another source sees %+v", other)
+	}
+}
+
+// Puts of the same schemas, and lists, at once all succeed; one of them is
+// kept, whole.
+func testConcurrentPuts(t *testing.T, s catalog.Store) {
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Go(func() {
+			at := t0.Add(time.Duration(i) * time.Second)
+			tables := make([]catalog.Table, i)
+			for j := range tables {
+				tables[j] = table("a", fmt.Sprint("t", j))
+			}
+			if err := s.PutCatalogSchemas(ctx, "src", "ds", []catalog.Schema{
+				{Name: "b", ScannedAt: at, Tables: tables}, {Name: "a", ScannedAt: at, Tables: tables},
+			}); err != nil {
+				t.Errorf("put schemas %d: %v", i, err)
+			}
+			if err := s.PutCatalogList(ctx, "src", "ds", catalog.List{Schemas: []string{"a", "b"}, ListedAt: at}); err != nil {
+				t.Errorf("put list %d: %v", i, err)
+			}
+		})
+	}
+	wg.Wait()
+	versions, err := s.CatalogVersions(ctx, "src")
+	if err != nil || len(versions) != 2 {
+		t.Fatalf("versions = %+v %v", versions, err)
+	}
+	for _, v := range versions {
+		if n := int(v.ScannedAt.Sub(t0) / time.Second); v.Tables != n {
+			t.Errorf("schema %s scanned at put %d has %d tables", v.Name, n, v.Tables)
+		}
+	}
+	if l, ok, err := s.CatalogList(ctx, "src"); err != nil || !ok || len(l.Schemas) != 2 {
+		t.Fatalf("list = %+v %v %v", l, ok, err)
 	}
 }
 
@@ -243,17 +281,7 @@ func testBatches(t *testing.T, s catalog.Store) {
 	if _, ok, _ := s.Batch(ctx, "missing"); ok {
 		t.Fatal("a missing batch is found")
 	}
-	list, _ := s.Batches(ctx, "ds", 10)
-	if len(list) != 2 || list[0].ID != "b2" || list[0].FinishedAt.IsZero() {
-		t.Fatalf("batches = %+v", list)
-	}
-	if one, _ := s.Batches(ctx, "ds", 1); len(one) != 1 {
-		t.Fatalf("limit: %+v", one)
-	}
-	open, _ := s.UnfinishedBatches(ctx)
-	if len(open) != 2 || open[0].ID != "b1" || open[1].ID != "b3" || len(open[0].Items) != 2 {
-		t.Fatalf("unfinished = %+v", open)
-	}
+	checkBatchLists(t, s)
 	if canceled, err := s.BatchCanceled(ctx, "b1"); canceled || err != nil {
 		t.Fatalf("canceled before cancel: %v %v", canceled, err)
 	}
@@ -272,6 +300,27 @@ func testBatches(t *testing.T, s catalog.Store) {
 	}
 	if got, _, _ := s.Batch(ctx, "b1"); !got.Canceled || got.Items[0].State != catalog.ItemRunning {
 		t.Fatalf("after cancel = %+v", got)
+	}
+}
+
+// checkBatchLists checks the lists of testBatches' batches: they count the
+// items by state instead of reading them.
+func checkBatchLists(t *testing.T, s catalog.Store) {
+	t.Helper()
+	ctx := context.Background()
+	counts := map[string]int{catalog.ItemPending: 1, catalog.ItemFailed: 1}
+	list, _ := s.Batches(ctx, "ds", 10)
+	if len(list) != 2 || list[0].ID != "b2" || list[0].FinishedAt.IsZero() || list[1].Items != nil ||
+		!reflect.DeepEqual(list[1].Counts, counts) || len(list[0].Counts) != 0 {
+		t.Fatalf("batches = %+v", list)
+	}
+	if one, _ := s.Batches(ctx, "ds", 1); len(one) != 1 {
+		t.Fatalf("limit: %+v", one)
+	}
+	open, _ := s.UnfinishedBatches(ctx)
+	if len(open) != 2 || open[0].ID != "b1" || open[1].ID != "b3" || open[0].Items != nil ||
+		!reflect.DeepEqual(open[0].Counts, counts) {
+		t.Fatalf("unfinished = %+v", open)
 	}
 }
 
