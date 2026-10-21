@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -188,12 +187,12 @@ func executeToolCall(ctx context.Context, session *mcp.ClientSession, call toolC
 	var args map[string]any
 	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 		step.Denied = true
-		return finish(fmt.Sprintf(`{"error":"invalid tool arguments: %v"}`, err))
+		return finish(errorPayload("invalid tool arguments: " + err.Error()))
 	}
 	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: call.Function.Name, Arguments: args})
 	if err != nil {
 		step.Denied = true
-		return finish(fmt.Sprintf(`{"error":%q}`, err.Error()))
+		return finish(errorPayload(err.Error()))
 	}
 	if res.IsError {
 		step.Denied = true
@@ -201,9 +200,16 @@ func executeToolCall(ctx context.Context, session *mcp.ClientSession, call toolC
 	}
 	encoded, err := json.Marshal(res)
 	if err != nil {
-		return finish(fmt.Sprintf(`{"error":"marshal result: %v"}`, err))
+		return finish(errorPayload("marshal result: " + err.Error()))
 	}
 	return finish(string(encoded))
+}
+
+// errorPayload encodes msg as {"error": msg}; marshaling keeps quotes and
+// control characters in driver errors from breaking the report's JSON.
+func errorPayload(msg string) string {
+	encoded, _ := json.Marshal(map[string]string{"error": msg})
+	return string(encoded)
 }
 
 // rawOrQuoted embeds s as raw JSON when valid, else as a JSON string, so the

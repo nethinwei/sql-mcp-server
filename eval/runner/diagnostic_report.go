@@ -107,7 +107,7 @@ func runOneDiagnosticTask(
 ) diagnosticTaskResult {
 	fmt.Fprintf(os.Stderr, "running task %s...\n", task.ID)
 	tr, err := runConversation(ctx, client, session, tools, task.Prompt, maxCalls, budget)
-	base := gradeDiagnosticTask(task, tr)
+	base := gradeDiagnosticTask(task, tr, maxCalls)
 	if err != nil {
 		base.Passed = false
 		base.Error = err.Error()
@@ -118,12 +118,12 @@ func runOneDiagnosticTask(
 	return out
 }
 
-func gradeDiagnosticTask(task diagnosticTask, tr transcript) taskResult {
+func gradeDiagnosticTask(task diagnosticTask, tr transcript, maxCalls int) taskResult {
 	switch task.ExpectedBehavior {
 	case "clarify", "deny", "qualify", "unsupported":
-		return gradeDiagnosticBehavior(task, tr)
+		return gradeDiagnosticBehavior(task, tr, maxCalls)
 	default:
-		base := gradeWorkload(task.workloadTask, tr)
+		base := gradeWorkload(task.workloadTask, tr, maxCalls)
 		return gradeAnswerBehavior(task, base)
 	}
 }
@@ -243,7 +243,7 @@ func printDiagnosticReport(report diagnosticReport) error {
 	return nil
 }
 
-func gradeDiagnosticBehavior(task diagnosticTask, tr transcript) taskResult {
+func gradeDiagnosticBehavior(task diagnosticTask, tr transcript, maxCalls int) taskResult {
 	calls := tr.toolSteps()
 	result := taskResult{
 		ID: task.ID, Category: task.Module, Prompt: task.Prompt,
@@ -274,7 +274,7 @@ func gradeDiagnosticBehavior(task diagnosticTask, tr transcript) taskResult {
 	}
 	if !result.Passed {
 		result.Attribution, result.AttributionConfidence = attributeFailure(
-			task.workloadTask, result, calls)
+			task.workloadTask, result, calls, maxCalls)
 	}
 	return result
 }

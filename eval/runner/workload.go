@@ -28,6 +28,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	workload "github.com/nethinwei/sql-mcp-server/fixtures/v4/generator"
+	"github.com/nethinwei/sql-mcp-server/internal/tcstart"
 
 	mcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	pgprov "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
@@ -169,12 +170,15 @@ func runWorkload(ctx context.Context) error {
 // startWorkloadDatabase seeds the v4 fixture from the deterministic
 // generator (same source as the checked-in SQL and the expected results).
 func startWorkloadDatabase(ctx context.Context, cfg workload.Config) (string, func(), error) {
-	container, err := postgres.Run(ctx, "postgres:16-alpine",
-		postgres.WithDatabase("evalworkload"),
-		postgres.WithUsername("evalworkload"),
-		postgres.WithPassword("evalworkload"),
-		postgres.BasicWaitStrategies(),
-	)
+	container, err := tcstart.Run(ctx, func(publish tcstart.Publish) (*postgres.PostgresContainer, error) {
+		return postgres.Run(ctx, "postgres:16-alpine",
+			postgres.WithDatabase("evalworkload"),
+			postgres.WithUsername("evalworkload"),
+			postgres.WithPassword("evalworkload"),
+			postgres.BasicWaitStrategies(),
+			publish,
+		)
+	}, "5432/tcp")
 	if err != nil {
 		return "", func() {}, err
 	}
@@ -242,7 +246,7 @@ func runWorkloadTasks(
 			defer func() { <-sem }()
 			fmt.Fprintf(os.Stderr, "running task %s...\n", task.ID)
 			tr, err := runConversation(ctx, client, session, tools, task.Prompt, file.MaxToolCalls, budget)
-			results[i] = gradeWorkload(task, tr)
+			results[i] = gradeWorkload(task, tr, file.MaxToolCalls)
 			if err != nil {
 				results[i].Passed = false
 				results[i].Error = err.Error()
@@ -258,8 +262,9 @@ func runWorkloadTasks(
 	return report, nil
 }
 
-// gradeWorkload applies both grading channels to one task transcript.
-func gradeWorkload(task workloadTask, tr transcript) taskResult {
+// gradeWorkload applies both grading channels to one task transcript;
+// maxCalls is the tool-call budget the conversation ran with.
+func gradeWorkload(task workloadTask, tr transcript, maxCalls int) taskResult {
 	calls := tr.toolSteps()
 	result := taskResult{
 		ID: task.ID, Category: task.Module, Prompt: task.Prompt,
@@ -294,7 +299,7 @@ func gradeWorkload(task workloadTask, tr transcript) taskResult {
 
 	result.Passed = len(result.Failures) == 0
 	if !result.Passed {
-		result.Attribution, result.AttributionConfidence = attributeFailure(task, result, calls)
+		result.Attribution, result.AttributionConfidence = attributeFailure(task, result, calls, maxCalls)
 	}
 	return result
 }
@@ -382,8 +387,8 @@ func evidenceRowsFound(rows [][]string, calls []interactionStep) int {
 // Structural failures attribute mechanically; wrong-answer failures fall
 // back to the task's declared candidate categories and are flagged for
 // manual review (the v3 convention: review refines attribution, never the
-// pass/fail number).
-func attributeFailure(task workloadTask, result taskResult, calls []interactionStep) ([]string, string) {
+// pass/fail number). maxCalls is the task file's tool-call budget.
+func attributeFailure(task workloadTask, result taskResult, calls []interactionStep, maxCalls int) ([]string, string) {
 	succeeded := 0
 	invalidArgs := 0
 	governanceDenied := 0
@@ -408,7 +413,7 @@ func attributeFailure(task workloadTask, result taskResult, calls []interactionS
 		return []string{"governance_policy"}, "mechanical"
 	case invalidArgs > 0 && succeeded == 0:
 		return []string{"argument_construction"}, "mechanical"
-	case result.ToolCalls >= maxWorkloadToolCalls && result.FinalAnswer == "":
+	case result.ToolCalls >= maxCalls && result.FinalAnswer == "":
 		// Call budget exhausted without an answer: the query likely was not
 		// expressible in bounded governed calls.
 		return []string{"ir_expressibility"}, "mechanical"

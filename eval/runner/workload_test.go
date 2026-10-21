@@ -99,7 +99,7 @@ func TestGradeWorkloadAttribution(t *testing.T) {
 	}
 
 	// No tool calls at all: discovery failure.
-	r := gradeWorkload(task, transcript{FinalAnswer: "no idea"})
+	r := gradeWorkload(task, transcript{FinalAnswer: "no idea"}, maxWorkloadToolCalls)
 	if r.Passed || r.Attribution[0] != "agent_discovery" {
 		t.Fatalf("no-calls attribution = %v", r.Attribution)
 	}
@@ -108,7 +108,7 @@ func TestGradeWorkloadAttribution(t *testing.T) {
 	tr := transcript{Steps: []interactionStep{
 		{Role: "tool", Tool: "aggregate_records", Denied: true, DenialCode: "COST_EXCEEDED"},
 	}, FinalAnswer: "blocked"}
-	r = gradeWorkload(task, tr)
+	r = gradeWorkload(task, tr, maxWorkloadToolCalls)
 	if r.Passed || r.Attribution[0] != "governance_policy" {
 		t.Fatalf("governance attribution = %v", r.Attribution)
 	}
@@ -118,7 +118,7 @@ func TestGradeWorkloadAttribution(t *testing.T) {
 	tr = transcript{Steps: []interactionStep{
 		{Role: "tool", Tool: "aggregate_records", Result: json.RawMessage(`{"count": 41}`)},
 	}, FinalAnswer: "the count is 41"}
-	r = gradeWorkload(task, tr)
+	r = gradeWorkload(task, tr, maxWorkloadToolCalls)
 	if r.Passed {
 		t.Fatal("wrong answer must fail")
 	}
@@ -130,9 +130,23 @@ func TestGradeWorkloadAttribution(t *testing.T) {
 	tr = transcript{Steps: []interactionStep{
 		{Role: "tool", Tool: "aggregate_records", Result: json.RawMessage(`{"count": 42}`)},
 	}, FinalAnswer: "the count is 42"}
-	r = gradeWorkload(task, tr)
+	r = gradeWorkload(task, tr, maxWorkloadToolCalls)
 	if !r.Passed || r.Attribution != nil {
 		t.Fatalf("pass grading broken: passed=%v attribution=%v", r.Passed, r.Attribution)
+	}
+}
+
+// TestGradeWorkloadCallBudgetAttribution: running out of the task file's
+// call budget (not the hard cap) without an answer is ir_expressibility.
+func TestGradeWorkloadCallBudgetAttribution(t *testing.T) {
+	task := workloadTask{ID: "t", FailureCategories: []string{"grain"}, answerContains: []string{"42"}}
+	call := interactionStep{Role: "tool", Tool: "aggregate_records", Result: json.RawMessage(`{"count": 41}`)}
+	tr := transcript{Steps: []interactionStep{call, call, call}}
+	if r := gradeWorkload(task, tr, 3); r.Attribution[0] != "ir_expressibility" {
+		t.Fatalf("budget of 3 spent: attribution = %v", r.Attribution)
+	}
+	if r := gradeWorkload(task, tr, maxWorkloadToolCalls); r.Attribution[0] != "grain" {
+		t.Fatalf("budget left: attribution = %v", r.Attribution)
 	}
 }
 

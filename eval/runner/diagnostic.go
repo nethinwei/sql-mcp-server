@@ -6,8 +6,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -467,9 +469,13 @@ func gradeUnsupportedBehavior(task diagnosticTask, result taskResult) taskResult
 	return result
 }
 
+// matchConfounder returns the category of the first confounder, by name,
+// the answer contains, so an answer matching several attributes the same
+// way on every run.
 func matchConfounder(answer string, oracle *oracleSpec) (string, bool) {
 	norm := normalizeAnswer(answer)
-	for _, c := range oracle.Confounders {
+	for _, name := range slices.Sorted(maps.Keys(oracle.Confounders)) {
+		c := oracle.Confounders[name]
 		if answerHasValue(norm, c.Value) || containsFold(norm, normalizeAnswer(c.Value)) {
 			return c.FailureCategory, true
 		}

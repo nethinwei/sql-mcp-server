@@ -12,6 +12,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
+	"github.com/nethinwei/sql-mcp-server/internal/tcstart"
 	"github.com/nethinwei/sql-mcp-server/version"
 	pgprov "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
@@ -55,12 +56,15 @@ func main() {
 }
 
 func startDatabase(ctx context.Context) (string, func(), error) {
-	container, err := postgres.Run(ctx, "postgres:16-alpine",
-		postgres.WithDatabase("modelscope"),
-		postgres.WithUsername("modelscope"),
-		postgres.WithPassword("modelscope"),
-		postgres.BasicWaitStrategies(),
-	)
+	container, err := tcstart.Run(ctx, func(publish tcstart.Publish) (*postgres.PostgresContainer, error) {
+		return postgres.Run(ctx, "postgres:16-alpine",
+			postgres.WithDatabase("modelscope"),
+			postgres.WithUsername("modelscope"),
+			postgres.WithPassword("modelscope"),
+			postgres.BasicWaitStrategies(),
+			publish,
+		)
+	}, "5432/tcp")
 	if err != nil {
 		return "", func() {}, err
 	}
@@ -178,8 +182,13 @@ func verifyDeniedReads(ctx context.Context, session *mcp.ClientSession) error {
 		return fmt.Errorf("tenant isolation failed: error=%v result=%s", err, resultText(isolated))
 	}
 	for name, arguments := range map[string]map[string]any{
-		"full scan":    {"entity": "users"},
-		"hidden field": {"entity": "users", "fields": []string{"tenant_id"}},
+		"full scan": {"entity": "users"},
+		// The key filter keeps the cost gate out, so only the field ACL
+		// can reject it.
+		"hidden field": {
+			"entity": "users", "fields": []string{"tenant_id"},
+			"filter": []map[string]any{{"field": "id", "op": "eq", "value": 1}},
+		},
 	} {
 		result, callErr := callRead(ctx, session, arguments)
 		if callErr != nil || !result.IsError {

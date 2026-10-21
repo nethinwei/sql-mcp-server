@@ -77,7 +77,10 @@ release-bump:
 		{ echo "release-bump: name the new version: make release-bump RELEASE_VERSION=x.y.z" >&2; exit 1; }
 	$(PYTHON) scripts/release/bump.py --version $(RELEASE_VERSION)
 
+# The checked-in server.json must already name RELEASE_VERSION (server and
+# package versions, OCI tag): verify it before rendering the release copy.
 release-metadata-check:
+	$(PYTHON) scripts/release/metadata.py verify --version $(RELEASE_VERSION) --file server.json
 	$(PYTHON) scripts/release/metadata.py render --version $(RELEASE_VERSION) \
 		--file server.json --output dist/server.json
 	$(MCP_PUBLISHER) validate dist/server.json

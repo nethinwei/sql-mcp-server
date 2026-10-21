@@ -19,6 +19,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
+	"github.com/nethinwei/sql-mcp-server/internal/tcstart"
 	"github.com/nethinwei/sql-mcp-server/version"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/mcpserver"
@@ -111,12 +112,15 @@ func run(ctx context.Context) error {
 }
 
 func startDatabase(ctx context.Context, rows int) (string, func(), error) {
-	container, err := postgres.Run(ctx, "postgres:16-alpine",
-		postgres.WithDatabase("benchoverhead"),
-		postgres.WithUsername("benchoverhead"),
-		postgres.WithPassword("benchoverhead"),
-		postgres.BasicWaitStrategies(),
-	)
+	container, err := tcstart.Run(ctx, func(publish tcstart.Publish) (*postgres.PostgresContainer, error) {
+		return postgres.Run(ctx, "postgres:16-alpine",
+			postgres.WithDatabase("benchoverhead"),
+			postgres.WithUsername("benchoverhead"),
+			postgres.WithPassword("benchoverhead"),
+			postgres.BasicWaitStrategies(),
+			publish,
+		)
+	}, "5432/tcp")
 	if err != nil {
 		return "", func() {}, err
 	}

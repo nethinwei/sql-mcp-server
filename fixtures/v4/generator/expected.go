@@ -33,13 +33,17 @@ func oneRow(contains []string, columns []string, row ...string) Expectation {
 }
 
 // money renders minor units in display units for scale-2 currencies
-// ("1234.56"); scale-0 currencies render plain. No thousands separators:
-// the grader normalizes digit-group separators away.
+// ("1234.56", "-0.50"); scale-0 currencies render plain. No thousands
+// separators: the grader normalizes digit-group separators away.
 func money(minor int64, scale int) string {
 	if scale == 0 {
 		return fmt.Sprintf("%d", minor)
 	}
-	return fmt.Sprintf("%d.%02d", minor/100, minor%100)
+	sign := ""
+	if minor < 0 {
+		sign, minor = "-", -minor
+	}
+	return fmt.Sprintf("%s%d.%02d", sign, minor/100, minor%100)
 }
 
 func itoa(n int) string     { return fmt.Sprintf("%d", n) }
