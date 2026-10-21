@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	"github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
@@ -32,8 +33,8 @@ const attempts = 3
 // Run runs start, which starts a container with publish among its options,
 // publish binding each of ports (every port the container exposes) to a
 // host port the host has free. A container without a host port for one of
-// them (a race lost all the same) is terminated and started again, up to
-// attempts times.
+// them, or one whose host port the daemon could not bind (a race lost all the
+// same), is terminated and started again, up to attempts times.
 func Run[C testcontainers.Container](
 	ctx context.Context, start func(publish Publish) (C, error), ports ...string,
 ) (C, error) {
@@ -48,12 +49,23 @@ func Run[C testcontainers.Container](
 		if err == nil {
 			err = published(ctx, c, ports)
 		}
-		if err == nil || !errors.Is(err, errdefs.ErrNotFound) {
+		if err == nil || !retryable(err) {
 			return c, err
 		}
 		_ = testcontainers.TerminateContainer(c) // nil when it was not created
 	}
 	return c, fmt.Errorf("tcstart: no host port after %d containers: %w", attempts, err)
+}
+
+// retryable reports whether err is the macOS port race: the container has no
+// host port for one of the ports, or the daemon could not bind the host port
+// it was given (the other form of the same collision).
+func retryable(err error) bool {
+	if errors.Is(err, errdefs.ErrNotFound) {
+		return true
+	}
+	s := err.Error()
+	return strings.Contains(s, "ports are not available") || strings.Contains(s, "address already in use")
 }
 
 // Apply applies publish to req, a request built by hand.
