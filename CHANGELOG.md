@@ -9,6 +9,11 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+## 0.1.21 - 2026-10-21
+
+加固与发布前审查版本，**有 breaking 变更**；升级步骤见
+[`docs/releases/v0.1.21.md`](docs/releases/v0.1.21.md#迁移)。
+
 ### Breaking
 
 - PostgreSQL provider 只连接 PostgreSQL 11–18：PostgreSQL 10 及以下、19 及以上，以及 Hologres、
