@@ -93,6 +93,11 @@ async function withItems(s: DatasourceScans, listed: ScanBatchHeaderFragment[]):
   }))
 }
 
+/** The running batches of s that list does not have. */
+const startedSince = (s: DatasourceScans, list: { id: string }[]) => {
+  const ids = new Set(list.map((b) => b.id))
+  return s.batches.filter((b) => b.state === 'running' && !ids.has(b.id))
+}
 const running = (s: DatasourceScans) => s.batches.some((b) => b.state === 'running')
 const doneCount = (s: DatasourceScans) => s.batches.reduce((n, b) => n + b.done, 0)
 const polling = new Set<string>()
@@ -110,7 +115,11 @@ export async function followBatches(ds: string, interval = 1000) {
     for (let first = true; first || running(s); first = false) {
       if (!first) await sleep(interval)
       const before = doneCount(s)
-      s.batches = await withItems(s, (await run(ScanBatchesQuery, { datasource: ds })).scanBatches)
+      // A batch started while a read is in flight is not in its answer: it
+      // is kept, and read by id until the listing has it.
+      const listed = (await run(ScanBatchesQuery, { datasource: ds })).scanBatches
+      const read = await withItems(s, [...startedSince(s, listed), ...listed])
+      s.batches = [...startedSince(s, read), ...read]
       if (doneCount(s) !== before) {
         await sync(ds)
         scans.version++

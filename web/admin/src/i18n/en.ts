@@ -213,6 +213,7 @@ const en: typeof zh = {
       qualified: { title: 'Reference qualified', detail: 'an existing reference is written in full: {detail}', plain: 'an existing reference is written in full' },
       unknownUser: { title: 'Unknown user', detail: 'user {detail} does not exist; nothing granted', plain: 'unknown user' },
       noFields: { title: 'No matching fields', detail: 'no field matches; nothing granted to {detail}', plain: 'no field matches' },
+      grantFieldsEmptied: { title: 'Grant left without fields', detail: 'the sync removed every field the grant to {detail} lists; it reads none of the entity', plain: 'a sync removed every field a grant lists' },
       referenced: { title: 'Field referenced', detail: 'not removed: {detail}', plain: 'still referenced, not removed' },
       denied: { title: 'Connection lacks privilege', detail: '{detail}', plain: 'the connection lacks the database privilege' },
       review: { title: 'New table granted', detail: 'the new table is granted to {detail}; confirm', plain: 'a new table enters a grant' },

@@ -105,6 +105,25 @@ describe('batches', () => {
     expect(batchState(scansOf('again'), 'x')).toEqual({ state: 'done', error: null })
   })
 
+  it('keeps a batch started while the batches are read, and follows it', async () => {
+    const b1 = batch('b1', 'done', [['a', 'done']])
+    const b2 = [batch('b2', 'running', [['b', 'running']]), batch('b2', 'done', [['b', 'done']])]
+    let listings = 0
+    answer.set(ScanBatchesQuery, () => {
+      // The first listing answers as of before b2 started (see startBatch).
+      if (listings++ === 0) {
+        scansOf('merge').batches = [b2[0], ...scansOf('merge').batches]
+        return { scanBatches: [b1] }
+      }
+      return { scanBatches: [b2[1], b1] }
+    })
+    answer.set(ScanBatchQuery, ({ id }) => ({ scanBatch: id === 'b1' ? b1 : b2[listings > 1 ? 1 : 0] }))
+    answer.set(SchemaListQuery, () => listed('a', ['a', 'b'], ['a', 'b']))
+    await followBatches('merge', 1)
+    expect(scansOf('merge').batches.map((b) => [b.id, b.state])).toEqual([['b2', 'done'], ['b1', 'done']])
+    expect(calls.some(([doc, vars]) => doc === ScanBatchQuery && (vars as { id: string }).id === 'b2')).toBe(true)
+  })
+
   it('reads the items of a finished batch once', async () => {
     serve(() => [batch('b7', 'done', [['y', 'failed']])])
     await followBatches('once')

@@ -155,8 +155,9 @@ Proposal = { Config（Base 应用后）, Entities（新增或修改）, Added, R
   - `block`（阻断，不能加入工作区或保存草稿）：目前没有规则产生它，结果校验不
     通过时同样阻断；
   - `confirm`（需确认，控制台要求勾选“已核对”，MCP 要求 Agent 向管理员报告）：
-    `unknownUser`、`noFields`、`referenced`、`denied`、`review`、`keyReferenced`、
-    `keyNotField`、`rowColumnMissing`，以及去掉了写动作的 `noKey`；
+    `unknownUser`、`noFields`（字段范围没有匹配的字段）、`grantFieldsEmptied`
+    （同步移除了授权列出的全部字段）、`referenced`、`denied`、`review`、
+    `keyReferenced`、`keyNotField`、`rowColumnMissing`，以及去掉了写动作的 `noKey`；
   - `info`（提示）：`renamed`、`sideEffects`、`relationshipDropped`、`relationshipNew`、
     `relationshipStale`、只读的
     `noKey`，以及 `qualified`：新增实体会让已有的简写引用（授权、关系目标、

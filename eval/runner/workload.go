@@ -328,13 +328,18 @@ func answerHasValue(normalizedAnswer, want string) bool {
 }
 
 // numericBoundaries reports whether answer[start:end] is a standalone
-// number: not preceded by a digit or decimal point, and not continued by
-// more digits ("6" must not match inside "16" or "6.5", but a sentence
-// period after "4589." is fine).
+// number: not preceded by a digit, decimal point or minus sign, and not
+// continued by more digits ("6" must not match inside "16", "6.5" or "-6",
+// but a sentence period after "4589." is fine). A minus sign is one not
+// following a letter or digit ("2025-6" is a hyphen); a negative expected
+// value carries its own sign.
 func numericBoundaries(answer string, start, end int) bool {
 	if start > 0 {
 		prev := answer[start-1]
 		if prev >= '0' && prev <= '9' || prev == '.' {
+			return false
+		}
+		if prev == '-' && answer[start] != '-' && (start == 1 || !isAlnum(answer[start-2])) {
 			return false
 		}
 	}
@@ -351,6 +356,10 @@ func numericBoundaries(answer string, start, end int) bool {
 		}
 	}
 	return true
+}
+
+func isAlnum(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 // evidenceRowsFound counts expected rows whose every cell value appears in

@@ -25,15 +25,28 @@ export function setActionOn(
   grants: GrantInput[], entities: string[], action: Action, on: boolean, index?: EntityIndex,
 ): GrantInput[] {
   const list = grants.map((g) => ({ ...g, actions: [...g.actions] }))
-  const idOf = (ref: string) => (index ? index.idOf(ref) : ref)
+  // The grants of each entity, in order, resolved once (a column toggle
+  // names every entity of the page).
+  const byId = new Map<string, GrantInput[]>()
+  for (const g of list) {
+    const id = index ? index.idOf(g.entity) : g.entity
+    if (id === undefined) continue
+    const own = byId.get(id)
+    if (own) own.push(g)
+    else byId.set(id, [g])
+  }
   for (const id of entities) {
     const name = index ? index.shortName(id) : id
-    const own = list.filter((g) => idOf(g.entity) === id)
+    const own = byId.get(id) ?? []
     if (!on) {
       for (const g of own) g.actions = g.actions.filter((a) => a !== action)
     } else if (!own.some((g) => g.actions.includes(action))) {
       if (own.length) own[0].actions.push(action)
-      else list.push({ entity: name, actions: [action] })
+      else {
+        const g = { entity: name, actions: [action] }
+        list.push(g)
+        byId.set(id, [g])
+      }
     }
   }
   return list.filter((g) => g.actions.length > 0)

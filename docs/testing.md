@@ -236,7 +236,9 @@ PostgreSQL/MySQL/OceanBase 或 MCP e2e 已在当前机器执行。
 - `release-config`：GoReleaser snapshot、6 个目标归档、checksum 和 SBOM；
 - `registry-metadata`：`server.json` 版本一致性与官方 publisher 校验。
 
-tag workflow 会重新运行 release quality、三库 integration、MCP e2e，并用 tag
+tag workflow 先校验已提交的 `server.json` 写的正是 tag 版本（不一致即失败，
+本地门禁须显式传入 `RELEASE_VERSION`，未传时读自 `server.json`，只能自洽），
+再重新运行 release quality、三库 integration、MCP e2e，并用 tag
 构建的镜像运行 quickstart smoke；全部通过后才发布签名二进制与 GHCR 多架构镜像，
 再对已发布镜像运行 quickstart smoke，最后发布 Registry metadata。发布流程
 见 [运行与运维](operations.md)。

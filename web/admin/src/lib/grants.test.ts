@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { locateGrant, setActionOn } from './grants'
 import type { GrantInput } from '@/gql/schema'
+import type { EntityIndex } from './entityRefs'
 
 const base: GrantInput[] = [
   { entity: 'orders', actions: ['READ'], rows: { field: 'region', op: 'eq', value: 'CN' } },
@@ -23,6 +24,29 @@ describe('setActionOn', () => {
   it('revokes from every grant and drops empty grants', () => {
     const out = setActionOn(base, ['orders'], 'READ', false)
     expect(out).toEqual([{ ...base[1], actions: ['AGGREGATE'] }])
+  })
+})
+
+describe('setActionOn with an entity index', () => {
+  it('resolves each grant once and keeps the grants in order', () => {
+    const resolved: string[] = []
+    const index = {
+      idOf: (ref: string) => (resolved.push(ref), `pg.${ref}`),
+      shortName: (id: string) => id.slice(3),
+    } as unknown as EntityIndex
+    const grants: GrantInput[] = [
+      { entity: 'b', actions: ['READ'] }, { entity: 'a', actions: ['READ'] }, { entity: 'b', actions: ['DELETE'] },
+    ]
+    const entities = ['pg.a', 'pg.b', 'pg.c', 'pg.d']
+    const out = setActionOn(grants, entities, 'DELETE', true, index)
+    expect(resolved).toHaveLength(grants.length)
+    expect(out).toEqual([
+      { entity: 'b', actions: ['READ'] }, { entity: 'a', actions: ['READ', 'DELETE'] },
+      { entity: 'b', actions: ['DELETE'] }, { entity: 'c', actions: ['DELETE'] }, { entity: 'd', actions: ['DELETE'] },
+    ])
+    expect(setActionOn(out, entities, 'DELETE', false, index)).toEqual([
+      { entity: 'b', actions: ['READ'] }, { entity: 'a', actions: ['READ'] },
+    ])
   })
 })
 

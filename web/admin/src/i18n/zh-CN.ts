@@ -209,6 +209,7 @@ export default {
       qualified: { title: '已限定引用', detail: '已有引用改为限定写法：{detail}', plain: '已有引用改为限定写法' },
       unknownUser: { title: '用户不存在', detail: '用户 {detail} 不存在，未授权', plain: '用户不存在' },
       noFields: { title: '没有匹配的字段', detail: '字段范围没有匹配的字段，未授予 {detail}', plain: '字段范围没有匹配的字段' },
+      grantFieldsEmptied: { title: '授权的字段被清空', detail: '同步移除了授予 {detail} 的授权列出的全部字段，它不再能读取该实体', plain: '同步移除了授权列出的全部字段' },
       referenced: { title: '字段仍被引用', detail: '未移除 {detail}', plain: '字段仍被引用，未移除' },
       denied: { title: '连接无此权限', detail: '{detail}', plain: '连接没有对应的数据库权限' },
       review: { title: '新表进入授权', detail: '新表将授予 {detail}，请确认', plain: '新表进入已有授权' },

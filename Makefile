@@ -79,6 +79,9 @@ release-bump:
 
 # The checked-in server.json must already name RELEASE_VERSION (server and
 # package versions, OCI tag): verify it before rendering the release copy.
+# Name the version being released (make release-preflight-fast
+# RELEASE_VERSION=x.y.z): left unset it is read from server.json, which then
+# only checks the file against itself. The tag workflow verifies the tag.
 release-metadata-check:
 	$(PYTHON) scripts/release/metadata.py verify --version $(RELEASE_VERSION) --file server.json
 	$(PYTHON) scripts/release/metadata.py render --version $(RELEASE_VERSION) \

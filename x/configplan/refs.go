@@ -113,7 +113,7 @@ func (ev *evaluation) dropGrantFields() {
 			}
 			out[i].Fields = &config.FieldACLConfig{Read: without(g.Fields.Read), Write: without(g.Fields.Write)}
 			if len(out[i].Fields.Read) == 0 && len(out[i].Fields.Write) == 0 {
-				ev.except(Exception{Kind: ExceptionNoFields, Ref: ev.dropped[on].ref, Entity: on, Detail: p.String()})
+				ev.except(Exception{Kind: ExceptionGrantFieldsEmptied, Ref: ev.dropped[on].ref, Entity: on, Detail: p.String()})
 			}
 		}
 		if out != nil {

@@ -7,6 +7,7 @@ import { ArrowUndoOutline } from '@vicons/ionicons5'
 import { useWorkspace, type Change } from '@/stores/workspace'
 import { can } from '@/api/session'
 import { saveState, useWorkspaceAction, workspace } from '@/lib/workspaceSync'
+import { routeFor } from '@/lib/changeRoute'
 
 const { t } = useI18n()
 const ws = useWorkspace()
@@ -17,12 +18,6 @@ const action = useWorkspaceAction()
 const typeTag: Record<Change['type'], 'success' | 'error' | 'warning'> = {
   added: 'success', removed: 'error', modified: 'warning',
 }
-const routeFor = (c: Change) =>
-  c.type === 'removed'
-    ? null
-    : c.kind === 'settings'
-      ? { name: 'settings' }
-      : { name: c.kind, params: { name: c.name } }
 const displayName = (c: Change) => (c.kind === 'settings' ? t('changes.settingsName') : c.name)
 
 const count = computed(() => ws.changes.length)

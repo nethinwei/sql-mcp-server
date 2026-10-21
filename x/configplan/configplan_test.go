@@ -222,7 +222,8 @@ func TestSyncEmptyingAGrantsFieldsIsReported(t *testing.T) {
 	t.Parallel()
 	base := decode(t, strings.Replace(baseYAML, "fields: {read: [id, gone]}", "fields: {read: [gone]}", 1))
 	p := evaluate(t, base, Plan{Scope: Scope{Drift: true}, Sync: &SyncRule{Remove: true}})
-	if got := kinds(p.Report.Exceptions); !slices.Equal(got, []string{"noFields shop.public.customers role:analyst"}) {
+	want := []string{"grantFieldsEmptied shop.public.customers role:analyst"}
+	if got := kinds(p.Report.Exceptions); !slices.Equal(got, want) {
 		t.Fatalf("exceptions = %v", got)
 	}
 	if x := p.Report.Exceptions[0]; x.Level != LevelConfirm || x.Ref != "shop.public.customers" {
@@ -231,6 +232,7 @@ func TestSyncEmptyingAGrantsFieldsIsReported(t *testing.T) {
 	if fields := p.Config.Roles["analyst"].Grants[0].Fields; len(fields.Read) != 0 || len(fields.Write) != 0 {
 		t.Fatalf("fields = %+v", fields)
 	}
+	valid(t, base, p)
 }
 
 func TestNamesExclusionsAndAmbiguity(t *testing.T) {
@@ -473,14 +475,15 @@ func TestFieldRulesFilterByColumnType(t *testing.T) {
 	base := decode(t, baseYAML)
 	p := evaluate(t, base, Plan{Scope: Scope{Refs: []string{"shop.public.customers"}},
 		Fields: []FieldRule{{Columns: []string{"*"}, Types: []string{"text"}, Exclude: true},
-			{Columns: []string{"*"}, Types: []string{"big*"}, Mask: "hash"}}})
+			{Columns: []string{"*"}, Types: []string{"big*"}, Mask: "secret"}}})
 	var got []string
 	for _, f := range entityOf(t, p, "shop.public.customers").Fields {
 		got = append(got, f.Name+":"+strconv.FormatBool(f.Exclude)+":"+f.Mask)
 	}
-	if want := []string{"id:false:hash", "name:true:", "legacy:true:", "gone:false:"}; !slices.Equal(got, want) {
+	if want := []string{"id:false:secret", "name:true:", "legacy:true:", "gone:false:"}; !slices.Equal(got, want) {
 		t.Fatalf("fields = %v, want %v", got, want)
 	}
+	valid(t, base, p)
 }
 
 // A grant with a field wildcard follows the fields: once a column is added,

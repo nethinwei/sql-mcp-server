@@ -132,6 +132,9 @@ const (
 	ExceptionUnknownUser = "unknownUser"
 	// ExceptionNoFields: a grant's field patterns match no field.
 	ExceptionNoFields = "noFields"
+	// ExceptionGrantFieldsEmptied: a sync removed every field a grant lists;
+	// the grant reads and writes none of its entity.
+	ExceptionGrantFieldsEmptied = "grantFieldsEmptied"
 	// ExceptionReferenced: a field to remove is still referenced.
 	ExceptionReferenced = "referenced"
 	// ExceptionDenied: the connection lacks the privilege for an action.

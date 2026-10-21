@@ -82,6 +82,11 @@ func TestAnswerHasValueNumericBoundaries(t *testing.T) {
 		{"it costs 10.00.5 whatever", "10.00", false},
 		{"a value of 6.", "6", true},
 		{"a value of 6.5", "6", false},
+		// A sign-flipped amount is not the expected one; a hyphen is no sign.
+		{"the balance is -12,345.67", "12345.67", false},
+		{"the balance is -12,345.67", "-12345.67", true},
+		{"-6", "6", false},
+		{"weeks 5-6 of 2026", "6", true},
 	}
 	for _, c := range cases {
 		if got := answerHasValue(normalizeAnswer(c.answer), c.want); got != c.match {
