@@ -2,8 +2,13 @@ package configstore
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"reflect"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -162,5 +167,98 @@ func assertPending(t *testing.T, s *SQLStore) {
 	log, err := s.PendingLog(ctx, "drift:shop.a.b")
 	if err != nil || len(log) != 2 || log[0].Status != "ignored" || log[1].Owner != "root" {
 		t.Fatalf("log = %+v, %v", log, err)
+	}
+	assertConcurrentPendingPuts(t, s)
+}
+
+// Concurrent puts of one key (a recurring template's key is deterministic)
+// all succeed and leave one state, one the puts wrote.
+func assertConcurrentPendingPuts(t *testing.T, s *SQLStore) {
+	t.Helper()
+	statuses := []string{"open", "snoozed", "ignored", "open", "snoozed", "ignored", "open", "snoozed"}
+	errs := make(chan error, len(statuses))
+	var wg sync.WaitGroup
+	for i, status := range statuses {
+		wg.Go(func() {
+			_, err := s.PutPendingState(context.Background(), PendingState{Key: "template:7", Status: status,
+				Owner: fmt.Sprint("a", i), UpdatedBy: "root"})
+			errs <- err
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent put: %v", err)
+		}
+	}
+	all, err := s.PendingStates(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found []PendingState
+	for _, p := range all {
+		if p.Key == "template:7" {
+			found = append(found, p)
+		}
+	}
+	if len(found) != 1 || !slices.Contains(statuses, found[0].Status) {
+		t.Fatalf("states of template:7 = %+v", found)
+	}
+	if log, err := s.PendingLog(context.Background(), "template:7"); err != nil || len(log) == 0 {
+		t.Fatalf("log = %+v, %v", log, err)
+	}
+}
+
+// A save that read a template deleted since does not bring it back; a
+// transaction whose function panics is rolled back, releasing the lock.
+func TestTemplatesStayDeletedAndPanicsRollBack(t *testing.T) {
+	ctx := context.Background()
+	s := openSQLite(t)
+	first, err := s.PutPlanTemplate(ctx, PlanTemplate{Name: "t", Plan: []byte(`{}`)}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeletePlanTemplate(ctx, "t"); err != nil {
+		t.Fatal(err)
+	}
+	err = s.locked(ctx, func(tx *sql.Tx) error {
+		return s.writeTemplate(ctx, tx, PlanTemplate{Name: "t", Plan: []byte(`{}`), Version: first.Version + 1}, true)
+	})
+	if !errors.Is(err, ErrTemplateConflict) {
+		t.Fatalf("a stale save: %v", err)
+	}
+	if all, _ := s.PlanTemplates(ctx); len(all) != 0 {
+		t.Fatalf("templates = %+v", all)
+	}
+	func() {
+		defer func() { _ = recover() }()
+		_ = s.locked(ctx, func(*sql.Tx) error { panic("boom") })
+	}()
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.PutPlanTemplate(ctx, PlanTemplate{Name: "u", Plan: []byte(`{}`)}, 0)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the lock of a panicked transaction is still held")
+	}
+}
+
+// A MySQL store reports matched rows, keeping what its DSN says.
+func TestMySQLDSNReportsMatchedRows(t *testing.T) {
+	got := mysqlDSN("u:p@tcp(h:3306)/db?parseTime=true&tls=skip-verify")
+	for _, want := range []string{"clientFoundRows=true", "parseTime=true", "tls=skip-verify", "u:p@tcp(h:3306)/db"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("dsn = %s, missing %s", got, want)
+		}
+	}
+	if bad := mysqlDSN("not a dsn"); bad != "not a dsn" {
+		t.Fatalf("a DSN that does not parse became %s", bad)
 	}
 }

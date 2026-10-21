@@ -20,6 +20,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
+	"github.com/nethinwei/sql-mcp-server/internal/tcstart"
 	pgprov "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
 
@@ -50,12 +51,15 @@ func main() {
 }
 
 func startDatabase(ctx context.Context) (string, func(), error) {
-	container, err := postgres.Run(ctx, "postgres:16-alpine",
-		postgres.WithDatabase("protocolsmoke"),
-		postgres.WithUsername("protocolsmoke"),
-		postgres.WithPassword("protocolsmoke"),
-		postgres.BasicWaitStrategies(),
-	)
+	container, err := tcstart.Run(ctx, func(publish tcstart.Publish) (*postgres.PostgresContainer, error) {
+		return postgres.Run(ctx, "postgres:16-alpine",
+			postgres.WithDatabase("protocolsmoke"),
+			postgres.WithUsername("protocolsmoke"),
+			postgres.WithPassword("protocolsmoke"),
+			postgres.BasicWaitStrategies(),
+			publish,
+		)
+	}, "5432/tcp")
 	if err != nil {
 		return "", func() {}, err
 	}
@@ -207,9 +211,18 @@ func verifySession(ctx context.Context, session *mcp.ClientSession) error {
 	if err != nil {
 		return fmt.Errorf("marshal denial: %w", err)
 	}
+	return checkDenial(raw)
+}
+
+// checkDenial checks a denial's structured content carries the contract:
+// a non-empty code and decisionId.
+func checkDenial(raw []byte) error {
 	var denial map[string]any
-	if err := json.Unmarshal(raw, &denial); err != nil || denial["code"] == "" {
+	if err := json.Unmarshal(raw, &denial); err != nil {
 		return fmt.Errorf("denial contract missing: %s", raw)
+	}
+	if code, _ := denial["code"].(string); code == "" {
+		return fmt.Errorf("denial is missing code: %s", raw)
 	}
 	if id, _ := denial["decisionId"].(string); id == "" {
 		return fmt.Errorf("denial is missing decisionId: %s", raw)

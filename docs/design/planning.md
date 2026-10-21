@@ -69,8 +69,10 @@
   每个数据源的目录按各库扫描时间缓存，不必每次重建。索引过滤与 `configplan.Rows`
   逐项一致由随机测试保证。
 - 扫描批次：`startScanBatch` 在服务端排队扫描多个库（每次 2 个，经同一个扫描
-  worker 池），关掉控制台也会继续；`scanBatches` 返回进度、每个库的成败与错误，
-  `cancelScanBatch` 停止，`retryScanBatch` 把失败与未完成的库作为新批次重扫。
+  worker 池），关掉控制台也会继续；`scanBatches` 返回进度（各状态的库数，由
+  `GROUP BY batch_id, state` 计数，不读各库的行；问到 `items` 时逐批读），
+  `scanBatch` 返回一个批次及每个库的成败与错误（控制台轮询只问计数，再逐批读条目，
+  已结束批次的条目不再变化，只读一次），`cancelScanBatch` 停止，`retryScanBatch` 把失败与未完成的库作为新批次重扫。
   批次是 `smcp_scan_batches` 的一行，每个库是 `smcp_scan_batch_items` 的一行
   （schema 版本 4，版本 3 的批次进度在升级时迁移过来）
   （状态、错误、已扫描次数、最早重试时间），所有副本都能看到。每个库的状态只沿
@@ -81,7 +83,8 @@
   未结束”为条件写批次行的心跳（锁住该行，接管须等它提交），再写库的状态，所以
   暂停后恢复的旧运行写不进任何东西，并在发现后停止。所有者每 5 秒续一次心跳，取消
   请求写入批次，所有者据此停止；30 秒没有心跳（进程重启或退出）时，任一进程按当前
-  已发布配置接管批次，把上一所有者正在扫描的库放回 pending 后继续。写状态时配置库
+  已发布配置接管批次（列出未结束批次时只读批次行与计数，认领成功后才读该批次
+  的库），把上一所有者正在扫描的库放回 pending 后继续。写状态时配置库
   出错（不是状态冲突）会退避重试（共 4 次）；出错的写入可能已经提交（应答丢失），
   所以重试发现该库已不在原状态时会读回它，与要写的完全一致才算写入成功，读不到则
   停止。仍失败时本次运行停止，但不结束批次、不取消任何库，批次保持最后写入的状态，
@@ -90,7 +93,8 @@
   5 秒、10 秒后自动重试，最多扫描 3 次，最后一次的错误留在该库上。每个数据源最多
   4 个未完成批次、每批最多 5000 个库，由 `CreateBatch` 在同一事务内（配置库锁行）
   计数并创建，并发请求与多副本不能一起越过上限；请求可带 `requestKey`（控制台每次
-  发起时生成），同一数据源同一键再次请求得到原来的批次，不会重复扫描。以上在四种
+  发起时生成），同一管理员在同一数据源用同一键再次请求得到原来的批次，不会重复扫描；
+  同一键请求了不同的库时报错，另一位管理员的同名键各自独立。以上在四种
   配置库上跑 `catalogtest` 一致性套件（`MoveItems`、`BatchRequestKeys`、
   `CreateBatchQuota` 等）。
 - 选择：控制台的“选择全部匹配”保存的是筛选条件加排除集合，不把几万个表引用传到
@@ -114,6 +118,8 @@ Evaluate(Input{Base, Published, Sources, Denied, Review, Missing, MissingFields,
 Proposal = { Config（Base 应用后）, Entities（新增或修改）, Added, Removed, Roles, Users, Report }
 ```
 
+- `exclude`：按 `datasource.schema.table` 排除表；写了任何扫描都没有找到的表（拼错或已删除）时
+  整个方案被拒绝，否则方案会作用到本想排除的表上；
 - `scope`：`datasources`、`schemas`/`tables`（`*` `?` 通配，不区分大小写）、
   `search`、`status`、`drift`、`refs`（显式表）、`entities`（已配置实体的 ID，只选
   它们的表，已不存在的表也按它判定），条件取交集；
@@ -133,7 +139,8 @@ Proposal = { Config（Base 应用后）, Entities（新增或修改）, Added, R
   `keys`（v0.1.20 起）把表的主键与可标识行的唯一键设为扫描结果（`syncKeys`），把
   实体的 table/view 类型设为扫描结果（`syncKind`）；视图保留配置中声明的键。键不再
   包含的列仍被某个关系用作连接列时报告 `keyReferenced`（confirm），键变为空时报告
-  去掉写动作的 `noKey`。关系**只报告不修改**：配置不记录关系是否由外键导入，外键
+  去掉写动作的 `noKey`；键的列不是实体的字段（同步也不新增）时不同步该键，报告
+  `keyNotField`（confirm）。关系**只报告不修改**：配置不记录关系是否由外键导入，外键
   没有对应关系时报告 `relationshipNew`，以导入命名方式命名（目标实体名或加序号）却
   没有外键对应的关系报告 `relationshipStale`，均为 info；手写关系不受影响。
   运行中的服务发现的缺列（`Input.MissingFields`）只用于范围内未扫描的表（扫描过的
@@ -148,8 +155,9 @@ Proposal = { Config（Base 应用后）, Entities（新增或修改）, Added, R
   - `block`（阻断，不能加入工作区或保存草稿）：目前没有规则产生它，结果校验不
     通过时同样阻断；
   - `confirm`（需确认，控制台要求勾选“已核对”，MCP 要求 Agent 向管理员报告）：
-    `unknownUser`、`noFields`、`referenced`、`denied`、`review`、`keyReferenced`、
-    `rowColumnMissing`，以及去掉了写动作的 `noKey`；
+    `unknownUser`、`noFields`（字段范围没有匹配的字段）、`grantFieldsEmptied`
+    （同步移除了授权列出的全部字段）、`referenced`、`denied`、`review`、
+    `keyReferenced`、`keyNotField`、`rowColumnMissing`，以及去掉了写动作的 `noKey`；
   - `info`（提示）：`renamed`、`sideEffects`、`relationshipDropped`、`relationshipNew`、
     `relationshipStale`、只读的
     `noKey`，以及 `qualified`：新增实体会让已有的简写引用（授权、关系目标、
@@ -181,12 +189,15 @@ Proposal = { Config（Base 应用后）, Entities（新增或修改）, Added, R
   区分“更新”和“另存为”，可查看与载入历史版本。
 - **待处理**：“重复执行”的模板不会自动改动工作区，`pending` 每次按当前目录重新
   计算：有修改或有未能应用的规则（`confirm`/`block` 例外）的模板、字段有差异的表、
-  表已不存在的实体（`goneTables`，可在控制台多选后从工作区移除），
+  表已不存在的实体（`goneTables`，可在控制台多选后从工作区移除；这两类各最多列出
+  200 项，未处理的在前，其余只计数：`moreDriftTables`/`moreGoneTables`），
   每项一个键（对象 + 情况摘要），可设负责人、稍后处理（到期重新打开）或忽略（必须
   写原因），每次变更写入 `smcp_pending_log`；情况变化（新匹配、新差异）后键随之
   变化，重新打开。未导入的表、未扫描的库、从未列出库的数据源只给出数量和跳转入口，
   没有处理状态。模板的方案在待处理中以审核方式预览（`previewPlan` 的 `review`），
-  授权覆盖的每张新表都作为需确认例外列出。
+  授权覆盖的每张新表都作为需确认例外列出。已无法执行的模板（如 `exclude` 指向已删除的表）
+  带 `error` 列出，不影响其他待处理项。字段通配（`fields: ["*"]` 等）的授权随表字段
+  变化更新同一条授权（操作与行过滤相同、原字段是新字段的子集），不追加新授权。
 - **配置 MCP**：`/admin/mcp`（Streamable HTTP，无状态），`Authorization: Bearer`
   使用管理员在控制台为每个客户端生成的令牌（`smcp_admin_tokens` 只存哈希；可命名、
   设有效期，记录最近使用时间，每人最多 20 个，单独吊销；过期、吊销或账号停用后
@@ -198,7 +209,8 @@ Proposal = { Config（Base 应用后）, Entities（新增或修改）, Added, R
   只在这些数据源内统计；同一管理员其他令牌或会话做的预览快照，只有其范围全在本令牌
   的数据源内才能读取；跨数据源的差异、模拟、版本列表、模板版本与待处理处理记录不可读）。工具：
   - `catalog_search`、`catalog_table`、`catalog_links`、`plan_scope`；
-  - `scan_schemas`（服务端扫描批次，默认扫描所有未扫描的库）、`scan_status`；
+  - `scan_schemas`（服务端扫描批次，默认扫描所有未扫描的库）、`scan_status`（读取
+    最近的批次及其各库状态，每批最多列 100 个库、未完成的在前，其余计入 `moreItems`）；
   - `plan_preview` 针对管理员的工作区（服务端保存的那一份，见下）预览，只返回摘要（`planId`、计数、按类与级别的例外数、需确认例外的
     ID、校验），接受 `review: true` 以审核方式列出授权覆盖的每张新表。预览结果按
     `planId` 为预览者保留 15 分钟（最近 32 个）：`plan_details` 只带 `planId`，

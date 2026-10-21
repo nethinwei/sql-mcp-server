@@ -1,7 +1,9 @@
 package configapp
 
 import (
-	"slices"
+	"container/list"
+	"context"
+	"errors"
 	"sync"
 )
 
@@ -12,8 +14,10 @@ type lru[V any] struct {
 	budget int
 	mu     sync.Mutex
 	used   int
-	// entries are the kept values, most recently used last.
-	entries []*lruEntry[V]
+	// order lists the kept entries, most recently used last; byKey finds
+	// each one's place in it.
+	order   *list.List
+	byKey   map[string]*list.Element
 	pending map[string]*lruCall[V]
 }
 
@@ -26,55 +30,89 @@ type lruEntry[V any] struct {
 type lruCall[V any] struct {
 	done  chan struct{}
 	value V
+	// failed: the build failed for its caller alone (see buildEnded), so
+	// those waiting build it again.
+	failed bool
 }
 
 func newLRU[V any](budget int) *lru[V] {
-	return &lru[V]{budget: budget, pending: map[string]*lruCall[V]{}}
+	return &lru[V]{budget: budget, order: list.New(), byKey: map[string]*list.Element{},
+		pending: map[string]*lruCall[V]{}}
 }
 
+// buildEnded is the weight of a build that failed as its caller's request
+// ended: not kept, and built again for those that waited for it.
+const buildEnded = -2
+
 // get returns the value of key, building it (with its weight) when it is
-// not kept; a negative weight is not kept (a build that failed).
+// not kept; a negative weight is not kept (a build that failed), its value
+// shared with those that waited for it but for buildEnded.
 func (c *lru[V]) get(key string, build func() (V, int)) V {
-	c.mu.Lock()
-	for i, e := range c.entries {
-		if e.key == key {
-			c.entries = append(slices.Delete(c.entries, i, i+1), e)
+	for {
+		c.mu.Lock()
+		if el, ok := c.byKey[key]; ok {
+			c.order.MoveToBack(el)
 			c.mu.Unlock()
-			return e.value
+			return el.Value.(*lruEntry[V]).value
 		}
-	}
-	if call, ok := c.pending[key]; ok {
+		call, ok := c.pending[key]
+		if !ok {
+			return c.build(key, build) // unlocks c.mu
+		}
 		c.mu.Unlock()
 		<-call.done
-		return call.value
+		if !call.failed {
+			return call.value
+		}
 	}
+}
+
+// build builds the value of key for the calls waiting for it; c.mu is held,
+// and unlocked once the build is registered.
+func (c *lru[V]) build(key string, build func() (V, int)) V {
 	call := &lruCall[V]{done: make(chan struct{})}
 	c.pending[key] = call
 	c.mu.Unlock()
-	weight := 0
+	weight, built := 0, false
 	defer func() {
 		c.mu.Lock()
 		delete(c.pending, key)
 		if weight > 0 {
 			c.keep(&lruEntry[V]{key: key, value: call.value, weight: weight})
 		}
+		// A build that panicked has no value: those waiting build it again.
+		call.failed = weight == buildEnded || !built
 		c.mu.Unlock()
 		close(call.done)
 	}()
 	call.value, weight = build()
+	built = true
 	if weight >= 0 {
 		weight = max(weight, 1)
 	}
 	return call.value
 }
 
+// failedWeight is the weight of a build that failed with err: buildEnded
+// when its caller's request ended.
+func failedWeight(err error) int {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return buildEnded
+	}
+	return -1
+}
+
 // keep adds an entry, evicting the least recently used ones past the budget
 // (never the entry itself).
 func (c *lru[V]) keep(e *lruEntry[V]) {
-	c.entries = append(c.entries, e)
+	if old, ok := c.byKey[e.key]; ok {
+		c.used -= c.order.Remove(old).(*lruEntry[V]).weight
+	}
+	c.byKey[e.key] = c.order.PushBack(e)
 	c.used += e.weight
-	for c.used > c.budget && len(c.entries) > 1 {
-		c.used -= c.entries[0].weight
-		c.entries = c.entries[1:]
+	for c.used > c.budget && c.order.Len() > 1 {
+		oldest := c.order.Remove(c.order.Front()).(*lruEntry[V])
+		delete(c.byKey, oldest.key)
+		c.used -= oldest.weight
 	}
 }

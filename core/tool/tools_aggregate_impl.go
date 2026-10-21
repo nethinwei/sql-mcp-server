@@ -15,6 +15,7 @@ import (
 func runAggregate(ctx context.Context, tc Context, in aggregateInput) (Result, error) {
 	ctx, tc, end := beginCall(ctx, tc, true, in.Transaction)
 	defer end()
+	capped := capLimit(tc, &in.Limit)
 	plan, err := prepareAggregate(ctx, tc, in)
 	if err != nil {
 		return Result{}, err
@@ -31,6 +32,7 @@ func runAggregate(ctx context.Context, tc Context, in aggregateInput) (Result, e
 		Content:              got.rows,
 		ReturnedRows:         int64(len(got.rows)),
 		EstimatedScannedRows: st.sql.estimatedRows(),
+		Truncated:            capped && int64(len(got.rows)) >= in.Limit, // groups may be left past the cap
 	}, nil
 }
 
@@ -59,10 +61,7 @@ func prepareAggregate(ctx context.Context, tc Context, in aggregateInput) (aggre
 		return aggregatePlan{}, err
 	}
 	aggFields = append(aggFields, locals...)
-	if err := validateFields(res, aggFields...); err != nil {
-		return aggregatePlan{}, err
-	}
-	if err := validateUnmaskedFields(res, aggFields...); err != nil {
+	if err := (fieldUses{compared: aggFields}).check(res); err != nil {
 		return aggregatePlan{}, err
 	}
 	g, err := authorizeRequest(ctx, tc, rbac.Request{
@@ -103,6 +102,12 @@ func compileAggregate(ctx context.Context, plan aggregatePlan, in aggregateInput
 	for i, g := range in.GroupBy {
 		groupBy[i] = plan.rel.field(columnOf(res.Entity, g))
 		toIR.rename[g] = groupBy[i]
+		// The IR names a group by its column (an alias's): having and
+		// orderBy would take the aggregate of the same name for it.
+		if slices.ContainsFunc(calls, func(c relalg.AggCall) bool { return c.Name == groupBy[i] }) {
+			return statement{}, fmt.Errorf("%w: group-by field %q is the column %q, the name of an aggregate",
+				ErrInvalidInput, g, groupBy[i])
+		}
 	}
 	for i := range calls {
 		calls[i].Field = columnOf(res.Entity, calls[i].Field)
@@ -135,12 +140,18 @@ func compileAggregate(ctx context.Context, plan aggregatePlan, in aggregateInput
 // does not change. An aggregate given twice would hide one of its columns
 // too.
 func aggregateCalls(aggregates []aggJSON, groupBy []string) ([]relalg.AggCall, []string, error) {
+	if len(aggregates) == 0 && len(groupBy) == 0 {
+		return nil, nil, fmt.Errorf("%w: aggregate computes aggregates, or groups by fields", ErrInvalidInput)
+	}
 	calls := make([]relalg.AggCall, 0, len(aggregates))
 	columns := append(make([]string, 0, len(groupBy)+len(aggregates)), groupBy...)
 	for _, a := range aggregates {
 		f := relalg.AggFunc(a.Func)
 		if !f.Valid() {
 			return nil, nil, fmt.Errorf("%w: aggregate func %q", ErrInvalidInput, a.Func)
+		}
+		if a.Field == "" && a.Func != string(relalg.AggCount) {
+			return nil, nil, fmt.Errorf("%w: %s aggregates a field: {func: %s, field}", ErrInvalidInput, a.Func, a.Func)
 		}
 		if a.Distinct && (a.Func != string(relalg.AggCount) || a.Field == "") {
 			return nil, nil, fmt.Errorf("%w: distinct counts a field: {func: count, field, distinct: true}",

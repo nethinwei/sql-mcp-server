@@ -1,6 +1,7 @@
 package configplan
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -32,6 +33,10 @@ type Input struct {
 	// newer scan. MissingRowColumns are the columns their row scopes test
 	// (not fields) found missing: no sync repairs those.
 	MissingFields, MissingRowColumns map[string][]string
+	// Index, when set, is NewIndex of Sources, Base and Published: the plans
+	// evaluated against them filter it rather than each resolve the entity
+	// of every table again.
+	Index *Index
 }
 
 // Proposal is the outcome of a plan.
@@ -116,8 +121,8 @@ const (
 	ExceptionNoKey = "noKey"
 	// ExceptionSideEffects: triggers or rules may write other tables.
 	ExceptionSideEffects = "sideEffects"
-	// ExceptionRelationshipDropped: a foreign key references a table that has
-	// no entity.
+	// ExceptionRelationshipDropped: a foreign key joins a table that has no
+	// entity, or whose entity has no field for a joined column.
 	ExceptionRelationshipDropped = "relationshipDropped"
 	// ExceptionQualified: an existing reference would name several entities
 	// once the plan adds its own; it is rewritten to the ID of the one it
@@ -127,6 +132,9 @@ const (
 	ExceptionUnknownUser = "unknownUser"
 	// ExceptionNoFields: a grant's field patterns match no field.
 	ExceptionNoFields = "noFields"
+	// ExceptionGrantFieldsEmptied: a sync removed every field a grant lists;
+	// the grant reads and writes none of its entity.
+	ExceptionGrantFieldsEmptied = "grantFieldsEmptied"
 	// ExceptionReferenced: a field to remove is still referenced.
 	ExceptionReferenced = "referenced"
 	// ExceptionDenied: the connection lacks the privilege for an action.
@@ -136,6 +144,9 @@ const (
 	// ExceptionKeyReferenced: a relationship joins on a column the synced
 	// keys no longer include.
 	ExceptionKeyReferenced = "keyReferenced"
+	// ExceptionKeyNotField: a scanned key names a column the entity has no
+	// field for; the sync leaves the key out.
+	ExceptionKeyNotField = "keyNotField"
 	// ExceptionRowColumnMissing: a row scope (tenant policy, row policy,
 	// grant rows) tests a column the table lacks; the entity stays
 	// unavailable until the scope is fixed by hand.
@@ -198,7 +209,15 @@ func Evaluate(in Input, p Plan) (Proposal, error) {
 		return Proposal{}, err
 	}
 	ev := newEvaluation(in, p)
-	rows := Rows(in.Sources, in.Base, in.Published, p.Scope)
+	var rows []Row
+	if in.Index != nil {
+		rows = in.Index.Rows(p.Scope)
+	} else {
+		rows = Rows(in.Sources, in.Base, in.Published, p.Scope)
+	}
+	if err := checkExcluded(in, p.Exclude); err != nil {
+		return Proposal{}, err
+	}
 	exclude := set(p.Exclude)
 	rows = slices.DeleteFunc(rows, func(r Row) bool {
 		excluded := exclude[r.Ref]
@@ -208,6 +227,75 @@ func Evaluate(in Input, p Plan) (Proposal, error) {
 		return excluded
 	})
 	ev.report.Matched = len(rows)
+	ev.reportScanned(rows)
+	if len(p.Scope.Refs) == 0 && len(p.Scope.Entities) == 0 {
+		ev.report.Unscanned = Unscanned(in.Sources, p.Scope)
+	}
+	targets := ev.importTables(rows)
+	// References of the base the tables imported made ambiguous are
+	// qualified before anything resolves them; those to the tables a sync
+	// removes go at the end.
+	ev.qualifyReferences()
+	// Sync first, so the field rules cover the fields it adds.
+	if p.Sync != nil {
+		targets = ev.syncAll(targets, exclude)
+	}
+	for _, t := range targets {
+		ev.applyFields(t)
+	}
+	for _, rule := range p.Grants {
+		ev.grant(rule, targets)
+	}
+	// What the plan wrote since names entities by ID: only the references
+	// to the tables a sync removed are left to go.
+	if len(ev.removed) > 0 {
+		ev.qualifyReferences()
+	}
+	return ev.proposal(rows), nil
+}
+
+// checkExcluded refuses a plan excluding a table no scan found: a misspelt
+// exclusion would apply the plan to the table meant (grant it), and a
+// template's to a table since dropped is to be looked at.
+func checkExcluded(in Input, refs []string) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	scanned := scannedRefs(in)
+	gone := map[string]bool{}
+	for _, g := range GoneTables(in.Sources, in.Base, Scope{}, in.Missing) { // excluded from removal
+		gone[g.Ref] = true
+	}
+	var unknown []string
+	for _, ref := range refs {
+		if !scanned(ref) && !gone[ref] {
+			unknown = append(unknown, ref)
+		}
+	}
+	if len(unknown) > 0 {
+		return fmt.Errorf("plan: exclude names no scanned table: %s (write datasource.schema.table)",
+			strings.Join(unknown, ", "))
+	}
+	return nil
+}
+
+// scannedRefs reports whether a table (by Ref) was scanned: one the index
+// has, or of the catalogs, without working out where each table stands.
+func scannedRefs(in Input) func(string) bool {
+	if in.Index != nil {
+		return in.Index.Has
+	}
+	refs := map[string]bool{}
+	for _, src := range in.Sources {
+		for _, t := range src.Catalog.Tables {
+			refs[Ref(src.Datasource, t.Schema, t.Source)] = true
+		}
+	}
+	return func(ref string) bool { return refs[ref] }
+}
+
+// reportScanned reports when the rows were scanned, the earliest and the latest.
+func (ev *evaluation) reportScanned(rows []Row) {
 	for _, r := range rows {
 		if r.ScannedAt.IsZero() {
 			continue
@@ -219,22 +307,6 @@ func Evaluate(in Input, p Plan) (Proposal, error) {
 			ev.report.ScannedTo = r.ScannedAt
 		}
 	}
-	if len(p.Scope.Refs) == 0 && len(p.Scope.Entities) == 0 {
-		ev.report.Unscanned = Unscanned(in.Sources, p.Scope)
-	}
-	targets := ev.importTables(rows)
-	// Sync first, so the field rules cover the fields it adds.
-	if p.Sync != nil {
-		ev.syncAll(targets, exclude)
-	}
-	for _, t := range targets {
-		ev.applyFields(t)
-	}
-	for _, rule := range p.Grants {
-		ev.grant(rule, targets)
-	}
-	ev.qualifyReferences()
-	return ev.proposal(rows), nil
 }
 
 // evaluation is the state of one Evaluate.
@@ -253,14 +325,25 @@ type evaluation struct {
 	report   Report
 	changes  map[string]*Change
 	order    []string
-	// summarized tells which entities each change names, by change key.
-	summarized map[string]map[string]bool
+	// summarized tells which entities each change names, with the fields
+	// it counts of each, by change key.
+	summarized map[string]map[string]int
 	// fieldRules are the plan's field rules, compiled.
 	fieldRules []compiledFieldRule
 	// refs resolves references among the entities once the plan's are
-	// added; uses indexes what names each field (see fieldUses).
-	refs *config.EntityRefs
-	uses map[string]map[string][]string
+	// added; uses indexes what names each field (see fieldUses), joins the
+	// relationships joining on it (see joinsOn).
+	refs        *config.EntityRefs
+	uses, joins map[string]map[string][]string
+	// dropped are the fields a sync removed, by entity ID (see
+	// dropGrantFields).
+	dropped map[string]droppedFields
+}
+
+// droppedFields are the fields a sync removed from the entity of a table.
+type droppedFields struct {
+	ref    string
+	fields []string
 }
 
 type compiledFieldRule struct {
@@ -279,7 +362,7 @@ func newEvaluation(in Input, p Plan) *evaluation {
 	ev := &evaluation{
 		in: in, plan: p, cfg: &cfg, index: map[string]int{}, imported: map[string]string{}, changed: map[string]bool{},
 		roles: map[string]bool{}, users: map[string]bool{}, changes: map[string]*Change{},
-		summarized: map[string]map[string]bool{},
+		summarized: map[string]map[string]int{}, dropped: map[string]droppedFields{},
 	}
 	for _, r := range p.Fields {
 		ev.fieldRules = append(ev.fieldRules, compiledFieldRule{r, compileGlobs(r.Columns), compileGlobs(r.Types)})
@@ -325,11 +408,39 @@ func (ev *evaluation) summarize(c Change, entity string, fields int) {
 		ev.order = append(ev.order, key)
 	}
 	got.Fields += fields
-	if entity != "" && !ev.summarized[key][entity] {
-		if ev.summarized[key] == nil {
-			ev.summarized[key] = map[string]bool{}
-		}
-		ev.summarized[key][entity] = true
+	if entity == "" {
+		return
+	}
+	if ev.summarized[key] == nil {
+		ev.summarized[key] = map[string]int{}
+	}
+	if _, ok := ev.summarized[key][entity]; !ok {
 		got.Entities = append(got.Entities, entity)
 	}
+	ev.summarized[key][entity] += fields
+}
+
+// forget takes the entities of drop out of the report: the changes naming
+// them (a change left naming none goes) and their exceptions.
+func (ev *evaluation) forget(drop map[string]bool) {
+	ev.order = slices.DeleteFunc(ev.order, func(key string) bool {
+		c, named := ev.changes[key], ev.summarized[key]
+		if len(c.Entities) == 0 {
+			return false
+		}
+		c.Entities = slices.DeleteFunc(c.Entities, func(id string) bool {
+			if drop[id] {
+				c.Fields -= named[id]
+				delete(named, id)
+			}
+			return drop[id]
+		})
+		if len(c.Entities) > 0 {
+			return false
+		}
+		delete(ev.changes, key)
+		delete(ev.summarized, key)
+		return true
+	})
+	ev.report.Exceptions = slices.DeleteFunc(ev.report.Exceptions, func(x Exception) bool { return drop[x.Entity] })
 }

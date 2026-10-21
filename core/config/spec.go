@@ -1,6 +1,9 @@
 package config
 
-import "reflect"
+import (
+	"errors"
+	"reflect"
+)
 
 //go:generate go run ../../internal/schemagen -root ../..
 
@@ -25,11 +28,35 @@ type Map[K comparable, V any] map[K]V
 // IsZero reports an unset map (omitted when encoded), not an empty one.
 func (m Map[K, V]) IsZero() bool { return m == nil }
 
+// ErrLegacyDatabase refuses a configuration writing both the legacy database
+// section and databases.
+var ErrLegacyDatabase = errors.New("config: database and databases are both set; move database into databases")
+
+// legacyIgnored reports a legacy database section databases take the place
+// of: ignored, yet kept in what is stored. A configuration in effect
+// written out (export, payloads stored before Specs) writes both, the same.
+func legacyIgnored(spec *Spec) bool {
+	if spec.Database == nil || len(spec.Databases) == 0 {
+		return false
+	}
+	legacy := spec.Database.config()
+	if isZero(legacy) {
+		return false
+	}
+	migrated, ok := spec.Databases["default"]
+	return len(spec.Databases) > 1 || !ok || !reflect.DeepEqual(migrated.config(), legacy)
+}
+
 // Resolve is the configuration spec describes: its defaults filled in, and
-// validated.
+// validated. Its lists and maps are copies one level deep: what is inside
+// their elements (uniqueKeys' keys, filters' values) is spec's, not to be
+// changed.
 func Resolve(spec *Spec) (*Config, error) {
 	var cfg Config
 	if spec != nil {
+		if legacyIgnored(spec) {
+			return nil, ErrLegacyDatabase
+		}
 		cfg = spec.config()
 	}
 	cfg.ApplyDefaults()
@@ -38,6 +65,10 @@ func Resolve(spec *Spec) (*Config, error) {
 	}
 	return &cfg, nil
 }
+
+// EntityOf is the entity s describes, as written: what it leaves unset is
+// zero, no default filled in.
+func EntityOf(s EntitySpec) EntityConfig { return s.config() }
 
 func ptr[T any](v T) *T { return &v }
 
@@ -62,7 +93,8 @@ func (s *Spec) Canonical() { s.canonical() }
 
 // SpecOf is the Spec of a configuration built in code, where a zero field
 // means unset (as before ApplyDefaults), or of one in effect, its defaults
-// then written out.
+// then written out. The Spec shares c's lists and maps: change neither
+// while the other is in use.
 func SpecOf(c *Config) *Spec {
 	s := c.spec()
 	return &s

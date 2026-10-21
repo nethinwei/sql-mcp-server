@@ -33,6 +33,7 @@ type ResolverRoot interface {
 	Mutation() MutationResolver
 	Query() QueryResolver
 	Revision() RevisionResolver
+	ScanBatch() ScanBatchResolver
 	Workspace() WorkspaceResolver
 }
 
@@ -331,6 +332,7 @@ type ComplexityRoot struct {
 		DiscardDraft        func(childComplexity int, id string) int
 		EditWorkspace       func(childComplexity int, input configapp.WorkspaceEditInput) int
 		GenerateUserToken   func(childComplexity int) int
+		LoadRevision        func(childComplexity int, to string, keep bool) int
 		MergeDraft          func(childComplexity int, id string) int
 		Publish             func(childComplexity int, input PublishInput) int
 		ResetWorkspace      func(childComplexity int, to string) int
@@ -356,6 +358,7 @@ type ComplexityRoot struct {
 	}
 
 	PendingPlan struct {
+		Error    func(childComplexity int) int
 		Key      func(childComplexity int) int
 		Report   func(childComplexity int) int
 		State    func(childComplexity int) int
@@ -385,6 +388,8 @@ type ComplexityRoot struct {
 		Drift               func(childComplexity int) int
 		DriftTables         func(childComplexity int) int
 		GoneTables          func(childComplexity int) int
+		MoreDriftTables     func(childComplexity int) int
+		MoreGoneTables      func(childComplexity int) int
 		NewTables           func(childComplexity int) int
 		Plans               func(childComplexity int) int
 		UnlistedDatasources func(childComplexity int) int
@@ -478,6 +483,7 @@ type ComplexityRoot struct {
 		Published            func(childComplexity int) int
 		Revision             func(childComplexity int, id string) int
 		Revisions            func(childComplexity int, limit *int) int
+		ScanBatch            func(childComplexity int, id string) int
 		ScanBatches          func(childComplexity int, datasource string) int
 		SchemaList           func(childComplexity int, datasource string, refresh *bool) int
 		SchemaScan           func(childComplexity int, id string) int
@@ -773,6 +779,7 @@ type MutationResolver interface {
 	ApplyPlan(ctx context.Context, input ApplyPlanInput) (*configapp.AppliedPlan, error)
 	UpdateWorkspace(ctx context.Context, to string) (*configapp.Workspace, error)
 	ResetWorkspace(ctx context.Context, to string) (*configapp.Workspace, error)
+	LoadRevision(ctx context.Context, to string, keep bool) (*configapp.Workspace, error)
 	MergeDraft(ctx context.Context, id string) (*configapp.Workspace, error)
 	ResolveConflict(ctx context.Context, id string, theirs bool) (*configapp.Workspace, error)
 	CheckpointWorkspace(ctx context.Context, comment *string) (*Revision, error)
@@ -821,15 +828,20 @@ type QueryResolver interface {
 	Drafts(ctx context.Context) ([]DraftRevision, error)
 	McpTokens(ctx context.Context) ([]configapp.McpToken, error)
 	ScanBatches(ctx context.Context, datasource string) ([]configapp.ScanBatch, error)
+	ScanBatch(ctx context.Context, id string) (*configapp.ScanBatch, error)
 }
 type RevisionResolver interface {
 	Config(ctx context.Context, obj *Revision) (*Configuration, error)
 	Sections(ctx context.Context, obj *Revision) (any, error)
 	Yaml(ctx context.Context, obj *Revision) (string, error)
 }
+type ScanBatchResolver interface {
+	Items(ctx context.Context, obj *configapp.ScanBatch) ([]configapp.ScanBatchItem, error)
+}
 type WorkspaceResolver interface {
 	Sections(ctx context.Context, obj *configapp.Workspace) (any, error)
 	Items(ctx context.Context, obj *configapp.Workspace, since *int) (*configapp.WorkspaceItems, error)
+	Conflicts(ctx context.Context, obj *configapp.Workspace) ([]configapp.WorkspaceConflict, error)
 }
 
 // endregion ************************** generated!.gotpl **************************
@@ -2062,6 +2074,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.GenerateUserToken(childComplexity), true
+	case "Mutation.loadRevision":
+		if e.ComplexityRoot.Mutation.LoadRevision == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_loadRevision_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.LoadRevision(childComplexity, args["to"].(string), args["keep"].(bool)), true
 	case "Mutation.mergeDraft":
 		if e.ComplexityRoot.Mutation.MergeDraft == nil {
 			break
@@ -2248,6 +2271,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.PendingGoneTable.State(childComplexity), true
 
+	case "PendingPlan.error":
+		if e.ComplexityRoot.PendingPlan.Error == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PendingPlan.Error(childComplexity), true
 	case "PendingPlan.key":
 		if e.ComplexityRoot.PendingPlan.Key == nil {
 			break
@@ -2371,6 +2400,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.PendingWork.GoneTables(childComplexity), true
+	case "PendingWork.moreDriftTables":
+		if e.ComplexityRoot.PendingWork.MoreDriftTables == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PendingWork.MoreDriftTables(childComplexity), true
+	case "PendingWork.moreGoneTables":
+		if e.ComplexityRoot.PendingWork.MoreGoneTables == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PendingWork.MoreGoneTables(childComplexity), true
 	case "PendingWork.newTables":
 		if e.ComplexityRoot.PendingWork.NewTables == nil {
 			break
@@ -2854,6 +2895,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.Revisions(childComplexity, args["limit"].(*int)), true
+	case "Query.scanBatch":
+		if e.ComplexityRoot.Query.ScanBatch == nil {
+			break
+		}
+
+		args, err := ec.field_Query_scanBatch_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.ScanBatch(childComplexity, args["id"].(string)), true
 	case "Query.scanBatches":
 		if e.ComplexityRoot.Query.ScanBatches == nil {
 			break
@@ -4688,6 +4740,8 @@ func (ec *executionContext) childFields_PendingPlan(ctx context.Context, field g
 		return ec.fieldContext_PendingPlan_template(ctx, field)
 	case "report":
 		return ec.fieldContext_PendingPlan_report(ctx, field)
+	case "error":
+		return ec.fieldContext_PendingPlan_error(ctx, field)
 	case "state":
 		return ec.fieldContext_PendingPlan_state(ctx, field)
 	}
@@ -4748,6 +4802,10 @@ func (ec *executionContext) childFields_PendingWork(ctx context.Context, field g
 		return ec.fieldContext_PendingWork_unscannedSchemas(ctx, field)
 	case "unlistedDatasources":
 		return ec.fieldContext_PendingWork_unlistedDatasources(ctx, field)
+	case "moreDriftTables":
+		return ec.fieldContext_PendingWork_moreDriftTables(ctx, field)
+	case "moreGoneTables":
+		return ec.fieldContext_PendingWork_moreGoneTables(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type PendingWork", field.Name)
 }
@@ -5660,6 +5718,28 @@ func (ec *executionContext) field_Mutation_editWorkspace_args(ctx context.Contex
 	return args, nil
 }
 
+func (ec *executionContext) field_Mutation_loadRevision_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "to",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNID2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["to"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "keep",
+		func(ctx context.Context, v any) (bool, error) {
+			return ec.unmarshalNBoolean2bool(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["keep"] = arg1
+	return args, nil
+}
+
 func (ec *executionContext) field_Mutation_mergeDraft_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -6059,6 +6139,20 @@ func (ec *executionContext) field_Query_revisions_args(ctx context.Context, rawA
 		return nil, err
 	}
 	args["limit"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_scanBatch_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNID2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["id"] = arg0
 	return args, nil
 }
 
@@ -11253,6 +11347,50 @@ func (ec *executionContext) fieldContext_Mutation_resetWorkspace(ctx context.Con
 	return fc, nil
 }
 
+func (ec *executionContext) _Mutation_loadRevision(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_loadRevision(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().LoadRevision(ctx, fc.Args["to"].(string), fc.Args["keep"].(bool))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *configapp.Workspace) graphql.Marshaler {
+			return ec.marshalNWorkspace2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐWorkspace(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_loadRevision(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Workspace(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_loadRevision_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Mutation_mergeDraft(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -11992,6 +12130,29 @@ func (ec *executionContext) fieldContext_PendingPlan_report(_ context.Context, f
 	return fc, nil
 }
 
+func (ec *executionContext) _PendingPlan_error(ctx context.Context, field graphql.CollectedField, obj *configapp.PendingPlan) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PendingPlan_error(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Error, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_PendingPlan_error(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PendingPlan", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _PendingPlan_state(ctx context.Context, field graphql.CollectedField, obj *configapp.PendingPlan) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -12518,6 +12679,52 @@ func (ec *executionContext) _PendingWork_unlistedDatasources(ctx context.Context
 }
 func (ec *executionContext) fieldContext_PendingWork_unlistedDatasources(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("PendingWork", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _PendingWork_moreDriftTables(ctx context.Context, field graphql.CollectedField, obj *configapp.PendingWork) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PendingWork_moreDriftTables(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.MoreDriftTables, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PendingWork_moreDriftTables(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PendingWork", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _PendingWork_moreGoneTables(ctx context.Context, field graphql.CollectedField, obj *configapp.PendingWork) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PendingWork_moreGoneTables(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.MoreGoneTables, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PendingWork_moreGoneTables(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PendingWork", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
 func (ec *executionContext) _PlanChange_kind(ctx context.Context, field graphql.CollectedField, obj *configapp.PlanChange) (ret graphql.Marshaler) {
@@ -14966,6 +15173,50 @@ func (ec *executionContext) fieldContext_Query_scanBatches(ctx context.Context, 
 	return fc, nil
 }
 
+func (ec *executionContext) _Query_scanBatch(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_scanBatch(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().ScanBatch(ctx, fc.Args["id"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *configapp.ScanBatch) graphql.Marshaler {
+			return ec.marshalNScanBatch2ᚖgithubᚗcomᚋnethinweiᚋsqlᚑmcpᚑserverᚋxᚋadminᚋconfigappᚐScanBatch(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_scanBatch(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ScanBatch(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_scanBatch_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query___type(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -15906,7 +16157,7 @@ func (ec *executionContext) _ScanBatch_items(ctx context.Context, field graphql.
 			return ec.fieldContext_ScanBatch_items(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.Items, nil
+			return ec.Resolvers.ScanBatch().Items(ctx, obj)
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []configapp.ScanBatchItem) graphql.Marshaler {
@@ -15920,8 +16171,8 @@ func (ec *executionContext) fieldContext_ScanBatch_items(_ context.Context, fiel
 	fc = &graphql.FieldContext{
 		Object:     "ScanBatch",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_ScanBatchItem(ctx, field)
 		},
@@ -18137,7 +18388,7 @@ func (ec *executionContext) _Workspace_conflicts(ctx context.Context, field grap
 			return ec.fieldContext_Workspace_conflicts(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.Conflicts, nil
+			return ec.Resolvers.Workspace().Conflicts(ctx, obj)
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []configapp.WorkspaceConflict) graphql.Marshaler {
@@ -18151,8 +18402,8 @@ func (ec *executionContext) fieldContext_Workspace_conflicts(_ context.Context, 
 	fc = &graphql.FieldContext{
 		Object:     "Workspace",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_WorkspaceConflict(ctx, field)
 		},
@@ -23589,6 +23840,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "loadRevision":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_loadRevision(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "mergeDraft":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_mergeDraft(ctx, field)
@@ -23777,6 +24035,11 @@ func (ec *executionContext) _PendingPlan(ctx context.Context, sel ast.SelectionS
 		case "report":
 			out.Values[i] = ec._PendingPlan_report(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "error":
+			out.Values[i] = ec._PendingPlan_error(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
 		case "state":
@@ -23980,6 +24243,16 @@ func (ec *executionContext) _PendingWork(ctx context.Context, sel ast.SelectionS
 			}
 		case "unlistedDatasources":
 			out.Values[i] = ec._PendingWork_unlistedDatasources(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "moreDriftTables":
+			out.Values[i] = ec._PendingWork_moreDriftTables(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "moreGoneTables":
+			out.Values[i] = ec._PendingWork_moreGoneTables(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -25218,6 +25491,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "scanBatch":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_scanBatch(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "__type":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Query___type(ctx, field)
@@ -25672,62 +25967,95 @@ func (ec *executionContext) _ScanBatch(ctx context.Context, sel ast.SelectionSet
 		case "id":
 			out.Values[i] = ec._ScanBatch_id(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "datasource":
 			out.Values[i] = ec._ScanBatch_datasource(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "state":
 			out.Values[i] = ec._ScanBatch_state(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "total":
 			out.Values[i] = ec._ScanBatch_total(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "done":
 			out.Values[i] = ec._ScanBatch_done(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "failed":
 			out.Values[i] = ec._ScanBatch_failed(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "canceled":
 			out.Values[i] = ec._ScanBatch_canceled(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "pending":
 			out.Values[i] = ec._ScanBatch_pending(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "items":
-			out.Values[i] = ec._ScanBatch_items(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._ScanBatch_items(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
 			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "startedBy":
 			out.Values[i] = ec._ScanBatch_startedBy(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "startedAt":
 			out.Values[i] = ec._ScanBatch_startedAt(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "finishedAt":
 			out.Values[i] = ec._ScanBatch_finishedAt(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
@@ -26957,10 +27285,43 @@ func (ec *executionContext) _Workspace(ctx context.Context, sel ast.SelectionSet
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "conflicts":
-			out.Values[i] = ec._Workspace_conflicts(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Workspace_conflicts(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
 			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "notes":
 			out.Values[i] = ec._Workspace_notes(ctx, field, obj)
 			if out.Values[i] == graphql.Null {

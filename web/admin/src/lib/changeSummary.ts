@@ -78,11 +78,49 @@ interface Legacy {
 }
 
 /**
+ * A configuration read once for a summary: its entity index, roles and users
+ * by name (the first of a name, as find reads them), the legacy access of its
+ * entities in entity order, and each user's access once computed.
+ */
+interface Prepared {
+  cfg: Config
+  index: EntityIndex<EntityInput>
+  roles: Map<string, RoleInput>
+  users: Map<string, UserInput>
+  legacy: { id: string; action: string; holders: string[]; legacy: Legacy }[]
+  access: Map<UserInput, Map<string, string>>
+}
+
+function prepare(cfg: Config): Prepared {
+  const byName = <T extends { name: string }>(items: T[]) => {
+    const out = new Map<string, T>()
+    for (const x of items) if (!out.has(x.name)) out.set(x.name, x)
+    return out
+  }
+  const legacy: Prepared['legacy'] = []
+  for (const e of cfg.entities) {
+    const l = (e.legacyAccess ?? {}) as Legacy
+    for (const [action, holders] of Object.entries(l.roles ?? {})) {
+      legacy.push({ id: entityId(e), action: action.toUpperCase(), holders: (holders ?? []).map((r) => r.toLowerCase()),
+        legacy: l })
+    }
+  }
+  return { cfg, index: new EntityIndex(cfg.entities), roles: byName(cfg.roles), users: byName(cfg.users), legacy,
+    access: new Map() }
+}
+
+/**
  * Each entity action a user holds, with the scopes giving it: top-level
  * grants, and legacy access of each role the user has (its fieldACL and row
  * policy are that role's scope).
  */
-function accessOf(cfg: Config, user: UserInput): Map<string, string> {
+function accessOf(p: Prepared, user: UserInput): Map<string, string> {
+  let out = p.access.get(user)
+  if (!out) p.access.set(user, (out = computeAccess(p, user)))
+  return out
+}
+
+function computeAccess(p: Prepared, user: UserInput): Map<string, string> {
   if (user.disabled) return new Map()
   const scopes = new Map<string, Set<string>>()
   const add = (entity: string, action: string, read: unknown, write: unknown, rows: unknown) => {
@@ -92,32 +130,27 @@ function accessOf(cfg: Config, user: UserInput): Map<string, string> {
   }
   const grants: GrantInput[] = [
     ...(user.grants ?? []),
-    ...(user.roles ?? []).flatMap((r) => cfg.roles.find((x) => x.name === r)?.grants ?? []),
+    ...(user.roles ?? []).flatMap((r) => p.roles.get(r)?.grants ?? []),
   ]
-  const index = new EntityIndex(cfg.entities)
   for (const g of grants) {
     for (const action of g.actions) {
-      add(index.idOf(g.entity) ?? g.entity, action, g.fieldsRestricted ? g.readFields ?? [] : null,
+      add(p.index.idOf(g.entity) ?? g.entity, action, g.fieldsRestricted ? g.readFields ?? [] : null,
         g.fieldsRestricted ? g.writeFields ?? [] : null, g.rows ?? null)
     }
   }
   const permissions = [
     ...(user.permissions ?? []),
-    ...(user.roles ?? []).flatMap((r) => cfg.roles.find((x) => x.name === r)?.permissions ?? []),
+    ...(user.roles ?? []).flatMap((r) => p.roles.get(r)?.permissions ?? []),
   ]
-  for (const p of permissions) {
-    const m = /^sql:execute@(.+)$/.exec(p)
+  for (const perm of permissions) {
+    const m = /^sql:execute@(.+)$/.exec(perm)
     if (m) add(m[1], sqlAction, null, null, null)
   }
   const roles = new Set((user.roles ?? []).map((r) => r.toLowerCase()))
-  for (const e of cfg.entities) {
-    const legacy = (e.legacyAccess ?? {}) as Legacy
-    for (const [action, holders] of Object.entries(legacy.roles ?? {})) {
-      for (const role of (holders ?? []).map((r) => r.toLowerCase()).filter((r) => roles.has(r))) {
-        const acl = legacy.fieldACL?.[role] as { read?: string[]; write?: string[] } | undefined
-        add(entityId(e), action.toUpperCase(), acl ? acl.read ?? [] : null, acl ? acl.write ?? [] : null,
-          legacy.rowPolicies?.[role] ?? null)
-      }
+  for (const { id, action, holders, legacy } of p.legacy) {
+    for (const role of holders.filter((r) => roles.has(r))) {
+      const acl = legacy.fieldACL?.[role] as { read?: string[]; write?: string[] } | undefined
+      add(id, action, acl ? acl.read ?? [] : null, acl ? acl.write ?? [] : null, legacy.rowPolicies?.[role] ?? null)
     }
   }
   return new Map([...scopes].map(([k, set]) => [k, set.has(unrestricted) ? unrestricted : json([...set].sort())]))
@@ -128,12 +161,12 @@ function access(k: string): Access {
   return { entity, action: action as Access['action'] }
 }
 
-function userChanges(before: Config, after: Config): UserChange[] {
-  const names = [...new Set([...before.users, ...after.users].map((u) => u.name))].sort()
+function userChanges(before: Prepared, after: Prepared): UserChange[] {
+  const names = [...new Set([...before.cfg.users, ...after.cfg.users].map((u) => u.name))].sort()
   const out: UserChange[] = []
   for (const name of names) {
-    const was = before.users.find((u) => u.name === name)
-    const now = after.users.find((u) => u.name === name)
+    const was = before.users.get(name)
+    const now = after.users.get(name)
     const a = was ? accessOf(before, was) : new Map<string, string>()
     const b = now ? accessOf(after, now) : new Map<string, string>()
     const change: UserChange = {
@@ -148,10 +181,10 @@ function userChanges(before: Config, after: Config): UserChange[] {
   return out
 }
 
-function fieldChanges(before: Config, after: Config): FieldChange[] {
+function fieldChanges(before: Prepared, after: Prepared): FieldChange[] {
   const out: FieldChange[] = []
-  const was = new EntityIndex(before.entities)
-  for (const e of after.entities) {
+  const was = before.index
+  for (const e of after.cfg.entities) {
     const old = was.get(entityId(e))
     if (!old) continue
     const visible = (ent: EntityInput) => new Set((ent.fields ?? []).filter((f) => !f.exclude).map((f) => f.name))
@@ -170,20 +203,20 @@ function fieldChanges(before: Config, after: Config): FieldChange[] {
 }
 
 /** Users who may reach entity in either configuration. */
-function usersReaching(entity: string, configs: Config[]): string[] {
+function usersReaching(entity: string, configs: Prepared[]): string[] {
   const out = new Set<string>()
-  for (const cfg of configs) {
-    for (const u of cfg.users) {
-      if ([...accessOf(cfg, u).keys()].some((k) => k.startsWith(`${entity}\u0000`))) out.add(u.name)
+  for (const p of configs) {
+    for (const u of p.cfg.users) {
+      if ([...accessOf(p, u).keys()].some((k) => k.startsWith(`${entity}\u0000`))) out.add(u.name)
     }
   }
   return [...out].sort()
 }
 
-function boundaryChanges(before: Config, after: Config): BoundaryChange[] {
+function boundaryChanges(before: Prepared, after: Prepared): BoundaryChange[] {
   const out: BoundaryChange[] = []
-  const was = new EntityIndex(before.entities)
-  for (const e of after.entities) {
+  const was = before.index
+  for (const e of after.cfg.entities) {
     const old = was.get(entityId(e))
     if (old && json(old.tenantPolicy) !== json(e.tenantPolicy)) {
       out.push({ entity: entityId(e), kind: 'tenantPolicy', users: usersReaching(entityId(e), [before, after]) })
@@ -195,17 +228,18 @@ function boundaryChanges(before: Config, after: Config): BoundaryChange[] {
 export function summarize(before: Config, after: Config): Summary {
   const ids = (c: Config) => new Set(c.entities.map(entityId))
   const [b, a] = [ids(before), ids(after)]
-  const [was, now] = [new EntityIndex(before.entities), new EntityIndex(after.entities)]
+  const [pb, pa] = [prepare(before), prepare(after)]
+  const [was, now] = [pb.index, pa.index]
   const label = (id: string) => (now.get(id) ? now.shortName(id) : was.get(id) ? was.shortName(id) : id)
   const labelled = (x: Access) => ({ ...x, entity: label(x.entity) })
   return {
-    users: userChanges(before, after).map((u) => ({
+    users: userChanges(pb, pa).map((u) => ({
       ...u, gained: u.gained.map(labelled), lost: u.lost.map(labelled), rescoped: u.rescoped.map(labelled),
     })),
-    boundaries: boundaryChanges(before, after).map((c) => ({ ...c, entity: label(c.entity) })),
+    boundaries: boundaryChanges(pb, pa).map((c) => ({ ...c, entity: label(c.entity) })),
     entitiesAdded: [...a].filter((n) => !b.has(n)).map(label),
     entitiesRemoved: [...b].filter((n) => !a.has(n)).map(label),
-    fields: fieldChanges(before, after).map((c) => ({ ...c, entity: label(c.entity) })),
+    fields: fieldChanges(pb, pa).map((c) => ({ ...c, entity: label(c.entity) })),
   }
 }
 

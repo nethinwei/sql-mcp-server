@@ -86,6 +86,51 @@ func TestReadOrderByPagesWithNextCursor(t *testing.T) {
 	}
 }
 
+// A read asking for more rows than MaxRows, or for no limit, reads MaxRows
+// of them, and a full page of them pages on.
+func TestReadLimitPastMaxRowsPages(t *testing.T) {
+	t.Parallel()
+	tc, db := orderContext(t, []any{int64(7), int64(500), "2026-10-01"}, []any{int64(9), int64(500), "2026-09-30"})
+	tc.MaxRows = 2
+	for _, limit := range []string{`"limit":5,`, ``} {
+		res, err := readJSON(t, tc, `{"entity":"orders","fields":["amount"],`+limit+`"orderBy":[{"field":"amount"}]}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sql := db.Queries[len(db.Queries)-1].Query; !strings.HasSuffix(sql, " LIMIT 2") {
+			t.Errorf("%s: sql = %s", limit, sql)
+		}
+		if res.NextCursor == nil || res.Truncated {
+			t.Errorf("%s: a page of MaxRows rows: next cursor %v, truncated %v", limit, res.NextCursor, res.Truncated)
+		}
+	}
+	// Without an order to page by, MaxRows rows of more asked for are
+	// reported cut; as many as asked for, or fewer than MaxRows, are not.
+	for input, want := range map[string]bool{
+		`{"entity":"orders","fields":["amount"]}`:           true,
+		`{"entity":"orders","fields":["amount"],"limit":5}`: true,
+		`{"entity":"orders","fields":["amount"],"limit":2}`: false,
+		`{"entity":"orders","fields":["amount"],"limit":1}`: false,
+	} {
+		res, err := readJSON(t, tc, input)
+		if err != nil {
+			t.Fatal(input, err)
+		}
+		if res.Truncated != want {
+			t.Errorf("%s: truncated = %v, want %v", input, res.Truncated, want)
+		}
+	}
+	// So are groups of an aggregate.
+	tc.DB = &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return storetest.NewFakeRows([]string{"region", "count"}, []any{"CN", int64(1)}, []any{"US", int64(2)}), nil
+	}}
+	res, err := AggregateTool{}.Run(context.Background(), json.RawMessage(`{"entity":"orders","groupBy":["region"],
+		"aggregates":[{"func":"count"}]}`), tc)
+	if err != nil || !res.Truncated {
+		t.Fatalf("aggregate of MaxRows groups: truncated %v, %v", res.Truncated, err)
+	}
+}
+
 // A nullable field sorts its NULLs last, and pages by them: after a value
 // come the greater ones and NULL, after NULL the rows of NULL with a greater
 // key. A masked field, an unknown direction and a field named twice are
@@ -97,7 +142,7 @@ func TestReadOrderByRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	if sql := db.Queries[0].Query; !strings.Contains(sql,
-		`ORDER BY CASE WHEN "region" IS NULL THEN 1 ELSE 0 END, "region" ASC, "id" ASC`) {
+		`ORDER BY "region" ASC NULLS LAST, "id" ASC`) {
 		t.Fatalf("sql = %s", sql)
 	}
 	for cursor, want := range map[string]string{
@@ -119,11 +164,36 @@ func TestReadOrderByRules(t *testing.T) {
 		`{"entity":"orders","orderBy":[{"field":"region"}],"cursor":{"region":"a","id":null}}`,
 		`{"entity":"orders","orderBy":[{"field":"amount"}],"cursor":{"amount":1}}`,
 		`{"entity":"orders","distinct":true}`,
+		// Distinct rows of a masked field would count its values.
+		`{"entity":"orders","fields":["phone"],"distinct":true}`,
+		`{"entity":"orders","fields":["region","phone"],"distinct":true}`,
 		`{"entity":"orders","fields":["amount"],"distinct":true,"orderBy":[{"field":"region"}]}`,
 	} {
 		if _, err := readJSON(t, tc, input); !errors.Is(err, ErrInvalidInput) {
 			t.Errorf("%s: err = %v", input, err)
 		}
+	}
+}
+
+// A cursor of an order has its numbers checked as the key's cursor does: a
+// fraction for an integer key is the caller's error, not the database's.
+func TestOrderCursorNumbersAreChecked(t *testing.T) {
+	t.Parallel()
+	tc, db := orderContext(t)
+	e := ordersEntity()
+	e.Attributes[0].Domain.Type = "bigint"
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	tc.Services = &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)}
+	for _, input := range []string{
+		`{"entity":"orders","limit":1,"cursor":{"id":1.5}}`,
+		`{"entity":"orders","limit":1,"orderBy":[{"field":"region"}],"cursor":{"region":"CN","id":1.5}}`,
+	} {
+		if _, err := readJSON(t, tc, input); !errors.Is(err, ErrInvalidInput) {
+			t.Errorf("%s: err = %v", input, err)
+		}
+	}
+	if len(db.Queries) != 0 {
+		t.Fatalf("queried: %v", db.Queries)
 	}
 }
 
@@ -137,8 +207,18 @@ func TestReadDistinct(t *testing.T) {
 	if err != nil || res.NextCursor != nil {
 		t.Fatalf("%v %v", res.NextCursor, err)
 	}
-	want := `SELECT DISTINCT "region" FROM "orders" ORDER BY "region" DESC`
+	want := `SELECT DISTINCT "region" FROM "orders" ORDER BY "region" DESC NULLS LAST`
 	if sql := db.Queries[0].Query; !strings.Contains(sql, want) {
+		t.Fatalf("sql = %s", sql)
+	}
+	// Without NULLS LAST, a CASE on the selected column orders the NULLs.
+	tc.Dialect = testdialect.MySQL{}
+	if _, err := readJSON(t, tc, `{"entity":"orders","fields":["region"],"distinct":true,"limit":1,
+		"orderBy":[{"field":"region","dir":"desc"}]}`); err != nil {
+		t.Fatal(err)
+	}
+	want = "SELECT DISTINCT `region` FROM `orders` ORDER BY CASE WHEN `region` IS NULL THEN 1 ELSE 0 END, `region` DESC"
+	if sql := db.Queries[1].Query; !strings.Contains(sql, want) {
 		t.Fatalf("sql = %s", sql)
 	}
 }
@@ -168,6 +248,10 @@ func TestFilterGroups(t *testing.T) {
 		`[{"any":[{"field":"amount","op":"eq","value":1},{"all":[{"field":"amount","op":"eq","value":2},` +
 			`{"field":"amount","op":"eq","value":3}]}]}]`,
 		`[{"any":[{"field":"phone","op":"eq","value":"1"}]}]`,
+		`[{"field":"region","op":"eq","value":null}]`,
+		`[{"not":{"field":"region","op":"ne","value":null}}]`,
+		`[{"field":"region","op":"in","value":"CN"}]`,
+		`[{"field":"region","op":"not_in","value":[]}]`,
 	} {
 		if _, err := readJSON(t, tc, `{"entity":"orders","filter":`+filter+`}`); !errors.Is(err, ErrInvalidInput) {
 			t.Errorf("%s: err = %v", filter, err)
@@ -190,8 +274,8 @@ func TestAggregateHavingOrderLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `SELECT "region", SUM("amount"), COUNT(DISTINCT "id") FROM "orders" WHERE "amount" > $1 GROUP BY "region" ` +
-		`HAVING (SUM("amount") >= $2 OR "region" = $3) ORDER BY CASE WHEN SUM("amount") IS NULL THEN 1 ELSE 0 END, ` +
-		`SUM("amount") DESC, CASE WHEN "region" IS NULL THEN 1 ELSE 0 END, "region" ASC LIMIT 3`
+		`HAVING (SUM("amount") >= $2 OR "region" = $3) ORDER BY SUM("amount") DESC NULLS LAST, ` +
+		`"region" ASC NULLS LAST LIMIT 3`
 	if sql := db.Queries[0].Query; sql != want {
 		t.Fatalf("sql = %s\nwant  %s", sql, want)
 	}
@@ -200,6 +284,9 @@ func TestAggregateHavingOrderLimit(t *testing.T) {
 		`{"entity":"orders","aggregates":[{"func":"count"}],"orderBy":[{"field":"amount"}]}`,
 		`{"entity":"orders","aggregates":[{"func":"sum","field":"amount","distinct":true}]}`,
 		`{"entity":"orders","aggregates":[{"func":"count","distinct":true}]}`,
+		`{"entity":"orders","aggregates":[{"func":"sum"}]}`,
+		`{"entity":"orders","aggregates":[]}`,
+		`{"entity":"orders"}`,
 	} {
 		if _, err := (AggregateTool{}).Run(context.Background(), json.RawMessage(input), tc); !errors.Is(err,
 			ErrInvalidInput) {

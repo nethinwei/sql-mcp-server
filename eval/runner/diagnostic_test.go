@@ -61,6 +61,21 @@ func TestMatchConfounder(t *testing.T) {
 	}
 }
 
+// TestMatchConfounderIsDeterministic: an answer matching several
+// confounders attributes to the first by name on every run.
+func TestMatchConfounderIsDeterministic(t *testing.T) {
+	oracle := &oracleSpec{Confounders: map[string]confounderSpec{
+		"b_time":  {Value: "16", FailureCategory: "time_semantics"},
+		"a_grain": {Value: "intents", FailureCategory: "grain"},
+		"c_unit":  {Value: "answer", FailureCategory: "unit_currency"},
+	}}
+	for range 50 {
+		if cat, _ := matchConfounder("the answer is 16 intents", oracle); cat != "grain" {
+			t.Fatalf("match = %q, want grain", cat)
+		}
+	}
+}
+
 func TestGradeClarifyBehavior(t *testing.T) {
 	task := diagnosticTask{
 		ClarifyContains: []string{"intent"},

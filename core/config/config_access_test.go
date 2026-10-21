@@ -174,6 +174,12 @@ var accessRejectCases = []struct {
 	{"legacy role with colon", func(c *Config) {
 		c.Entities[0].Roles.Read = []string{"user:alice"}
 	}, "must not contain ':'"},
+	{"empty entity role", func(c *Config) {
+		c.Entities[0].Roles.Read = []string{" "}
+	}, "a role must not be empty"},
+	{"server role naming a user", func(c *Config) {
+		c.Server.Role = "user:alice"
+	}, "server.role"},
 	{"unknown server user", func(c *Config) {
 		c.Server.User = "ghost"
 	}, "server.user references unknown user"},
@@ -183,6 +189,9 @@ var accessRejectCases = []struct {
 		c.Users["Alice"] = u
 		c.Server.User = "alice"
 	}, "disabled"},
+	{"unknown budget role", func(c *Config) {
+		c.Budget.Roles = map[string]BudgetLimits{"ghost": {}}
+	}, "budget references unknown role"},
 	{"unknown budget user", func(c *Config) {
 		c.Budget.Users["ghost"] = BudgetLimits{}
 	}, "budget references unknown user"},
@@ -201,6 +210,100 @@ func TestValidateAccessRejectsInvalidConfig(t *testing.T) {
 			err := cfg.Validate()
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("Validate() = %v, want error containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// A config with several errors in its maps reports the same first one every
+// time: the keys are checked in order, not in map order.
+// invalidConfigs are configurations with several errors of a kind, each
+// with what the error reported first mentions.
+func invalidConfigs() map[string]struct {
+	config func() *Config
+	want   string
+} {
+	off := false
+	return map[string]struct {
+		config func() *Config
+		want   string
+	}{
+		"budget roles": {func() *Config {
+			cfg := accessConfig()
+			cfg.Budget.Roles = map[string]BudgetLimits{}
+			for _, role := range []string{"ghost1", "ghost2", "ghost3", "ghost4", "ghost5", "ghost6"} {
+				cfg.Budget.Roles[role] = BudgetLimits{}
+			}
+			return cfg
+		}, "ghost1"},
+		"routing": {func() *Config {
+			conns := Connections{"rw": {DSN: "rw"}}
+			return &Config{Databases: map[string]DatabaseConfig{
+				"main": connections(conns, RoutingConfig{Read: "x", Write: "y", Execute: "z"}),
+			}}
+		}, "routing.read"},
+		"sqlEscape estimate": {func() *Config {
+			cfg := accessConfig()
+			cfg.Tools = ToolFlags{ExecuteSQL: true, present: true}
+			cfg.Audit = AuditConfig{Enabled: true, Path: "audit.jsonl"}
+			cfg.Cost.Enabled = &off
+			cfg.Database = DatabaseConfig{}
+			cfg.Databases = map[string]DatabaseConfig{}
+			for _, db := range []string{"default", "b", "c", "d", "e", "f"} {
+				cfg.Databases[db] = DatabaseConfig{Driver: "postgres", DSN: "x",
+					SQLEscape: SQLEscapeConfig{Connection: DefaultConnection}}
+			}
+			return cfg
+		}, `database "b"`},
+		"colon roles": {func() *Config {
+			cfg := accessConfig()
+			cfg.Entities[0].Roles.Read = []string{"a:1", "b:2", "c:3", "d:4", "e:5", "f:6"}
+			return cfg
+		}, `"a:1"`},
+		"relationship prefix": {relationshipPrefixConfig, `"rel.a"`},
+		"condition keys": {func() *Config {
+			cfg := accessConfig()
+			cfg.Entities[0].TenantPolicy = FilterConfig{"op": "eq", "field": "tenant_id", "value": 1,
+				"bogus1": true, "bogus2": true}
+			return cfg
+		}, `"bogus1"`},
+	}
+}
+
+// relationshipPrefixConfig has a relationship whose name prefixes several
+// fields.
+func relationshipPrefixConfig() *Config {
+	cfg := accessConfig()
+	cfg.Entities = append(cfg.Entities, EntityConfig{Name: "items"})
+	for _, f := range []string{"rel.a", "rel.b", "rel.c", "rel.d", "rel.e", "rel.f"} {
+		cfg.Entities[0].Fields = append(cfg.Entities[0].Fields, FieldConfig{Name: f})
+	}
+	cfg.Entities[0].Relationships = []RelationshipConfig{{Name: "rel", Target: "items",
+		JoinOn: map[string]string{"id": "id"}}}
+	return cfg
+}
+
+func TestValidateReportsTheSameErrorEachTime(t *testing.T) {
+	t.Parallel()
+	for name, tc := range invalidConfigs() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var first string
+			for i := range 20 {
+				cfg := tc.config()
+				cfg.ApplyDefaults()
+				err := cfg.Validate()
+				if err == nil {
+					t.Fatal("validated")
+				}
+				if i == 0 {
+					first = err.Error()
+					if !strings.Contains(first, tc.want) {
+						t.Fatalf("error = %q, want it to mention %q", first, tc.want)
+					}
+				} else if err.Error() != first {
+					t.Fatalf("validation %d reported %q, first %q", i, err, first)
+				}
 			}
 		})
 	}

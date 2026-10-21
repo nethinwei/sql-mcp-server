@@ -2,13 +2,13 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
-  NButton, NCheckbox, NCheckboxGroup, NDivider, NGrid, NGi, NInput, NModal, NPagination, NRadio,
+  NAlert, NButton, NCheckbox, NCheckboxGroup, NDivider, NGrid, NGi, NInput, NModal, NPagination, NRadio,
   NRadioGroup, NSpace, NSwitch, NText, NTooltip,
 } from 'naive-ui'
 import FilterBuilder from './FilterBuilder.vue'
 import GrantMatrixRow from './GrantMatrixRow.vue'
 import { type Filter } from '@/lib/filter'
-import { setActionOn, type GrantRow as Row } from '@/lib/grants'
+import { grantsByEntity, locateGrant, setActionOn, type GrantRow as Row } from '@/lib/grants'
 import { byNamespace } from '@/lib/names'
 import { EntityIndex, entityId } from '@/lib/entityRefs'
 import { grantable as grantableOn, indexCapabilities, type CapabilityIndex } from '@/lib/capabilities'
@@ -36,20 +36,9 @@ const onlyGranted = ref(props.modelValue.length > 0)
 
 // Grants name entities by reference; they are matched by the entity it names.
 const entityIndex = computed(() => new EntityIndex(props.entities))
-const grantedId = (g: GrantInput) => entityIndex.value.idOf(g.entity)
 
 // The grants of each entity, by entity ID, with their position in modelValue.
-const grantsById = computed(() => {
-  const out = new Map<string, { g: GrantInput; index: number }[]>()
-  props.modelValue.forEach((g, index) => {
-    const id = grantedId(g)
-    if (id === undefined) return
-    const list = out.get(id)
-    if (list) list.push({ g, index })
-    else out.set(id, [{ g, index }])
-  })
-  return out
-})
+const grantsById = computed(() => grantsByEntity(props.modelValue, (ref) => entityIndex.value.idOf(ref)))
 
 // The entities in order with their ID and namespace, kept while the
 // entities stay: toggling a grant does not sort them again.
@@ -88,7 +77,7 @@ const listed = computed<Row[][]>(() => {
       if (!onlyGranted.value) out.push([row({ entity, id, grant: null, index: -1, sub: 0, namespace })])
       continue
     }
-    out.push(grants.map(({ g, index }, sub) => row({ entity, id, grant: g, index, sub, namespace })))
+    out.push(grants.map(({ grant, index }, sub) => row({ entity, id, grant, index, sub, namespace })))
   }
   kept = next
   return out
@@ -156,7 +145,7 @@ const columnEntities = (action: Action) => [...new Set(rows.value.filter((r) => 
 const columnStates = computed(() => new Map(actions.map((action) => {
   const entities = columnEntities(action)
   const on = entities.filter((id) =>
-    (grantsById.value.get(id) ?? []).some(({ g }) => g.actions.includes(action))).length
+    (grantsById.value.get(id) ?? []).some(({ grant }) => grant.actions.includes(action))).length
   return [action, { checked: entities.length > 0 && on === entities.length, partial: on > 0 && on < entities.length,
     any: entities.length > 0 }]
 })))
@@ -194,25 +183,36 @@ const draftRead = ref<string[]>([])
 const draftWrite = ref<string[]>([])
 const draftRows = ref<Filter | undefined>(undefined)
 const fieldFilter = ref('')
+// The grant edited was replaced or removed while the editor was open.
+const editorGone = ref(false)
 
 function openFields(row: Row) {
   draftRestricted.value = Boolean(row.grant?.fieldsRestricted)
   draftRead.value = row.grant?.fieldsRestricted ? [...(row.grant.readFields ?? [])] : fieldNames(row.entity)
   draftWrite.value = [...(row.grant?.writeFields ?? [])]
   fieldFilter.value = ''
+  editorGone.value = false
   editing.value = { row, mode: 'fields' }
   editorOpen.value = true
 }
 function openRows(row: Row) {
   draftRows.value = (row.grant?.rows as Filter | undefined) ?? undefined
+  editorGone.value = false
   editing.value = { row, mode: 'rows' }
   editorOpen.value = true
 }
 function saveEditor() {
   const e = editing.value
   if (!e) return
+  // The grants may have changed since the editor opened: write the grant
+  // edited, wherever it is now, and nothing when it is gone.
+  const at = e.row.grant ? locateGrant(props.modelValue, e.row.grant) : -1
+  if (at < 0) {
+    editorGone.value = true
+    return
+  }
   emitWith((list) => {
-    const g = edit(list, e.row.index)
+    const g = edit(list, at)
     if (e.mode === 'fields') {
       g.fieldsRestricted = draftRestricted.value
       g.readFields = draftRestricted.value ? draftRead.value : []
@@ -300,6 +300,7 @@ const editingWrites = computed(() =>
 
     <n-modal :show="editorOpen" preset="card" class="editor" :mask-closable="false" :title="editorTitle"
       @update:show="(v: boolean) => (editorOpen = v)" @after-leave="editing = null">
+      <n-alert v-if="editorGone" type="warning" class="gone">{{ t('grants.editorGone') }}</n-alert>
       <template v-if="editing?.mode === 'fields'">
         <n-radio-group v-model:value="draftRestricted">
           <n-space vertical :size="6">
@@ -310,7 +311,7 @@ const editingWrites = computed(() =>
         <template v-if="draftRestricted">
           <n-divider class="divider" />
           <n-input v-model:value="fieldFilter" size="small" :placeholder="t('grants.filterFields')" clearable class="field-filter" />
-          <n-grid :cols="editingWrites ? 2 : 1" :x-gap="24">
+          <n-grid :cols="editingWrites ? 2 : 1" :x-gap="24" :y-gap="16">
             <n-gi>
               <div class="col-head">
                 <n-text strong>{{ t('grants.readable') }}</n-text>
@@ -382,6 +383,7 @@ tr.namespace td { font-size: 12px; opacity: .7; background: rgba(128,128,128,.06
 .pager { margin-top: 10px; justify-content: flex-end; }
 .empty { text-align: center; opacity: .6; padding: 20px; }
 .divider { margin: 12px 0; }
+.gone { margin-bottom: 12px; }
 .field-filter { margin-bottom: 10px; }
 .fieldlist { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; max-height: 360px; overflow: auto; }
 .field-desc { margin-left: 6px; font-size: 12px; }

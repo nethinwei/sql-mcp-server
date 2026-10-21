@@ -76,7 +76,7 @@ func TestFingerprintStableAcrossValuesAndSensitiveToTypes(t *testing.T) {
 	) {
 		t.Fatal("datasources must not share fingerprints")
 	}
-	if len(a) < len("fp:v3:") || a[:len("fp:v3:")] != "fp:v3:" {
+	if len(a) < len("fp:v4:") || a[:len("fp:v4:")] != "fp:v4:" {
 		t.Fatalf("fingerprint version = %q, want v3", a)
 	}
 }
@@ -145,5 +145,38 @@ func TestNoopFeedbackStore(t *testing.T) {
 	s.Record(Feedback{Template: "q", ActualRows: 1})
 	if _, ok := s.Stats("q"); ok {
 		t.Fatal("noop should miss")
+	}
+}
+
+// The zero value records with the default bounds.
+func TestZeroMemoryStoreRecords(t *testing.T) {
+	var s MemoryStore
+	s.Record(Feedback{Template: "a", ActualRows: 4})
+	s.Record(Feedback{Template: "b", ActualRows: 2})
+	if stats, ok := s.Stats("a"); !ok || stats.AverageRows != 4 {
+		t.Fatalf("stats = %+v %v", stats, ok)
+	}
+}
+
+// The window keeps the latest samples, as a list cut to its size would.
+func TestMemoryStoreWindowMatchesItsReference(t *testing.T) {
+	t.Parallel()
+	s := NewAdaptiveMemoryStoreWithBounds(4, 8, 3, 5, nil)
+	var reference []Feedback
+	for i := range 23 {
+		f := Feedback{Template: "q", ActualRows: int64(i*7%11 + 1), Duration: time.Duration(i), EstimatedRows: int64(i)}
+		s.Record(f)
+		if reference = append(reference, f); len(reference) > 4 {
+			reference = reference[1:]
+		}
+		stats, ok := s.Stats("q")
+		var rows int64
+		for _, r := range reference {
+			rows += r.ActualRows
+		}
+		if !ok || stats.Samples != len(reference) || stats.AverageRows != rows/int64(len(reference)) ||
+			stats.LatestRows != f.ActualRows || stats.EstimatedRows != f.EstimatedRows {
+			t.Fatalf("after %d: %+v, reference %+v", i, stats, reference)
+		}
 	}
 }

@@ -156,12 +156,16 @@ const nothing = computed(() => pending.value && !plans.value.length && !drift.va
             <n-button size="small" @click="router.push({ name: 'plans', query: { template: p.template.name } })">
               {{ t('pending.edit') }}
             </n-button>
-            <n-button size="small" type="primary" @click="review(p.template.plan as Plan)">{{ t('pending.review') }}</n-button>
+            <n-button v-if="!p.error" size="small" type="primary" @click="review(p.template.plan as Plan)">
+              {{ t('pending.review') }}
+            </n-button>
           </div>
         </template>
-        <plan-report :report="p.report" />
+        <n-alert v-if="p.error" type="error" :show-icon="false">{{ t('pending.failed', { error: p.error }) }}</n-alert>
+        <plan-report v-else :report="p.report" />
       </n-card>
-      <n-card v-if="gone.length" size="small" :title="t('pending.goneTables', { n: gone.length })">
+      <n-card v-if="gone.length || pending?.moreGoneTables" size="small"
+        :title="t('pending.goneTables', { n: gone.length })">
         <template #header-extra>
           <n-button size="small" type="primary" :disabled="!goneChecked.length" @click="removeGone">
             {{ t('pending.removeSelected', { n: goneChecked.length }) }}
@@ -170,10 +174,17 @@ const nothing = computed(() => pending.value && !plans.value.length && !drift.va
         <n-text depth="3" class="meta">{{ t('pending.goneHint') }}</n-text>
         <n-data-table v-model:checked-row-keys="goneChecked" size="small" :columns="goneColumns" :data="gone"
           :row-key="(d: GoneTable) => d.entity" :pagination="{ pageSize: 20 }" />
+        <n-text v-if="pending?.moreGoneTables" depth="3" class="meta">
+          {{ t('pending.moreTables', { n: pending.moreGoneTables }) }}
+        </n-text>
       </n-card>
-      <n-card v-if="drift.length" size="small" :title="t('pending.driftTables', { n: drift.length })">
+      <n-card v-if="drift.length || pending?.moreDriftTables" size="small"
+        :title="t('pending.driftTables', { n: drift.length })">
         <n-data-table size="small" :columns="driftColumns" :data="drift" :row-key="(d: DriftTable) => d.key"
           :pagination="{ pageSize: 20 }" />
+        <n-text v-if="pending?.moreDriftTables" depth="3" class="meta">
+          {{ t('pending.moreTables', { n: pending.moreDriftTables }) }}
+        </n-text>
       </n-card>
       <n-alert v-if="pending && !plans.length && !nothing" type="default" :show-icon="false">
         {{ t('pending.noTemplates') }}

@@ -1,7 +1,8 @@
 package configplan
 
 import (
-	"reflect"
+	"bytes"
+	"encoding/json"
 	"slices"
 	"strings"
 
@@ -74,12 +75,17 @@ func (ev *evaluation) grant(rule GrantRule, targets []target) {
 		}
 	}
 	changed := false
+	wildcard := compileGlobs(rule.Fields).patterns != nil
 	for _, t := range targets {
 		g, ok := ev.grantFor(rule, t)
 		if !ok {
 			continue
 		}
 		at, merged := mergeGrant(grants, byEntity[t.id], g)
+		if at < 0 && wildcard {
+			at = widenGrant(grants, byEntity[t.id], g)
+			merged = at >= 0
+		}
 		if at < 0 {
 			byEntity[t.id] = append(byEntity[t.id], len(grants))
 			grants = append(grants, g)
@@ -153,8 +159,7 @@ func (ev *evaluation) checkGrant(rule GrantRule, t target, actions []string) {
 func mergeGrant(grants []config.GrantConfig, on []int, g config.GrantConfig) (int, bool) {
 	for _, i := range on {
 		have := grants[i]
-		if !reflect.DeepEqual(have.Fields, g.Fields) ||
-			!reflect.DeepEqual(normalizeRows(have.Rows), normalizeRows(g.Rows)) {
+		if !sameFields(have.Fields, g.Fields) || !sameRows(have.Rows, g.Rows) {
 			continue
 		}
 		missing := slices.DeleteFunc(
@@ -169,9 +174,47 @@ func mergeGrant(grants []config.GrantConfig, on []int, g config.GrantConfig) (in
 	return -1, false
 }
 
-func normalizeRows(rows config.FilterConfig) config.FilterConfig {
-	if len(rows) == 0 {
-		return nil
+// widenGrant replaces with g the grant among grants (at positions on) a
+// rule with a field wildcard made before the entity gained fields: same
+// actions and rows, fields written as g's are and among them. Appending g
+// would leave that grant behind, one more per schema change. It returns
+// where, or -1.
+func widenGrant(grants []config.GrantConfig, on []int, g config.GrantConfig) int {
+	for _, i := range on {
+		have := grants[i]
+		if have.Fields == nil || !sameRows(have.Rows, g.Rows) || !sameSet(have.Actions, g.Actions) ||
+			(have.Fields.Write == nil) != (g.Fields.Write == nil) ||
+			have.Fields.Write != nil && !slices.Equal(have.Fields.Write, have.Fields.Read) ||
+			slices.ContainsFunc(have.Fields.Read, func(f string) bool { return !slices.Contains(g.Fields.Read, f) }) {
+			continue
+		}
+		grants[i].Fields = g.Fields
+		return i
 	}
-	return rows
+	return -1
+}
+
+func sameSet(a, b []string) bool {
+	return slices.Equal(slices.Sorted(slices.Values(a)), slices.Sorted(slices.Values(b)))
+}
+
+// sameFields reports whether a and b name the same fields: none (every
+// field), or the same lists, an empty list the same as none written.
+func sameFields(a, b *config.FieldACLConfig) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return slices.Equal(a.Read, b.Read) && slices.Equal(a.Write, b.Write)
+}
+
+// sameRows reports whether a and b filter the same rows, compared as JSON:
+// a filter decoded from YAML holds 7 where one decoded from JSON (a plan)
+// holds 7.0. No filter and an empty one are the same.
+func sameRows(a, b config.FilterConfig) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return len(a) == len(b)
+	}
+	ja, errA := json.Marshal(a)
+	jb, errB := json.Marshal(b)
+	return errA == nil && errB == nil && bytes.Equal(ja, jb)
 }

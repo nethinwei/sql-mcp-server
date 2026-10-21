@@ -1,7 +1,10 @@
 package postgres
 
 import (
+	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -41,8 +44,69 @@ func TestClassifySchemaChanges(t *testing.T) {
 			t.Errorf("%s: %v", c.code, err)
 		}
 	}
+	// Another error of the statement is its own, the driver's kept; one of
+	// the server's trouble passes through, counting against its health.
 	other := &pgconn.PgError{Code: "0A000", Message: "FOR UPDATE is not allowed with aggregate functions"}
-	if got := classify(other); got != error(other) {
-		t.Errorf("other errors must pass through: %v", got)
+	if got := classify(other); errors.Is(got, store.ErrStalePlan) || !errors.Is(got, store.ErrRejected) ||
+		!errors.Is(got, other) {
+		t.Errorf("a statement's own error: %v", got)
+	}
+	for _, code := range []string{"53300", "57P03", "58030", "XX000"} {
+		if server := (&pgconn.PgError{Code: code}); classify(server) != error(server) {
+			t.Errorf("%s: the server's trouble must pass through", code)
+		}
+	}
+}
+
+// A server that ends the session while a statement runs (an administrator's
+// termination, a shutdown or crash, a broken connection) leaves the
+// statement's outcome unknown, as a connection the driver lost does.
+func TestClassifyTerminatedSessions(t *testing.T) {
+	t.Parallel()
+	for _, code := range []string{"57P01", "57P02", "08006", "08003", "08000", "08P01"} {
+		if err := classify(&pgconn.PgError{Code: code}); !errors.Is(err, store.ErrConnectionLost) {
+			t.Errorf("%s: %v, want store.ErrConnectionLost", code, err)
+		}
+	}
+	if err := classify(&pgconn.PgError{Code: "57014"}); !errors.Is(err, store.ErrStatementTimeout) ||
+		errors.Is(err, store.ErrConnectionLost) {
+		t.Errorf("57014: %v, want a timeout only", err)
+	}
+}
+
+// A connection that could not be made sent no statement, whatever the
+// database answered while connecting (57P03 when it is starting up) or the
+// network did: its statement did not run.
+func TestClassifyConnectionsNotMade(t *testing.T) {
+	t.Parallel()
+	db, err := sql.Open("pgx", "postgres://u:p@127.0.0.1:1/db?sslmode=disable&connect_timeout=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	_, err = db.ExecContext(context.Background(), "DELETE FROM t")
+	if err == nil {
+		t.Fatal("connected to a closed port")
+	}
+	if got := classify(err); !errors.Is(got, store.ErrNotConnected) || errors.Is(got, store.ErrConnectionLost) {
+		t.Errorf("connect failure: %v, want store.ErrNotConnected", got)
+	}
+	refused := fmt.Errorf("%w: PostgreSQL 10.23", ErrUnsupportedServer)
+	if got := classify(refused); !errors.Is(got, store.ErrNotConnected) {
+		t.Errorf("unsupported server: %v, want store.ErrNotConnected", got)
+	}
+	if err := classify(&pgconn.PgError{Code: "57P03"}); errors.Is(err, store.ErrConnectionLost) {
+		t.Errorf("57P03: %v, which only a connection being made gets", err)
+	}
+}
+
+// A value its column cannot hold (data exception, class 22) is the caller's,
+// not the database's trouble.
+func TestClassifyInvalidValues(t *testing.T) {
+	t.Parallel()
+	for _, code := range []string{"22P02", "22007", "22008", "22003", "22001"} {
+		if err := classify(&pgconn.PgError{Code: code}); !errors.Is(err, store.ErrInvalidValue) {
+			t.Errorf("%s: %v", code, err)
+		}
 	}
 }

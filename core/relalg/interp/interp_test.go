@@ -2,6 +2,7 @@ package interp
 
 import (
 	"errors"
+	"math"
 	"math/big"
 	"testing"
 
@@ -162,6 +163,19 @@ func TestSortLimitOffset(t *testing.T) {
 	wantIDs(t, res, 3)
 	res = mustEval(t, relalg.Limit{Input: sorted, Count: 2, Offset: 99})
 	wantIDs(t, res)
+	res = mustEval(t, relalg.Limit{Input: sorted, Count: math.MaxInt64, Offset: 3}) // no overflow
+	wantIDs(t, res, 5, 3)
+}
+
+// TestLimitRefusesWhatCodegenRefuses keeps the oracle and the SQL apart on
+// no invalid limit: codegen refuses a limit below 1 and a negative offset.
+func TestLimitRefusesWhatCodegenRefuses(t *testing.T) {
+	for _, l := range []relalg.Limit{{Count: 0}, {Count: -1}, {Count: 1, Offset: -1}} {
+		l.Input = scanT()
+		if _, err := Eval(testDB(), l); err == nil {
+			t.Errorf("limit %d offset %d: evaluated, want refused", l.Count, l.Offset)
+		}
+	}
 }
 
 func globalAgg(pred relalg.Predicate, calls ...relalg.AggCall) relalg.Expr {
@@ -273,5 +287,26 @@ func TestInvalidIRRejected(t *testing.T) {
 	_, err = Eval(testDB(), relalg.Insert{Target: relalg.RelationRef{Name: "t"}})
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("write expressions must be unsupported, got %v", err)
+	}
+}
+
+// In LIKE, \ makes the character after it literal (the databases' default
+// escape); a trailing one is itself.
+func TestLikeEscapes(t *testing.T) {
+	for pattern, cases := range map[string]map[string]bool{
+		`a\%b`:  {"a%b": true, "axb": false, "a%%b": false},
+		`a\_b%`: {"a_b": true, "a_bc": true, "axb": false},
+		`a\\b`:  {`a\b`: true, "ab": false},
+		`ab\`:   {`ab\`: true, "ab": false},
+	} {
+		re, err := likeRegexp(pattern)
+		if err != nil {
+			t.Fatal(pattern, err)
+		}
+		for s, want := range cases {
+			if re.MatchString(s) != want {
+				t.Errorf("%q LIKE %q = %v, want %v", s, pattern, !want, want)
+			}
+		}
 	}
 }

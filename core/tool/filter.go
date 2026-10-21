@@ -85,11 +85,28 @@ func filterPredicate(c condJSON, depth int, n *int) (relalg.Predicate, error) {
 	if !op.Valid() {
 		return nil, fmt.Errorf("%w: operator %q", ErrInvalidInput, c.Op)
 	}
-	value, err := normalizeJSONValue(c.Value)
+	value, err := conditionValue(op, c.Value)
+	if err != nil {
+		return nil, err
+	}
+	return relalg.Condition{Field: c.Field, Op: op, Value: value}, nil
+}
+
+// conditionValue is the value op compares with, checked for its shape.
+func conditionValue(op relalg.Op, raw any) (any, error) {
+	value, err := normalizeJSONValue(raw)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
-	return relalg.Condition{Field: c.Field, Op: op, Value: value}, nil
+	// A comparison with null holds for no row: it is a mistake for is_null.
+	if value == nil && op != relalg.OpIsNull && op != relalg.OpIsNotNull {
+		return nil, fmt.Errorf("%w: %s compares with null, which holds for no row; use is_null or is_not_null",
+			ErrInvalidInput, op)
+	}
+	if list, ok := value.([]any); (op == relalg.OpIn || op == relalg.OpNotIn) && (!ok || len(list) == 0) {
+		return nil, fmt.Errorf("%w: %s compares with a list of values, not empty", ErrInvalidInput, op)
+	}
+	return value, nil
 }
 
 // filterFields extracts the field names referenced by a filter, through its

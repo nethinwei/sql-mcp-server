@@ -51,7 +51,9 @@ resolve → route → authorize → compile → gate → exec → mask → after
 
 脱敏顺序有一处调整。原先 read 在 expand 之后才对父行脱敏，因为连接需要用原值。
 现在执行器在脱敏前保留连接列的原值（`keep` 得到 `queried.kept`），expand 用这些
-原值分组；父行与子行都由各自的语句脱敏，结果与原先相同。
+原值分组；父行与子行都由各自的语句脱敏，结果与原先相同。连接列任一侧被脱敏时
+expand 与跨关系谓词一律拒绝（`fieldUses.compared`）：子行的连接列等于父行的原值，
+会把被脱敏的值带出来。
 
 ## 流式结果预算（`core/tool/results.go`）
 
@@ -84,7 +86,9 @@ singleflight 共享给跟随者的结果；读缓存的条目大小也用计量�
 - `context.DeadlineExceeded`、`context.Canceled`。
 
 `driver.ErrBadConn` **不算**：按 `database/sql` 的约定，它表示语句尚未发出，并已在
-别的连接上重试过。数据库自身返回的错误也不算。
+别的连接上重试过。`store.ErrNotConnected` 也不算，并且优先于上面各项：provider 用它
+标记建连失败（PostgreSQL 的 `pgconn.ConnectError`、版本不受支持），此时语句没有发出，
+即使错误链里还有 `net.Error` 或超时。数据库自身返回的错误也不算。
 
 - 事务外的写入（update/delete/create/execute）遇到上述错误时，返回
   `OutcomeUnknownError`（`errors.Is(err, ErrOutcomeUnknown)`）。原因错误保留在错误链中

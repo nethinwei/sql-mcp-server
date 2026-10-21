@@ -31,8 +31,29 @@ func DecodeSpec(data []byte) (*config.Spec, error) {
 	if err := decoder.Decode(&spec); err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
 	}
+	if err := noMoreDocuments(decoder); err != nil {
+		return nil, err
+	}
 	spec.Canonical()
 	return &spec, nil
+}
+
+// noMoreDocuments refuses a document after the configuration's (past a
+// ---): it would not be read. An empty one is no document.
+func noMoreDocuments(decoder *yaml.Decoder) error {
+	for {
+		var doc yaml.Node
+		err := decoder.Decode(&doc)
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if len(doc.Content) > 0 && doc.Content[0].Tag != "!!null" {
+			return errors.New("yaml: a configuration is one document; another follows it (---)")
+		}
+	}
 }
 
 // EncodeSpec returns the deterministic encoding of spec, what it sets only:

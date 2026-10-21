@@ -22,6 +22,10 @@ type Candidate struct {
 	Entity config.EntityConfig
 	// ID identifies the entity: the configured one's when configured.
 	ID string
+	// Dropped are the targets of the relationships Entity leaves out: those
+	// of foreign keys on columns a configured entity at either end has no
+	// field for (a join names fields).
+	Dropped []string
 }
 
 // TableKey identifies a table within a datasource: tables of different
@@ -67,7 +71,7 @@ func Candidates(
 	for _, e := range cfg.Entities {
 		key := TableKey(cmp.Or(e.Schema, cat.Default), e.PhysicalSource())
 		if _, ok := chosen[key]; !ok && e.DatasourceName() == datasource && e.Kind != "procedure" {
-			chosen[key] = candidateName{name: e.Name, id: e.ID()}
+			chosen[key] = configuredName(e)
 		}
 	}
 	out := make([]Candidate, 0, len(cat.Tables))
@@ -76,7 +80,8 @@ func Candidates(
 		if only != nil && !only[key] {
 			continue
 		}
-		c := Candidate{Table: d, Entity: candidateEntity(datasource, d, chosen), ID: chosen[key].id}
+		c := Candidate{Table: d, ID: chosen[key].id}
+		c.Entity, c.Dropped = candidateEntity(datasource, d, chosen)
 		if e, ok := configured[key]; ok {
 			c.Configured = &e
 		}
@@ -89,7 +94,25 @@ func Candidates(
 	return out
 }
 
-type candidateName struct{ name, id string }
+// candidateName names the entity of a table; fields are those of a
+// configured one (nil: a candidate's, every column).
+type candidateName struct {
+	name, id string
+	fields   map[string]bool
+}
+
+func configuredName(e config.EntityConfig) candidateName {
+	fields := make(map[string]bool, len(e.Fields))
+	for _, f := range e.Fields {
+		fields[f.Name] = true
+	}
+	return candidateName{name: e.Name, id: e.ID(), fields: fields}
+}
+
+// has reports whether the entity has a field for each of columns.
+func (n candidateName) has(columns []string) bool {
+	return n.fields == nil || !slices.ContainsFunc(columns, func(c string) bool { return !n.fields[c] })
+}
 
 func candidateNames(
 	datasource string, discovered []entity.Entity, configured map[string]config.EntityConfig,
@@ -99,7 +122,7 @@ func candidateNames(
 	used := maps.Clone(taken)
 	for _, d := range discovered {
 		if e, ok := configured[TableKey(d.Schema, d.Source)]; ok {
-			out[TableKey(d.Schema, d.Source)] = candidateName{name: e.Name, id: e.ID()}
+			out[TableKey(d.Schema, d.Source)] = configuredName(e)
 		}
 	}
 	// Preferred names go first, so numbering moves other tables aside.
@@ -146,8 +169,11 @@ func IdentityUniqueKeys(d entity.Entity) [][]string {
 // copied: at runtime they are the default descriptions, so later comment
 // changes still apply and only a written description overrides. It carries no
 // roles, grants or row policies: nobody can access it until an administrator
-// grants access explicitly.
-func candidateEntity(datasource string, d entity.Entity, names map[string]candidateName) config.EntityConfig {
+// grants access explicitly. It returns the targets of the foreign keys it
+// leaves out (see Candidate.Dropped).
+func candidateEntity(
+	datasource string, d entity.Entity, names map[string]candidateName,
+) (config.EntityConfig, []string) {
 	self := names[TableKey(d.Schema, d.Source)]
 	out := config.EntityConfig{
 		Name: self.name, Source: d.Source, DataSource: datasource, Schema: d.Schema,
@@ -162,9 +188,14 @@ func candidateEntity(datasource string, d entity.Entity, names map[string]candid
 	for _, a := range d.Attributes {
 		out.Fields = append(out.Fields, config.FieldConfig{Name: a.Name})
 	}
+	var dropped []string
 	for _, fk := range d.ForeignKeys {
 		target, ok := names[TableKey(cmp.Or(fk.RefSchema, d.Schema), fk.RefRelation)]
 		if !ok {
+			continue
+		}
+		if !target.has(fk.RefColumns) {
+			dropped = append(dropped, target.id)
 			continue
 		}
 		joinOn := make(map[string]string, len(fk.Columns))
@@ -176,17 +207,18 @@ func candidateEntity(datasource string, d entity.Entity, names map[string]candid
 			JoinOn: joinOn,
 		})
 	}
-	return out
+	return out, dropped
 }
 
 // addReverseRelationships adds a has-many relationship on each candidate for
 // every foreign key of a table of the catalog referencing it (the
 // belongs-to relationship of that table's candidate), whether or not that
-// table's candidate was built.
+// table's candidate was built; not when that table's configured entity has
+// no field for a column of the foreign key.
 func addReverseRelationships(cs []Candidate, tables []entity.Entity, names map[string]candidateName) {
-	byID := make(map[string]*config.EntityConfig, len(cs))
+	byID := make(map[string]*Candidate, len(cs))
 	for i := range cs {
-		byID[cs[i].ID] = &cs[i].Entity
+		byID[cs[i].ID] = &cs[i]
 	}
 	for _, d := range tables {
 		child := names[TableKey(d.Schema, d.Source)]
@@ -195,10 +227,15 @@ func addReverseRelationships(cs []Candidate, tables []entity.Entity, names map[s
 			if !ok {
 				continue
 			}
-			parent, ok := byID[target.id]
+			c, ok := byID[target.id]
 			if !ok {
 				continue
 			}
+			if !child.has(fk.Columns) {
+				c.Dropped = append(c.Dropped, child.id)
+				continue
+			}
+			parent := &c.Entity
 			joinOn := make(map[string]string, len(fk.Columns))
 			for i, column := range fk.Columns {
 				joinOn[fk.RefColumns[i]] = column
@@ -212,6 +249,9 @@ func addReverseRelationships(cs []Candidate, tables []entity.Entity, names map[s
 }
 
 func uniqueRelationshipName(existing []config.RelationshipConfig, base string) string {
+	if config.RelationshipNameReserved(base) { // a table named x1
+		base = "to_" + base
+	}
 	name := base
 	for n := 2; slices.ContainsFunc(existing, func(r config.RelationshipConfig) bool { return r.Name == name }); n++ {
 		name = base + "_" + strconv.Itoa(n)

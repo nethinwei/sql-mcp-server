@@ -123,7 +123,7 @@ cost:
   sqlEscape:
     estimate: required # required | skip: EXPLAIN execute_sql statements first
     metadata: allow # allow | refuse: SHOW/DESCRIBE <table> without an estimate
-  # Prefer datasource-scoped fp:v3:<sha256> values from reviewed generated SQL.
+  # Prefer datasource-scoped fp:v4:<sha256> values from reviewed generated SQL.
   allowTemplates: []
   rejectTemplates: []
   aqe:
@@ -168,6 +168,7 @@ cache:
   maxSize: 1000
   maxEntryRows: 10000
   maxEntryBytes: 16777216
+  maxTotalBytes: 268435456   # all entries together; past it the ones closest to expiry go
   preparedMaxSize: 128
 
 rateLimit:

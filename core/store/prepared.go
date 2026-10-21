@@ -1,7 +1,9 @@
 package store
 
 import (
+	"container/list"
 	"context"
+	"errors"
 	"sync"
 )
 
@@ -24,7 +26,7 @@ type PreparedDB struct {
 	max        int
 	mu         sync.Mutex
 	items      map[string]*preparedEntry
-	order      []string
+	order      *list.List // queries, the least recently used first
 	preparing  map[string]*prepareCall
 	generation uint64
 }
@@ -33,6 +35,7 @@ type preparedEntry struct {
 	stmt    Prepared
 	refs    int
 	retired bool
+	at      *list.Element // in order, while kept
 }
 
 type prepareCall struct {
@@ -50,6 +53,7 @@ func WithPreparedCache(db DB, max int) *PreparedDB {
 		DB:        db,
 		max:       max,
 		items:     map[string]*preparedEntry{},
+		order:     list.New(),
 		preparing: map[string]*prepareCall{},
 	}
 }
@@ -62,13 +66,19 @@ func (d *PreparedDB) statement(ctx context.Context, query string) (*preparedEntr
 	d.mu.Lock()
 	if entry, ok := d.items[query]; ok {
 		entry.refs++
+		d.order.MoveToBack(entry.at) // the least recently used goes first
 		d.mu.Unlock()
 		return entry, true, nil
 	}
 	if call, ok := d.preparing[query]; ok {
 		call.waiters++
 		d.mu.Unlock()
-		return d.waitPrepare(ctx, call)
+		entry, ok, err := d.waitPrepare(ctx, call)
+		if ended(err) && ctx.Err() == nil {
+			// Its preparer's request ended, not this one: prepared for this one.
+			return d.statement(ctx, query)
+		}
+		return entry, ok, err
 	}
 	call := &prepareCall{
 		done:       make(chan struct{}),
@@ -108,21 +118,43 @@ func (d *PreparedDB) finishPrepareSuccessLocked(
 	call.entry = entry
 	call.complete = true
 	if call.generation == d.generation {
-		if len(d.order) >= d.max {
-			oldest := d.order[0]
-			d.order = d.order[1:]
+		if d.order.Len() >= d.max {
+			oldest := d.order.Remove(d.order.Front()).(string)
 			oldEntry := d.items[oldest]
 			delete(d.items, oldest)
 			d.retireLocked(oldEntry)
 		}
 		d.items[query] = entry
-		d.order = append(d.order, query)
+		entry.at = d.order.PushBack(query)
 	} else {
 		entry.retired = true
 	}
 	delete(d.preparing, query)
 	close(call.done)
 	return entry, true, nil
+}
+
+// ended reports the error of a request that ended (canceled, or past its
+// deadline).
+func ended(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// failed drops the entry of query when err says its plan is stale: the
+// database keeps refusing a statement prepared before its table changed,
+// so the statement is prepared again when next run.
+func (d *PreparedDB) failed(query string, entry *preparedEntry, err error) {
+	if !errors.Is(err, ErrStalePlan) {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.items[query] != entry {
+		return
+	}
+	delete(d.items, query)
+	d.order.Remove(entry.at)
+	d.retireLocked(entry)
 }
 
 func (d *PreparedDB) waitPrepare(ctx context.Context, call *prepareCall) (*preparedEntry, bool, error) {
@@ -181,6 +213,7 @@ func (d *PreparedDB) QueryContext(ctx context.Context, query string, args ...any
 	if ok {
 		rows, err := entry.stmt.QueryContext(ctx, args...)
 		if err != nil {
+			d.failed(query, entry, err)
 			d.release(entry)
 			return nil, err
 		}
@@ -197,7 +230,11 @@ func (d *PreparedDB) ExecContext(ctx context.Context, query string, args ...any)
 	}
 	if ok {
 		defer d.release(entry)
-		return entry.stmt.ExecContext(ctx, args...)
+		r, err := entry.stmt.ExecContext(ctx, args...)
+		if err != nil {
+			d.failed(query, entry, err)
+		}
+		return r, err
 	}
 	return d.DB.ExecContext(ctx, query, args...)
 }
@@ -217,6 +254,6 @@ func (d *PreparedDB) Close() error {
 		}
 	}
 	d.items = map[string]*preparedEntry{}
-	d.order = nil
+	d.order.Init()
 	return first
 }

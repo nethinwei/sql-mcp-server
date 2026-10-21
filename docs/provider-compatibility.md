@@ -13,6 +13,10 @@
 - **未支持**：启动时拒绝或无实现；
 - **外部配置**：能力依赖 DBA/部署配置，本服务不代管。
 
+PostgreSQL 一列的“真实数据库验证”覆盖 PostgreSQL 11 至 18 每个大版本（CI 逐版本运行
+provider integration）。范围外的版本与 PostgreSQL 协议兼容库在连接时被拒绝，不适用
+本页任何结论，见[支持版本](supported-versions.md#数据库)。
+
 ## 功能
 
 | 能力 | PostgreSQL | MySQL | OceanBase | 证据 |
@@ -71,6 +75,8 @@
 | PostgreSQL | DSN 设置 `statement_timeout` | `limit.timeout.write` | `enforced` | a cancel request at the request deadline (the DSN sets its own statement_timeout) |
 | PostgreSQL | `pooler: transaction` | `limit.timeout.read` | `best_effort` | statement_timeout is a session setting a transaction pooler does not keep; a cancel request at the request deadline stops the statement only if the pooler forwards it |
 | PostgreSQL | `pooler: transaction` | `limit.timeout.write` | `best_effort` | statement_timeout is a session setting a transaction pooler does not keep; a cancel request at the request deadline stops the statement only if the pooler forwards it |
+| PostgreSQL | `cost.queryTimeout: 0` | `limit.timeout.read` | `unsupported` | none: cost.queryTimeout is 0, so no statement timeout is set (the database's and the account's own defaults still apply) |
+| PostgreSQL | `cost.queryTimeout: 0` | `limit.timeout.write` | `unsupported` | none: cost.queryTimeout is 0, so no statement timeout is set (the database's and the account's own defaults still apply) |
 | MySQL | 默认 | `limit.timeout.read` | `enforced` | max_execution_time just under cost.queryTimeout (SELECT only) |
 | MySQL | 默认 | `limit.timeout.write` | `enforced` | KILL QUERY at the request deadline (max_execution_time stops SELECT only) |
 | MySQL | 默认 | `limit.unkeyedWrite` | `enforced` | sql_safe_updates = 1 |
@@ -79,6 +85,8 @@
 | MySQL | `pooler: transaction` | `limit.timeout.read` | `best_effort` | max_execution_time is a session setting a transaction pooler does not keep |
 | MySQL | `pooler: transaction` | `limit.timeout.write` | `unsupported` | max_execution_time stops SELECT only, and behind a transaction pooler a statement past its deadline cannot be stopped (KILL QUERY could reach another client's session): bound writes on the database side (DBA) |
 | MySQL | `pooler: transaction` | `limit.unkeyedWrite` | `best_effort` | sql_safe_updates is a session setting a transaction pooler does not keep |
+| MySQL | `cost.queryTimeout: 0` | `limit.timeout.read` | `unsupported` | none: cost.queryTimeout is 0, so no statement timeout is set (the database's and the account's own defaults still apply) |
+| MySQL | `cost.queryTimeout: 0` | `limit.timeout.write` | `unsupported` | none: cost.queryTimeout is 0, so no statement timeout is set (the database's and the account's own defaults still apply) |
 | OceanBase | 默认 | `limit.timeout.read` | `enforced` | ob_query_timeout just under cost.queryTimeout |
 | OceanBase | 默认 | `limit.timeout.write` | `enforced` | ob_query_timeout just under cost.queryTimeout |
 | OceanBase | 默认 | `limit.unkeyedWrite` | `enforced` | sql_safe_updates = 1 |
@@ -88,6 +96,8 @@
 | OceanBase | `pooler: transaction` | `limit.timeout.read` | `best_effort` | ob_query_timeout is a session setting a transaction pooler does not keep |
 | OceanBase | `pooler: transaction` | `limit.timeout.write` | `best_effort` | ob_query_timeout is a session setting a transaction pooler does not keep |
 | OceanBase | `pooler: transaction` | `limit.unkeyedWrite` | `best_effort` | sql_safe_updates is a session setting a transaction pooler does not keep |
+| OceanBase | `cost.queryTimeout: 0` | `limit.timeout.read` | `unsupported` | none: cost.queryTimeout is 0, so no statement timeout is set (the database's and the account's own defaults still apply) |
+| OceanBase | `cost.queryTimeout: 0` | `limit.timeout.write` | `unsupported` | none: cost.queryTimeout is 0, so no statement timeout is set (the database's and the account's own defaults still apply) |
 <!-- END GENERATED: provider-capabilities -->
 
 ## 关键安全差异
@@ -103,10 +113,29 @@
 [威胁模型](threat-model.md)，当前发布时点证据见
 [`v0.1.4` 发布说明](releases/v0.1.4.md)。
 
+## PostgreSQL 已知限制
+
+以下缺口已确认但未修复：
+
+- 序列化失败（`40001`）与死锁（`40P01`）按普通数据库错误返回，不标记为可重试；需要 core
+  增加可重试错误种类，MySQL 同样缺少；
+- 计划缓存失效（`cached plan must not change result type`）按英文消息识别，`lc_messages`
+  非英文时不会自动重试，按数据库错误返回；
+- 约束错误的 `fields` 按 `", "` 拆分 `Key (...)` 详情，列名本身含 `", "`（带引号的标识符）
+  时拆分不准；
+- 全表扫描的表大小取所涉各表中最大的一个（分区表按所扫描分区之和计），多表计划不按各表
+  之和估算；
+- 传统 `INHERITS` 的父表按派生关系处理：读取父表包含子表的行，与视图一样按父表实体的策略
+  返回；父表与子表可由不同实体同时暴露，管理员需为两者配置一致的行策略（声明式分区不受影响，
+  分区不被发现）；
+- 列类型取自 `information_schema.columns.data_type`：数组只记为 `ARRAY`，enum 记为
+  `USER-DEFINED`，不含 numeric 精度。
+
 ## 验证命令
 
 ```sh
-make test-integration-postgres
+make test-integration-postgres                                  # PostgreSQL 16
+SQL_MCP_PG_IMAGE=postgres:11-alpine make test-integration-postgres   # 其他受支持版本
 make test-integration-mysql
 make test-integration-oceanbase
 make test-e2e

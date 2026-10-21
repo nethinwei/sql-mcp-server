@@ -1,10 +1,15 @@
 package mysql
 
 import (
+	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
+	"strings"
+	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 
@@ -35,30 +40,30 @@ func NewAdapter(
 	if err != nil {
 		return nil, nil, fmt.Errorf("mysql: parse dsn: %w", err)
 	}
-	if cfg.Params == nil {
-		cfg.Params = map[string]string{}
+	if cfg.Params, err = sqladapter.SessionParams(cfg.Params); err != nil {
+		return nil, nil, fmt.Errorf("mysql: parse dsn: %w", err)
 	}
-	caps := limits(cfg.Params, opts.Pooler, oceanBaseVariable)
-	if _, ok := cfg.Params["sql_safe_updates"]; !ok {
-		cfg.Params["sql_safe_updates"] = "1"
-	}
-	if opts.Timeout <= 0 {
-		return nil, nil, errors.New("mysql: statement timeout must be positive")
+	caps := limits(cfg.Params, opts, oceanBaseVariable)
+	sessionDefaults(cfg, dsn)
+	ioTimeouts(cfg, dsn, opts)
+	if opts.Timeout < 0 {
+		return nil, nil, errors.New("mysql: statement timeout must not be negative")
 	}
 	if opts.Pooler == providerregistry.PoolerTransaction {
 		cfg.InterpolateParams = true
 	}
-	if oceanBaseVariable == "" {
-		if _, ok := cfg.Params["max_execution_time"]; !ok {
-			cfg.Params["max_execution_time"] = strconv.FormatInt(opts.NativeTimeout().Milliseconds(), 10)
-		}
-	} else if _, ok := cfg.Params[oceanBaseVariable]; !ok {
+	// Without a timeout none is set (see providerregistry.Options.WithoutTimeout).
+	if _, ok := cfg.Params["max_execution_time"]; !ok && opts.Timeout > 0 && oceanBaseVariable == "" {
+		cfg.Params["max_execution_time"] = strconv.FormatInt(opts.NativeTimeout().Milliseconds(), 10)
+	}
+	if _, ok := cfg.Params[oceanBaseVariable]; !ok && opts.Timeout > 0 && oceanBaseVariable != "" {
 		cfg.Params[oceanBaseVariable] = strconv.FormatInt(opts.NativeTimeout().Microseconds(), 10)
 	}
-	connector, err := mysqldriver.NewConnector(cfg)
+	base, err := mysqldriver.NewConnector(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
+	var connector driver.Connector = dialConnector{base}
 	if killsStatements(opts.Pooler, oceanBaseVariable) {
 		connector = newKillConnector(connector)
 	}
@@ -69,7 +74,55 @@ func NewAdapter(
 			return nil, nil, fmt.Errorf("mysql: ping failed: %w", err)
 		}
 	}
-	return sqladapter.New(db, newTextRows, classify), caps, nil
+	classifier := classify
+	if oceanBaseVariable != "" {
+		classifier = classifyOceanBase
+	}
+	return sqladapter.New(db, sqladapter.TypedTextRows(binaryTypes, unsignedTypes), classifier), caps, nil
+}
+
+// sessionDefaults sets what a DSN leaves unset: rowsAffected counts the rows
+// a statement matched, as on PostgreSQL, not those it changed; and updates
+// and deletes without a key or a limit are refused (sql_safe_updates).
+func sessionDefaults(cfg *mysqldriver.Config, dsn string) {
+	if !dsnSets(dsn, "clientFoundRows") {
+		cfg.ClientFoundRows = true
+	}
+	if _, ok := cfg.Params["sql_safe_updates"]; !ok {
+		cfg.Params["sql_safe_updates"] = "1"
+	}
+}
+
+// dialTimeout bounds a connection attempt whose DSN sets no timeout: a
+// server that never answers its handshake fails the open rather than
+// holding startup or a reload (as PostgreSQL's connect_timeout default).
+const dialTimeout = 10 * time.Second
+
+// ioTimeouts sets what a DSN leaves unset of the driver's I/O timeouts: the
+// dial's (dialTimeout), and with a statement timeout a read timeout past it
+// by as much, so that a server that stops answering mid-statement breaks the
+// connection instead of holding it, while one stopping the statement (its
+// timeout, KILL QUERY) answers first.
+func ioTimeouts(cfg *mysqldriver.Config, dsn string, opts providerregistry.Options) {
+	if !dsnSets(dsn, "timeout") {
+		cfg.Timeout = dialTimeout
+	}
+	if !dsnSets(dsn, "readTimeout") && opts.Timeout > 0 {
+		cfg.ReadTimeout = opts.Timeout + dialTimeout
+	}
+}
+
+// dsnSets tells whether dsn sets the parameter name (exactly: timeout is not
+// readTimeout). The parameters follow the first ? after the DSN's last /, as
+// the driver reads them.
+func dsnSets(dsn, name string) bool {
+	_, params, _ := strings.Cut(dsn[strings.LastIndexByte(dsn, '/')+1:], "?")
+	for param := range strings.SplitSeq(params, "&") {
+		if key, _, _ := strings.Cut(param, "="); key == name {
+			return true
+		}
+	}
+	return false
 }
 
 // binaryTypes are the column types whose values are bytes, not text.
@@ -78,35 +131,30 @@ var binaryTypes = map[string]bool{
 	"BLOB": true, "TINYBLOB": true, "MEDIUMBLOB": true, "LONGBLOB": true,
 }
 
-// textRows returns text columns as strings. The driver scans them (and
-// DECIMAL) into []byte, which would otherwise serialize to clients as base64.
-type textRows struct {
-	*sql.Rows
-	binary []bool
+// unsignedTypes are the column types the driver types by protocol (see
+// sqladapter.TypedTextRows); its other integers are int64 either way.
+var unsignedTypes = map[string]bool{"UNSIGNED BIGINT": true}
+
+// dialConnector marks a connection that could not be made as such
+// (store.ErrNotConnected): the driver returns the network error of a dial,
+// a TLS handshake or a refused login bare, which would otherwise read as a
+// statement whose connection broke while it ran, its outcome unknown. A
+// driver.ErrBadConn is left as it is: database/sql tries another
+// connection for it.
+type dialConnector struct{ driver.Connector }
+
+func (c dialConnector) Connect(ctx context.Context) (driver.Conn, error) {
+	conn, err := c.Connector.Connect(ctx)
+	if err != nil && !errors.Is(err, driver.ErrBadConn) {
+		return nil, fmt.Errorf("%w: %w", store.ErrNotConnected, err)
+	}
+	return conn, err
 }
 
-func newTextRows(rows *sql.Rows) store.Rows { return &textRows{Rows: rows} }
-
-func (r *textRows) Scan(dest ...any) error {
-	if err := r.Rows.Scan(dest...); err != nil {
-		return err
-	}
-	if r.binary == nil {
-		types, err := r.ColumnTypes()
-		if err != nil {
-			return err
-		}
-		r.binary = make([]bool, len(types))
-		for i, t := range types {
-			r.binary[i] = binaryTypes[t.DatabaseTypeName()]
-		}
-	}
-	for i, d := range dest {
-		if p, ok := d.(*any); ok && i < len(r.binary) && !r.binary[i] {
-			if b, ok := (*p).([]byte); ok {
-				*p = string(b)
-			}
-		}
+// Close closes the driver's connector, when it has something to close.
+func (c dialConnector) Close() error {
+	if closer, ok := c.Connector.(io.Closer); ok {
+		return closer.Close()
 	}
 	return nil
 }

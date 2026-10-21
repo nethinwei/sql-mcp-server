@@ -167,3 +167,66 @@ func TestImportedRelationshipNames(t *testing.T) {
 func relationshipsEqual(a, b config.RelationshipConfig) bool {
 	return a.Name == b.Name && a.Target == b.Target && a.Cardinality == b.Cardinality && maps.Equal(a.JoinOn, b.JoinOn)
 }
+
+// An entity configuring a subset of its table's columns keeps out the
+// scanned keys on columns it has no field for, and reports them; a sync
+// adding the columns syncs the key too.
+func TestSyncKeysOnUnconfiguredColumns(t *testing.T) {
+	t.Parallel()
+	base := decode(t, `databases:
+  shop: {driver: postgres, dsn: "postgres://u@h/shop"}
+entities:
+  - {name: customers, datasource: shop, schema: public, fields: [{name: name}]}
+`)
+	p := evaluate(t, base, Plan{Scope: Scope{Entities: []string{"shop.public.customers"}}, Sync: &SyncRule{Keys: true}})
+	if e := entityOf(t, p, "shop.public.customers"); len(e.PrimaryKey) != 0 {
+		t.Fatalf("customers keys = %v", e.PrimaryKey)
+	}
+	if !slices.ContainsFunc(p.Report.Exceptions, func(x Exception) bool {
+		return x.Kind == ExceptionKeyNotField && x.Ref == "shop.public.customers" && x.Detail == "id" &&
+			x.Level == LevelConfirm
+	}) {
+		t.Fatalf("exceptions = %v", kinds(p.Report.Exceptions))
+	}
+	valid(t, base, p)
+	p = evaluate(t, base, Plan{Scope: Scope{Entities: []string{"shop.public.customers"}},
+		Sync: &SyncRule{Keys: true, Add: true}})
+	if e := entityOf(t, p, "shop.public.customers"); !slices.Equal(e.PrimaryKey, []string{"id"}) {
+		t.Fatalf("customers keys = %v", e.PrimaryKey)
+	}
+	valid(t, base, p)
+}
+
+// joinsOn lists, from its index, what a scan of every relationship finds:
+// the relationships joining on the column, on either side, each once.
+func TestJoinsOnMatchesEveryRelationship(t *testing.T) {
+	t.Parallel()
+	base := decode(t, syncYAML+`  - name: tree
+    datasource: shop
+    schema: public
+    fields: [{name: id}, {name: parent}]
+    relationships:
+      - {name: parent, target: tree, cardinality: belongs-to, joinOn: {parent: id}}
+      - {name: self, target: tree, cardinality: one-to-one, joinOn: {id: id}}
+`)
+	ev := newEvaluation(Input{Base: base, Published: base, Sources: shop()}, Plan{})
+	for _, e := range base.Entities {
+		for _, f := range e.Fields {
+			var want []string
+			for _, from := range base.Entities {
+				for _, r := range from.Relationships {
+					target, ok := ev.resolve(r.Target)
+					for local, remote := range r.JoinOn {
+						if from.ID() == e.ID() && local == f.Name || ok && target == e.ID() && remote == f.Name {
+							want = append(want, "relationship "+from.ID()+"."+r.Name)
+							break
+						}
+					}
+				}
+			}
+			if got := ev.joinsOn(e.ID(), f.Name); !slices.Equal(got, want) {
+				t.Errorf("joinsOn(%s, %s) = %v, want %v", e.ID(), f.Name, got, want)
+			}
+		}
+	}
+}

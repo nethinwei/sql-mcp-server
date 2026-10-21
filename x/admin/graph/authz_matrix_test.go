@@ -12,14 +12,25 @@ import (
 )
 
 // operation is one top-level field called with the least valid arguments.
+// content: it returns a type carrying a configuration, whose content fields
+// it selects.
 type operation struct {
 	kind, field, document string
+	content               bool
+}
+
+// contentFields are the fields of the types carrying a configuration that
+// read it: they require admin:read whatever operation returned the type.
+var contentFields = map[string]string{
+	"Workspace": "sections items { complete } conflicts { id }",
+	"Revision":  "yaml sections config { __typename }",
 }
 
 // operations lists every query and mutation field of the schema, each with
 // its required arguments filled in by type (an argument of a valid type, so
 // the call reaches the resolver; whether the value makes sense does not
-// matter) and __typename selected.
+// matter) and __typename selected, with the content fields of a type that
+// carries a configuration.
 func operations() []operation {
 	var out []operation
 	for kind, def := range map[string]*ast.Definition{"query": parsedSchema.Query, "mutation": parsedSchema.Mutation} {
@@ -37,10 +48,11 @@ func operations() []operation {
 			if len(args) > 0 {
 				call += "(" + strings.Join(args, ", ") + ")"
 			}
+			content, carries := contentFields[f.Type.Name()]
 			if selection(f.Type) {
-				call += " { __typename }"
+				call += " { __typename " + content + " }"
 			}
-			out = append(out, operation{kind: kind, field: f.Name, document: kind + " { " + call + " }"})
+			out = append(out, operation{kind: kind, field: f.Name, document: kind + " { " + call + " }", content: carries})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].field < out[j].field })
@@ -144,9 +156,11 @@ var requiredPermissions = map[string][]string{
 	"generateUserToken":   {auth.PermWrite},
 	"mergeDraft":          {auth.PermWrite},
 	"resetWorkspace":      {auth.PermWrite},
+	"loadRevision":        {auth.PermWrite},
 	"resolveConflict":     {auth.PermWrite},
 	"retryScanBatch":      {auth.PermWrite},
 	"savePlanTemplate":    {auth.PermWrite},
+	"scanBatch":           {auth.PermWrite},
 	"scanBatches":         {auth.PermWrite},
 	"schemaList":          {auth.PermWrite},
 	"schemaScan":          {auth.PermWrite},
@@ -177,7 +191,8 @@ var requiredPermissions = map[string][]string{
 
 // TestEveryOperationEnforcesItsPermissions calls every operation of the
 // admin API under every combination of permissions and checks it is refused
-// exactly when the combination lacks one it requires.
+// exactly when the combination lacks one it requires, or admin:read for the
+// content of a configuration it returns.
 func TestEveryOperationEnforcesItsPermissions(t *testing.T) {
 	ops := operations()
 	for _, op := range ops {
@@ -202,19 +217,33 @@ func TestEveryOperationEnforcesItsPermissions(t *testing.T) {
 			if !forbidden {
 				allowed[op.field] = append(allowed[op.field], held)
 			}
-			want, listed := requiredPermissions[op.field]
-			if !listed {
-				continue
-			}
-			if forbidden == containsAll(held, want) {
-				t.Errorf("%s holding %v: forbidden = %v, requires %v (%v)", op.field, held, forbidden, want, err)
-			}
+			checkOperation(t, op, held, forbidden, err)
 		}
 	}
 	for _, op := range ops {
 		if _, ok := requiredPermissions[op.field]; !ok {
 			t.Logf("%s is allowed holding %v", op.field, allowed[op.field])
 		}
+	}
+}
+
+// checkOperation checks op, called holding held, was refused exactly when
+// held lacks a permission it requires. The content of a configuration it
+// returns requires admin:read: without it the call must not succeed (it is
+// refused, or fails before returning one).
+func checkOperation(t *testing.T, op operation, held []string, forbidden bool, err error) {
+	t.Helper()
+	want, listed := requiredPermissions[op.field]
+	if !listed {
+		return
+	}
+	switch reads := slices.Contains(held, auth.PermRead); {
+	case !containsAll(held, want) || !op.content || reads:
+		if forbidden == containsAll(held, want) {
+			t.Errorf("%s holding %v: forbidden = %v, requires %v (%v)", op.field, held, forbidden, want, err)
+		}
+	case err == nil:
+		t.Errorf("%s holding %v returned a configuration's content without %s", op.field, held, auth.PermRead)
 	}
 }
 

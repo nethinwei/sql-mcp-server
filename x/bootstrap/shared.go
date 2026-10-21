@@ -29,9 +29,11 @@ import (
 // one database failing or slowing down is held back on its own).
 type Shared struct {
 	generation atomic.Uint64
-	cache      *cache.TTLCache[[]map[string]any]
-	bus        *bus.Bus
-	quota      *engine.Quota
+	// auditDropped counts the audit events every App of the process dropped.
+	auditDropped atomic.Int64
+	cache        *cache.TTLCache[[]map[string]any]
+	bus          *bus.Bus
+	quota        *engine.Quota
 	// The state of the process's calls, which outlives every configuration:
 	// open transactions, the sessions' budgets, the writes sessions follow,
 	// and the results calls hold. Publishing an App applies its limits to
@@ -68,16 +70,17 @@ func (s *Shared) unwarned(warnings string) bool {
 
 // rateLimits are the rate-limit settings, comparable.
 type rateLimits struct {
-	config.RateLimitConfig // Enabled and MaxResultMemory cleared
+	config.RateLimitConfig // Enabled, MaxResultMemory and the pool's lifetimes cleared
 	enabled                bool
 }
 
-// rateLimitsOf are cfg's rate limits, but for the result memory bound: it is
-// applied on its own (Shared.apply), and changing it must not reset the
+// rateLimitsOf are cfg's rate limits, but for the result memory bound and
+// the lifetimes of pooled connections: they are applied on their own
+// (Shared.apply, configurePool), and changing them must not reset the
 // connections' health.
 func rateLimitsOf(cfg *config.Config) rateLimits {
 	out := rateLimits{RateLimitConfig: cfg.RateLimit, enabled: cfg.RateLimit.EnabledOrDefault()}
-	out.Enabled, out.MaxResultMemory = nil, 0
+	out.Enabled, out.MaxResultMemory, out.ConnMaxIdleTime, out.ConnMaxLifetime = nil, 0, 0, 0
 	return out
 }
 
@@ -251,7 +254,7 @@ func (s *Shared) apply(app *App) {
 	s.callers.Update(keyLimits(app.callers))
 	s.results.SetCapacity(cfg.RateLimit.MaxResultMemory)
 	if cfg.Cache.Enabled {
-		s.cache.UpdateLimits(cfg.Cache.TTL, cfg.Cache.MaxSize)
+		s.cache.UpdateLimits(cfg.Cache.TTL, cfg.Cache.MaxSize, cfg.Cache.MaxTotalBytes)
 	}
 	for _, p := range app.allProviders() {
 		configurePool(p, cfg.RateLimit.IOPool, cfg.RateLimit.ConnMaxIdleTime, cfg.RateLimit.ConnMaxLifetime)
@@ -259,7 +262,9 @@ func (s *Shared) apply(app *App) {
 }
 
 // engine returns an engine on the shared quota, admitting calls on the bus's
-// Serve lane: the Apps of the process share its in-flight bound.
+// Serve lane: the Apps of the process share its in-flight bound. It has no
+// breaker nor adaptive limiter (recordProviderFailure then decides nothing):
+// each shared connection keeps its own health, across reloads.
 func (s *Shared) engine(*config.Config) (*engine.Engine, error) {
 	return engine.New(
 		engine.WithQuota(s.quota),

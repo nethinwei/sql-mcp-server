@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
@@ -53,7 +53,13 @@ const tokenTag = computed(() => ({
 async function generate() {
   try {
     const { generateUserToken } = await run(GenerateUserTokenMutation, {}, true)
-    if (user.value) user.value.tokenHash = generateUserToken.tokenHash
+    // A token is usable only once its hash is in the user: without the user
+    // (removed meanwhile) it is not shown at all.
+    if (!user.value) {
+      message.error(t('users.notFound', { name: props.name }))
+      return
+    }
+    user.value.tokenHash = generateUserToken.tokenHash
     newToken.value = generateUserToken.token
   } catch (e) {
     message.error(e instanceof Error ? e.message : String(e))
@@ -105,7 +111,14 @@ function remove() {
   })
 }
 
-onMounted(() => { if (route.query.token && editable.value && tokenState.value === 'none') void generate() })
+// ?token=1 (from creating the user) mints its first token once the user is
+// loaded: on a cold load the workspace arrives after the page mounts.
+let looked = false
+watch(user, (u) => {
+  if (!u || looked) return
+  looked = true
+  if (route.query.token && editable.value && tokenState.value === 'none') void generate()
+}, { immediate: true })
 </script>
 
 <template>

@@ -2,17 +2,18 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
+	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
 	"github.com/nethinwei/sql-mcp-server/core/store"
+	"github.com/nethinwei/sql-mcp-server/x/providers/sqladapter"
 )
 
 // ErrAnalyzeRequiresReadOnly protects the provider boundary from executing
@@ -21,36 +22,35 @@ var ErrAnalyzeRequiresReadOnly = errors.New("postgres: EXPLAIN ANALYZE requires 
 
 // pgExplainer estimates a plan by running EXPLAIN (FORMAT JSON).
 type pgExplainer struct {
-	db *sql.DB
-	// classify classifies the errors of EXPLAIN as those of statements, so
-	// the gate tells a schema change from a plan it could not get.
-	classify func(error) error
+	pool *sqladapter.Pool
+	// fresh keeps the tables statsFresh found fresh, for statsTTL: every
+	// read of them asks, each time a query.
+	fresh *sync.Map
 }
+
+// statsTTL is how long statsFresh's answer for a table is kept.
+const statsTTL = time.Minute
 
 // Explain implements cost.Explainer. It wraps the query in EXPLAIN and parses
 // the JSON plan, walking the plan tree to detect sorts, temporary/hash nodes,
 // and partition pruning. Statistics freshness is probed for the scanned
-// table (see statsFresh); VERBOSE names its schema. Any parse failure
-// degrades to ScanUnknown.
+// table (see statsFresh); VERBOSE names its schema. A plan that does not
+// parse degrades to ScanUnknown; one that cannot be read is an error,
+// classified as the statement's (see sqladapter.Pool.Explain).
 func (e pgExplainer) Explain(ctx context.Context, query string, args []any) (cost.Plan, error) {
-	rows, err := e.db.QueryContext(ctx, "EXPLAIN (FORMAT JSON, VERBOSE) "+query, args...)
+	raw, err := e.pool.Explain(ctx, "EXPLAIN (FORMAT JSON, VERBOSE) "+query, args, "")
 	if err != nil {
-		return cost.Plan{}, e.classify(err)
+		return cost.Plan{}, err
 	}
-	defer func() { _ = rows.Close() }()
-	if !rows.Next() {
-		return cost.Plan{ScanType: cost.ScanUnknown}, nil
-	}
-	var raw string
-	if err := rows.Scan(&raw); err != nil {
+	if raw == "" {
 		return cost.Plan{ScanType: cost.ScanUnknown}, nil
 	}
 	p, root, err := parsePGExplain([]byte(raw))
 	if err != nil {
 		return p, err
 	}
-	if scanned, ok := relationForScan(root, p.ScanType); ok {
-		p.StatsFresh = e.statsFresh(ctx, scanned.Schema, scanned.RelationName)
+	if scanned := scannedRelations(root, nil); len(scanned) > 0 {
+		p.StatsFresh = e.statsFresh(ctx, scanned)
 	}
 	if p.ScanType == cost.ScanFull {
 		if relations, ok := fullScanRelations(root, nil); ok {
@@ -62,12 +62,12 @@ func (e pgExplainer) Explain(ctx context.Context, query string, args []any) (cos
 
 // fullScanRelations lists the tables the plan's sequential scans read; false
 // when a scan names none.
-func fullScanRelations(n pgPlanNode, out []string) ([]string, bool) {
+func fullScanRelations(n pgPlanNode, out []relation) ([]relation, bool) {
 	if pgScanType(n.NodeType) == cost.ScanFull {
 		if n.RelationName == "" {
 			return nil, false
 		}
-		out = append(out, n.RelationName)
+		out = append(out, relation{schema: n.Schema, name: n.RelationName})
 	}
 	for _, child := range n.Plans {
 		var ok bool
@@ -78,69 +78,13 @@ func fullScanRelations(n pgPlanNode, out []string) ([]string, bool) {
 	return out, true
 }
 
-// tableRowsSQL estimates the rows of the largest table of the given names (of
-// any schema: a name in several counts as its largest) as the planner does:
-// the analyzed rows per page times the pages the table has now, so a table
-// that grew since it was analyzed counts as grown. A table never analyzed
-// counts as full pages of the smallest rows (a 28-byte tuple and line
-// pointer). The count of names found tells a name that is not a table.
-const tableRowsSQL = `SELECT count(DISTINCT relname), coalesce(max(CASE
-  WHEN relpages > 0 AND reltuples >= 0 THEN reltuples / relpages * pages
-  ELSE pages * (block / 28) END), 0)::bigint
-FROM (SELECT c.relname, c.relpages, c.reltuples,
-  ceil(pg_relation_size(c.oid) / current_setting('block_size')::float8) AS pages,
-  current_setting('block_size')::float8 AS block
-  FROM pg_class c WHERE c.relname = ANY($1) AND c.relkind IN ('r', 'm')) t`
-
-// tableRows reports how many rows the largest of the relations holds; false
-// when that cannot be told.
-func (e pgExplainer) tableRows(ctx context.Context, relations []string) (int64, bool) {
-	slices.Sort(relations)
-	relations = slices.Compact(relations)
-	var found, rows int64
-	if err := e.db.QueryRowContext(ctx, tableRowsSQL, relations).Scan(&found, &rows); err != nil ||
-		found != int64(len(relations)) {
-		return 0, false
-	}
-	return rows, true
-}
-
-// statsFreshSQL tells whether the planner's statistics of a table can be
-// trusted: it was analyzed, by ANALYZE or by autovacuum, or it is so small
-// (at most smallTablePages pages) that an estimate cannot be far off.
-// Autovacuum never analyzes a table of fewer rows than its threshold, so a
-// small table may well have never been. Every table of the name counts when
-// the schema is not known.
-const statsFreshSQL = `SELECT bool_and(coalesce(s.last_analyze, s.last_autoanalyze) IS NOT NULL
-  OR pg_relation_size(c.oid) <= $3 * current_setting('block_size')::bigint)
-FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-LEFT JOIN pg_stat_all_tables s ON s.relid = c.oid
-WHERE c.relname = $1 AND ($2 = '' OR n.nspname = $2) AND c.relkind IN ('r', 'm')`
-
-// smallTablePages is the size, in pages, up to which a table's statistics
-// do not matter (64 KiB with the default 8 KiB pages).
-const smallTablePages = 8
-
-// statsFresh reports whether the statistics of the table schema.rel are
-// fresh (see statsFreshSQL).
-func (e pgExplainer) statsFresh(ctx context.Context, schema, rel string) bool {
-	var fresh sql.NullBool
-	if err := e.db.QueryRowContext(ctx, statsFreshSQL, rel, schema, smallTablePages).Scan(&fresh); err != nil ||
-		!fresh.Valid {
-		// A probe that fails or finds no such table (a view, a foreign
-		// table) is permissive rather than blocking queries.
-		return true
-	}
-	return fresh.Bool
-}
-
 type pgPlanNode struct {
 	NodeType        string       `json:"Node Type"`
 	RelationName    string       `json:"Relation Name"`
 	Schema          string       `json:"Schema"` // with VERBOSE
 	TotalCost       float64      `json:"Total Cost"`
 	PlanRows        int64        `json:"Plan Rows"`
-	ActualRows      int64        `json:"Actual Rows"`
+	ActualRows      float64      `json:"Actual Rows"` // an average per loop since PostgreSQL 18
 	ActualLoops     int64        `json:"Actual Loops"`
 	SubplansRemoved int          `json:"Subplans Removed"`
 	Plans           []pgPlanNode `json:"Plans"`
@@ -162,7 +106,7 @@ func (p *Provider) ExplainAnalyze(ctx context.Context, compiled codegen.Compiled
 	if beginner == nil {
 		beginner = p
 	}
-	tx, err := beginner.BeginTx(ctx, &store.TxOptions{ReadOnly: true})
+	tx, err := beginner.BeginTx(ctx, &store.TxOptions{Isolation: store.LevelDefault, ReadOnly: true})
 	if err != nil {
 		return cost.Plan{}, err
 	}
@@ -219,13 +163,15 @@ func parsePGExplainAnalyze(b []byte) (cost.Plan, error) {
 	if len(arr) == 0 {
 		return cost.Plan{ScanType: cost.ScanUnknown, Raw: b}, errors.New("postgres: empty EXPLAIN ANALYZE plan")
 	}
-	p.ActualRows = actualRowsProcessed(arr[0].Plan)
+	p.ActualRows = int64(math.Round(actualRowsProcessed(arr[0].Plan)))
 	p.ExecutionTime = time.Duration(arr[0].ExecutionTime * float64(time.Millisecond))
 	return p, nil
 }
 
-func actualRowsProcessed(node pgPlanNode) int64 {
-	rows := node.ActualRows * node.ActualLoops
+// actualRowsProcessed sums the rows of every node: its rows per loop (an
+// average, fractional since PostgreSQL 18) times its loops.
+func actualRowsProcessed(node pgPlanNode) float64 {
+	rows := node.ActualRows * float64(node.ActualLoops)
 	for _, child := range node.Plans {
 		rows += actualRowsProcessed(child)
 	}
@@ -270,7 +216,7 @@ func walkPlan(n pgPlanNode, p *cost.Plan) {
 		p.EstimatedRows = n.PlanRows
 	}
 	switch n.NodeType {
-	case "Sort":
+	case "Sort", "Incremental Sort":
 		p.HasSort = true
 	case "Materialize", "Hash":
 		// A hash or materialized input held in memory; that of a small
@@ -285,16 +231,16 @@ func walkPlan(n pgPlanNode, p *cost.Plan) {
 	}
 }
 
-func relationForScan(node pgPlanNode, scan cost.ScanType) (pgPlanNode, bool) {
-	if pgScanType(node.NodeType) == scan && node.RelationName != "" {
-		return node, true
+// scannedRelations lists the tables the plan's scans read, whatever the
+// scan: the planner's statistics of each count.
+func scannedRelations(n pgPlanNode, out []relation) []relation {
+	if n.RelationName != "" && pgScanType(n.NodeType) != cost.ScanUnknown {
+		out = append(out, relation{schema: n.Schema, name: n.RelationName})
 	}
-	for _, child := range node.Plans {
-		if scanned, ok := relationForScan(child, scan); ok {
-			return scanned, true
-		}
+	for _, child := range n.Plans {
+		out = scannedRelations(child, out)
 	}
-	return pgPlanNode{}, false
+	return out
 }
 
 func pgScanType(node string) cost.ScanType {
@@ -303,12 +249,23 @@ func pgScanType(node string) cost.ScanType {
 		// PostgreSQL Seq Scan reads the whole heap: treat as a full scan so
 		// RejectFullScan catches unfiltered queries.
 		return cost.ScanFull
+	case strings.HasSuffix(node, "Bitmap Heap Scan"): // "Parallel Bitmap Heap Scan" too
+		// The heap pages its bitmap index scans found: driven by an index,
+		// but as many pages as the index condition matches, maybe most of
+		// the table. Its child, a Bitmap Index Scan, is no bounded read of
+		// it, so the plan counts as worse than an index scan (a bitmap is
+		// also how an IN list of keys is read, so it is no full scan).
+		return cost.ScanSeq
 	case strings.Contains(node, "Index Only Scan"):
 		return cost.ScanIndex
 	case strings.Contains(node, "Index Scan"):
 		return cost.ScanIndex
 	case strings.Contains(node, "Tid Scan"):
 		return cost.ScanPoint
+	case strings.Contains(node, "Tid Range Scan"):
+		// A range of a table's row locations (PostgreSQL 14), read in heap
+		// order: it may span the whole table, so it is no bounded index read.
+		return cost.ScanSeq
 	case node == "Result" || node == "Values Scan":
 		// No table is read: a constant SELECT, or the rows INSERT ... VALUES
 		// writes. A scan elsewhere in the plan still outranks it.

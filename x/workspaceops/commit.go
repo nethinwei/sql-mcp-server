@@ -2,6 +2,8 @@ package workspaceops
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 
 	"github.com/nethinwei/sql-mcp-server/core/revision"
@@ -25,6 +27,24 @@ func (s Service) MergeDraft(ctx context.Context, username, by string, draft int6
 	if err != nil {
 		return State{}, err
 	}
+	for attempt := 0; ; attempt++ {
+		// The published revision is read again when the workspace moved past
+		// it meanwhile: merging onto it would move the workspace back.
+		st, err := s.mergeDraft(ctx, username, by, d, from)
+		if !errors.Is(err, errPublishedMoved) || attempt == attempts-1 {
+			return st, err
+		}
+	}
+}
+
+// errPublishedMoved: the workspace builds on a revision published after the
+// one read.
+var errPublishedMoved = fmt.Errorf("%w: a newer revision was published", workspace.ErrChanged)
+
+func (s Service) mergeDraft(ctx context.Context, username, by string, d revision.Revision, from int64) (
+	State, error,
+) {
+	draft := d.ID
 	published, err := s.Revisions.Published(ctx)
 	if err != nil {
 		return State{}, err
@@ -41,8 +61,11 @@ func (s Service) MergeDraft(ctx context.Context, username, by string, draft int6
 	return s.apply(ctx, username, by, func(w *workspace.Workspace, base workspace.Snapshot) (
 		workspace.Snapshot, workspace.LogEntry, error,
 	) {
-		if slices.Contains(w.Taken, draft) {
-			return nil, workspace.LogEntry{Op: "merge", Note: "#" + idOf(draft)}, nil
+		if slices.Contains(w.Taken, draft) { // taken in already: nothing to write
+			return nil, workspace.LogEntry{}, errUnchanged
+		}
+		if w.Base > published.ID {
+			return nil, workspace.LogEntry{}, errPublishedMoved
 		}
 		onto, before := snaps[published.ID], w.Items
 		if w.Base != published.ID {
@@ -94,10 +117,14 @@ func (s Service) Checkpoint(ctx context.Context, username, by, comment string) (
 		if w.Version == built.Version && w.Base == built.Base {
 			at = w.Version + 1
 		}
+		// The draft replaces the one saved before, discarded below: Taken
+		// grows by what was taken in, not by every save.
+		w.Taken = slices.DeleteFunc(w.Taken, func(id int64) bool { return id == earlier && id != 0 })
 		w.Checkpoint, w.CheckpointAt, w.Taken = draft.ID, at, append(w.Taken, draft.ID)
 		return nil, workspace.LogEntry{Op: "checkpoint", Note: "#" + idOf(draft.ID)}, nil
 	})
 	if err != nil {
+		s.discard(ctx, draft.ID, by) // no workspace holds it: it would be offered to all as a draft
 		return revision.Revision{}, err
 	}
 	if earlier != 0 {
@@ -128,6 +155,21 @@ func (s Service) discard(ctx context.Context, id int64, by string) {
 	}
 }
 
+// NotMovedError is a commit published whose workspace could not then be
+// moved onto the revision: the revision serves, and the workspace still
+// builds on the one before, with its notes and drafts, until it is updated.
+type NotMovedError struct {
+	Published revision.Revision
+	Err       error
+}
+
+func (e *NotMovedError) Error() string {
+	return fmt.Sprintf("workspace: published as #%d, but the workspace was not moved onto it (update it): %v",
+		e.Published.ID, e.Err)
+}
+
+func (e *NotMovedError) Unwrap() error { return e.Err }
+
 // CommitRequest commits a workspace as it was read.
 type CommitRequest struct {
 	// Version is the workspace version reviewed; another one is
@@ -145,7 +187,8 @@ type CommitRequest struct {
 // *revisionops.ConflictError; the revision stored is discarded). The
 // workspace then builds on the new revision, keeping what was written to
 // it while committing; its notes are dropped and the drafts it saved or
-// took in, published with it, are discarded.
+// took in, published with it, are discarded. A workspace that cannot be
+// moved onto it is a *NotMovedError, with the revision published.
 func (s Service) Commit(ctx context.Context, username, by string, req CommitRequest) (revision.Revision, error) {
 	st, ok, err := s.Read(ctx, username)
 	if err != nil || !ok {
@@ -180,7 +223,7 @@ func (s Service) Commit(ctx context.Context, username, by string, req CommitRequ
 	}
 	committed := s.Schema.Changes(st.Base, snap.Items)
 	if err := s.moveAfterCommit(ctx, username, by, snap, published, committed); err != nil {
-		return published, err
+		return published, &NotMovedError{Published: published, Err: err}
 	}
 	for _, id := range append(slices.Clone(snap.Taken), snap.Checkpoint) {
 		if id != 0 && id != published.ID {
@@ -204,14 +247,18 @@ func (s Service) moveAfterCommit(ctx context.Context, username, by string, snap 
 	_, err = s.apply(ctx, username, by, func(w *workspace.Workspace, _ workspace.Snapshot) (
 		workspace.Snapshot, workspace.LogEntry, error,
 	) {
-		s.moveOnto(w, snap.Items, w.Items, next, published.ID)
+		var moved workspace.Snapshot
+		if w.Base <= published.ID { // else moved on past it already (a newer publish followed)
+			s.moveOnto(w, snap.Items, w.Items, next, published.ID)
+			moved = next
+		}
 		w.Notes = slices.DeleteFunc(w.Notes, func(n workspace.Note) bool { return slices.Contains(snap.Notes, n) })
 		w.Taken = slices.DeleteFunc(w.Taken, func(id int64) bool { return slices.Contains(snap.Taken, id) })
 		if w.Checkpoint == snap.Checkpoint {
 			w.Checkpoint = 0
 		}
 		w.CheckpointAt = 0
-		return next, workspace.LogEntry{Op: "commit", Items: committed, Note: "#" + idOf(published.ID)}, nil
+		return moved, workspace.LogEntry{Op: "commit", Items: committed, Note: "#" + idOf(published.ID)}, nil
 	})
 	return err
 }

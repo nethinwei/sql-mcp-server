@@ -113,7 +113,7 @@ PostgreSQL sampler 始终使用独立 read-only transaction 并 rollback，调�
 
 从单数据源升级到 `databases` 多数据源前，必须迁移 `allowTemplates` 和
 `rejectTemplates` 中的旧裸 SQL。每项应替换为 datasource 隔离的
-`fp:v3:<sha256>` fingerprint，或改成 `datasource:SQL`（例如
+`fp:v4:<sha256>` fingerprint，或改成 `datasource:SQL`（例如
 `primary:SELECT * FROM users`）。只要多数据源配置中仍存在裸 SQL，配置校验、
 启动装配和 reload 都会 fail-closed；reload 失败时继续保留旧运行快照。该检查
 同时覆盖 allow 和 reject，避免 allow 错误放行，也避免 reject 静默失效。
@@ -177,11 +177,11 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 
 ### `version`：配置版本
 
-配置契约版本标记，当前为 "1"；加载器保存但暂不限制取值。
+配置契约版本标记，当前为 "1"，未写即 "1"；其他取值校验失败，不认识的契约不会被加载。
 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `version` | 字符串 |  |  | 配置契约版本标记，当前为 "1"；加载器保存但暂不限制取值。 |
+| `version` | 字符串 |  | 可选 `1` | 配置契约版本标记，当前为 "1"，未写即 "1"；其他取值校验失败，不认识的契约不会被加载。 |
 
 ### `server`：服务（监听、认证、TLS）
 
@@ -204,18 +204,18 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `auth.tls.clientIdentity` | 字符串 | `"user"` | 可选 `user`、`default` | 配置了用户时，只出示客户端证书、不带 bearer token 的请求以谁的身份调用。user（默认）：证书须匹配某个用户的 certSubjects，否则拒绝（401）；default：使用默认身份（server.user 或 server.role，v0.1.20 之前的行为）。未配置用户时不起作用。受信代理的证书不受此限制。 |
 | `auth.tls` | 对象 |  |  | TLS / mTLS。cert 与 key 必须同时设置。 |
 | `auth` | 对象 |  |  | HTTP 认证。trustProxyHeaders、trustedProxyCIDRs 与非 loopback 的信任规则见 security.md。 |
-| `secrets.allowedRoots` | 字符串列表 | `["/run/secrets","/var/run/secrets"]` |  | 允许读取 secret 文件的根目录（绝对路径）；符号链接不能逃逸这些目录。 |
+| `secrets.allowedRoots` | 字符串列表 | `["/run/secrets","/var/run/secrets"]` |  | 允许读取 secret 文件的根目录（绝对路径）；符号链接不能逃逸这些目录。不写或写空列表都取默认的 /run/secrets、/var/run/secrets。 |
 | `secrets` | 对象 |  |  | DSN 中 ${file:...} 占位符的读取限制。 |
 | `user` | 字符串 |  |  | 没有用户身份的请求使用的默认用户，优先于 role；CLI --user 覆盖。必须是已配置且未禁用的用户。 |
 | `sessionTimeout` | 时长 | `"30m"` | ≥ 0；修改需重启 | HTTP MCP 会话空闲多久后关闭。关闭时回滚会话内的显式事务、清空会话预算计数；之后客户端用旧会话请求得到 404 并自动建立新会话。修改需重启。 |
 
 ### `database`
 
-旧式单数据源配置，加载时迁移为名为 default 的数据源。需要 database 或至少一个 databases 项。
+旧式单数据源配置，加载时迁移为名为 default 的数据源。需要 database 或至少一个 databases 项，两者不能同时设置。
 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `database` | `database` |  |  | 旧式单数据源配置，加载时迁移为名为 default 的数据源。需要 database 或至少一个 databases 项。 |
+| `database` | `database` |  |  | 旧式单数据源配置，加载时迁移为名为 default 的数据源。需要 database 或至少一个 databases 项，两者不能同时设置。 |
 
 ### `databases`
 
@@ -231,7 +231,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 
 | 字段 | 类型 | 默认值 | 约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `entities` | `entity` 列表 | `[{"name":"x","fields":[{"name":"x"}],"roles":{},"mcp":{"dmlTools":true},"relationships":[{"name":"","target":"","cardinality":"","joinOn":null}]}]` |  | 显式暴露给 Agent 的实体；可以为空。启动自省会拒绝数据库中缺失的表、视图或字段。 |
+| `entities` | `entity` 列表 |  |  | 显式暴露给 Agent 的实体；可以为空。启动自省会拒绝数据库中缺失的表、视图或字段。 |
 
 ### `roles`
 
@@ -288,12 +288,12 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `rejectFullScan` | 布尔 | `true` |  | 拒绝全表扫描（表本身不超过 fullScanMaxRows 行的小表除外）。 |
 | `fullScanMaxRows` | 整数 | `1000` | ≥ 0 | 被全表扫描的表本身不超过此行数时（配置表、维表，包括被连接的），按索引扫描评分、不被 rejectFullScan 拒绝。按表的规模判断而不是计划的输出行数（PostgreSQL 取 pg_class 统计、MySQL 取 rows_examined_per_scan、OceanBase 取 EXPLAIN EXTENDED 的 table_rows），任何一张全表扫描的表得不到行数时都不豁免；0 表示全表扫描一律按全表扫描处理。 |
 | `whitelistPKPoint` | 布尔 | `true` |  | 主键点查询跳过估算（仍受结果上限约束）。 |
-| `requirePKForWrite` | 布尔 | `true` |  | 写操作必须带主键条件；不随 cost.enabled 关闭。 |
+| `requirePKForWrite` | 布尔 | `true` |  | 写操作必须带主键条件；不随 cost.enabled 关闭，allowTemplates 也不能放行。 |
 | `requireKnownScan` | 布尔 | `true` |  | 无法判断扫描方式时拒绝；MySQL/OceanBase 的 EXPLAIN 失败即拒绝。 |
 | `requireFreshStats` | 布尔 |  |  | 统计信息过旧时拒绝（未开启时只在评分中扣 15 分）。PostgreSQL 中过旧指被扫描的表既没被 ANALYZE 也没被 autovacuum 分析过，且大于 64 KiB；MySQL、OceanBase 不判断。 |
-| `queryTimeout` | 时长 | `"30s"` | ≥ 0 | 查询超时，0（不限）或不小于 100ms；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。 |
+| `queryTimeout` | 时长 | `"30s"` | ≥ 0 | 查询超时，0（不限）或不小于 100ms；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。0 时请求没有时限，也不下发数据库语句超时（数据库与账号自身的默认值仍然生效），开启 requireNativeLimits 时拒绝该配置。 |
 | `requireNativeLimits` | 布尔 |  |  | 严格模式：数据源的连接无法在数据库侧把语句限制在 queryTimeout 内（能力不是 enforced）时，拒绝加载该配置，控制台校验也报错；关闭时只告警。 |
-| `allowTemplates` | 字符串列表 |  |  | 受治理工具中跳过估算的 SQL 模板：推荐 fp:v3:<sha256> 指纹；多数据源下精确 SQL 写成 datasource:SQL。不绕过安全检查；不作用于 execute_sql（其估算见 cost.sqlEscape）。 |
+| `allowTemplates` | 字符串列表 |  |  | 受治理工具中跳过估算的 SQL 模板：推荐 fp:v4:<sha256> 指纹；多数据源下精确 SQL 写成 datasource:SQL。不绕过安全检查；不作用于 execute_sql（其估算见 cost.sqlEscape）。 |
 | `rejectTemplates` | 字符串列表 |  |  | 受治理工具中总是拒绝的 SQL 模板，写法同 allowTemplates。按精确文本或指纹匹配，不是 SQL 语义级黑名单；不作用于 execute_sql（逃生通道的边界是其连接账号的权限）。 |
 | `aqe.windowSize` | 整数 | `32` | ≥ 0 | 每个模板保留的反馈样本数。 |
 | `aqe.anomalyFactor` | 数字 | `3` | ≥ 0 | 实际与估算偏差超过该倍数视为异常。 |
@@ -329,6 +329,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `maxSize` | 整数 | `4096` | ≥ 0 | 最多缓存条目数。 |
 | `maxEntryRows` | 整数 | `10000` | ≥ 0 | 单条缓存最多行数；默认等于 cost.maxRows，启用结果缓存时必须大于 0。 |
 | `maxEntryBytes` | 整数 | `16777216` | ≥ 0 | 单条缓存最多字节数；默认等于 cost.maxBytes，启用结果缓存时必须大于 0。 |
+| `maxTotalBytes` | 整数 | `268435456` | ≥ 0 | 结果缓存所有条目合计最多字节数，超出时先淘汰最早过期的条目；默认 256 MiB（不小于 maxEntryBytes），启用结果缓存时不能小于 maxEntryBytes。 |
 | `preparedMaxSize` | 整数 |  | ≥ 0 | 预编译语句缓存条目数，与结果缓存相互独立；0 表示不缓存。 |
 
 ### `rateLimit`：限流与熔断
@@ -343,7 +344,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `ioPool` | 整数 | `16` | ≥ 0 | IO 工作池大小；普通执行使用它。 |
 | `minConcurrency` | 整数 | `1` | ≥ 0 | 自适应并发的下限（每个数据库连接各自调整）。 |
 | `rttThreshold` | 时长 |  | ≥ 0 | 延迟超过该值时降低并发；0s 不触发。 |
-| `breakerThreshold` | 整数 | `5` | ≥ 0 | 连续失败多少次后熔断；每个数据库连接各自熔断，调用方取消或数据库因数据、权限拒绝的语句不计入。 |
+| `breakerThreshold` | 整数 | `5` | ≥ 0 | 连续失败多少次后熔断；每个数据库连接各自熔断。只计数据库或连接自身的故障（含数据库的语句超时）；调用方取消，以及数据库因数据、取值、权限、语句本身（如语法）或已变化的 schema 拒绝的语句不计入。 |
 | `breakerCooldown` | 时长 | `"5s"` | ≥ 0 | 熔断后多久重试；冷却后只放行一个探测调用，成功才恢复。 |
 | `connMaxIdleTime` | 时长 | `"5m"` | ≥ 0 | 数据库连接最长空闲时间。 |
 | `connMaxLifetime` | 时长 | `"30m"` | ≥ 0 | 数据库连接最长存活时间。 |

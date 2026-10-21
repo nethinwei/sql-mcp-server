@@ -18,6 +18,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"github.com/nethinwei/sql-mcp-server/internal/tcstart"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/mcpserver"
 	pgprov "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
@@ -55,12 +56,15 @@ func TestMain(m *testing.M) {
 func sharedE2EPostgres() error {
 	e2ePG.once.Do(func() {
 		ctx := context.Background()
-		e2ePG.container, e2ePG.err = postgres.Run(ctx, "postgres:16-alpine",
-			postgres.WithDatabase("test"),
-			postgres.WithUsername("test"),
-			postgres.WithPassword("test"),
-			postgres.BasicWaitStrategies(),
-		)
+		e2ePG.container, e2ePG.err = tcstart.Run(ctx, func(publish tcstart.Publish) (*postgres.PostgresContainer, error) {
+			return postgres.Run(ctx, "postgres:16-alpine",
+				postgres.WithDatabase("test"),
+				postgres.WithUsername("test"),
+				postgres.WithPassword("test"),
+				postgres.BasicWaitStrategies(),
+				publish,
+			)
+		}, "5432/tcp")
 		if e2ePG.err != nil {
 			return
 		}

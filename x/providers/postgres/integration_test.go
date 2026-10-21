@@ -20,6 +20,8 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/tool"
 	"github.com/nethinwei/sql-mcp-server/internal/escapetest"
 	"github.com/nethinwei/sql-mcp-server/internal/numbertest"
+	"github.com/nethinwei/sql-mcp-server/internal/pgimage"
+	"github.com/nethinwei/sql-mcp-server/internal/tcstart"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	pgprov "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
@@ -28,12 +30,15 @@ import (
 func startPG(t testing.TB) (string, func()) {
 	t.Helper()
 	ctx := context.Background()
-	container, err := postgres.Run(ctx, "postgres:16-alpine",
-		postgres.WithDatabase("test"),
-		postgres.WithUsername("test"),
-		postgres.WithPassword("test"),
-		postgres.BasicWaitStrategies(),
-	)
+	container, err := tcstart.Run(ctx, func(publish tcstart.Publish) (*postgres.PostgresContainer, error) {
+		return postgres.Run(ctx, pgimage.Image(),
+			postgres.WithDatabase("test"),
+			postgres.WithUsername("test"),
+			postgres.WithPassword("test"),
+			postgres.BasicWaitStrategies(),
+			publish,
+		)
+	}, "5432/tcp")
 	if err != nil {
 		t.Fatalf("start postgres container: %v", err)
 	}
@@ -137,6 +142,29 @@ func assertPGTableRows(t *testing.T, ctx context.Context, prov *pgprov.Provider)
 	if err != nil || big.ScanType != cost.ScanFull || big.EstimatedRows > 1000 || !big.TableSized ||
 		big.TableRows < 50000 {
 		t.Fatalf("large table plan = %+v, %v", big, err)
+	}
+	assertPGPartitionedTableRows(t, ctx, prov)
+}
+
+// A partitioned table scanned whole is sized by its partitions together,
+// not by its largest one: three partitions of 600 rows are 1800 rows.
+func assertPGPartitionedTableRows(t *testing.T, ctx context.Context, prov *pgprov.Provider) {
+	t.Helper()
+	for _, stmt := range []string{
+		"CREATE TABLE smcp_events (id int, d int) PARTITION BY RANGE (d)",
+		"CREATE TABLE smcp_events_0 PARTITION OF smcp_events FOR VALUES FROM (0) TO (1)",
+		"CREATE TABLE smcp_events_1 PARTITION OF smcp_events FOR VALUES FROM (1) TO (2)",
+		"CREATE TABLE smcp_events_2 PARTITION OF smcp_events FOR VALUES FROM (2) TO (3)",
+		"INSERT INTO smcp_events SELECT g, g % 3 FROM generate_series(1, 1800) g", "ANALYZE smcp_events",
+	} {
+		if _, err := prov.ExecContext(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func() { _, _ = prov.ExecContext(ctx, "DROP TABLE smcp_events") }()
+	plan, err := prov.Explainer().Explain(ctx, "SELECT * FROM smcp_events WHERE id + 0 = $1", []any{5})
+	if err != nil || plan.ScanType != cost.ScanFull || !plan.TableSized || plan.TableRows < 1800 {
+		t.Fatalf("partitioned table plan = %+v, %v", plan, err)
 	}
 }
 

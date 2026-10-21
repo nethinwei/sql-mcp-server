@@ -21,6 +21,7 @@ import (
 
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
+	"github.com/nethinwei/sql-mcp-server/internal/tcstart"
 	pgprov "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
 
@@ -97,12 +98,15 @@ func run(ctx context.Context) error {
 // against. Every value is a pure function of the row index; changing it
 // invalidates the task set and requires a new task-set version.
 func startDatabase(ctx context.Context) (string, func(), error) {
-	container, err := postgres.Run(ctx, "postgres:16-alpine",
-		postgres.WithDatabase("evalpilot"),
-		postgres.WithUsername("evalpilot"),
-		postgres.WithPassword("evalpilot"),
-		postgres.BasicWaitStrategies(),
-	)
+	container, err := tcstart.Run(ctx, func(publish tcstart.Publish) (*postgres.PostgresContainer, error) {
+		return postgres.Run(ctx, "postgres:16-alpine",
+			postgres.WithDatabase("evalpilot"),
+			postgres.WithUsername("evalpilot"),
+			postgres.WithPassword("evalpilot"),
+			postgres.BasicWaitStrategies(),
+			publish,
+		)
+	}, "5432/tcp")
 	if err != nil {
 		return "", func() {}, err
 	}

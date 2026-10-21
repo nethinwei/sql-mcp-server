@@ -274,3 +274,119 @@ func BenchmarkPreparedDBParallelCacheHit(b *testing.B) {
 		}
 	})
 }
+
+// staleStmtDB prepares statements whose plan goes stale for good once its
+// table changed: only one prepared afresh runs.
+type staleStmtDB struct {
+	preparedFakeDB
+	changed bool
+}
+
+func (d *staleStmtDB) PrepareContext(context.Context, string) (Prepared, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.prepared++
+	return &staleStmt{preparedFakeStmt: preparedFakeStmt{db: &d.preparedFakeDB}, db: d, changed: d.changed}, nil
+}
+
+type staleStmt struct {
+	preparedFakeStmt
+	db      *staleStmtDB
+	changed bool // prepared after the change
+}
+
+func (s *staleStmt) QueryContext(context.Context, ...any) (Rows, error) {
+	if s.db.changed && !s.changed {
+		return nil, ErrStalePlan
+	}
+	return closedRows{}, nil
+}
+
+// A statement refused for a stale plan is prepared again when next run,
+// as the database keeps refusing the one prepared before.
+func TestPreparedDBPreparesAStalePlanAgain(t *testing.T) {
+	db := &staleStmtDB{}
+	cached := WithPreparedCache(db, 4)
+	query := func() error {
+		rows, err := cached.QueryContext(context.Background(), "select 1")
+		if err == nil {
+			_ = rows.Close()
+		}
+		return err
+	}
+	if err := query(); err != nil {
+		t.Fatal(err)
+	}
+	db.changed = true
+	if err := query(); !errors.Is(err, ErrStalePlan) {
+		t.Fatalf("first run after the change = %v", err)
+	}
+	if err := query(); err != nil || db.prepared != 2 || db.closed != 1 {
+		t.Fatalf("run again = %v, prepared %d, closed %d", err, db.prepared, db.closed)
+	}
+}
+
+// The statement used least recently is the one evicted.
+func TestPreparedDBEvictsTheLeastRecentlyUsed(t *testing.T) {
+	db := &preparedFakeDB{}
+	cached := WithPreparedCache(db, 2)
+	for _, q := range []string{"a", "b", "a", "c", "a"} {
+		if _, err := cached.ExecContext(context.Background(), q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if db.prepared != 3 {
+		t.Fatalf("prepared %d, want a kept while used", db.prepared)
+	}
+}
+
+// ctxPreparedDB prepares as its context allows: the first prepare waits for
+// release, then fails if its context ended.
+type ctxPreparedDB struct {
+	preparedFakeDB
+	started chan struct{}
+	release chan struct{}
+	first   sync.Once
+}
+
+func (d *ctxPreparedDB) PrepareContext(ctx context.Context, _ string) (Prepared, error) {
+	d.first.Do(func() {
+		close(d.started)
+		<-d.release
+	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	d.mu.Lock()
+	d.prepared++
+	d.mu.Unlock()
+	return &preparedFakeStmt{db: &d.preparedFakeDB}, nil
+}
+
+// A statement waiting on another call's prepare is not failed by that
+// call's request ending: it is prepared for the one waiting.
+func TestPreparedDBWaiterOutlivesItsPreparer(t *testing.T) {
+	db := &ctxPreparedDB{started: make(chan struct{}), release: make(chan struct{})}
+	cached := WithPreparedCache(db, 4)
+	leaderCtx, cancel := context.WithCancel(context.Background())
+	leader := make(chan error, 1)
+	go func() {
+		_, err := cached.ExecContext(leaderCtx, "update t set x = 1")
+		leader <- err
+	}()
+	<-db.started
+	waiter := make(chan error, 1)
+	go func() {
+		_, err := cached.ExecContext(context.Background(), "update t set x = 1")
+		waiter <- err
+	}()
+	time.Sleep(20 * time.Millisecond) // the second waits for the first prepare
+	cancel()
+	close(db.release)
+	if err := <-leader; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the canceled call = %v", err)
+	}
+	if err := <-waiter; err != nil {
+		t.Fatalf("the waiting call failed with its preparer's end: %v", err)
+	}
+}

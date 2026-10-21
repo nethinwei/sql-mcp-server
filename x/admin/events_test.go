@@ -15,6 +15,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/core/workspace"
+	"github.com/nethinwei/sql-mcp-server/x/admin/accounts"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
 )
 
@@ -105,6 +106,35 @@ func TestEventsSignalNewRevisions(t *testing.T) {
 				t.Fatalf("event = %s, want %s eventually", got, want)
 			}
 		}
+	}
+}
+
+// A store with no published revision yet still signals new revisions: no
+// published revision is a state, not a failed read.
+func TestEventsSignalRevisionsBeforeAnyPublish(t *testing.T) {
+	f := newFixture(t)
+	f.h.published = newPublishedFeed(nil, f.h.cfg.Store, 10*time.Millisecond)
+	ctx := context.Background()
+	srv := httptest.NewServer(f.h)
+	defer srv.Close()
+	_, cookie, _ := f.login(t, "correct horse battery")
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/admin/events", nil)
+	req.AddCookie(cookie)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil || res.StatusCode != http.StatusOK {
+		t.Fatalf("stream = %v %v", res, err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	saving, stop := context.WithCancel(ctx)
+	defer stop()
+	go func() { // drafts until one lands after the state found on connecting
+		for saving.Err() == nil {
+			_, _ = f.h.cfg.Store.Create(saving, revision.Draft{Payload: []byte("x: 1\n"), Author: "root"})
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+	if got := nextEventData(t, bufio.NewScanner(res.Body)); !strings.HasPrefix(got, `{"sequence":`) {
+		t.Fatalf("event = %q, want a revisions event", got)
 	}
 }
 
@@ -348,5 +378,87 @@ func TestNoWorkspaceFeed(t *testing.T) {
 		t.Fatal("a nil feed sends")
 	} else {
 		stop()
+	}
+}
+
+// An event stream re-reads its session's account every eventAccountChecks
+// checks: an account disabled meanwhile ends it, one not read now does not.
+func TestEventStreamEndsWithItsAccount(t *testing.T) {
+	f := newFixture(t)
+	store := &failingAccounts{Store: f.accounts}
+	f.h = New(Config{Store: f.h.cfg.Store, Accounts: store, Now: f.h.cfg.Now})
+	_, cookie, _ := f.login(t, "correct horse battery")
+	sess, _ := f.h.sessions.lookup(cookie.Value)
+	held := f.h.sessionHeld(context.Background(), cookie.Value, sess)
+	store.fail = true
+	for i := range eventAccountChecks {
+		if !held() {
+			t.Fatalf("check %d: an account not read now ended the stream", i)
+		}
+	}
+	store.fail = false
+	if _, err := f.accounts.MutateAdmins(context.Background(), func(all []accounts.Account) ([]accounts.Account, error) {
+		all[0].Disabled = true
+		return all, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for range eventAccountChecks - 1 {
+		held()
+	}
+	if held() {
+		t.Fatal("a disabled account kept its stream")
+	}
+	if f.h.sessions.alive(cookie.Value) {
+		t.Fatal("a disabled account kept its session")
+	}
+}
+
+// hangingStore is a store whose published revision cannot be read until
+// released.
+type hangingStore struct {
+	revision.Store
+	release chan struct{}
+}
+
+func (s hangingStore) PublishedSummary(ctx context.Context) (revision.Revision, error) {
+	<-s.release
+	return s.Store.PublishedSummary(ctx)
+}
+
+// A store that hangs holds up no console opening the stream: the state is
+// read by the feed, not under the lock listeners take, and sent once read.
+func TestEventsDoNotWaitForAHangingStore(t *testing.T) {
+	store := revision.NewMemoryStore(nil)
+	publishNext(t, store)
+	hang := hangingStore{Store: store, release: make(chan struct{})}
+	feed := newPublishedFeed(nil, hang, time.Millisecond)
+	subscribed := make(chan (<-chan feedState), 2)
+	for range 2 {
+		go func() {
+			events, stop := feed.subscribe()
+			t.Cleanup(stop)
+			subscribed <- events
+		}()
+	}
+	var events []<-chan feedState
+	for range 2 {
+		select {
+		case ev := <-subscribed:
+			events = append(events, ev)
+		case <-time.After(time.Second):
+			t.Fatal("opening a stream waited for the store")
+		}
+	}
+	close(hang.release)
+	for _, ev := range events {
+		select {
+		case st := <-ev:
+			if st.Published.ID != "1" {
+				t.Fatalf("state = %+v", st)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("the state read was not sent")
+		}
 	}
 }

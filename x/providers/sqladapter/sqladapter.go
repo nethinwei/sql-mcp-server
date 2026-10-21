@@ -62,7 +62,7 @@ func (d *Pool) ExecContext(ctx context.Context, query string, args ...any) (stor
 func (d *Pool) PrepareContext(ctx context.Context, query string) (store.Prepared, error) {
 	s, err := d.db.PrepareContext(ctx, query)
 	if err != nil {
-		return nil, err
+		return nil, d.classify(err)
 	}
 	return stmt{Stmt: s, db: d}, nil
 }
@@ -75,7 +75,7 @@ func (d *Pool) BeginTx(ctx context.Context, opts *store.TxOptions) (store.Tx, er
 	}
 	t, err := d.db.BeginTx(ctx, sqlOpts)
 	if err != nil {
-		return nil, err
+		return nil, d.classify(err)
 	}
 	return tx{Tx: t, db: d}, nil
 }

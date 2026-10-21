@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -158,6 +159,12 @@ func TestMergeEdgeCases(t *testing.T) {
 			`[{"entity":"a","actions":["READ"]},{"entity":"a","actions":["CREATE"]}]`,
 			`[{"entity":"a","actions":["READ"]},{"entity":"a","actions":["CREATE"]}]`,
 			`[{"entity":"a","actions":["READ"]}]`, `[{"entity":"a","actions":["READ"]}]`, 0},
+		{"both add an object: merged key by key", ``, `{"name":"r","description":"mine"}`,
+			`{"name":"r","grants":[{"entity":"x"}]}`, `{"name":"r","description":"mine","grants":[{"entity":"x"}]}`, 0},
+		{"both add a nested object", ``, `{"name":"r","mcp":{"a":1}}`, `{"name":"r","mcp":{"b":2}}`,
+			`{"name":"r","mcp":{"a":1,"b":2}}`, 0},
+		{"both add an object, a key differently", ``, `{"name":"r","description":"mine"}`,
+			`{"name":"r","description":"theirs"}`, `{"name":"r","description":"mine"}`, 1},
 		{"local order wins, new elements are appended", `[{"name":"a"},{"name":"b"}]`, `[{"name":"b"},{"name":"a"}]`,
 			`[{"name":"a"},{"name":"b"},{"name":"c"}]`, `[{"name":"b"},{"name":"a"},{"name":"c"}]`, 0},
 	} {
@@ -189,5 +196,65 @@ func TestDiff(t *testing.T) {
 	}
 	if len(schema.Diff(js(t, `{"a":1,"description":""}`), js(t, `{"a":1}`))) != 0 {
 		t.Fatal("unset optional text differs")
+	}
+}
+
+// A pinned conflict on a list element that has since been grouped with
+// another of its key (a second grant on one entity) cannot take the other
+// side's value: which element it replaces is not known. Resolving it so is
+// refused, the workspace untouched; keeping the workspace's value resolves it.
+func TestResolveTheirsThroughAGroupIsRefused(t *testing.T) {
+	ref := Ref{Kind: "role", Key: "r"}
+	snap := func(s string) Snapshot { return Snapshot{{Ref: ref, Value: js(t, s)}} }
+	old := snap(`{"name":"r","grants":[{"entity":"x","actions":["READ"]}]}`)
+	local := snap(`{"name":"r","grants":[{"entity":"x","actions":["READ","UPDATE"]}]}`)
+	next := snap(`{"name":"r","grants":[{"entity":"x","actions":["READ","DELETE"]}]}`)
+	now, cs := schema.Replay(old, local, next, Source{Kind: SourceDraft, ID: "1"}, true)
+	if len(cs) != 1 || !cs[0].Pinned {
+		t.Fatalf("conflicts = %+v", cs)
+	}
+	grouped := `{"name":"r","grants":[{"entity":"x","actions":["READ","UPDATE"],"readFields":["id"]},` +
+		`{"entity":"x","actions":["READ"]}]}`
+	now = now.With(ref, js(t, grouped))
+	got, left, err := schema.Resolve(now, next, cs, cs[0].ID, true)
+	if !errors.Is(err, ErrUnplaceable) || !schema.Same(got.Get(ref), js(t, grouped)) || len(left) != 1 {
+		t.Fatalf("theirs: %v, item %s, left %v", err, show(got.Get(ref)), left)
+	}
+	if got, _, err := schema.Resolve(now, next, cs, cs[0].ID, false); err != nil ||
+		!schema.Same(got.Get(ref), js(t, grouped)) {
+		t.Fatalf("mine: %v, item %s", err, show(got.Get(ref)))
+	}
+}
+
+// An item written null is removed, as one written Missing: whether it was
+// there or not, no item is null.
+func TestApplyNullRemoves(t *testing.T) {
+	a, b := Ref{Kind: "role", Key: "a"}, Ref{Kind: "role", Key: "b"}
+	s := Snapshot{{Ref: a, Value: js(t, `{"name":"a"}`)}}.Apply(map[Ref]any{a: nil, b: nil}, []Ref{a, b})
+	if len(s) != 0 {
+		t.Fatalf("snapshot = %+v", s)
+	}
+}
+
+// An empty object key (a blank row the console saved) is a property, and an
+// empty list key an element: neither is mistaken for the other.
+func TestEmptyKeysKeepTheirStepKind(t *testing.T) {
+	v, cs := schema.Merge(js(t, `{"m":{"":1}}`), js(t, `{"m":{"":2}}`), js(t, `{"m":{"":3}}`), nil)
+	if len(cs) != 1 || cs[0].Path.String() != "m." || schema.GetAt(js(t, `{"m":{"":2}}`), cs[0].Path) != 2.0 {
+		t.Fatalf("merged = %s %+v", show(v), cs)
+	}
+	if got := schema.SetAt(v, cs[0].Path, cs[0].Theirs); !schema.Same(got, js(t, `{"m":{"":3}}`)) {
+		t.Fatalf("set = %s", show(got))
+	}
+	role := js(t, `{"fields":[{"name":"","mask":"x"}]}`)
+	at := Path{FieldStep("fields"), ElementStep(""), FieldStep("mask")}
+	if schema.GetAt(role, at) != "x" || at.String() != "fields[].mask" {
+		t.Fatalf("get = %v %s", schema.GetAt(role, at), at)
+	}
+	data, err := json.Marshal(Path{FieldStep(""), ElementStep("")})
+	var back, legacy Path
+	if err != nil || json.Unmarshal(data, &back) != nil || json.Unmarshal([]byte(`[{}]`), &legacy) != nil ||
+		back[0].IsElement() || !back[1].IsElement() || !legacy[0].IsElement() {
+		t.Fatalf("json = %s %+v %+v %v", data, back, legacy, err)
 	}
 }

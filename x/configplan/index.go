@@ -13,12 +13,18 @@ type Index struct {
 	// referenced counts the foreign keys of scanned tables referencing each
 	// table, by Ref.
 	referenced map[string]int
+	// refs are the Refs of the rows.
+	refs map[string]bool
 }
 
 // NewIndex indexes the tables of sources against base and published (nil:
 // none).
 func NewIndex(sources []Source, base, published *config.Config) *Index {
 	x := &Index{rows: Rows(sources, base, published, Scope{}), referenced: map[string]int{}}
+	x.refs = make(map[string]bool, len(x.rows))
+	for _, r := range x.rows {
+		x.refs[r.Ref] = true
+	}
 	for _, src := range sources {
 		for _, t := range src.Catalog.Tables {
 			for _, fk := range t.ForeignKeys {
@@ -57,6 +63,9 @@ func (x *Index) Match(scope Scope) []int32 {
 
 // At is the row at a position Match listed.
 func (x *Index) At(i int32) Row { return x.rows[i] }
+
+// Has reports whether a table (by Ref) is indexed.
+func (x *Index) Has(ref string) bool { return x.refs[ref] }
 
 // Len is how many tables are indexed.
 func (x *Index) Len() int { return len(x.rows) }

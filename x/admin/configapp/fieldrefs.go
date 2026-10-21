@@ -13,7 +13,8 @@ import (
 // FieldReference is a place in the workspace naming a field of an entity:
 // a role or user (Via fields: a grant lists it, which removing the field
 // takes care of; rows: a grant filters by it, to fix first), or an entity's
-// relationship, primaryKey, uniqueKey or tenantPolicy (Name its ID).
+// relationship, primaryKey, uniqueKey, tenantPolicy or legacyAccess (its
+// entity-level fieldACL and rowPolicies; Name its ID).
 type FieldReference struct {
 	Field string  `json:"field"`
 	Kind  string  `json:"kind"`
@@ -44,7 +45,9 @@ func (r *Service) FieldReferences(ctx context.Context, entity string) ([]FieldRe
 	return fieldReferencesOf(sections, entity), nil
 }
 
-var fieldReferenceOrder = []string{"role", "user", "relationship", "primaryKey", "uniqueKey", "tenantPolicy"}
+var fieldReferenceOrder = []string{
+	"role", "user", "relationship", "primaryKey", "uniqueKey", "tenantPolicy", "legacyAccess",
+}
 
 func fieldReferencesOf(s Sections, id string) []FieldReference {
 	entities := make([]config.EntityConfig, 0, len(s.Entities))
@@ -61,7 +64,7 @@ func fieldReferencesOf(s Sections, id string) []FieldReference {
 		c.grants("user", u.Name, u.Grants)
 	}
 	for i, e := range s.Entities {
-		c.entity(entities[i].ID(), e)
+		c.entity(entities[i], e)
 	}
 	slices.SortStableFunc(c.out, func(a, b FieldReference) int {
 		return slices.Index(fieldReferenceOrder, a.Kind) - slices.Index(fieldReferenceOrder, b.Kind)
@@ -101,27 +104,22 @@ func (c *fieldRefs) grants(kind, name string, grants []GrantItem) {
 	}
 }
 
-// entity are the references the entity with ID eid makes.
-func (c *fieldRefs) entity(eid string, e EntityItem) {
-	for _, rel := range e.Relationships {
-		joinOn, _ := rel.JoinOn.(map[string]any)
-		target, _ := c.index.IDOf(rel.Target)
-		for local, remote := range joinOn {
-			c.add(eid, local, "relationship", eid, "")
-			if field, ok := remote.(string); ok {
-				c.add(target, field, "relationship", eid, "")
-			}
+// entity are the references the entity named as named makes (see
+// configrefs.FieldUses); of one that does not read as an entity (a value
+// edited into a wrong shape), its keys only.
+func (c *fieldRefs) entity(named config.EntityConfig, e EntityItem) {
+	eid := named.ID()
+	if spec, err := e.spec(); err == nil {
+		named = config.EntityOf(spec)
+	} else {
+		named.PrimaryKey, named.UniqueKeys = e.PrimaryKey, e.UniqueKeys
+	}
+	configrefs.FieldUses(named, c.index.IDOf, func(u configrefs.FieldUse) {
+		switch u.Kind {
+		case configrefs.UseFieldACL, configrefs.UseRowPolicy:
+			c.add(u.Entity, u.Field, "legacyAccess", eid, "")
+		default: // relationship, primaryKey, uniqueKey, tenantPolicy, and any other, by its kind
+			c.add(u.Entity, u.Field, u.Kind, eid, "")
 		}
-	}
-	for _, f := range e.PrimaryKey {
-		c.add(eid, f, "primaryKey", eid, "")
-	}
-	for _, k := range e.UniqueKeys {
-		for _, f := range k {
-			c.add(eid, f, "uniqueKey", eid, "")
-		}
-	}
-	for _, f := range configrefs.FilterFields(NormalizeJSON(e.TenantPolicy)) {
-		c.add(eid, f, "tenantPolicy", eid, "")
-	}
+	})
 }

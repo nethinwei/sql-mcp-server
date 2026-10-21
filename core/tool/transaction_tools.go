@@ -110,50 +110,45 @@ func resolveTransactionReadOnly(
 	datasource string,
 	requested *bool,
 ) (bool, error) {
-	canRead, canWrite, err := transactionPermissions(ctx, tc, datasource)
+	write := requested != nil && !*requested
+	allowed, err := transactionAllowed(ctx, tc, datasource, write)
 	if err != nil {
 		return false, err
 	}
-	if !canRead && !canWrite {
+	if !allowed {
 		return false, ErrUnauthorized
 	}
-	if requested != nil && !*requested {
-		if !canWrite {
-			return false, ErrUnauthorized
-		}
-		return false, nil
-	}
-	return true, nil
+	return !write, nil
 }
 
-func transactionPermissions(ctx context.Context, tc Context, datasource string) (bool, bool, error) {
+// transactionAllowed reports whether the caller may act on some entity of
+// datasource: write it when write, else any action (a read-only transaction
+// serves whoever may use the datasource). It stops at the first entity that
+// says so: a datasource has thousands of entities.
+func transactionAllowed(ctx context.Context, tc Context, datasource string, write bool) (bool, error) {
 	if tc.Registry == nil || tc.Authorizer == nil {
-		return false, false, nil
+		return false, nil
 	}
-	canRead, canWrite := false, false
 	for e := range tc.Registry.All() {
 		if e.DatasourceName() != datasource {
 			continue
 		}
 		for _, action := range entity.ActionsFor(e.Kind) {
+			if write && (action == entity.ActionRead || action == entity.ActionAggregate) {
+				continue
+			}
 			dec, err := authorize(ctx, tc, rbac.Request{
 				Role: tc.Role, Subject: tc.Subject, Entity: e.Name, Action: action,
 			})
 			if err != nil {
-				return false, false, err
+				return false, err
 			}
-			if !dec.Allowed {
-				continue
-			}
-			switch action {
-			case entity.ActionRead, entity.ActionAggregate:
-				canRead = true
-			default:
-				canWrite = true
+			if dec.Allowed {
+				return true, nil
 			}
 		}
 	}
-	return canRead, canWrite, nil
+	return false, nil
 }
 
 func parseIsolation(value string) (store.IsolationLevel, error) {

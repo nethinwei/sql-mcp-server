@@ -45,15 +45,24 @@ type Options struct {
 	Bus *bus.Bus
 }
 
+// withDefaults fills in what is not positive: no worker would never finish
+// a batch, and a ticker refuses a beat that is not.
 func (o Options) withDefaults() Options {
-	o.Parallel = cmp.Or(o.Parallel, 2)
-	o.Beat, o.Stale = cmp.Or(o.Beat, 5*time.Second), cmp.Or(o.Stale, 30*time.Second)
-	o.Attempts, o.Backoff = cmp.Or(o.Attempts, 3), cmp.Or(o.Backoff, 5*time.Second)
-	o.MoveTries, o.MoveBackoff = cmp.Or(o.MoveTries, 4), cmp.Or(o.MoveBackoff, 100*time.Millisecond)
+	o.Parallel = positive(o.Parallel, 2)
+	o.Beat, o.Stale = positive(o.Beat, 5*time.Second), positive(o.Stale, 30*time.Second)
+	o.Attempts, o.Backoff = positive(o.Attempts, 3), positive(o.Backoff, 5*time.Second)
+	o.MoveTries, o.MoveBackoff = positive(o.MoveTries, 4), positive(o.MoveBackoff, 100*time.Millisecond)
 	if o.Now == nil {
 		o.Now = time.Now
 	}
 	return o
+}
+
+func positive[T int | time.Duration](v, def T) T {
+	if v <= 0 {
+		return def
+	}
+	return v
 }
 
 // Work does one item of a batch of datasource, the schema, and says how it
@@ -192,7 +201,9 @@ func (r *Runner) move(br *batchRun, it catalog.BatchItem, from ...string) bool {
 	wait := r.opts.MoveBackoff
 	failed := false
 	for try := 1; !br.lost.Load(); try++ {
-		moved, err := r.store.MoveItem(context.Background(), br.id, br.owner, r.opts.Now(), it, from...)
+		ctx, cancel := r.storeContext()
+		moved, err := r.store.MoveItem(ctx, br.id, br.owner, r.opts.Now(), it, from...)
+		cancel()
 		switch {
 		case err == nil && (moved || !failed):
 			return moved
@@ -203,12 +214,12 @@ func (r *Runner) move(br *batchRun, it catalog.BatchItem, from ...string) bool {
 			}
 			slog.Error("scan batch progress unknown: the run stops, the batch is taken over later",
 				"batch", br.id, "schema", it.Schema, "error", readErr.Error())
-		case errors.Is(err, catalog.ErrNotOwner):
+		case errors.Is(err, catalog.ErrNotOwner), r.ctx.Err() != nil: // another run owns it, or this process stops
 		case try < r.opts.MoveTries:
 			slog.Warn("scan batch progress not recorded, trying again", "batch", br.id, "schema", it.Schema,
 				"error", err.Error())
 			failed = true
-			time.Sleep(wait)
+			sleep(r.ctx, wait)
 			wait *= 2
 			continue
 		default:
@@ -221,19 +232,34 @@ func (r *Runner) move(br *batchRun, it catalog.BatchItem, from ...string) bool {
 	return false
 }
 
+// storeContext bounds a write of a run's progress: by the process stopping
+// (not the batch: a batch stopped settles what was left), and by Stale, past
+// which the run has lost the batch anyway.
+func (r *Runner) storeContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(r.ctx, r.opts.Stale)
+}
+
 // written reports whether the item of a batch is it, as a move wrote it.
 func (r *Runner) written(br *batchRun, it catalog.BatchItem) (bool, error) {
-	b, ok, err := r.store.Batch(context.Background(), br.id)
+	ctx, cancel := r.storeContext()
+	defer cancel()
+	b, ok, err := r.store.Batch(ctx, br.id)
 	if err != nil || !ok {
 		return false, cmp.Or(err, errors.New("the batch is gone"))
 	}
 	for _, got := range b.Items {
 		if got.Schema == it.Schema {
 			return got.State == it.State && got.Error == it.Error && got.Attempts == it.Attempts &&
-				got.NotBefore.Equal(it.NotBefore), nil
+				sameInstant(got.NotBefore, it.NotBefore), nil
 		}
 	}
 	return false, nil
+}
+
+// sameInstant compares times as a store keeps them, to the microsecond: a
+// time read back has lost what was finer.
+func sameInstant(a, b time.Time) bool {
+	return a.IsZero() == b.IsZero() && a.UnixMicro() == b.UnixMicro()
 }
 
 // execute runs the items, a few at a time, each when its NotBefore comes,
@@ -262,7 +288,9 @@ func (r *Runner) execute(ctx context.Context, br *batchRun, items []catalog.Batc
 	if r.ctx.Err() != nil || br.lost.Load() {
 		return // this process stops, or another runs the batch now
 	}
-	if err := r.store.FinishBatch(context.Background(), br.id, br.owner, r.opts.Now()); err != nil &&
+	finishing, cancel := r.storeContext()
+	defer cancel()
+	if err := r.store.FinishBatch(finishing, br.id, br.owner, r.opts.Now()); err != nil &&
 		!errors.Is(err, catalog.ErrNotOwner) {
 		slog.Warn("scan batch not finished", "batch", br.id, "error", err.Error())
 	}
@@ -271,7 +299,7 @@ func (r *Runner) execute(ctx context.Context, br *batchRun, items []catalog.Batc
 // later queues it for a worker when its NotBefore comes, or at once when ctx
 // ends (the worker then lets it go).
 func (r *Runner) later(ctx context.Context, queue chan<- catalog.BatchItem, it catalog.BatchItem) {
-	wait := time.Until(it.NotBefore)
+	wait := it.NotBefore.Sub(r.opts.Now()) // by the clock that set it
 	if wait <= 0 {
 		queue <- it
 		return
@@ -303,7 +331,7 @@ func (r *Runner) beat(ctx context.Context, br *batchRun) {
 			br.stop()
 			return
 		}
-		if b, _, err := r.store.Batch(ctx, br.id); err == nil && b.Canceled {
+		if canceled, err := r.store.BatchCanceled(ctx, br.id); err == nil && canceled {
 			br.stop()
 			return
 		}
@@ -350,7 +378,8 @@ func sleep(ctx context.Context, d time.Duration) {
 
 // TakeOver runs the unfinished batches whose owner stopped beating: what
 // they did not do yet is done here, and the items they were doing again.
-// resolve says how to work a datasource as configured now.
+// resolve says how to work a datasource as configured now. The items of a
+// batch are read once it is claimed, not those of every batch others run.
 func (r *Runner) TakeOver(ctx context.Context, resolve Resolver) {
 	open, err := r.store.UnfinishedBatches(ctx)
 	if err != nil {
@@ -361,16 +390,24 @@ func (r *Runner) TakeOver(ctx context.Context, resolve Resolver) {
 		if r.Running(b.ID) {
 			continue
 		}
-		now, owner := r.opts.Now(), r.run()
-		if claimed, err := r.store.ClaimBatch(ctx, b.ID, owner, now.Add(-r.opts.Stale), now); err != nil || !claimed {
+		b, ok := r.claim(ctx, b.ID)
+		if !ok {
+			continue
+		}
+		if b.Canceled {
+			// Canceled before its run ended: it ends now, not scanned again.
+			r.finish(&b, "canceled")
 			continue
 		}
 		work, err := resolve(ctx, b.Datasource)
+		if errors.Is(err, ErrGone) {
+			r.finish(&b, "datasource gone")
+			continue
+		}
 		if err != nil {
 			slog.Warn("scan batch not resumed", "batch", b.ID, "error", err.Error())
 			continue
 		}
-		b.Owner, b.Heartbeat = owner, now
 		if !r.requeueRunning(&b) {
 			// Left unfinished, as it was: taken over again once stale.
 			slog.Warn("scan batch not resumed: its running schemas could not be queued again", "batch", b.ID)
@@ -379,6 +416,40 @@ func (r *Runner) TakeOver(ctx context.Context, resolve Resolver) {
 		slog.Info("scan batch taken over", "batch", b.ID, "datasource", b.Datasource)
 		r.runBatch(b, work)
 	}
+}
+
+// claim makes a new run of this process the owner of batch id when its
+// owner stopped beating, and reads it, items too; false when another owns
+// it or it could not be read (left claimed, taken over again once stale).
+func (r *Runner) claim(ctx context.Context, id string) (catalog.Batch, bool) {
+	now, owner := r.opts.Now(), r.run()
+	if claimed, err := r.store.ClaimBatch(ctx, id, owner, now.Add(-r.opts.Stale), now); err != nil || !claimed {
+		return catalog.Batch{}, false
+	}
+	b, ok, err := r.store.Batch(ctx, id)
+	if err != nil || !ok {
+		slog.Warn("scan batch claimed but not read", "batch", id, "error", err)
+		return catalog.Batch{}, false
+	}
+	b.Owner, b.Heartbeat = owner, now
+	return b, true
+}
+
+// ErrGone is the error of a Resolver for a datasource no longer configured:
+// its batches end (their items left canceled) instead of being taken over
+// again and again, counting against the open batches for good.
+var ErrGone = errors.New("leasing: the datasource is no longer configured")
+
+// finish ends a batch this process claimed without running it, its items
+// left canceled.
+func (r *Runner) finish(b *catalog.Batch, why string) {
+	ctx, cancel := r.storeContext()
+	defer cancel()
+	if err := r.store.FinishBatch(ctx, b.ID, b.Owner, r.opts.Now()); err != nil {
+		slog.Warn("scan batch not ended", "batch", b.ID, "why", why, "error", err.Error())
+		return
+	}
+	slog.Info("scan batch ended without running", "batch", b.ID, "why", why)
 }
 
 // requeueRunning moves the items the last owner was doing back to pending,

@@ -40,7 +40,7 @@ func TestGoneSessionsAreNotFound(t *testing.T) {
 	if code := call(http.MethodPost, "s1"); code != http.StatusNoContent || reached != 1 {
 		t.Fatalf("the bound session = %d (reached %d)", code, reached)
 	}
-	revokeSessions(store, nil, nil)([]string{"reader"})
+	revokeSessions(nil, store, nil, nil)([]string{"reader"})
 	if code := call(http.MethodPost, "s1"); code != http.StatusNotFound || reached != 1 {
 		t.Fatalf("a revoked session = %d (reached %d), want 404 and not handed on", code, reached)
 	}

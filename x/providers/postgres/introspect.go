@@ -3,6 +3,10 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"log/slog"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
@@ -72,20 +76,32 @@ func uniqueKeyReason(partial, expression, nullsDistinctFree bool) string {
 var pgAction = map[string]string{"c": entity.FKCascade, "n": entity.FKSetNull, "d": entity.FKSetDefault}
 
 // Physical implements introspect.PhysicalNamer. The cluster's system
-// identifier names the server; a role that cannot read it falls back to the
-// server address, and to "" (unknown) over a Unix socket.
+// identifier names the server; a role that may not read it falls back to the
+// server address, and to "" (unknown) over a Unix socket: the datasource then
+// names its relations alone, rather than its assembly failing. Any other
+// error fails, as a datasource named by the wrong key would expose a relation
+// another one does without its being seen (I-1).
 func (i pgIntrospector) Physical(ctx context.Context) (introspect.Physical, error) {
 	var p introspect.Physical
 	if err := i.db.QueryRowContext(ctx, `SELECT current_database()`).Scan(&p.Catalog); err != nil {
 		return p, err
 	}
-	if err := i.db.QueryRowContext(ctx,
-		`SELECT system_identifier::text FROM pg_control_system()`).Scan(&p.Server); err == nil {
+	err := i.db.QueryRowContext(ctx, `SELECT system_identifier::text FROM pg_control_system()`).Scan(&p.Server)
+	if err == nil {
 		return p, nil
 	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "42501" && pgErr.Code != "42883" {
+		return p, err
+	}
 	var addr sql.NullString
-	err := i.db.QueryRowContext(ctx,
-		`SELECT host(inet_server_addr()) || ':' || inet_server_port()`).Scan(&addr)
+	if err := i.db.QueryRowContext(ctx,
+		`SELECT host(inet_server_addr()) || ':' || inet_server_port()`).Scan(&addr); err != nil {
+		return p, err
+	}
+	if !addr.Valid {
+		slog.Warn("postgres: the server cannot be identified; its relations are named by the datasource")
+	}
 	p.Server = addr.String
-	return p, err
+	return p, nil
 }

@@ -59,7 +59,6 @@ interface State extends Sections {
   basePublished: string | null
   baseHash: string
   datasources: Datasource[]
-  /** Users that had a token in the base revision. */
   /** Each user's token hash in the base revision ('' or absent: no token). */
   baseTokens: Record<string, string>
   baseline: string
@@ -318,8 +317,10 @@ function changesBetween(base: Sections, now: Sections): Change[] {
   ]
 }
 
+// The settings compare as written, whatever the order of their keys (as
+// the content does: see canonicalSections).
 function settingsChange(base: Sections['settings'], now: Sections['settings']): Change[] {
-  return JSON.stringify(base) === JSON.stringify(now) ? [] : [{ kind: 'settings', name: 'settings', type: 'modified' }]
+  return canonical(base) === canonical(now) ? [] : [{ kind: 'settings', name: 'settings', type: 'modified' }]
 }
 
 /**
@@ -539,7 +540,13 @@ export const useWorkspace = defineStore('workspace', {
           if (itemCanonical(it?.value) !== (was.values[ref] ?? canonical(undefined))) pending.set(ref, it)
         }
       }
-      if (baseData) this.apply(baseData, w.base)
+      if (baseData) {
+        // apply starts the renames afresh: the items renamed here and not
+        // written yet stay renamed, so they are written as renames.
+        const renamed = this.renamed
+        this.apply(baseData, w.base)
+        for (const [ref, origin] of Object.entries(renamed)) if (pending.get(ref)) this.renamed[ref] = origin
+      }
       const server = itemsOfList(w.items.items)
       const copy: Copy = { values: {}, raw: {} }
       for (const [ref, it] of server) setCopy(copy, ref, it.value)
@@ -697,7 +704,14 @@ export const useWorkspace = defineStore('workspace', {
       const restored = change.kind === 'entity' ? restore(this.entities, base.entities)
         : change.kind === 'role' ? restore(this.roles, base.roles)
           : restore(this.users, base.users)
-      if (!restored) {
+      if (restored) {
+        // The restored item is written as itself again: one renamed from it
+        // here is a new item, not a rename the server would apply to it.
+        const prefix = itemRef(change.kind, '')
+        for (const [ref, origin] of Object.entries(this.renamed)) {
+          if (origin === change.name && ref.startsWith(prefix)) delete this.renamed[ref]
+        }
+      } else {
         if (change.kind === 'entity') this.removeEntity(change.name)
         else if (change.kind === 'role') this.removeRole(change.name)
         else this.removeUser(change.name)

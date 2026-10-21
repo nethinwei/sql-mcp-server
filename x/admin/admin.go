@@ -6,13 +6,16 @@ package admin
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/99designs/gqlgen/graphql"
@@ -77,8 +80,10 @@ type Config struct {
 	// from requests (server.pathPrefix); pages, the cookie and redirects
 	// carry it.
 	PathPrefix string
-	// SecureCookie marks the session cookie Secure; set it when serving TLS.
-	SecureCookie bool
+	// SecureCookie reports, for each cookie set, whether it is Secure:
+	// whether browsers reach the console over HTTPS under the configuration
+	// served now. Nil: never.
+	SecureCookie func() bool
 	// Playground mounts GraphiQL at /admin/playground and enables GraphQL
 	// schema introspection. It is a development aid.
 	Playground bool
@@ -96,12 +101,21 @@ type Handler struct {
 	published *publishedFeed
 	// workspaces is nil when no store keeps workspaces.
 	workspaces *workspaceFeed
+	// ending is closed when the event streams end (EndStreams).
+	ending     chan struct{}
+	endStreams sync.Once
+}
+
+// accountService applies the account rules, hashing and verifying
+// passwords through the sign-in gate.
+func (h *Handler) accountService() accounts.Service {
+	return accounts.Service{Store: h.cfg.Accounts, Gate: h.logins}
 }
 
 // New builds the admin handler.
 func New(cfg Config) *Handler {
 	h := &Handler{
-		cfg: cfg, sessions: newSessions(cfg.Now), logins: newLoginGate(maxConcurrentLogins),
+		cfg: cfg, sessions: newSessions(cfg.Now), logins: newLoginGate(maxConcurrentLogins), ending: make(chan struct{}),
 		scans:     configapp.NewScans(scanjobs.Options{Bus: cfg.Bus}, cfg.Catalog),
 		published: newPublishedFeed(cfg.Bus, cfg.Store, eventPollInterval),
 	}
@@ -114,7 +128,7 @@ func New(cfg Config) *Handler {
 	}
 	app.WatchScanBatches()
 	cfg.Bus.Go("warm console caches", app.Warm)
-	resolver := &graph.Resolver{App: app, Accounts: accounts.Service{Store: cfg.Accounts}, Status: cfg.Status}
+	resolver := &graph.Resolver{App: app, Accounts: h.accountService(), Status: cfg.Status}
 	srv := handler.New(graph.NewExecutableSchema(graph.Config{Resolvers: resolver}))
 	srv.AddTransport(transport.POST{})
 	srv.Use(extension.FixedComplexityLimit(maxQueryComplexity))
@@ -154,6 +168,9 @@ func New(cfg Config) *Handler {
 // gateway prefix.
 func (h *Handler) path(p string) string { return h.cfg.PathPrefix + p }
 
+// secureCookie reports whether the cookie set now is Secure.
+func (h *Handler) secureCookie() bool { return h.cfg.SecureCookie != nil && h.cfg.SecureCookie() }
+
 // Close stops the background schema scans.
 func (h *Handler) Close() {
 	h.scans.Close()
@@ -172,8 +189,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 // login verifies a local account and starts a session. Failures do not tell
 // unknown accounts from wrong passwords and lock a name after repeated
-// failures.
+// failures. The body must be declared JSON: a cross-site page can only send
+// form encodings or text/plain without a CORS preflight this handler never
+// grants, so it cannot sign a browser into another account.
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
+	if !isJSON(r) {
+		writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{"error": "expected Content-Type application/json"})
+		return
+	}
 	var in struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -187,11 +210,11 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": errLockedOut.Error()})
 		return
 	}
-	if !h.logins.enter(r.Context()) {
+	if !h.logins.Enter(r.Context()) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": errBusy.Error()})
 		return
 	}
-	defer h.logins.leave()
+	defer h.logins.Leave()
 	account, err := h.cfg.Accounts.GetAdmin(r.Context(), username)
 	if err != nil && !errors.Is(err, configstore.ErrAdminNotFound) {
 		slog.Error("admin sign-in lookup failed", "error", err.Error())
@@ -199,7 +222,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ok := auth.VerifyPassword(account.PasswordHash, in.Password) && err == nil && !account.Disabled
-	h.sessions.recordLogin(username, ok)
+	h.sessions.recordLogin(username, ok, err == nil)
 	if !ok {
 		slog.Warn("admin sign-in rejected", "username", username)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid username or password"})
@@ -211,7 +234,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Value: id, Path: h.path("/admin"), HttpOnly: true, Secure: h.cfg.SecureCookie,
+		Name: cookieName, Value: id, Path: h.path("/admin"), HttpOnly: true, Secure: h.secureCookie(),
 		SameSite: http.SameSiteStrictMode, MaxAge: int(sessionAbsoluteTimeout.Seconds()),
 	})
 	slog.Info("admin signed in", "username", account.Username)
@@ -223,9 +246,9 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 // currentSession restores the console after a reload: it returns the signed-in
 // account and the session's CSRF token, which cross-site pages cannot read.
 func (h *Handler) currentSession(w http.ResponseWriter, r *http.Request) {
-	sess, principal, ok := h.session(r)
-	if !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": auth.ErrUnauthorized.Error()})
+	sess, principal, err := h.session(r)
+	if err != nil {
+		refuseSession(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -233,22 +256,36 @@ func (h *Handler) currentSession(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// logout ends the request's session. It acts only for a live session with its
+// CSRF token: any other request, a cross-site one included, leaves the cookie.
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(cookieName); err == nil {
-		if sess, ok := h.sessions.lookup(c.Value); ok && r.Header.Get(csrfHeader) == sess.csrf {
-			h.sessions.delete(c.Value)
-		}
+	c, err := r.Cookie(cookieName)
+	if err != nil {
+		refuseSession(w, errSignedOut)
+		return
 	}
+	sess, ok := h.sessions.lookup(c.Value)
+	if !ok {
+		refuseSession(w, errSignedOut)
+		return
+	}
+	if !sameToken(r.Header.Get(csrfHeader), sess.csrf) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing or invalid " + csrfHeader})
+		return
+	}
+	h.sessions.delete(c.Value)
 	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Path: h.path("/admin"), HttpOnly: true, Secure: h.cfg.SecureCookie,
+		Name: cookieName, Path: h.path("/admin"), HttpOnly: true, Secure: h.secureCookie(),
 		SameSite: http.SameSiteStrictMode, MaxAge: -1,
 	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// session resolves the request's session and re-reads its account, so a
-// disabled or deleted account, or one whose password changed, loses access on
-// its next request.
+// isJSON reports whether r declares a JSON body.
+func isJSON(r *http.Request) bool {
+	media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return err == nil && media == "application/json"
+}
 
 // credentialTag fingerprints a password hash for comparison with a session.
 func credentialTag(passwordHash string) string {
@@ -256,33 +293,73 @@ func credentialTag(passwordHash string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (h *Handler) session(r *http.Request) (session, auth.Principal, bool) {
+// sameToken compares a token a request presents with the one expected, in
+// constant time.
+func sameToken(got, want string) bool {
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+// errSignedOut: the request has no session, or its account no longer holds
+// it (deleted, disabled, or its password changed).
+var errSignedOut = auth.ErrUnauthorized
+
+// session resolves the request's session and re-reads its account, so a
+// disabled or deleted account, or one whose password changed, loses access on
+// its next request: errSignedOut, and the session is deleted. An account that
+// cannot be read now (the store failing, the request ending) is another
+// error, and the session stays.
+func (h *Handler) session(r *http.Request) (session, auth.Principal, error) {
 	c, err := r.Cookie(cookieName)
 	if err != nil {
-		return session{}, auth.Principal{}, false
+		return session{}, auth.Principal{}, errSignedOut
 	}
 	sess, ok := h.sessions.lookup(c.Value)
 	if !ok {
-		return session{}, auth.Principal{}, false
+		return session{}, auth.Principal{}, errSignedOut
 	}
-	account, err := h.cfg.Accounts.GetAdmin(r.Context(), sess.username)
-	if err != nil || account.Disabled || credentialTag(account.PasswordHash) != sess.credential {
+	principal, err := h.holder(r.Context(), sess)
+	if errors.Is(err, errSignedOut) {
 		h.sessions.delete(c.Value)
-		return session{}, auth.Principal{}, false
 	}
-	return sess, auth.Principal{Username: account.Username, Permissions: account.Permissions}, true
+	return sess, principal, err
+}
+
+// holder re-reads the account of sess: errSignedOut when it no longer holds
+// the session.
+func (h *Handler) holder(ctx context.Context, sess session) (auth.Principal, error) {
+	account, err := h.cfg.Accounts.GetAdmin(ctx, sess.username)
+	switch {
+	case errors.Is(err, configstore.ErrAdminNotFound):
+		return auth.Principal{}, errSignedOut
+	case err != nil:
+		return auth.Principal{}, err
+	case account.Disabled || credentialTag(account.PasswordHash) != sess.credential:
+		return auth.Principal{}, errSignedOut
+	}
+	return auth.Principal{Username: account.Username, Permissions: account.Permissions}, nil
+}
+
+// refuseSession answers a request whose session did not resolve: 401 when
+// signed out, else 503, as the session may serve the next request.
+func refuseSession(w http.ResponseWriter, err error) {
+	if errors.Is(err, errSignedOut) {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": auth.ErrUnauthorized.Error()})
+		return
+	}
+	slog.Warn("admin session not resolved", "err", err)
+	writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the account cannot be read now"})
 }
 
 // authenticated requires a session and, when checkCSRF is set, the session's
 // CSRF token in X-CSRF-Token.
 func (h *Handler) authenticated(checkCSRF bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sess, principal, ok := h.session(r)
-		if !ok {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": auth.ErrUnauthorized.Error()})
+		sess, principal, err := h.session(r)
+		if err != nil {
+			refuseSession(w, err)
 			return
 		}
-		if checkCSRF && r.Header.Get(csrfHeader) != sess.csrf {
+		if checkCSRF && !sameToken(r.Header.Get(csrfHeader), sess.csrf) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing or invalid " + csrfHeader})
 			return
 		}
@@ -290,9 +367,19 @@ func (h *Handler) authenticated(checkCSRF bool, next http.Handler) http.Handler 
 	})
 }
 
+// playgroundPolicy is the development playground's Content-Security-Policy:
+// GraphiQL loads from its CDN and runs an inline script (the console's policy
+// would refuse both), and the page, which holds the session's CSRF token,
+// talks to this server only and is framed by none.
+const playgroundPolicy = "default-src 'none'; script-src https://cdn.jsdelivr.net 'unsafe-inline'; " +
+	"style-src https://cdn.jsdelivr.net 'unsafe-inline'; font-src https://cdn.jsdelivr.net data:; " +
+	"img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+
 func (h *Handler) playground(w http.ResponseWriter, r *http.Request) {
-	sess, _, ok := h.session(r)
-	if !ok {
+	w.Header().Set("Content-Security-Policy", playgroundPolicy)
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	sess, _, err := h.session(r)
+	if err != nil {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = io.WriteString(w, loginPage)
 		return

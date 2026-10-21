@@ -52,6 +52,8 @@ func fixedCases(schema string) []Case {
 		}}),
 		selCase("like-prefix", schema, cond("name", relalg.OpLike, "%a")),
 		selCase("like-underscore", schema, cond("name", relalg.OpLike, "_eta")),
+		selCase("like-escaped-percent", schema, cond("name", relalg.OpLike, `a\%b`)),
+		selCase("like-escaped-underscore", schema, cond("name", relalg.OpLike, `a\_%`)),
 		selCase("decimal-comparison", schema, cond("price", relalg.OpGte, 2.5)),
 		selCase("range-and", schema, relalg.And{Preds: []relalg.Predicate{
 			cond("val", relalg.OpGte, int64(0)), cond("val", relalg.OpLte, int64(9)),
@@ -103,6 +105,9 @@ func shapeCases(schema string) []Case {
 	return []Case{
 		{Name: "projection-keeps-duplicates", Expr: projectCat},
 		{Name: "distinct-collapses-nulls", Expr: relalg.Distinct{Input: projectCat}},
+		{Name: "distinct-orders-nulls-last", Ordered: true, Expr: relalg.Distinct{Input: relalg.Project{
+			Input: relalg.Sort{Input: scan(schema), OrderBy: []relalg.OrderTerm{{Field: "cat", Dir: "asc", Nullable: true}}},
+			Items: []relalg.ProjectItem{{Field: "cat"}}}}},
 		{Name: "sort-limit-offset", Expr: relalg.Limit{Input: sorted, Count: 3, Offset: 2},
 			Ordered: true},
 		{Name: "offset-beyond-rows", Expr: relalg.Limit{Input: sorted, Count: 5, Offset: 50},

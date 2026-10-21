@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nethinwei/sql-mcp-server/core/store"
 )
 
 // fakeDriver records the statements its connections run; "slow" runs until
@@ -52,6 +54,23 @@ func (c *fakeConn) ExecContext(ctx context.Context, query string, _ []driver.Nam
 
 func (c *fakeConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
 	return &idRows{id: c.id}, nil
+}
+
+func (c *fakeConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	return fakeTx{c}, nil
+}
+
+// fakeTx records its COMMIT and ROLLBACK as statements.
+type fakeTx struct{ c *fakeConn }
+
+func (t fakeTx) Commit() error {
+	_, err := t.c.ExecContext(context.Background(), "COMMIT", nil)
+	return err
+}
+
+func (t fakeTx) Rollback() error {
+	_, err := t.c.ExecContext(context.Background(), "ROLLBACK", nil)
+	return err
 }
 
 func (c *fakeConn) Prepare(string) (driver.Stmt, error)      { return nil, errors.New("not supported") }
@@ -138,5 +157,70 @@ func TestKillConnStopsAStatementReturningAtItsDeadline(t *testing.T) {
 			time.Sleep(time.Millisecond)
 		}
 		_ = connector.Close()
+	}
+}
+
+// A connection sent a KILL QUERY refuses its later statements, unsent: an
+// open transaction keeps it from the pool, and a late KILL QUERY would stop
+// the next one. The refusal is a statement timeout, not driver.ErrBadConn,
+// which database/sql would retry on another connection.
+func TestKilledConnRefusesLaterStatements(t *testing.T) {
+	t.Parallel()
+	d := &fakeDriver{}
+	connector := newKillConnector(d)
+	defer connector.Close()
+	raw, err := connector.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := raw.(*killConn)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _ = c.ExecContext(ctx, "slow", nil)
+	_, execErr := c.ExecContext(context.Background(), "next", nil)
+	_, queryErr := c.QueryContext(context.Background(), "next", nil)
+	_, prepareErr := c.PrepareContext(context.Background(), "next")
+	for _, err := range []error{execErr, queryErr, prepareErr} {
+		if !errors.Is(err, store.ErrStatementTimeout) || errors.Is(err, driver.ErrBadConn) {
+			t.Errorf("a statement on a killed connection: %v", err)
+		}
+	}
+	if slices.Contains(d.statements(), "next") {
+		t.Fatalf("a statement ran on a killed connection: %v", d.statements())
+	}
+}
+
+// A transaction whose connection was sent a KILL QUERY sends no COMMIT the
+// KILL could interrupt (its outcome would be unknown): the commit is refused,
+// unsent, and the rollback leaves it to the connection's close. Nor does a
+// killed connection begin another.
+func TestKilledConnSendsNoCommit(t *testing.T) {
+	t.Parallel()
+	d := &fakeDriver{}
+	connector := newKillConnector(d)
+	defer connector.Close()
+	raw, err := connector.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := raw.(*killConn)
+	tx, err := c.BeginTx(context.Background(), driver.TxOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _ = c.ExecContext(ctx, "slow", nil)
+	if err := tx.Commit(); !errors.Is(err, store.ErrStatementTimeout) {
+		t.Errorf("commit on a killed connection: %v", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Errorf("rollback on a killed connection: %v", err)
+	}
+	if _, err := c.BeginTx(context.Background(), driver.TxOptions{}); !errors.Is(err, store.ErrStatementTimeout) {
+		t.Errorf("begin on a killed connection: %v", err)
+	}
+	if ran := d.statements(); slices.Contains(ran, "COMMIT") || slices.Contains(ran, "ROLLBACK") || c.IsValid() {
+		t.Fatalf("a killed connection ended its transaction itself: %v", ran)
 	}
 }

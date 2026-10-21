@@ -96,3 +96,31 @@ func TestFilterFields(t *testing.T) {
 		t.Fatalf("no filter = %v", got)
 	}
 }
+
+// Every place an entity's definition names a field is a use: of its own
+// fields, and of the target's a relationship joins on.
+func TestFieldUses(t *testing.T) {
+	e := config.EntityConfig{Name: "orders", DataSource: "shop", PrimaryKey: []string{"id"},
+		UniqueKeys: [][]string{{"code"}},
+		Relationships: []config.RelationshipConfig{
+			{Name: "lines", Target: "lines", JoinOn: map[string]string{"id": "order_id", "a": "b"}},
+			{Name: "lost", Target: "nowhere", JoinOn: map[string]string{"x": "y"}},
+		},
+		TenantPolicy: map[string]any{"field": "tenant", "op": "eq", "value": 1},
+		FieldACL:     map[string]config.FieldACLConfig{"r": {Read: []string{"name"}, Write: []string{"note"}}},
+		RowPolicies:  config.RowPolicies{"r": {"not": map[string]any{"field": "status", "op": "eq", "value": "x"}}},
+	}
+	resolve := func(ref string) (string, bool) { return "shop.lines", ref == "lines" }
+	var got []string
+	FieldUses(e, resolve, func(u FieldUse) { got = append(got, u.Entity+"."+u.Field+" "+u.Kind+" "+u.Relationship) })
+	want := []string{
+		"shop.orders.a relationship lines", "shop.lines.b relationship lines",
+		"shop.orders.id relationship lines", "shop.lines.order_id relationship lines",
+		"shop.orders.x relationship lost",
+		"shop.orders.id primaryKey ", "shop.orders.code uniqueKey ", "shop.orders.tenant tenantPolicy ",
+		"shop.orders.name fieldACL ", "shop.orders.note fieldACL ", "shop.orders.status rowPolicy ",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("uses = %q\nwant  %q", got, want)
+	}
+}

@@ -1,5 +1,7 @@
 package workspace
 
+import "errors"
+
 // Conflicts arise when changes are re-applied onto another side (Replay):
 // a newer published revision (an update), a draft taken in, or a write of
 // the same workspace made meanwhile. They stand until resolved, or until the
@@ -12,7 +14,12 @@ package workspace
 // holds the other side's value already (for instance typed in by hand) or
 // removed what holds it (the item, a list element or object on the way).
 func (s Schema) View(now, base Snapshot, c Conflict) (Open, bool) {
-	item := now.Get(c.Ref)
+	return s.view(now.Get, base.Get, c)
+}
+
+// view is View, with the items of now and base looked up by nowAt and baseAt.
+func (s Schema) view(nowAt, baseAt func(Ref) any, c Conflict) (Open, bool) {
+	item := nowAt(c.Ref)
 	theirsItem := Missing
 	theirs := c.Theirs
 	if c.TheirsGone {
@@ -20,7 +27,7 @@ func (s Schema) View(now, base Snapshot, c Conflict) (Open, bool) {
 	}
 	path := c.Path
 	if !c.Pinned {
-		theirsItem = base.Get(c.Ref)
+		theirsItem = baseAt(c.Ref)
 		path = s.addressable(c.Path, item, theirsItem)
 	}
 	for i := range path {
@@ -42,12 +49,31 @@ func (s Schema) View(now, base Snapshot, c Conflict) (Open, bool) {
 // OpenConflicts are the conflicts that stand in now.
 func (s Schema) OpenConflicts(now, base Snapshot, cs []Conflict) []Open {
 	var out []Open
+	nowAt, baseAt := lookups(now, base, len(cs))
 	for _, c := range cs {
-		if o, ok := s.View(now, base, c); ok {
+		if o, ok := s.view(nowAt, baseAt, c); ok {
 			out = append(out, o)
 		}
 	}
 	return out
+}
+
+// lookups look up the items of now and base for n conflicts: by an index of
+// each past one, as a snapshot is walked to find an item.
+func lookups(now, base Snapshot, n int) (nowAt, baseAt func(Ref) any) {
+	if n <= 1 {
+		return now.Get, base.Get
+	}
+	at := func(snap Snapshot) func(Ref) any {
+		index := snap.Index()
+		return func(ref Ref) any {
+			if i, ok := index[ref]; ok {
+				return snap[i].Value
+			}
+			return Missing
+		}
+	}
+	return at(now), at(base)
 }
 
 // within reports whether c is on outer's value or one under it.
@@ -92,6 +118,7 @@ func (s Schema) Replay(old, local, next Snapshot, source Source, pinned bool) (S
 // base (unpinned) stands, after an update, against the newest base (source).
 func (s Schema) Carry(pending, found []Conflict, now, base Snapshot, source *Source) []Conflict {
 	var carried []Conflict
+	nowAt, baseAt := lookups(now, base, len(pending))
 	for _, p := range pending {
 		replaced := false
 		for _, f := range found {
@@ -100,7 +127,7 @@ func (s Schema) Carry(pending, found []Conflict, now, base Snapshot, source *Sou
 		if !p.Pinned && source != nil {
 			p.Source = *source
 		}
-		if o, ok := s.View(now, base, p); !replaced && ok {
+		if o, ok := s.view(nowAt, baseAt, p); !replaced && ok {
 			carried = append(carried, o.Conflict)
 		}
 	}
@@ -117,12 +144,25 @@ func (s Schema) Carry(pending, found []Conflict, now, base Snapshot, source *Sou
 	return out
 }
 
+// Errors of Resolve.
+var (
+	// ErrNotOpen: no open conflict has the ID given.
+	ErrNotOpen = errors.New("workspace: no such open conflict")
+	// ErrUnplaceable: the other side's value of a pinned conflict is of a
+	// list element that now shares its key with others (a second grant on
+	// one entity, say): which of them it replaces is not known, so it cannot
+	// be taken; the workspace's can be kept, or the list edited by hand.
+	ErrUnplaceable = errors.New("workspace: the other side's value is of a list element that now shares " +
+		"its key with others: keep yours, or edit the list by hand")
+)
+
 // Resolve resolves conflict id: mine keeps the workspace's value, theirs
 // takes the other side's (removing it when removed there). Its choice
 // decides the values under it on its side too; what now matches the other
-// side needs no choice. It returns the workspace and the conflicts left, or
-// false when id is not an open conflict.
-func (s Schema) Resolve(now, base Snapshot, cs []Conflict, id string, theirs bool) (Snapshot, []Conflict, bool) {
+// side needs no choice. It returns the workspace and the conflicts left;
+// ErrNotOpen when id is not an open conflict, ErrUnplaceable when the other
+// side's value cannot be put back.
+func (s Schema) Resolve(now, base Snapshot, cs []Conflict, id string, theirs bool) (Snapshot, []Conflict, error) {
 	var chosen Open
 	found := false
 	for _, c := range cs {
@@ -131,19 +171,25 @@ func (s Schema) Resolve(now, base Snapshot, cs []Conflict, id string, theirs boo
 		}
 	}
 	if !found {
-		return now, cs, false
+		return now, cs, ErrNotOpen
 	}
 	if theirs {
+		// A pinned conflict keeps its path (see View): one through a list
+		// element now grouped with others names none of them alone.
+		if chosen.Pinned && len(s.addressable(chosen.Path, now.Get(chosen.Ref))) < len(chosen.Path) {
+			return now, cs, ErrUnplaceable
+		}
 		item := s.SetAt(now.Get(chosen.Ref), chosen.Path, chosen.TheirsValue)
 		now = now.With(chosen.Ref, item)
 	}
 	var left []Conflict
+	nowAt, baseAt := lookups(now, base, len(cs))
 	for _, c := range cs {
 		decided := c.ID == id ||
 			within(c, chosen.Conflict) && len(c.Path) > len(chosen.Path) && c.Source == chosen.Source
-		if _, ok := s.View(now, base, c); !decided && ok {
+		if _, ok := s.view(nowAt, baseAt, c); !decided && ok {
 			left = append(left, c)
 		}
 	}
-	return now, left, true
+	return now, left, nil
 }

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -50,7 +51,7 @@ type Metrics struct {
 	registry     *prometheus.Registry
 	calls        metric.Int64Counter
 	durations    metric.Float64Histogram
-	auditDropped func() int64
+	auditDropped atomic.Pointer[func() int64]
 }
 
 // NewMetrics returns an empty collector. It cannot fail with the instruments
@@ -89,8 +90,8 @@ func newMetrics() (*Metrics, error) {
 	}
 	_, err = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 		var n int64
-		if m.auditDropped != nil {
-			n = m.auditDropped()
+		if read := m.auditDropped.Load(); read != nil {
+			n = (*read)()
 		}
 		o.ObserveInt64(dropped, n)
 		return nil
@@ -99,9 +100,9 @@ func newMetrics() (*Metrics, error) {
 }
 
 // SetAuditDropped installs a live reader for the audit drop counter (e.g.
-// audit.AsyncAuditor.Dropped), sampled at scrape time. Set it before the
-// first scrape.
-func (m *Metrics) SetAuditDropped(read func() int64) { m.auditDropped = read }
+// audit.AsyncAuditor.Dropped), sampled at scrape time; it may be set while
+// scrapes run.
+func (m *Metrics) SetAuditDropped(read func() int64) { m.auditDropped.Store(&read) }
 
 // Registry is the Prometheus registry the metrics are exported to, for a
 // host serving them alongside its own.

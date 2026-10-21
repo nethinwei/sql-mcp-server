@@ -122,7 +122,12 @@ var structuredSections = []string{"database", "databases", "entities", "roles", 
 // SectionsOf are the sections of what a configuration says: an unset value
 // is not in its item (lists are written empty).
 func SectionsOf(spec *config.Spec) (Sections, error) {
-	payload, err := configyaml.EncodeSpec(spec)
+	// The settings and the limits of roles and users are read from the
+	// encoding: the entities and databases, items read from spec, are left
+	// out of it (thousands of entities would be encoded for nothing).
+	rest := *spec
+	rest.Entities, rest.Database, rest.Databases = nil, nil, nil
+	payload, err := configyaml.EncodeSpec(&rest)
 	if err != nil {
 		return Sections{}, err
 	}

@@ -19,6 +19,7 @@ export const reasonsZh = {
     postgresStatementTimeout: 'statement_timeout 略小于 cost.queryTimeout，并在请求到期时发送取消请求',
     postgresPooled: 'statement_timeout 是会话设置，事务型连接池不保留；请求到期时的取消请求只有连接池转发时才能停止语句',
     postgresCancelOnly: '请求到期时发送取消请求（DSN 自行设置了 statement_timeout）',
+    none: '无：cost.queryTimeout 为 0，不设置语句超时（数据库与账号自身的默认值仍然生效）',
     sessionVariable: '{variable} 略小于 cost.queryTimeout',
     sessionVariableSelectOnly: '{variable} 略小于 cost.queryTimeout（只限制 SELECT）',
     dsnSetsVariable: 'DSN 自行设置了 {variable}，cost.queryTimeout 不在数据库侧生效',
@@ -49,6 +50,7 @@ export const reasonsZh = {
     readOnlyServer: '数据库处于只读状态',
     missing: '账号缺少 {privilege} 权限',
     filterNeedsSelect: '带过滤条件的 {privilege} 还需要 SELECT 权限',
+    readsBack: '写后读与事务内的读取也走这条连接，需要 SELECT 权限',
     uncheckable: '无法检查权限：{error}',
   },
   strength: {
@@ -82,6 +84,7 @@ export const reasonsEn: typeof reasonsZh = {
     postgresStatementTimeout: 'statement_timeout just under cost.queryTimeout, and a cancel request at the request deadline',
     postgresPooled: 'statement_timeout is a session setting a transaction pooler does not keep; a cancel request at the request deadline stops the statement only if the pooler forwards it',
     postgresCancelOnly: 'a cancel request at the request deadline (the DSN sets its own statement_timeout)',
+    none: 'none: cost.queryTimeout is 0, so no statement timeout is set (the database\'s and the account\'s own defaults still apply)',
     sessionVariable: '{variable} just under cost.queryTimeout',
     sessionVariableSelectOnly: '{variable} just under cost.queryTimeout (SELECT only)',
     dsnSetsVariable: 'the DSN sets {variable}, so cost.queryTimeout is not applied natively',
@@ -112,6 +115,7 @@ export const reasonsEn: typeof reasonsZh = {
     readOnlyServer: 'the server is read-only',
     missing: 'the account lacks the {privilege} privilege',
     filterNeedsSelect: 'a filtered {privilege} also needs SELECT',
+    readsBack: 'reads after writes run on this connection and need SELECT',
     uncheckable: 'the privilege could not be checked: {error}',
   },
   strength: {

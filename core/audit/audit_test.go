@@ -3,9 +3,11 @@ package audit
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -224,5 +226,50 @@ func TestAsyncAuditorRecordRacesClose(t *testing.T) {
 		}
 		a.Close()
 		wg.Wait()
+	}
+}
+
+// A sink that does not return bounds closing by the context, not forever;
+// once it returns, the queue drains.
+func TestAsyncAuditorCloseContextBoundsAStuckSink(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	var written atomic.Int64
+	a := NewAsyncAuditorWithClose(func(Event) error {
+		<-release
+		written.Add(1)
+		return nil
+	}, nil, 4)
+	for range 2 {
+		_ = a.Record(context.Background(), Event{Tool: "x"})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := a.CloseContext(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("close = %v", err)
+	}
+	close(release)
+	if err := a.CloseContext(context.Background()); err != nil || written.Load() != 2 {
+		t.Fatalf("close = %v, %d written", err, written.Load())
+	}
+}
+
+// Auditors counting their drops in one counter add up: a process's count
+// does not start again with the auditor a reload assembles.
+func TestAsyncAuditorsShareTheirDropCount(t *testing.T) {
+	t.Parallel()
+	var dropped atomic.Int64
+	release := make(chan struct{})
+	defer close(release)
+	blocked := func(Event) error { <-release; return nil }
+	for range 2 {
+		a := NewAsyncAuditorWithClose(blocked, nil, 1).CountDropsIn(&dropped)
+		for range 5 {
+			_ = a.Record(context.Background(), Event{Tool: "x"})
+		}
+	}
+	// Each holds one event in its flusher and one queued: three dropped each.
+	if n := dropped.Load(); n < 6 {
+		t.Fatalf("dropped = %d, want both auditors' drops", n)
 	}
 }

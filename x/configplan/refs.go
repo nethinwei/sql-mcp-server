@@ -32,14 +32,7 @@ func (ev *evaluation) fieldUses() map[string]map[string][]string {
 		return ev.uses
 	}
 	ev.uses = map[string]map[string][]string{}
-	use := func(id, field, where string) {
-		if ev.uses[id] == nil {
-			ev.uses[id] = map[string][]string{}
-		}
-		if !slices.Contains(ev.uses[id][field], where) {
-			ev.uses[id][field] = append(ev.uses[id][field], where)
-		}
-	}
+	use := func(id, field, where string) { addUse(ev.uses, id, field, where) }
 	for _, e := range ev.cfg.Entities {
 		ev.entityUses(e, use)
 	}
@@ -55,39 +48,31 @@ func (ev *evaluation) fieldUses() map[string]map[string][]string {
 	return ev.uses
 }
 
+// addUse records that where names field of the entity id, once.
+func addUse(uses map[string]map[string][]string, id, field, where string) {
+	if uses[id] == nil {
+		uses[id] = map[string][]string{}
+	}
+	if !slices.Contains(uses[id][field], where) {
+		uses[id][field] = append(uses[id][field], where)
+	}
+}
+
 func (ev *evaluation) entityUses(e config.EntityConfig, use func(id, field, where string)) {
-	id := e.ID()
-	for _, f := range e.PrimaryKey {
-		use(id, f, "primaryKey")
-	}
-	for _, k := range e.UniqueKeys {
-		for _, f := range k {
-			use(id, f, "uniqueKeys")
+	configrefs.FieldUses(e, ev.resolve, func(u configrefs.FieldUse) {
+		switch u.Kind {
+		case configrefs.UsePrimaryKey:
+			use(u.Entity, u.Field, "primaryKey")
+		case configrefs.UseUniqueKey:
+			use(u.Entity, u.Field, "uniqueKeys")
+		case configrefs.UseRelationship:
+			use(u.Entity, u.Field, "relationship "+e.ID()+"."+u.Relationship)
+		case configrefs.UseTenantPolicy, configrefs.UseFieldACL, configrefs.UseRowPolicy:
+			use(u.Entity, u.Field, "access")
+		default: // a use this does not know: still one, named as it is
+			use(u.Entity, u.Field, u.Kind)
 		}
-	}
-	for _, f := range configrefs.FilterFields(e.TenantPolicy) {
-		use(id, f, "access")
-	}
-	for _, policy := range e.RowPolicies {
-		for _, f := range configrefs.FilterFields(policy) {
-			use(id, f, "access")
-		}
-	}
-	for _, acl := range e.FieldACL {
-		for _, f := range slices.Concat(acl.Read, acl.Write) {
-			use(id, f, "access")
-		}
-	}
-	for _, r := range e.Relationships {
-		where := "relationship " + id + "." + r.Name
-		target, ok := ev.resolve(r.Target)
-		for local, remote := range r.JoinOn {
-			use(id, local, where)
-			if ok {
-				use(target, remote, where)
-			}
-		}
-	}
+	})
 }
 
 // fieldReferences lists what references a field of the entity id besides
@@ -98,25 +83,38 @@ func (ev *evaluation) fieldReferences(id, field string) []string {
 	return out
 }
 
-// dropGrantField removes a field from the field lists of the grants on id.
-func (ev *evaluation) dropGrantField(id, field string) {
+// dropGrantFields removes the fields a sync removed (dropped) from the field
+// lists of the grants on their entities, in one pass over the grants: a
+// sync may remove thousands. A grant left with no field reads none of its
+// entity, which the report says.
+func (ev *evaluation) dropGrantFields() {
+	if len(ev.dropped) == 0 {
+		return
+	}
 	for _, p := range ev.principals() {
 		grants := ev.grantsOf(p)
 		var out []config.GrantConfig
 		for i, g := range grants {
-			if g.Fields == nil || !slices.Contains(g.Fields.Read, field) && !slices.Contains(g.Fields.Write, field) {
+			if g.Fields == nil {
 				continue
 			}
-			if on, ok := ev.resolve(g.Entity); !ok || on != id {
+			on, ok := ev.resolve(g.Entity)
+			gone := ev.dropped[on].fields
+			if !ok || !slices.ContainsFunc(slices.Concat(g.Fields.Read, g.Fields.Write), func(f string) bool {
+				return slices.Contains(gone, f)
+			}) {
 				continue
 			}
 			if out == nil {
 				out = slices.Clone(grants)
 			}
 			without := func(fs []string) []string {
-				return slices.DeleteFunc(slices.Clone(fs), func(f string) bool { return f == field })
+				return slices.DeleteFunc(slices.Clone(fs), func(f string) bool { return slices.Contains(gone, f) })
 			}
 			out[i].Fields = &config.FieldACLConfig{Read: without(g.Fields.Read), Write: without(g.Fields.Write)}
+			if len(out[i].Fields.Read) == 0 && len(out[i].Fields.Write) == 0 {
+				ev.except(Exception{Kind: ExceptionGrantFieldsEmptied, Ref: ev.dropped[on].ref, Entity: on, Detail: p.String()})
+			}
 		}
 		if out != nil {
 			ev.setGrants(p, out)

@@ -51,8 +51,8 @@ func TestFixtureHandChecked(t *testing.T) {
 		t.Fatal(err)
 	}
 	row := res.Rows[0]
-	if row[0] != int64(12) || row[1] != int64(10) {
-		t.Fatalf("count(*)=%v count(val)=%v, want 12 and 10", row[0], row[1])
+	if row[0] != int64(14) || row[1] != int64(10) {
+		t.Fatalf("count(*)=%v count(val)=%v, want 14 and 10", row[0], row[1])
 	}
 	if row[2].(*big.Rat).Cmp(big.NewRat(41, 1)) != 0 {
 		t.Fatalf("sum(val)=%v, want 41", row[2])

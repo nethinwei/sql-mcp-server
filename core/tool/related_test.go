@@ -20,6 +20,12 @@ import (
 // of region CN only (and not their phone), and the items.
 func relatedContext(t *testing.T) (Context, *storetest.FakeDB) {
 	t.Helper()
+	return relatedContextOf(t, func(*entity.Entity) {})
+}
+
+// relatedContextOf is relatedContext with orders changed by edit.
+func relatedContextOf(t *testing.T, edit func(orders *entity.Entity)) (Context, *storetest.FakeDB) {
+	t.Helper()
 	keyed := func(name string, fields ...string) entity.Entity {
 		e := entity.Entity{Name: name, Source: name, Keys: []entity.Key{{Columns: []string{"id"}, Primary: true}},
 			MCP: entity.MCPFlags{DMLTools: true}}
@@ -34,6 +40,7 @@ func relatedContext(t *testing.T) (Context, *storetest.FakeDB) {
 		{Name: "items", Target: "items", Cardinality: "has-many", JoinOn: map[string]string{"id": "order_id"}},
 		{Name: "buyer", Target: "customers", Cardinality: "belongs-to", JoinOn: map[string]string{"note": "region"}},
 	}
+	edit(&orders)
 	customers := keyed("customers", "region", "phone")
 	customers.Attributes = append(customers.Attributes, entity.Attribute{Name: "secret", Mask: "email"})
 	items := keyed("items", "order_id", "sku")
@@ -70,7 +77,7 @@ func TestReadAcrossRelationships(t *testing.T) {
 	want := `SELECT "_"."id", "_"."amount" FROM "orders" AS "_" LEFT JOIN "customers" AS "customer" ON ` +
 		`"customer"."id" = "_"."customer_id" AND "customer"."region" = $1 WHERE ("customer"."region" = $2 AND ` +
 		`EXISTS (SELECT 1 FROM "items" AS "x1" WHERE "x1"."order_id" = "_"."id" AND "x1"."sku" LIKE $3)) ` +
-		`ORDER BY CASE WHEN "customer"."region" IS NULL THEN 1 ELSE 0 END, "customer"."region" DESC, "_"."id" ASC LIMIT 5`
+		`ORDER BY "customer"."region" DESC NULLS LAST, "_"."id" ASC LIMIT 5`
 	if got := db.Queries[0].Query; got != want {
 		t.Fatalf("sql = %s\nwant  %s", got, want)
 	}
@@ -86,7 +93,7 @@ func TestAggregateByRelatedField(t *testing.T) {
 		"orderBy":[{"field":"sum_amount","dir":"desc"}],"limit":3}`), tc)
 	want := `SELECT "customer"."region", SUM("_"."amount") FROM "orders" AS "_" LEFT JOIN "customers" AS "customer" ON ` +
 		`"customer"."id" = "_"."customer_id" AND "customer"."region" = $1 GROUP BY "customer"."region" ` +
-		`ORDER BY CASE WHEN SUM("_"."amount") IS NULL THEN 1 ELSE 0 END, SUM("_"."amount") DESC LIMIT 3`
+		`ORDER BY SUM("_"."amount") DESC NULLS LAST LIMIT 3`
 	if got := db.Queries[0].Query; got != want {
 		t.Fatalf("sql = %s\nwant  %s", got, want)
 	}
@@ -125,5 +132,91 @@ func TestRelationshipRules(t *testing.T) {
 	if _, err := (UpdateTool{}).Run(context.Background(), json.RawMessage(update), tc); !errors.Is(err,
 		ErrInvalidInput) || !strings.Contains(err.Error(), "exists") {
 		t.Errorf("update by exists: %v", err)
+	}
+}
+
+// A masked join column is compared by any join the caller's request asks
+// for (a related field filtered or ordered by, an exists, an expansion,
+// whose children carry the target's equal value): refused, as the field
+// itself would be, on either side of the join, and before any query, as is
+// an expansion across datasources.
+func TestMaskedJoinColumnIsCompared(t *testing.T) {
+	t.Parallel()
+	tc, db := relatedContextOf(t, func(orders *entity.Entity) { orders.Attributes[1].Mask = "full" })
+	for _, input := range []string{
+		`{"entity":"orders","filter":[{"field":"customer.region","op":"eq","value":"CN"}]}`,
+		`{"entity":"orders","filter":[{"exists":"customer","filter":[]}]}`,
+		`{"entity":"orders","orderBy":[{"field":"customer.region"}],"limit":5}`,
+		`{"entity":"orders","expand":["customer"],"limit":5}`,
+		`{"entity":"orders","fields":["id"],"expand":["customer"],"limit":5}`,
+	} {
+		if _, err := (ReadTool{}).Run(context.Background(), json.RawMessage(input), tc); !errors.Is(err,
+			ErrInvalidInput) || len(db.Queries) != 0 {
+			t.Errorf("%s: err = %v, want %v before any query (%d ran)", input, err, ErrInvalidInput, len(db.Queries))
+		}
+	}
+	tc, db = relatedContextOf(t, func(orders *entity.Entity) {
+		orders.Relations = append(orders.Relations, entity.Relationship{Name: "contact", Target: "customers",
+			Cardinality: "has-many", JoinOn: map[string]string{"note": "secret"}})
+	})
+	for _, input := range []string{
+		`{"entity":"orders","filter":[{"exists":"contact","filter":[]}]}`,
+		`{"entity":"orders","expand":["contact"],"limit":5}`,
+	} {
+		if _, err := (ReadTool{}).Run(context.Background(), json.RawMessage(input), tc); !errors.Is(err,
+			ErrInvalidInput) || len(db.Queries) != 0 {
+			t.Errorf("%s: err = %v, want %v before any query (%d ran)", input, err, ErrInvalidInput, len(db.Queries))
+		}
+	}
+	elsewhere, db := relatedContextOf(t, func(orders *entity.Entity) { orders.DataSource = "elsewhere" })
+	if _, err := (ReadTool{}).Run(context.Background(), json.RawMessage(
+		`{"entity":"orders","expand":["customer"],"limit":5}`), elsewhere); !errors.Is(err, ErrInvalidInput) ||
+		len(db.Queries) != 0 {
+		t.Errorf("expand across datasources: err = %v, %d queries", err, len(db.Queries))
+	}
+	if _, err := (ReadTool{}).Run(context.Background(), json.RawMessage(
+		`{"entity":"orders","expand":["customer"],"limit":5}`), tc); err != nil {
+		t.Errorf("expand on unmasked columns: %v", err)
+	}
+}
+
+// An exists filter reads only the fields it compares and joins on: grants
+// of the target that differ in other fields do not make it ambiguous.
+func TestExistsReadsOnlyWhatItCompares(t *testing.T) {
+	t.Parallel()
+	orders := entity.Entity{Name: "orders", Source: "orders", MCP: entity.MCPFlags{DMLTools: true},
+		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
+		Attributes: []entity.Attribute{{Name: "id"}},
+		Relations: []entity.Relationship{{Name: "items", Target: "items", Cardinality: "has-many",
+			JoinOn: map[string]string{"id": "order_id"}}},
+	}
+	items := entity.Entity{Name: "items", Source: "items", MCP: entity.MCPFlags{DMLTools: true},
+		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
+		Attributes: []entity.Attribute{{Name: "id"}, {Name: "order_id"}, {Name: "sku"}, {Name: "qty"}},
+	}
+	reg, err := entity.NewRegistry([]entity.Entity{orders, items})
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := []entity.Action{entity.ActionRead}
+	policy := rbac.Policy{Roles: map[string]map[string][]rbac.Grant{"analyst": {
+		"orders": {{ID: "o", Actions: read}},
+		"items": {
+			{ID: "sku", Actions: read, Fields: &entity.FieldPermissions{Read: []string{"order_id", "sku"}}},
+			{ID: "qty", Actions: read, Fields: &entity.FieldPermissions{Read: []string{"order_id", "qty"}}},
+		},
+	}}}
+	db := &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		return storetest.NewFakeRows([]string{"id"}), nil
+	}}
+	tc := Context{Services: &Services{Registry: reg, Authorizer: rbac.NewGrantAuthorizer(reg, policy)},
+		Role: "analyst", DB: db, Dialect: testdialect.Postgres{}}
+	if _, err := (ReadTool{}).Run(context.Background(), json.RawMessage(`{"entity":"orders",
+		"filter":[{"exists":"items","filter":[{"field":"sku","op":"eq","value":"A"}]}]}`), tc); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (ReadTool{}).Run(context.Background(), json.RawMessage(`{"entity":"orders",
+		"filter":[{"exists":"items","filter":[]}]}`), tc); err != nil {
+		t.Fatal(err)
 	}
 }

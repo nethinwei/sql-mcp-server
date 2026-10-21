@@ -47,7 +47,7 @@ type Service interface {
 	PreviewInWorkspace(ctx context.Context, p configplan.Plan, review bool) (*configapp.Preview, error)
 	Previewed(ctx context.Context, planID string) (*configapp.Preview, error)
 	Revisions(ctx context.Context, limit int) ([]revision.Revision, error)
-	ScanBatches(ctx context.Context, datasource string) ([]configapp.ScanBatch, error)
+	ScanBatchesWithItems(ctx context.Context, datasource string) ([]configapp.ScanBatch, error)
 	SchemaList(ctx context.Context, datasource string, refresh bool) (*configapp.SchemaList, error)
 	Simulate(ctx context.Context, in configapp.SimulateRequest) (*configapp.Simulation, error)
 	StartScanBatch(ctx context.Context, in configapp.ScanBatchInput) (*configapp.ScanBatch, error)
@@ -113,8 +113,9 @@ const tokenKey ctxKey = iota
 
 func authenticate(tokens Tokens, admins accounts.Store, opts Options, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok || token == "" {
+		// The scheme is case-insensitive (RFC 9110), as on /mcp.
+		scheme, token, ok := strings.Cut(strings.TrimSpace(r.Header.Get("Authorization")), " ")
+		if !ok || !strings.EqualFold(scheme, "Bearer") || strings.TrimSpace(token) == "" {
 			unauthorized(w)
 			return
 		}

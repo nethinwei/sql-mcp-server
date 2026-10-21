@@ -94,3 +94,64 @@ func TestOnlyEntityToolsHaveTheirEntityResolved(t *testing.T) {
 		t.Fatalf("procedure input = %s, %v", got, err)
 	}
 }
+
+// A call naming its entity ambiguously is refused, and audited with the
+// masked fields of every entity it may name redacted.
+func TestAmbiguousReferenceIsAuditedRedacted(t *testing.T) {
+	t.Parallel()
+	tenants := func(datasource, schema string) entity.Entity {
+		return entity.Entity{
+			Name: entity.ID(datasource, schema, "tenants"), Local: "tenants", DataSource: datasource, Schema: schema,
+			Source: "tenants", MCP: entity.MCPFlags{DMLTools: true},
+			Attributes: []entity.Attribute{{Name: "id"}, {Name: "secret", Mask: "full"}},
+		}
+	}
+	shop, warehouse := tenants("shop", "crm"), tenants("warehouse", "logistics")
+	reg, err := entity.NewRegistry([]entity.Entity{shop, warehouse})
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := []rbac.Grant{{ID: "g", Actions: []entity.Action{entity.ActionCreate}}}
+	authz := rbac.NewGrantAuthorizer(reg, rbac.Policy{Roles: map[string]map[string][]rbac.Grant{
+		"both": {shop.Name: write, warehouse.Name: write},
+	}})
+	aud := &recorderAuditor{}
+	input, _ := json.Marshal(createInput{Entity: "tenants", Values: map[string]any{"id": 1, "secret": "hunter2"}})
+	_, err = RunTool(context.Background(), CreateTool{}, input,
+		Context{Services: &Services{Registry: reg, Authorizer: authz, Auditor: aud}, Role: "both"})
+	var ambiguous *AmbiguousEntityError
+	if !errors.As(err, &ambiguous) || len(aud.events) != 1 {
+		t.Fatalf("err = %v, events = %+v", err, aud.events)
+	}
+	if got := string(aud.events[0].Input); strings.Contains(got, "hunter2") {
+		t.Fatalf("audited %s", got)
+	}
+}
+
+// A call naming an entity that does not resolve (a typo, or one a reload
+// removed) cannot tell its masked fields: it is audited with every field
+// value redacted, ambiguous or unknown alike.
+func TestUnresolvedReferenceIsAuditedRedacted(t *testing.T) {
+	t.Parallel()
+	reg, err := entity.NewRegistry([]entity.Entity{testUsersEntity()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []string{
+		`{"entity":"patients","values":{"id":1,"ssn":"078-05-1120"}}`,
+		`{"entity":"","values":{"id":1,"ssn":"078-05-1120"}}`,
+		`{"entity":"patients","filter":[{"field":"ssn","op":"eq","value":"078-05-1120"}]}`,
+	} {
+		aud := &recorderAuditor{}
+		_, _ = RunTool(context.Background(), CreateTool{}, json.RawMessage(input),
+			Context{Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Auditor: aud},
+				Role: "writer"})
+		if len(aud.events) != 1 || strings.Contains(string(aud.events[0].Input), "078-05-1120") {
+			t.Fatalf("%s audited %+v", input, aud.events)
+		}
+	}
+	// A call naming no entity has no field values to tell apart: kept.
+	if got := sensitiveFields("list_entities", json.RawMessage(`{}`), reg); len(got) != 0 {
+		t.Fatalf("sensitive fields of a call naming no entity = %v", got)
+	}
+}

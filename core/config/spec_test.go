@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -137,11 +138,63 @@ func TestResolve(t *testing.T) {
 	if _, err := Resolve(nil); err == nil {
 		t.Fatal("a configuration without a database resolved")
 	}
+	legacy := &DatabaseSpec{Driver: ptr("postgres"), DSN: ptr("y")}
+	if _, err := Resolve(&Spec{Database: legacy, Databases: db}); !errors.Is(err, ErrLegacyDatabase) {
+		t.Fatalf("Resolve(database and databases) = %v, want ErrLegacyDatabase", err)
+	}
+	if cfg, err := Resolve(&Spec{Database: legacy}); err != nil || cfg.Databases["default"].DSN != "y" {
+		t.Fatalf("Resolve(the legacy database) = %+v, %v", cfg, err)
+	}
+	// A configuration in effect written out writes both, the same.
+	migrated := Map[string, DatabaseSpec]{"default": *legacy}
+	if _, err := Resolve(&Spec{Database: legacy, Databases: migrated}); err != nil {
+		t.Fatalf("Resolve(the legacy database migrated) = %v", err)
+	}
 }
 
 func TestListAndMapIsZero(t *testing.T) {
 	if !(List[int](nil)).IsZero() || (List[int]{}).IsZero() || !(Map[string, int](nil)).IsZero() ||
 		(Map[string, int]{}).IsZero() {
 		t.Fatal("only nil is unset")
+	}
+}
+
+// Resolving a Spec leaves it as written: normalizing the configuration
+// changes copies of its lists, never the Spec another caller may share.
+func TestResolveLeavesTheSpec(t *testing.T) {
+	t.Parallel()
+	subjects := List[string]{"DNS:Alice.Example.com"}
+	spec := &Spec{
+		Databases: Map[string, DatabaseSpec]{"shop": {Driver: ptr("postgres"), DSN: ptr("x")}},
+		Users:     Map[string, UserSpec]{"alice": {CertSubjects: subjects, Roles: List[string]{"Reader"}}},
+		Roles:     Map[string, RoleDefinitionSpec]{"reader": {}},
+	}
+	if _, err := Resolve(spec); err != nil {
+		t.Fatal(err)
+	}
+	if subjects[0] != "DNS:Alice.Example.com" || spec.Users["alice"].Roles[0] != "Reader" {
+		t.Fatalf("Resolve changed the Spec: %v %v", subjects, spec.Users["alice"].Roles)
+	}
+}
+
+// The containers a configuration and its Spec share: Resolve copies lists
+// and maps one level deep (normalizing replaces their elements, never what
+// is inside them), and SpecOf copies none.
+func TestSpecAndConfigShareInnerContainers(t *testing.T) {
+	cfg := Config{Entities: []EntityConfig{{
+		Name: "orders", Roles: RoleConfig{Read: []string{"ops"}}, UniqueKeys: [][]string{{"code"}},
+	}}}
+	spec := SpecOf(&cfg)
+	if spec.Entities[0].Roles.Read[0] = "dev"; cfg.Entities[0].Roles.Read[0] != "dev" {
+		t.Fatal("SpecOf copied a list")
+	}
+	resolved := spec.config()
+	resolved.Entities[0].Roles.Read[0] = "admin"
+	if got := spec.Entities[0].Roles.Read[0]; got != "dev" {
+		t.Fatalf("a list element written in the configuration reached the Spec: %q", got)
+	}
+	resolved.Entities[0].UniqueKeys[0][0] = "id"
+	if got := spec.Entities[0].UniqueKeys[0][0]; got != "id" {
+		t.Fatalf("an inner list was copied: %q", got)
 	}
 }

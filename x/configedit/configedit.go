@@ -64,7 +64,8 @@ func Apply(base []byte, edit Edit) (*config.Config, []byte, error) {
 // ApplySpec returns the configuration base with edit applied: what it says,
 // what it resolves to, and its payload. The result is validated as a whole,
 // so an edit may add a user and a budget for it at once. base is left as it
-// is.
+// is, and may be shared by edits applied at once, when it is canonical, as a
+// decoded payload is: making the result canonical then writes nothing of it.
 func ApplySpec(base *config.Spec, edit Edit) (*config.Spec, *config.Config, []byte, error) {
 	spec := *base
 	if err := applySettings(&spec, edit.Settings); err != nil {
@@ -73,11 +74,7 @@ func ApplySpec(base *config.Spec, edit Edit) (*config.Spec, *config.Config, []by
 	if err := applySections(&spec, edit); err != nil {
 		return nil, nil, nil, err
 	}
-	payload, err := revisionops.Normalize(&spec)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	cfg, err := config.Resolve(&spec)
+	payload, cfg, err := revisionops.NormalizeResolved(&spec)
 	if err != nil {
 		return nil, nil, nil, err
 	}

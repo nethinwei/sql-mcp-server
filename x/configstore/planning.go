@@ -85,7 +85,7 @@ func (s *SQLStore) PutPlanTemplate(ctx context.Context, t PlanTemplate, expected
 			return fmt.Errorf("%w: %q is at version %d, not %d", ErrTemplateConflict, t.Name, current.Version, expected)
 		}
 		t.Version = current.Version + 1
-		return s.writeTemplate(ctx, tx, t)
+		return s.writeTemplate(ctx, tx, t, exists)
 	})
 	if err != nil {
 		return PlanTemplate{}, fmt.Errorf("configstore: save plan template: %w", err)
@@ -93,12 +93,22 @@ func (s *SQLStore) PutPlanTemplate(ctx context.Context, t PlanTemplate, expected
 	return t, nil
 }
 
-func (s *SQLStore) writeTemplate(ctx context.Context, tx *sql.Tx, t PlanTemplate) error {
-	if _, err := s.exec(ctx, tx, "DELETE FROM smcp_plan_templates WHERE name = ?", t.Name); err != nil {
-		return err
-	}
+// writeTemplate writes version t.Version of a template: the row in place of
+// the version before it (still there: a template deleted meanwhile is not
+// brought back), or a new one.
+func (s *SQLStore) writeTemplate(ctx context.Context, tx *sql.Tx, t PlanTemplate, exists bool) error {
 	args := []any{t.Name, string(t.Plan), boolInt(t.Recurring), t.Version, t.Author, toMicros(t.UpdatedAt)}
-	if _, err := s.exec(ctx, tx, "INSERT INTO smcp_plan_templates ("+templateColumns+
+	if exists {
+		r, err := s.exec(ctx, tx, "UPDATE smcp_plan_templates SET payload = ?, recurring = ?, version = ?, author = ?, "+
+			"updated_us = ? WHERE name = ? AND version = ?", string(t.Plan), boolInt(t.Recurring), t.Version, t.Author,
+			toMicros(t.UpdatedAt), t.Name, t.Version-1)
+		if err != nil {
+			return err
+		}
+		if n, err := r.RowsAffected(); err == nil && n != 1 {
+			return fmt.Errorf("%w: %q changed meanwhile", ErrTemplateConflict, t.Name)
+		}
+	} else if _, err := s.exec(ctx, tx, "INSERT INTO smcp_plan_templates ("+templateColumns+
 		") VALUES (?, ?, ?, ?, ?, ?)", args...); err != nil {
 		return err
 	}
@@ -107,9 +117,10 @@ func (s *SQLStore) writeTemplate(ctx context.Context, tx *sql.Tx, t PlanTemplate
 	return err
 }
 
-// DeletePlanTemplate removes a template and its versions.
+// DeletePlanTemplate removes a template and its versions, under the store
+// lock as saving one is.
 func (s *SQLStore) DeletePlanTemplate(ctx context.Context, name string) error {
-	return s.withTx(ctx, func(tx *sql.Tx) error {
+	return s.locked(ctx, func(tx *sql.Tx) error {
 		res, err := s.exec(ctx, tx, "DELETE FROM smcp_plan_templates WHERE name = ?", name)
 		if err != nil {
 			return fmt.Errorf("configstore: delete plan template: %w", err)

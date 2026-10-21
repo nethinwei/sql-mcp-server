@@ -112,7 +112,7 @@ type bearer struct{ token string }
 
 func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
 	r = r.Clone(r.Context())
-	r.Header.Set("Authorization", "Bearer "+b.token)
+	r.Header.Set("Authorization", "bearer "+b.token) // the scheme in any case
 	return http.DefaultTransport.RoundTrip(r)
 }
 
@@ -511,5 +511,21 @@ func TestRetiredReadOnlyTokensAreRefused(t *testing.T) {
 	token := e.scopedToken(t, "root", time.Time{}, configstore.TokenScope{ReadOnly: true})
 	if _, err := connect(t, e.url, token); err == nil {
 		t.Fatal("a read-only token connected")
+	}
+}
+
+// A diff's lines are counted as there are: the newline ending the last one
+// starts no other.
+func TestDiffPageCountsItsLines(t *testing.T) {
+	t.Parallel()
+	page := diffPage("a\nb\n", 0, 0)
+	if page["total"] != 2 || page["diff"] != "a\nb\n" {
+		t.Fatalf("page = %+v", page)
+	}
+	if page := diffPage("a\nb", 1, 0); page["total"] != 2 || page["diff"] != "b" {
+		t.Fatalf("page = %+v", page)
+	}
+	if page := diffPage("", 0, 0); page["total"] != 0 {
+		t.Fatalf("page = %+v", page)
 	}
 }

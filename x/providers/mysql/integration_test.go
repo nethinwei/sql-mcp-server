@@ -6,9 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/testcontainers/testcontainers-go"
 	tcmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
@@ -19,19 +21,25 @@ import (
 	"github.com/nethinwei/sql-mcp-server/internal/escapetest"
 	"github.com/nethinwei/sql-mcp-server/internal/insertkeytest"
 	"github.com/nethinwei/sql-mcp-server/internal/numbertest"
+	"github.com/nethinwei/sql-mcp-server/internal/tcstart"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
 )
 
-// startMySQL starts a MySQL container and returns its DSN.
-func startMySQL(t testing.TB) (string, func()) {
+// startMySQL starts a MySQL container, with the server options given, and
+// returns its DSN.
+func startMySQL(t testing.TB, options ...string) (string, func()) {
 	t.Helper()
 	ctx := context.Background()
-	container, err := tcmysql.Run(ctx, "mysql:8",
-		tcmysql.WithDatabase("test"),
-		tcmysql.WithUsername("test"),
-		tcmysql.WithPassword("test"),
-	)
+	container, err := tcstart.Run(ctx, func(publish tcstart.Publish) (*tcmysql.MySQLContainer, error) {
+		return tcmysql.Run(ctx, "mysql:8",
+			tcmysql.WithDatabase("test"),
+			tcmysql.WithUsername("test"),
+			tcmysql.WithPassword("test"),
+			testcontainers.WithCmdArgs(options...),
+			publish,
+		)
+	}, "3306/tcp", "33060/tcp")
 	if err != nil {
 		t.Fatalf("start mysql container: %v", err)
 	}
@@ -308,6 +316,11 @@ func TestMySQLUpdateUnsafeWriteAndPK(t *testing.T) {
 	if res.Content[0]["rowsAffected"] != int64(1) {
 		t.Fatalf("rowsAffected = %v, want 1", res.Content[0]["rowsAffected"])
 	}
+	// The same update again matches the row, as on PostgreSQL, though it
+	// changes nothing.
+	if res, err = (tool.UpdateTool{}).Run(ctx, pkUpd, tc); err != nil || res.Content[0]["rowsAffected"] != int64(1) {
+		t.Fatalf("an update changing nothing: rowsAffected = %v, %v", res.Content[0]["rowsAffected"], err)
+	}
 }
 
 func TestMySQLExecuteProcedure(t *testing.T) {
@@ -470,4 +483,40 @@ func TestMySQLInsertedKey(t *testing.T) {
 	prov, cleanup := setupMySQL(t)
 	defer cleanup()
 	insertkeytest.Run(t, "mysql", prov, "")
+}
+
+// A statement without arguments takes the text protocol, one with them the
+// binary one: the integers of the same columns read the same either way.
+func TestMySQLIntegersReadTheSameByEitherProtocol(t *testing.T) {
+	prov, cleanup := setupMySQL(t)
+	defer cleanup()
+	ctx := context.Background()
+	if _, err := prov.ExecContext(ctx, "CREATE TABLE counters (id bigint unsigned PRIMARY KEY, n int)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prov.ExecContext(ctx, "INSERT INTO counters VALUES (5, 7), (18446744073709551615, 8)"); err != nil {
+		t.Fatal(err)
+	}
+	read := func(query string, args ...any) [][]any {
+		rows, err := prov.QueryContext(ctx, query, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var out [][]any
+		for rows.Next() {
+			row := make([]any, 2)
+			if err := rows.Scan(&row[0], &row[1]); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, row)
+		}
+		return out
+	}
+	text := read("SELECT id, n FROM counters ORDER BY n")
+	binary := read("SELECT id, n FROM counters WHERE n > ? ORDER BY n", 0)
+	want := [][]any{{uint64(5), int64(7)}, {uint64(18446744073709551615), int64(8)}}
+	if !reflect.DeepEqual(text, want) || !reflect.DeepEqual(binary, want) {
+		t.Fatalf("text protocol %#v, binary %#v, want %#v", text, binary, want)
+	}
 }

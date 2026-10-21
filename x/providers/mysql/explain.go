@@ -2,36 +2,29 @@ package mysql
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"strconv"
 	"strings"
 
 	"github.com/nethinwei/sql-mcp-server/core/cost"
+	"github.com/nethinwei/sql-mcp-server/x/providers/sqladapter"
 )
 
 // mysqlExplainer estimates a plan via EXPLAIN FORMAT=JSON.
 type mysqlExplainer struct {
-	db *sql.DB
-	// classify classifies the errors of EXPLAIN as those of statements, so
-	// the gate tells a schema change from a plan it could not get.
-	classify func(error) error
+	pool *sqladapter.Pool
 }
 
 // Explain implements cost.Explainer. MySQL estimates are less trustworthy, so
-// the gate weakens this layer (see NewGateFromCapabilities). Parse failures
-// degrade to ScanUnknown.
+// the gate weakens this layer (see NewGateFromCapabilities). A plan that does
+// not parse degrades to ScanUnknown; one that cannot be read is an error,
+// classified as the statement's (see sqladapter.Pool.Explain).
 func (e mysqlExplainer) Explain(ctx context.Context, query string, args []any) (cost.Plan, error) {
-	rows, err := e.db.QueryContext(ctx, "EXPLAIN FORMAT=JSON "+query, args...)
+	raw, err := e.pool.Explain(ctx, "EXPLAIN FORMAT=JSON "+query, args, "")
 	if err != nil {
-		return cost.Plan{}, e.classify(err)
+		return cost.Plan{}, err
 	}
-	defer func() { _ = rows.Close() }()
-	if !rows.Next() {
-		return cost.Plan{ScanType: cost.ScanUnknown}, nil
-	}
-	var raw string
-	if err := rows.Scan(&raw); err != nil {
+	if raw == "" {
 		return cost.Plan{ScanType: cost.ScanUnknown}, nil
 	}
 	return ParseExplain([]byte(raw))

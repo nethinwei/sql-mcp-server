@@ -1,15 +1,22 @@
 package mysql
 
 import (
+	"context"
+	"errors"
 	"testing"
+	"time"
+
+	mysqldriver "github.com/go-sql-driver/mysql"
 
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
+	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
 )
 
 func TestLimits(t *testing.T) {
 	t.Parallel()
-	pooled := providerregistry.Options{Pooler: providerregistry.PoolerTransaction}
+	timed := providerregistry.Options{Timeout: time.Second}
+	pooled := providerregistry.Options{Timeout: time.Second, Pooler: providerregistry.PoolerTransaction}
 	tests := []struct {
 		name                 string
 		dsn                  string
@@ -17,21 +24,23 @@ func TestLimits(t *testing.T) {
 		variable             string
 		read, write, unkeyed dialect.Strength
 	}{
-		{"injected", "u:p@tcp(h)/db", providerregistry.Options{}, "",
+		{"injected", "u:p@tcp(h)/db", timed, "",
 			dialect.Enforced, dialect.Enforced, dialect.Enforced},
-		{"DSN timeout", "u:p@tcp(h)/db?max_execution_time=0", providerregistry.Options{}, "",
+		{"DSN timeout", "u:p@tcp(h)/db?max_execution_time=0", timed, "",
 			dialect.BestEffort, dialect.Enforced, dialect.Enforced},
-		{"DSN safe updates off", "u:p@tcp(h)/db?sql_safe_updates=0", providerregistry.Options{}, "",
+		{"DSN safe updates off", "u:p@tcp(h)/db?sql_safe_updates=0", timed, "",
 			dialect.Enforced, dialect.Enforced, dialect.Unsupported},
-		{"DSN safe updates on", "u:p@tcp(h)/db?sql_safe_updates=ON", providerregistry.Options{}, "",
+		{"DSN names in upper case", "u:p@tcp(h)/db?SQL_SAFE_UPDATES=0&Max_Execution_Time=0", timed,
+			"", dialect.BestEffort, dialect.Enforced, dialect.Unsupported},
+		{"DSN safe updates on", "u:p@tcp(h)/db?sql_safe_updates=ON", timed, "",
 			dialect.Enforced, dialect.Enforced, dialect.Enforced},
-		{"DSN safe updates not understood", "u:p@tcp(h)/db?sql_safe_updates=2", providerregistry.Options{}, "",
+		{"DSN safe updates not understood", "u:p@tcp(h)/db?sql_safe_updates=2", timed, "",
 			dialect.Enforced, dialect.Enforced, dialect.BestEffort},
 		{"pooler", "u:p@tcp(h)/db", pooled, "",
 			dialect.BestEffort, dialect.Unsupported, dialect.BestEffort},
-		{"oceanbase injected", "u:p@tcp(h)/db", providerregistry.Options{}, "ob_query_timeout",
+		{"oceanbase injected", "u:p@tcp(h)/db", timed, "ob_query_timeout",
 			dialect.Enforced, dialect.Enforced, dialect.Enforced},
-		{"oceanbase DSN timeout", "u:p@tcp(h)/db?ob_query_timeout=0", providerregistry.Options{}, "ob_query_timeout",
+		{"oceanbase DSN timeout", "u:p@tcp(h)/db?ob_query_timeout=0", timed, "ob_query_timeout",
 			dialect.BestEffort, dialect.BestEffort, dialect.Enforced},
 	}
 	for _, test := range tests {
@@ -51,6 +60,102 @@ func TestLimits(t *testing.T) {
 			if p.Claim(k).Reason.Text == "" {
 				t.Errorf("%s: %s has no reason", test.name, k)
 			}
+		}
+	}
+}
+
+// A DSN setting a variable twice, in different cases, is refused: which one
+// the server applies last is unknown.
+func TestLimitsRefuseAVariableSetTwice(t *testing.T) {
+	t.Parallel()
+	if _, err := Limits("u:p@tcp(h)/db?sql_safe_updates=1&SQL_SAFE_UPDATES=0", providerregistry.Options{}); err == nil {
+		t.Fatal("a variable set twice was accepted")
+	}
+}
+
+// Without a timeout (cost.queryTimeout 0) the adapter opens, sets none, and
+// says so.
+func TestOpenWithoutATimeout(t *testing.T) {
+	t.Parallel()
+	for _, variable := range []string{"", "ob_query_timeout"} {
+		p, err := LimitsFor("u:p@tcp(h)/db", providerregistry.Options{}, variable)
+		if err != nil || p.Claim(dialect.TimeoutRead).Strength != dialect.Unsupported ||
+			p.Claim(dialect.UnkeyedWrite).Strength != dialect.Enforced {
+			t.Fatalf("%q: limits = %+v, %v", variable, p, err)
+		}
+		pool, caps, err := NewAdapter("u:p@tcp(h)/db", providerregistry.Options{Lazy: true}, variable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = pool.Close()
+		if c := caps.Claim(dialect.TimeoutWrite); c.Strength != dialect.Unsupported {
+			t.Fatalf("%q: timeout = %+v", variable, c)
+		}
+	}
+}
+
+// A connection that cannot be made is that, not a statement whose
+// connection broke while it ran (its outcome unknown): nothing was sent.
+func TestUnreachableServerIsNotConnected(t *testing.T) {
+	t.Parallel()
+	pool, _, err := NewAdapter("u:p@tcp(127.0.0.1:1)/db?timeout=1s",
+		providerregistry.Options{Timeout: time.Second, Lazy: true}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	_, err = pool.ExecContext(context.Background(), "UPDATE t SET a = 1 WHERE id = 1")
+	if !errors.Is(err, store.ErrNotConnected) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// The driver's I/O timeouts a DSN leaves unset are set: the dial's always,
+// a read timeout past the statement timeout when there is one. What the DSN
+// sets, even to 0, stays, and one parameter is not taken for another.
+func TestIOTimeoutDefaults(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		dsn           string
+		timeout       time.Duration
+		dial, readOut time.Duration
+	}{
+		{"u:p@tcp(h)/db", 0, dialTimeout, 0},
+		{"u:p@tcp(h)/db", 30 * time.Second, dialTimeout, 30*time.Second + dialTimeout},
+		{"u:p@tcp(h)/db?timeout=0", 30 * time.Second, 0, 30*time.Second + dialTimeout},
+		{"u:p@tcp(h)/db?readTimeout=5s", 30 * time.Second, dialTimeout, 5 * time.Second},
+		{"u:p@tcp(h)/db?writeTimeout=1s&timeout=2s", 0, 2 * time.Second, 0},
+		{"u:p?timeout=1@tcp(h)/db", 0, dialTimeout, 0}, // in the password
+	} {
+		cfg, err := mysqldriver.ParseDSN(c.dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ioTimeouts(cfg, c.dsn, providerregistry.Options{Timeout: c.timeout})
+		if cfg.Timeout != c.dial || cfg.ReadTimeout != c.readOut {
+			t.Errorf("%s (%v): timeout %v, readTimeout %v; want %v, %v", c.dsn, c.timeout, cfg.Timeout,
+				cfg.ReadTimeout, c.dial, c.readOut)
+		}
+	}
+}
+
+// rowsAffected counts matched rows unless the DSN's own parameter says
+// otherwise: the text in a password is no parameter.
+func TestSessionDefaultsClientFoundRows(t *testing.T) {
+	t.Parallel()
+	for dsn, want := range map[string]bool{
+		"u:p@tcp(h)/db":                       true,
+		"u:p@tcp(h)/db?clientFoundRows=false": false,
+		"u:clientFoundRows=x@tcp(h)/db":       true, // in the password
+	} {
+		cfg, err := mysqldriver.ParseDSN(dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.Params = map[string]string{}
+		sessionDefaults(cfg, dsn)
+		if cfg.ClientFoundRows != want {
+			t.Errorf("%s: ClientFoundRows = %v, want %v", dsn, cfg.ClientFoundRows, want)
 		}
 	}
 }

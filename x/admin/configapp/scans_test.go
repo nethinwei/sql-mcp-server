@@ -21,7 +21,8 @@ import (
 func scansConfig(dsn string) *config.Config {
 	return &config.Config{
 		Databases: map[string]config.DatabaseConfig{"shop": {Driver: "postgres", DSN: dsn}},
-		Entities:  []config.EntityConfig{{Name: "accounts", DataSource: "shop", Schema: "crm"}},
+		Entities: []config.EntityConfig{{Name: "accounts", DataSource: "shop", Schema: "crm",
+			Fields: []config.FieldConfig{{Name: "id"}}}},
 	}
 }
 
@@ -319,5 +320,39 @@ func TestScanBatchRequestKey(t *testing.T) {
 	waitFinished(t, store, first.ID)
 	if runs.Load() != 1 {
 		t.Fatalf("scanned %d times", runs.Load())
+	}
+	// The key of another request: its batch would leave b unscanned.
+	if _, err := scans.startBatch(context.Background(), "shop", "root", "k1", []string{"b"}, counted); err == nil {
+		t.Fatal("a key reused for other schemas got the batch of the first")
+	}
+	other, err := scans.startBatch(context.Background(), "shop", "bob", "k1", []string{"b"}, counted)
+	if err != nil || other.ID == first.ID {
+		t.Fatalf("another administrator's request = %+v, %v", other, err)
+	}
+}
+
+// A catalog of schemas scanned at different times takes the default schema
+// and case of the last scan, whatever order a map visits them in.
+func TestCatalogDefaultIsTheLastScanned(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := catalog.NewMemoryStore()
+	src := source{Datasource: "shop", Driver: "postgres", DSN: "x"}
+	t0 := time.Now()
+	var schemas []catalog.Schema
+	for i := range 8 {
+		schemas = append(schemas, catalog.Schema{Name: fmt.Sprint("s", i), ScannedAt: t0.Add(time.Duration(i) * time.Second),
+			Default: fmt.Sprint("d", i), Tables: []catalog.Table{}})
+	}
+	if err := store.PutCatalogSchemas(ctx, src.ID(), "shop", schemas); err != nil {
+		t.Fatal(err)
+	}
+	for range 20 {
+		scans := NewScans(scanjobs.Options{}, store)
+		cat, _, err := scans.catalogOf(ctx, src)
+		scans.Close()
+		if err != nil || cat.Default != "d7" {
+			t.Fatalf("default = %q, %v", cat.Default, err)
+		}
 	}
 }

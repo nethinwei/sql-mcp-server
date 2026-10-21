@@ -49,6 +49,9 @@ func TestValidateStorePayloadRejectsPlaintextSecrets(t *testing.T) {
 		// The driver grammar rejects these; every grammar is tried instead.
 		{"postgres", "app:hunter2@tcp(db:3306)/app"},
 		{"unknown", "host=db password = hunter2"},
+		// sslpassword decrypts the client key: a secret too.
+		{"postgres", "postgres://app@db/app?sslpassword=hunter2"},
+		{"postgres", "host=db sslpassword=hunter2"},
 	}
 	for _, c := range bad {
 		cfg := &config.Config{Databases: map[string]config.DatabaseConfig{"main": {Driver: c[0], DSN: c[1]}}}
@@ -60,6 +63,19 @@ func TestValidateStorePayloadRejectsPlaintextSecrets(t *testing.T) {
 	shared.Server.Auth.Token = "s3cret"
 	if err := ValidateStorePayload(shared); !errors.Is(err, ErrPlaintextSecret) {
 		t.Fatalf("shared token must be rejected: %v", err)
+	}
+}
+
+// The legacy database section is stored as written, beside databases too:
+// its secrets are refused there as well.
+func TestValidateStorePayloadChecksTheLegacySection(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Database:  config.DatabaseConfig{Driver: "postgres", DSN: "postgres://app:hunter2@db/app"},
+		Databases: map[string]config.DatabaseConfig{"main": {Driver: "postgres", DSN: "${DSN}"}},
+	}
+	if err := ValidateStorePayload(cfg); !errors.Is(err, ErrPlaintextSecret) {
+		t.Fatalf("a legacy section's password must be rejected: %v", err)
 	}
 }
 
@@ -290,5 +306,43 @@ func TestValidConfigurationsPassCheckOffline(t *testing.T) {
 		if err := CheckOffline(cfg); err != nil {
 			t.Errorf("%s validates but cannot be assembled: %v", name, err)
 		}
+	}
+}
+
+// laggingSummary reports the published revision as it was at summary while
+// the store has published another since.
+type laggingSummary struct {
+	revision.Store
+	summary revision.Revision
+}
+
+func (s laggingSummary) PublishedSummary(context.Context) (revision.Revision, error) {
+	return s.summary, nil
+}
+
+// A revision published between the summary a poll reads and the revision it
+// loads is the one that failed: it is the one reported stale.
+func TestWatchStoreReportsTheRevisionLoaded(t *testing.T) {
+	t.Parallel()
+	store := revision.NewMemoryStore(nil)
+	first := publishPayload(t, store, "ok-1")
+	runtime := NewRuntimeWithBuilder(&App{DefaultRole: "ok-1"}, nil)
+	defer runtime.Close()
+	build := func(rev revision.Revision) (*App, error) {
+		if string(rev.Payload) == "broken" {
+			return nil, errors.New("assemble failed")
+		}
+		return &App{DefaultRole: string(rev.Payload)}, nil
+	}
+	summary := publishPayload(t, store, "ok-2")
+	broken := publishPayload(t, store, "broken")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		_ = runtime.WatchStore(ctx, laggingSummary{store, summary}, first.ID, time.Millisecond, build, func(error) {})
+	}()
+	waitFor(t, func() bool { _, ok := runtime.Stale(); return ok })
+	if s, _ := runtime.Stale(); s.RevisionID != broken.ID {
+		t.Fatalf("stale revision = %d, want #%d (the one loaded), not #%d", s.RevisionID, broken.ID, summary.ID)
 	}
 }

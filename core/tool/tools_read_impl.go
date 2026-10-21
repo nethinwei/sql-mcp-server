@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nethinwei/sql-mcp-server/core/budget"
 	"github.com/nethinwei/sql-mcp-server/core/cache"
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
@@ -32,6 +33,7 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 	ctx, tc, end := beginCall(ctx, tc, true, in.Transaction)
 	defer end()
 	start := time.Now()
+	capped := capLimit(tc, &in.Limit)
 	plan, err := prepareReadPlan(ctx, tc, in)
 	if err != nil {
 		return Result{}, err
@@ -47,10 +49,13 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 	// A read across relationships is not cached: writes to their targets
 	// would not invalidate it.
 	cacheable := len(plan.rel.joins) == 0 && !relalg.HasExists(plan.full)
-	if cached, err, ok := readCacheHit(ctx, plan.tc, in, cacheKey); ok && cacheable {
-		return cached, err
+	if cacheable {
+		if cached, err, ok := readCacheHit(ctx, plan.tc, in, cacheKey); ok {
+			return cached, err
+		}
 	}
 	st.keep = expandJoinColumns(plan.res.Entity, in.Expand)
+	_, before := plan.tc.results.counted()
 	got, err := st.query(ctx)
 	if err != nil {
 		return Result{}, err
@@ -58,17 +63,45 @@ func runRead(ctx context.Context, tc Context, in readInput) (Result, error) {
 	if err := expandRows(ctx, plan.tc, plan.res.Entity, got, in.Expand); err != nil {
 		return Result{}, err
 	}
-	trimExpandedJoinFields(plan.res.Entity, in, got.rows)
+	// The cursor first: an ordered field may be a join column the read adds.
 	next := nextCursor(plan.order, plan.res, in, got.rows)
-	trimOrderFields(plan.order, plan.res, in, got.rows)
+	if err := finishReadRows(plan, in, got.rows, before); err != nil {
+		return Result{}, err
+	}
 	recordReadFeedback(ctx, plan.tc, in.Entity, st.sql.Compiled, planTemplate, st.sql.plan,
 		int64(len(got.rows)), time.Since(start))
-	if next == nil && cacheable {
+	// Rows left past the cap that no cursor reaches are reported.
+	truncated := next == nil && capped && int64(len(got.rows)) >= in.Limit
+	if next == nil && !truncated && cacheable {
 		storeReadCache(ctx, plan.tc, in, cacheKey, stamp, got.rows)
 	}
 	returned, _ := plan.tc.results.counted()
 	return Result{Content: got.rows, ReturnedRows: returned, EstimatedScannedRows: st.sql.estimatedRows(),
-		NextCursor: next}, nil
+		NextCursor: next, Truncated: truncated}, nil
+}
+
+// finishReadRows trims from rows what the read added to them for itself, and
+// counts the bytes an expansion repeats (see resultMeter.grow): before is
+// what the call had counted before the read.
+func finishReadRows(plan readPlan, in readInput, rows []map[string]any, before int64) error {
+	trimExpandedJoinFields(plan.res.Entity, in, rows)
+	trimOrderFields(plan.order, plan.res, in, rows)
+	if len(in.Expand) == 0 {
+		return nil
+	}
+	return plan.tc.results.grow(before, rows)
+}
+
+// capLimit bounds *limit by tc.MaxRows, the rows a read or an aggregate
+// returns at most (see cost.EnforceCap): a call asking for more, or for no
+// limit, reads that many, and reports whether it did (a full page of them
+// may not be all).
+func capLimit(tc Context, limit *int64) bool {
+	if tc.MaxRows <= 0 || *limit < 0 || *limit > 0 && *limit <= tc.MaxRows { // a negative one is refused later
+		return false
+	}
+	*limit = tc.MaxRows
+	return true
 }
 
 func prepareReadPlan(ctx context.Context, tc Context, in readInput) (readPlan, error) {
@@ -92,11 +125,7 @@ func prepareReadPlan(ctx context.Context, tc Context, in readInput) (readPlan, e
 		return readPlan{}, err
 	}
 	readFields = append(readFields, locals...)
-	if err := validateFields(res, readFields...); err != nil {
-		return readPlan{}, err
-	}
-	predicateFields, _ := splitPaths(res.Entity, append(filterFields(in.Filter), sortedKeys(in.Cursor)...))
-	if err := validateUnmaskedFields(res, predicateFields...); err != nil {
+	if err := checkReadUses(tc, res, in, readFields, locals); err != nil {
 		return readPlan{}, err
 	}
 	req := rbac.Request{
@@ -107,7 +136,7 @@ func prepareReadPlan(ctx context.Context, tc Context, in readInput) (readPlan, e
 	if err != nil {
 		return readPlan{}, err
 	}
-	g, err := authorizeRequest(ctx, tc, req)
+	g, err := authorizeRead(ctx, tc, res, in, req)
 	if err != nil {
 		return readPlan{}, err
 	}
@@ -119,6 +148,43 @@ func prepareReadPlan(ctx context.Context, tc Context, in readInput) (readPlan, e
 		entityPlan: ep, projectionFields: req.Fields, order: order, rel: rel,
 		full: andPreds(andPreds(pred, g.RowFilter), keyset), keysetCols: keysetCols, grant: g,
 	}, nil
+}
+
+// checkReadUses refuses, before any query, a read of fields, or a comparison
+// of them, the caller may not make: those of its filter and cursor, of the
+// relationships it joins (locals) and of the expansions it asks for.
+func checkReadUses(tc Context, res entity.Resolved, in readInput, readFields, locals []string) error {
+	predicateFields, _ := splitPaths(res.Entity, append(filterFields(in.Filter), sortedKeys(in.Cursor)...))
+	predicateFields = append(predicateFields, locals...) // a join on them compares their values
+	// so does expansion's: a child carries the target's equal value
+	predicateFields = append(predicateFields, expandJoinColumns(res.Entity, in.Expand)...)
+	if err := (fieldUses{read: readFields, compared: predicateFields}).check(res); err != nil {
+		return err
+	}
+	return checkExpansions(tc, res.Entity, in.Expand)
+}
+
+// checkExpansions refuses an expansion its configuration rules out: one
+// joining on no field, on a target column the caller may not compare, or
+// across datasources.
+func checkExpansions(tc Context, parent entity.Entity, names []string) error {
+	for _, name := range names {
+		relation, _ := relationshipByName(parent, name)
+		if len(relation.JoinOn) == 0 {
+			return fmt.Errorf("%w: relationship %q joins on no field", ErrInvalidInput, name)
+		}
+		target, err := resolveDMLEntity(tc, relation.Target)
+		if err != nil {
+			return err
+		}
+		if err := (fieldUses{compared: relationJoin(relation).target}).check(target); err != nil {
+			return err
+		}
+		if target.Entity.DataSource != parent.DataSource {
+			return fmt.Errorf("%w: cross-datasource relationship %q", ErrInvalidInput, name)
+		}
+	}
+	return nil
 }
 
 // relate plans what a request names across res's relationships (paths, and
@@ -193,6 +259,10 @@ func readCursor(e entity.Entity, order readOrder, in readInput) (relalg.Predicat
 		return nil, nil, nil
 	}
 	p, err := orderCursor(order, in.Cursor)
+	if err != nil {
+		return nil, nil, err
+	}
+	p, err = coercePredicate(e, p) // as the key's cursor: numbers checked here, not by the database
 	return p, nil, err
 }
 
@@ -220,19 +290,32 @@ func cursorPredicate(e entity.Entity, cursor map[string]any) (relalg.Predicate, 
 	return keyset, cols, err
 }
 
+// authorizeRead authorizes a read; a distinct one compares the fields it
+// returns (the database tells rows apart by them), so none may be masked.
+func authorizeRead(ctx context.Context, tc Context, res entity.Resolved, in readInput, req rbac.Request) (
+	grant, error,
+) {
+	g, err := authorizeRequest(ctx, tc, req)
+	if err == nil && in.Distinct {
+		err = fieldUses{compared: g.Fields}.check(res)
+	}
+	return g, err
+}
+
 func readFieldNames(res entity.Resolved, in readInput) ([]string, []string, error) {
 	readFields := append(filterFields(in.Filter), in.Fields...)
 	projectionFields := append([]string(nil), in.Fields...)
 	for _, name := range in.Expand {
-		relation, ok := relationshipByName(res.Entity, name)
-		if !ok {
+		if _, ok := relationshipByName(res.Entity, name); !ok {
 			return nil, nil, fmt.Errorf("%w: unknown relationship %q", ErrInvalidInput, name)
 		}
-		for local := range relation.JoinOn {
-			readFields = append(readFields, local)
-			if len(in.Fields) > 0 && !slices.Contains(projectionFields, local) {
-				projectionFields = append(projectionFields, local)
-			}
+	}
+	// The columns expansion joins on are read, and kept for it (st.keep),
+	// as one list (expandJoinColumns).
+	for _, local := range expandJoinColumns(res.Entity, in.Expand) {
+		readFields = append(readFields, local)
+		if len(in.Fields) > 0 && !slices.Contains(projectionFields, local) {
+			projectionFields = append(projectionFields, local)
 		}
 	}
 	return append(readFields, sortedKeys(in.Cursor)...), projectionFields, nil
@@ -245,17 +328,21 @@ func compileReadQuery(ctx context.Context, plan readPlan, in readInput) (stateme
 	if err != nil {
 		return statement{}, "", cache.Key{}, err
 	}
-	planTemplate := cost.Fingerprint(tc.DataSource, tc.Dialect.Name(), compiled)
+	planTemplate := ""
+	if _, off := tc.Feedback.(cost.NoopFeedbackStore); tc.Feedback != nil && !off { // the feedback's key only
+		planTemplate = cost.Fingerprint(tc.DataSource, tc.Dialect.Name(), compiled)
+	}
 	sql, err := gateSQL(ctx, tc, compiled)
 	if err != nil {
 		err = withIndexHints(ctx, tc, res.Entity, err)
 		return statement{}, "", cache.Key{}, err
 	}
-	key := cache.Key{
-		Database: physicalDatabase(res.Entity), Relation: cacheRelation(res.Entity),
-		Datasource: res.Entity.DatasourceName(), Generation: tc.Generation,
-		SQL:  sql.SQL + "\x00expand=" + strings.Join(in.Expand, ","),
-		Args: argsKey(sql.Args), Scope: scopeKey(tc.Role, tc.Subject),
+	key := cache.Key{Database: physicalDatabase(res.Entity)}
+	if tc.Cache != nil { // the rest only finds an entry
+		key.Relation, key.Datasource, key.Generation = cacheRelation(res.Entity), res.Entity.DatasourceName(),
+			tc.Generation
+		key.SQL = sql.SQL + "\x00expand=" + strings.Join(in.Expand, ",")
+		key.Args, key.Scope = argsKey(sql.Args), scopeKey(tc.Role, tc.Subject)
 	}
 	return newStatement(tc, res, plan.grant, sql), planTemplate, key, nil
 }
@@ -275,9 +362,8 @@ func buildReadExpression(res entity.Resolved, in readInput, plan readPlan) relal
 		}
 		expr = relalg.Sort{Input: expr, OrderBy: order}
 	}
-	if len(plan.grant.Fields) > 0 {
-		expr = relalg.Project{Input: expr, Items: projectItems(res.Entity, plan.grant.Fields)}
-	}
+	expr = relalg.Project{Input: expr, Items: projectItems(res.Entity, plan.grant.Fields)} // never empty
+
 	if in.Distinct {
 		expr = relalg.Distinct{Input: expr}
 	}
@@ -287,49 +373,86 @@ func buildReadExpression(res entity.Resolved, in readInput, plan readPlan) relal
 	return expr
 }
 
+// cachesRead reports whether a read of in may be served from the cache and
+// stored in it, both ways alike: not in a transaction (it sees its own
+// writes), not expanded (expansion edits the rows), not following a write of
+// the session. What it reads decides too (see runRead: no relationships).
+func cachesRead(tc Context, in readInput) bool {
+	return tc.Cache != nil && in.Transaction == "" && len(in.Expand) == 0 && !tc.followsWrite
+}
+
+// readCacheHit serves a read from the cache. The rows are the ones stored,
+// shared by every call served from them: nothing after a read edits its rows
+// (masking and trimming come before storeReadCache; a read that expands, which
+// edits them, is not cached). TestCachedRowsStayAsStored holds it.
 func readCacheHit(ctx context.Context, tc Context, in readInput, key cache.Key) (Result, error, bool) {
-	if tc.Cache == nil || in.Transaction != "" || len(in.Expand) > 0 || tc.followsWrite {
+	if !cachesRead(tc, in) {
 		return Result{}, nil, false
 	}
-	cached, ok := tc.Cache.Get(ctx, key)
+	var cached []map[string]any
+	var size int64
+	ok := false
+	if sized, isSized := tc.Cache.(cache.Sized[[]map[string]any]); isSized {
+		cached, size, ok = sized.GetSized(ctx, key)
+	} else {
+		cached, ok = tc.Cache.Get(ctx, key)
+	}
 	if !ok {
 		return Result{}, nil, false
 	}
-	for _, row := range cached {
-		if err := tc.results.add(row); err != nil {
-			return Result{}, err, true
-		}
+	if err := countCached(tc, cached, size); err != nil {
+		return Result{}, err, true
 	}
 	returned, _ := tc.results.counted()
 	return Result{Content: cached, ReturnedRows: returned}, nil, true
 }
 
+// trimExpandedJoinFields drops from out the columns read only to expand on
+// (not asked for), worked out once for all the rows.
 func trimExpandedJoinFields(parent entity.Entity, in readInput, out []map[string]any) {
 	if len(in.Fields) == 0 {
 		return
 	}
+	drop := slices.DeleteFunc(expandJoinColumns(parent, in.Expand), func(c string) bool {
+		return slices.Contains(in.Fields, c)
+	})
 	for _, row := range out {
-		for _, name := range in.Expand {
-			relation, _ := relationshipByName(parent, name)
-			for local := range relation.JoinOn {
-				if !slices.Contains(in.Fields, local) {
-					delete(row, local)
-				}
-			}
+		for _, c := range drop {
+			delete(row, c)
 		}
 	}
 }
 
+// countCached counts the rows of a read cached against the call's limits:
+// by the size they were stored with (see storeReadCache), not encoded again,
+// or one by one when it is not known.
+func countCached(tc Context, rows []map[string]any, size int64) error {
+	if size > 0 {
+		return tc.results.addSized(int64(len(rows)), size)
+	}
+	for _, row := range rows {
+		if err := tc.results.add(row); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func storeReadCache(ctx context.Context, tc Context, in readInput, key cache.Key, stamp uint64, out []map[string]any) {
-	if tc.Cache == nil || in.Transaction != "" || len(in.Expand) > 0 || tc.followsWrite {
+	if !cachesRead(tc, in) {
 		return
 	}
 	_, size := tc.results.counted() // a read cached has no expansion: its rows are the call's
 	rowsAllowed := tc.CacheMaxEntryRows <= 0 || len(out) <= tc.CacheMaxEntryRows
 	bytesAllowed := tc.CacheMaxEntryBytes <= 0 || size <= tc.CacheMaxEntryBytes
-	if rowsAllowed && bytesAllowed {
-		_ = tc.Cache.Set(ctx, key, out, stamp)
+	if !rowsAllowed || !bytesAllowed {
+		return
 	}
+	if sized, ok := tc.Cache.(cache.Sized[[]map[string]any]); ok {
+		_ = sized.SetSized(ctx, key, out, stamp, size)
+		return
+	}
+	_ = tc.Cache.Set(ctx, key, out, stamp)
 }
 
 // expandJoinColumns are the local columns the relationships expanded join
@@ -338,7 +461,7 @@ func expandJoinColumns(parent entity.Entity, names []string) []string {
 	var columns []string
 	for _, name := range names {
 		relation, _ := relationshipByName(parent, name)
-		for local := range relation.JoinOn {
+		for _, local := range slices.Sorted(maps.Keys(relation.JoinOn)) {
 			if !slices.Contains(columns, local) {
 				columns = append(columns, local)
 			}
@@ -356,11 +479,10 @@ func expandRows(ctx context.Context, tc Context, parent entity.Entity, parents q
 	return nil
 }
 
+// expandOneRelationship expands parents by the relationship name, which
+// checkExpansions admitted.
 func expandOneRelationship(ctx context.Context, tc Context, parent entity.Entity, parents queried, name string) error {
 	relation, _ := relationshipByName(parent, name)
-	if len(relation.JoinOn) == 0 {
-		return fmt.Errorf("%w: relationship %q joins on no field", ErrInvalidInput, name)
-	}
 	target, err := resolveDMLEntity(tc, relation.Target)
 	if err != nil {
 		return err
@@ -368,12 +490,6 @@ func expandOneRelationship(ctx context.Context, tc Context, parent entity.Entity
 	join := relationJoin(relation)
 	join.localDecimal = decimalColumns(parent, join.local)
 	join.targetDecimal = decimalColumns(target.Entity, join.target)
-	if err := validateFields(target, join.target...); err != nil {
-		return err
-	}
-	if target.Entity.DataSource != parent.DataSource {
-		return fmt.Errorf("%w: cross-datasource relationship %q", ErrInvalidInput, name)
-	}
 	targetTC, err := routeEntity(ctx, tc, target.Entity, entity.ActionRead)
 	if err != nil {
 		return err
@@ -432,7 +548,9 @@ func joinKeyOf(values []any, decimal []bool) (key string, ok bool) {
 		switch x := v.(type) {
 		case nil:
 			return "", false
-		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		case int64:
+			parts[i] = "n:" + strconv.FormatInt(x, 10)
+		case int, int8, int16, int32, uint, uint8, uint16, uint32, uint64:
 			parts[i] = "n:" + fmt.Sprint(x)
 		case float32:
 			parts[i] = numberKey(strconv.FormatFloat(float64(x), 'g', -1, 32), x)
@@ -452,11 +570,60 @@ func joinKeyOf(values []any, decimal []bool) (key string, ok bool) {
 // numberKey is the key of the number text spells, as an exact fraction in
 // lowest terms; v's own key when text is not a finite number.
 func numberKey(text string, v any) string {
+	if key, ok := decimalKey(text); ok {
+		return key
+	}
 	r, ok := new(big.Rat).SetString(text)
 	if !ok {
 		return fmt.Sprintf("%T:%q", v, text)
 	}
 	return "n:" + r.RatString()
+}
+
+// decimalKey is numberKey of a plain decimal (an optional sign, digits, an
+// optional point and digits) of at most 18 digits, worked out without a
+// big.Rat, as big.Rat.RatString writes it: every row of an expansion keys
+// its decimal join values.
+func decimalKey(text string) (string, bool) {
+	s, negative := text, false
+	if len(s) > 0 && (s[0] == '-' || s[0] == '+') {
+		s, negative = s[1:], s[0] == '-'
+	}
+	whole, frac, _ := strings.Cut(s, ".")
+	digits := whole + frac
+	if digits == "" || len(digits) > 18 || whole == "" && frac == "" {
+		return "", false
+	}
+	var num int64
+	for _, c := range digits {
+		if c < '0' || c > '9' {
+			return "", false
+		}
+		num = num*10 + int64(c-'0')
+	}
+	den := int64(1)
+	for range frac {
+		den *= 10
+	}
+	g := gcd(num, den)
+	num, den = num/g, den/g
+	if negative && num != 0 {
+		num = -num
+	}
+	if den == 1 {
+		return "n:" + strconv.FormatInt(num, 10), true
+	}
+	return "n:" + strconv.FormatInt(num, 10) + "/" + strconv.FormatInt(den, 10), true
+}
+
+func gcd(a, b int64) int64 {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	if a == 0 {
+		return 1
+	}
+	return a
 }
 
 func textKey(s string, decimal bool) string {
@@ -508,11 +675,17 @@ func queryExpandedChildren(
 	batchSize := max(1, effectiveMaxIN(targetTC)/len(join.target))
 	for start := 0; start < len(tuples); start += batchSize {
 		stop := min(start+batchSize, len(tuples))
-		st, err := compileExpandBatch(ctx, tc, targetTC, target, relation, join, tuples[start:stop])
+		st, cut, err := compileExpandBatch(ctx, tc, targetTC, target, relation, join, tuples[start:stop])
 		if err != nil {
 			return nil, err
 		}
+		// The batch reads one row past the row limit, and the executor refuses
+		// it when that row arrives; a batch the gate cut shorter (at the row
+		// limit, which no caller's exceeds) may have lost children at it.
 		children, err := st.query(ctx)
+		if err == nil && cut && st.rowCap > 0 && int64(len(children.rows)) >= st.rowCap {
+			err = budget.ErrExceeded
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -549,6 +722,9 @@ func joinPredicate(columns []string, tuples [][]any) relalg.Predicate {
 	return relalg.Or{Preds: ors}
 }
 
+// compileExpandBatch plans the query of the children of tuples, bounded at
+// one row past targetTC's row limit (rowCap): cut reports that the gate
+// bounded it shorter, so that a batch reaching the limit may be incomplete.
 func compileExpandBatch(
 	ctx context.Context,
 	tc Context,
@@ -557,33 +733,34 @@ func compileExpandBatch(
 	relation entity.Relationship,
 	join joinColumns,
 	tuples [][]any,
-) (statement, error) {
+) (st statement, cut bool, err error) {
 	predicate := joinPredicate(join.target, tuples)
 	g, err := authorizeRequest(ctx, targetTC, rbac.Request{
 		Role: tc.Role, Subject: tc.Subject, Entity: relation.Target,
 		Action: entity.ActionRead, ReadFields: join.target, Predicate: predicate,
 	})
 	if err != nil {
-		return statement{}, err
+		return statement{}, false, err
 	}
 	full := andPreds(predicate, g.RowFilter)
 	scan := relalg.Scan{Relation: target.Entity.Ref()}
 	expr := relalg.Expr(relalg.Select{Input: scan, Predicate: full})
-	if len(g.Fields) > 0 {
-		expr = relalg.Project{Input: expr, Items: relalg.ProjectFields(g.Fields)}
+	expr = relalg.Project{Input: expr, Items: relalg.ProjectFields(g.Fields)} // never empty (authorizeRequest)
+	if targetTC.MaxRows > 0 {
+		expr = relalg.Limit{Input: expr, Count: targetTC.MaxRows + 1}
 	}
 	compiled, err := compile(targetTC, target.Entity, expr, identityKeys(tc, target.Entity, false),
 		codegen.WithMaxINCardinality(max(len(tuples), effectiveMaxIN(targetTC))))
 	if err != nil {
-		return statement{}, err
+		return statement{}, false, err
 	}
 	sql, err := gateSQL(ctx, targetTC, compiled)
 	if err != nil {
-		return statement{}, err
+		return statement{}, false, err
 	}
-	st := newStatement(targetTC, target, g, sql)
-	st.keep = join.target
-	return st, nil
+	st = newStatement(targetTC, target, g, sql)
+	st.keep, st.rowCap = join.target, targetTC.MaxRows
+	return st, sql.SQL != compiled.SQL, nil
 }
 
 func attachExpandedChildren(

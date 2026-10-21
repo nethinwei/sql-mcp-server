@@ -10,6 +10,9 @@
 package configrefs
 
 import (
+	"maps"
+	"slices"
+
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 )
@@ -109,4 +112,62 @@ func FilterFields(v any) []string {
 		}
 	}
 	return out
+}
+
+// The kinds of FieldUse: what in an entity's definition names a field.
+const (
+	UsePrimaryKey   = "primaryKey"
+	UseUniqueKey    = "uniqueKey"
+	UseTenantPolicy = "tenantPolicy"
+	UseFieldACL     = "fieldACL"  // entity-level, by role
+	UseRowPolicy    = "rowPolicy" // entity-level, by role
+	UseRelationship = "relationship"
+)
+
+// FieldUse is a field an entity's definition names: one of its own, or the
+// target's a relationship joins on.
+type FieldUse struct {
+	// Entity is the ID of the entity whose field it is.
+	Entity, Field, Kind string
+	// Relationship names the relationship, for UseRelationship.
+	Relationship string
+}
+
+// FieldUses calls fn for every field e's definition names, in one order:
+// its relationships' join columns on both sides (the target as resolve finds
+// it, none when it names no single entity), its keys, its tenant policy,
+// and its entity-level access. Grants, which name fields of the entities
+// they are on, are their own.
+func FieldUses(e config.EntityConfig, resolve func(ref string) (string, bool), fn func(FieldUse)) {
+	id := e.ID()
+	for _, r := range e.Relationships {
+		target, ok := resolve(r.Target)
+		for _, local := range slices.Sorted(maps.Keys(r.JoinOn)) {
+			fn(FieldUse{Entity: id, Field: local, Kind: UseRelationship, Relationship: r.Name})
+			if ok {
+				fn(FieldUse{Entity: target, Field: r.JoinOn[local], Kind: UseRelationship, Relationship: r.Name})
+			}
+		}
+	}
+	for _, f := range e.PrimaryKey {
+		fn(FieldUse{Entity: id, Field: f, Kind: UsePrimaryKey})
+	}
+	for _, k := range e.UniqueKeys {
+		for _, f := range k {
+			fn(FieldUse{Entity: id, Field: f, Kind: UseUniqueKey})
+		}
+	}
+	for _, f := range FilterFields(e.TenantPolicy) {
+		fn(FieldUse{Entity: id, Field: f, Kind: UseTenantPolicy})
+	}
+	for _, role := range slices.Sorted(maps.Keys(e.FieldACL)) {
+		for _, f := range slices.Concat(e.FieldACL[role].Read, e.FieldACL[role].Write) {
+			fn(FieldUse{Entity: id, Field: f, Kind: UseFieldACL})
+		}
+	}
+	for _, role := range slices.Sorted(maps.Keys(e.RowPolicies)) {
+		for _, f := range FilterFields(e.RowPolicies[role]) {
+			fn(FieldUse{Entity: id, Field: f, Kind: UseRowPolicy})
+		}
+	}
 }

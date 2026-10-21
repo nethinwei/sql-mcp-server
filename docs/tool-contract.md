@@ -57,15 +57,26 @@
    - `OVERLOADED`（retryable）：服务整体过载（执行队列已满、全局限流、正在关闭），
      与调用方无关；稍后重试。v0.1.17 前它是协议级错误，客户端看不到机器码；
    - `DATASOURCE_UNAVAILABLE`（retryable）：调用路由到的数据源连续失败，熔断器暂时
-     拒绝新请求；等熔断恢复后重试，修改请求无济于事。v0.1.17 前同为协议级错误；
+     拒绝新请求；等熔断恢复后重试，修改请求无济于事。v0.1.17 前同为协议级错误。只有
+     说明数据库本身有问题的失败（连接中断、资源耗尽、关闭、内部错误）计入熔断；调用方
+     造成的失败（取值与列类型不符、语法、约束、权限、死锁等）不计入（v0.1.21 起）；
+   - 受治理工具中取值与字段类型不符、被数据库拒绝（如给时间列传非日期文本）时返回
+     `INVALID_INPUT`（retryable，v0.1.21 起；此前为 `DATABASE_ERROR`），不带数据库原文；
    - `AUDIT_UNAVAILABLE`（不可重试）：`execute_sql` 的审计记录无法写入，调用未执行或结果
      已被扣下（`exec` 的效果可能已发生，按 `OUTCOME_UNKNOWN` 的口径确认）；
    - `DATABASE_ERROR` / `DATASOURCE_FORBIDDEN` 对 `execute_sql` 的**例外**：`reason` 携带
      驱动返回的错误原文，`constraints.sqlstate` 携带 SQLSTATE（驱动提供时）；受治理面的
      工具仍不回显原文；
-   - `OUTCOME_UNKNOWN`（不可重试）：写入或提交执行期间连接中断或超时，数据库可能已经
-     执行也可能没有；原样重试可能重复写入，应先读取受影响的行（或事务写过的内容）再决定；
+   - `OUTCOME_UNKNOWN`（不可重试）：写入、提交或 `execute_sql`（任一 `mode`）执行期间连接
+     中断或超时，数据库可能已经执行也可能没有；原样重试可能重复写入，应先读取受影响的行
+     （或事务写过的内容）再决定；
      相关读缓存已按“已写入”失效；
+   - `STATEMENT_TIMEOUT`（retryable，v0.1.21 起；此前为 `DATABASE_ERROR`，写入可能报
+     `OUTCOME_UNKNOWN`）：数据库在自己的语句超时处停住并回滚了语句，没有生效；收窄请求或
+     稍后重试。`execute_sql` 的 `reason` 同样携带驱动原文。与此前相同，它计入数据源熔断。
+     语句执行中被中断（MySQL/OceanBase 1317，超过 deadline 时的 KILL QUERY）只对受治理的
+     读取报 `STATEMENT_TIMEOUT`；写入、存储过程调用、提交与 `execute_sql`（任一 `mode`：
+     查询也可能 `CALL` 过程）报 `OUTCOME_UNKNOWN`（过程中先前的语句可能已生效）；
    - `TRANSACTION_NOT_FOUND`：令牌对应的事务若在最近 10 分钟内结束，且请求来自同一会话
      与身份，`constraints.outcome` 给出结束方式：`committed`、`rolledBack`、`expired`
      或 `unknown`（提交结果未知）；其他调用方只得到不带 `constraints` 的未找到。`expired`
@@ -144,7 +155,8 @@
   `0.1`、超过 15 位有效数字的金额都按写出的值比较与写入。用于 `create_record` 的
   `values`、`update_record` 的 `set`、`filter`（含 `exists` 内）与 `cursor`；没有列可依
   的值（存储过程参数、`execute_sql` 的 `args`、关联字段与 `having` 的值）按原文字传递，
-  由数据库转换。此前小数一律转为 float64。
+  由数据库转换。此前小数一律转为 float64。结果中的非有限浮点数（PostgreSQL 的 `NaN`、
+  `Infinity`、`-Infinity`）JSON 无法表示，按数据库的写法以字符串返回（v0.1.21 起；此前调用失败）。
 - **排序与分页**（`read_records`）：`orderBy: [{field, dir}]`（`asc` 默认，最多 8 项），
   末尾自动补上实体的键使顺序确定；脱敏字段不能排序。NULL 一律排在最后（可空字段）。
   带 `limit` 且本页取满时，结果在 `result` 旁给出 `nextCursor`，下一页与相同的
@@ -156,9 +168,11 @@
   `belongs-to`）且连接列是目标实体的键；目标以左连接取得，调用方看不到或不存在的目标行
   表现为 NULL。`{"exists": "关系名", "filter": [...]}` 按任意关系过滤（目标中有满足条件的
   行），可放在 `not` 中；不嵌套。调用方必须能读目标中用到的字段，目标的行策略照常生效，
-  脱敏字段不能用；关系的连接列按本实体字段授权；目标须在同一数据源。`fields` 不能写
-  关联字段（读取关联行用 `expand`），聚合不能聚合关联字段，按关联字段排序时不给
-  `nextCursor`，写操作的 `filter` 不能用 `exists` 或关联字段。跨关系的读取不进结果缓存。
+  脱敏字段不能用；关系的连接列按本实体字段授权；任一侧连接列被脱敏的关系不能用于
+  跨关系过滤、排序、`exists` 或 `expand`（子行会带出与父行相等的原值）；目标须在同一
+  数据源。`fields` 不能写关联字段（读取关联行用 `expand`），聚合不能聚合关联字段，
+  按关联字段排序时不给 `nextCursor`，写操作的 `filter` 不能用 `exists` 或关联字段。
+  跨关系的读取不进结果缓存。
 - **去重**（`read_records`）：`distinct: true` 对 `fields` 去重；需要 `fields`，不能与
   `expand`、`cursor` 同用；排序字段须在 `fields` 中，NULL 的位置按数据库默认。
 - **索引**：`describe_entities` 带 `entity` 时给出 `indexes`：
@@ -188,12 +202,20 @@
   约束，后者返回可重试的 `BUDGET_EXCEEDED`，诱导重复执行），审计事件的
   `resultSummary` 记录截断；
   `create_record` 的 RETURNING 行被截断时返回 `{"rowsAffected": 1, "truncated": true}`；
+  读取与聚合最多返回 `cost.maxRows` 行（调用者的 `limits.maxRows` 更严时取它）：`limit` 未写或
+  大于它时按它读取，有序读取满页给 `nextCursor` 续读；没有游标可续（`read_records` 未按可翻页的
+  `orderBy` 排序，或 `aggregate_records`）而恰好返回这么多行时另带 `"truncated": true`，表示之后
+  可能还有行；`expand` 的一批子行同样以该上限为界，超过上限时整次读取以 `BUDGET_EXCEEDED`
+  失败（v0.1.21 起；此前超出的子行被静默丢弃；上限就是 `cost.maxRows` 时恰好达到也失败，
+  因为无法区分是否被截断），应缩小页大小后重试；
 - 返回单个对象的工具直接给出该对象：`describe_entities`、`create_record`、
   `update_record`、`delete_record`、`begin_transaction`、`commit_transaction`、
   `rollback_transaction`、`execute_sql`。
 - `create_record` 的对象是新行的标识键（按列名；行范围预填的列也在内，没有 RETURNING 的数据库上
   自增列取驱动的 last insert id）加 `rowsAffected`，没有 RETURNING 时另带 `lastInsertId`，截断时
   另带 `truncated`。这三个名字是保留的：标识键列恰好同名时会被覆盖。
+- `rowsAffected` 在各数据库上都是语句**匹配**的行数：值没有变化的 `update_record` 也计入
+  （MySQL/OceanBase 默认按 `clientFoundRows=true` 连接；DSN 显式写了 `clientFoundRows` 时按 DSN）。
 
 `describe_entities` 不带 `entity` 时分页列出实体：
 `{"entities": [{name, id, description, datasource}], "total": n, "nextOffset": m}`；

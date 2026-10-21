@@ -239,3 +239,30 @@ func assertMaskedFieldRejected(t *testing.T, tc Context, tool Tool, input string
 		t.Fatalf("error = %v", err)
 	}
 }
+
+// A group-by alias whose column is an aggregate's name is refused: the IR
+// names the group by its column, so having and orderBy would take the one
+// for the other.
+func TestAggregateRefusesAGroupColumnNamedAsAnAggregate(t *testing.T) {
+	t.Parallel()
+	e := entity.Entity{
+		Name: "items", Source: "items",
+		Attributes: []entity.Attribute{{Name: "id"}, {Name: "count", Alias: "quantity"}},
+		Keys:       []entity.Key{{Columns: []string{"id"}, Primary: true}},
+		Role:       entity.RoleAccess{entity.ActionAggregate: {"reader"}},
+		MCP:        entity.MCPFlags{DMLTools: true},
+	}
+	reg, _ := entity.NewRegistry([]entity.Entity{e})
+	db := &storetest.FakeDB{QueryFn: func(context.Context, string, ...any) (store.Rows, error) {
+		t.Fatal("query must not run")
+		return nil, nil
+	}}
+	tc := Context{Services: &Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+		Role: "reader", DB: db, Dialect: testdialect.Postgres{}}
+	in := `{"entity":"items","groupBy":["quantity"],"aggregates":[{"func":"count"}],
+		"having":[{"field":"quantity","op":"gt","value":1}],"orderBy":[{"field":"count"}]}`
+	if _, err := (AggregateTool{}).Run(context.Background(), json.RawMessage(in), tc); !errors.Is(err,
+		ErrInvalidInput) {
+		t.Fatalf("err = %v, want %v", err, ErrInvalidInput)
+	}
+}

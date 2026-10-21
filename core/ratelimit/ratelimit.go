@@ -97,7 +97,15 @@ type Breaker struct {
 	// probes, so that only that request frees its place.
 	probe  atomic.Uint64
 	probes atomic.Uint64
+	// epoch counts the breaker's openings and closings: a request let
+	// through while closed carries it, and its outcome counts only while the
+	// breaker has not changed state since.
+	epoch atomic.Uint64
 }
+
+// probeTicket marks a half-open probe's ticket; any other ticket is the epoch
+// a request was let through in.
+const probeTicket = 1 << 63
 
 // NewBreaker returns a Breaker that opens after threshold consecutive failures,
 // staying open for cooldown.
@@ -107,47 +115,64 @@ func NewBreaker(threshold int64, cooldown time.Duration) *Breaker {
 
 // Allow returns ErrCircuitOpen if the breaker is open, or half-open with a
 // probe already through. A request it lets through must end with Record, or
-// with Release when its outcome says nothing of health; probe is nonzero for
-// the half-open probe.
-func (b *Breaker) Allow() (probe uint64, err error) {
+// with Release when its outcome says nothing of health, passing the ticket
+// Allow returned.
+func (b *Breaker) Allow() (ticket uint64, err error) {
 	until := b.openUntil.Load()
 	if until == 0 {
-		return 0, nil
+		return b.epoch.Load(), nil
 	}
 	if time.Now().UnixNano() < until {
 		return 0, ErrCircuitOpen
 	}
-	probe = b.probes.Add(1)
-	if !b.probe.CompareAndSwap(0, probe) {
+	ticket = b.probes.Add(1) | probeTicket
+	if !b.probe.CompareAndSwap(0, ticket) {
 		return 0, ErrCircuitOpen
 	}
-	return probe, nil
+	return ticket, nil
 }
 
 // Release ends a request whose outcome says nothing of health (a cancelled
-// one), probe as Allow returned it: the probe frees its place, and any other
+// one), ticket as Allow returned it: the probe frees its place, and any other
 // request (one let through before the breaker opened, an earlier probe)
 // leaves the current probe's alone.
-func (b *Breaker) Release(probe uint64) {
-	if probe != 0 {
-		b.probe.CompareAndSwap(probe, 0)
+func (b *Breaker) Release(ticket uint64) {
+	if ticket&probeTicket != 0 {
+		b.probe.CompareAndSwap(ticket, 0)
 	}
 }
 
-// Record counts a request's outcome. A success closes the breaker; a failure
-// reopens a half-open one, and opens a closed one at threshold consecutive
-// failures.
-func (b *Breaker) Record(success bool) {
-	if success {
-		b.failures.Store(0)
-		b.openUntil.Store(0)
-		b.probe.Store(0)
+// Record counts a request's outcome, ticket as Allow returned it. While
+// closed, a success resets the count of failures and a failure opens the
+// breaker at threshold consecutive ones. Once open, only the half-open
+// probe's outcome counts: its success closes the breaker, its failure
+// reopens it. A request let through before the breaker last opened or closed
+// tells of the database as it was then, and changes nothing.
+func (b *Breaker) Record(ticket uint64, success bool) {
+	if b.openUntil.Load() != 0 {
+		if ticket&probeTicket == 0 || !b.probe.CompareAndSwap(ticket, 0) {
+			return
+		}
+		if success {
+			b.failures.Store(0)
+			b.epoch.Add(1) // before closing: a request let through now is new
+			b.openUntil.Store(0)
+		} else {
+			b.openUntil.Store(time.Now().Add(b.cooldown).UnixNano())
+		}
 		return
 	}
-	f := b.failures.Add(1)
-	if f >= b.threshold || b.openUntil.Load() != 0 {
+	if ticket != b.epoch.Load() {
+		return
+	}
+	if success {
+		b.failures.Store(0)
+		return
+	}
+	if b.failures.Add(1) >= b.threshold {
 		b.openUntil.Store(time.Now().Add(b.cooldown).UnixNano())
 		b.probe.Store(0)
+		b.epoch.Add(1)
 	}
 }
 

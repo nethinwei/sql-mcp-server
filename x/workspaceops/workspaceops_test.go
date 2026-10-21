@@ -17,16 +17,21 @@ var schema = workspace.Schema{
 }
 
 // codec keeps a revision's items as its JSON payload; an item with
-// "invalid": true does not build. onBuild runs while building.
-type codec struct{ onBuild func() }
+// "invalid": true does not build. onBuild runs while building, onItems
+// (once) while reading a revision's items.
+type codec struct{ onBuild, onItems func() }
 
-func (codec) Items(rev revision.Revision) (workspace.Snapshot, error) {
+func (c *codec) Items(rev revision.Revision) (workspace.Snapshot, error) {
+	if f := c.onItems; f != nil {
+		c.onItems = nil
+		f()
+	}
 	var s workspace.Snapshot
 	err := json.Unmarshal(rev.Payload, &s)
 	return s, err
 }
 
-func (c codec) Build(_ revision.Revision, items workspace.Snapshot) ([]byte, error) {
+func (c *codec) Build(_ revision.Revision, items workspace.Snapshot) ([]byte, error) {
 	for _, it := range items {
 		if m, ok := it.Value.(map[string]any); ok && m["invalid"] == true {
 			return nil, errors.New("invalid")
@@ -188,7 +193,8 @@ func TestMergeDraft(t *testing.T) {
 		t.Fatalf("merged = %+v %v", st, err)
 	}
 	again, err := e.svc.MergeDraft(e.ctx, "root", "root", draft.ID)
-	if err != nil || again.Workspace.Version != st.Workspace.Version+1 || len(again.Open) != 1 {
+	// Taken in already: nothing is written (a checkpoint of this version stays one).
+	if err != nil || again.Workspace.Version != st.Workspace.Version || len(again.Open) != 1 {
 		t.Fatalf("merged twice = %+v %v", again, err)
 	}
 }
@@ -262,6 +268,24 @@ func TestCheckpointWhileWriting(t *testing.T) {
 	}
 }
 
+// Saving again replaces the draft saved before in what the workspace holds:
+// Taken does not grow with every save.
+func TestCheckpointReplacesTheEarlierInTaken(t *testing.T) {
+	e := newEnv(t)
+	e.write("root", role("mine"), role("base"))
+	first, err := e.svc.Checkpoint(e.ctx, "root", "root", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := e.svc.Checkpoint(e.ctx, "root", "root", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := e.read().Workspace; !slices.Equal(w.Taken, []int64{second.ID}) || w.Checkpoint != second.ID {
+		t.Fatalf("after replacing #%d with #%d: %+v", first.ID, second.ID, w)
+	}
+}
+
 // A commit publishes the version reviewed and moves the workspace onto it,
 // keeping what was written meanwhile and discarding the drafts it held.
 func TestCommit(t *testing.T) {
@@ -300,6 +324,44 @@ func TestCommit(t *testing.T) {
 	}
 	if got, _ := e.revs.Get(e.ctx, cp.ID); got.State != revision.StateDiscarded {
 		t.Fatalf("the checkpoint is %s", got.State)
+	}
+}
+
+// failingStore fails to write while fail is set.
+type failingStore struct {
+	workspace.Store
+	fail *bool
+}
+
+func (s failingStore) PutWorkspace(
+	ctx context.Context, w workspace.Workspace, expected int64, entry workspace.LogEntry,
+) (workspace.Workspace, error) {
+	if *s.fail {
+		return workspace.Workspace{}, errors.New("store down")
+	}
+	return s.Store.PutWorkspace(ctx, w, expected, entry)
+}
+
+// A commit published whose workspace cannot then be moved onto it says so,
+// with the revision: it is published, and the workspace still builds on the
+// one before.
+func TestCommitPublishedButNotMoved(t *testing.T) {
+	e := newEnv(t)
+	st := e.write("root", role("mine"), role("base"))
+	fail := false
+	e.svc.Store = failingStore{e.svc.Store, &fail}
+	e.codec.onBuild = func() { fail = true }
+	rev, err := e.svc.Commit(e.ctx, "root", "root", CommitRequest{Version: st.Workspace.Version, ExpectedPublished: 1})
+	var notMoved *NotMovedError
+	if !errors.As(err, &notMoved) || notMoved.Published.ID != rev.ID || rev.State != revision.StatePublished {
+		t.Fatalf("commit = %+v, %v", rev, err)
+	}
+	if published, _ := e.revs.Published(e.ctx); published.ID != rev.ID {
+		t.Fatalf("published = #%d, want #%d", published.ID, rev.ID)
+	}
+	fail = false
+	if w := e.read().Workspace; w.Base != 1 {
+		t.Fatalf("the workspace moved: %+v", w)
 	}
 }
 
@@ -349,8 +411,10 @@ func TestWriteReconcilesRenames(t *testing.T) {
 		return after.With(note, map[string]any{"name": "renames", "count": len(renames)}), nil
 	}
 	renamed := map[string]any{"name": "lead", "grants": []any{}}
-	st, err := e.svc.WriteItems(e.ctx, "root", "root", "edit",
-		[]Write{{Ref: lead, Value: renamed, Previous: workspace.Missing, From: &analyst}}, nil)
+	st, err := e.svc.WriteItems(e.ctx, "root", "root", "edit", []Write{
+		{Ref: lead, Value: renamed, Previous: workspace.Missing, From: &analyst},
+		{Ref: analyst, Value: workspace.Missing, Previous: role("base")},
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,5 +468,179 @@ func TestRenameKeepsAChangeMadeMeanwhile(t *testing.T) {
 	}
 	if workspace.IsMissing(st.Workspace.Items.Get(lead)) {
 		t.Fatal("the renamed item was not written")
+	}
+}
+
+// A rename written alone, without the removal of the item it renames, is
+// refused while that item is there: what its writer read of it is not known,
+// so a change made to it meanwhile would be lost.
+func TestARenameAloneIsRefused(t *testing.T) {
+	e := newEnv(t)
+	lead := workspace.Ref{Kind: "role", Key: "lead"}
+	renamed := map[string]any{"name": "lead", "description": "base", "grants": []any{}}
+	_, err := e.svc.WriteItems(e.ctx, "root", "root", "edit",
+		[]Write{{Ref: lead, Value: renamed, Previous: workspace.Missing, From: &analyst}}, nil)
+	if !errors.Is(err, ErrRenameAlone) || e.read().Workspace.Version != 0 {
+		t.Fatalf("a rename alone: %v", err)
+	}
+}
+
+// A rename written again (a retry after its answer was lost) is a write
+// alone: the item it came from is gone already, so Reconcile is told of no
+// rename, which would read the item now at the new name as replaced.
+func TestARenameWrittenAgainIsAWriteAlone(t *testing.T) {
+	e := newEnv(t)
+	lead := workspace.Ref{Kind: "role", Key: "lead"}
+	var renames []map[workspace.Ref]workspace.Ref
+	e.svc.Reconcile = func(_, after workspace.Snapshot, r map[workspace.Ref]workspace.Ref) (workspace.Snapshot, error) {
+		renames = append(renames, r)
+		return after, nil
+	}
+	renamed := map[string]any{"name": "lead", "description": "base", "grants": []any{}}
+	for range 2 {
+		if _, err := e.svc.WriteItems(e.ctx, "root", "root", "edit", []Write{
+			{Ref: lead, Value: renamed, Previous: workspace.Missing, From: &analyst},
+			{Ref: analyst, Value: workspace.Missing, Previous: role("base")},
+		}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(renames) != 2 || renames[0][lead] != analyst || len(renames[1]) != 0 {
+		t.Fatalf("renames = %v", renames)
+	}
+	if workspace.IsMissing(e.read().Workspace.Items.Get(lead)) {
+		t.Fatal("the renamed item is gone")
+	}
+}
+
+// Two items renamed to each other's names in one write swap: both stay, and
+// Reconcile is told of both renames.
+func TestRenamesSwappingNames(t *testing.T) {
+	e := newEnv(t)
+	lead := workspace.Ref{Kind: "role", Key: "lead"}
+	leadRole := map[string]any{"name": "lead", "description": "lead", "grants": []any{}}
+	if _, err := e.svc.WriteItems(e.ctx, "root", "root", "edit",
+		[]Write{{Ref: lead, Value: leadRole, Previous: workspace.Missing}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var renames map[workspace.Ref]workspace.Ref
+	e.svc.Reconcile = func(_, after workspace.Snapshot, r map[workspace.Ref]workspace.Ref) (workspace.Snapshot, error) {
+		renames = r
+		return after, nil
+	}
+	analystRole := e.analyst()
+	asLead := map[string]any{"name": "lead", "description": "base", "grants": []any{}}
+	asAnalyst := map[string]any{"name": "analyst", "description": "lead", "grants": []any{}}
+	st, err := e.svc.WriteItems(e.ctx, "root", "root", "edit", []Write{
+		{Ref: lead, Value: asLead, Previous: leadRole, From: &analyst},
+		{Ref: analyst, Value: asAnalyst, Previous: analystRole, From: &lead},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := st.Workspace.Items
+	if !schema.Same(items.Get(lead), asLead) || !schema.Same(items.Get(analyst), asAnalyst) || len(st.Open) != 0 {
+		t.Fatalf("items = %v, conflicts %+v", items, st.Open)
+	}
+	if renames[lead] != analyst || renames[analyst] != lead {
+		t.Fatalf("renames = %v", renames)
+	}
+}
+
+// Renames chained in one write (analyst to lead, lead to viewer) move the
+// item on: the key between goes, and Reconcile is told of one rename, from
+// where the item came.
+func TestRenamesChainedInOneWrite(t *testing.T) {
+	e := newEnv(t)
+	lead := workspace.Ref{Kind: "role", Key: "lead"}
+	viewer := workspace.Ref{Kind: "role", Key: "viewer"}
+	var renames map[workspace.Ref]workspace.Ref
+	e.svc.Reconcile = func(_, after workspace.Snapshot, r map[workspace.Ref]workspace.Ref) (workspace.Snapshot, error) {
+		renames = r
+		return after, nil
+	}
+	asLead := map[string]any{"name": "lead", "description": "base", "grants": []any{}}
+	asViewer := map[string]any{"name": "viewer", "description": "base", "grants": []any{}}
+	st, err := e.svc.WriteItems(e.ctx, "root", "root", "edit", []Write{
+		{Ref: lead, Value: asLead, Previous: workspace.Missing, From: &analyst},
+		{Ref: viewer, Value: asViewer, Previous: workspace.Missing, From: &lead},
+		{Ref: analyst, Value: workspace.Missing, Previous: role("base")},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := st.Workspace.Items
+	if !workspace.IsMissing(items.Get(analyst)) || !workspace.IsMissing(items.Get(lead)) ||
+		!schema.Same(items.Get(viewer), asViewer) || len(st.Open) != 0 {
+		t.Fatalf("items = %v, conflicts %+v", items, st.Open)
+	}
+	if len(renames) != 1 || renames[viewer] != analyst {
+		t.Fatalf("renames = %v", renames)
+	}
+}
+
+// meanwhile runs once, after the published revision is read: another
+// request publishing and moving the workspace on in between.
+type meanwhile struct {
+	revision.Store
+	once func()
+}
+
+func (m *meanwhile) Published(ctx context.Context) (revision.Revision, error) {
+	rev, err := m.Store.Published(ctx)
+	if f := m.once; f != nil {
+		m.once = nil
+		f()
+	}
+	return rev, err
+}
+
+// A workspace is never moved back: a draft merged while another request
+// moved the workspace onto a newer publish merges onto that one; an update
+// to an older revision than its base, or a commit's move once a newer one
+// was followed, leaves its base where it is.
+func TestWorkspaceIsNeverMovedBack(t *testing.T) {
+	e := newEnv(t)
+	draft, err := e.revs.Create(e.ctx, revision.Draft{ParentID: 1, Payload: []byte(items(role("draft", "x")))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.write("root", role("mine"), role("base"))
+	var newer int64
+	m := &meanwhile{Store: e.revs, once: func() {
+		newer = e.publish(items(role("base", "y")))
+		if _, err := e.svc.Update(e.ctx, "root", "root", newer); err != nil {
+			t.Error(err)
+		}
+	}}
+	e.svc.Revisions = m
+	st, err := e.svc.MergeDraft(e.ctx, "root", "root", draft.ID)
+	if err != nil || st.Workspace.Base != newer {
+		t.Fatalf("merged onto #%d (%v), want #%d", st.Workspace.Base, err, newer)
+	}
+	if st, err := e.svc.Update(e.ctx, "root", "root", 1); err != nil || st.Workspace.Base != newer {
+		t.Fatalf("updated back to #%d (%v), want #%d", st.Workspace.Base, err, newer)
+	}
+}
+
+// A checkpoint whose workspace cannot then record it leaves no draft
+// behind: the draft it stored is discarded.
+func TestFailedCheckpointLeavesNoDraft(t *testing.T) {
+	e := newEnv(t)
+	e.write("root", role("mine"), role("base"))
+	fail := false
+	e.svc.Store = failingStore{e.svc.Store, &fail}
+	e.codec.onBuild = func() { fail = true }
+	if _, err := e.svc.Checkpoint(e.ctx, "root", "root", "share"); err == nil {
+		t.Fatal("the checkpoint was recorded")
+	}
+	all, err := e.revs.List(e.ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rev := range all {
+		if rev.State == revision.StateDraft {
+			t.Fatalf("draft #%d left behind", rev.ID)
+		}
 	}
 }

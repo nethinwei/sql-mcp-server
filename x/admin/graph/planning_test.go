@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -61,6 +62,23 @@ type catalogResponse struct {
 const catalogQuery = `query($f: CatalogFilter!) { catalog(input: {filter: $f}) { total
 	counts { all new workspace published drift }
 	tables { ref status entity missing hasKey referencedBy foreignKeys } coverage { datasource scanned listed } } }`
+
+// Each count is what its filter would show: by status among the drifted
+// tables, drifted among those of the status.
+func TestCatalogCountsPerFilter(t *testing.T) {
+	_, c := planningHarness(t)
+	var drifted catalogResponse
+	mustPost(t, c, catalogQuery, &drifted, client.Var("f", map[string]any{"drift": true}))
+	if counts := drifted.Catalog.Counts; drifted.Catalog.Total != 1 || counts.All != 1 || counts.New != 0 ||
+		counts.Published != 1 || counts.Drift != 1 {
+		t.Fatalf("drifted only = %+v", drifted.Catalog)
+	}
+	var fresh catalogResponse
+	mustPost(t, c, catalogQuery, &fresh, client.Var("f", map[string]any{"status": []string{"NEW"}}))
+	if fresh.Catalog.Counts.Drift != 0 {
+		t.Fatalf("new only = %+v", fresh.Catalog)
+	}
+}
 
 func TestCatalogAcrossStatuses(t *testing.T) {
 	_, c := planningHarness(t)
@@ -502,6 +520,19 @@ func TestScanBatches(t *testing.T) {
 			t.Fatalf("batches = %+v", all)
 		}
 	}
+	// The list counts the items; they are read per batch when asked for.
+	type item struct{ Schema, State string }
+	var listed struct{ ScanBatches []struct{ Items []item } }
+	mustPost(t, c, `{ scanBatches(datasource: "shop") { items { schema state } } }`, &listed)
+	var one struct{ ScanBatch struct{ Items []item } }
+	if err := c.Post(`query($id: ID!) { scanBatch(id: $id) { items { schema state } } }`, &one,
+		client.Var("id", batch.StartScanBatch.ID)); err != nil {
+		t.Fatal(err)
+	}
+	want := []item{{"public", "done"}}
+	if !reflect.DeepEqual(listed.ScanBatches[0].Items, want) || !reflect.DeepEqual(one.ScanBatch.Items, want) {
+		t.Fatalf("items listed %+v, of the batch %+v", listed, one)
+	}
 	var retry map[string]any
 	err := c.Post(
 		`mutation($id: ID!) { retryScanBatch(id: $id) { id } }`,
@@ -535,5 +566,32 @@ func TestPlanningPermissions(t *testing.T) {
 		if err := reader.Post(q, &resp); err != nil {
 			t.Errorf("a reader cannot run %s: %v", q, err)
 		}
+	}
+}
+
+// A recurring template that no longer evaluates (its exclusions name a
+// table since dropped) is reported with its error; the other pending work
+// is still listed.
+func TestPendingReportsATemplateThatNoLongerEvaluates(t *testing.T) {
+	h, c := planningHarness(t)
+	stale := configstore.PlanTemplate{Name: "stale", Recurring: true, Author: "root",
+		Plan: []byte(`{"scope": {"status": ["new"]}, "exclude": ["shop.public.dropped"], "import": true}`)}
+	if _, err := h.resolver.App.Plans.PutPlanTemplate(context.Background(), stale, 0); err != nil {
+		t.Fatal(err)
+	}
+	var pending struct {
+		Pending struct {
+			Plans []struct {
+				Template struct{ Name string }
+				Error    *string
+			}
+			Drift int
+		}
+	}
+	mustPost(t, c, `{ pending { plans { template { name } error } drift } }`, &pending)
+	pw := pending.Pending
+	if pw.Drift != 1 || len(pw.Plans) != 1 || pw.Plans[0].Template.Name != "stale" || pw.Plans[0].Error == nil ||
+		!strings.Contains(*pw.Plans[0].Error, "shop.public.dropped") {
+		t.Fatalf("pending = %+v", pw)
 	}
 }

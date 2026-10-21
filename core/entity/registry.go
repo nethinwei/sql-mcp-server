@@ -23,6 +23,9 @@ type Registry struct {
 	// visible holds each entity's attributes that are not excluded, computed
 	// once: every authorization resolves its entity.
 	visible map[string][]Attribute
+	// procedures are the positions of the procedures among entities: a
+	// procedure tool's call finds its procedure among them.
+	procedures []int
 }
 
 // NewRegistry builds a Registry from entities, rejecting empty names and
@@ -45,6 +48,9 @@ func NewRegistry(entities []Entity) (*Registry, error) {
 		for _, ref := range e.References() {
 			r.byRef[ref] = append(r.byRef[ref], e.Name)
 		}
+		if e.Kind == KindProcedure {
+			r.procedures = append(r.procedures, len(r.entities))
+		}
 		r.entities = append(r.entities, e)
 		attrs := make([]Attribute, 0, len(e.Attributes))
 		for _, a := range e.Attributes {
@@ -61,11 +67,15 @@ func NewRegistry(entities []Entity) (*Registry, error) {
 // projection applied (excluded attributes removed). The found flag is false
 // if no entity, or more than one, matches.
 func (r *Registry) Resolve(ref string) (Resolved, bool) {
-	matches := r.Match(ref)
-	if len(matches) != 1 {
-		return Resolved{}, false
+	e, ok := r.byName[ref]
+	if !ok {
+		// Match without building its list: every call resolves its entity.
+		names := r.byRef[ref]
+		if len(names) != 1 {
+			return Resolved{}, false
+		}
+		e = r.byName[names[0]]
 	}
-	e := matches[0]
 	return Resolved{Entity: e, Attributes: r.visible[e.Name]}, true
 }
 
@@ -74,6 +84,18 @@ func (r *Registry) Entities() []Entity {
 	out := make([]Entity, len(r.entities))
 	copy(out, r.entities)
 	return out
+}
+
+// Procedures yields the procedures in registration order without copying
+// them.
+func (r *Registry) Procedures() iter.Seq[Entity] {
+	return func(yield func(Entity) bool) {
+		for _, i := range r.procedures {
+			if !yield(r.entities[i]) {
+				return
+			}
+		}
+	}
 }
 
 // All yields the entities in registration order without copying them, for

@@ -29,7 +29,7 @@ Provider differential conformance suite（`internal/conformance`）的唯一
 | 谓词 | 语义 |
 | --- | --- |
 | `eq/ne/gt/gte/lt/lte` | 任一侧为 `NULL` → `UNKNOWN`；否则数值按数值比较、字符串按字节序比较（collation 偏差见下） |
-| `like` | 左侧为 `NULL` → `UNKNOWN`；`%` 匹配任意序列，`_` 匹配单字符；canonical 语义大小写敏感（偏差见下） |
+| `like` | 左侧为 `NULL` → `UNKNOWN`；`%` 匹配任意序列，`_` 匹配单字符，`\` 使其后一个字符按字面匹配（各库的默认转义符；模式以 `\` 结尾时 PostgreSQL 报错）；canonical 语义大小写敏感（偏差见下） |
 | `in (v1..vn)` | 等价于 `x=v1 OR ... OR x=vn`：任一 `TRUE` → `TRUE`；否则若任一 `UNKNOWN`（含列表中的 `NULL`）→ `UNKNOWN`；否则 `FALSE` |
 | `not_in` | `NOT(in)`：列表含 `NULL` 时永不为 `TRUE`（最多 `FALSE/UNKNOWN`） |
 | `is_null` / `is_not_null` | 二值，永不 `UNKNOWN` |
@@ -56,8 +56,10 @@ Provider differential conformance suite（`internal/conformance`）的唯一
 `Relation` 自己的列；不嵌套。codegen 在有 `Join` 或 `Exists` 时给主表起别名（`_`），所有列
 带限定；`Exists` 渲染为 `EXISTS (SELECT 1 FROM … AS xN WHERE …)`。
 
-`NULL` 排在最后的实现：codegen 对标记 `Nullable` 的排序项先按
-`CASE WHEN x IS NULL THEN 1 ELSE 0 END` 排序（三库一致）；未标记的项按数据库默认渲染，
+`NULL` 排在最后的实现：codegen 对标记 `Nullable` 的排序项，在支持的方言（PostgreSQL，
+`dialect.NullsLast`）上渲染为 `x ASC|DESC NULLS LAST`（升序仍能用索引排序，`SELECT DISTINCT`
+也允许），其余方言（MySQL、OceanBase）先按 `CASE WHEN x IS NULL THEN 1 ELSE 0 END` 排序；
+distinct 读同样标记（只能按已选字段排序，CASE 引用的也是已选列）。未标记的项按数据库默认渲染，
 由调用方保证该列不含 `NULL`（工具层按列的可空性标记），以免妨碍用索引排序。
 
 ## 聚合语义
@@ -123,7 +125,7 @@ conformance 验收。
 
 - 覆盖读路径 + 聚合；写算子与事务语义等价由现有 integration/e2e 保证行为，
   精确语义规范留待 L12 逐能力立项时补齐；
-- conformance corpus 值域限于整数、decimal、小写 ASCII 字符串与 `NULL`；
+- conformance corpus 值域限于整数、decimal、小写 ASCII 字符串（含 LIKE 的 `%`、`_`）与 `NULL`；
   时间/时区/collation/布尔的跨库归一化尚未进入等价 corpus；
 - interpreter 不是性能参考，也不承诺与任何 Provider 的错误消息文本一致，
   只承诺错误分类一致。

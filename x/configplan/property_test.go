@@ -132,6 +132,9 @@ func TestPlansHoldTheirProperties(t *testing.T) {
 			continue
 		}
 		sources := []Source{{Datasource: "shop", Catalog: cat}}
+		if _, ok := cat.Lookup("public", "orders"); !ok {
+			plan.Exclude = nil // excluding a table no scan found is refused
+		}
 		p, err := Evaluate(Input{Base: base, Sources: sources}, plan)
 		if err != nil {
 			t.Fatalf("seed %d: %v", seed, err)

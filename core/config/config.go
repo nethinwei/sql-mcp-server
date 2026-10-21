@@ -18,10 +18,10 @@ var (
 )
 
 // Config is the top-level configuration. Version is the configuration contract
-// marker; the current value is "1" and loaders currently preserve it without
-// rejecting other values.
+// marker: "1", the current one, or unset, which means it; any other fails
+// validation, so a payload of an unknown contract is never loaded.
 type Config struct {
-	Version      string                    `yaml:"version"         json:"version"`
+	Version      string                    `yaml:"version"         json:"version" schema:"enum=@configVersion"`
 	Server       ServerConfig              `yaml:"server"          json:"server"`
 	Database     DatabaseConfig            `yaml:"database"        json:"database" schema:"nodefault"`
 	Databases    map[string]DatabaseConfig `yaml:"databases"       json:"databases" schema:"nodefault,keys=@pathSegment"`
@@ -519,8 +519,8 @@ func (c CostConfig) Threshold() cost.Threshold {
 }
 
 // RequirePKForWriteOrDefault reports whether writes must be primary-key scoped.
-// A nil setting defaults to true (safe): a non-point UPDATE/DELETE is rejected
-// unless explicitly allowed via allowTemplates.
+// A nil setting defaults to true (safe): a non-point UPDATE/DELETE is rejected,
+// whatever allowTemplates lists (see cost.WriteGuard).
 func (c CostConfig) RequirePKForWriteOrDefault() bool {
 	if c.RequirePKForWrite != nil {
 		return *c.RequirePKForWrite
@@ -535,6 +535,7 @@ type CacheConfig struct {
 	MaxSize         int           `yaml:"maxSize"         json:"maxSize" schema:"min=0"`
 	MaxEntryRows    int           `yaml:"maxEntryRows"    json:"maxEntryRows" schema:"min=0"`
 	MaxEntryBytes   int64         `yaml:"maxEntryBytes"   json:"maxEntryBytes" schema:"min=0"`
+	MaxTotalBytes   int64         `yaml:"maxTotalBytes"   json:"maxTotalBytes" schema:"min=0"`
 	PreparedMaxSize int           `yaml:"preparedMaxSize" json:"preparedMaxSize" schema:"min=0"`
 }
 

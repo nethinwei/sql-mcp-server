@@ -8,6 +8,7 @@ package catalog
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/entity"
@@ -199,7 +200,17 @@ func FromCatalog(cat introspect.Catalog, schemas []string, at time.Time) []Schem
 	}
 	out := make([]Schema, 0, len(schemas))
 	for _, name := range schemas {
-		s := Schema{Name: name, ScannedAt: at, Default: cat.Default, FoldCase: cat.FoldCase, Tables: bySchema[name]}
+		tables := bySchema[name]
+		if tables == nil && cat.FoldCase {
+			// The server names it in its own case (lower, under MySQL's
+			// lower_case_table_names): the schema is kept by the name asked.
+			for schema, found := range bySchema {
+				if strings.EqualFold(schema, name) {
+					tables = append(tables, found...)
+				}
+			}
+		}
+		s := Schema{Name: name, ScannedAt: at, Default: cat.Default, FoldCase: cat.FoldCase, Tables: tables}
 		if name == "" {
 			s.Tables = make([]Table, 0, len(cat.Tables))
 			for _, t := range cat.Tables {

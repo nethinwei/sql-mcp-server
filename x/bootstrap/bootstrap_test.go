@@ -52,6 +52,7 @@ func TestRecordProviderFailureClassification(t *testing.T) {
 	}
 	for _, err := range []error{
 		tool.WrapDBError(errors.New("connection reset")), driver.ErrBadConn,
+		tool.WrapDBError(fmt.Errorf("%w: canceling statement", store.ErrStatementTimeout)),
 		fmt.Errorf("read: %w", io.ErrUnexpectedEOF), &net.OpError{Op: "dial", Err: errors.New("refused")},
 	} {
 		if !recordProviderFailure(err) {
@@ -320,6 +321,8 @@ func TestRedactDSN(t *testing.T) {
 		{"postgres", "user=x password = secret host=db", "user=x password = *** host=db"},
 		{"postgres", "password='a b\\' c' host=db", "password=*** host=db"},
 		{"unknown", "host=db password = secret", "host=db password = ***"},
+		{"postgres", "postgres://u@h/db?sslpassword=secret", "postgres://u@h/db?sslpassword=***"},
+		{"postgres", "user=x sslpassword=secret host=db", "user=x sslpassword=*** host=db"},
 	}
 	for _, c := range cases {
 		if got := RedactDSN(c.driver, c.in); got != c.want {

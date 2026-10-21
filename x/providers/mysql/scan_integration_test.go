@@ -12,6 +12,7 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	"github.com/nethinwei/sql-mcp-server/internal/tcstart"
 	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
 )
 
@@ -21,8 +22,10 @@ import (
 func setupMySQLTwoDatabases(t *testing.T) (*mysql.Provider, func()) {
 	t.Helper()
 	ctx := context.Background()
-	container, err := tcmysql.Run(ctx, "mysql:8", tcmysql.WithDatabase("test"),
-		tcmysql.WithUsername("test"), tcmysql.WithPassword("test"))
+	container, err := tcstart.Run(ctx, func(publish tcstart.Publish) (*tcmysql.MySQLContainer, error) {
+		return tcmysql.Run(ctx, "mysql:8", tcmysql.WithDatabase("test"),
+			tcmysql.WithUsername("test"), tcmysql.WithPassword("test"), publish)
+	}, "3306/tcp", "33060/tcp")
 	if err != nil {
 		t.Fatalf("start mysql container: %v", err)
 	}
@@ -129,4 +132,21 @@ func TestMySQLScanReadsIndexes(t *testing.T) {
 		return
 	}
 	t.Fatal("docs not found")
+}
+
+// With lower_case_table_names on, a schema named in another case than the
+// server reports it is scanned all the same.
+func TestDiscoverFoldsSchemaCase(t *testing.T) {
+	ctx := context.Background()
+	dsn, stop := startMySQL(t, "--lower-case-table-names=1")
+	defer stop()
+	prov := connectMySQLWithRetry(t, dsn)
+	defer func() { _ = prov.Close() }()
+	if _, err := prov.ExecContext(ctx, "CREATE TABLE items (id int PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := prov.Introspector().Discover(ctx, []string{"TEST"})
+	if err != nil || len(got) != 1 || got[0].Name != "items" {
+		t.Fatalf("discovered %+v, %v", got, err)
+	}
 }

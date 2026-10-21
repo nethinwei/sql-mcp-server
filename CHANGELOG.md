@@ -9,6 +9,239 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ## Unreleased
 
+## 0.1.21 - 2026-10-21
+
+加固与发布前审查版本，**有 breaking 变更**；升级步骤见
+[`docs/releases/v0.1.21.md`](docs/releases/v0.1.21.md#迁移)。
+
+### Breaking
+
+- PostgreSQL provider 只连接 PostgreSQL 11–18：PostgreSQL 10 及以下、19 及以上，以及 Hologres、
+  Greenplum、Redshift、CockroachDB、openGauss/GaussDB、YugabyteDB（版本号含 `-YB-`）等协议
+  兼容库在连接时拒绝（`postgres: unsupported server`）。此前它们按 PostgreSQL 16 的假设运行，
+  结果半可用。每条新建的连接都检查，读、写、过程与 SQL 逃生连接一视同仁；服务器原地升级或
+  故障切换后，新连接重新判定。
+- PostgreSQL 传统继承（`INHERITS`）：有子表的父表按派生关系处理（同视图）。父表的主键与唯一键
+  不覆盖子表的行，改为取实体配置中声明的键，只用于读取，不再用于写入安全。
+- 成本模板 fingerprint 升为 `fp:v4:`：读取（`read_records`、`aggregate_records`）的 `limit` 未写或
+  大于 `cost.maxRows` 时，生成的 SQL 直接带 `LIMIT maxRows`；PostgreSQL 上按可空列排序改为
+  `NULLS LAST`。这些语句的 SQL 变了，旧 fingerprint 不再匹配，而失效的 `rejectTemplates` 会放行
+  原本拒绝的语句，因此配置中残留的 `fp:v3:` 值在加载时拒绝，需按本版本重新采集。`datasource:SQL`
+  与精确 SQL 形式的模板同样不再匹配这些语句，但无法自动识别，升级时请逐条复核。
+- `filter` 中 `eq`、`ne`、`gt`、`gte`、`lt`、`lte`、`like` 与 `null` 比较时返回 `INVALID_INPUT`
+  （此前不报错、永远返回 0 行）；判断 NULL 用 `is_null` / `is_not_null`。
+- 配置 YAML 只能有一个文档：`---` 之后还有内容时加载失败（此前静默丢弃）。
+- 配置同时写了旧式 `database:` 与 `databases:`（且两者不是同一数据源的导出形式）时加载失败
+  （此前 `database:` 被静默忽略，但其 DSN 仍随 revision 入库）。
+- `aggregate_records` 既无 `aggregates` 也无 `groupBy`、或 `sum`/`avg`/`min`/`max` 未写 `field` 时返回
+  `INVALID_INPUT`；`filter` 的 `in`/`not_in` 值必须是非空列表（此前到达数据库才失败或报内部错误）。
+- 实体 `roles` 中的空角色、配置了用户时 `server.role` 写成 `user:<name>`、`budget.roles` 中不存在的
+  角色、任何字符串列表中的空字符串元素、含 `.` 或为 `_`/`x<数字>` 的关系名（及以关系名加 `.` 开头的
+  字段名）都在加载时拒绝。
+- 批量配置方案的 `exclude` 写了扫描中不存在的表时拒绝整个方案（此前静默忽略，方案照样作用到该表）。
+- MySQL/OceanBase 的 `rowsAffected` 改为匹配行数（默认 `clientFoundRows=true`），与 PostgreSQL 一致。
+- 管理 API `resetWorkspace`/`updateWorkspace` 只接受发布过的修订；载入任意修订改用新的 `loadRevision`。
+- 管理 API `editWorkspace`：带 `renamedFrom` 的改名，同一次写入必须同时写出旧项的删除（`value: null`，
+  `previous` 为读到的旧值），旧项已不存在时除外；只发改名会被拒绝（此前旧项被直接删除，期间别人对它的
+  修改静默丢失）。控制台本来就这样写，不受影响。
+
+### Added
+
+- `cache.maxTotalBytes`：结果缓存所有条目合计的字节上限（默认 256 MiB，不小于 `maxEntryBytes`），
+  超出时先淘汰最早过期的条目。
+- 读取与聚合的结果到 `cost.maxRows` 为止且无法续读时带 `truncated: true`；有序读取满页时给
+  `nextCursor`（此前 `limit` 大于 `maxRows` 时满页也没有游标，客户端会误以为结果完整）。
+- 开启 `readAfterWrite` 或读写事务时，启动检查也确认 write 连接有 SELECT 权限
+  （`privilege.readsBack`）。
+- 拒绝码 `STATEMENT_TIMEOUT`（retryable，兼容新增）：数据库在自己的语句超时处停住并回滚的语句
+  （PostgreSQL 57014、MySQL 3024、OceanBase 4012，以及读取被中断的 1317）此前是 `DATABASE_ERROR`
+  （不可重试），写入还可能因请求 deadline 同时到达被报告为 `OUTCOME_UNKNOWN`；与此前相同，它计入
+  数据源熔断。写入、存储过程调用、提交或 `execute_sql`（任一 `mode`）被中断（1317）报
+  `OUTCOME_UNKNOWN`：过程先前的语句可能已生效；`execute_sql` 查询执行期间连接中断同样报
+  `OUTCOME_UNKNOWN`（此前为 `DATABASE_ERROR`）。
+
+### Fixed
+
+- 任一侧连接列被脱敏的关系不能再用于 `expand`、跨关系过滤/排序与 `exists`（子行会带出与父行
+  相等的原值），在发出任何查询前拒绝；`expand` 一批子行超过行上限时读取以 `BUDGET_EXCEEDED` 失败，
+  不再静默丢弃子行；结果中的 NaN/±Infinity 以字符串返回，不再让调用失败。
+- 引擎与连接两处熔断计数统一为同一规则：数据库因语句本身、取值或已变化的 schema 拒绝的语句不计入。
+- MySQL/OceanBase：收到 KILL QUERY 的连接不再发送 COMMIT/ROLLBACK 或开始新事务；DSN 中只有
+  `clientFoundRows` 参数本身（不是密码里的同名文字）会关闭匹配行计数。
+- 聚合的谓词检查按配置的 `cost.maxINListSize` 而非默认 1000 判断 IN 列表。
+
+- 扫描批次的 `requestKey` 按发起的管理员区分：另一位管理员用同一个 key 会开始自己的批次；同一位管理员
+  用同一个 key 请求不同的 schema 时报错（此前静默返回别人的或旧的批次，新 schema 永不扫描）。
+- 熔断器打开后只认半开探测的结果：打开前已放行、之后才返回的请求不再提前关闭熔断。
+- singleflight 执行在工具自身的恢复之外 panic 时，调用以错误结束并释放该 key（此前进程退出）；
+  没有 engine 时工具 panic 同样以错误结束并照常审计。
+- 发布回调 panic 时旧快照仍会退役关闭；被暂停的用户作为 `server.user` 时，无身份请求不再以其身份执行。
+- 目录的默认 schema 与大小写取最近一次扫描的值（此前随 map 遍历顺序变化）。
+- `begin_transaction` 只读事务只要求能使用该数据源，找到第一个可用实体即停（此前对只读角色扫描整个注册表）。
+- codegen 遇到不认识的 IR 节点按写语句处理（经写入防护），不再当作读取放行。
+- 构建、CI 与发布改用 Go 1.26.10，修复 govulncheck 报告的标准库 `crypto/x509` 漏洞 GO-2026-6809。
+- 存储模式的密钥检查与 DSN 脱敏识别 `sslpassword`，并检查旧式 `database:` 段。
+- 配置文件改回正在服务的内容时释放失败修订暂停的用户；旧快照排空积压不再被当作修订失败
+  （不标记 stale、不退避）。
+- 批量配置方案重复应用不再产生重复 grant（YAML 与 JSON 的数值比较）；导入造成短引用歧义时先限定
+  引用再同步，字段修剪不再遗漏。
+- 控制台“载入工作区”：内容作为相对当前发布版本的修改载入，可以直接发布（此前基准变成被载入的
+  修订，无法提交；载入已丢弃的草稿后工作区卡死）。
+- `expand` 与 `orderBy` 同一连接列时满页仍给 `nextCursor`；实体引用歧义的调用审计时按全部候选实体
+  脱敏；事务内写入在执行前登记缓存失效目标；`exists`/关联字段只按用到的字段授权（不再误报
+  `AMBIGUOUS_FIELD_SCOPE`）；行策略中的小数（如 `0.1`）与 decimal 列精确比较；小表全扫描仍计入
+  `maxScannedRows`；prepared 语句计划失效后重新准备（缓存改为 LRU）。
+- 未带身份的调用方不再因实体 `roles` 中的空角色获得授权；`--role` 写成用户 principal 时按伪造身份处理。
+- 工作区三方合并：双方都新增的同一对象按键合并，不再整项冲突；重复合并同一草稿不再写入新版本。
+- PostgreSQL：分区表全扫描按所有被扫描分区的行数合计判断小表与扫描行数（此前取最大分区，可绕过
+  `rejectFullScan`），表按 schema 匹配；`Parallel Bitmap Heap Scan` 不再被当作未知扫描拒绝；
+  `requireFreshStats` 检查计划读取的每张表。
+- 共享执行（singleflight）在发起调用离开后仍计入结果内存直到执行结束；prepared 语句的等待者不再
+  收到发起者的取消错误。
+- 工作区写入不再持有全局发布锁（按版本条件更新）；`/admin/events` 首次读取不再在锁内进行，存储卡住
+  时不阻塞其他控制台；配置 MCP 的 Bearer 不区分大小写；`Resolve` 不再修改调用方的 Spec。
+- 配置库升级 schema 时跨进程串行；OceanBase 内存/内部错误计入连接健康；PostgreSQL 统计探测失败
+  不再缓存为“新鲜”。
+
+- 控制台：账号暂时读不到（存储故障、请求中断）时返回 503 并保留会话，只有账号被删、停用或改密才
+  登出；事件流约每 30 秒重读账号；登出前保存失败时停留在页面；切换基线时保留未写入的改名；
+  settings 只改键顺序不再显示已修改；读不到会话时提示而不是白屏。
+- 工作区：重试同一改名不再删掉引用；一次写入中的互换与链式改名（A→B→C）结果正确；预算条目的
+  改名不再依赖遍历顺序；三方合并的缓存不再因地址复用误判相等；同一方案写法顺序不同时 planId 相同；
+  删字段时的引用提示包含实体级 `fieldACL` 与 `rowPolicies`。
+- MySQL、OceanBase 与 PostgreSQL 的 DSN 参数名不区分大小写（如 `SQL_SAFE_UPDATES=0` 被识别）；
+  只差大小写的重复参数拒绝。
+- 关停时先等进行中的工具调用答复，再关闭 MCP 会话与控制台的事件流，不再等满 15 秒。
+- singleflight 的迟到调用不再收到已取消调用的 `context.Canceled`；非 ASCII 邮箱脱敏不再产生非法
+  UTF-8；预编译语句与开启事务的驱动错误参与分类；`schema.json` 不再把示例实体与 `allowedRoots`
+  的元素写成默认值。
+- codegen 拒绝节点顺序不合 SELECT 的 IR（如 `Limit` 之上的过滤、两层 `Limit`、聚合之上的投影），
+  不再生成语义不同的 SQL；参考解释器的 `LIKE` 支持 `\` 转义。
+- **安全**：PostgreSQL 分区表的级联未计入授权。外键引用分区（而非分区表）时，级联挂在分区上，
+  删除分区表的行会经数据库级联删除未暴露表的数据而不经检查（违反 I-6）。分区上的外键、级联与
+  trigger 现在归到其分区表；分区表外键在分区上的副本不再计入，删除被引用行不再因
+  `cascades to <分区>, which no entity exposes` 被误拒；分区上的 trigger 让分区表带有写入副作用。
+- **安全**：PostgreSQL 传统继承（`INHERITS`）的父表级联未计入授权。删除父表的行会删到子表的行，
+  引用子表的外键级联与子表的 trigger 随之执行，而父表实体不带这些级联与副作用（违反 I-6）。
+  子表的级联与 trigger 现在同时计入它的每个祖先表。
+- PostgreSQL 的 `json`、`jsonb`、`xml` 值返回原文；此前驱动把它们读成字节，客户端得到 base64。
+  `bytea` 仍是二进制。与 MySQL 共用同一个文本列处理（`sqladapter.TextRows`）。
+- PostgreSQL domain 的默认值计入列默认值（不再被当作必填而拒绝 create）。唯一键的非空判断只认列
+  自身已验证的 `NOT NULL`：domain 的 `NOT NULL` 不保证已存储的行（外连接产生的 NULL 可以绕过），
+  PostgreSQL 18 的 `NOT VALID` 非空约束不检查已有行，建在这类列上的唯一索引不作为身份键。
+- PostgreSQL 直接定义在分区上的外键归到其分区表（多个分区同名的外键只计一次）；此前挂在分区名下，
+  分区表实体、目录与配置方案都看不到。
+- PostgreSQL DSN 显式设置的 `connect_timeout`（包括表示不限时的 `0`）与 `PGCONNECT_TIMEOUT` 不再被
+  10 秒默认值覆盖。
+- PostgreSQL 的 Hologres 识别只认内置或 `pg_catalog` 中的 `hg_version()`，普通 PostgreSQL 上同名的
+  用户函数不再使连接被拒绝。
+- PostgreSQL 13 的 `Incremental Sort` 计为排序，14 的 `Tid Range Scan` 计为顺序扫描（此前为未知；
+  ctid 范围可以覆盖整张表，不按有界的索引读取评分）。
+- PostgreSQL 11–13 扫描失败（`column "con.conname" must appear in the GROUP BY clause`）。
+- PostgreSQL 18 的 `EXPLAIN ANALYZE` 采样解析失败（`Actual Rows` 改为每次循环的平均值，带小数）。
+
+- PostgreSQL：没有 schema `USAGE` 的表不再被发现，表与过程的权限也不再显示为可读或可执行（此前
+  表级授权或 `EXECUTE` 显示 granted，执行却报 `permission denied for schema`）。
+- PostgreSQL：服务端在语句执行中结束会话（`57P01`、`57P02`、`08` 类）按连接中断处理，写入的结果
+  报告为未知（`OUTCOME_UNKNOWN`），与 MySQL 一致。建连失败（包括 `57P03` 数据库正在启动、连接
+  超时、服务器版本不受支持）时语句未发出，不报告为结果未知（新增 `store.ErrNotConnected`）。
+- 批量配置：同步删除“已在目录中、但服务配置发现表缺失”的实体后，后续字段规则与授权不再作用到错位的
+  实体上（此前会改错另一个实体并落盘，实体列表删空时 panic）；评估不再改写调用方方案中的 `actions`。
+- 工作区：配置库的工作区缓存与调用方不再共享切片，提交时清理备注不再改写缓存或并发读取到的工作区。
+- PostgreSQL：EXPLAIN 的结果读完并关闭后再查统计信息与表大小，`ioPool` 用满时不再互相等待到查询超时。
+  三个 provider 读取 EXPLAIN 结果失败时返回分类后的错误并计入熔断，不再当作扫描方式未知。
+- 嵌套的 `tenantPolicy`（`and` 多个条件）与角色行策略同时存在时，create 能填入每一个隐藏的租户列（此前
+  返回 `ROW_POLICY_VIOLATION`）。
+- `cost.queryTimeout: 0` 按文档表示不限：不设请求时限，也不下发数据库语句超时，超时能力声明为“无”
+  （开启 `requireNativeLimits` 时拒绝该配置）；此前 provider 拒绝打开，配置无法启动。
+- 提交工作区时已发布、但工作区未能切换到新版本，返回该 revision 并附 `NOT_MOVED` 提示（此前报“提交
+  失败”，重试得到 `BEHIND`）；控制台随即把工作区移到新版本。
+- 带 `expand` 的读取，投影列顺序固定（此前同一请求可能生成不同 SQL）。
+- 会话预算表满时不再驱逐调用方自己的会话（此前其累计成本被清零），驱逐与过期清理不再全表扫描。
+- 目录状态计数与漂移数各按“除自身外的全部条件”计算，开启漂移筛选时状态计数不再大于结果总数。
+- 修改 `connMaxIdleTime`、`connMaxLifetime` 不再重置各连接的熔断与 AIMD 状态。
+- 关闭时卡住的审计 sink 不再阻挡连接与预编译语句的清理；扫描批次的进度写入随进程停止取消，卡住的
+  配置库不再拖住关闭。
+- 能力评估超时时记录告警（此前静默保持未知）。
+- 熔断器只计入说明数据库本身有问题的失败：调用方传入列类型放不下的值、语法错误、死锁等不再计入，
+  单个调用方无法再用几次非法参数让整个数据源对所有人熔断。受治理工具中这类取值错误返回
+  `INVALID_INPUT`（此前 `DATABASE_ERROR`）。
+- 实体没有任何可见字段时读取被拒绝（此前生成 `SELECT *`，返回全部物理列且不脱敏）；读取路径与
+  展开在授权给出空投影时一律拒绝。不读字段的聚合不再被各授权项的字段集合二次收窄（此前可能误拒，
+  或丢掉一个授权项的行而静默少算）。
+- `distinct` 读取的字段中有脱敏字段时拒绝（此前数据库按明文去重，行数泄露明文的基数）。
+- 解决 pinned 冲突时，若对方的值所在的列表元素此后与同键元素成组，“采用对方的值”被拒绝（此前把
+  整组改成残缺对象并清除冲突）；“保留我的值”照常。
+- MySQL/OceanBase：`lower_case_table_names` 非 0 时，以不同大小写写的 schema 也能扫描到表（此前
+  整库 0 张表，全部实体判为缺失）。
+- 扫描批次：应答丢失后读回比较时按存储的微秒精度比较（此前失败重试的项被标成 canceled）；接管时
+  已取消的批次和数据源已删除的批次直接结束（此前前者被重扫，后者永远占用并发名额）。
+- 重载吊销用户时，会话的关闭与事务回滚改在后台进行，长查询不再堵住重载。
+- 配置库监视：一次轮询中先后发布两个 revision 且后者装配失败时，按实际载入的 revision 记录失败并
+  暂停其用户（此前记在前一个上，且跳过暂停）。
+- 文件配置监视：装配失败的内容按递增间隔重试（此前每秒全量装配一次）。
+- 删除方案模板与保存走同一把存储锁，保存按版本更新，删除后不会被一次过期的保存恢复；事务内
+  panic 时回滚并释放存储锁。
+- `execute_sql` 结果中列名相同的列各自计入返回字节。
+- MySQL/OceanBase 配置库按“匹配的行”统计 UPDATE（`clientFoundRows`，与 PostgreSQL、SQLite 一致）：同一
+  微秒内写两次的心跳不再被当作“批次已不归本次运行”而丢掉整个扫描运行。
+- 工作区永不回退到更旧的已发布 revision：合并草稿时若工作区已被移到更新的发布，改为基于最新发布
+  重新合并（此前会退回旧发布，覆盖已发布内容）；更新到比当前更旧的 revision、以及提交后工作区已
+  跟随更新的发布时，基础版本保持不变。
+- MySQL/OceanBase 连接不上（拨号、TLS、认证失败）时语句未发出，不再报告为“写入结果未知”
+  （`OUTCOME_UNKNOWN`），与 PostgreSQL 一致。
+- 保存检查点失败时丢弃已存下的草稿（此前留下一条无人关联的草稿）。
+- 大小写不敏感的 MySQL/OceanBase 上，以不同大小写写的 schema 扫描结果按请求名保存（此前保存为空）。
+- PostgreSQL 位图堆扫描（Bitmap Heap Scan）按顺序扫描计分，不再当作索引扫描。
+- 关闭时卡住的能力评估不再挡住其余清理；重载的共享设置在新快照真正发布后才生效。
+- 工作区写入 `null` 一律视为删除（此前已有项被写成 null 值，新项被静默忽略）。
+- 并发预览共用同一份已解析配置时不再发生数据竞争（`Spec` 规范化只写入确实改动的部分）。
+- 配置 MCP 的 diff 分页行数不再多计末尾空行；审计丢弃计数跨重载累计，不再回退；扫描重试按注入的
+  时钟等待。
+- 经关系过滤、排序或 `exists` 时，连接所用的本地列按“比较”检查：脱敏的外键列不能再借
+  `customer.name` 一类条件推出其值（`expand` 仍用保留的原值连接）。
+- `expand` 的子行被多个父行引用时按返回的次数计入 `cost.maxBytes` 与预算 `maxReturnedBytes`（此前
+  只计一次，结果可远超字节上限）。
+- `aggregate_records` 的分组字段若是别名、其列名与某个聚合列同名（如列 `count`），返回
+  `INVALID_INPUT`（此前 having/orderBy 静默按聚合计算）；IR 中谓词为空的 `Select` 在 codegen 拒绝。
+- MySQL/OceanBase：`BIGINT UNSIGNED` 列无论语句是否带参数（文本/二进制协议）都读为同一类型，此前
+  取值的 JSON 类型和 `expand` 的匹配随过滤条件变化；DSN 未设 `timeout` 时拨号限时 10 秒，配置了
+  语句超时且未设 `readTimeout` 时读超时为语句超时加 10 秒；被 KILL QUERY 的连接在事务内拒绝后续
+  语句（不发出），不再被迟到的 KILL 打断；1317（语句被中断）按语句超时而非数据库故障分类。
+- 工作区合并：对象中的空键（控制台自动保存的空行，如 `joinOn`、`budget.roles`、`fieldACL`）不再被
+  当作列表元素，冲突不再被静默关闭、对象不再被替换成数组；冲突路径的存储格式兼容旧数据。
+- 角色改名到用户已列出的名字时只保留一个；改名到已有预算项的名字时，与实体级访问一致，由改名的
+  角色/用户的预算项取代原有项。
+- 预算 session 状态表满时先淘汰调用者自己的空闲状态，不再能靠不断换 session 重置其他主体的
+  `maxSessionCost`（全局容量上限不变）。
+- 发布回调 panic 不再终止配置监视：之后的热重载与暂停照常进行，单次轮询的 panic 会被报告。
+- `server.publicURL` 与证书热重载后，控制台 Cookie 的 `Secure` 随之变化（此前停留在启动时的值）。
+- `/readyz/db` 的并发探测共享同一次 ping，结果缓存 1 秒，不再占满连接池。
+- 批量配置：同步键时，列不是实体字段的键不再写入（报告 confirm 级 `keyNotField`），导入时外键
+  连接的已配置实体缺少连接列的字段时不生成关系（报告 `relationshipDropped`），两者此前都使整个方案
+  校验失败；排除检查与按类型的字段规则不再随表数放大开销。
+
+### Changed
+
+- PostgreSQL：DSN 未设 `connect_timeout` 时连接限时 10 秒，无响应的地址不再让启动挂起；扫描出错时
+  报告是哪一步（如 `postgres: scan cascades: …`）；账号无权读取系统标识（`pg_control_system()`）时
+  以服务器地址标识，经 Unix socket 连接时以数据源名标识其关系并告警，不再使装配失败；其他错误
+  （连接中断、超时）仍使本轮装配失败，不降级为数据源名。
+- CI 与发布流水线对 PostgreSQL 11–18 每个大版本运行 provider integration（`SQL_MCP_PG_IMAGE`）。
+- `requirePKForWrite` 的拒绝提示不再建议加入 `allowTemplates`：模板只跳过估算，不能放行写保护（I14 与
+  文档同步更正）。
+- 热路径性能：模板指纹流式计算且无模板时不算；无审计器时不做审计脱敏，无需脱敏的输入不再解码重编码；
+  缓存命中按存入时的尺寸计量；授权按主体缓存候选授权、预建字段 ACL 集合；过程工具与实体解析不再
+  全表遍历；扫描批次列表一次查询读出全部条目；批量配置的模板评估复用目录索引。
+- 配置校验：正则与字段规则按类型缓存、实体引用索引不再复制实体（3000 个实体约 35ms→7ms，内存约
+  40MB→10MB）；预览与提交不再重复解析与解码配置。MySQL/OceanBase 配置库按唯一索引读取已发布
+  revision，控制台事件流只读摘要；创建扫描批次时清理 30 天前已结束的批次；心跳只读取消标志；
+  PostgreSQL 的统计新鲜度按表缓存 1 分钟。
+- 控制台：工作区构建结果按基础版本与编辑缓存，并发请求只构建一次，基础与已发布配置复用已解析的
+  revision；草稿列表在 revision 无变化时复用；过期的方案预览及时释放；不再读取的数据源目录 30 分钟后
+  释放。读取：缓存按库与关系两级索引失效；IN 列表只查一次列类型；结果计量复用编码缓冲；成本反馈
+  改为环形缓冲；同步删除大量字段时授权字段列表只扫一遍。
+
 ## 0.1.20 - 2026-10-19
 
 加固版本，处理一次外部代码与设计 review 的全部结论，**有 breaking 变更**；升级步骤见

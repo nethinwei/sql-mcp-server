@@ -11,12 +11,15 @@ import (
 	tcmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
 
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
+	"github.com/nethinwei/sql-mcp-server/internal/tcstart"
 )
 
 func TestMySQLPrivileges(t *testing.T) {
 	ctx := context.Background()
-	container, err := tcmysql.Run(ctx, "mysql:8", tcmysql.WithDatabase("test"),
-		tcmysql.WithUsername("test"), tcmysql.WithPassword("test"))
+	container, err := tcstart.Run(ctx, func(publish tcstart.Publish) (*tcmysql.MySQLContainer, error) {
+		return tcmysql.Run(ctx, "mysql:8", tcmysql.WithDatabase("test"),
+			tcmysql.WithUsername("test"), tcmysql.WithPassword("test"), publish)
+	}, "3306/tcp", "33060/tcp")
 	if err != nil {
 		t.Fatalf("start mysql container: %v", err)
 	}

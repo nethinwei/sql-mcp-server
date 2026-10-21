@@ -33,8 +33,11 @@ type DB interface {
 type IsolationLevel uint8
 
 const (
+	// LevelDefault is the database's default level: the zero value, so that
+	// options naming no level ask for no particular one.
+	LevelDefault IsolationLevel = iota
 	// LevelReadUncommitted allows dirty reads.
-	LevelReadUncommitted IsolationLevel = iota
+	LevelReadUncommitted
 	// LevelReadCommitted is the default for most databases.
 	LevelReadCommitted
 	// LevelRepeatableRead prevents non-repeatable reads.
@@ -91,12 +94,15 @@ func IterNamed(rows Rows, names []string) iter.Seq2[Row, error] {
 			yield(nil, err)
 			return
 		}
+		// One buffer for every row: a row's map takes the values scanned
+		// (database/sql copies the bytes it scans into an any).
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
 		for rows.Next() {
-			vals := make([]any, len(cols))
-			ptrs := make([]any, len(cols))
-			for i := range vals {
-				ptrs[i] = &vals[i]
-			}
+			clear(vals)
 			if err := rows.Scan(ptrs...); err != nil {
 				yield(nil, err)
 				return

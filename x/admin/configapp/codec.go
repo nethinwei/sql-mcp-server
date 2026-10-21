@@ -12,7 +12,6 @@ import (
 	"github.com/nethinwei/sql-mcp-server/internal/kit"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/configedit"
-	"github.com/nethinwei/sql-mcp-server/x/configyaml"
 )
 
 // A configuration as workspace items is its Sections, item by item: each
@@ -173,15 +172,6 @@ func itemsOfSpec(spec *config.Spec) (workspace.Snapshot, error) {
 	return itemsOfSections(sections)
 }
 
-// itemsOfPayload are the items of a payload, as it says.
-func itemsOfPayload(payload []byte) (workspace.Snapshot, error) {
-	spec, err := configyaml.DecodeSpec(payload)
-	if err != nil {
-		return nil, err
-	}
-	return itemsOfSpec(spec)
-}
-
 // edit is items as an edit of a base revision.
 func (c codec) edit(items workspace.Snapshot) (configedit.Edit, error) {
 	sections, err := sectionsOfItems(items)
@@ -220,7 +210,14 @@ func (c codec) Build(base revision.Revision, items workspace.Snapshot) ([]byte, 
 // overlays base key by key, so a section base has and the item does not is
 // removed (null), its default applying.
 func removeSettings(base *config.Spec, edit *configedit.Edit) {
-	for _, key := range settingsKeys(base) {
+	removeSettingsBut(settingsKeys(base), edit)
+}
+
+// removeSettingsBut removes (null) the sections of keys, those base has,
+// that edit does not set. The settings item of a configuration has the
+// keys settingsKeys finds in it (TestSettingsKeysAreTheItemKeys).
+func removeSettingsBut(keys []string, edit *configedit.Edit) {
+	for _, key := range keys {
 		if _, kept := edit.Settings[key]; !kept {
 			if edit.Settings == nil {
 				edit.Settings = map[string]any{}

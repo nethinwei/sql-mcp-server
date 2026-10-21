@@ -10,6 +10,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/reason"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
+	"github.com/nethinwei/sql-mcp-server/x/providers/sqladapter"
 )
 
 // Limits is what a MySQL connection to dsn opened with opts guarantees on
@@ -26,7 +27,11 @@ func LimitsFor(dsn string, opts providerregistry.Options, timeoutVariable string
 	if err != nil {
 		return nil, fmt.Errorf("mysql: parse dsn: %w", err)
 	}
-	return limits(cfg.Params, opts.Pooler, timeoutVariable), nil
+	params, err := sqladapter.SessionParams(cfg.Params)
+	if err != nil {
+		return nil, fmt.Errorf("mysql: parse dsn: %w", err)
+	}
+	return limits(params, opts, timeoutVariable), nil
 }
 
 // limits judges the session settings NewAdapter injects against what params
@@ -34,8 +39,10 @@ func LimitsFor(dsn string, opts providerregistry.Options, timeoutVariable string
 // setting lands on is not the one the next statement runs in. On MySQL a
 // statement past its deadline is stopped with KILL QUERY (not behind a
 // pooler); a cancelled context alone only closes the client connection.
-func limits(params map[string]string, pooler, timeoutVariable string) dialect.Profile {
-	pooled := pooler == providerregistry.PoolerTransaction
+// Without a timeout (opts.Timeout 0) none is set (see
+// providerregistry.Options.WithoutTimeout).
+func limits(params map[string]string, opts providerregistry.Options, timeoutVariable string) dialect.Profile {
+	pooled := opts.Pooler == providerregistry.PoolerTransaction
 	session := func(variable string, enforced reason.Code) dialect.Claim {
 		if pooled {
 			return dialect.Claim{Strength: dialect.BestEffort, Evidence: dialect.Declared,
@@ -57,7 +64,7 @@ func limits(params map[string]string, pooler, timeoutVariable string) dialect.Pr
 		out[dialect.TimeoutWrite] = session(timeoutVariable, reason.SessionVariable)
 	}
 	out[dialect.UnkeyedWrite] = unkeyedWrite(params, pooled)
-	return out
+	return opts.WithoutTimeout(out)
 }
 
 // killsStatements reports whether connections stop a statement past its

@@ -15,7 +15,7 @@ import (
 // maxRetryDelay; another revision is tried at once.
 func TestRetryBackoffSpacesAttempts(t *testing.T) {
 	t.Parallel()
-	b := retryBackoff{base: time.Second}
+	b := retryBackoff[int64]{base: time.Second}
 	now := time.Unix(0, 0)
 	if !b.due(7, now) {
 		t.Fatal("a revision never tried is due")

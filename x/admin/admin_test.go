@@ -115,6 +115,38 @@ func TestLoginSessionAndCSRF(t *testing.T) {
 	}
 }
 
+// A cross-site page can post a form or text/plain without a preflight: login
+// refuses them, and logout acts only for the session with its CSRF token.
+func TestLoginAndLogoutRefuseCrossSiteRequests(t *testing.T) {
+	f := newFixture(t)
+	body := `{"username":"root","password":"correct horse battery"}`
+	for _, ct := range []string{"text/plain", "application/x-www-form-urlencoded", "multipart/form-data", ""} {
+		rec := f.do(http.MethodPost, "/admin/login", body, map[string]string{"Content-Type": ct}, nil)
+		if rec.Code != http.StatusUnsupportedMediaType || rec.Header().Get("Set-Cookie") != "" {
+			t.Fatalf("login as %q = %d, cookie %q", ct, rec.Code, rec.Header().Get("Set-Cookie"))
+		}
+	}
+	json := map[string]string{"Content-Type": "application/json; charset=utf-8"}
+	if rec := f.do(http.MethodPost, "/admin/login", body, json, nil); rec.Code != http.StatusOK {
+		t.Fatalf("login with a JSON media type and parameters = %d", rec.Code)
+	}
+	_, cookie, csrf := f.login(t, "correct horse battery")
+	for name, c := range map[string]*http.Cookie{"no session": nil, "stale session": {Name: cookieName, Value: "x"}} {
+		rec := f.do(http.MethodPost, "/admin/logout", "", map[string]string{csrfHeader: csrf}, c)
+		if rec.Code != http.StatusUnauthorized || rec.Header().Get("Set-Cookie") != "" {
+			t.Fatalf("logout with %s = %d, cookie %q", name, rec.Code, rec.Header().Get("Set-Cookie"))
+		}
+	}
+	rec := f.do(http.MethodPost, "/admin/logout", "", nil, cookie)
+	if rec.Code != http.StatusForbidden || rec.Header().Get("Set-Cookie") != "" {
+		t.Fatalf("logout without the CSRF token = %d, cookie %q", rec.Code, rec.Header().Get("Set-Cookie"))
+	}
+	rec = f.do(http.MethodPost, "/admin/graphql", meQuery, map[string]string{csrfHeader: csrf}, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("a refused logout must keep the session: %d", rec.Code)
+	}
+}
+
 func TestLoginFailuresLockOut(t *testing.T) {
 	f := newFixture(t)
 	for i := 0; i < maxLoginFailures; i++ {
@@ -230,10 +262,36 @@ func TestLoginGateRejectsExcessAttempts(t *testing.T) {
 	f.h.logins.queued.Store(0)
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		f.h.logins.leave()
+		f.h.logins.Leave()
 	}()
 	if rec, _, _ := f.login(t, "correct horse battery"); rec.Code != http.StatusOK {
 		t.Fatalf("queued sign-in = %d", rec.Code)
+	}
+}
+
+// Setting a password hashes it (and verifies the current one) through the
+// gate that bounds sign-ins.
+func TestPasswordChangeGoesThroughTheLoginGate(t *testing.T) {
+	f := newFixture(t)
+	_, cookie, csrf := f.login(t, "correct horse battery")
+	for range maxConcurrentLogins {
+		f.h.logins.slots <- struct{}{}
+	}
+	f.h.logins.queued.Store(maxQueuedLogins)
+	change := `{"query":"mutation { setAdminPassword(input: {username: \"root\", password: \"a brand new passphrase\", ` +
+		`currentPassword: \"correct horse battery\"}) { username } }"}`
+	headers := map[string]string{csrfHeader: csrf}
+	rec := f.do(http.MethodPost, "/admin/graphql", change, headers, cookie)
+	if !strings.Contains(rec.Body.String(), accounts.ErrBusy.Error()) {
+		t.Fatalf("a password change past the gate = %d %s", rec.Code, rec.Body)
+	}
+	f.h.logins.queued.Store(0)
+	for range maxConcurrentLogins {
+		f.h.logins.Leave()
+	}
+	if rec := f.do(http.MethodPost, "/admin/graphql", change, headers, cookie); strings.Contains(rec.Body.String(),
+		"errors") {
+		t.Fatalf("change password: %d %s", rec.Code, rec.Body)
 	}
 }
 
@@ -348,7 +406,11 @@ func TestPlaygroundPathsUnderAGatewayPrefix(t *testing.T) {
 	_, cookie, _ := f.login(t, "correct horse battery")
 	// The endpoint is appended to location.host: it must be the absolute
 	// path under the prefix.
-	page := f.do(http.MethodGet, "/admin/playground", "", nil, cookie).Body.String()
+	rec := f.do(http.MethodGet, "/admin/playground", "", nil, cookie)
+	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "connect-src 'self'") {
+		t.Fatalf("the playground, holding the CSRF token, is served with policy %q", csp)
+	}
+	page := rec.Body.String()
 	if !strings.Contains(page, `const url = location.protocol + '//' + location.host + "/sql-mcp-server/admin/graphql";`) {
 		i := strings.Index(page, "location.host")
 		t.Fatalf("playground endpoint: %s", page[i:min(len(page), i+80)])
@@ -377,5 +439,37 @@ func TestConfigMCPEndpointNeedsAToken(t *testing.T) {
 		map[string]string{csrfHeader: csrf}, cookie)
 	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Header().Get("WWW-Authenticate"), "Bearer") {
 		t.Fatalf("a session cookie reached the endpoint: %d", rec.Code)
+	}
+}
+
+// failingAccounts fails to read accounts while fail is set.
+type failingAccounts struct {
+	accounts.Store
+	fail bool
+}
+
+func (a *failingAccounts) GetAdmin(ctx context.Context, username string) (accounts.Account, error) {
+	if a.fail {
+		return accounts.Account{}, context.Canceled
+	}
+	return a.Store.GetAdmin(ctx, username)
+}
+
+// An account that cannot be read now (the store failing, the request
+// ending) answers 503 and keeps the session: only an account gone,
+// disabled or with another password signs it out.
+func TestSessionSurvivesAnAccountNotReadNow(t *testing.T) {
+	f := newFixture(t)
+	store := &failingAccounts{Store: f.accounts}
+	f.h = New(Config{Store: f.h.cfg.Store, Accounts: store, Now: f.h.cfg.Now})
+	_, cookie, csrf := f.login(t, "correct horse battery")
+	ok := map[string]string{csrfHeader: csrf}
+	store.fail = true
+	if rec := f.do(http.MethodPost, "/admin/graphql", meQuery, ok, cookie); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("account not read: %d", rec.Code)
+	}
+	store.fail = false
+	if rec := f.do(http.MethodPost, "/admin/graphql", meQuery, ok, cookie); rec.Code != http.StatusOK {
+		t.Fatalf("the session was lost: %d %s", rec.Code, rec.Body)
 	}
 }

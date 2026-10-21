@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/entity"
@@ -44,6 +45,7 @@ import (
 // absent object in the schema.
 
 var enums = map[string][]string{
+	"configVersion":     {"1"},
 	"transport":         {"stdio", "http"},
 	"entityKind":        {"table", "view", "procedure"},
 	"grantAction":       entity.ActionNames(),
@@ -162,18 +164,57 @@ func (c *Config) validateRules() error {
 	return checkStruct(reflect.ValueOf(c).Elem(), "")
 }
 
-func checkStruct(v reflect.Value, path string) error {
-	t := v.Type()
+// fieldRule is a field of a struct type with the rule its tag says.
+type fieldRule struct {
+	index int
+	name  string
+	rule  Rule
+	err   error
+}
+
+// structRules caches the rules of each struct type, by reflect.Type: a
+// configuration of thousands of entities checks each type's fields
+// thousands of times.
+var structRules sync.Map
+
+func rulesOf(t reflect.Type) []fieldRule {
+	if rules, ok := structRules.Load(t); ok {
+		return rules.([]fieldRule)
+	}
+	var rules []fieldRule
 	for i := range t.NumField() {
 		name := YAMLName(t.Field(i))
 		if name == "" {
 			continue
 		}
 		rule, err := ParseRule(t.Field(i).Tag.Get("schema"))
-		if err != nil {
-			return fmt.Errorf("config: %s: %w", joinPath(path, name), err)
+		rules = append(rules, fieldRule{index: i, name: name, rule: rule, err: err})
+	}
+	structRules.Store(t, rules)
+	return rules
+}
+
+// compiledPatterns caches the patterns of rules, compiled.
+var compiledPatterns sync.Map
+
+func compiledPattern(pattern string) *regexp.Regexp {
+	if re, ok := compiledPatterns.Load(pattern); ok {
+		return re.(*regexp.Regexp)
+	}
+	re := regexp.MustCompile(pattern)
+	compiledPatterns.Store(pattern, re)
+	return re
+}
+
+// checkStruct checks the fields of v, at path. Their paths are joined only
+// to report an error or to go into a nested value: most values are scalars
+// that pass.
+func checkStruct(v reflect.Value, path string) error {
+	for _, f := range rulesOf(v.Type()) {
+		if f.err != nil {
+			return fmt.Errorf("config: %s: %w", joinPath(path, f.name), f.err)
 		}
-		if err := checkValue(v.Field(i), rule, joinPath(path, name)); err != nil {
+		if err := checkValue(v.Field(f.index), f.rule, path, f.name); err != nil {
 			return err
 		}
 	}
@@ -182,9 +223,11 @@ func checkStruct(v reflect.Value, path string) error {
 
 var durationType = reflect.TypeFor[time.Duration]()
 
-func checkValue(v reflect.Value, r Rule, path string) (err error) {
+// checkValue checks v, the value named name under parent (an element of a
+// list is named by its index: see elementName).
+func checkValue(v reflect.Value, r Rule, parent, name string) (err error) {
 	if r.Required && v.IsZero() {
-		return fmt.Errorf("config: %s is required", path)
+		return fmt.Errorf("config: %s is required", joinPath(parent, name))
 	}
 	switch v.Kind() {
 	case reflect.Pointer:
@@ -193,42 +236,47 @@ func checkValue(v reflect.Value, r Rule, path string) (err error) {
 		}
 		inner := r
 		inner.Required = false
-		return checkValue(v.Elem(), inner, path)
+		return checkValue(v.Elem(), inner, parent, name)
 	case reflect.Struct:
 		if v.IsZero() {
 			return nil
 		}
-		return checkStruct(v, path)
+		return checkStruct(v, joinPath(parent, name))
 	case reflect.Slice:
+		path := joinPath(parent, name)
 		if v.Len() < r.MinItems {
 			return fmt.Errorf("config: %s needs at least %d items", path, r.MinItems)
 		}
 		item := Rule{Enum: r.Enum, Pattern: r.Pattern, MinLength: r.MinLength}
 		for i := range v.Len() {
-			elem, p := v.Index(i), fmt.Sprintf("%s[%d]", path, i)
-			// Elements are present even when zero, unlike an unset struct field.
-			if elem.Kind() == reflect.Struct {
-				err = checkStruct(elem, p)
+			// Elements are present even when zero, unlike an unset struct field;
+			// an empty string names nothing (an empty role, action, subject).
+			if elem := v.Index(i); elem.Kind() == reflect.Struct {
+				err = checkStruct(elem, elementName(path, i))
+			} else if elem.Kind() == reflect.String && elem.String() == "" {
+				err = fmt.Errorf("config: %s must not be empty", elementName(path, i))
 			} else {
-				err = checkValue(elem, item, p)
+				err = checkValue(elem, item, "", elementName(path, i))
 			}
 			if err != nil {
 				return err
 			}
 		}
 	case reflect.Map:
-		return checkMap(v, r, path)
+		return checkMap(v, r, joinPath(parent, name))
 	default:
-		return checkScalar(v, r, path)
+		return checkScalar(v, r, parent, name)
 	}
 	return nil
 }
+
+func elementName(path string, i int) string { return path + "[" + strconv.Itoa(i) + "]" }
 
 func checkMap(v reflect.Value, r Rule, path string) error {
 	keys := v.MapKeys()
 	sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
 	for _, k := range keys {
-		if r.Keys != "" && !regexp.MustCompile(r.Keys).MatchString(k.String()) {
+		if r.Keys != "" && !compiledPattern(r.Keys).MatchString(k.String()) {
 			return fmt.Errorf("config: %s key %q must match %s", path, k.String(), r.Keys)
 		}
 		if elem := v.MapIndex(k); elem.Kind() == reflect.Struct {
@@ -240,7 +288,7 @@ func checkMap(v reflect.Value, r Rule, path string) error {
 	return nil
 }
 
-func checkScalar(v reflect.Value, r Rule, path string) error {
+func checkScalar(v reflect.Value, r Rule, parent, name string) error {
 	switch v.Kind() {
 	case reflect.String:
 		s := v.String()
@@ -248,16 +296,19 @@ func checkScalar(v reflect.Value, r Rule, path string) error {
 			return nil
 		}
 		if len(s) < r.MinLength {
-			return fmt.Errorf("config: %s must have at least %d characters", path, r.MinLength)
+			return fmt.Errorf("config: %s must have at least %d characters", joinPath(parent, name), r.MinLength)
 		}
 		if r.Enum != nil && !slices.Contains(r.Enum, s) {
-			return fmt.Errorf("config: %s is %q, want one of %s", path, s, strings.Join(r.Enum, ", "))
+			return fmt.Errorf("config: %s is %q, want one of %s", joinPath(parent, name), s, strings.Join(r.Enum, ", "))
 		}
-		if r.Pattern != "" && !regexp.MustCompile(r.Pattern).MatchString(s) {
-			return fmt.Errorf("config: %s %q must match %s", path, s, r.Pattern)
+		if r.Pattern != "" && !compiledPattern(r.Pattern).MatchString(s) {
+			return fmt.Errorf("config: %s %q must match %s", joinPath(parent, name), s, r.Pattern)
 		}
 	case reflect.Int, reflect.Int64, reflect.Float64:
-		return checkBounds(v, r, path)
+		if r.Min == "" && r.Max == "" {
+			return nil
+		}
+		return checkBounds(v, r, joinPath(parent, name))
 	}
 	return nil
 }

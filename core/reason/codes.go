@@ -19,6 +19,7 @@ const (
 	PostgresTimeout          Code = "timeout.postgresStatementTimeout"
 	PostgresTimeoutPooled    Code = "timeout.postgresPooled"
 	PostgresCancelOnly       Code = "timeout.postgresCancelOnly"
+	NoQueryTimeout           Code = "timeout.none"
 	SessionVariable          Code = "timeout.sessionVariable"
 	SessionVariableReadsOnly Code = "timeout.sessionVariableSelectOnly"
 	DSNSetsTimeout           Code = "timeout.dsnSetsVariable"
@@ -43,6 +44,7 @@ const (
 	PrivilegeReadOnlyServer    Code = "privilege.readOnlyServer"
 	PrivilegeMissing           Code = "privilege.missing"
 	PrivilegeFilterNeedsSelect Code = "privilege.filterNeedsSelect"
+	PrivilegeReadsBack         Code = "privilege.readsBack"
 	PrivilegeUncheckable       Code = "privilege.uncheckable"
 
 	// How firmly a connection guarantees a capability.
@@ -70,7 +72,9 @@ var templates = map[Code]string{
 	PostgresTimeout: "statement_timeout just under cost.queryTimeout, and a cancel request at the request deadline",
 	PostgresTimeoutPooled: "statement_timeout is a session setting a transaction pooler does not keep; " +
 		"a cancel request at the request deadline stops the statement only if the pooler forwards it",
-	PostgresCancelOnly:       "a cancel request at the request deadline (the DSN sets its own statement_timeout)",
+	PostgresCancelOnly: "a cancel request at the request deadline (the DSN sets its own statement_timeout)",
+	NoQueryTimeout: "none: cost.queryTimeout is 0, so no statement timeout is set " +
+		"(the database's and the account's own defaults still apply)",
 	SessionVariable:          "{variable} just under cost.queryTimeout",
 	SessionVariableReadsOnly: "{variable} just under cost.queryTimeout (SELECT only)",
 	DSNSetsTimeout:           "the DSN sets {variable}, so cost.queryTimeout is not applied natively",
@@ -96,6 +100,7 @@ var templates = map[Code]string{
 	PrivilegeReadOnlyServer:    "the server is read-only",
 	PrivilegeMissing:           "the account lacks the {privilege} privilege",
 	PrivilegeFilterNeedsSelect: "a filtered {privilege} also needs SELECT",
+	PrivilegeReadsBack:         "reads after writes run on this connection and need SELECT",
 	PrivilegeUncheckable:       "the privilege could not be checked: {error}",
 
 	StrengthEnforced:    "enforced",

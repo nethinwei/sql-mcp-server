@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 )
 
@@ -24,8 +25,9 @@ func toRat(v any) (*big.Rat, bool) {
 	case int64:
 		return new(big.Rat).SetInt64(n), true
 	case float64:
-		r := new(big.Rat).SetFloat64(n)
-		return r, r != nil
+		// The number as written (a configuration's 0.1 is a tenth), not the
+		// binary fraction nearest it: distinct floats keep their order.
+		return new(big.Rat).SetString(strconv.FormatFloat(n, 'g', -1, 64))
 	case *big.Rat:
 		return n, n != nil
 	}
@@ -70,16 +72,12 @@ func boolCmp(a, b bool) int {
 	}
 }
 
-// compareForSort orders values inside Sort: NULL first (the spec leaves NULL
-// placement provider-defined; the equivalence corpus avoids NULL sort keys).
+// compareForSort compares two sort keys. evalSort places a NULL against a
+// non-NULL itself (NULLs last, the IR's semantics), so the only NULLs that
+// reach here come in pairs, and they tie.
 func compareForSort(a, b any) (int, error) {
-	switch {
-	case a == nil && b == nil:
+	if a == nil && b == nil {
 		return 0, nil
-	case a == nil:
-		return -1, nil
-	case b == nil:
-		return 1, nil
 	}
 	return compareValues(a, b)
 }

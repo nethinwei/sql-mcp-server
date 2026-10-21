@@ -28,7 +28,11 @@ type recorder struct {
 // off archived.
 func tenantContext(t *testing.T, rec *recorder, visible bool) Context {
 	t.Helper()
-	e := entity.Entity{
+	return tenantContextOf(t, rec, tenantOrders(visible))
+}
+
+func tenantOrders(visible bool) entity.Entity {
+	return entity.Entity{
 		Name:   "orders",
 		Source: "orders",
 		Attributes: []entity.Attribute{
@@ -44,6 +48,11 @@ func tenantContext(t *testing.T, rec *recorder, visible bool) Context {
 		}},
 		MCP: entity.MCPFlags{DMLTools: true},
 	}
+}
+
+// tenantContextOf is tenantContext on e.
+func tenantContextOf(t *testing.T, rec *recorder, e entity.Entity) Context {
+	t.Helper()
 	reg, err := entity.NewRegistry([]entity.Entity{e})
 	if err != nil {
 		t.Fatal(err)
@@ -78,6 +87,26 @@ func TestCreatePinsTheHiddenTenantColumn(t *testing.T) {
 	if len(rec.sqls) != 1 || !strings.Contains(rec.sqls[0], `"tenant_id"`) ||
 		!slices.Contains(rec.args[0], any(int64(7))) {
 		t.Fatalf("insert = %q %v, want the tenant column set to 7", rec.sqls, rec.args)
+	}
+}
+
+// A tenant policy of several conditions, ANDed with the role's rows, pins
+// each hidden column it names.
+func TestCreatePinsEveryColumnOfANestedTenantPolicy(t *testing.T) {
+	t.Parallel()
+	e := tenantOrders(false)
+	e.Attributes = append(e.Attributes, entity.Attribute{Name: "region", Excluded: true})
+	e.TenantPolicy = relalg.And{Preds: []relalg.Predicate{
+		e.TenantPolicy, relalg.Condition{Field: "region", Op: relalg.OpEq, Value: "eu"},
+	}}
+	var rec recorder
+	if _, err := (CreateTool{}).Run(context.Background(), json.RawMessage(
+		`{"entity":"orders","values":{"id":1,"status":"new"}}`), tenantContextOf(t, &rec, e)); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.sqls) != 1 || !strings.Contains(rec.sqls[0], `"tenant_id"`) || !strings.Contains(rec.sqls[0], `"region"`) ||
+		!slices.Contains(rec.args[0], any(int64(7))) || !slices.Contains(rec.args[0], any("eu")) {
+		t.Fatalf("insert = %q %v, want the tenant set to 7 in eu", rec.sqls, rec.args)
 	}
 }
 

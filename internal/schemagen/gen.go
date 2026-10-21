@@ -293,11 +293,15 @@ func (g *generator) value(t reflect.Type, rule config.Rule, key, section string,
 	case t.Kind() == reflect.Slice:
 		n["type"] = "array"
 		item := config.Rule{Enum: rule.Enum, Pattern: rule.Pattern, MinLength: rule.MinLength}
-		n["items"] = g.value(t.Elem(), item, key, section, val.elem(), noDefault)
+		// A list the seed sets is there to reach its elements' fields: what
+		// the defaults fill in it is not the list's default. A list the
+		// defaults fill has a default, and its elements none of their own.
+		seeded := val.before.IsValid() && val.before.Len() > 0
+		n["items"] = g.value(t.Elem(), item, key, section, val.elem(), noDefault || !seeded)
 		if rule.MinItems > 0 {
 			n["minItems"] = rule.MinItems
 		}
-		return withDefault(n, val, noDefault)
+		return withDefault(n, val, noDefault || seeded)
 	case t.Kind() == reflect.Map:
 		n["type"] = "object"
 		if rule.Keys != "" {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -331,5 +332,161 @@ func TestBusCloseStopsBatches(t *testing.T) {
 	}
 	if got := batchState(t, store, batch.ID); !got.FinishedAt.IsZero() {
 		t.Fatalf("closing the bus finished the batch: %+v", got)
+	}
+}
+
+// hangingMoves never answers a move until its context ends.
+type hangingMoves struct {
+	catalog.BatchStore
+	entered chan struct{}
+}
+
+func (h hangingMoves) MoveItem(ctx context.Context, _, _ string, _ time.Time, _ catalog.BatchItem, _ ...string,
+) (bool, error) {
+	select {
+	case h.entered <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return false, ctx.Err()
+}
+
+// A store that hangs does not hang closing: the writes of progress end with
+// the process.
+func TestCloseDoesNotWaitForAHangingStore(t *testing.T) {
+	t.Parallel()
+	store := hangingMoves{BatchStore: catalog.NewMemoryStore(), entered: make(chan struct{}, 1)}
+	r := New(store, quick)
+	start(t, r, succeeds, "a")
+	<-store.entered
+	closed := make(chan struct{})
+	go func() { r.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("closing waited for a store that hangs")
+	}
+}
+
+// The lost answer of the move putting a failed item back with its retry
+// time counts as made too: the time read back, to the microsecond a store
+// keeps, is the one written. The item is retried, not canceled.
+func TestLostAnswerOfARetry(t *testing.T) {
+	t.Parallel()
+	var moves atomic.Int32
+	store := lostAnswers{BatchStore: catalog.NewMemoryStore(), lose: func() bool { return moves.Add(1) == 2 }}
+	opts := quick
+	opts.Now = func() time.Time { return time.Now().Add(321 * time.Nanosecond) } // finer than a store keeps
+	r := New(store, opts)
+	t.Cleanup(r.Close)
+	var runs atomic.Int32
+	failsOnce := func(context.Context, string, string) (string, string) {
+		if runs.Add(1) == 1 {
+			return catalog.ItemFailed, "once"
+		}
+		return catalog.ItemDone, ""
+	}
+	got := waitFinished(t, store, start(t, r, failsOnce, "a").ID)
+	if got.Items[0].State != catalog.ItemDone || runs.Load() != 2 {
+		t.Fatalf("after a lost answer of a retry: %+v, worked %d times", got.Items, runs.Load())
+	}
+}
+
+// A batch canceled before its process stopped, or whose datasource is no
+// longer configured, ends when taken over: it is not scanned again, nor
+// left open for good.
+func TestTakeOverEndsCanceledAndOrphanedBatches(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		cancel  bool
+		resolve Resolver
+	}{
+		"canceled": {true, resolving(succeeds)},
+		"datasource gone": {false, func(context.Context, string) (Work, error) {
+			return nil, fmt.Errorf("%w: shop", ErrGone)
+		}},
+	} {
+		store := catalog.NewMemoryStore()
+		first := New(store, quick)
+		b := start(t, first, blocked, "a", "b")
+		time.Sleep(20 * time.Millisecond)
+		if tc.cancel {
+			if err := store.CancelBatch(context.Background(), b.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		first.Close()
+		var runs atomic.Int32
+		second := New(store, quick)
+		second.opts.Now = func() time.Time { return time.Now().Add(time.Minute) }
+		resolve := func(ctx context.Context, ds string) (Work, error) {
+			work, err := tc.resolve(ctx, ds)
+			return func(ctx context.Context, d, s string) (string, string) { runs.Add(1); return work(ctx, d, s) }, err
+		}
+		second.TakeOver(context.Background(), resolve)
+		got := batchState(t, store, b.ID)
+		second.Close()
+		if got.FinishedAt.IsZero() || runs.Load() != 0 {
+			t.Fatalf("%s: finished %v, scanned %d times: %+v", name, got.FinishedAt, runs.Load(), got.Items)
+		}
+	}
+}
+
+// A retry waits its backoff by the runner's clock, which set it: a clock
+// ahead of the system's does not hold the item back by the difference.
+func TestRetryWaitsByTheRunnersClock(t *testing.T) {
+	t.Parallel()
+	store := catalog.NewMemoryStore()
+	opts := quick
+	opts.Now = func() time.Time { return time.Now().Add(time.Hour) }
+	r := New(store, opts)
+	t.Cleanup(r.Close)
+	var runs atomic.Int32
+	failsOnce := func(context.Context, string, string) (string, string) {
+		if runs.Add(1) == 1 {
+			return catalog.ItemFailed, "once"
+		}
+		return catalog.ItemDone, ""
+	}
+	if got := waitFinished(t, store, start(t, r, failsOnce, "a").ID); got.Items[0].State != catalog.ItemDone {
+		t.Fatalf("items = %+v", got.Items)
+	}
+}
+
+// readBatches records the batches whose items a store was asked for.
+type readBatches struct {
+	catalog.BatchStore
+	mu   sync.Mutex
+	read []string
+}
+
+func (r *readBatches) Batch(ctx context.Context, id string) (catalog.Batch, bool, error) {
+	r.mu.Lock()
+	r.read = append(r.read, id)
+	r.mu.Unlock()
+	return r.BatchStore.Batch(ctx, id)
+}
+
+// A takeover reads the items of the batch it claimed only: those of batches
+// others run stay unread.
+func TestTakeOverReadsTheItemsOfClaimedBatchesOnly(t *testing.T) {
+	t.Parallel()
+	store := &readBatches{BatchStore: catalog.NewMemoryStore()}
+	now := time.Now()
+	for id, beat := range map[string]time.Time{"stale": now.Add(-time.Hour), "live": now.Add(time.Hour)} {
+		b := catalog.Batch{ID: id, Datasource: "shop", Owner: "other", StartedAt: beat, Heartbeat: beat,
+			Items: items("a", "b")}
+		if _, created, err := store.CreateBatch(context.Background(), b, 4); err != nil || !created {
+			t.Fatalf("create %s: %v %v", id, created, err)
+		}
+	}
+	r := New(store, quick)
+	t.Cleanup(r.Close)
+	r.TakeOver(context.Background(), resolving(succeeds))
+	waitFinished(t, store.BatchStore, "stale")
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if !slices.Equal(store.read, []string{"stale"}) {
+		t.Fatalf("items read of %v, want of the claimed batch only", store.read)
 	}
 }

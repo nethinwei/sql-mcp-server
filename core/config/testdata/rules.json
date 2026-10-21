@@ -4,6 +4,15 @@
     "config": {"database": {"driver": "postgres", "dsn": "x"}}
   },
   {
+    "name": "the current contract version",
+    "config": {"version": "1", "database": {"driver": "postgres", "dsn": "x"}}
+  },
+  {
+    "name": "an unknown contract version",
+    "config": {"version": "2", "database": {"driver": "postgres", "dsn": "x"}},
+    "error": "version is \"2\"", "path": ["version"]
+  },
+  {
     "name": "empty optional strings mean unset",
     "config": {"database": {"driver": "postgres", "dsn": "x"},
       "server": {"transport": ""},
@@ -22,6 +31,12 @@
     "config": {"database": {"driver": "postgres", "dsn": "x"},
       "entities": [{"name": "orders", "fields": [{"name": "id"}]}],
       "roles": {"Analyst": {"grants": [{"entity": "orders", "actions": ["read"]}]}}}
+  },
+  {
+    "name": "an empty role names the caller naming none",
+    "config": {"database": {"driver": "postgres", "dsn": "x"},
+      "entities": [{"name": "orders", "fields": [{"name": "id"}], "roles": {"read": [""]}}]},
+    "error": "must not be empty", "path": ["entities", 0, "roles", "read", 0]
   },
   {
     "name": "path prefix of a gateway",

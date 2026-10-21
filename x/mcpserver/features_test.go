@@ -264,8 +264,9 @@ func TestAuthorizedSchemaReportsFieldsPerAction(t *testing.T) {
 	for _, want := range []string{
 		`"actions":["read","aggregate"]`,
 		`"read":{"fields":["id"]}`,
-		`"aggregate":{"explicitFieldsRequired":true,"fieldScopes":[["id","amount"],["id","region"]],` +
-			`"fields":["id","amount","region"]}`,
+		// Counting rows reads no field: each grant's rows count (combining
+		// amount and region in one call is refused, with the scopes).
+		`"aggregate":{"fields":["id","amount","region"]}`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("schema missing %s: %s", want, text)

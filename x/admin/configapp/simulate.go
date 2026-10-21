@@ -155,10 +155,18 @@ func (r *Service) Diff(ctx context.Context, from string, to Against) (string, er
 	return revisionops.Diff(name(a.ID), a.Payload, name(b.ID), b.Payload)
 }
 
-// Revisions lists revisions, newest first, without their payloads.
+// maxListed bounds one page of revisions or workspace log entries: a store
+// lists everything for a limit of 0, which a caller must not reach.
+const maxListed = 1000
+
+// listLimit is limit within 1..maxListed.
+func listLimit(limit int) int { return min(max(limit, 1), maxListed) }
+
+// Revisions lists revisions, newest first, without their payloads: at least
+// one and at most maxListed.
 func (r *Service) Revisions(ctx context.Context, limit int) ([]revision.Revision, error) {
 	if _, err := auth.RequireUnlimited(ctx, auth.PermRead); err != nil {
 		return nil, err
 	}
-	return r.Store.List(ctx, limit)
+	return r.Store.List(ctx, listLimit(limit))
 }

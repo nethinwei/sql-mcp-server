@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -10,9 +11,13 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/cost"
+	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/ratelimit"
+	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"github.com/nethinwei/sql-mcp-server/core/store"
 	"github.com/nethinwei/sql-mcp-server/core/store/storetest"
+	"github.com/nethinwei/sql-mcp-server/core/tool"
+	"github.com/nethinwei/sql-mcp-server/internal/testdialect"
 )
 
 // guardedPair is shared services with two connections, a and b, whose
@@ -96,6 +101,11 @@ func TestCancelledCallsDoNotCount(t *testing.T) {
 			t.Fatalf("%v counts against health", changed)
 		}
 	}
+	// Nor does a value the caller gave that its column cannot hold: any
+	// caller could otherwise open the breaker for everyone.
+	if countsAgainstHealth(fmt.Errorf("%w: 22P02", store.ErrInvalidValue)) {
+		t.Fatal("an invalid value counts against health")
+	}
 	// A statement the database stopped at its timeout counts: when the
 	// database slows down, timeouts are how it shows.
 	if !countsAgainstHealth(fmt.Errorf("%w: canceling statement", store.ErrStatementTimeout)) {
@@ -103,19 +113,86 @@ func TestCancelledCallsDoNotCount(t *testing.T) {
 	}
 }
 
-// The bound on results held in memory says nothing of a connection's health:
-// changing it keeps every breaker's state.
-func TestResultMemoryChangeKeepsHealth(t *testing.T) {
-	failA, failB := true, false
-	s, a, _, cfg := guardedPair(t, &failA, &failB)
-	if err := query(a); err == nil {
-		t.Fatal("a failing query passed")
+// The engine's breaker (recordProviderFailure, on a tool's errors) and a
+// connection's (countsAgainstHealth, on the database's) count the same
+// database errors, whether a read, a write or a procedure call met them: a
+// write's are of unknown outcome or a constraint violation, not WrapDBError's.
+func TestHealthRulesAgree(t *testing.T) {
+	t.Parallel()
+	calls := healthCalls(t)
+	for err, counts := range map[error]bool{
+		store.ErrRejected: false, store.ErrInvalidValue: false, store.ErrPermissionDenied: false,
+		store.ErrMissingRelation: false, store.ErrStalePlan: false, &store.ConstraintError{Kind: "unique"}: false,
+		context.Canceled:          false,
+		store.ErrStatementTimeout: true, store.ErrInterrupted: true, store.ErrConnectionLost: true,
+		errors.New("out of memory"): true,
+	} {
+		wrapped := fmt.Errorf("%w: 42", err)
+		if countsAgainstHealth(wrapped) != counts {
+			t.Errorf("%v: connection %v, want %v", err, countsAgainstHealth(wrapped), counts)
+		}
+		for name, call := range calls {
+			if failure := call(wrapped); recordProviderFailure(failure) != counts {
+				t.Errorf("%v: %s fails with %v, engine %v, want %v", err, name, failure, !counts, counts)
+			}
+		}
 	}
-	next := *cfg
-	next.RateLimit.MaxResultMemory *= 2
-	s.apply(&App{config: &next})
-	if err := query(a); !errors.Is(err, ratelimit.ErrCircuitOpen) {
-		t.Fatalf("changing the result memory reset a's breaker: %v", err)
+}
+
+// healthCalls are a read, an update and a procedure call, each failing with
+// the database error it is given, as its tool reports it.
+func healthCalls(t *testing.T) map[string]func(error) error {
+	t.Helper()
+	users := entity.Entity{Name: "users", Source: "users", Attributes: []entity.Attribute{{Name: "id"}, {Name: "email"}},
+		Keys: []entity.Key{{Columns: []string{"id"}, Primary: true}}, MCP: entity.MCPFlags{DMLTools: true},
+		Role: entity.RoleAccess{entity.ActionRead: {"r"}, entity.ActionUpdate: {"r"}}}
+	proc := entity.Entity{Name: "refresh", Source: "refresh", Kind: entity.KindProcedure,
+		Attributes: []entity.Attribute{{Name: "id"}}, Role: entity.RoleAccess{entity.ActionExecute: {"r"}},
+		MCP: entity.MCPFlags{DMLTools: true, TrustedProcedure: true}}
+	reg, err := entity.NewRegistry([]entity.Entity{users, proc})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(tl tool.Tool, input string) func(error) error {
+		return func(dbErr error) error {
+			db := &storetest.FakeDB{
+				ExecFn:  func(context.Context, string, ...any) (store.Result, error) { return store.Result{}, dbErr },
+				QueryFn: func(context.Context, string, ...any) (store.Rows, error) { return nil, dbErr },
+			}
+			tc := tool.Context{Services: &tool.Services{Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg)},
+				Role: "r", DB: db, Dialect: testdialect.Postgres{}}
+			_, err := tool.RunTool(context.Background(), tl, json.RawMessage(input), tc)
+			return err
+		}
+	}
+	return map[string]func(error) error{
+		"read": run(tool.ReadTool{}, `{"entity":"users"}`),
+		"update": run(tool.UpdateTool{},
+			`{"entity":"users","filter":[{"field":"id","op":"eq","value":1}],"set":{"email":"x"}}`),
+		"execute": run(tool.ExecuteTool{}, `{"entity":"refresh"}`),
+	}
+}
+
+// The bound on results held in memory and the lifetimes of pooled
+// connections say nothing of a connection's health: changing them keeps
+// every breaker's state.
+func TestResultMemoryAndPoolChangesKeepHealth(t *testing.T) {
+	for name, change := range map[string]func(*config.RateLimitConfig){
+		"result memory":       func(r *config.RateLimitConfig) { r.MaxResultMemory *= 2 },
+		"connection idle":     func(r *config.RateLimitConfig) { r.ConnMaxIdleTime += time.Minute },
+		"connection lifetime": func(r *config.RateLimitConfig) { r.ConnMaxLifetime += time.Minute },
+	} {
+		failA, failB := true, false
+		s, a, _, cfg := guardedPair(t, &failA, &failB)
+		if err := query(a); err == nil {
+			t.Fatal("a failing query passed")
+		}
+		next := *cfg
+		change(&next.RateLimit)
+		s.apply(&App{config: &next})
+		if err := query(a); !errors.Is(err, ratelimit.ErrCircuitOpen) {
+			t.Fatalf("changing the %s reset a's breaker: %v", name, err)
+		}
 	}
 }
 

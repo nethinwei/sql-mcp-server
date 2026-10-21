@@ -17,6 +17,7 @@ func (Postgres) QuoteIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 func (Postgres) Placeholder(i int) string { return "$" + strconv.Itoa(i+1) }
+func (Postgres) OrdersNullsLast()         {}
 func (Postgres) Capabilities() dialect.Profile {
 	return dialect.Profile{
 		dialect.Returning: {Strength: dialect.Enforced}, dialect.Explain: {Strength: dialect.Enforced},

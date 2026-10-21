@@ -650,9 +650,23 @@ func TestDiscardDraft(t *testing.T) {
 	if err := h.client(auth.PermRead).Post(discard, &resp, client.Var("id", id)); err == nil {
 		t.Fatal("a reader discarded a draft")
 	}
+	listed := func() int {
+		var drafts struct {
+			Drafts []struct{ Revision struct{ ID string } }
+		}
+		mustPost(t, c, `{ drafts { revision { id } } }`, &drafts)
+		return len(drafts.Drafts)
+	}
+	first, kept := listed(), listed() // the second served from what the first worked out
+	if first != 1 || kept != 1 {
+		t.Fatalf("drafts listed: %d, then %d", first, kept)
+	}
 	mustPost(t, c, discard, &resp, client.Var("id", id))
 	if resp.DiscardDraft.State != "DISCARDED" {
 		t.Fatalf("discarded = %+v", resp)
+	}
+	if n := listed(); n != 0 {
+		t.Fatalf("%d drafts listed after the discard", n)
 	}
 	var pub map[string]any
 	err := c.Post(`mutation($id: ID!) { publish(input: {id: $id}) { id } }`, &pub, client.Var("id", id))

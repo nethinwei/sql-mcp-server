@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { describeFilter, filterFields } from './filter'
+import { describeFilter, filterFields, withOp } from './filter'
 import { locale } from '@/i18n'
 
 locale.value = 'zh-CN'
@@ -24,5 +24,16 @@ describe('describeFilter', () => {
     expect(filterFields({ and: [{ op: 'eq', field: 'a', value: 1 }, { or: [{ op: 'eq', field: 'b', value: 2 }] }] }))
       .toEqual(['a', 'b'])
     expect(filterFields({ not: { op: 'eq', field: 'c', value: 1 } })).toEqual(['c'])
+  })
+})
+
+describe('withOp', () => {
+  it('fits the value to the operator', () => {
+    expect(withOp({ op: 'in', field: 'region', value: ['CN', 'US'] }, 'eq')).toEqual({ op: 'eq', field: 'region', value: 'CN' })
+    expect(withOp({ op: 'not_in', field: 'region', value: [] }, 'like')).toEqual({ op: 'like', field: 'region', value: '' })
+    expect(withOp({ op: 'eq', field: 'region', value: 'CN' }, 'in')).toEqual({ op: 'in', field: 'region', value: ['CN'] })
+    expect(withOp({ op: 'in', field: 'region', value: ['CN'] }, 'not_in')).toEqual({ op: 'not_in', field: 'region', value: ['CN'] })
+    expect(withOp({ op: 'in', field: 'region', value: ['CN'] }, 'is_null')).toEqual({ op: 'is_null', field: 'region' })
+    expect(withOp({ op: 'eq', field: 'n', value: 3 }, 'gt')).toEqual({ op: 'gt', field: 'n', value: 3 })
   })
 })

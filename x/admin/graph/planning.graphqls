@@ -88,8 +88,10 @@ input WorkspaceItemInput {
   "The item as its writer read it; null: it was absent."
   previous: JSON
   """
-  For an entity or a role renamed or moved: the key it had. The item it
-  replaces is removed, and references to it follow (see docs/design/editing.md).
+  For an entity or a role renamed or moved: the key it had. References to
+  it follow (see docs/design/editing.md). The same input removes that item
+  (value null, previous as read), unless it is gone already: a change made
+  to it meanwhile then conflicts instead of being lost.
   """
   renamedFrom: String
 }
@@ -170,8 +172,14 @@ extend type Query {
   drafts: [DraftRevision!]!
   "The signed-in administrator's tokens for the configuration MCP endpoint."
   mcpTokens: [McpToken!]!
-  "Recent schema scan batches of a datasource, running ones first."
+  """
+  Recent schema scan batches of a datasource, running ones first. Their items
+  are read per batch when asked for: a poll asks for the counts only and reads
+  the items of a batch with scanBatch.
+  """
   scanBatches(datasource: String!): [ScanBatch!]!
+  "A scan batch with its items."
+  scanBatch(id: ID!): ScanBatch!
 }
 
 extend type Mutation {
@@ -189,8 +197,14 @@ extend type Mutation {
   applyPlan(input: ApplyPlanInput!): AppliedPlan!
   "Moves the workspace onto revision to, re-applying what was changed in it."
   updateWorkspace(to: ID!): Workspace!
-  "Makes the workspace revision to as it is, dropping what was changed in it."
+  "Makes the workspace revision to (a published one) as it is, dropping what was changed in it."
   resetWorkspace(to: ID!): Workspace!
+  """
+  Makes the content of revision to (any revision) the workspace, as changes to
+  the published revision it then builds on; keep re-applies what was changed
+  in it onto to, a value both changed differently a conflict.
+  """
+  loadRevision(to: ID!, keep: Boolean! = false): Workspace!
   "Takes a draft into the workspace, onto the published revision."
   mergeDraft(id: ID!): Workspace!
   "Resolves a conflict: theirs takes the other side's value, else the workspace's stays."
@@ -227,7 +241,10 @@ type CatalogPage {
   "Tables matching the filter."
   total: Int!
   tables: [CatalogRow!]!
-  "Tables by status, matching every condition but the status."
+  """
+  Tables by status, matching every condition but the status; drift counts
+  those matching every condition but the drift.
+  """
   counts: CatalogCounts!
   coverage: [CatalogCoverage!]!
 }
@@ -393,8 +410,10 @@ type PlanException {
   """
   id: String!
   """
-  renamed, noKey, sideEffects, relationshipDropped, qualified, unknownUser,
-  noFields, referenced, denied or review.
+  renamed, noKey, sideEffects, relationshipDropped, relationshipNew,
+  relationshipStale, qualified, unknownUser, noFields, grantFieldsEmptied,
+  referenced, denied, review, keyReferenced, keyNotField or rowColumnMissing
+  (docs/design/planning.md gives each one's level).
   """
   kind: String!
   """
@@ -441,6 +460,10 @@ type PendingWork {
   unscannedSchemas: Int!
   "Datasources whose schemas were never listed: what they hold is unknown."
   unlistedDatasources: [String!]!
+  "Drift tables past the first 200 listed (those not handled first)."
+  moreDriftTables: Int!
+  "Gone tables past the first 200 listed (those not handled first)."
+  moreGoneTables: Int!
 }
 
 type PendingGoneTable {
@@ -457,6 +480,8 @@ type PendingPlan {
   key: String!
   template: PlanTemplate!
   report: PlanReport!
+  "Why the template no longer evaluates; its report is then empty."
+  error: String
   state: PendingState
 }
 

@@ -2,7 +2,6 @@ package oceanbase
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"regexp"
 	"strconv"
@@ -10,68 +9,37 @@ import (
 
 	"github.com/nethinwei/sql-mcp-server/core/cost"
 	"github.com/nethinwei/sql-mcp-server/x/providers/mysql"
+	"github.com/nethinwei/sql-mcp-server/x/providers/sqladapter"
 )
 
 // obExplainer estimates a plan via EXPLAIN FORMAT=JSON.
 type obExplainer struct {
-	db *sql.DB
-	// classify classifies the errors of EXPLAIN as those of statements, so
-	// the gate tells a schema change from a plan it could not get.
-	classify func(error) error
+	pool *sqladapter.Pool
 }
 
 // Explain implements cost.Explainer. OceanBase plan JSON varies by version; we
 // parse the real OceanBase shape (OPERATOR/EST.ROWS/EST.TIME) first, fall back
 // to a MySQL-compatible query_block, and degrade to ScanUnknown on any
-// mismatch (never panic).
+// mismatch (never panic). A plan that cannot be read is an error, classified
+// as the statement's (see sqladapter.Pool.Explain).
 func (e obExplainer) Explain(ctx context.Context, query string, args []any) (cost.Plan, error) {
-	rows, err := e.db.QueryContext(ctx, "EXPLAIN FORMAT=JSON "+query, args...)
-	if err != nil {
-		return cost.Plan{}, e.classify(err)
-	}
-	defer func() { _ = rows.Close() }()
 	// OceanBase returns the JSON plan across multiple rows; concatenate them.
-	var sb strings.Builder
-	for rows.Next() {
-		var s string
-		if err := rows.Scan(&s); err != nil {
-			return cost.Plan{ScanType: cost.ScanUnknown}, nil
-		}
-		sb.WriteString(s)
-	}
-	if err := rows.Err(); err != nil {
+	raw, err := e.pool.Explain(ctx, "EXPLAIN FORMAT=JSON "+query, args, "")
+	if err != nil {
 		return cost.Plan{}, err
 	}
-	if sb.Len() == 0 {
+	if raw == "" {
 		return cost.Plan{ScanType: cost.ScanUnknown}, nil
 	}
-	plan, err := parseOBExplain([]byte(sb.String()))
+	plan, err := parseOBExplain([]byte(raw))
 	if err == nil && plan.ScanType == cost.ScanFull && !plan.TableSized {
 		// The JSON plan estimates what operators output; the tables' sizes
 		// are in EXPLAIN EXTENDED's optimization info.
-		if text, err := e.explainText(ctx, "EXPLAIN EXTENDED "+query, args); err == nil {
+		if text, err := e.pool.Explain(ctx, "EXPLAIN EXTENDED "+query, args, "\n"); err == nil {
 			plan.TableRows, plan.TableSized = obTableRows(text)
 		}
 	}
 	return plan, err
-}
-
-func (e obExplainer) explainText(ctx context.Context, query string, args []any) (string, error) {
-	rows, err := e.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = rows.Close() }()
-	var sb strings.Builder
-	for rows.Next() {
-		var s string
-		if err := rows.Scan(&s); err != nil {
-			return "", err
-		}
-		sb.WriteString(s)
-		sb.WriteByte('\n')
-	}
-	return sb.String(), rows.Err()
 }
 
 var (
@@ -171,16 +139,15 @@ func parseOBExplain(b []byte) (cost.Plan, error) {
 	return plan, nil
 }
 
-// obScanType maps an OceanBase operator (or MySQL access_type in the fallback
-// path) to a ScanType.
+// obScanType maps an OceanBase operator to a ScanType (a MySQL-compatible
+// plan is parsed as MySQL's: see parseOBExplain).
 func obScanType(op string) cost.ScanType {
 	switch {
-	case strings.Contains(op, "FULL SCAN") || strings.EqualFold(op, "ALL"):
+	case strings.Contains(op, "FULL SCAN"):
 		return cost.ScanFull
-	case strings.Contains(op, "GET") || strings.EqualFold(op, "const") ||
-		strings.EqualFold(op, "eq_ref") || strings.EqualFold(op, "system"):
+	case strings.Contains(op, "GET"):
 		return cost.ScanPoint
-	case strings.Contains(op, "INDEX") || strings.Contains(op, "RANGE") || strings.EqualFold(op, "ref"):
+	case strings.Contains(op, "INDEX") || strings.Contains(op, "RANGE"):
 		return cost.ScanIndex
 	}
 	return cost.ScanUnknown

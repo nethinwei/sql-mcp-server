@@ -42,11 +42,17 @@ models:
   TableStatus:
     model:
       - github.com/99designs/gqlgen/graphql.String
+  ScanBatch:
+    fields:
+      items:
+        resolver: true
   Workspace:
     fields:
       sections:
         resolver: true
       items:
+        resolver: true
+      conflicts:
         resolver: true
   Revision:
     model:

@@ -19,8 +19,9 @@ type Batch struct {
 	ID         string
 	Datasource string
 	StartedBy  string
-	// RequestKey names the request that started the batch: a request sent
-	// again with the same key gets the same batch.
+	// RequestKey names the request that started the batch: the same request
+	// sent again (with the same key, by the same administrator) gets the
+	// same batch.
 	RequestKey string
 	// Owner is one run of the batch, never reused: a takeover makes a new
 	// one.
@@ -30,7 +31,11 @@ type Batch struct {
 	Heartbeat  time.Time
 	// Canceled asks the owner to stop.
 	Canceled bool
-	Items    []BatchItem
+	// Items are the batch's schemas, as Batch reads them; the lists
+	// (Batches, UnfinishedBatches) leave them out and count them by state
+	// in Counts instead.
+	Items  []BatchItem
+	Counts map[string]int
 }
 
 // Item states: an item goes from pending to running, and from running to
@@ -64,18 +69,32 @@ var (
 	ErrNotOwner = errors.New("catalog: the scan batch is not this run's")
 )
 
+// BatchRetention is how long a finished batch is kept: CreateBatch drops
+// the batches of its datasource finished longer ago, so that the batches
+// kept, which it reads, do not grow without end.
+const BatchRetention = 30 * 24 * time.Hour
+
 // BatchStore keeps scan batches.
 type BatchStore interface {
 	// CreateBatch creates b (its owner beating at b.Heartbeat) unless its
 	// datasource has maxOpen unfinished batches (ErrTooManyBatches), checking
 	// and creating in one step, so concurrent requests, of any process,
 	// cannot pass the bound together. A batch started before with b's
-	// RequestKey for the datasource is returned instead, with false.
+	// RequestKey for the datasource is returned instead, with false. The
+	// batches of the datasource finished BatchRetention before b started
+	// are dropped.
 	CreateBatch(ctx context.Context, b Batch, maxOpen int) (Batch, bool, error)
 	Batch(ctx context.Context, id string) (Batch, bool, error)
-	// Batches lists the batches of datasource, newest first.
+	// BatchCanceled reports whether batch id was canceled (false when there
+	// is none), without reading its items.
+	BatchCanceled(ctx context.Context, id string) (bool, error)
+	// Batches lists the batches of datasource, newest first, without their
+	// items (see Batch.Counts): a console polls it.
 	Batches(ctx context.Context, datasource string, limit int) ([]Batch, error)
-	// UnfinishedBatches lists every batch not finished.
+	// BatchesWithItems lists the batches of datasource as Batches does, with
+	// their items; a batch pruned meanwhile may be listed without them.
+	BatchesWithItems(ctx context.Context, datasource string, limit int) ([]Batch, error)
+	// UnfinishedBatches lists every batch not finished, without their items.
 	UnfinishedBatches(ctx context.Context) ([]Batch, error)
 	// ClaimBatch makes owner the owner of an unfinished batch whose heartbeat
 	// is before staleBefore, or already owner's, beating at now; false when
@@ -103,15 +122,31 @@ func cloneBatch(b Batch) Batch {
 	return b
 }
 
+// header is b as the lists give it: its items counted by state.
+func header(b Batch) Batch {
+	b.Counts = map[string]int{}
+	for _, it := range b.Items {
+		b.Counts[it.State]++
+	}
+	b.Items = nil
+	return b
+}
+
 func (m *MemoryStore) CreateBatch(_ context.Context, b Batch, maxOpen int) (Batch, bool, error) {
 	m.batches.mu.Lock()
 	defer m.batches.mu.Unlock()
+	for id, other := range m.batches.all {
+		if other.Datasource == b.Datasource && !other.FinishedAt.IsZero() &&
+			other.FinishedAt.Before(b.StartedAt.Add(-BatchRetention)) {
+			delete(m.batches.all, id)
+		}
+	}
 	open := 0
 	for _, other := range m.batches.all {
 		if other.Datasource != b.Datasource {
 			continue
 		}
-		if b.RequestKey != "" && other.RequestKey == b.RequestKey {
+		if b.RequestKey != "" && other.RequestKey == b.RequestKey && other.StartedBy == b.StartedBy {
 			return cloneBatch(other), false, nil
 		}
 		if other.FinishedAt.IsZero() {
@@ -135,13 +170,33 @@ func (m *MemoryStore) Batch(_ context.Context, id string) (Batch, bool, error) {
 	return cloneBatch(b), ok, nil
 }
 
+func (m *MemoryStore) BatchCanceled(_ context.Context, id string) (bool, error) {
+	m.batches.mu.Lock()
+	defer m.batches.mu.Unlock()
+	return m.batches.all[id].Canceled, nil
+}
+
 func (m *MemoryStore) Batches(_ context.Context, datasource string, limit int) ([]Batch, error) {
+	return m.listBatches(datasource, limit, header)
+}
+
+func (m *MemoryStore) BatchesWithItems(_ context.Context, datasource string, limit int) ([]Batch, error) {
+	return m.listBatches(datasource, limit, func(b Batch) Batch {
+		b = cloneBatch(b)
+		if b.Items == nil {
+			b.Items = []BatchItem{}
+		}
+		return b
+	})
+}
+
+func (m *MemoryStore) listBatches(datasource string, limit int, view func(Batch) Batch) ([]Batch, error) {
 	m.batches.mu.Lock()
 	defer m.batches.mu.Unlock()
 	out := []Batch{}
 	for _, b := range m.batches.all {
 		if b.Datasource == datasource {
-			out = append(out, cloneBatch(b))
+			out = append(out, view(b))
 		}
 	}
 	slices.SortFunc(
@@ -157,7 +212,7 @@ func (m *MemoryStore) UnfinishedBatches(context.Context) ([]Batch, error) {
 	out := []Batch{}
 	for _, b := range m.batches.all {
 		if b.FinishedAt.IsZero() {
-			out = append(out, cloneBatch(b))
+			out = append(out, header(b))
 		}
 	}
 	slices.SortFunc(out, func(a, b Batch) int { return cmp.Compare(a.ID, b.ID) })
@@ -201,6 +256,7 @@ func (m *MemoryStore) MoveItem(
 		return false, nil
 	}
 	b.Items = slices.Clone(b.Items)
+	item.NotBefore = item.NotBefore.Truncate(time.Microsecond) // as a store keeps it
 	b.Items[i] = item
 	m.batches.all[id] = b
 	return true, nil

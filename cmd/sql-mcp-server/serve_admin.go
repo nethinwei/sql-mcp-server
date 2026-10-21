@@ -75,7 +75,7 @@ func (f serveAdminFlags) handler(
 			return nil
 		},
 		PathPrefix:   cfg.Server.PathPrefix,
-		SecureCookie: secureCookie(cfg), Playground: *f.playground,
+		SecureCookie: liveSecureCookie(runtime, cfg), Playground: *f.playground,
 	}), nil
 }
 
@@ -84,6 +84,18 @@ func (f serveAdminFlags) handler(
 // (server.publicURL is https).
 func secureCookie(cfg *config.Config) bool {
 	return cfg.Server.Auth.TLS.Cert != "" || strings.HasPrefix(strings.ToLower(cfg.Server.PublicURL), "https://")
+}
+
+// liveSecureCookie is secureCookie of the configuration served now (startup
+// until a snapshot has one): server.publicURL and the certificate apply
+// without a restart, and so does whether the console's cookie is Secure.
+func liveSecureCookie(runtime *bootstrap.Runtime, startup *config.Config) func() bool {
+	return func() bool {
+		if app := runtime.Current(); app != nil && app.Config() != nil {
+			return secureCookie(app.Config())
+		}
+		return secureCookie(startup)
+	}
 }
 
 // runtimeMissing reports what the served App found missing from the

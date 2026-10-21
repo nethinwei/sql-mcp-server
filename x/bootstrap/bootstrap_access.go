@@ -226,8 +226,12 @@ func (a *App) UserByTokenHash(hash string) (UserIdentity, bool) {
 	return a.UserByName(name)
 }
 
-// UserByName returns an enabled user by name.
+// UserByName returns an enabled user by name, none when its runtime holds
+// the user.
 func (a *App) UserByName(name string) (UserIdentity, bool) {
 	id, ok := a.Users[name]
+	if ok && a.held != nil && a.held(name) {
+		return UserIdentity{}, false
+	}
 	return id, ok
 }

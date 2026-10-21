@@ -2,7 +2,7 @@ module github.com/nethinwei/sql-mcp-server
 
 go 1.26.0
 
-toolchain go1.26.9
+toolchain go1.26.10
 
 require (
 	github.com/99designs/gqlgen v0.17.95
@@ -47,7 +47,7 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/coder/websocket v1.8.15 // indirect
-	github.com/containerd/errdefs v1.0.0 // indirect
+	github.com/containerd/errdefs v1.0.0
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/containerd/platforms v0.2.1 // indirect
@@ -76,7 +76,7 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/go-archive v0.3.0 // indirect
-	github.com/moby/moby/api v1.54.2 // indirect
+	github.com/moby/moby/api v1.54.2
 	github.com/moby/moby/client v0.4.0 // indirect
 	github.com/moby/patternmatcher v0.6.1 // indirect
 	github.com/moby/sys/sequential v0.7.0 // indirect

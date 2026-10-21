@@ -57,7 +57,7 @@ depguard 规则 `versioning-generic` 禁止它导入 `core/config`、`x/configed
 
 | 值 | 规则 |
 |---|---|
-| 对象 | 按键逐个合并；一侧删除、另一侧修改为冲突 |
+| 对象 | 按键逐个合并（双方都新增的对象也是，视基准为空对象）；一侧删除、另一侧修改为冲突 |
 | 列表，元素有 `name` 或 `entity`（`Schema.ListKeys`） | 按键识别元素：字段、关系按 `name`，授权按 `entity`；新增、删除、修改各自合并，顺序按我方，再追加只有对方新增的；同一键出现多次的元素成组整体比较 |
 | 其他列表、标量 | 整体比较：只有一侧改了取那一侧，两侧改得一样取之，改得不同为冲突 |
 | `Schema.OptionalText` 中的文本 | 空串等同未设置 |
@@ -80,8 +80,9 @@ depguard 规则 `versioning-generic` 禁止它导入 `core/config`、`x/configed
 |---|---|---|
 | 读 | `workspace`、`workspaceLog` | 工作区（各项按控制台形状的分区返回）、冲突、说明、已合并的草稿、检查点；写入记录 |
 | 写 | `editWorkspace`；`applyPlan`、`plan_apply` | `WriteItems`，见不变量 3；Agent 写入附说明（令牌名与 `comment`） |
-| update | `updateWorkspace(to)` | 移到较新的修订，重放本地修改，改得不同的成为相对已发布的冲突 |
-| reset | `resetWorkspace(to)` | 变成修订 `to` 原样，丢弃修改、冲突与说明，并清除已合并草稿与检查点的记录（这些草稿仍是草稿，重新出现在待审列表，可以再次合并） |
+| update | `updateWorkspace(to)` | 移到较新的已发布修订，重放本地修改，改得不同的成为相对已发布的冲突 |
+| reset | `resetWorkspace(to)` | 变成修订 `to`（须是发布过的修订）原样，丢弃修改、冲突与说明，并清除已合并草稿与检查点的记录（这些草稿仍是草稿，重新出现在待审列表，可以再次合并） |
+| 载入 | `loadRevision(to, keep)` | 把任意修订 `to`（旧版本、已丢弃的草稿）的内容作为相对当前发布的未发布修改载入，基准改为当前发布，因此可以直接提交；`keep` 为假时同 reset 丢弃原有修改，为真时把原有修改三方合并到 `to` 的内容上，改得不同的成为固定对方值的冲突 |
 | 合并草稿 | `mergeDraft(id)` | 草稿相对其基准的修改合并进工作区（先移到最新发布）；与发布冲突保留草稿的，与工作区冲突保留工作区的；重复合并无效果 |
 | 解决冲突 | `resolveConflict(id, theirs)` | `theirs` 取对方的值，否则保留我的 |
 | 检查点 | `checkpointWorkspace(comment)` | 把工作区存为草稿供他人审核，取代之前存的那份；草稿内容是开始保存时读到的工作区，保存期间或之后有写入（或未写过的工作区跟随了新发布）即不再是“与工作区一致”的草稿 |

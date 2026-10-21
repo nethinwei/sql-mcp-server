@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
+	"maps"
+	"slices"
 	"strings"
 )
 
@@ -69,7 +71,8 @@ func (c *Config) normalizeAccess() error {
 	}
 	c.Server.User = rbac.NormalizeRole(c.Server.User)
 	budgetUsers := make(map[string]BudgetLimits, len(c.Budget.Users))
-	for name, limits := range c.Budget.Users {
+	for _, name := range slices.Sorted(maps.Keys(c.Budget.Users)) {
+		limits := c.Budget.Users[name]
 		key := rbac.NormalizeRole(name)
 		if _, exists := budgetUsers[key]; exists {
 			return fmt.Errorf("config: budget has colliding user %q after normalization", key)
@@ -84,7 +87,8 @@ func (c *Config) normalizeAccess() error {
 
 func (c *Config) normalizeRoleDefinitions() error {
 	roles := make(map[string]RoleDefinition, len(c.Roles))
-	for name, def := range c.Roles {
+	for _, name := range slices.Sorted(maps.Keys(c.Roles)) {
+		def := c.Roles[name]
 		key, err := canonicalAccessName("role", name)
 		if err != nil {
 			return err
@@ -106,7 +110,8 @@ func (c *Config) normalizeRoleDefinitions() error {
 
 func (c *Config) normalizeUsers() error {
 	users := make(map[string]UserConfig, len(c.Users))
-	for name, user := range c.Users {
+	for _, name := range slices.Sorted(maps.Keys(c.Users)) {
+		user := c.Users[name]
 		key, err := canonicalAccessName("user", name)
 		if err != nil {
 			return err
@@ -166,7 +171,8 @@ func (c *Config) validateAccess(databases map[string]DatabaseConfig) error {
 			}
 		}
 	}
-	for name, def := range c.Roles {
+	for _, name := range slices.Sorted(maps.Keys(c.Roles)) {
+		def := c.Roles[name]
 		if err := validatePermissions("role", name, def.Permissions, databases); err != nil {
 			return err
 		}
@@ -180,17 +186,30 @@ func (c *Config) validateAccess(databases map[string]DatabaseConfig) error {
 func (c *Config) validateUsers(entities EntityRefs, databases map[string]DatabaseConfig) error {
 	known := c.knownRoles()
 	if len(c.Users) > 0 {
-		for role := range known {
+		for _, role := range slices.Sorted(maps.Keys(known)) {
 			if strings.Contains(role, ":") {
 				return fmt.Errorf("config: role %q must not contain ':' when users are configured", role)
 			}
+		}
+		// A user's principal as the default role would serve every caller
+		// naming no one as that user.
+		if strings.Contains(c.Server.Role, ":") {
+			return fmt.Errorf("config: server.role %q must not contain ':' when users are configured; "+
+				"use server.user", c.Server.Role)
+		}
+	}
+	for _, role := range slices.Sorted(maps.Keys(c.Budget.Roles)) {
+		// A misspelt role would leave the role meant without its budget.
+		if !known[role] && role != c.Server.Role {
+			return fmt.Errorf("config: budget references unknown role %q", role)
 		}
 	}
 	hashes := make(map[string]string, len(c.Users))
 	if c.Server.Auth.Token != "" {
 		hashes[TokenHash(c.Server.Auth.Token)] = "server.auth.token"
 	}
-	for name, user := range c.Users {
+	for _, name := range slices.Sorted(maps.Keys(c.Users)) {
+		user := c.Users[name]
 		if err := validateUser(name, user, known, hashes, entities, databases); err != nil {
 			return err
 		}
@@ -207,7 +226,7 @@ func (c *Config) validateUsers(entities EntityRefs, databases map[string]Databas
 			return fmt.Errorf("config: server.user %q is disabled", c.Server.User)
 		}
 	}
-	for name := range c.Budget.Users {
+	for _, name := range slices.Sorted(maps.Keys(c.Budget.Users)) {
 		if _, ok := c.Users[name]; !ok {
 			return fmt.Errorf("config: budget references unknown user %q", name)
 		}

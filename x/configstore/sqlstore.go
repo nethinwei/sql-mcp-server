@@ -108,14 +108,15 @@ func tuples(rows, cols int) string {
 	return strings.TrimSuffix(strings.Repeat("("+placeholders(cols)+"), ", rows), ", ")
 }
 
-// withTx runs fn in a transaction, rolling back on error.
+// withTx runs fn in a transaction, rolling back on error, and on a panic of
+// fn: the transaction, which may hold the store lock, must not outlive it.
 func (s *SQLStore) withTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
+	defer func() { _ = tx.Rollback() }() // after Commit, a no-op
 	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
 		return err
 	}
 	return tx.Commit()
@@ -250,8 +251,8 @@ func (s *SQLStore) Published(ctx context.Context) (revision.Revision, error) {
 
 // PublishedSummary implements revision.Store.
 func (s *SQLStore) PublishedSummary(ctx context.Context) (revision.Revision, error) {
-	r, err := scanRevision(s.queryRow(ctx, s.db, "SELECT "+summaryColumns+" FROM smcp_revisions WHERE state = ?",
-		string(revision.StatePublished)))
+	r, err := scanRevision(s.queryRow(ctx, s.db, "SELECT "+summaryColumns+" FROM smcp_revisions WHERE "+
+		s.dialect.published))
 	if errors.Is(err, sql.ErrNoRows) {
 		return revision.Revision{}, revision.ErrNoPublished
 	}
@@ -259,8 +260,8 @@ func (s *SQLStore) PublishedSummary(ctx context.Context) (revision.Revision, err
 }
 
 func (s *SQLStore) published(ctx context.Context, q execer) (revision.Revision, error) {
-	r, err := scanRevision(s.queryRow(ctx, q, "SELECT "+revisionColumns+" FROM smcp_revisions WHERE state = ?",
-		string(revision.StatePublished)))
+	r, err := scanRevision(s.queryRow(ctx, q, "SELECT "+revisionColumns+" FROM smcp_revisions WHERE "+
+		s.dialect.published))
 	if errors.Is(err, sql.ErrNoRows) {
 		return revision.Revision{}, revision.ErrNoPublished
 	}

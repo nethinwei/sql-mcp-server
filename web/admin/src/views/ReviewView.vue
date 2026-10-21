@@ -72,7 +72,9 @@ function writer(c: { kind: string; name: string }) {
 }
 
 const restartList = () => restart.value.join(t('common.listSep'))
-const summary = computed(() => summarize(JSON.parse(ws.baseline) as Config, ws.$state))
+// The baseline is parsed when it changes, not on every edit of the workspace.
+const baseline = computed(() => JSON.parse(ws.baseline) as Config)
+const summary = computed(() => summarize(baseline.value, ws.$state))
 
 // Validation, restart flags and the diff describe the content they were
 // computed for. Any change to the workspace (here, in the header change bar or
@@ -169,6 +171,23 @@ async function save(publish: boolean) {
   } catch (e) {
     if (e instanceof WorkspaceSwitched) return
     if (e instanceof ApiError) {
+      if (e.code === 'NOT_MOVED' && e.extensions.published) {
+        // Published all the same, the workspace left on the revision before:
+        // it is moved on from here, or the administrator is told to.
+        const id = String(e.extensions.published)
+        void status.refresh()
+        draftsChanged.value++
+        let moved = false
+        try {
+          moved = await owned(() => workspace.follow(id), at)
+        } catch (err) {
+          if (err instanceof WorkspaceSwitched) return
+        }
+        if (moved) message.success(t(restart.value.length ? 'review.publishedRestart' : 'review.published', { id }))
+        else message.warning(t('review.publishedNotMoved', { id }))
+        void router.push({ name: 'revisions', query: { id } })
+        return
+      }
       if (e.code === 'CONFLICT' && e.extensions.published) return conflict(String(e.extensions.published))
       if (e.code === 'BEHIND') {
         await status.refresh()

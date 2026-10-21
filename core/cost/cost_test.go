@@ -248,7 +248,7 @@ func TestValidateTemplateScopes(t *testing.T) {
 		reject []string
 		want   string
 	}{
-		{name: "fingerprints", allow: []string{"fp:v3:abc"}, reject: []string{"fp:v3:def"}},
+		{name: "fingerprints", allow: []string{"fp:v4:abc"}, reject: []string{"fp:v4:def"}},
 		{name: "scoped exact SQL", allow: []string{"primary:SELECT 1"}, reject: []string{"replica:SELECT bad"}},
 		{name: "bare allow", allow: []string{"SELECT 1"}, want: "allowTemplates"},
 		{name: "bare reject", reject: []string{"SELECT bad"}, want: "rejectTemplates"},
@@ -263,7 +263,7 @@ func TestValidateTemplateScopes(t *testing.T) {
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.want) ||
-				!strings.Contains(err.Error(), "fp:v3:<sha256>") ||
+				!strings.Contains(err.Error(), "fp:v4:<sha256>") ||
 				!strings.Contains(err.Error(), "primary:") {
 				t.Fatalf("cost.ValidateTemplateScopes() error = %v, want migration guidance for %s", err, tc.want)
 			}
@@ -280,22 +280,22 @@ func TestValidateTemplateScopes(t *testing.T) {
 func TestValidateTemplateScopesRefusesFingerprintsMatchingNothing(t *testing.T) {
 	t.Parallel()
 	for _, ds := range [][]string{{"primary"}, {"primary", "replica"}} {
-		stale := []struct{ allow, reject []string }{{allow: []string{"fp:v2:abc"}}, {reject: []string{"fp:v1:def"}}}
+		stale := []struct{ allow, reject []string }{{allow: []string{"fp:v3:abc"}}, {reject: []string{"fp:v2:def"}}}
 		for _, c := range stale {
 			err := cost.ValidateTemplateScopes(ds, c.allow, c.reject)
-			if err == nil || !strings.Contains(err.Error(), "earlier version") || !strings.Contains(err.Error(), "fp:v3:") {
+			if err == nil || !strings.Contains(err.Error(), "earlier version") || !strings.Contains(err.Error(), "fp:v4:") {
 				t.Fatalf("%v %v: error = %v, want an earlier-version fingerprint refused", ds, c, err)
 			}
 		}
 	}
-	for _, value := range []string{" fp:v2:abc", "fp:v3:abc ", "primary:fp:v2:abc", "primary: fp:v3:abc"} {
+	for _, value := range []string{" fp:v2:abc", "fp:v4:abc ", "primary:fp:v2:abc", "primary: fp:v4:abc"} {
 		err := cost.ValidateTemplateScopes([]string{"primary"}, nil, []string{value})
 		if err == nil || !strings.Contains(err.Error(), "matches nothing") {
 			t.Fatalf("%q: error = %v, want it refused", value, err)
 		}
 	}
-	if fp := cost.Fingerprint("primary", "postgres", codegen.Compiled{SQL: "SELECT 1"}); !strings.HasPrefix(fp, "fp:v3:") {
-		t.Fatalf("Fingerprint = %q, want the fp:v3: prefix", fp)
+	if fp := cost.Fingerprint("primary", "postgres", codegen.Compiled{SQL: "SELECT 1"}); !strings.HasPrefix(fp, "fp:v4:") {
+		t.Fatalf("Fingerprint = %q, want the fp:v4: prefix", fp)
 	}
 }
 
@@ -461,6 +461,19 @@ func TestAggregateGuardRequiresPredicate(t *testing.T) {
 	if d, _ := guard.Check(context.Background(), filtered); !d.Allow {
 		t.Fatalf("filtered aggregate should pass: %+v", d)
 	}
+	// An IN list past relalg's default bound, within a larger configured
+	// cost.maxINListSize codegen enforced, is a predicate too.
+	values := make([]any, relalg.DefaultMaxINCardinality+1)
+	for i := range values {
+		values[i] = i
+	}
+	filtered.Expr = relalg.Aggregate{Input: relalg.Select{
+		Input:     relalg.Scan{Relation: relalg.RelationRef{Name: "events"}},
+		Predicate: relalg.Condition{Field: "tenant_id", Op: relalg.OpIn, Value: values},
+	}}
+	if d, _ := guard.Check(context.Background(), filtered); !d.Allow {
+		t.Fatalf("a long IN list should pass: %+v", d)
+	}
 }
 
 // TestAggregateGuardHintNamesExecutableRepair locks the v0.1.8 contract
@@ -500,6 +513,25 @@ func TestAllowedCallStillRunsCallGuard(t *testing.T) {
 	)
 	if d, _ := g.Check(context.Background(), call); d.Allow {
 		t.Fatal("cost.StaticRule allow bypass must not skip cost.CallGuard")
+	}
+}
+
+// An allowed template skips the estimate only: a bulk write it names is
+// still refused by the write guard, whose hints name no template.
+func TestAllowedTemplateDoesNotPassTheWriteGuard(t *testing.T) {
+	t.Parallel()
+	write := codegen.Compiled{Kind: codegen.KindWrite, SQL: "UPDATE t SET x=1 WHERE y=2"}
+	g := cost.NewGateFromCapabilities(testdialect.MySQL{}.Capabilities(), nil, cost.Threshold{
+		RequirePKForWrite: true, LegacyExactSQL: true, AllowTemplates: []string{write.SQL},
+	}, nil)
+	d, err := g.Check(context.Background(), write)
+	if err != nil || d.Allow {
+		t.Fatalf("decision = %+v, %v", d, err)
+	}
+	for _, hint := range d.Hints {
+		if strings.Contains(hint, "allowTemplates") {
+			t.Fatalf("hint %q suggests a template, which cannot admit the write", hint)
+		}
 	}
 }
 
@@ -646,6 +678,22 @@ func TestEstimateSmallTableFullScan(t *testing.T) {
 		if d.Allow != c.allow {
 			t.Errorf("%+v: allow = %v", c, d.Allow)
 		}
+	}
+}
+
+// A small table read whole still counts its rows against the scanned-row
+// limit: taking the scan for an index scan does not shrink what it reads.
+func TestSmallTableFullScanCountsItsRows(t *testing.T) {
+	t.Parallel()
+	est := cost.Estimate{
+		Explainer: costtest.FakeExplainer{Plan: cost.Plan{
+			ScanType: cost.ScanFull, EstimatedRows: 1, TableRows: 600, TableSized: true, StatsFresh: true,
+		}},
+		Threshold: cost.Threshold{FullScanMaxRows: 1000, MaxScannedRows: 500, HardScore: 40, SoftScore: 60},
+	}
+	d, err := est.Check(context.Background(), codegen.Compiled{SQL: "SELECT * FROM t"})
+	if err != nil || d.Allow {
+		t.Fatalf("a 600-row scan under a 500-row limit: allow = %v, %v", d.Allow, err)
 	}
 }
 

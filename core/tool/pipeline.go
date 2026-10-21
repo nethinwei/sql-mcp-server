@@ -41,6 +41,12 @@ func authorizeRequest(ctx context.Context, tc Context, req rbac.Request) (grant,
 	if !dec.Allowed {
 		return grant{}, denyUnauthorized(dec)
 	}
+	if req.Action == entity.ActionRead && len(dec.Fields) == 0 {
+		// A read selects the fields it may return: none would be SELECT *,
+		// every column, hidden ones too. The authorizer refuses it; an
+		// authorizer that does not is refused here (fail closed).
+		return grant{}, denyUnauthorized(rbac.Decision{Reason: "no readable fields"})
+	}
 	if tc.Registry != nil {
 		if res, ok := tc.Registry.Resolve(req.Entity); ok && res.Entity.Unavailable != "" {
 			return grant{}, fmt.Errorf("%w: %q: %s", ErrEntityUnavailable, req.Entity, res.Entity.Unavailable)
@@ -113,22 +119,30 @@ func estimateSQL(ctx context.Context, tc Context, route EscapeRoute, sql string,
 		return gated{}, &UnestimableError{Cause: err}
 	}
 	dec := cost.Estimate{Threshold: route.Threshold.Tighten(tc.Tightening), FailClosed: true}.Evaluate(plan, nil)
+	if err := admitDecision(ctx, tc, dec); err != nil {
+		return gated{}, err
+	}
+	return gated{Compiled: compiled, plan: dec.Plan}, nil
+}
+
+// admitDecision reports the gate's decision (FireCostGate) and admits what
+// it allowed within the caller's scanned-row budget: the one way the
+// governed tools and the escape hatch judge a plan.
+func admitDecision(ctx context.Context, tc Context, dec cost.Decision) error {
 	verdict := "allow"
-	if !dec.Allow {
+	switch {
+	case dec.Allow:
+	case dec.Soft:
+		verdict = "soft"
+	default:
 		verdict = "hard"
-		if dec.Soft {
-			verdict = "soft"
-		}
 	}
 	estimated, score := dec.Estimate()
 	tc.Hooks.FireCostGate(ctx, estimated, score, verdict)
 	if !dec.Allow {
-		return gated{}, toExceededError(dec)
+		return toExceededError(dec)
 	}
-	if err := checkScannedBudget(tc, dec.Plan); err != nil {
-		return gated{}, err
-	}
-	return gated{Compiled: compiled, plan: dec.Plan}, nil
+	return checkScannedBudget(tc, dec.Plan)
 }
 
 // checkScannedBudget holds a plan the cost gate allowed to the caller's
@@ -205,7 +219,7 @@ type rawRows struct {
 // queryRaw runs st, the escape hatch's query, and reads its rows as they
 // are, counted against the call's byte limit and cut at its row cap.
 func (st statement) queryRaw(ctx context.Context) (out rawRows, err error) {
-	if err := st.admitted(); err != nil {
+	if err := st.admitted(ctx); err != nil {
 		return rawRows{}, err
 	}
 	defer func() { err = st.settle(ctx, err) }()
@@ -233,7 +247,10 @@ func (st statement) queryRaw(ctx context.Context) (out rawRows, err error) {
 		if err := rows.Scan(pointers...); err != nil {
 			return rawRows{}, st.fail(err)
 		}
-		if err := st.tc.results.add(rowOf(out.columns, values)); errors.Is(err, errResultCut) {
+		for i, v := range values {
+			values[i] = finite(v)
+		}
+		if err := st.tc.results.addValues(values); errors.Is(err, errResultCut) {
 			out.truncated = true
 			break
 		} else if err != nil {
@@ -247,22 +264,25 @@ func (st statement) queryRaw(ctx context.Context) (out rawRows, err error) {
 	return out, nil
 }
 
-// rowOf is values under columns, as the meter counts a row.
-func rowOf(columns []string, values []any) map[string]any {
-	row := make(map[string]any, len(columns))
-	for i, c := range columns {
-		row[c] = values[i]
-	}
-	return row
-}
-
 // admitted refuses a statement made without an authorization or without SQL
-// (the zero grant or gated a failed step returns).
-func (st statement) admitted() error {
+// (the zero grant or gated a failed step returns). A write inside a
+// transaction records what it may change before it runs: a commit coming
+// between its end and its settling would otherwise leave the cached reads
+// it changed in place (a write that fails rolls the transaction back, and
+// what it recorded with it).
+func (st statement) admitted(ctx context.Context) error {
 	if !st.grant.Allowed || st.sql.SQL == "" {
 		return ErrUnauthorized
 	}
+	if st.transactional() {
+		return afterWrite(ctx, st.tc, st.res.Entity, st.tc.Transaction)
+	}
 	return nil
+}
+
+// transactional reports a governed write inside a transaction.
+func (st statement) transactional() bool {
+	return st.write && !st.raw && st.tc.Transaction != ""
 }
 
 // queried are a query's rows and, for each, the values of the statement's
@@ -277,7 +297,7 @@ type queried struct {
 // query runs st and reads its rows: shaped, masked and counted against the
 // call's limits, stopping at the first that crosses them.
 func (st statement) query(ctx context.Context) (out queried, err error) {
-	if err := st.admitted(); err != nil {
+	if err := st.admitted(ctx); err != nil {
 		return queried{}, err
 	}
 	defer func() { err = st.settle(ctx, err) }()
@@ -288,9 +308,13 @@ func (st statement) query(ctx context.Context) (out queried, err error) {
 		return queried{}, st.fail(err)
 	}
 	out.rows = make([]map[string]any, 0)
+	rules := st.maskRules()
 	for row, err := range store.IterNamed(rows, st.columns) {
 		if err != nil {
 			return queried{}, st.fail(err)
+		}
+		for c, v := range row {
+			row[c] = finite(v)
 		}
 		if st.keep != nil {
 			kept := make(map[string]any, len(st.keep))
@@ -299,7 +323,7 @@ func (st statement) query(ctx context.Context) (out queried, err error) {
 			}
 			out.kept = append(out.kept, kept)
 		}
-		st.present(row)
+		st.present(row, rules)
 		err := errResultCut // a write's rows past its cap are cut: it already took effect
 		if st.rowCap <= 0 || int64(len(out.rows)) < st.rowCap {
 			err = st.tc.results.add(row)
@@ -322,7 +346,7 @@ func (st statement) query(ctx context.Context) (out queried, err error) {
 
 // exec runs st, a statement without rows.
 func (st statement) exec(ctx context.Context) (store.Result, error) {
-	if err := st.admitted(); err != nil {
+	if err := st.admitted(ctx); err != nil {
 		return store.Result{}, err
 	}
 	r, err := retryStalePlan(st.tc, func() (store.Result, error) {
@@ -334,8 +358,18 @@ func (st statement) exec(ctx context.Context) (store.Result, error) {
 	return r, st.settle(ctx, err)
 }
 
-// present shapes and masks a row of st's entity for the caller.
-func (st statement) present(row map[string]any) {
+// maskRules are the mask rules of st's rows (see present); nil without a
+// masker.
+func (st statement) maskRules() map[string]string {
+	if st.tc.Masker == nil {
+		return nil
+	}
+	return maskRules(st.res.Entity.Attributes)
+}
+
+// present shapes a row of st's entity for the caller and masks it by rules
+// (st.maskRules, read once for the rows of a statement).
+func (st statement) present(row map[string]any, rules map[string]string) {
 	if st.fields != nil {
 		for field := range row {
 			if !st.fields[field] {
@@ -344,7 +378,7 @@ func (st statement) present(row map[string]any) {
 		}
 	}
 	if st.tc.Masker != nil {
-		maskRow(st.tc.Masker, st.res.Entity.Attributes, row)
+		maskRow(st.tc.Masker, rules, row)
 	}
 }
 
@@ -369,8 +403,10 @@ func (st statement) classify(err error) error {
 	if !st.write {
 		return WrapDBError(err)
 	}
-	if st.tc.Transaction == "" && uncertain(err) {
+	if st.tc.Transaction == "" && uncertain(err) || errors.Is(err, store.ErrInterrupted) {
 		// Inside a transaction nothing is committed yet; its commit tells.
+		// An interrupted procedure may have done part of its work, even
+		// inside one: retried, it would do it again.
 		return outcomeUnknown(err)
 	}
 	return writeError(st.res, err)
@@ -378,14 +414,20 @@ func (st statement) classify(err error) error {
 
 // failRaw classifies a database error of the escape hatch's statement,
 // keeping the driver's message: the caller holds the connection's whole
-// account, and the message is what they are after.
+// account, and the message is what they are after. A statement cut short
+// (interrupted, its connection lost) is of unknown outcome whatever the mode,
+// as settle takes it: a query may write too, or CALL a procedure whose
+// earlier statements took effect.
 func (st statement) failRaw(err error) error {
-	if st.write && uncertain(err) {
+	if uncertain(err) {
 		return outcomeUnknown(err)
 	}
 	kind := ErrDatabase
-	if errors.Is(err, store.ErrPermissionDenied) {
+	switch {
+	case errors.Is(err, store.ErrPermissionDenied):
 		kind = ErrDatasourceForbidden
+	case errors.Is(err, store.ErrStatementTimeout):
+		kind = ErrStatementTimeout
 	}
 	return &RawDBError{Kind: kind, Cause: err}
 }
@@ -404,7 +446,7 @@ func (st statement) settle(ctx context.Context, err error) error {
 		}
 		return err
 	}
-	if !st.write {
+	if !st.write || st.transactional() { // recorded when admitted
 		return err
 	}
 	if followErr := afterWrite(ctx, st.tc, st.res.Entity, st.tc.Transaction); err == nil {
@@ -426,9 +468,18 @@ func outcomeUnknown(err error) error { return &classified{kind: ErrOutcomeUnknow
 // its connection broke or its deadline passed after it may have been sent. A
 // broken connection a driver reports before sending the statement
 // (driver.ErrBadConn, which database/sql retries on another connection) is
-// not uncertain, nor is any error the database itself returned.
+// not uncertain, nor is a connection that could not be made
+// (store.ErrNotConnected), nor a statement the database stopped at its
+// timeout (store.ErrStatementTimeout, rolled back, though a deadline passed
+// too), nor any error the database itself returned but an interruption
+// (store.ErrInterrupted: a procedure's earlier statements, or a commit, may
+// have taken effect).
 func uncertain(err error) bool {
 	var netErr net.Error
-	return errors.Is(err, store.ErrConnectionLost) || errors.Is(err, io.ErrUnexpectedEOF) ||
+	if errors.Is(err, store.ErrNotConnected) || errors.Is(err, store.ErrStatementTimeout) {
+		return false
+	}
+	return errors.Is(err, store.ErrConnectionLost) || errors.Is(err, store.ErrInterrupted) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.As(err, &netErr)
 }

@@ -16,23 +16,41 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           cache: true
+      # server.json is released as checked in, with the tag's version: a
+      # tag it does not name fails here, before anything is built. An RC tag
+      # (vX.Y.Z-rc.N) names the release server.json holds (X.Y.Z).
+      - name: verify server.json names the tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          python3 scripts/release/metadata.py verify --version "${VERSION%%-*}" --file server.json
       - run: make release-quality
 
   integration:
-    name: release integration (${{ matrix.db }})
+    name: release integration (${{ matrix.db }}${{ matrix.pg && format(' {0}', matrix.pg) || '' }})
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        db: [postgres, mysql, oceanbase]
+        include:
+          # PostgreSQL on every supported version (docs/supported-versions.md).
+          - {db: postgres, pg: "11"}
+          - {db: postgres, pg: "12"}
+          - {db: postgres, pg: "13"}
+          - {db: postgres, pg: "14"}
+          - {db: postgres, pg: "15"}
+          - {db: postgres, pg: "16"}
+          - {db: postgres, pg: "17"}
+          - {db: postgres, pg: "18"}
+          - {db: mysql}
+          - {db: oceanbase}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           cache: true
       - name: download modules (retry on a flaky module proxy)
         run: |
@@ -41,6 +59,8 @@ jobs:
             echo "go mod download failed (attempt $attempt)"; sleep 15
           done
       - run: make test-integration-${{ matrix.db }}
+        env:
+          SQL_MCP_PG_IMAGE: ${{ matrix.pg && format('postgres:{0}-alpine', matrix.pg) || '' }}
 
   e2e:
     name: release e2e
@@ -50,7 +70,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           cache: true
       - run: make test-e2e
 
@@ -62,7 +82,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           cache: true
       - run: make modelscope-check
 
@@ -76,7 +96,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           cache: true
       - run: make quickstart-check
 
@@ -93,7 +113,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           cache: true
       - id: syft
         uses: anchore/sbom-action/download-syft@v0.24.0
@@ -210,7 +230,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           cache: true
       - name: run allow and deny smoke
         env:
@@ -246,8 +266,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: scripts/release/verify-attestations.sh attest
 
+  # An RC is not published to the public MCP Registry, as it is not tagged
+  # latest: the registry lists final releases only.
   registry:
     name: publish MCP Registry metadata
+    if: ${{ !contains(github.ref_name, '-') }}
     needs: quickstart
     runs-on: ubuntu-latest
     permissions:
@@ -261,6 +284,7 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.value }}
         run: >-
+          python3 scripts/release/metadata.py verify --version "${VERSION%%-*}" --file server.json &&
           python3 scripts/release/metadata.py render
           --version "$VERSION"
           --file server.json

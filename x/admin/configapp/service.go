@@ -84,11 +84,17 @@ type Service struct {
 	PlannedLimits func(*config.Config) []bootstrap.LimitIssue
 	// previews keeps recent plan previews.
 	previews previews
-	// configs keeps recently built workspace configurations (revisions'
-	// are specs').
-	configs configs
+	// builds keeps recently built workspace configurations (revisions' are
+	// specs'): see BuildDraft.
+	builds     *lru[keptBuilt]
+	buildsOnce sync.Once
 	// items keeps the items of recently read revisions.
 	items workspaceops.ItemsCache
+	// drafts are the drafts Drafts listed, at the revisions' sequence seq.
+	drafts     []PendingDraft
+	draftsSeq  int64
+	draftsKept bool
+	draftsMu   sync.Mutex
 	// specs keeps recently read revisions' configurations (see RevisionSpec).
 	specs     *lru[keptSpec]
 	specsOnce sync.Once
@@ -160,13 +166,37 @@ type Built struct {
 
 // BuildDraft applies d to its base revision through configedit, the same
 // chain as `store import`: decode, defaults, validation, store secret rule and
-// the deterministic encoding.
+// the deterministic encoding. Building onto a large revision takes a large
+// part of a second, and every page of the console asks for its workspace's:
+// what was built is kept, by base and edit, and requests asking at once
+// build once. It is shared: callers only read it.
 func (r *Service) BuildDraft(ctx context.Context, d Draft) (Built, error) {
+	key, err := draftKey(d)
+	if err != nil {
+		return Built{}, err
+	}
+	r.buildsOnce.Do(func() { r.builds = newLRU[keptBuilt](configsKept) })
+	k := r.builds.get(key, func() (keptBuilt, int) {
+		built, err := r.buildDraft(ctx, d)
+		if err != nil {
+			return keptBuilt{err: err}, failedWeight(err) // not kept: tried again
+		}
+		return keptBuilt{built: built}, 1
+	})
+	return k.built, k.err
+}
+
+type keptBuilt struct {
+	built Built
+	err   error
+}
+
+func (r *Service) buildDraft(ctx context.Context, d Draft) (Built, error) {
 	base, err := r.Revision(ctx, d.Base)
 	if err != nil {
 		return Built{}, err
 	}
-	baseSpec, _, err := bootstrap.LoadRevisionSpec(base)
+	baseSpec, _, err := r.RevisionSpec(base.ID, func() (revision.Revision, error) { return base, nil })
 	if err != nil {
 		return Built{}, fmt.Errorf("base revision %d: %w", base.ID, err)
 	}
@@ -188,17 +218,8 @@ func (r *Service) SelectConfig(ctx context.Context, against Against) (*config.Co
 	if draft == nil {
 		return r.revisionConfig(ctx, id)
 	}
-	key, err := draftKey(*draft)
-	if err != nil {
-		return nil, err
-	}
-	return r.configs.keep(key, func() (*config.Config, error) {
-		d, err := r.BuildDraft(ctx, *draft)
-		if err != nil {
-			return nil, err
-		}
-		return d.Config, nil
-	})
+	built, err := r.BuildDraft(ctx, *draft)
+	return built.Config, err
 }
 
 // RestartChanges compares a configuration with the published one.
@@ -235,11 +256,34 @@ type PendingDraft struct {
 }
 
 // Drafts lists every draft, newest first, with what each builds on, worked
-// out over the whole history.
+// out over the whole history: once per change to the revisions (see
+// revision.Store.Sequence), as every console asks it again at each publish.
 func (r *Service) Drafts(ctx context.Context) ([]PendingDraft, error) {
 	if _, err := auth.RequireUnlimited(ctx, auth.PermRead); err != nil {
 		return nil, err
 	}
+	seq, err := r.Store.Sequence(ctx) // read first: a change after it is seen next time
+	if err != nil {
+		return nil, err
+	}
+	r.draftsMu.Lock()
+	if r.draftsKept && r.draftsSeq == seq {
+		out := slices.Clone(r.drafts)
+		r.draftsMu.Unlock()
+		return out, nil
+	}
+	r.draftsMu.Unlock()
+	out, err := r.listDrafts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	r.draftsMu.Lock()
+	r.drafts, r.draftsSeq, r.draftsKept = out, seq, true
+	r.draftsMu.Unlock()
+	return slices.Clone(out), nil
+}
+
+func (r *Service) listDrafts(ctx context.Context) ([]PendingDraft, error) {
 	all, err := r.Store.List(ctx, 0)
 	if err != nil {
 		return nil, err

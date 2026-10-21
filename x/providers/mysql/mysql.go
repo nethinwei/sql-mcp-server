@@ -30,7 +30,7 @@ func Open(dsn string, opts providerregistry.Options) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
-	base := sqladapter.NewBase(ad, Dialect{}, mysqlExplainer{db: ad.DB(), classify: ad.Classify}, NewIntrospector(ad.DB()))
+	base := sqladapter.NewBase(ad, Dialect{}, mysqlExplainer{pool: ad}, NewIntrospector(ad.DB()))
 	return &Provider{base.WithLimits(limits)}, nil
 }
 

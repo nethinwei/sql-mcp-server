@@ -1,9 +1,11 @@
 package tool
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/nethinwei/sql-mcp-server/core/budget"
@@ -83,10 +85,35 @@ type resultMeter struct {
 	// or the memory they are cut (errResultCut) rather than refused (failing
 	// the call would invite a duplicate retry, see finalizeToolResult).
 	write bool
-	// closed: the call ended. An execution it shared (singleflight) may
-	// still read rows for the calls waiting on it; they are no longer held
-	// for this call, which released what it held.
+	// closed: the call ended, and so did the executions running for it (see
+	// run); what it held is released.
 	closed bool
+	// running counts the executions reading rows for the call: one it
+	// shared (singleflight) goes on for the calls waiting on it once the
+	// call ended, and holds its rows meanwhile; ended, the call's end waits
+	// for them.
+	running int
+	ended   bool
+}
+
+// run marks an execution reading rows into m, and returns its end.
+func (m *resultMeter) run() func() {
+	if m == nil {
+		return func() {}
+	}
+	m.mu.Lock()
+	m.running++
+	m.closed = false // the call may have ended before its execution started
+	m.mu.Unlock()
+	return func() {
+		m.mu.Lock()
+		m.running--
+		last := m.running == 0 && m.ended
+		m.mu.Unlock()
+		if last {
+			m.close()
+		}
+	}
 }
 
 // meterCall gives tc's call a meter unless it has one, and returns the
@@ -100,7 +127,7 @@ func meterCall(tc Context, readOnly bool) (Context, func()) {
 		m.maxBytes = minLimit(tc.MaxReturnedBytes, tc.BudgetLimits.MaxReturnedBytes)
 	}
 	tc.results = m
-	return tc, m.close
+	return tc, m.end
 }
 
 // errResultCut stops reading a write's rows past the call's rows or the
@@ -121,17 +148,78 @@ func (m *resultMeter) add(row map[string]any) error {
 	if m == nil {
 		return nil
 	}
-	encoded, err := json.Marshal(row)
+	n, err := encodedSize(row)
 	if err != nil {
 		return fmt.Errorf("encode a result row: %w", err)
 	}
-	n := int64(len(encoded)) + 1 // and its separator
+	return m.addSized(1, n)
+}
+
+// finite is v with a non-finite float (PostgreSQL's NaN and infinities),
+// which JSON cannot carry, as the database writes it.
+func finite(v any) any {
+	var f float64
+	switch x := v.(type) {
+	case float64:
+		f = x
+	case float32:
+		f = float64(x)
+	default:
+		return v
+	}
+	switch {
+	case math.IsNaN(f):
+		return "NaN"
+	case math.IsInf(f, 1):
+		return "Infinity"
+	case math.IsInf(f, -1):
+		return "-Infinity"
+	}
+	return v
+}
+
+// rowBuffers are the buffers rows are encoded into to be counted: a read
+// counts each of its rows, thousands.
+var rowBuffers = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+
+// encodedSize is the size of v encoded as JSON, and its separator (the
+// newline an encoder ends it with stands for it).
+func encodedSize(v any) (int64, error) {
+	buf := rowBuffers.Get().(*bytes.Buffer)
+	defer rowBuffers.Put(buf)
+	buf.Reset()
+	if err := json.NewEncoder(buf).Encode(v); err != nil {
+		return 0, err
+	}
+	return int64(buf.Len()), nil
+}
+
+// addValues counts a row of values, as an escape hatch query returns it (a
+// list: its columns may share a name).
+func (m *resultMeter) addValues(values []any) error {
+	if m == nil {
+		return nil
+	}
+	n, err := encodedSize(values)
+	if err != nil {
+		return fmt.Errorf("encode a result row: %w", err)
+	}
+	return m.addSized(1, n)
+}
+
+// addSized counts rows of n bytes in all (each with its separator) against
+// the call's limits: the rows of a read cached, counted as they were read.
+// Only a read's rows come at once: a write's are cut one at a time.
+func (m *resultMeter) addSized(rows, n int64) error {
+	if m == nil {
+		return nil
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.rows++
+	m.rows += rows
 	if m.maxRows > 0 && m.rows > m.maxRows {
 		if m.write {
-			m.rows--
+			m.rows -= rows
 			return errResultCut
 		}
 		return budget.ErrExceeded
@@ -145,13 +233,30 @@ func (m *resultMeter) add(row map[string]any) error {
 	}
 	if !m.memory.reserve(n) {
 		if m.write {
-			m.rows, m.bytes = m.rows-1, m.bytes-n
+			m.rows, m.bytes = m.rows-rows, m.bytes-n
 			return errResultCut
 		}
 		return fmt.Errorf("%w: the server holds too many results in memory; narrow the request or retry later",
 			budget.ErrExceeded)
 	}
 	m.held += n
+	return nil
+}
+
+// grow counts the bytes rows encode to beyond the counted ones, before
+// what was counted when the call read them: a child expansion attaches is
+// counted once as read, but is encoded once per parent row naming it.
+func (m *resultMeter) grow(before int64, rows []map[string]any) error {
+	if m == nil {
+		return nil
+	}
+	n, err := encodedSize(rows)
+	if err != nil {
+		return fmt.Errorf("encode a result: %w", err)
+	}
+	if _, bytes := m.counted(); n > bytes-before {
+		return m.addSized(0, n-(bytes-before))
+	}
 	return nil
 }
 
@@ -163,6 +268,18 @@ func (m *resultMeter) counted() (rows, bytes int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.rows, m.bytes
+}
+
+// end ends the call's metering: what it holds is released once no execution
+// reads rows for it.
+func (m *resultMeter) end() {
+	m.mu.Lock()
+	m.ended = true
+	running := m.running
+	m.mu.Unlock()
+	if running == 0 {
+		m.close()
+	}
 }
 
 // close releases the call's results from the process's memory.

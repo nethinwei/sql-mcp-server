@@ -13,6 +13,7 @@ package workspaceops
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 
@@ -65,11 +66,19 @@ var (
 	ErrConflicts = errors.New("workspace: resolve the conflicts first")
 	// ErrNothingPublished: a workspace builds on the published configuration.
 	ErrNothingPublished = errors.New("workspace: nothing is published")
+	// ErrNeverPublished: a workspace builds on a revision that was published;
+	// a draft is loaded (see Load) or merged (see MergeDraft).
+	ErrNeverPublished = errors.New("workspace: the revision was never published: load it or merge it instead")
 	// ErrBehind: the workspace builds on an older revision than the
 	// published one; it commits only after an update (fast-forward only).
 	ErrBehind = errors.New("workspace: it builds on an older revision than the published one: update it first")
 	// ErrNoConflict: no open conflict has the ID given.
 	ErrNoConflict = errors.New("workspace: no such open conflict")
+	// ErrRenameAlone: a rename written without the removal of the item it
+	// renames, which says what its writer read of it; without that, a
+	// change made to it meanwhile would be lost.
+	ErrRenameAlone = errors.New("workspace: a rename must remove the item it renames in the same write, " +
+		"with the value read")
 )
 
 // attempts bounds how often an operation reads the workspace again when
@@ -138,6 +147,28 @@ func (s Service) items(ctx context.Context, id int64) (workspace.Snapshot, error
 	return s.itemsOf(rev)
 }
 
+// publishedItems is items, refused for a revision never published: one a
+// workspace can build on.
+func (s Service) publishedItems(ctx context.Context, id int64) (workspace.Snapshot, error) {
+	if s.Cache != nil {
+		if items, ok := s.Cache.publishedItems(id); ok {
+			return items, nil
+		}
+	}
+	rev, err := s.Revisions.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if rev.State.Unpublished() {
+		return nil, fmt.Errorf("%w: #%d", ErrNeverPublished, id)
+	}
+	items, err := s.itemsOf(rev)
+	if err == nil && s.Cache != nil {
+		s.Cache.keep(keptItems{id: id, items: items, published: true})
+	}
+	return items, err
+}
+
 // itemsOf is rev's configuration as items, kept in the cache.
 func (s Service) itemsOf(rev revision.Revision) (workspace.Snapshot, error) {
 	if s.Cache == nil {
@@ -147,8 +178,13 @@ func (s Service) itemsOf(rev revision.Revision) (workspace.Snapshot, error) {
 }
 
 // change is what an operation does to a workspace it read: it edits w (and
-// may move it to another base, whose items it returns) and says what to log.
+// may move it to another base, whose items it returns) and says what to log;
+// errUnchanged when there is nothing to write.
 type change func(w *workspace.Workspace, base workspace.Snapshot) (workspace.Snapshot, workspace.LogEntry, error)
+
+// errUnchanged is a change that leaves the workspace as it is: apply writes
+// nothing and returns it as read.
+var errUnchanged = errors.New("workspace: unchanged")
 
 // apply runs fn on username's workspace and writes the result at the
 // version read, reading again when another write came between.
@@ -163,6 +199,9 @@ func (s Service) apply(ctx context.Context, username, by string, fn change) (Sta
 		}
 		read := w.Version
 		newBase, entry, err := fn(&w, base)
+		if errors.Is(err, errUnchanged) {
+			return s.state(w, base), nil
+		}
 		if err != nil {
 			return State{}, err
 		}
@@ -182,7 +221,9 @@ func (s Service) apply(ctx context.Context, username, by string, fn change) (Sta
 
 // Write is an item written: its value (Missing removes it) and the value
 // its writer read (Missing: absent). From, when set, is the item it was
-// renamed or moved from, which it replaces (see Reconciler).
+// renamed or moved from, which it replaces (see Reconciler): the same
+// writes remove that item, with the value its writer read, unless it is
+// gone already (ErrRenameAlone).
 type Write struct {
 	Ref             workspace.Ref
 	Value, Previous any
@@ -202,6 +243,9 @@ func (s Service) WriteItems(ctx context.Context, username, by, op string, writes
 		workspace.Snapshot, workspace.LogEntry, error,
 	) {
 		before := w.Items
+		if err := renamesRemove(before, writes); err != nil {
+			return nil, workspace.LogEntry{}, err
+		}
 		values, refs, renames, found := s.batch(w, writes)
 		w.Items = before.Apply(values, refs)
 		var err error
@@ -221,44 +265,111 @@ func (s Service) WriteItems(ctx context.Context, username, by, op string, writes
 }
 
 // batch applies writes at once over w's items: values holds what each ref
-// becomes (an item a rename replaces goes missing), read back by the writes
-// that follow it in the same batch; a write whose previous value is not the
-// current one merges with it, and found keeps what conflicted.
+// becomes, read back by the writes that follow it in the same batch; a
+// write whose previous value is not the current one merges with it, and
+// found keeps what conflicted. Renames are as batchState.rename has them.
 func (s Service) batch(w *workspace.Workspace, writes []Write) (
 	map[workspace.Ref]any, []workspace.Ref, map[workspace.Ref]workspace.Ref, []workspace.Conflict,
 ) {
 	var found []workspace.Conflict
-	refs := make([]workspace.Ref, 0, len(writes))
-	before, renames := w.Items, map[workspace.Ref]workspace.Ref{}
-	at, values := before.Index(), map[workspace.Ref]any{}
-	current := func(ref workspace.Ref) any {
-		if v, ok := values[ref]; ok {
-			return v
-		}
-		if i, ok := at[ref]; ok {
-			return before[i].Value
-		}
-		return workspace.Missing
-	}
+	b := newBatchState(w.Items, writes)
 	for _, wr := range writes {
+		b.later[wr.Ref]--
 		if wr.From != nil && *wr.From != wr.Ref {
-			renames[wr.Ref] = *wr.From
-			if !workspace.IsMissing(current(*wr.From)) {
-				values[*wr.From] = workspace.Missing
-				refs = append(refs, *wr.From)
-			}
+			b.rename(wr.Ref, *wr.From)
 		}
 		value := wr.Value
-		if was := current(wr.Ref); !s.Schema.Same(was, wr.Previous) {
+		if was := b.current(wr.Ref); !s.Schema.Same(was, wr.Previous) {
 			var conflicts []workspace.ValueConflict
 			value, conflicts = s.Schema.Merge(wr.Previous, wr.Value, was, nil)
 			found = append(found, s.pinned(wr.Ref, conflicts, workspace.Source{Kind: workspace.SourceWorkspace,
 				By: w.UpdatedBy})...)
 		}
-		values[wr.Ref] = value
-		refs = append(refs, wr.Ref)
+		b.values[wr.Ref] = value
+		b.refs = append(b.refs, wr.Ref)
 	}
-	return values, refs, renames, found
+	return b.values, b.refs, b.renames, found
+}
+
+// batchState is a batch of writes being applied over before.
+type batchState struct {
+	before  workspace.Snapshot
+	at      map[workspace.Ref]int
+	values  map[workspace.Ref]any
+	refs    []workspace.Ref
+	renames map[workspace.Ref]workspace.Ref
+	// written are the refs the batch writes; later counts the writes of
+	// each still to come.
+	written map[workspace.Ref]bool
+	later   map[workspace.Ref]int
+}
+
+func newBatchState(before workspace.Snapshot, writes []Write) *batchState {
+	b := &batchState{before: before, at: before.Index(), values: map[workspace.Ref]any{},
+		refs: make([]workspace.Ref, 0, len(writes)), renames: map[workspace.Ref]workspace.Ref{},
+		written: make(map[workspace.Ref]bool, len(writes)), later: make(map[workspace.Ref]int, len(writes))}
+	for _, wr := range writes {
+		b.written[wr.Ref] = true
+		b.later[wr.Ref]++
+	}
+	return b
+}
+
+// current is what ref holds at this point of the batch.
+func (b *batchState) current(ref workspace.Ref) any {
+	if v, ok := b.values[ref]; ok {
+		return v
+	}
+	if i, ok := b.at[ref]; ok {
+		return b.before[i].Value
+	}
+	return workspace.Missing
+}
+
+// rename records the write of to as the rename of from, and vacates from:
+//   - an item of the workspace moves, and its key goes missing, unless the
+//     batch writes it too (a swap, or its removal);
+//   - an item an earlier write of the batch made (a chain: a to b, b to c)
+//     moves on: the rename is from where it came (c from a), and its key
+//     goes missing unless a later write takes it;
+//   - an item that is not there (a retry of a rename done) is a write
+//     alone: what named the item already follows it.
+func (b *batchState) rename(to, from workspace.Ref) {
+	switch {
+	case !workspace.IsMissing(b.before.Get(from)):
+		b.renames[to] = from
+		if b.written[from] || workspace.IsMissing(b.current(from)) {
+			return
+		}
+	case !workspace.IsMissing(b.current(from)):
+		if origin, ok := b.renames[from]; ok {
+			b.renames[to] = origin
+			delete(b.renames, from)
+		}
+		if b.later[from] > 0 {
+			return
+		}
+	default:
+		return
+	}
+	b.values[from] = workspace.Missing
+	b.refs = append(b.refs, from)
+}
+
+// renamesRemove checks that each rename of an item still there comes with
+// a write of that item (its removal, or what takes its key): the value read
+// of it is what a change made meanwhile merges against.
+func renamesRemove(before workspace.Snapshot, writes []Write) error {
+	written := make(map[workspace.Ref]bool, len(writes))
+	for _, wr := range writes {
+		written[wr.Ref] = true
+	}
+	for _, wr := range writes {
+		if wr.From != nil && *wr.From != wr.Ref && !written[*wr.From] && !workspace.IsMissing(before.Get(*wr.From)) {
+			return fmt.Errorf("%w: %s %q", ErrRenameAlone, wr.From.Kind, wr.From.Key)
+		}
+	}
+	return nil
 }
 
 // renamesLast puts the renames after the other writes: the removal of the
@@ -315,13 +426,16 @@ func (s Service) pinned(ref workspace.Ref, vcs []workspace.ValueConflict, src wo
 // one), re-applying what was changed here: a value both changed differently
 // keeps the workspace's, as a conflict against to.
 func (s Service) Update(ctx context.Context, username, by string, to int64) (State, error) {
-	next, err := s.items(ctx, to)
+	next, err := s.publishedItems(ctx, to)
 	if err != nil {
 		return State{}, err
 	}
 	return s.apply(ctx, username, by, func(w *workspace.Workspace, base workspace.Snapshot) (
 		workspace.Snapshot, workspace.LogEntry, error,
 	) {
+		if w.Base > to { // moved on meanwhile (another console followed a newer publish)
+			return nil, workspace.LogEntry{}, errUnchanged
+		}
 		changed := s.Schema.Changes(base, w.Items)
 		s.moveOnto(w, base, w.Items, next, to)
 		return next, workspace.LogEntry{Op: "update", Items: changed, Note: "#" + idOf(to)}, nil
@@ -329,7 +443,8 @@ func (s Service) Update(ctx context.Context, username, by string, to int64) (Sta
 }
 
 // moveOnto moves w onto revision to (items next), re-applying the changes
-// from old to local.
+// from old to local. Revisions are numbered as published, so a workspace is
+// never moved onto one older than its base: its callers see to it.
 func (s Service) moveOnto(w *workspace.Workspace, old, local, next workspace.Snapshot, to int64) {
 	src := workspace.Source{Kind: workspace.SourcePublished, ID: idOf(to)}
 	now, found := s.Schema.Replay(old, local, next, src, false)
@@ -337,11 +452,12 @@ func (s Service) moveOnto(w *workspace.Workspace, old, local, next workspace.Sna
 	w.Items, w.Base = now, to
 }
 
-// Reset makes username's workspace revision to as it is: what was changed
-// here, the conflicts and the notes are dropped, and so is the record of the
-// drafts taken in or saved from it (they are drafts still, offered again).
+// Reset makes username's workspace revision to (a published one) as it is:
+// what was changed here, the conflicts and the notes are dropped, and so is
+// the record of the drafts taken in or saved from it (they are drafts still,
+// offered again).
 func (s Service) Reset(ctx context.Context, username, by string, to int64) (State, error) {
-	next, err := s.items(ctx, to)
+	next, err := s.publishedItems(ctx, to)
 	if err != nil {
 		return State{}, err
 	}
@@ -367,9 +483,12 @@ func (s Service) Resolve(ctx context.Context, username, by, id string, theirs bo
 				ref = c.Ref
 			}
 		}
-		items, left, ok := s.Schema.Resolve(w.Items, base, w.Conflicts, id, theirs)
-		if !ok {
+		items, left, err := s.Schema.Resolve(w.Items, base, w.Conflicts, id, theirs)
+		if errors.Is(err, workspace.ErrNotOpen) {
 			return nil, workspace.LogEntry{}, ErrNoConflict
+		}
+		if err != nil {
+			return nil, workspace.LogEntry{}, err
 		}
 		w.Items, w.Conflicts = items, left
 		return nil, workspace.LogEntry{Op: "resolve", Items: []workspace.Ref{ref}}, nil

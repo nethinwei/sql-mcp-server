@@ -307,8 +307,8 @@ export const PendingStatePartsFragment = graphql(`
 export const PendingQuery = graphql(`
   query Pending {
     pending {
-      drift newTables unscannedSchemas unlistedDatasources
-      plans { key template { ...PlanTemplateParts } report { ...PlanReportParts } state { ...PendingStateParts } }
+      drift newTables unscannedSchemas unlistedDatasources moreDriftTables moreGoneTables
+      plans { key template { ...PlanTemplateParts } report { ...PlanReportParts } error state { ...PendingStateParts } }
       driftTables { key ref entity added missing state { ...PendingStateParts } }
       goneTables { key ref entity scanned state { ...PendingStateParts } }
     }
@@ -337,15 +337,24 @@ export const RevokeMcpTokenMutation = graphql(`
   mutation RevokeMcpToken($id: ID!) { revokeMcpToken(id: $id) }
 `)
 
-export const ScanBatchPartsFragment = graphql(`
-  fragment ScanBatchParts on ScanBatch {
+export const ScanBatchHeaderFragment = graphql(`
+  fragment ScanBatchHeader on ScanBatch {
     id datasource state total done failed canceled pending startedBy startedAt finishedAt
-    items { schema state error }
   }
 `)
 
+export const ScanBatchPartsFragment = graphql(`
+  fragment ScanBatchParts on ScanBatch { ...ScanBatchHeader items { schema state error } }
+`)
+
+// The batches as a poll reads them: counted, without their items, which
+// ScanBatchQuery reads a batch at a time.
 export const ScanBatchesQuery = graphql(`
-  query ScanBatches($datasource: String!) { scanBatches(datasource: $datasource) { ...ScanBatchParts } }
+  query ScanBatches($datasource: String!) { scanBatches(datasource: $datasource) { ...ScanBatchHeader } }
+`)
+
+export const ScanBatchQuery = graphql(`
+  query ScanBatch($id: ID!) { scanBatch(id: $id) { ...ScanBatchParts } }
 `)
 
 export const StartScanBatchMutation = graphql(`
@@ -384,6 +393,12 @@ export const UpdateWorkspaceMutation = graphql(`
 
 export const ResetWorkspaceMutation = graphql(`
   mutation ResetWorkspace($to: ID!, $since: Int) { resetWorkspace(to: $to) { ...WorkspaceParts } }
+`)
+
+export const LoadRevisionMutation = graphql(`
+  mutation LoadRevision($to: ID!, $keep: Boolean!, $since: Int) {
+    loadRevision(to: $to, keep: $keep) { ...WorkspaceParts }
+  }
 `)
 
 export const MergeDraftMutation = graphql(`

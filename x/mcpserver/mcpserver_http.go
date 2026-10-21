@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"github.com/nethinwei/sql-mcp-server/core/config"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -57,19 +59,28 @@ func sessionHandler(s *mcp.Server, cfg HTTPConfig) http.Handler {
 	// that are not browsers send no Origin and are unaffected.
 	handler = http.NewCrossOriginProtection().Handler(handler)
 	if cfg.RevokedPrincipals != nil {
-		cfg.RevokedPrincipals(revokeSessions(identities, cfg.OnSessionClosed, closeSession(s)))
+		cfg.RevokedPrincipals(revokeSessions(cfg.Bus, identities, cfg.OnSessionClosed, closeSessions(s)))
 	}
 	return handler
 }
 
-// closeSession closes the open session with the ID, which releases what the
-// transport holds for it; it then reports itself closed, which is idempotent.
-func closeSession(s *mcp.Server) func(string) {
-	return func(id string) {
+// closeSessions closes the open sessions with the IDs, in one pass over the
+// open sessions, which releases what the transport holds for them; each then
+// reports itself closed, which is idempotent.
+func closeSessions(s *mcp.Server) func([]string) {
+	return func(ids []string) {
+		closing := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			closing[id] = true
+		}
+		var open []*mcp.ServerSession
 		for ss := range s.Sessions() {
-			if ss.ID() == id {
-				_ = ss.Close()
+			if closing[ss.ID()] {
+				open = append(open, ss)
 			}
+		}
+		for _, ss := range open {
+			_ = ss.Close()
 		}
 	}
 }
@@ -81,13 +92,13 @@ func authenticated(cfg HTTPConfig, clientCAs *x509.CertPool, next http.Handler) 
 	handler := next
 	if cfg.TrustProxyHeaders {
 		networks, _ := parseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
-		handler = trustedProxy(networks, cfg.TrustedProxyCertSubjects, cfg.mtlsEnabled(),
+		handler = trustedProxy(networks, cfg.TrustedProxyCertSubjects, cfg.Users, cfg.mtlsEnabled(),
 			withProxyIdentity(cfg.Users, handler), handler)
 	}
 	handler = limitBody(cfg.MaxBodyBytes, cfg.BodyReadTimeout, handler)
 	handler = principalAuth(cfg.Token, cfg.Users, cfg.mtlsEnabled() || cfg.TrustProxyHeaders, handler)
 	if cfg.mtlsEnabled() {
-		handler = certIdentity(cfg.Users, cfg.ClientIdentity != config.ClientIdentityDefault, cfg.fromProxy, handler)
+		handler = certIdentity(cfg.Users, cfg.ClientIdentity != config.ClientIdentityDefault, cfg.fromProxy(), handler)
 		handler = requireClientCert(clientCAs, handler)
 	}
 	return handler
@@ -129,7 +140,7 @@ func buildHTTPMux(mcpHandler, metrics http.Handler, cfg HTTPConfig) *http.ServeM
 		_, _ = w.Write([]byte("ok"))
 	})
 	mux.Handle("/readyz/snapshot", staleMarker(cfg.SnapshotStale, readinessHandler(cfg.SnapshotReady)))
-	mux.Handle("/readyz/db", readinessHandler(cfg.DatabaseReady))
+	mux.Handle("/readyz/db", readinessHandler(shareProbe(cfg.DatabaseReady, databaseProbeTTL)))
 	if cfg.Admin != nil {
 		admin := limitBody(cfg.MaxBodyBytes, cfg.BodyReadTimeout, cfg.Admin)
 		mux.Handle("/admin/", admin)
@@ -165,6 +176,75 @@ func readinessHandler(probe func(context.Context) error) http.Handler {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+}
+
+// databaseProbeTTL is how long a database readiness result is served again:
+// a probe may be that stale.
+const databaseProbeTTL = time.Second
+
+// shareProbe runs probe for one caller at a time, the others waiting for its
+// result, and serves that result again for ttl: /readyz/db reaches every
+// database and anyone may call it (it is unauthenticated), so concurrent
+// probes must not take the connections tool calls need. Nil stays nil.
+func shareProbe(probe func(context.Context) error, ttl time.Duration) func(context.Context) error {
+	if probe == nil {
+		return nil
+	}
+	p := &sharedProbe{probe: probe, ttl: ttl}
+	return p.check
+}
+
+type sharedProbe struct {
+	probe func(context.Context) error
+	ttl   time.Duration
+	mu    sync.Mutex
+	at    time.Time // when err was found; zero: never
+	err   error
+	// running is closed when the probe running ends; nil when none runs.
+	running chan struct{}
+}
+
+// check is the probe's result: the last one if fresh, else the running
+// probe's, else that of one it runs. The probe is not bound to the caller
+// that runs it (only to readinessProbeTimeout): a caller leaving does not
+// fail the others waiting.
+func (p *sharedProbe) check(ctx context.Context) error {
+	p.mu.Lock()
+	if p.running == nil && !p.at.IsZero() && time.Since(p.at) < p.ttl {
+		defer p.mu.Unlock()
+		return p.err
+	}
+	running, lead := p.running, p.running == nil
+	if lead {
+		running = make(chan struct{})
+		p.running = running
+	}
+	p.mu.Unlock()
+	if lead {
+		p.run(ctx, running)
+	}
+	select {
+	case <-running:
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// run runs the probe and records its result, however it ends.
+func (p *sharedProbe) run(ctx context.Context, running chan struct{}) {
+	err := errors.New("readiness probe panicked")
+	defer func() {
+		p.mu.Lock()
+		p.err, p.at, p.running = err, time.Now(), nil
+		p.mu.Unlock()
+		close(running)
+	}()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), readinessProbeTimeout)
+	defer cancel()
+	err = p.probe(ctx)
 }
 
 // staleMarker adds X-Snapshot-Stale with the ID of a published store
@@ -215,9 +295,12 @@ func serveHTTPWithShutdown(ctx context.Context, b *bus.Bus, srv *http.Server, tl
 		case <-served:
 			return
 		}
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			slog.Warn("http requests still running at shutdown; closing their connections", "err", err)
+			_ = srv.Close()
+		}
 	})
 	var err error
 	if tlsEnabled {
@@ -317,15 +400,18 @@ func ServeHTTP(ctx context.Context, s *mcp.Server, cfg HTTPConfig) error {
 	if err != nil {
 		return err
 	}
+	calls := &callsRunning{}
 	srv := &http.Server{
 		Addr:              h.cfg.Addr,
-		Handler:           h.handler(),
+		Handler:           calls.count(h.handler()),
 		ReadHeaderTimeout: h.cfg.ReadHeaderTimeout,
 		ReadTimeout:       h.cfg.ReadTimeout,
 		WriteTimeout:      h.cfg.WriteTimeout,
 		IdleTimeout:       h.cfg.IdleTimeout,
 		MaxHeaderBytes:    h.cfg.MaxHeaderBytes,
 	}
+	endStreamsAtShutdown(srv, h.cfg.Admin)
+	closeSessionsAtShutdown(srv, s, calls)
 	if h.cfg.tlsEnabled() {
 		srv.TLSConfig = &tls.Config{
 			MinVersion:         tls.VersionTLS12,

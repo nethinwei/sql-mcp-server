@@ -1,9 +1,10 @@
 import { reactive } from 'vue'
 import { run } from '@/api/client'
 import {
-  CancelScanBatchMutation, RetryScanBatchMutation, ScanBatchesQuery, SchemaListQuery, StartScanBatchMutation,
+  CancelScanBatchMutation, RetryScanBatchMutation, ScanBatchesQuery, ScanBatchQuery, SchemaListQuery,
+  StartScanBatchMutation,
 } from '@/api/ops'
-import type { ImportTablePartsFragment, ScanBatchPartsFragment } from '@/gql/graphql'
+import type { ImportTablePartsFragment, ScanBatchHeaderFragment, ScanBatchPartsFragment } from '@/gql/graphql'
 
 // Scanning goes schema by schema, in batches the server runs a few at a time:
 // a batch goes on when the console is closed or reloaded, which reads the
@@ -79,6 +80,24 @@ export function batchState(s: DatasourceScans, schema: string): { state: string;
   return null
 }
 
+/**
+ * The batches listed with their items: a finished batch's, which no longer
+ * change, are those read before; the others' are read again.
+ */
+async function withItems(s: DatasourceScans, listed: ScanBatchHeaderFragment[]): Promise<ScanBatch[]> {
+  const known = new Map(s.batches.map((b) => [b.id, b]))
+  return Promise.all(listed.map(async (b) => {
+    const had = known.get(b.id)
+    if (had && had.state !== 'running' && b.state !== 'running') return { ...b, items: had.items }
+    return (await run(ScanBatchQuery, { id: b.id })).scanBatch
+  }))
+}
+
+/** The running batches of s that list does not have. */
+const startedSince = (s: DatasourceScans, list: { id: string }[]) => {
+  const ids = new Set(list.map((b) => b.id))
+  return s.batches.filter((b) => b.state === 'running' && !ids.has(b.id))
+}
 const running = (s: DatasourceScans) => s.batches.some((b) => b.state === 'running')
 const doneCount = (s: DatasourceScans) => s.batches.reduce((n, b) => n + b.done, 0)
 const polling = new Set<string>()
@@ -96,7 +115,11 @@ export async function followBatches(ds: string, interval = 1000) {
     for (let first = true; first || running(s); first = false) {
       if (!first) await sleep(interval)
       const before = doneCount(s)
-      s.batches = (await run(ScanBatchesQuery, { datasource: ds })).scanBatches
+      // A batch started while a read is in flight is not in its answer: it
+      // is kept, and read by id until the listing has it.
+      const listed = (await run(ScanBatchesQuery, { datasource: ds })).scanBatches
+      const read = await withItems(s, [...startedSince(s, listed), ...listed])
+      s.batches = [...startedSince(s, read), ...read]
       if (doneCount(s) !== before) {
         await sync(ds)
         scans.version++

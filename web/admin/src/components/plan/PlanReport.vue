@@ -30,7 +30,7 @@ const ws = useWorkspace()
 
 // Exceptions only an edit of the entity (or what names it) resolves: a link
 // leads there.
-const fixable = new Set(['referenced', 'keyReferenced', 'rowColumnMissing'])
+const fixable = new Set(['referenced', 'keyReferenced', 'keyNotField', 'rowColumnMissing'])
 
 const short = (id?: string | null) => (id ? ws.entityIndex.shortName(id) || id : '')
 const levelOrder = { block: 0, confirm: 1, info: 2 } as Record<string, number>

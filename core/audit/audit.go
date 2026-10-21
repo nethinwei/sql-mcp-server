@@ -101,11 +101,22 @@ type AsyncAuditor struct {
 	durable   Durable
 	closeSink func() error
 	done      chan struct{}
-	dropped   atomic.Int64
+	// dropped counts the events dropped; it may be shared (CountDropsIn).
+	dropped *atomic.Int64
 	// mu orders Record's send before Close closes the queue: senders hold it
 	// shared, Close exclusively, so no send can reach a closed channel.
 	mu     sync.RWMutex
 	closed bool
+}
+
+// CountDropsIn counts the events a dropped in c, which may count those of
+// other auditors: a process's count does not start again with each auditor a
+// reload assembles. It is set before a is used.
+func (a *AsyncAuditor) CountDropsIn(c *atomic.Int64) *AsyncAuditor {
+	if c != nil {
+		a.dropped = c
+	}
+	return a
 }
 
 // Durably makes a record synchronously through d (its sink, typically) on
@@ -141,6 +152,7 @@ func NewAsyncAuditorOn(b *bus.Bus, sink Sink, closeSink func() error, queueSize 
 		queueSize = 1024
 	}
 	a := &AsyncAuditor{
+		dropped:   &atomic.Int64{},
 		queue:     make(chan Event, queueSize),
 		sink:      sink,
 		closeSink: closeSink,
@@ -189,16 +201,24 @@ func (a *AsyncAuditor) Record(_ context.Context, e Event) error {
 func (a *AsyncAuditor) Dropped() int64 { return a.dropped.Load() }
 
 // Close stops accepting events and waits for the flusher to drain the queue.
-func (a *AsyncAuditor) Close() {
+func (a *AsyncAuditor) Close() { _ = a.CloseContext(context.Background()) }
+
+// CloseContext stops accepting events and waits for the flusher to drain
+// the queue, or for ctx: a sink that does not return leaves the flusher
+// draining on its own, and ctx's error is returned.
+func (a *AsyncAuditor) CloseContext(ctx context.Context) error {
 	a.mu.Lock()
-	if a.closed {
-		a.mu.Unlock()
-		return
+	if !a.closed {
+		a.closed = true
+		close(a.queue)
 	}
-	a.closed = true
-	close(a.queue)
 	a.mu.Unlock()
-	<-a.done
+	select {
+	case <-a.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (a *AsyncAuditor) isClosed() bool {

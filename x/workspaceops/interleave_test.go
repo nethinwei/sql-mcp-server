@@ -27,7 +27,9 @@ type model struct {
 	committed []int64
 	// dropped is the workspace version a reset dropped each draft taken in at.
 	dropped map[int64]int64
-	log     []string
+	// base is the revision the workspace was last seen to build on.
+	base int64
+	log  []string
 }
 
 type rng struct{ s uint32 }
@@ -85,8 +87,10 @@ func (m *model) rename() {
 		return
 	}
 	m.log = append(m.log, fmt.Sprintf("rename %s → %s", from.Key, to.Key))
-	st, err := m.svc.WriteItems(m.ctx, "root", "root", "edit", []Write{{Ref: to,
-		Value: roleItem(to.Key, "renamed"), Previous: workspace.Missing, From: &from}}, nil)
+	st, err := m.svc.WriteItems(m.ctx, "root", "root", "edit", []Write{
+		{Ref: to, Value: roleItem(to.Key, "renamed"), Previous: workspace.Missing, From: &from},
+		{Ref: from, Value: workspace.Missing, Previous: items.Get(from)},
+	}, nil)
 	if err != nil {
 		m.fail("rename: %v", err)
 	}
@@ -101,7 +105,7 @@ func (m *model) rename() {
 // merge takes in a new draft of the published revision changing one item.
 func (m *model) merge() {
 	published, _ := m.revs.Published(m.ctx)
-	items, _ := (codec{}).Items(published)
+	items, _ := (&codec{}).Items(published)
 	key := keys[m.r.intn(len(keys))]
 	items = items.With(workspace.Ref{Kind: "role", Key: key}, roleItem(key, fmt.Sprintf("d%d", m.r.intn(5))))
 	payload, _ := json.Marshal(items)
@@ -109,7 +113,21 @@ func (m *model) merge() {
 	if err != nil {
 		m.t.Fatal(err)
 	}
+	if m.r.intn(3) == 0 { // others publish and update while it reads the revisions
+		m.codec.onItems = func() {
+			m.log = append(m.log, "  while merging:")
+			if m.r.intn(2) == 0 { // the workspace follows a newer publish
+				m.publishOther()
+				m.update()
+				return
+			}
+			for n := m.r.intn(3); n > 0; n-- {
+				m.step(false)
+			}
+		}
+	}
 	st, err := m.svc.MergeDraft(m.ctx, "root", "root", draft.ID)
+	m.codec.onItems = nil
 	if err != nil {
 		m.t.Fatalf("seed %d: merge: %v", m.seed, err)
 	}
@@ -121,7 +139,7 @@ func (m *model) merge() {
 // administrator); update then moves the workspace onto it.
 func (m *model) publishOther() {
 	published, _ := m.revs.Published(m.ctx)
-	items, _ := (codec{}).Items(published)
+	items, _ := (&codec{}).Items(published)
 	key := keys[m.r.intn(len(keys))]
 	items = items.With(workspace.Ref{Kind: "role", Key: key}, roleItem(key, fmt.Sprintf("p%d", m.r.intn(5))))
 	payload, _ := json.Marshal(items)
@@ -132,9 +150,11 @@ func (m *model) publishOther() {
 func (m *model) update() {
 	published, _ := m.revs.Published(m.ctx)
 	m.log = append(m.log, fmt.Sprintf("update #%d", published.ID))
-	if _, err := m.svc.Update(m.ctx, "root", "root", published.ID); err != nil {
+	st, err := m.svc.Update(m.ctx, "root", "root", published.ID)
+	if err != nil {
 		m.t.Fatalf("seed %d: update: %v", m.seed, err)
 	}
+	m.base = max(m.base, st.Workspace.Base) // seen, even in the middle of another operation
 }
 
 func (m *model) reset() {
@@ -146,6 +166,27 @@ func (m *model) reset() {
 	}
 	for id := range m.merged {
 		if _, done := m.dropped[id]; !done && !m.published(id) {
+			m.dropped[id] = st.Workspace.Version
+		}
+	}
+}
+
+// load loads a random revision (any state), sometimes keeping what was
+// changed; not keeping it drops the drafts taken in, as a reset does.
+func (m *model) load() {
+	all, _ := m.revs.List(m.ctx, 0)
+	to := all[m.r.intn(len(all))].ID
+	keep := m.r.intn(2) == 0
+	m.log = append(m.log, fmt.Sprintf("load #%d keep=%t", to, keep))
+	st, err := m.svc.Load(m.ctx, "root", "root", to, keep)
+	if err != nil {
+		m.t.Fatalf("seed %d: load: %v", m.seed, err)
+	}
+	if published, _ := m.revs.Published(m.ctx); st.Workspace.Base != published.ID {
+		m.fail("loaded onto #%d, published #%d", st.Workspace.Base, published.ID)
+	}
+	for id := range m.merged {
+		if _, done := m.dropped[id]; !keep && !done && !m.published(id) {
 			m.dropped[id] = st.Workspace.Version
 		}
 	}
@@ -211,7 +252,7 @@ func (m *model) commit() {
 
 // step runs one random operation; commits only at the top level.
 func (m *model) step(top bool) {
-	switch n := m.r.intn(14); {
+	switch n := m.r.intn(15); {
 	case n < 1:
 		m.rename()
 	case n < 5:
@@ -228,6 +269,8 @@ func (m *model) step(top bool) {
 		m.checkpoint()
 	case n < 12:
 		m.reset()
+	case n < 13:
+		m.load()
 	default:
 		m.commit()
 	}
@@ -242,6 +285,10 @@ func (m *model) fail(format string, args ...any) {
 func (m *model) check() {
 	m.t.Helper()
 	w := m.read().Workspace
+	if w.Base < m.base { // revisions are numbered as published
+		m.fail("the workspace moved back from #%d to #%d", m.base, w.Base)
+	}
+	m.base = w.Base
 	for id, at := range m.merged {
 		rev, _ := m.revs.Get(m.ctx, id)
 		published := m.published(id)

@@ -79,6 +79,22 @@ func TestSubmitPanicRecovered(t *testing.T) {
 	}
 }
 
+// A panic past the tool's own recovery (classifying its error) fails the
+// call and frees its key: the next call of the key runs.
+func TestSubmitPanicOutsideTheToolFreesItsKey(t *testing.T) {
+	t.Parallel()
+	e, _ := New(WithIOPool(1), WithMaxInflight(2), WithFailureClassifier(func(error) bool { panic("classify") }))
+	_, err := Submit(context.Background(), e, "k", func(context.Context) (any, error) { return nil, errors.New("x") })
+	if err == nil || !contains(err.Error(), "panic recovered") {
+		t.Fatalf("got %v, want panic-recovered error", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if v, err := Submit(ctx, e, "k", func(context.Context) (any, error) { return 1, nil }); err != nil || v != 1 {
+		t.Fatalf("the key after the panic = %v, %v", v, err)
+	}
+}
+
 func TestSubmitBreakerOpen(t *testing.T) {
 	t.Parallel()
 	b := ratelimit.NewBreaker(1, time.Second)
@@ -488,7 +504,7 @@ func contains(s, sub string) bool {
 func TestRunPassesTheBreakerUnderTheRateLimit(t *testing.T) {
 	t.Parallel()
 	breaker := ratelimit.NewBreaker(1, time.Hour)
-	breaker.Record(false)
+	breaker.Record(0, false)
 	e, _ := New(WithIOPool(1), WithBreaker(breaker), WithRPSLimiter(ratelimit.NewTokenBucket(1)))
 	if _, err := Run(context.Background(), e, func(context.Context) (any, error) { panic("boom") }); err == nil {
 		t.Fatal("a panic was not recovered")
@@ -497,5 +513,33 @@ func TestRunPassesTheBreakerUnderTheRateLimit(t *testing.T) {
 		err, ratelimit.ErrRateLimited,
 	) {
 		t.Fatalf("a second run within the second passed the rate limit: %v", err)
+	}
+}
+
+// A call every waiter left is canceled, and a caller coming while it winds
+// down runs a call of its own instead of getting the canceled one's error.
+func TestSingleflightLateCallerAfterAllWaitersLeft(t *testing.T) {
+	t.Parallel()
+	e, _ := New(WithIOPool(2), WithMaxInflight(4))
+	ctx, cancel := context.WithCancel(context.Background())
+	started, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	defer close(release)
+	go func() {
+		_, _ = Submit(ctx, e, "late", func(ctx context.Context) (any, error) {
+			close(started)
+			<-ctx.Done()
+			close(canceled)
+			<-release // winds down slowly
+			return nil, ctx.Err()
+		})
+	}()
+	<-started
+	cancel()
+	<-canceled
+	late, stop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stop()
+	got, err := Submit(late, e, "late", func(context.Context) (any, error) { return "own", nil })
+	if err != nil || got != "own" {
+		t.Fatalf("late caller = %v, %v", got, err)
 	}
 }

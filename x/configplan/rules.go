@@ -64,6 +64,9 @@ func (ev *evaluation) importFrom(src Source, rows []Row) []target {
 		if r.Table.SideEffects {
 			ev.except(Exception{Kind: ExceptionSideEffects, Ref: r.Ref, Entity: e.ID()})
 		}
+		for _, target := range c.Dropped {
+			ev.except(Exception{Kind: ExceptionRelationshipDropped, Entity: e.ID(), Detail: target})
+		}
 		out = append(out, target{row: r, id: e.ID(), new: true})
 	}
 	return out
@@ -84,22 +87,28 @@ func (ev *evaluation) dropDanglingRelationships() {
 	}
 }
 
-// columnType is the type of a column of the table, "" when none.
-func columnType(r Row, column string) string {
+// columnTypes are the types of the table's columns by name, when a field
+// rule tests them (nil otherwise; a column not there has type "").
+func (ev *evaluation) columnTypes(r Row) map[string]string {
+	if !slices.ContainsFunc(ev.fieldRules, func(rule compiledFieldRule) bool { return rule.types.set() }) {
+		return nil
+	}
+	out := make(map[string]string, len(r.Table.Attributes))
 	for _, a := range r.Table.Attributes {
-		if a.Name == column {
-			return a.Domain.Type
+		if _, ok := out[a.Name]; !ok {
+			out[a.Name] = a.Domain.Type
 		}
 	}
-	return ""
+	return out
 }
 
 // applyFields applies the field rules, in order, to an entity.
 func (ev *evaluation) applyFields(t target) {
+	types := ev.columnTypes(t.row)
 	for _, rule := range ev.fieldRules {
 		e := ev.entity(t)
 		for i, f := range e.Fields {
-			if !rule.columns.match(f.Name) || rule.types.set() && !rule.types.match(columnType(t.row, f.Name)) {
+			if !rule.columns.match(f.Name) || rule.types.set() && !rule.types.match(types[f.Name]) {
 				continue
 			}
 			if rule.Exclude && !f.Exclude {
@@ -139,7 +148,9 @@ func (ev *evaluation) sync(t target) {
 		}
 		e := ev.change(t)
 		e.Fields = slices.DeleteFunc(e.Fields, func(f config.FieldConfig) bool { return f.Name == field })
-		ev.dropGrantField(t.id, field)
+		d := ev.dropped[t.id] // out of the grants' lists after (dropGrantFields)
+		d.ref, d.fields = t.row.Ref, append(d.fields, field)
+		ev.dropped[t.id] = d
 		ev.summarize(Change{Kind: ChangeSyncRemove}, t.id, 1)
 	}
 }

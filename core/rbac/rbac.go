@@ -142,8 +142,44 @@ type GrantAuthorizer struct {
 	entityGrants map[string]map[string]Grant
 	// usable memoizes Usable by role and entity: it depends on neither the
 	// request's fields nor its subject, and entity discovery asks it of
-	// every entity on every listing.
+	// every entity on every listing. Only the principals the policy names
+	// and the entities there are are kept (the role and the name come from
+	// the caller): it holds at most those pairs.
 	usable sync.Map
+	known  map[string]bool
+	// granted memoizes candidates for the principals known: every
+	// authorization of a call asks it, as entity discovery asks Usable.
+	granted sync.Map
+	// acls are the field lists of the grants, as sets, by the grant's
+	// FieldPermissions: built once, instead of per authorization.
+	acls map[*entity.FieldPermissions]aclSet
+}
+
+type candidatesKey struct {
+	principal, entity string
+	action            entity.Action
+}
+
+// aclSet is a grant's field lists as sets.
+type aclSet struct{ read, write map[string]bool }
+
+func newACLSet(f *entity.FieldPermissions) aclSet {
+	set := func(fields []string) map[string]bool {
+		out := make(map[string]bool, len(fields))
+		for _, field := range fields {
+			out[field] = true
+		}
+		return out
+	}
+	return aclSet{read: set(f.Read), write: set(f.Write)}
+}
+
+// acl is g's field lists as sets; g's Fields is set.
+func (a *GrantAuthorizer) acl(g Grant) aclSet {
+	if set, ok := a.acls[g.Fields]; ok {
+		return set
+	}
+	return newACLSet(g.Fields) // a grant not of the policy, as a test makes
 }
 
 type usableKey struct{ role, entity string }
@@ -157,23 +193,34 @@ func (a *GrantAuthorizer) Usable(role, name string) bool {
 	if ok, seen := a.usable.Load(key); seen {
 		return ok.(bool)
 	}
+	e, found := a.registry.Resolve(name)
+	if !found {
+		return false
+	}
 	ok := false
-	if e, found := a.registry.Resolve(name); found {
-		for _, action := range entity.ActionsFor(e.Entity.Kind) {
-			dec, err := a.Authorize(context.Background(), Request{Role: role, Entity: name, Action: action})
-			if err == nil && dec.Reachable() {
-				ok = true
-				break
-			}
+	for _, action := range entity.ActionsFor(e.Entity.Kind) {
+		dec, err := a.Authorize(context.Background(), Request{Role: role, Entity: name, Action: action})
+		if err == nil && dec.Reachable() {
+			ok = true
+			break
 		}
 	}
-	a.usable.Store(key, ok)
+	if a.known[key.role] {
+		a.usable.Store(key, ok)
+	}
 	return ok
 }
 
 // NewGrantAuthorizer returns an Authorizer for the registry and policy.
 func NewGrantAuthorizer(reg *entity.Registry, policy Policy) *GrantAuthorizer {
-	a := &GrantAuthorizer{registry: reg, policy: policy, entityGrants: map[string]map[string]Grant{}}
+	a := &GrantAuthorizer{registry: reg, policy: policy, entityGrants: map[string]map[string]Grant{},
+		known: map[string]bool{}}
+	for name := range policy.Principals {
+		a.known[NormalizeRole(name)] = true
+	}
+	for name := range policy.Roles {
+		a.known[NormalizeRole(name)] = true
+	}
 	for _, e := range reg.Entities() {
 		byRole := map[string]Grant{}
 		for _, roles := range e.Role {
@@ -183,7 +230,7 @@ func NewGrantAuthorizer(reg *entity.Registry, policy Policy) *GrantAuthorizer {
 					continue
 				}
 				if g, ok := entityRoleGrant(e, role); ok {
-					byRole[role] = g
+					byRole[role], a.known[role] = g, true
 				}
 			}
 		}
@@ -191,7 +238,37 @@ func NewGrantAuthorizer(reg *entity.Registry, policy Policy) *GrantAuthorizer {
 			a.entityGrants[e.Name] = byRole
 		}
 	}
+	a.indexACLs()
 	return a
+}
+
+// indexACLs builds the field lists of every grant as sets.
+func (a *GrantAuthorizer) indexACLs() {
+	a.acls = map[*entity.FieldPermissions]aclSet{}
+	add := func(g Grant) {
+		if g.Fields != nil {
+			a.acls[g.Fields] = newACLSet(g.Fields)
+		}
+	}
+	for _, byEntity := range a.policy.Roles {
+		for _, grants := range byEntity {
+			for _, g := range grants {
+				add(g)
+			}
+		}
+	}
+	for _, p := range a.policy.Principals {
+		for _, grants := range p.Grants {
+			for _, g := range grants {
+				add(g)
+			}
+		}
+	}
+	for _, byRole := range a.entityGrants {
+		for _, g := range byRole {
+			add(g)
+		}
+	}
 }
 
 // NewRoleAuthorizer returns an Authorizer that only uses entity-level role
@@ -228,22 +305,16 @@ func (a *GrantAuthorizer) Authorize(_ context.Context, req Request) (Decision, e
 		}
 	}
 	if req.Action == entity.ActionRead && len(req.Fields) == 0 && allRestricted(candidates) &&
-		len(unionProjection(res.Attributes, nil, candidates)) == 0 {
+		len(a.unionProjection(res.Attributes, nil, candidates)) == 0 {
 		return Decision{Allowed: false, Reason: fmt.Sprintf("role %q has no readable fields", req.Role)}, nil
 	}
-	covering := coveringGrants(candidates, readFields, writeFields, res.Attributes)
+	covering := a.coveringGrants(candidates, readFields, writeFields, res.Attributes)
 	if len(covering) == 0 {
-		return deniedFieldScope(req, candidates, readFields, writeFields, res.Attributes), nil
+		return a.deniedFieldScope(req, candidates, readFields, writeFields, res.Attributes), nil
 	}
-	// Only actions that return rows project fields; a write is covered by the
-	// fields it reads and writes, not by fields it never returns.
-	var projected []string
-	if returnsRows(req.Action) {
-		projected = unionProjection(res.Attributes, req.Fields, covering)
-		covering = coveringGrants(covering, projected, nil, res.Attributes)
-		if len(covering) == 0 {
-			return ambiguousFieldScope(req, candidates, res.Attributes), nil
-		}
+	projected, covering, denied := a.project(req, res, covering)
+	if denied != nil {
+		return *denied, nil
 	}
 	filter, ids := effectiveRowFilter(covering, res.Entity.TenantPolicy)
 	return Decision{
@@ -252,6 +323,36 @@ func (a *GrantAuthorizer) Authorize(_ context.Context, req Request) (Decision, e
 		RowFilter: resolveSubject(filter, req.Subject),
 		Grants:    ids,
 	}, nil
+}
+
+// project is the projection of req, with the grants covering it, or why it
+// is denied. Only actions that return rows project fields; a write is
+// covered by the fields it reads and writes, not by fields it never
+// returns. A read returns its projection, so the grants covering it alone
+// serve it, and one of nothing is refused: no field is no statement (it is
+// never SELECT *). An aggregate returns what it reads: its projection only
+// tells which fields it may read, and narrows nothing (its rows would). An
+// ambiguous projection's retry hint lists the scopes of the grants covering
+// the fields req reads, the ones that can serve a retry.
+func (a *GrantAuthorizer) project(req Request, res entity.Resolved, covering []Grant) (
+	[]string, []Grant, *Decision,
+) {
+	if !returnsRows(req.Action) {
+		return nil, covering, nil
+	}
+	projected := a.unionProjection(res.Attributes, req.Fields, covering)
+	if req.Action != entity.ActionRead {
+		return projected, covering, nil
+	}
+	if len(projected) == 0 {
+		return nil, nil, &Decision{Allowed: false, Reason: fmt.Sprintf("role %q has no readable fields", req.Role)}
+	}
+	serving := a.coveringGrants(covering, projected, nil, res.Attributes)
+	if len(serving) == 0 {
+		denied := a.ambiguousFieldScope(req, covering, res.Attributes)
+		return nil, nil, &denied
+	}
+	return projected, serving, nil
 }
 
 func returnsRows(action entity.Action) bool {
@@ -290,6 +391,22 @@ func effectiveRowFilter(covering []Grant, tenant relalg.Predicate) (relalg.Predi
 // principal's direct grants plus, for each of its roles, top-level role grants
 // and the entity-level role grant.
 func (a *GrantAuthorizer) candidates(e entity.Entity, principal string, action entity.Action) []Grant {
+	if principal == "" { // a caller naming no role holds no grant, whatever a configuration lists
+		return nil
+	}
+	if !a.known[principal] { // made up by the caller: not kept
+		return a.findCandidates(e, principal, action)
+	}
+	key := candidatesKey{principal, e.Name, action}
+	if found, ok := a.granted.Load(key); ok {
+		return found.([]Grant)
+	}
+	found := slices.Clip(a.findCandidates(e, principal, action)) // callers append to copies only
+	a.granted.Store(key, found)
+	return found
+}
+
+func (a *GrantAuthorizer) findCandidates(e entity.Entity, principal string, action entity.Action) []Grant {
 	roles := []string{principal}
 	var out []Grant
 	if p, ok := a.policy.Principals[principal]; ok {
@@ -335,14 +452,15 @@ func entityRoleGrant(e entity.Entity, role string) (Grant, bool) {
 	return g, true
 }
 
-func coveringGrants(grants []Grant, read, write []string, visible []entity.Attribute) []Grant {
+func (a *GrantAuthorizer) coveringGrants(grants []Grant, read, write []string, visible []entity.Attribute) []Grant {
 	out := make([]Grant, 0, len(grants))
 	for _, g := range grants {
 		if g.Fields == nil {
 			out = append(out, g)
 			continue
 		}
-		if firstDenied(read, g.Fields.Read, visible) == "" && firstDenied(write, g.Fields.Write, visible) == "" {
+		acl := a.acl(g)
+		if firstDenied(read, acl.read, visible) == "" && firstDenied(write, acl.write, visible) == "" {
 			out = append(out, g)
 		}
 	}
@@ -351,24 +469,26 @@ func coveringGrants(grants []Grant, read, write []string, visible []entity.Attri
 
 // deniedFieldScope explains why no candidate covers the request: a field no
 // candidate can read or write at all, or otherwise an ambiguous combination.
-func deniedFieldScope(req Request, candidates []Grant, read, write []string, visible []entity.Attribute) Decision {
+func (a *GrantAuthorizer) deniedFieldScope(
+	req Request, candidates []Grant, read, write []string, visible []entity.Attribute,
+) Decision {
 	for _, f := range read {
-		if len(coveringGrants(candidates, []string{f}, nil, visible)) == 0 {
+		if len(a.coveringGrants(candidates, []string{f}, nil, visible)) == 0 {
 			return Decision{Allowed: false, Reason: fmt.Sprintf("field %q is not readable by role %q", f, req.Role)}
 		}
 	}
 	for _, f := range write {
-		if len(coveringGrants(candidates, nil, []string{f}, visible)) == 0 {
+		if len(a.coveringGrants(candidates, nil, []string{f}, visible)) == 0 {
 			return Decision{Allowed: false, Reason: fmt.Sprintf("field %q is not writable by role %q", f, req.Role)}
 		}
 	}
-	return ambiguousFieldScope(req, candidates, visible)
+	return a.ambiguousFieldScope(req, candidates, visible)
 }
 
-func ambiguousFieldScope(req Request, candidates []Grant, visible []entity.Attribute) Decision {
+func (a *GrantAuthorizer) ambiguousFieldScope(req Request, candidates []Grant, visible []entity.Attribute) Decision {
 	scopes := make([][]string, 0, len(candidates))
 	for _, g := range candidates {
-		scopes = append(scopes, grantProjection(visible, nil, g))
+		scopes = append(scopes, a.grantProjection(visible, nil, g))
 	}
 	return Decision{
 		Allowed:     false,
@@ -379,10 +499,10 @@ func ambiguousFieldScope(req Request, candidates []Grant, visible []entity.Attri
 
 // unionProjection returns the requested (or, when none, all) visible fields
 // readable by at least one grant, in attribute order.
-func unionProjection(visible []entity.Attribute, requested []string, grants []Grant) []string {
+func (a *GrantAuthorizer) unionProjection(visible []entity.Attribute, requested []string, grants []Grant) []string {
 	seen := make(map[string]bool)
 	for _, g := range grants {
-		for _, f := range grantProjection(visible, requested, g) {
+		for _, f := range a.grantProjection(visible, requested, g) {
 			seen[f] = true
 		}
 	}
@@ -395,11 +515,11 @@ func unionProjection(visible []entity.Attribute, requested []string, grants []Gr
 	return out
 }
 
-func grantProjection(visible []entity.Attribute, requested []string, g Grant) []string {
+func (a *GrantAuthorizer) grantProjection(visible []entity.Attribute, requested []string, g Grant) []string {
 	if g.Fields == nil {
 		return projectFields(visible, requested)
 	}
-	return projectFieldsForACL(visible, requested, *g.Fields)
+	return projectFieldsForACL(visible, requested, a.acl(g).read)
 }
 
 func allRestricted(grants []Grant) bool {
@@ -466,6 +586,15 @@ func projectFields(visible []entity.Attribute, requested []string) []string {
 		}
 		return out
 	}
+	out := make([]string, 0, len(requested))
+	if len(requested)*len(visible) <= 256 { // a few fields asked: no set to build
+		for _, f := range requested {
+			if slices.ContainsFunc(visible, func(a entity.Attribute) bool { return a.Name == f || a.Alias == f && f != "" }) {
+				out = append(out, f)
+			}
+		}
+		return out
+	}
 	allowed := make(map[string]bool, len(visible)*2)
 	for _, a := range visible {
 		allowed[a.Name] = true
@@ -473,7 +602,6 @@ func projectFields(visible []entity.Attribute, requested []string) []string {
 			allowed[a.Alias] = true
 		}
 	}
-	out := make([]string, 0, len(requested))
 	for _, f := range requested {
 		if allowed[f] {
 			out = append(out, f)
@@ -482,11 +610,7 @@ func projectFields(visible []entity.Attribute, requested []string) []string {
 	return out
 }
 
-func projectFieldsForACL(visible []entity.Attribute, requested []string, acl entity.FieldPermissions) []string {
-	allowed := make(map[string]bool, len(acl.Read))
-	for _, f := range acl.Read {
-		allowed[f] = true
-	}
+func projectFieldsForACL(visible []entity.Attribute, requested []string, allowed map[string]bool) []string {
 	projected := projectFields(visible, requested)
 	out := projected[:0]
 	for _, f := range projected {
@@ -497,11 +621,7 @@ func projectFieldsForACL(visible []entity.Attribute, requested []string, acl ent
 	return out
 }
 
-func firstDenied(requested, configured []string, visible []entity.Attribute) string {
-	allowed := make(map[string]bool, len(configured))
-	for _, f := range configured {
-		allowed[f] = true
-	}
+func firstDenied(requested []string, allowed map[string]bool, visible []entity.Attribute) string {
 	for _, f := range requested {
 		if !fieldAllowed(f, allowed, visible) {
 			return f

@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"maps"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/nethinwei/sql-mcp-server/x/configedit"
@@ -80,4 +82,23 @@ func roundTripPayload(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return payload
+}
+
+// The keys settingsKeys finds in a configuration are those of its settings
+// item: committing a workspace and reading it as a draft remove the same
+// sections (see removeSettingsBut).
+func TestSettingsKeysAreTheItemKeys(t *testing.T) {
+	spec, err := configyaml.DecodeSpec(roundTripPayload(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sections, err := SectionsOf(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := settingsKeys(spec)
+	slices.Sort(got)
+	if want := slices.Sorted(maps.Keys(sections.Settings)); len(want) == 0 || !slices.Equal(got, want) {
+		t.Fatalf("settingsKeys = %v, the item's = %v", got, want)
+	}
 }

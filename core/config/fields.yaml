@@ -10,8 +10,8 @@
 
 version:
   title: {zh-CN: '配置版本', en: 'Config version'}
-  zh-CN: 配置契约版本标记，当前为 "1"；加载器保存但暂不限制取值。
-  en: Configuration contract marker, currently "1"; loaders keep it without restricting it yet.
+  zh-CN: 配置契约版本标记，当前为 "1"，未写即 "1"；其他取值校验失败，不认识的契约不会被加载。
+  en: Configuration contract marker, currently "1"; unset means "1". Any other value fails validation, so a configuration of an unknown contract is never loaded.
 
 server:
   title: {zh-CN: '服务（监听、认证、TLS）', en: 'Server (listen, auth, TLS)'}
@@ -42,8 +42,8 @@ server.secrets:
   zh-CN: DSN 中 ${file:...} 占位符的读取限制。
   en: Limits for ${file:...} placeholders in DSNs.
 server.secrets.allowedRoots:
-  zh-CN: 允许读取 secret 文件的根目录（绝对路径）；符号链接不能逃逸这些目录。
-  en: Absolute directories secret files may be read from; symbolic links cannot escape them.
+  zh-CN: 允许读取 secret 文件的根目录（绝对路径）；符号链接不能逃逸这些目录。不写或写空列表都取默认的 /run/secrets、/var/run/secrets。
+  en: Absolute directories secret files may be read from; symbolic links cannot escape them. Unset or empty, the defaults /run/secrets and /var/run/secrets apply.
 server.auth:
   zh-CN: HTTP 认证。trustProxyHeaders、trustedProxyCIDRs 与非 loopback 的信任规则见 security.md。
   en: HTTP authentication. Trust rules for proxies and non-loopback listeners are in security.md.
@@ -76,8 +76,8 @@ server.auth.tls.clientIdentity:
   en: 'With users configured, who a request presenting a client certificate without a bearer token calls as. user (default): the certificate must match a user''s certSubjects, else it is refused (401); default: the default identity (server.user or server.role, the behavior before v0.1.20). No effect without users. Trusted proxies'' certificates are exempt.'
 
 database:
-  zh-CN: 旧式单数据源配置，加载时迁移为名为 default 的数据源。需要 database 或至少一个 databases 项。
-  en: Legacy single datasource, migrated to the datasource named default. Either database or at least one databases entry is required.
+  zh-CN: 旧式单数据源配置，加载时迁移为名为 default 的数据源。需要 database 或至少一个 databases 项，两者不能同时设置。
+  en: Legacy single datasource, migrated to the datasource named default. Either database or at least one databases entry is required, not both.
 databases:
   zh-CN: 数据源名称到连接配置的映射。
   en: Datasource name to connection.
@@ -470,8 +470,8 @@ cost.whitelistPKPoint:
   zh-CN: 主键点查询跳过估算（仍受结果上限约束）。
   en: Primary-key point reads skip estimation (result caps still apply).
 cost.requirePKForWrite:
-  zh-CN: 写操作必须带主键条件；不随 cost.enabled 关闭。
-  en: Writes must filter by primary key; not turned off by cost.enabled.
+  zh-CN: 写操作必须带主键条件；不随 cost.enabled 关闭，allowTemplates 也不能放行。
+  en: Writes must filter by primary key; not turned off by cost.enabled, nor bypassed by allowTemplates.
 cost.requireKnownScan:
   zh-CN: 无法判断扫描方式时拒绝；MySQL/OceanBase 的 EXPLAIN 失败即拒绝。
   en: Reject when the scan type is unknown; on MySQL/OceanBase a failed EXPLAIN rejects.
@@ -479,14 +479,14 @@ cost.requireFreshStats:
   zh-CN: 统计信息过旧时拒绝（未开启时只在评分中扣 15 分）。PostgreSQL 中过旧指被扫描的表既没被 ANALYZE 也没被 autovacuum 分析过，且大于 64 KiB；MySQL、OceanBase 不判断。
   en: Reject when table statistics are stale (otherwise they only lower the score by 15). On PostgreSQL a scanned table is stale when neither ANALYZE nor autovacuum analyzed it and it is larger than 64 KiB; MySQL and OceanBase do not tell.
 cost.queryTimeout:
-  zh-CN: 查询超时，0（不限）或不小于 100ms；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。
-  en: Query timeout, 0 (none) or at least 100ms; the database statement timeout is set a tenth shorter (at most a second), so the database stops the statement first.
+  zh-CN: 查询超时，0（不限）或不小于 100ms；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。0 时请求没有时限，也不下发数据库语句超时（数据库与账号自身的默认值仍然生效），开启 requireNativeLimits 时拒绝该配置。
+  en: Query timeout, 0 (none) or at least 100ms; the database statement timeout is set a tenth shorter (at most a second), so the database stops the statement first. At 0 calls have no deadline and no database statement timeout is set (the database's and the account's own defaults still apply); requireNativeLimits then refuses the configuration.
 cost.requireNativeLimits:
   zh-CN: 严格模式：数据源的连接无法在数据库侧把语句限制在 queryTimeout 内（能力不是 enforced）时，拒绝加载该配置，控制台校验也报错；关闭时只告警。
   en: Strict mode. Refuse the configuration when a datasource's connection cannot stop statements at queryTimeout on the database side (the capability is not enforced), and fail its validation in the console; off, it only warns.
 cost.allowTemplates:
-  zh-CN: 受治理工具中跳过估算的 SQL 模板：推荐 fp:v3:<sha256> 指纹；多数据源下精确 SQL 写成 datasource:SQL。不绕过安全检查；不作用于 execute_sql（其估算见 cost.sqlEscape）。
-  en: SQL templates of the governed tools that skip estimation; prefer fp:v3:<sha256> fingerprints, and with several datasources write exact SQL as datasource:SQL. Safety checks still apply; execute_sql is not affected (see cost.sqlEscape for its estimate).
+  zh-CN: 受治理工具中跳过估算的 SQL 模板：推荐 fp:v4:<sha256> 指纹；多数据源下精确 SQL 写成 datasource:SQL。不绕过安全检查；不作用于 execute_sql（其估算见 cost.sqlEscape）。
+  en: SQL templates of the governed tools that skip estimation; prefer fp:v4:<sha256> fingerprints, and with several datasources write exact SQL as datasource:SQL. Safety checks still apply; execute_sql is not affected (see cost.sqlEscape for its estimate).
 cost.rejectTemplates:
   zh-CN: 受治理工具中总是拒绝的 SQL 模板，写法同 allowTemplates。按精确文本或指纹匹配，不是 SQL 语义级黑名单；不作用于 execute_sql（逃生通道的边界是其连接账号的权限）。
   en: SQL templates of the governed tools that are always rejected; same forms as allowTemplates. Matched by exact text or fingerprint, not a semantic SQL blocklist; execute_sql is not affected (the escape hatch is bounded by its connection's privileges).
@@ -584,6 +584,9 @@ cache.maxEntryRows:
 cache.maxEntryBytes:
   zh-CN: 单条缓存最多字节数；默认等于 cost.maxBytes，启用结果缓存时必须大于 0。
   en: Maximum bytes per entry; defaults to cost.maxBytes and must be positive when the result cache is enabled.
+cache.maxTotalBytes:
+  zh-CN: 结果缓存所有条目合计最多字节数，超出时先淘汰最早过期的条目；默认 256 MiB（不小于 maxEntryBytes），启用结果缓存时不能小于 maxEntryBytes。
+  en: Maximum bytes of all result cache entries together; past it the entries closest to expiry go first. Defaults to 256 MiB (at least maxEntryBytes) and must hold one entry of maxEntryBytes when the result cache is enabled.
 cache.preparedMaxSize:
   zh-CN: 预编译语句缓存条目数，与结果缓存相互独立；0 表示不缓存。
   en: Prepared statement cache size, independent of the result cache; 0 disables it.
@@ -611,10 +614,12 @@ rateLimit.rttThreshold:
   zh-CN: 延迟超过该值时降低并发；0s 不触发。
   en: Reduce concurrency when latency exceeds this; 0s disables it.
 rateLimit.breakerThreshold:
-  zh-CN: 连续失败多少次后熔断；每个数据库连接各自熔断，调用方取消或数据库因数据、权限拒绝的语句不计入。
+  zh-CN: 连续失败多少次后熔断；每个数据库连接各自熔断。只计数据库或连接自身的故障（含数据库的语句超时）；调用方取消，以及数据库因数据、取值、权限、语句本身（如语法）或已变化的 schema 拒绝的语句不计入。
   en: >-
-    Consecutive failures that open the breaker; each database connection has its own, and calls the caller
-    cancelled or statements the database refused for their data or privileges do not count.
+    Consecutive failures that open the breaker; each database connection has its own. Only the database's or
+    the connection's own failures count (its statement timeouts included); calls the caller cancelled, and
+    statements the database refused for their data, values, privileges, their own text (a syntax error) or a
+    schema that changed, do not.
 rateLimit.breakerCooldown:
   zh-CN: 熔断后多久重试；冷却后只放行一个探测调用，成功才恢复。
   en: Time before retrying after the breaker opens; one probe call is then let through, and only its success closes it.

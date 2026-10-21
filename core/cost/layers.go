@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
@@ -31,14 +32,21 @@ func (StaticRule) Phase() Phase { return PhaseSafety }
 
 // Check implements Layer.
 func (s StaticRule) Check(_ context.Context, c codegen.Compiled) (Decision, error) {
-	if matchesBaseline(s.RejectTemplates, s.Datasource, s.DialectName, c, s.LegacyExactSQL) {
+	computed := ""
+	fp := func() string { // once for both lists
+		if computed == "" {
+			computed = Fingerprint(s.Datasource, s.DialectName, c)
+		}
+		return computed
+	}
+	if matchesTemplates(s.RejectTemplates, s.Datasource, c, s.LegacyExactSQL, fp) {
 		return Decision{Allow: false, Hints: []string{"query matches a rejected template"}}, nil
 	}
 	if s.PKWhitelist && c.IsKeyPoint {
 		p := Plan{ScanType: ScanPoint, StatsFresh: true}
 		return Decision{Allow: true, Bypass: true, Plan: &p, Score: ptrScore(ScorePlan(p))}, nil
 	}
-	if matchesBaseline(s.AllowTemplates, s.Datasource, s.DialectName, c, s.LegacyExactSQL) {
+	if matchesTemplates(s.AllowTemplates, s.Datasource, c, s.LegacyExactSQL, fp) {
 		return Decision{Allow: true, Bypass: true}, nil
 	}
 	return Decision{Allow: true}, nil
@@ -133,7 +141,7 @@ func (e Estimate) explainPlan(ctx context.Context, c codegen.Compiled) (Plan, er
 	if err != nil {
 		plan = Plan{ScanType: ScanUnknown, StatsFresh: false}
 	}
-	if e.Feedback != nil {
+	if _, off := e.Feedback.(NoopFeedbackStore); e.Feedback != nil && !off {
 		key := Fingerprint(e.Threshold.Datasource, e.Threshold.DialectName, c)
 		if stats, ok := e.Feedback.Stats(key); ok && stats.AverageRows > plan.EstimatedRows {
 			plan.EstimatedRows = stats.AverageRows
@@ -214,8 +222,8 @@ func (e EnforceCap) Check(_ context.Context, c codegen.Compiled) (Decision, erro
 // key the database enforces (primary or unique key)
 // is hard-rejected. This backstops databases whose row estimates are
 // unreliable (MySQL/OceanBase), where an unbounded WHERE could touch millions
-// of rows. Point writes are already bypassed by StaticRule's PK whitelist;
-// known-good bulk writes can be admitted via AllowTemplates after review.
+// of rows. It is an Enforcement layer: no template admits a write past it
+// (AllowTemplates only skips Estimate); cost.requirePKForWrite off does.
 type WriteGuard struct{}
 
 // Name implements Layer.
@@ -246,7 +254,6 @@ func (WriteGuard) Check(_ context.Context, c codegen.Compiled) (Decision, error)
 		Allow: false,
 		Hints: []string{
 			"scope the write with an equality filter on a primary or unique key (e.g. id = ...)",
-			"or add the exact statement to allowTemplates after review",
 		},
 	}, nil
 }
@@ -296,8 +303,10 @@ func (g AggregateGuard) Check(_ context.Context, c codegen.Compiled) (Decision, 
 	if !g.RequirePredicate || c.Kind != codegen.KindAggregate {
 		return Decision{Allow: true}, nil
 	}
+	// Codegen bounded the IN lists by the configured limit, which may be
+	// past relalg's default: the predicate's shape is checked, not them.
 	p := codegen.PredicateOf(c.Expr)
-	if p != nil && relalg.ValidatePredicate(p) == nil {
+	if p != nil && relalg.ValidatePredicateWithMaxINCardinality(p, math.MaxInt) == nil {
 		return Decision{Allow: true}, nil
 	}
 	return Decision{Allow: false, Hints: []string{aggregatePredicateHint(c)}}, nil

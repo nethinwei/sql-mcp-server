@@ -6,10 +6,13 @@ import (
 	"crypto/x509/pkix"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 )
 
 // serveCert serves a request whose connection presented a certificate
@@ -131,9 +134,54 @@ func TestProxyCertificateMatchesDNSNamesInAnyCase(t *testing.T) {
 	} {
 		req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
 		req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{&c.cert}}
-		if got := fromProxyCertificate(c.subjects, req); got != c.want {
+		if got := fromProxyCertificate(c.subjects, nil, req); got != c.want {
 			t.Errorf("subjects %v, DNS %v, CN %q: %v, want %v", c.subjects, c.cert.DNSNames,
 				c.cert.Subject.CommonName, got, c.want)
 		}
+	}
+}
+
+// uriUsers names a user by a certificate's URI SAN, as a uri: certSubjects
+// entry does.
+type uriUsers struct {
+	fakeUsers
+	uri, name string
+}
+
+func (u uriUsers) UserByCertificate(leaf *x509.Certificate) (bootstrap.UserIdentity, bool) {
+	for _, uri := range leaf.URIs {
+		if uri.String() == u.uri {
+			return u.UserByName(u.name)
+		}
+	}
+	return bootstrap.UserIdentity{}, false
+}
+
+// A user's certificate (here by a uri: subject, which the configuration
+// cannot compare with a proxy's names) that also carries a proxy's DNS name
+// is not the proxy's: its holder must not name other callers by headers.
+func TestUserCertificateIsNoProxy(t *testing.T) {
+	t.Parallel()
+	alice, _ := url.Parse("spiffe://example.org/agent/alice")
+	users := uriUsers{fakeUsers: testUsers(), uri: alice.String(), name: "alice"}
+	subjects := []string{"gateway.example.com"}
+	cert := &x509.Certificate{DNSNames: []string{"gateway.example.com"}, URIs: []*url.URL{alice}}
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}
+	if fromProxyCertificate(subjects, users, req) {
+		t.Fatal("a user's certificate was trusted as a proxy's")
+	}
+	if !fromProxyCertificate(subjects, nil, req) {
+		t.Fatal("without that user the certificate is the proxy's")
+	}
+	served := ""
+	mark := func(name string) http.Handler {
+		return http.HandlerFunc(func(http.ResponseWriter, *http.Request) { served = name })
+	}
+	req.Header.Set(userHeader, "bob")
+	rec := httptest.NewRecorder()
+	trustedProxy(nil, subjects, users, true, mark("proxied"), mark("direct")).ServeHTTP(rec, req)
+	if served != "" || rec.Code != http.StatusForbidden {
+		t.Fatalf("identity headers from a user's certificate: served %q, %d", served, rec.Code)
 	}
 }

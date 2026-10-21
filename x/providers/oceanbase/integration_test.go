@@ -22,6 +22,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/internal/escapetest"
 	"github.com/nethinwei/sql-mcp-server/internal/insertkeytest"
 	"github.com/nethinwei/sql-mcp-server/internal/numbertest"
+	"github.com/nethinwei/sql-mcp-server/internal/tcstart"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/providers/oceanbase"
 )
@@ -29,15 +30,21 @@ import (
 func startOBContainer(t *testing.T) (testcontainers.Container, string) {
 	t.Helper()
 	ctx := context.Background()
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        "oceanbase/oceanbase-ce:4.3.5.6-106000012026040916",
-			ExposedPorts: []string{"2881/tcp"},
-			WaitingFor:   wait.ForListeningPort("2881/tcp").WithStartupTimeout(5 * time.Minute),
-			Env:          map[string]string{"MODE": "mini"},
-		},
-		Started: true,
-	})
+	container, err := tcstart.Run(ctx, func(publish tcstart.Publish) (testcontainers.Container, error) {
+		req := testcontainers.GenericContainerRequest{
+			ContainerRequest: testcontainers.ContainerRequest{
+				Image:        "oceanbase/oceanbase-ce:4.3.5.6-106000012026040916",
+				ExposedPorts: []string{"2881/tcp"},
+				WaitingFor:   wait.ForListeningPort("2881/tcp").WithStartupTimeout(5 * time.Minute),
+				Env:          map[string]string{"MODE": "mini"},
+			},
+			Started: true,
+		}
+		if err := tcstart.Apply(&req, publish); err != nil {
+			return nil, err
+		}
+		return testcontainers.GenericContainer(ctx, req)
+	}, "2881/tcp")
 	if err != nil {
 		t.Fatalf("start oceanbase container: %v", err)
 	}

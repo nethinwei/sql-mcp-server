@@ -11,3 +11,12 @@ type Dialect interface {
 	// opened.
 	Capabilities() Profile
 }
+
+// NullsLast is a Dialect ordering a term's NULLs last with NULLS LAST, which
+// keeps an index on the column serving the order (and is allowed in the
+// ORDER BY of a SELECT DISTINCT); codegen orders them last with a CASE on
+// any other dialect.
+type NullsLast interface {
+	Dialect
+	OrdersNullsLast()
+}

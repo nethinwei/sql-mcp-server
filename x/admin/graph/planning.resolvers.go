@@ -45,6 +45,12 @@ func (r *mutationResolver) ResetWorkspace(ctx context.Context, to string) (*conf
 	return w, apiError(err)
 }
 
+// LoadRevision is the resolver for the loadRevision field.
+func (r *mutationResolver) LoadRevision(ctx context.Context, to string, keep bool) (*configapp.Workspace, error) {
+	w, err := r.App.LoadIntoWorkspace(ctx, to, keep)
+	return w, apiError(err)
+}
+
 // MergeDraft is the resolver for the mergeDraft field.
 func (r *mutationResolver) MergeDraft(ctx context.Context, id string) (*configapp.Workspace, error) {
 	w, err := r.App.MergeDraft(ctx, id)
@@ -69,10 +75,7 @@ func (r *mutationResolver) CheckpointWorkspace(ctx context.Context, comment *str
 // CommitWorkspace is the resolver for the commitWorkspace field.
 func (r *mutationResolver) CommitWorkspace(ctx context.Context, input configapp.CommitInput) (*Revision, error) {
 	rev, err := r.App.CommitWorkspace(ctx, input)
-	if err != nil {
-		return nil, apiError(err)
-	}
-	return toRevision(rev), nil
+	return committed(ctx, rev, err)
 }
 
 // SavePlanTemplate is the resolver for the savePlanTemplate field.
@@ -231,17 +234,55 @@ func (r *queryResolver) ScanBatches(ctx context.Context, datasource string) ([]c
 	return r.App.ScanBatches(ctx, datasource)
 }
 
+// ScanBatch is the resolver for the scanBatch field.
+func (r *queryResolver) ScanBatch(ctx context.Context, id string) (*configapp.ScanBatch, error) {
+	return r.App.ScanBatch(ctx, id)
+}
+
+// Items is the resolver for the items field.
+func (r *scanBatchResolver) Items(ctx context.Context, obj *configapp.ScanBatch) ([]configapp.ScanBatchItem, error) {
+	if obj.Items != nil {
+		return obj.Items, nil
+	}
+	// Listed without them: read the batch's.
+	b, err := r.App.ScanBatch(ctx, obj.ID)
+	if err != nil {
+		return nil, err
+	}
+	return b.Items, nil
+}
+
 // Sections is the resolver for the sections field.
 func (r *workspaceResolver) Sections(ctx context.Context, obj *configapp.Workspace) (any, error) {
+	if err := readsContent(ctx); err != nil {
+		return nil, err
+	}
 	return obj.Sections()
 }
 
 // Items is the resolver for the items field.
 func (r *workspaceResolver) Items(ctx context.Context, obj *configapp.Workspace, since *int) (*configapp.WorkspaceItems, error) {
+	if err := readsContent(ctx); err != nil {
+		return nil, err
+	}
 	return r.App.WorkspaceItems(ctx, obj, since)
 }
+
+// Conflicts is the resolver for the conflicts field.
+func (r *workspaceResolver) Conflicts(ctx context.Context, obj *configapp.Workspace) ([]configapp.WorkspaceConflict, error) {
+	if err := readsContent(ctx); err != nil {
+		return nil, err
+	}
+	return obj.Conflicts, nil
+}
+
+// ScanBatch returns ScanBatchResolver implementation.
+func (r *Resolver) ScanBatch() ScanBatchResolver { return &scanBatchResolver{r} }
 
 // Workspace returns WorkspaceResolver implementation.
 func (r *Resolver) Workspace() WorkspaceResolver { return &workspaceResolver{r} }
 
-type workspaceResolver struct{ *Resolver }
+type (
+	scanBatchResolver struct{ *Resolver }
+	workspaceResolver struct{ *Resolver }
+)

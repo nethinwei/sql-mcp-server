@@ -1,42 +1,75 @@
 package cost
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/codegen"
 )
 
 // fingerprintPrefix versions Fingerprint: what it hashes changed in v3, when
 // a decimal argument began binding as its text (a string) for its precision,
-// so a v2 key of a statement with one no longer matches.
-const fingerprintPrefix = "fp:v3:"
+// and in v4, when reads began carrying their row cap as their LIMIT and
+// PostgreSQL ordering NULLs last with NULLS LAST, so a key of an earlier
+// version may no longer match.
+const fingerprintPrefix = "fp:v4:"
 
 // Fingerprint returns a stable baseline key derived from datasource, dialect,
 // normalized generated SQL, and bound parameter types. Values are deliberately
-// excluded.
+// excluded. It hashes as it reads: every governed statement is fingerprinted,
+// with up to thousands of arguments.
 func Fingerprint(datasource, dialectName string, c codegen.Compiled) string {
-	var b strings.Builder
-	b.WriteString(strings.ToLower(strings.TrimSpace(datasource)))
-	b.WriteByte('\n')
-	b.WriteString(strings.ToLower(strings.TrimSpace(dialectName)))
-	b.WriteByte('\n')
-	b.WriteString(strings.Join(strings.Fields(c.SQL), " "))
-	for _, arg := range c.Args {
-		b.WriteByte('\n')
-		if arg == nil {
-			b.WriteString("<nil>")
-			continue
+	h := sha256.New()
+	w := bufio.NewWriterSize(h, 512)
+	_, _ = w.WriteString(strings.ToLower(strings.TrimSpace(datasource)))
+	_ = w.WriteByte('\n')
+	_, _ = w.WriteString(strings.ToLower(strings.TrimSpace(dialectName)))
+	_ = w.WriteByte('\n')
+	first := true
+	for field := range strings.FieldsSeq(c.SQL) { // the SQL with its spaces collapsed
+		if !first {
+			_ = w.WriteByte(' ')
 		}
-		t := reflect.TypeOf(arg)
-		_, _ = fmt.Fprintf(&b, "%s/%s", t.PkgPath(), t.String())
+		_, _ = w.WriteString(field)
+		first = false
 	}
-	sum := sha256.Sum256([]byte(b.String()))
-	return fingerprintPrefix + hex.EncodeToString(sum[:])
+	for _, arg := range c.Args {
+		_ = w.WriteByte('\n')
+		_, _ = w.WriteString(argType(arg))
+	}
+	_ = w.Flush()
+	var sum [sha256.Size]byte
+	return fingerprintPrefix + hex.EncodeToString(h.Sum(sum[:0]))
+}
+
+// argType names the type of a bound argument as package path/type.
+func argType(arg any) string {
+	switch arg.(type) {
+	case nil:
+		return "<nil>"
+	case string:
+		return "/string"
+	case int64:
+		return "/int64"
+	case int:
+		return "/int"
+	case float64:
+		return "/float64"
+	case bool:
+		return "/bool"
+	case []byte:
+		return "/[]uint8"
+	case time.Time:
+		return "time/time.Time"
+	}
+	t := reflect.TypeOf(arg)
+	return t.PkgPath() + "/" + t.String()
 }
 
 // ValidateTemplateScopes rejects fingerprints of an earlier version, which
@@ -68,9 +101,10 @@ func ValidateTemplateScopes(datasources, allowTemplates, rejectTemplates []strin
 			}
 			return fmt.Errorf(
 				"cost: %s entry %q is legacy bare SQL and is unsafe with multiple datasources; "+
-					"migrate it to fp:v3:<sha256> or prefix it with a datasource, for example %q",
+					"migrate it to %s<sha256> or prefix it with a datasource, for example %q",
 				templates.name,
 				value,
+				fingerprintPrefix,
 				names[0]+":"+value,
 			)
 		}
@@ -95,7 +129,7 @@ func validateFingerprintVersion(name string, values []string) error {
 				"(it names its datasource)", name, value, fp)
 		case !strings.HasPrefix(fp, fingerprintPrefix):
 			return fmt.Errorf("cost: %s entry %q is a fingerprint of an earlier version, which matches nothing; "+
-				"capture it again as fp:v3:<sha256> (decimal arguments now bind as text)", name, value)
+				"capture it again as %s<sha256> (reads now carry their row cap as LIMIT)", name, value, fingerprintPrefix)
 		}
 	}
 	return nil
@@ -117,10 +151,22 @@ func matchesBaseline(
 	c codegen.Compiled,
 	allowLegacyExactSQL bool,
 ) bool {
-	fp := Fingerprint(datasource, dialectName, c)
-	scopedSQL := strings.TrimSpace(datasource) + ":" + c.SQL
+	return matchesTemplates(values, datasource, c, allowLegacyExactSQL, func() string {
+		return Fingerprint(datasource, dialectName, c)
+	})
+}
+
+// matchesTemplates is matchesBaseline with the fingerprint from fp, asked
+// only when there are templates: a check matching two lists asks once.
+func matchesTemplates(values []string, datasource string, c codegen.Compiled, allowLegacyExactSQL bool,
+	fp func() string,
+) bool {
+	if len(values) == 0 { // no templates, the default: nothing to fingerprint
+		return false
+	}
+	fingerprint, scopedSQL := fp(), strings.TrimSpace(datasource)+":"+c.SQL
 	for _, value := range values {
-		if value == fp || value == scopedSQL || allowLegacyExactSQL && value == c.SQL {
+		if value == fingerprint || value == scopedSQL || allowLegacyExactSQL && value == c.SQL {
 			return true
 		}
 	}

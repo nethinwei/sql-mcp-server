@@ -77,8 +77,8 @@ func procedureToolBase(e entity.Entity) string {
 func ProcedureTools(reg *entity.Registry) []ProcedureTool {
 	var out []ProcedureTool
 	bases := map[string]int{}
-	for _, e := range reg.Entities() {
-		if e.Kind == entity.KindProcedure && e.MCP.CustomTool && e.MCP.TrustedProcedure {
+	for e := range reg.Procedures() {
+		if e.MCP.CustomTool && e.MCP.TrustedProcedure {
 			t := ProcedureTool{Entity: e, Name: procedureToolBase(e)}
 			bases[t.Name]++
 			out = append(out, t)

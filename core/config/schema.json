@@ -18,9 +18,12 @@
     "version": {
       "title": "Config version",
       "x-title-zh-CN": "配置版本",
-      "description": "Configuration contract marker, currently \"1\"; loaders keep it without restricting it yet.",
-      "x-description-zh-CN": "配置契约版本标记，当前为 \"1\"；加载器保存但暂不限制取值。",
-      "type": "string"
+      "description": "Configuration contract marker, currently \"1\"; unset means \"1\". Any other value fails validation, so a configuration of an unknown contract is never loaded.",
+      "x-description-zh-CN": "配置契约版本标记，当前为 \"1\"，未写即 \"1\"；其他取值校验失败，不认识的契约不会被加载。",
+      "type": "string",
+      "enum": [
+        "1"
+      ]
     },
     "server": {
       "title": "Server (listen, auth, TLS)",
@@ -137,16 +140,15 @@
           "type": "object",
           "properties": {
             "allowedRoots": {
-              "description": "Absolute directories secret files may be read from; symbolic links cannot escape them.",
-              "x-description-zh-CN": "允许读取 secret 文件的根目录（绝对路径）；符号链接不能逃逸这些目录。",
+              "description": "Absolute directories secret files may be read from; symbolic links cannot escape them. Unset or empty, the defaults /run/secrets and /var/run/secrets apply.",
+              "x-description-zh-CN": "允许读取 secret 文件的根目录（绝对路径）；符号链接不能逃逸这些目录。不写或写空列表都取默认的 /run/secrets、/var/run/secrets。",
               "type": "array",
               "default": [
                 "/run/secrets",
                 "/var/run/secrets"
               ],
               "items": {
-                "type": "string",
-                "default": "/run/secrets"
+                "type": "string"
               }
             }
           },
@@ -172,8 +174,8 @@
     },
     "database": {
       "$ref": "#/$defs/database",
-      "description": "Legacy single datasource, migrated to the datasource named default. Either database or at least one databases entry is required.",
-      "x-description-zh-CN": "旧式单数据源配置，加载时迁移为名为 default 的数据源。需要 database 或至少一个 databases 项。"
+      "description": "Legacy single datasource, migrated to the datasource named default. Either database or at least one databases entry is required, not both.",
+      "x-description-zh-CN": "旧式单数据源配置，加载时迁移为名为 default 的数据源。需要 database 或至少一个 databases 项，两者不能同时设置。"
     },
     "databases": {
       "description": "Datasource name to connection.",
@@ -190,28 +192,6 @@
       "description": "Entities exposed to agents; may be empty. Startup introspection rejects tables, views or fields missing from the database.",
       "x-description-zh-CN": "显式暴露给 Agent 的实体；可以为空。启动自省会拒绝数据库中缺失的表、视图或字段。",
       "type": "array",
-      "default": [
-        {
-          "name": "x",
-          "fields": [
-            {
-              "name": "x"
-            }
-          ],
-          "roles": {},
-          "mcp": {
-            "dmlTools": true
-          },
-          "relationships": [
-            {
-              "name": "",
-              "target": "",
-              "cardinality": "",
-              "joinOn": null
-            }
-          ]
-        }
-      ],
       "items": {
         "$ref": "#/$defs/entity"
       }
@@ -415,8 +395,8 @@
           "default": true
         },
         "requirePKForWrite": {
-          "description": "Writes must filter by primary key; not turned off by cost.enabled.",
-          "x-description-zh-CN": "写操作必须带主键条件；不随 cost.enabled 关闭。",
+          "description": "Writes must filter by primary key; not turned off by cost.enabled, nor bypassed by allowTemplates.",
+          "x-description-zh-CN": "写操作必须带主键条件；不随 cost.enabled 关闭，allowTemplates 也不能放行。",
           "type": "boolean",
           "default": true
         },
@@ -432,8 +412,8 @@
           "type": "boolean"
         },
         "queryTimeout": {
-          "description": "Query timeout, 0 (none) or at least 100ms; the database statement timeout is set a tenth shorter (at most a second), so the database stops the statement first.",
-          "x-description-zh-CN": "查询超时，0（不限）或不小于 100ms；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。",
+          "description": "Query timeout, 0 (none) or at least 100ms; the database statement timeout is set a tenth shorter (at most a second), so the database stops the statement first. At 0 calls have no deadline and no database statement timeout is set (the database's and the account's own defaults still apply); requireNativeLimits then refuses the configuration.",
+          "x-description-zh-CN": "查询超时，0（不限）或不小于 100ms；数据库语句超时取其九成（至多短 1 秒），使数据库先停住语句。0 时请求没有时限，也不下发数据库语句超时（数据库与账号自身的默认值仍然生效），开启 requireNativeLimits 时拒绝该配置。",
           "type": "string",
           "x-format": "duration",
           "x-minimum": "0",
@@ -446,8 +426,8 @@
           "type": "boolean"
         },
         "allowTemplates": {
-          "description": "SQL templates of the governed tools that skip estimation; prefer fp:v3:\u003csha256\u003e fingerprints, and with several datasources write exact SQL as datasource:SQL. Safety checks still apply; execute_sql is not affected (see cost.sqlEscape for its estimate).",
-          "x-description-zh-CN": "受治理工具中跳过估算的 SQL 模板：推荐 fp:v3:\u003csha256\u003e 指纹；多数据源下精确 SQL 写成 datasource:SQL。不绕过安全检查；不作用于 execute_sql（其估算见 cost.sqlEscape）。",
+          "description": "SQL templates of the governed tools that skip estimation; prefer fp:v4:\u003csha256\u003e fingerprints, and with several datasources write exact SQL as datasource:SQL. Safety checks still apply; execute_sql is not affected (see cost.sqlEscape for its estimate).",
+          "x-description-zh-CN": "受治理工具中跳过估算的 SQL 模板：推荐 fp:v4:\u003csha256\u003e 指纹；多数据源下精确 SQL 写成 datasource:SQL。不绕过安全检查；不作用于 execute_sql（其估算见 cost.sqlEscape）。",
           "type": "array",
           "items": {
             "type": "string"
@@ -632,6 +612,13 @@
           "default": 16777216,
           "minimum": 0
         },
+        "maxTotalBytes": {
+          "description": "Maximum bytes of all result cache entries together; past it the entries closest to expiry go first. Defaults to 256 MiB (at least maxEntryBytes) and must hold one entry of maxEntryBytes when the result cache is enabled.",
+          "x-description-zh-CN": "结果缓存所有条目合计最多字节数，超出时先淘汰最早过期的条目；默认 256 MiB（不小于 maxEntryBytes），启用结果缓存时不能小于 maxEntryBytes。",
+          "type": "integer",
+          "default": 268435456,
+          "minimum": 0
+        },
         "preparedMaxSize": {
           "description": "Prepared statement cache size, independent of the result cache; 0 disables it.",
           "x-description-zh-CN": "预编译语句缓存条目数，与结果缓存相互独立；0 表示不缓存。",
@@ -690,8 +677,8 @@
           "pattern": "^(0|-?([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+)$"
         },
         "breakerThreshold": {
-          "description": "Consecutive failures that open the breaker; each database connection has its own, and calls the caller cancelled or statements the database refused for their data or privileges do not count.",
-          "x-description-zh-CN": "连续失败多少次后熔断；每个数据库连接各自熔断，调用方取消或数据库因数据、权限拒绝的语句不计入。",
+          "description": "Consecutive failures that open the breaker; each database connection has its own. Only the database's or the connection's own failures count (its statement timeouts included); calls the caller cancelled, and statements the database refused for their data, values, privileges, their own text (a syntax error) or a schema that changed, do not.",
+          "x-description-zh-CN": "连续失败多少次后熔断；每个数据库连接各自熔断。只计数据库或连接自身的故障（含数据库的语句超时）；调用方取消，以及数据库因数据、取值、权限、语句本身（如语法）或已变化的 schema 拒绝的语句不计入。",
           "type": "integer",
           "default": 5,
           "minimum": 0

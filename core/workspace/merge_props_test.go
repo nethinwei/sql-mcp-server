@@ -118,7 +118,7 @@ func propEdit(r *rng, base any) any {
 		fields := names(o["fields"])
 		grants, _ := o["grants"].([]any)
 		fieldAt := func(rest ...Step) Path {
-			return append(Path{{Field: "fields"}, {Element: pick(r, fields)}}, rest...)
+			return append(Path{{Field: "fields"}, ElementStep(pick(r, fields))}, rest...)
 		}
 		switch int(r.next() * 9) {
 		case 0:
@@ -133,7 +133,7 @@ func propEdit(r *rng, base any) any {
 			}
 		case 3:
 			key := pick(r, []string{"tax", "note", "email"})
-			v = schema.SetAt(v, Path{{Field: "fields"}, {Element: key}}, propField(r, key))
+			v = schema.SetAt(v, Path{{Field: "fields"}, ElementStep(key)}, propField(r, key))
 		case 4:
 			if len(fields) > 0 {
 				v = schema.SetAt(v, fieldAt(Step{Field: "exclude"}), r.chance(0.5))
@@ -182,7 +182,7 @@ func leaves(values []any, path Path, out map[string]Path) {
 			defined = append(defined, at)
 		}
 	}
-	if len(path) > 0 && path[len(path)-1].Field == "" && slices.ContainsFunc(defined, isGroup) {
+	if len(path) > 0 && path[len(path)-1].IsElement() && slices.ContainsFunc(defined, isGroup) {
 		out[fmt.Sprint(path)] = path
 		return
 	}
@@ -210,7 +210,7 @@ func leaves(values []any, path Path, out map[string]Path) {
 		}
 	case allLists:
 		for _, k := range listOrder {
-			leaves(values, append(slices.Clone(path), Step{Element: k}), out)
+			leaves(values, append(slices.Clone(path), ElementStep(k)), out)
 		}
 	default:
 		out[fmt.Sprint(path)] = path

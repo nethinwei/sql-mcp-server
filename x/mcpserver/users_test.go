@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
@@ -191,9 +192,14 @@ func TestCallerIdentityUsesDefaultUser(t *testing.T) {
 	if role != "operator" {
 		t.Fatalf("explicit identity must win over the default user: %q", role)
 	}
+	// A default role (--role) naming a user's principal is forged.
+	named := &bootstrap.App{DefaultRole: "user:alice", Users: app.Users}
+	if role, _ := callerIdentity(t.Context(), named); role != forgedPrincipal {
+		t.Fatalf("a default role naming a user = %q", role)
+	}
 	app.Users = nil
 	role, subject = callerIdentity(t.Context(), app)
-	if role != "user:alice" || subject != nil {
+	if role != forgedPrincipal || subject != nil {
 		t.Fatalf("removed default user must fail closed to a grant-less principal: %q %v", role, subject)
 	}
 	app.DefaultUser = ""
@@ -209,7 +215,18 @@ func TestRevokeSessionsDropsBindingsAndRollsBack(t *testing.T) {
 	store.bind("s2", sessionIdentity{role: "user:alice", subject: `{"tenant_id":"t1"}`})
 	store.bind("s3", sessionIdentity{role: "user:bob"})
 	var closed []string
-	returned := revokeSessions(store, func(s string) { closed = append(closed, s) }, nil)([]string{"user:alice"})
+	done := make(chan struct{})
+	onClosed := func(s string) {
+		if closed = append(closed, s); len(closed) == 2 {
+			close(done)
+		}
+	}
+	returned := revokeSessions(nil, store, onClosed, nil)([]string{"user:alice"})
+	// The bindings are gone at once; the sessions close in the background.
+	if same(store.lookup("s1", sessionIdentity{role: "user:alice"})) {
+		t.Fatal("revoked session must no longer match")
+	}
+	<-done
 	slices.Sort(closed)
 	slices.Sort(returned)
 	if !slices.Equal(closed, []string{"s1", "s2"}) || !slices.Equal(returned, closed) {
@@ -231,4 +248,26 @@ func TestValidateHTTPSecurityAcceptsUsersAsAuthentication(t *testing.T) {
 	if err := validateHTTPSecurity(HTTPConfig{Addr: ":8080", HTTPAuth: HTTPAuth{Users: testUsers()}}); err != nil {
 		t.Fatalf("configured users authenticate an exposed listener: %v", err)
 	}
+}
+
+// Revoking returns while a session's requests still run: closing it waits
+// for them, the reload revoking it does not.
+func TestRevokeDoesNotWaitForTheSessionsClosing(t *testing.T) {
+	t.Parallel()
+	store := newSessionIdentityStore()
+	store.bind("s1", sessionIdentity{role: "user:alice"})
+	release, closed := make(chan struct{}), make(chan struct{})
+	closeOpen := func([]string) { <-release; close(closed) }
+	returned := make(chan []string, 1)
+	go func() { returned <- revokeSessions(nil, store, nil, closeOpen)([]string{"user:alice"}) }()
+	select {
+	case got := <-returned:
+		if len(got) != 1 {
+			t.Fatalf("revoked %v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("revoking waited for the session to close")
+	}
+	close(release)
+	<-closed
 }

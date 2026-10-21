@@ -219,7 +219,11 @@ func TestForkRunsOnceClosed(t *testing.T) {
 	b.Fork(&wg, "open", func(context.Context) { ran.Add(1) })
 	wg.Wait()
 	_ = b.Close(context.Background())
-	b.Fork(&wg, "closed", func(context.Context) { ran.Add(1) })
+	b.Fork(&wg, "closed", func(ctx context.Context) {
+		if ctx.Err() != nil { // the work can see the bus has closed
+			ran.Add(1)
+		}
+	})
 	wg.Wait()
 	if ran.Load() != 2 {
 		t.Fatalf("ran %d", ran.Load())

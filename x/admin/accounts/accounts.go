@@ -35,6 +35,39 @@ var ErrLastAccountManager = errors.New("admin: at least one enabled account must
 // Service applies the account rules on top of a Store.
 type Service struct {
 	Store Store
+	// Gate bounds the password hashing and verification running at once;
+	// nil runs them unbounded (the CLI).
+	Gate Gate
+}
+
+// Gate bounds memory-hard password work (argon2id, 64 MiB each): Enter
+// false means the caller must not do it; a true result is paired with
+// Leave. The admin API passes the gate that bounds sign-ins.
+type Gate interface {
+	Enter(ctx context.Context) bool
+	Leave()
+}
+
+// ErrBusy: the gate refused password work.
+var ErrBusy = errors.New("admin: too many password operations in progress; try again later")
+
+// slow runs password work through the gate, holding it for work only.
+func (s Service) slow(ctx context.Context, work func() error) error {
+	if s.Gate != nil {
+		if !s.Gate.Enter(ctx) {
+			return ErrBusy
+		}
+		defer s.Gate.Leave()
+	}
+	return work()
+}
+
+func (s Service) hash(ctx context.Context, password string) (hash string, err error) {
+	err = s.slow(ctx, func() error {
+		hash, err = auth.HashPassword(password)
+		return err
+	})
+	return hash, err
 }
 
 // Patch lists the account settings to change; nil fields stay as they are.
@@ -76,7 +109,7 @@ func (s Service) Create(ctx context.Context, username, password string, permissi
 		return Account{}, err
 	}
 	// Hashing is slow by design; do it before taking the store lock.
-	hash, err := auth.HashPassword(password)
+	hash, err := s.hash(ctx, password)
 	if err != nil {
 		return Account{}, err
 	}
@@ -95,7 +128,7 @@ func (s Service) SetPassword(ctx context.Context, username, password string) (Ac
 	if err := auth.ValidatePassword(password); err != nil {
 		return Account{}, err
 	}
-	hash, err := auth.HashPassword(password)
+	hash, err := s.hash(ctx, password)
 	if err != nil {
 		return Account{}, err
 	}
@@ -158,10 +191,14 @@ func (s Service) SetPasswordAs(
 	if err != nil {
 		return Account{}, err
 	}
-	if !auth.VerifyPassword(own.PasswordHash, current) {
-		return Account{}, ErrWrongPassword
-	}
-	hash, err := auth.HashPassword(password)
+	var hash string
+	err = s.slow(ctx, func() (err error) {
+		if !auth.VerifyPassword(own.PasswordHash, current) {
+			return ErrWrongPassword
+		}
+		hash, err = auth.HashPassword(password)
+		return err
+	})
 	if err != nil {
 		return Account{}, err
 	}

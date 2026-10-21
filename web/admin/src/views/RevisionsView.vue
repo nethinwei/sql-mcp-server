@@ -136,7 +136,7 @@ function rollback(id: string) {
 }
 function loadIntoWorkspace(id: string) {
   const go = () => action(async () => {
-    await workspace.reset(id)
+    await workspace.load(id, false)
     message.success(t('revisions.loaded', { id }))
   })
   if (!ws.dirty) return void go()
@@ -147,7 +147,7 @@ function loadIntoWorkspace(id: string) {
     positiveText: t('revisions.loadKeeping'),
     negativeText: t('revisions.loadDiscarding'),
     onPositiveClick: () => action(async () => {
-      await workspace.update(id)
+      await workspace.load(id, true)
       const n = ws.openConflicts.length
       if (n) message.warning(t('drafts.conflicts', { id, n }))
       else message.success(t('revisions.loaded', { id }))
@@ -159,7 +159,7 @@ function loadIntoWorkspace(id: string) {
 
 <template>
   <n-empty v-if="!revisions.length && !list.fetching.value" :description="t('revisions.empty')" />
-  <n-grid v-else :cols="3" :x-gap="16" responsive="screen" item-responsive>
+  <n-grid v-else :cols="3" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
     <n-gi span="3 l:1">
       <n-card size="small" :title="t('revisions.list')" content-style="max-height: calc(100vh - 200px); overflow: auto">
         <n-timeline>

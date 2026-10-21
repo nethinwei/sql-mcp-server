@@ -67,6 +67,20 @@ func TestParsePGExplainSort(t *testing.T) {
 	}
 }
 
+// Nodes of later PostgreSQL versions: an Incremental Sort (13) sorts, and a
+// Tid Range Scan (14) reads a range of a table's heap, which may be all of it.
+func TestParsePGExplainLaterNodes(t *testing.T) {
+	t.Parallel()
+	p, _, err := parsePGExplain([]byte(`[{"Plan":{"Node Type":"Incremental Sort","Plan Rows":10,"Plans":[` +
+		`{"Node Type":"Tid Range Scan","Relation Name":"t","Plan Rows":10}]}}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.HasSort || p.ScanType != cost.ScanSeq {
+		t.Fatalf("plan = %+v, want a sort over a sequential scan", p)
+	}
+}
+
 func TestParsePGExplainUsesRiskiestNestedScanAndLargestRows(t *testing.T) {
 	t.Parallel()
 	raw := `[{"Plan":{"Node Type":"Nested Loop","Plan Rows":3,"Plans":[` +
@@ -81,8 +95,24 @@ func TestParsePGExplainUsesRiskiestNestedScanAndLargestRows(t *testing.T) {
 	if p.ScanType != cost.ScanFull || p.EstimatedRows != 12000 || !p.HasSort {
 		t.Fatalf("plan = %+v", p)
 	}
-	if got, ok := relationForScan(root, p.ScanType); !ok || got.RelationName != "large" || got.Schema != "bulk" {
-		t.Fatalf("stats relation = %+v, want bulk.large", got)
+	// The statistics of every table read count, not those of the worst scan's.
+	if got := scannedRelations(root, nil); !slices.Equal(got, []relation{{"", "small"}, {"bulk", "large"}}) {
+		t.Fatalf("stats relations = %+v", got)
+	}
+}
+
+// Parallel variants of a scan are that scan: a parallel bitmap heap scan
+// is no unknown one (refused under a fail-closed estimate).
+func TestPGScanTypeOfParallelNodes(t *testing.T) {
+	t.Parallel()
+	for node, want := range map[string]cost.ScanType{
+		"Bitmap Heap Scan": cost.ScanSeq, "Parallel Bitmap Heap Scan": cost.ScanSeq,
+		"Parallel Seq Scan": cost.ScanFull, "Parallel Index Scan": cost.ScanIndex,
+		"Parallel Index Only Scan": cost.ScanIndex,
+	} {
+		if got := pgScanType(node); got != want {
+			t.Errorf("%s = %v, want %v", node, got, want)
+		}
 	}
 }
 
@@ -145,6 +175,22 @@ func TestParsePGExplainAnalyzeRecursivelyCountsRowsAndLoops(t *testing.T) {
 	}
 	if p.ExecutionTime != 12500*time.Microsecond {
 		t.Fatalf("ExecutionTime = %s, want 12.5ms", p.ExecutionTime)
+	}
+}
+
+// PostgreSQL 18 reports Actual Rows as an average per loop, with two
+// decimals: 0.50 rows over 4 loops is 2 rows.
+func TestParsePGExplainAnalyzeReadsFractionalRows(t *testing.T) {
+	t.Parallel()
+	raw := `[{"Plan":{"Node Type":"Nested Loop","Plan Rows":2,"Actual Rows":2.00,"Actual Loops":1,"Plans":[` +
+		`{"Node Type":"Index Scan","Plan Rows":1,"Actual Rows":0.50,"Actual Loops":4}` +
+		`]},"Execution Time":1.5}]`
+	p, err := parsePGExplainAnalyze([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.ActualRows != 4 {
+		t.Fatalf("ActualRows = %d, want 4", p.ActualRows)
 	}
 }
 
@@ -216,7 +262,7 @@ func TestFullScanRelations(t *testing.T) {
 		{NodeType: "Hash", Plans: []pgPlanNode{{NodeType: "Seq Scan", RelationName: "regions"}}},
 		{NodeType: "Index Scan", RelationName: "users"},
 	}}
-	if got, ok := fullScanRelations(join, nil); !ok || !slices.Equal(got, []string{"orders", "regions"}) {
+	if got, ok := fullScanRelations(join, nil); !ok || !slices.Equal(got, []relation{{"", "orders"}, {"", "regions"}}) {
 		t.Fatalf("relations = %v, %v", got, ok)
 	}
 	if _, ok := fullScanRelations(pgPlanNode{NodeType: "Seq Scan"}, nil); ok {
@@ -244,5 +290,17 @@ func TestParsePGExplainReadsNoTable(t *testing.T) {
 		`"Plans":[{"Node Type":"Seq Scan","Relation Name":"users","Plan Rows":100}]}}]`
 	if p, _, _ := parsePGExplain([]byte(raw)); p.ScanType != cost.ScanFull {
 		t.Errorf("Result over Seq Scan: ScanType = %v, want ScanFull", p.ScanType)
+	}
+}
+
+// A bitmap heap scan reads the heap pages its index condition matched,
+// maybe most of the table: worse than an index scan, though no full scan.
+func TestParsePGExplainBitmapHeapScan(t *testing.T) {
+	t.Parallel()
+	raw := `[{"Plan":{"Node Type":"Bitmap Heap Scan","Relation Name":"orders","Plan Rows":40000,` +
+		`"Plans":[{"Node Type":"Bitmap Index Scan","Plan Rows":40000}]}}]`
+	p, _, _ := parsePGExplain([]byte(raw))
+	if p.ScanType != cost.ScanSeq || p.EstimatedRows != 40000 {
+		t.Fatalf("plan = %+v, want ScanSeq", p)
 	}
 }

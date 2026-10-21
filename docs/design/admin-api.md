@@ -33,7 +33,8 @@ v0.1.11 交付；OIDC / OAuth2 登录于 2026-10-12 路线图复审降为 Later�
 - 修改即时生效，不进入 revision；配置发布不会影响管理员权限；
 - 权限：`admin:read`（查询）、`admin:write`（创建 draft、导入预览、simulate）、
   `admin:publish`（发布、回滚）、`admin:accounts`（管理管理员账号），`admin:*`
-  表示全部；
+  表示全部；返回的 `Revision` / `Workspace` 里承载配置内容的字段（`yaml`、`config`、
+  `sections`、`items`、`conflicts`）无论由哪个操作返回都要求 `admin:read`；
 - 第一个管理员由 CLI 创建：`sql-mcp-server admin create --store S --username u`
   （权限默认 `admin:*`，密码从标准输入读取）；
 - 账号规则只有一份实现：`x/admin/accounts.Service`，管理 API 与 `admin`
@@ -47,7 +48,9 @@ v0.1.11 交付；OIDC / OAuth2 登录于 2026-10-12 路线图复审降为 Later�
 
 - `POST /admin/login`（JSON `{username, password}`）成功后下发
   `smcp_admin` 会话 Cookie（HttpOnly、SameSite=Strict；服务终止 TLS 或 `server.publicURL` 为 https 时加 Secure），并在
-  响应体返回 `csrfToken`；`POST /admin/logout` 注销；
+  响应体返回 `csrfToken`；请求必须声明 `Content-Type: application/json`（否则 415）：跨站页面不经
+  CORS 预检只能发表单或 `text/plain`，因而无法把浏览器登录进别的账号；`POST /admin/logout` 注销，
+  只对带该会话 `X-CSRF-Token` 的有效会话生效（无会话 401、缺 token 403，均不清除 Cookie）；
 - 所有 `/admin/graphql` 请求都必须带有效会话，并在 `X-CSRF-Token` 头中携带该
   会话的 CSRF token；
 - 控制台里会话结束（退出、401、另一个标签页换了账号）时整页重新加载登录页，登录
@@ -57,9 +60,13 @@ v0.1.11 交付；OIDC / OAuth2 登录于 2026-10-12 路线图复审降为 Later�
   在下一次请求时失效；
 - 登录失败按用户名计数，连续 5 次失败即锁定；锁定时长从 1 分钟起，连续锁定时逐次
   翻倍，上限 1 小时；登录成功或 1 小时内没有失败后重新从 1 分钟算起。失败响应不区分
-  "用户不存在"与"密码错误"；
+  "用户不存在"与"密码错误"；失败表最多记 1 万个名字，记满后不认识的名字不再记录也不被锁定，
+  真实账号的失败可以挤掉不认识的名字照常记录：灌满失败表既锁不住从未失败的管理员，也清不掉
+  账号的锁定（代价是灌满之后，锁定与否能区分账号是否存在）；
 - 改自己的密码必须提供当前密码（`currentPassword`），避免会话被盗后攻击者改密、把
   账号主人锁在外面；改他人密码需要 `admin:accounts`，不需要对方的当前密码；
+- 口令校验与哈希（argon2id，每次 64 MiB）同时最多 2 个、排队最多 16 个（每个最多等
+  5 秒），超出即拒绝：登录、创建账号与改密（`accounts.Service.Gate`）共用这道闸门；
 - 登录做成可插拔的 `LoginProvider`，第二轮接入通用 OIDC 与通用 OAuth2。
 
 ## GraphQL 数据模型（结论）
@@ -147,7 +154,7 @@ type Mutation {
   （`admin:publish`；期间有写入为 `CONFLICT`，有未解决冲突为 `CONFLICTS`，基准落后为
   `BEHIND`，发布被抢先为带 `published` 的 `CONFLICT`）。设计与不变量见
   `docs/design/versioning.md`。`discardDraft(id)` 把草稿标为
-  `DISCARDED`（`admin:write`），留在历史中且不能再发布。服务端每秒读取一次已发布
+  `DISCARDED`（`admin:write`），留在历史中且不能再发布，也不能作为回滚目标。服务端每秒读取一次已发布
   revision、最新 revision 与该管理员工作区的版本号，只在有控制台连接时读取；10 秒
   轮询保留为兜底。
 - 三方合并在服务端（`core/workspace`）：对象按键、命名列表按元素（字段与关系按名称，

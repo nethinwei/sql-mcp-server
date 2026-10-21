@@ -16,6 +16,8 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/entity"
 	"github.com/nethinwei/sql-mcp-server/core/introspect"
 	"github.com/nethinwei/sql-mcp-server/core/tool"
+	"github.com/nethinwei/sql-mcp-server/internal/pgimage"
+	"github.com/nethinwei/sql-mcp-server/internal/tcstart"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	pgprov "github.com/nethinwei/sql-mcp-server/x/providers/postgres"
 )
@@ -25,8 +27,10 @@ import (
 func setupPGAccounts(t *testing.T) (ro, rw string, cleanup func()) {
 	t.Helper()
 	ctx := context.Background()
-	container, err := postgres.Run(ctx, "postgres:16-alpine", postgres.WithDatabase("test"),
-		postgres.WithUsername("test"), postgres.WithPassword("test"), postgres.BasicWaitStrategies())
+	container, err := tcstart.Run(ctx, func(publish tcstart.Publish) (*postgres.PostgresContainer, error) {
+		return postgres.Run(ctx, pgimage.Image(), postgres.WithDatabase("test"),
+			postgres.WithUsername("test"), postgres.WithPassword("test"), postgres.BasicWaitStrategies(), publish)
+	}, "5432/tcp")
 	if err != nil {
 		t.Fatalf("start postgres container: %v", err)
 	}
@@ -49,6 +53,13 @@ func setupPGAccounts(t *testing.T) (ro, rw string, cleanup func()) {
 		`ALTER ROLE app_ro SET default_transaction_read_only = on`,
 		`CREATE TABLE salaries (id integer PRIMARY KEY, name text, amount integer)`,
 		`GRANT SELECT (id, name) ON salaries TO app_ro`,
+		// A table app_ro may read and a function it may run, in a schema it may not use.
+		`CREATE SCHEMA locked`, `CREATE TABLE locked.secrets (id integer PRIMARY KEY)`,
+		`GRANT SELECT ON locked.secrets TO app_ro`,
+		`CREATE FUNCTION locked.recalc() RETURNS integer LANGUAGE sql AS 'SELECT 1'`,
+		`GRANT EXECUTE ON FUNCTION locked.recalc() TO app_ro`,
+		// As managed services do: only the superuser reads the system identifier.
+		`REVOKE EXECUTE ON FUNCTION pg_control_system() FROM PUBLIC`,
 	} {
 		if _, err := admin.ExecContext(ctx, stmt); err != nil {
 			t.Fatalf("%s: %v", stmt, err)
@@ -149,5 +160,52 @@ func TestPGCapabilitiesAndRefusedWrites(t *testing.T) {
 	denial, ok := tool.DenialFor(err, "d")
 	if !ok || denial.Code != tool.CodeDatasourceForbidden {
 		t.Fatalf("a write on a read-only account: denial = %+v (%v)", denial, err)
+	}
+}
+
+// A table or a procedure in a schema the account may not use is out of its
+// reach whatever its own grants: the table is neither discovered nor
+// reported readable, the procedure not reported executable.
+func TestPGSchemaUsageGatesTables(t *testing.T) {
+	ro, _, cleanup := setupPGAccounts(t)
+	defer cleanup()
+	ctx := context.Background()
+	prov, err := pgprov.New(ro)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = prov.Close() }()
+	found, err := prov.Introspector().Discover(ctx, []string{"locked"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 0 {
+		t.Errorf("discovered %d relations in a schema the account may not use", len(found))
+	}
+	privileges, err := prov.Introspector().(introspect.PrivilegeInspector).TablePrivileges(ctx, "locked",
+		[]string{"secrets"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := privileges["secrets"]; p.Select == introspect.PrivilegeGranted {
+		t.Errorf("locked.secrets privileges = %+v, want SELECT not granted", p)
+	}
+	// The account may not read the system identifier: its server is named by
+	// its address instead.
+	var mayRead bool
+	if err := prov.DB().QueryRowContext(ctx,
+		`SELECT has_function_privilege('pg_control_system()', 'EXECUTE')`).Scan(&mayRead); err != nil || mayRead {
+		t.Fatalf("the account may read the system identifier (%v): the fallback is not tested", err)
+	}
+	if physical, err := prov.Introspector().(introspect.PhysicalNamer).Physical(ctx); err != nil ||
+		physical.Server == "" {
+		t.Errorf("physical = %+v, %v; want the server's address", physical, err)
+	}
+	execute, err := prov.Introspector().(introspect.PrivilegeInspector).ProcedurePrivilege(ctx, "locked", "recalc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execute == introspect.PrivilegeGranted {
+		t.Error("locked.recalc reported executable without USAGE on its schema")
 	}
 }

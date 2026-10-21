@@ -70,7 +70,9 @@ HTTP 暴露 `/mcp` 与三个无需认证的健康端点：
 - `/readyz/snapshot`（snapshot readiness）：配置快照已发布可服务时返回 200，
   否则 503；
 - `/readyz/db`（database readiness）：所有已配置数据库可达（带 5 秒超时的
-  轻量 ping，不走查询主路径）时返回 200，否则 503。
+  轻量 ping，不走查询主路径）时返回 200，否则 503。它会真正访问每个数据库、占用
+  连接池中的连接，且无需认证：并发的探测共享同一次 ping，结果缓存 1 秒（探测可能
+  滞后约 1 秒），所以频繁探测不会挤占工具调用的连接；仍应只向编排器与网关内网暴露。
 
 镜像基于 distroless，没有 shell 和 curl，容器健康检查用二进制自带的子命令：
 `sql-mcp-server healthcheck [--url http://127.0.0.1:8080/readyz/snapshot] [--timeout 3s]`，
@@ -133,7 +135,8 @@ watcher 轮询文件内容 hash。新配置必须完整通过加载、secret 解
 “users held until the published revision applies”；下一次成功重载解除暂停。
 
 热重载只拒绝[字段参考](configuration.md#字段参考)中标记“修改需重启”的字段
-（`server.transport`、`server.addr`）以及开启或关闭 TLS：它们决定监听器本身。
+（`server.transport`、`server.addr`、`server.pathPrefix`、`server.sessionTimeout`）
+以及开启或关闭 TLS：它们决定监听器、路由与会话管理器本身。
 其余变化均可热加载，包括：认证（token、可信代理、用户的启用与全部删除）与 TLS
 证书/客户端 CA 轮换（下一次握手生效）、工具集合与 custom procedure tool（客户端
 收到 `tools/list_changed` 通知）、事务限制。新认证在装配前准备好（校验并读取证书），

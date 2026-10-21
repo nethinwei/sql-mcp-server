@@ -57,7 +57,10 @@
 写入仍按项进行（`editWorkspace`，带 `previous` 的条件写与三方合并不变），新增两点：
 
 - `WorkspaceItemInput.renamedFrom: String`：实体（ID）或角色（名称）改名、移动时写出
-  旧键。没有它，“删 A 加 B”与“A 改名为 B”无法区分。
+  旧键。没有它，“删 A 加 B”与“A 改名为 B”无法区分。同一次写入必须同时写出旧项的删除
+  （`value: null`，`previous` 为读到的旧值），旧项已不存在时除外（重试）：旧项在期间被
+  别人修改时，靠这个 `previous` 合并成冲突而不是静默丢失；只发改名会被拒绝
+  （`workspaceops.ErrRenameAlone`）。
 - `workspaceops.Codec` 增加扩展点
   `Reconcile(before, after workspace.Snapshot, renames map[Ref]Ref) (workspace.Snapshot, error)`，
   在 `WriteItems` 的乐观循环里、合并之后、按版本写入之前执行。因此派生改动与触发它的

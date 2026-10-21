@@ -51,12 +51,17 @@ func (s *Scans) startBatch(
 	for _, schema := range schemas {
 		b.Items = append(b.Items, catalog.BatchItem{Schema: schema, State: catalog.ItemPending})
 	}
-	got, _, err := s.batches.Start(ctx, b, batchOpen, s.work(run))
+	got, started, err := s.batches.Start(ctx, b, batchOpen, s.work(run))
 	if errors.Is(err, catalog.ErrTooManyBatches) {
 		return nil, fmt.Errorf("%s has %d scan batches running: wait for them or stop one", datasource, batchOpen)
 	}
 	if err != nil {
 		return nil, err
+	}
+	same := func(it catalog.BatchItem, s string) bool { return it.Schema == s }
+	if !started && !slices.EqualFunc(got.Items, schemas, same) {
+		// The key named another request: its batch would leave these schemas unscanned.
+		return nil, fmt.Errorf("request key %q started a batch of other schemas: send a new key", key)
 	}
 	return viewBatch(got), nil
 }
@@ -121,29 +126,39 @@ func (s *Scans) WatchBatches(runner func(ctx context.Context, datasource string)
 	})
 }
 
+// viewBatch shows b with its items when they were read (Batch), otherwise
+// (the lists) with their counts only, Items nil.
 func viewBatch(b catalog.Batch) *ScanBatch {
 	out := &ScanBatch{
-		ID: b.ID, Datasource: b.Datasource, State: "running", Total: len(b.Items), StartedBy: b.StartedBy,
-		StartedAt: b.StartedAt, Items: make([]ScanBatchItem, 0, len(b.Items)),
+		ID: b.ID, Datasource: b.Datasource, State: "running", StartedBy: b.StartedBy, StartedAt: b.StartedAt,
 	}
 	if !b.FinishedAt.IsZero() {
 		out.State, out.FinishedAt = "done", &b.FinishedAt
 	}
-	for _, item := range b.Items {
-		switch item.State {
-		case "done":
-			out.Done++
-		case "failed":
-			out.Failed++
-		case "canceled":
-			out.Canceled++
-		default:
-			out.Pending++
+	counts := b.Counts
+	if b.Items != nil {
+		counts = map[string]int{}
+		out.Items = make([]ScanBatchItem, 0, len(b.Items))
+		for _, item := range b.Items {
+			counts[item.State]++
+			out.Items = append(
+				out.Items,
+				ScanBatchItem{Schema: item.Schema, State: item.State, Error: kit.Optional(item.Error)},
+			)
 		}
-		out.Items = append(
-			out.Items,
-			ScanBatchItem{Schema: item.Schema, State: item.State, Error: kit.Optional(item.Error)},
-		)
+	}
+	for state, n := range counts {
+		out.Total += n
+		switch state {
+		case "done":
+			out.Done += n
+		case "failed":
+			out.Failed += n
+		case "canceled":
+			out.Canceled += n
+		default:
+			out.Pending += n
+		}
 	}
 	if out.State == "done" && out.Canceled > 0 {
 		out.State = "canceled"
@@ -162,7 +177,7 @@ func (r *Service) runnerFor(ctx context.Context, datasource string) (scanRunner,
 		return nil, err
 	}
 	if !hasDatasource(cfg, datasource) {
-		return nil, fmt.Errorf("unknown datasource %q", datasource)
+		return nil, fmt.Errorf("%w: unknown datasource %q", leasing.ErrGone, datasource)
 	}
 	src := sourceOf(cfg, datasource)
 	return func(schema string) func(context.Context) (struct{}, error) {
@@ -206,7 +221,8 @@ func (r *Service) StartScanBatch(ctx context.Context, in ScanBatchInput) (*ScanB
 	return scans.startBatch(ctx, datasource, who.Username, key, schemas, run)
 }
 
-// ScanBatches lists the recent batches of datasource, running ones first.
+// ScanBatches lists the recent batches of datasource, running ones first,
+// without their items (see ScanBatch): a console polls it.
 func (r *Service) ScanBatches(ctx context.Context, datasource string) ([]ScanBatch, error) {
 	if _, err := auth.RequireDatasource(ctx, auth.PermWrite, datasource); err != nil {
 		return nil, err
@@ -219,6 +235,28 @@ func (r *Service) ScanBatches(ctx context.Context, datasource string) ([]ScanBat
 	if err != nil {
 		return nil, err
 	}
+	return viewBatches(all), nil
+}
+
+// ScanBatchesWithItems lists the recent batches of a datasource as
+// ScanBatches does, with their items.
+func (r *Service) ScanBatchesWithItems(ctx context.Context, datasource string) ([]ScanBatch, error) {
+	if _, err := auth.RequireDatasource(ctx, auth.PermWrite, datasource); err != nil {
+		return nil, err
+	}
+	scans, err := r.scans()
+	if err != nil {
+		return nil, err
+	}
+	all, err := scans.store.BatchesWithItems(ctx, datasource, batchList)
+	if err != nil {
+		return nil, err
+	}
+	return viewBatches(all), nil
+}
+
+// viewBatches shows batches, the running ones first.
+func viewBatches(all []catalog.Batch) []ScanBatch {
 	out := make([]ScanBatch, 0, len(all))
 	for _, b := range all {
 		out = append(out, *viewBatch(b))
@@ -227,7 +265,16 @@ func (r *Service) ScanBatches(ctx context.Context, datasource string) ([]ScanBat
 		out,
 		func(a, b ScanBatch) int { return boolRank(a.State != "running") - boolRank(b.State != "running") },
 	)
-	return out, nil
+	return out
+}
+
+// ScanBatch is batch id with its items.
+func (r *Service) ScanBatch(ctx context.Context, id string) (*ScanBatch, error) {
+	_, b, err := r.batchOf(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return viewBatch(b), nil
 }
 
 func boolRank(b bool) int {
@@ -240,7 +287,7 @@ func boolRank(b bool) int {
 // CancelScanBatch asks the owner of a batch to stop; this process stops at
 // once a batch it runs.
 func (r *Service) CancelScanBatch(ctx context.Context, id string) (*ScanBatch, error) {
-	scans, err := r.batchOf(ctx, id)
+	scans, _, err := r.batchOf(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -255,34 +302,32 @@ func (r *Service) CancelScanBatch(ctx context.Context, id string) (*ScanBatch, e
 	return viewBatch(b), nil
 }
 
-// batchOf checks the caller may act on the datasource of a batch.
-func (r *Service) batchOf(ctx context.Context, id string) (*Scans, error) {
+// batchOf reads a batch, checking the caller may act on its datasource.
+func (r *Service) batchOf(ctx context.Context, id string) (*Scans, catalog.Batch, error) {
 	if _, err := auth.Require(ctx, auth.PermWrite); err != nil {
-		return nil, err
+		return nil, catalog.Batch{}, err
 	}
 	scans, err := r.scans()
 	if err != nil {
-		return nil, err
+		return nil, catalog.Batch{}, err
 	}
 	b, ok, err := scans.store.Batch(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, catalog.Batch{}, err
 	}
 	if !ok {
-		return nil, fmt.Errorf("unknown scan batch %q", id)
+		return nil, catalog.Batch{}, fmt.Errorf("unknown scan batch %q", id)
 	}
-	_, err = auth.RequireDatasource(ctx, auth.PermWrite, b.Datasource)
-	return scans, err
+	if _, err := auth.RequireDatasource(ctx, auth.PermWrite, b.Datasource); err != nil {
+		return nil, catalog.Batch{}, err
+	}
+	return scans, b, nil
 }
 
 // RetryScanBatch scans again, as a new batch, what failed or was canceled
 // in a batch.
 func (r *Service) RetryScanBatch(ctx context.Context, id string) (*ScanBatch, error) {
-	scans, err := r.batchOf(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	b, _, err := scans.store.Batch(ctx, id)
+	_, b, err := r.batchOf(ctx, id)
 	if err != nil {
 		return nil, err
 	}

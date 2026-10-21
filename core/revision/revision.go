@@ -190,14 +190,14 @@ func ValidateHistory(revs []Revision) error {
 }
 
 // RollbackTarget selects the rollback target among revs for the published
-// revision current: an explicit target must exist and not be a draft;
+// revision current: an explicit target must exist and have been published;
 // otherwise the newest superseded revision whose content differs is chosen.
 func RollbackTarget(revs []Revision, current Revision, target int64) (Revision, error) {
 	if target != 0 {
 		for _, r := range revs {
 			if r.ID == target {
-				if r.State == StateDraft {
-					return Revision{}, fmt.Errorf("%w: rollback target %d is a draft", ErrInvalidState, target)
+				if r.State.Unpublished() {
+					return Revision{}, fmt.Errorf("%w: rollback target %d is %s", ErrInvalidState, target, r.State)
 				}
 				return r, nil
 			}

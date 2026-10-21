@@ -182,7 +182,7 @@ cost:
 
 Denial 新增一个 code：`AUDIT_UNAVAILABLE`（不可重试）——审计 sink 写入失败。
 其余复用：`UNAUTHORIZED`、`INVALID_INPUT`、`COST_EXCEEDED`（估算失败或超阈值）、
-`BUDGET_EXCEEDED`、`DATABASE_ERROR`、`OUTCOME_UNKNOWN`（`exec` 期间连接中断）。
+`BUDGET_EXCEEDED`、`DATABASE_ERROR`、`OUTCOME_UNKNOWN`（任一 `mode` 执行期间连接中断或语句被中断）。
 `DATABASE_ERROR` 对本入口**回显数据库原文**（决议 3）：`reason` 携带驱动返回的
 错误文本，`constraints.sqlstate` 携带 SQLSTATE。这是工具契约中唯一的例外，
 `docs/tool-contract.md` 单列说明：受治理面的 `DATABASE_ERROR` 仍不回显；本工具的
@@ -213,8 +213,9 @@ RunTool（hook、预算、engine、审计）
   不变。`statement` 新增 `raw bool` 与 `escape EscapeRoute`：
   - `present`：`raw` 时不做字段过滤与 mask（没有实体，`res` 为零值），这是文档声明的
     “不套用实体级 mask”；
-  - `fail`：`raw` 读按 `WrapDBError`，`raw` 写按 `uncertain` 判定 `OUTCOME_UNKNOWN`，
-    其余归 `DATABASE_ERROR`（不做约束违反分类，那需要实体字段映射）；
+  - `fail`：`raw` 语句不分 `mode` 按 `uncertain` 判定 `OUTCOME_UNKNOWN`（查询也可能写入
+    或 `CALL` 过程，与 `settle` 的口径一致），其余归 `DATABASE_ERROR`、
+    `DATASOURCE_FORBIDDEN` 或 `STATEMENT_TIMEOUT`（不做约束违反分类，那需要实体字段映射）；
   - `settle`：`raw` 写入后不知道改了哪些表，按数据源整体失效读缓存（复用数据源模型
     为视图准备的整库失效）并记录 `WriteTracker`（会话随后的读走 write 连接）。
 - `authorizeSQL` 产出的 `grant` 是 `rbac.Decision{Allowed: true, Grants:

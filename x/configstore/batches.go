@@ -34,41 +34,91 @@ func scanBatch(row scanner) (catalog.Batch, error) {
 		&canceled); err != nil {
 		return catalog.Batch{}, err
 	}
-	b.StartedAt, b.FinishedAt, b.Heartbeat, b.Canceled = fromMicros(started), fromMicros(finished), fromMicros(beat),
-		canceled != 0
+	b.StartedAt, b.FinishedAt, b.Heartbeat = fromMicros(started), fromMicros(finished), fromMicros(beat)
+	b.Canceled = canceled != 0
 	return b, nil
 }
 
-func scanItem(row scanner) (catalog.BatchItem, error) {
-	var it catalog.BatchItem
+// batchItem is an item with the batch it is of.
+type batchItem struct {
+	batch string
+	item  catalog.BatchItem
+}
+
+func scanBatchItem(row scanner) (batchItem, error) {
+	var it batchItem
 	var notBefore int64
-	if err := row.Scan(&it.Schema, &it.State, &it.Error, &it.Attempts, &notBefore); err != nil {
-		return catalog.BatchItem{}, err
+	if err := row.Scan(&it.batch, &it.item.Schema, &it.item.State, &it.item.Error, &it.item.Attempts,
+		&notBefore); err != nil {
+		return batchItem{}, err
 	}
-	it.NotBefore = fromMicros(notBefore)
+	it.item.NotBefore = fromMicros(notBefore)
 	return it, nil
 }
 
-// withItems reads the items of each batch.
+// withItems reads the items of the batches, in one query.
 func (s *SQLStore) withItems(ctx context.Context, q execer, batches []catalog.Batch) error {
-	for i := range batches {
-		items, err := queryAll(ctx, s, q, scanItem,
-			"SELECT "+itemColumns+" FROM smcp_scan_batch_items WHERE batch_id = ? ORDER BY ordinal", batches[i].ID)
-		if err != nil {
-			return fmt.Errorf("configstore: read scan batch items: %w", err)
-		}
-		batches[i].Items = kit.OrEmpty(items)
+	if len(batches) == 0 {
+		return nil
+	}
+	ids := make([]any, len(batches))
+	at := make(map[string]int, len(batches))
+	for i, b := range batches {
+		ids[i], at[b.ID] = b.ID, i
+		batches[i].Items = []catalog.BatchItem{}
+	}
+	items, err := queryAll(ctx, s, q, scanBatchItem, "SELECT batch_id, "+itemColumns+
+		" FROM smcp_scan_batch_items WHERE batch_id IN ("+placeholders(len(ids))+") ORDER BY batch_id, ordinal", ids...)
+	if err != nil {
+		return fmt.Errorf("configstore: read scan batch items: %w", err)
+	}
+	for _, it := range items {
+		b := &batches[at[it.batch]]
+		b.Items = append(b.Items, it.item)
 	}
 	return nil
 }
 
-func (s *SQLStore) batches(ctx context.Context, query string, args ...any) ([]catalog.Batch, error) {
+// withCounts counts the items of the batches by state, in one query.
+func (s *SQLStore) withCounts(ctx context.Context, batches []catalog.Batch) error {
+	if len(batches) == 0 {
+		return nil
+	}
+	ids := make([]any, len(batches))
+	at := make(map[string]int, len(batches))
+	for i, b := range batches {
+		ids[i], at[b.ID] = b.ID, i
+		batches[i].Counts = map[string]int{}
+	}
+	type count struct {
+		batch, state string
+		n            int
+	}
+	counts, err := queryAll(ctx, s, s.db, func(row scanner) (c count, err error) {
+		return c, row.Scan(&c.batch, &c.state, &c.n)
+	}, "SELECT batch_id, state, COUNT(*) FROM smcp_scan_batch_items WHERE batch_id IN ("+placeholders(len(ids))+
+		") GROUP BY batch_id, state", ids...)
+	if err != nil {
+		return fmt.Errorf("configstore: count scan batch items: %w", err)
+	}
+	for _, c := range counts {
+		batches[at[c.batch]].Counts[c.state] = c.n
+	}
+	return nil
+}
+
+// batches reads the batches query selects; with items, their items too,
+// otherwise their counts.
+func (s *SQLStore) batches(ctx context.Context, items bool, query string, args ...any) ([]catalog.Batch, error) {
 	out, err := queryAll(ctx, s, s.db, scanBatch, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("configstore: read scan batches: %w", err)
 	}
 	out = kit.OrEmpty(out)
-	return out, s.withItems(ctx, s.db, out)
+	if items {
+		return out, s.withItems(ctx, s.db, out)
+	}
+	return out, s.withCounts(ctx, out)
 }
 
 // CreateBatch implements catalog.BatchStore: the checks and the inserts run
@@ -77,9 +127,13 @@ func (s *SQLStore) batches(ctx context.Context, query string, args ...any) ([]ca
 func (s *SQLStore) CreateBatch(ctx context.Context, b catalog.Batch, maxOpen int) (catalog.Batch, bool, error) {
 	var existing *catalog.Batch
 	err := s.locked(ctx, func(tx *sql.Tx) error {
+		if err := s.dropOldBatches(ctx, tx, b.Datasource, b.StartedAt.Add(-catalog.BatchRetention)); err != nil {
+			return err
+		}
 		if b.RequestKey != "" {
 			found, err := scanBatch(s.queryRow(ctx, tx, "SELECT "+batchColumns+
-				" FROM smcp_scan_batches WHERE datasource = ? AND request_key = ?", b.Datasource, b.RequestKey))
+				" FROM smcp_scan_batches WHERE datasource = ? AND request_key = ? AND started_by = ?",
+				b.Datasource, b.RequestKey, b.StartedBy))
 			if err == nil {
 				existing = &found
 				return nil
@@ -131,7 +185,7 @@ func (s *SQLStore) insertItems(ctx context.Context, tx *sql.Tx, id string, items
 
 // Batch implements catalog.BatchStore.
 func (s *SQLStore) Batch(ctx context.Context, id string) (catalog.Batch, bool, error) {
-	all, err := s.batches(ctx, "SELECT "+batchColumns+" FROM smcp_scan_batches WHERE id = ?", id)
+	all, err := s.batches(ctx, true, "SELECT "+batchColumns+" FROM smcp_scan_batches WHERE id = ?", id)
 	if err != nil || len(all) == 0 {
 		return catalog.Batch{}, false, err
 	}
@@ -140,13 +194,24 @@ func (s *SQLStore) Batch(ctx context.Context, id string) (catalog.Batch, bool, e
 
 // Batches implements catalog.BatchStore.
 func (s *SQLStore) Batches(ctx context.Context, datasource string, limit int) ([]catalog.Batch, error) {
-	return s.batches(ctx, fmt.Sprintf("SELECT "+batchColumns+
-		" FROM smcp_scan_batches WHERE datasource = ? ORDER BY started_us DESC, id DESC LIMIT %d", max(limit, 0)), datasource)
+	return s.batches(ctx, false, latestBatches(limit), datasource)
+}
+
+// BatchesWithItems implements catalog.BatchStore in two statements: a batch
+// pruned between them is listed without items.
+func (s *SQLStore) BatchesWithItems(ctx context.Context, datasource string, limit int) ([]catalog.Batch, error) {
+	return s.batches(ctx, true, latestBatches(limit), datasource)
+}
+
+// latestBatches selects the limit latest batches of a datasource.
+func latestBatches(limit int) string {
+	return fmt.Sprintf("SELECT "+batchColumns+
+		" FROM smcp_scan_batches WHERE datasource = ? ORDER BY started_us DESC, id DESC LIMIT %d", max(limit, 0))
 }
 
 // UnfinishedBatches implements catalog.BatchStore.
 func (s *SQLStore) UnfinishedBatches(ctx context.Context) ([]catalog.Batch, error) {
-	return s.batches(ctx, "SELECT "+batchColumns+" FROM smcp_scan_batches WHERE finished_us = 0 ORDER BY id")
+	return s.batches(ctx, false, "SELECT "+batchColumns+" FROM smcp_scan_batches WHERE finished_us = 0 ORDER BY id")
 }
 
 // ClaimBatch implements catalog.BatchStore with one conditional update.
@@ -227,6 +292,29 @@ func (s *SQLStore) FinishBatch(ctx context.Context, id, owner string, at time.Ti
 		err = fmt.Errorf("configstore: finish scan batch: %w", err)
 	}
 	return err
+}
+
+// dropOldBatches drops the batches of datasource finished before, with their
+// items.
+func (s *SQLStore) dropOldBatches(ctx context.Context, tx *sql.Tx, datasource string, before time.Time) error {
+	old := "SELECT id FROM smcp_scan_batches WHERE datasource = ? AND finished_us > 0 AND finished_us < ?"
+	if _, err := s.exec(ctx, tx, "DELETE FROM smcp_scan_batch_items WHERE batch_id IN ("+old+")", datasource,
+		toMicros(before)); err != nil {
+		return err
+	}
+	_, err := s.exec(ctx, tx, "DELETE FROM smcp_scan_batches WHERE datasource = ? AND finished_us > 0 "+
+		"AND finished_us < ?", datasource, toMicros(before))
+	return err
+}
+
+// BatchCanceled implements catalog.BatchStore.
+func (s *SQLStore) BatchCanceled(ctx context.Context, id string) (bool, error) {
+	var canceled int
+	err := s.queryRow(ctx, s.db, "SELECT canceled FROM smcp_scan_batches WHERE id = ?", id).Scan(&canceled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return canceled != 0, err
 }
 
 // CancelBatch implements catalog.BatchStore.

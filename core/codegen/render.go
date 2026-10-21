@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/core/relalg"
 )
 
@@ -44,13 +45,58 @@ type selectCtx struct {
 	offset     int64
 	hasLimit   bool
 	distinct   bool
+	// rank is that of the outermost node flattened so far (see rankOf).
+	rank int
 }
 
+// rankOf places e in a read chain, from the innermost out: one SELECT
+// takes its nodes in this order only (a Join or a Select may repeat), so a
+// chain in another order (a Select over a Limit, two Limits, a Project over
+// an Aggregate) would render as another query.
+func rankOf(e relalg.Expr) (rank int, repeats bool) {
+	switch e.(type) {
+	case relalg.Join:
+		return 1, true
+	case relalg.Select:
+		return 2, true
+	case relalg.Aggregate:
+		return 3, false
+	case relalg.Having:
+		return 4, false
+	case relalg.Sort:
+		return 5, false
+	case relalg.Project:
+		return 6, false
+	case relalg.Distinct:
+		return 7, false
+	case relalg.Limit:
+		return 8, false
+	}
+	return 0, false // a Scan, innermost
+}
+
+// flatten flattens e, a read chain, into ctx, refusing a chain out of order
+// (see rankOf), and a selection without a predicate (it would render as a
+// WHERE and nothing).
 func (b *builder) flatten(e relalg.Expr, ctx *selectCtx) error {
+	if s, ok := e.(relalg.Select); ok && s.Predicate == nil {
+		return fmt.Errorf("%w: a selection without a predicate", ErrUnsupportedExpr)
+	}
+	if err := b.flattenNode(e, ctx); err != nil {
+		return err
+	}
+	rank, repeats := rankOf(e)
+	if _, scan := e.(relalg.Scan); !scan && (ctx.rank > rank || ctx.rank == rank && !repeats) {
+		return fmt.Errorf("%w: %T over a node a SELECT applies after it", ErrUnsupportedExpr, e)
+	}
+	ctx.rank = rank
+	return nil
+}
+
+func (b *builder) flattenNode(e relalg.Expr, ctx *selectCtx) error {
 	switch n := e.(type) {
 	case relalg.Scan:
 		ctx.from, ctx.scanAlias = b.qtable(n.Relation), n.Alias
-		b.noteTable(n.Relation.Name)
 	case relalg.Select:
 		if err := b.flatten(n.Input, ctx); err != nil {
 			return err
@@ -59,6 +105,9 @@ func (b *builder) flatten(e relalg.Expr, ctx *selectCtx) error {
 	case relalg.Project:
 		if err := b.flatten(n.Input, ctx); err != nil {
 			return err
+		}
+		if len(ctx.aggregates) > 0 || len(ctx.groupBy) > 0 { // its columns are the aggregate's
+			return fmt.Errorf("%w: a projection over an aggregate", ErrUnsupportedExpr)
 		}
 		ctx.cols = n.Items
 	case relalg.Sort:
@@ -217,19 +266,21 @@ func (b *builder) writeHavingClause(ctx *selectCtx) error {
 	return b.renderPredicate(ctx.having)
 }
 
-// writeOrderByClause orders by the terms; a nullable term first orders its
-// NULLs last, the same on every database (they default differently).
+// writeOrderByClause orders by the terms; a nullable term orders its NULLs
+// last, the same on every database (they default differently): with NULLS
+// LAST where the dialect has it, else by a CASE first.
 func (b *builder) writeOrderByClause(ctx *selectCtx) {
 	if len(ctx.order) == 0 {
 		return
 	}
+	_, nullsLast := b.dialect.(dialect.NullsLast)
 	b.sql.WriteString(" ORDER BY ")
 	for i, t := range ctx.order {
 		if i > 0 {
 			b.sql.WriteString(", ")
 		}
 		col := b.column(t.Field)
-		if t.Nullable {
+		if t.Nullable && !nullsLast {
 			b.sql.WriteString("CASE WHEN " + col + " IS NULL THEN 1 ELSE 0 END, ")
 		}
 		b.sql.WriteString(col)
@@ -237,6 +288,9 @@ func (b *builder) writeOrderByClause(ctx *selectCtx) {
 			b.sql.WriteString(" DESC")
 		} else {
 			b.sql.WriteString(" ASC")
+		}
+		if t.Nullable && nullsLast {
+			b.sql.WriteString(" NULLS LAST")
 		}
 	}
 }
@@ -307,8 +361,11 @@ func (b *builder) aggregateCall(a relalg.AggCall) (string, error) {
 		return "", fmt.Errorf("%w: %q", relalg.ErrInvalidAggFunc, a.Func)
 	}
 	field := "*"
-	if a.Field != "" {
+	switch {
+	case a.Field != "":
 		field = b.col(a.Field)
+	case a.Func != relalg.AggCount: // only COUNT(*) has no field
+		return "", fmt.Errorf("%w: %s without a field", relalg.ErrInvalidAggFunc, a.Func)
 	}
 	if a.Distinct {
 		field = "DISTINCT " + field
@@ -412,7 +469,6 @@ func (b *builder) renderInsert(n relalg.Insert) error {
 			return fmt.Errorf("codegen: insert tuple has %d values for %d columns", len(tup), len(n.Columns))
 		}
 	}
-	b.noteTable(n.Target.Name)
 	b.sql.WriteString("INSERT INTO ")
 	b.sql.WriteString(b.qtable(n.Target))
 	if len(n.Columns) > 0 {
@@ -446,7 +502,6 @@ func (b *builder) renderUpdate(n relalg.Update) error {
 	if len(n.Set) == 0 || n.Predicate == nil {
 		return ErrUnboundedWrite
 	}
-	b.noteTable(n.Target.Name)
 	b.sql.WriteString("UPDATE ")
 	b.sql.WriteString(b.qtable(n.Target))
 	b.sql.WriteString(" SET ")
@@ -466,7 +521,6 @@ func (b *builder) renderDelete(n relalg.Delete) error {
 	if n.Predicate == nil {
 		return ErrUnboundedWrite
 	}
-	b.noteTable(n.Target.Name)
 	b.sql.WriteString("DELETE FROM ")
 	b.sql.WriteString(b.qtable(n.Target))
 	return b.renderWhere(n.Predicate)
@@ -481,7 +535,6 @@ func (b *builder) renderWhere(p relalg.Predicate) error {
 }
 
 func (b *builder) renderCall(n relalg.Call) error {
-	b.noteTable(n.Procedure.Name)
 	b.sql.WriteString("CALL ")
 	b.sql.WriteString(b.qtable(n.Procedure))
 	b.sql.WriteString("(")

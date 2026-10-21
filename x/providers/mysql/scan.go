@@ -98,8 +98,20 @@ type mysqlTable struct {
 // tables lists the base tables and views of schemas, skipping the config
 // store's own.
 func (i Introspector) tables(ctx context.Context, schemas []string) ([]mysqlTable, error) {
+	// information_schema compares names as its collation does; the schemas
+	// asked for are told apart as the server tells databases apart: without
+	// case under lower_case_table_names (it reports them lower case).
+	physical, err := i.Physical(ctx)
+	if err != nil {
+		return nil, err
+	}
+	asked := func(schema string) bool {
+		return slices.ContainsFunc(schemas, func(s string) bool {
+			return s == schema || physical.FoldCase && strings.EqualFold(s, schema)
+		})
+	}
 	var tables []mysqlTable
-	err := i.each(ctx,
+	err = i.each(ctx,
 		`SELECT table_schema, table_name, COALESCE(table_comment, ''), table_type = 'VIEW'
 		 FROM information_schema.tables
 		 WHERE table_schema IN ({schemas}) AND table_type IN ('BASE TABLE', 'VIEW')`,
@@ -108,7 +120,7 @@ func (i Introspector) tables(ctx context.Context, schemas []string) ([]mysqlTabl
 			if err := rows.Scan(&t.schema, &t.name, &t.comment, &t.view); err != nil {
 				return err
 			}
-			if !slices.Contains(schemas, t.schema) || config.IsStoreTable(t.name) {
+			if !asked(t.schema) || config.IsStoreTable(t.name) {
 				return nil
 			}
 			if t.view && t.comment == "VIEW" { // MySQL reports a view's comment as "VIEW"
@@ -224,7 +236,7 @@ func (i Introspector) shownIndexes(ctx context.Context, s *scanned, _ []string) 
 // showIndex reads SHOW INDEX of a table, by index name. Its columns vary by
 // server and version, so they are read by name.
 func (i Introspector) showIndex(ctx context.Context, k tableKey) (map[string]entity.Index, error) {
-	quote := func(name string) string { return "`" + strings.ReplaceAll(name, "`", "``") + "`" }
+	quote := Dialect{}.QuoteIdent
 	rows, err := i.db.QueryContext(ctx, "SHOW INDEX FROM "+quote(k.Schema)+"."+quote(k.Table))
 	if err != nil {
 		return nil, err

@@ -43,14 +43,44 @@ func Run(t *testing.T, newStore NewStore) {
 		"SchemasRoundTrip": testSchemasRoundTrip,
 		"Prune":            testPrune,
 		"DeleteSchemas":    testDeleteSchemas,
+		"ConcurrentPuts":   testConcurrentPuts,
 		"Batches":          testBatches,
 		"BatchRequestKeys": testBatchRequestKeys,
 		"ClaimBatches":     testClaimBatches,
 		"MoveItems":        testMoveItems,
 		"CreateBatchQuota": testCreateBatchQuota,
+		"Owned":            testOwned,
+		"BatchRetention":   testBatchRetention,
 	}
 	for name, fn := range cases {
 		t.Run(name, func(t *testing.T) { fn(t, newStore(t)) })
+	}
+}
+
+// What is put and what is read are the caller's own: editing them changes
+// nothing kept.
+func testOwned(t *testing.T, s catalog.Store) {
+	ctx := context.Background()
+	list := catalog.List{Schemas: []string{"a"}, ListedAt: t0}
+	schema := catalog.Schema{Name: "a", ScannedAt: t0, Tables: []catalog.Table{table("a", "t1")}}
+	if err := s.PutCatalogList(ctx, "src", "ds", list); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutCatalogSchemas(ctx, "src", "ds", []catalog.Schema{schema}); err != nil {
+		t.Fatal(err)
+	}
+	list.Schemas[0], schema.Tables[0].Columns[0].Name = "edited", "edited"
+	for range 2 {
+		got, _, err := s.CatalogList(ctx, "src")
+		if err != nil || got.Schemas[0] != "a" {
+			t.Fatalf("list = %+v, %v", got, err)
+		}
+		got.Schemas[0] = "edited"
+		schemas, err := s.CatalogSchemas(ctx, "src", []string{"a"})
+		if err != nil || len(schemas) != 1 || schemas[0].Tables[0].Columns[0].Name != "id" {
+			t.Fatalf("schemas = %+v, %v", schemas, err)
+		}
+		schemas[0].Tables[0].Columns[0].Name = "edited"
 	}
 }
 
@@ -105,6 +135,43 @@ func testSchemasRoundTrip(t *testing.T, s catalog.Store) {
 	}
 	if other, _ := s.CatalogVersions(ctx, "other"); len(other) != 0 {
 		t.Fatalf("another source sees %+v", other)
+	}
+}
+
+// Puts of the same schemas, and lists, at once all succeed; one of them is
+// kept, whole.
+func testConcurrentPuts(t *testing.T, s catalog.Store) {
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Go(func() {
+			at := t0.Add(time.Duration(i) * time.Second)
+			tables := make([]catalog.Table, i)
+			for j := range tables {
+				tables[j] = table("a", fmt.Sprint("t", j))
+			}
+			if err := s.PutCatalogSchemas(ctx, "src", "ds", []catalog.Schema{
+				{Name: "b", ScannedAt: at, Tables: tables}, {Name: "a", ScannedAt: at, Tables: tables},
+			}); err != nil {
+				t.Errorf("put schemas %d: %v", i, err)
+			}
+			if err := s.PutCatalogList(ctx, "src", "ds", catalog.List{Schemas: []string{"a", "b"}, ListedAt: at}); err != nil {
+				t.Errorf("put list %d: %v", i, err)
+			}
+		})
+	}
+	wg.Wait()
+	versions, err := s.CatalogVersions(ctx, "src")
+	if err != nil || len(versions) != 2 {
+		t.Fatalf("versions = %+v %v", versions, err)
+	}
+	for _, v := range versions {
+		if n := int(v.ScannedAt.Sub(t0) / time.Second); v.Tables != n {
+			t.Errorf("schema %s scanned at put %d has %d tables", v.Name, n, v.Tables)
+		}
+	}
+	if l, ok, err := s.CatalogList(ctx, "src"); err != nil || !ok || len(l.Schemas) != 2 {
+		t.Fatalf("list = %+v %v %v", l, ok, err)
 	}
 }
 
@@ -170,6 +237,32 @@ func create(t *testing.T, s catalog.Store, b catalog.Batch) {
 	}
 }
 
+// Creating a batch drops those of its datasource finished BatchRetention
+// before it started, items too; newer ones, unfinished ones and those of
+// other datasources stay.
+func testBatchRetention(t *testing.T, s catalog.Store) {
+	ctx := context.Background()
+	at := func(id, datasource string, started time.Time, finish bool) {
+		create(t, s, catalog.Batch{ID: id, Datasource: datasource, Owner: "p", StartedAt: started, Heartbeat: started,
+			Items: []catalog.BatchItem{item("a", catalog.ItemPending)}})
+		if finish {
+			if err := s.FinishBatch(ctx, id, "p", started); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	at("old", "ds", t0, true)
+	at("open", "ds", t0, false)
+	at("other", "ds2", t0, true)
+	at("recent", "ds", t0.Add(catalog.BatchRetention/2), true)
+	at("new", "ds", t0.Add(catalog.BatchRetention+time.Hour), false)
+	for id, kept := range map[string]bool{"old": false, "open": true, "other": true, "recent": true, "new": true} {
+		if _, ok, err := s.Batch(ctx, id); err != nil || ok != kept {
+			t.Errorf("batch %s kept = %v, want %v (%v)", id, ok, kept, err)
+		}
+	}
+}
+
 func testBatches(t *testing.T, s catalog.Store) {
 	ctx := context.Background()
 	b := catalog.Batch{ID: "b1", Datasource: "ds", StartedBy: "root", Owner: "p1", StartedAt: t0, Heartbeat: t0,
@@ -188,19 +281,18 @@ func testBatches(t *testing.T, s catalog.Store) {
 	if _, ok, _ := s.Batch(ctx, "missing"); ok {
 		t.Fatal("a missing batch is found")
 	}
-	list, _ := s.Batches(ctx, "ds", 10)
-	if len(list) != 2 || list[0].ID != "b2" || list[0].FinishedAt.IsZero() {
-		t.Fatalf("batches = %+v", list)
-	}
-	if one, _ := s.Batches(ctx, "ds", 1); len(one) != 1 {
-		t.Fatalf("limit: %+v", one)
-	}
-	open, _ := s.UnfinishedBatches(ctx)
-	if len(open) != 2 || open[0].ID != "b1" || open[1].ID != "b3" || len(open[0].Items) != 2 {
-		t.Fatalf("unfinished = %+v", open)
+	checkBatchLists(t, s)
+	if canceled, err := s.BatchCanceled(ctx, "b1"); canceled || err != nil {
+		t.Fatalf("canceled before cancel: %v %v", canceled, err)
 	}
 	if err := s.CancelBatch(ctx, "b1"); err != nil {
 		t.Fatal(err)
+	}
+	if canceled, err := s.BatchCanceled(ctx, "b1"); !canceled || err != nil {
+		t.Fatalf("canceled after cancel: %v %v", canceled, err)
+	}
+	if canceled, err := s.BatchCanceled(ctx, "none"); canceled || err != nil {
+		t.Fatalf("canceled of no batch: %v %v", canceled, err)
 	}
 	if moved, err := s.MoveItem(ctx, "b1", "p1", t0.Add(time.Second), item("a", catalog.ItemRunning),
 		catalog.ItemPending); !moved || err != nil {
@@ -211,11 +303,41 @@ func testBatches(t *testing.T, s catalog.Store) {
 	}
 }
 
+// checkBatchLists checks the lists of testBatches' batches: they count the
+// items by state instead of reading them.
+func checkBatchLists(t *testing.T, s catalog.Store) {
+	t.Helper()
+	ctx := context.Background()
+	counts := map[string]int{catalog.ItemPending: 1, catalog.ItemFailed: 1}
+	list, _ := s.Batches(ctx, "ds", 10)
+	if len(list) != 2 || list[0].ID != "b2" || list[0].FinishedAt.IsZero() || list[1].Items != nil ||
+		!reflect.DeepEqual(list[1].Counts, counts) || len(list[0].Counts) != 0 {
+		t.Fatalf("batches = %+v", list)
+	}
+	if one, _ := s.Batches(ctx, "ds", 1); len(one) != 1 {
+		t.Fatalf("limit: %+v", one)
+	}
+	full, err := s.BatchesWithItems(ctx, "ds", 10)
+	b1, _, _ := s.Batch(ctx, "b1")
+	if err != nil || len(full) != 2 || full[0].ID != "b2" || full[0].Items == nil || len(full[0].Items) != 0 ||
+		!reflect.DeepEqual(full[1], b1) {
+		t.Fatalf("batches with items = %+v, %v", full, err)
+	}
+	if one, _ := s.BatchesWithItems(ctx, "ds", 1); len(one) != 1 || one[0].ID != "b2" {
+		t.Fatalf("limit with items: %+v", one)
+	}
+	open, _ := s.UnfinishedBatches(ctx)
+	if len(open) != 2 || open[0].ID != "b1" || open[1].ID != "b3" || open[0].Items != nil ||
+		!reflect.DeepEqual(open[0].Counts, counts) {
+		t.Fatalf("unfinished = %+v", open)
+	}
+}
+
 // A request sent again with its key gets the batch it started.
 func testBatchRequestKeys(t *testing.T, s catalog.Store) {
 	ctx := context.Background()
-	b := catalog.Batch{ID: "b1", Datasource: "ds", RequestKey: "k1", StartedAt: t0, Items: []catalog.BatchItem{
-		item("a", catalog.ItemPending)}}
+	b := catalog.Batch{ID: "b1", Datasource: "ds", StartedBy: "alice", RequestKey: "k1", StartedAt: t0,
+		Items: []catalog.BatchItem{item("a", catalog.ItemPending)}}
 	create(t, s, b)
 	again := b
 	again.ID = "b2"
@@ -223,7 +345,12 @@ func testBatchRequestKeys(t *testing.T, s catalog.Store) {
 	if err != nil || created || got.ID != "b1" || len(got.Items) != 1 {
 		t.Fatalf("the same request again = %+v %v %v", got, created, err)
 	}
-	again.Datasource = "other"
+	// The key names a request of one administrator: another's starts a batch.
+	again.ID, again.StartedBy = "b3", "bob"
+	if _, created, _ := s.CreateBatch(ctx, again, 100); !created {
+		t.Fatal("another administrator's request got alice's batch")
+	}
+	again.ID, again.Datasource = "b4", "other"
 	if _, created, _ := s.CreateBatch(ctx, again, 100); !created {
 		t.Fatal("a key of another datasource")
 	}

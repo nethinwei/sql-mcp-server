@@ -46,10 +46,51 @@ type Schema struct {
 }
 
 // Step is a step into a value: an object property, or the element of a list
-// with a key.
+// with a key. Either key may be empty (a blank row the console saved), so
+// the kind is explicit: build steps with FieldStep and ElementStep.
 type Step struct {
-	Field   string `json:"field,omitempty"`
-	Element string `json:"element,omitempty"`
+	Field   string
+	Element string
+	// List marks an element step whose key may be empty.
+	List bool
+}
+
+// FieldStep is the step into object property k.
+func FieldStep(k string) Step { return Step{Field: k} }
+
+// ElementStep is the step into the list element keyed k.
+func ElementStep(k string) Step { return Step{Element: k, List: true} }
+
+// IsElement reports whether s steps into a list element.
+func (s Step) IsElement() bool { return s.List || s.Element != "" }
+
+type stepJSON struct {
+	Field   *string `json:"field,omitempty"`
+	Element string  `json:"element,omitempty"`
+}
+
+// MarshalJSON writes a property step with its field always present, so an
+// empty property survives the round trip.
+func (s Step) MarshalJSON() ([]byte, error) {
+	if s.IsElement() {
+		return json.Marshal(stepJSON{Element: s.Element})
+	}
+	return json.Marshal(stepJSON{Field: &s.Field})
+}
+
+// UnmarshalJSON reads a step: without a field it is an element step (as
+// steps stored before the kind was explicit read).
+func (s *Step) UnmarshalJSON(b []byte) error {
+	var j stepJSON
+	if err := json.Unmarshal(b, &j); err != nil {
+		return err
+	}
+	if j.Field != nil {
+		*s = FieldStep(*j.Field)
+	} else {
+		*s = ElementStep(j.Element)
+	}
+	return nil
 }
 
 // Path is a sequence of steps; empty is the whole value.
@@ -67,7 +108,7 @@ func (p Path) Pattern() string {
 
 func patternStep(first bool, s Step) string {
 	switch {
-	case s.Element != "" || s.Field == "":
+	case s.IsElement():
 		return "[]"
 	case first:
 		return s.Field
@@ -88,7 +129,7 @@ func (p Path) String() string {
 	var b strings.Builder
 	for i, s := range p {
 		switch {
-		case s.Element != "" || s.Field == "":
+		case s.IsElement():
 			b.WriteString("[")
 			b.WriteString(s.Element)
 			b.WriteString("]")
@@ -149,10 +190,17 @@ func (s Schema) normalize(v any, p string) any {
 // and pattern, so a subtree is serialized once however many of its ancestors
 // compare it (each level of a merge compares the values under it): a merge
 // costs the size of its inputs, not their size times their depth. The
-// inputs of one operation are not written to while it runs.
+// inputs of one operation are not written to while it runs. An entry holds
+// its value: values built during the operation (the groups of a keyed list)
+// may go, and their address must not name another value meanwhile.
 type comparer struct {
 	s    Schema
-	memo map[memoKey]string
+	memo map[memoKey]memoEntry
+}
+
+type memoEntry struct {
+	v   any
+	out string
 }
 
 // memoKey identifies a map or a list value at a pattern: a map by its
@@ -163,14 +211,14 @@ type memoKey struct {
 	n       int
 }
 
-func (s Schema) comparer() *comparer { return &comparer{s: s, memo: map[memoKey]string{}} }
+func (s Schema) comparer() *comparer { return &comparer{s: s, memo: map[memoKey]memoEntry{}} }
 
 // canonicalAt is the canonical JSON of v at pattern p.
 func (c *comparer) canonicalAt(p string, v any) string {
 	key, memoized := memoKeyOf(p, v)
 	if memoized {
-		if out, ok := c.memo[key]; ok {
-			return out
+		if e, ok := c.memo[key]; ok {
+			return e.out
 		}
 	}
 	n := c.s.normalize(v, p)
@@ -179,7 +227,7 @@ func (c *comparer) canonicalAt(p string, v any) string {
 	}
 	data, _ := json.Marshal(n)
 	if memoized {
-		c.memo[key] = string(data)
+		c.memo[key] = memoEntry{v: v, out: string(data)}
 	}
 	return string(data)
 }
@@ -219,7 +267,7 @@ func Identical(a, b any) bool {
 
 // sameAt compares two values at path.
 func (c *comparer) sameAt(path Path, a, b any) bool {
-	if n := len(path); n > 0 && (path[n-1].Element != "" || path[n-1].Field == "") {
+	if n := len(path); n > 0 && path[n-1].IsElement() {
 		return c.sameElements(path, a, b)
 	}
 	if Identical(a, b) {
@@ -316,6 +364,9 @@ func (c *comparer) merge(base, local, next any, path Path) (any, []ValueConflict
 	bo, okB := object(base)
 	lo, okL := object(local)
 	no, okN := object(next)
+	if IsMissing(base) && okL && okN { // added on both sides: merged key by key, as an object changed
+		bo, okB = map[string]any{}, true
+	}
 	if okB && okL && okN {
 		return c.mergeObjects(bo, lo, no, path)
 	}
@@ -342,7 +393,7 @@ func (c *comparer) mergeObjects(base, local, next map[string]any, path Path) (an
 		}
 	}
 	for k := range keys {
-		v, cs := c.merge(get(base, k), get(local, k), get(next, k), append(slices.Clone(path), Step{Field: k}))
+		v, cs := c.merge(get(base, k), get(local, k), get(next, k), append(slices.Clone(path), FieldStep(k)))
 		if !IsMissing(v) {
 			value[k] = v
 		}
@@ -363,7 +414,7 @@ func (c *comparer) mergeLists(base, local, next keyedList, path Path) (any, []Va
 	value := []any{}
 	var conflicts []ValueConflict
 	for _, key := range order {
-		at := append(slices.Clone(path), Step{Element: key})
+		at := append(slices.Clone(path), ElementStep(key))
 		be, le, ne := base.get(key), local.get(key), next.get(key)
 		var v any
 		var cs []ValueConflict
@@ -406,7 +457,7 @@ func sortConflicts(cs []ValueConflict) {
 func (s Schema) GetAt(root any, path Path) any {
 	v := root
 	for i, step := range path {
-		if step.Element == "" && step.Field != "" {
+		if !step.IsElement() {
 			m, ok := object(v)
 			if !ok {
 				return Missing
@@ -434,7 +485,7 @@ func (s Schema) setAt(root any, p string, path Path, value any) any {
 		return value
 	}
 	step, rest := path[0], path[1:]
-	if step.Element == "" && step.Field != "" {
+	if !step.IsElement() {
 		obj := map[string]any{}
 		if m, ok := object(root); ok {
 			maps.Copy(obj, m)
@@ -497,7 +548,7 @@ func (s Schema) setElement(root any, p, key string, rest Path, value any) any {
 // treats as a whole.
 func (s Schema) addressable(path Path, items ...any) Path {
 	for i := 0; i < len(path)-1; i++ {
-		if path[i].Element == "" && path[i].Field != "" {
+		if !path[i].IsElement() {
 			continue
 		}
 		for _, item := range items {
@@ -540,7 +591,7 @@ func (c *comparer) diff(a, b any, path Path, out *[]Change) {
 			}
 		}
 		for _, k := range slices.Sorted(maps.Keys(keys)) {
-			c.diff(get(ao, k), get(bo, k), append(slices.Clone(path), Step{Field: k}), out)
+			c.diff(get(ao, k), get(bo, k), append(slices.Clone(path), FieldStep(k)), out)
 		}
 		return
 	}
@@ -554,7 +605,7 @@ func (c *comparer) diff(a, b any, path Path, out *[]Change) {
 			}
 		}
 		for _, k := range order {
-			at := append(slices.Clone(path), Step{Element: k})
+			at := append(slices.Clone(path), ElementStep(k))
 			ae, be := ka.get(k), kb.get(k)
 			if isGroup(ae) || isGroup(be) {
 				if !c.sameElements(at, ae, be) {

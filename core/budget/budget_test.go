@@ -3,6 +3,9 @@ package budget
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
+	"slices"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -268,5 +271,97 @@ func TestStricter(t *testing.T) {
 		if got := Stricter(c[0], c[1]); got != c[2] {
 			t.Errorf("Stricter(%d, %d) = %d, want %d", c[0], c[1], got, c[2])
 		}
+	}
+}
+
+// A full table never drops the state of the scope acquiring: its session
+// cost stays.
+func TestMemoryManagerFullTableKeepsTheCallersState(t *testing.T) {
+	m := NewWithBounds(map[string]Limits{"r": {MaxSessionCost: 10}}, nil, time.Hour, 1)
+	scope := Scope{Role: "r", Session: "s"}
+	for i := range 3 {
+		lease, err := m.Acquire(context.Background(), scope)
+		if i == 2 {
+			if !errors.Is(err, ErrExceeded) {
+				t.Fatalf("the session's cost was dropped: %v", err)
+			}
+			return
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = lease.Complete(Usage{Cost: 6})
+	}
+}
+
+// Random acquires, completions and closed sessions keep the table bounded
+// and the idle list exactly the states no call runs in.
+func TestMemoryManagerIdleListInvariants(t *testing.T) {
+	m := NewWithBounds(nil, nil, time.Hour, 4)
+	rng := rand.New(rand.NewPCG(1, 2))
+	var leases []Lease
+	for step := range 5000 {
+		switch rng.IntN(3) {
+		case 0:
+			scope := Scope{Role: strconv.Itoa(rng.IntN(2)), Session: strconv.Itoa(rng.IntN(8))}
+			if lease, err := m.Acquire(context.Background(), scope); err == nil {
+				leases = append(leases, lease)
+			}
+		case 1:
+			if len(leases) > 0 {
+				i := rng.IntN(len(leases))
+				_ = leases[i].Complete(Usage{Cost: 1})
+				leases = slices.Delete(leases, i, i+1)
+			}
+		default:
+			m.CloseSession(strconv.Itoa(rng.IntN(8)))
+		}
+		m.mu.Lock()
+		idle := 0
+		for scope, st := range m.sessions {
+			if (st.inflight == 0) != (st.idle != nil) || st.idle != nil && st.idle.Value.(Scope) != scope {
+				m.mu.Unlock()
+				t.Fatalf("step %d: state of %v: inflight %d, idle %v", step, scope, st.inflight, st.idle)
+			}
+			if st.idle != nil {
+				idle++
+			}
+		}
+		held := 0
+		for _, h := range m.holders {
+			held += h.states
+		}
+		if len(m.sessions) > m.maxStates || m.idle.Len() != idle || held != len(m.sessions) {
+			m.mu.Unlock()
+			t.Fatalf("step %d: %d states, %d listed idle, %d idle", step, len(m.sessions), m.idle.Len(), idle)
+		}
+		m.mu.Unlock()
+	}
+}
+
+// A caller cycling session ids through a full table drops only its own idle
+// states: another principal's session keeps its cost.
+func TestMemoryManagerFullTableKeepsOtherPrincipalsStates(t *testing.T) {
+	m := NewWithBounds(map[string]Limits{"victim": {MaxSessionCost: 10}}, nil, time.Hour, 3)
+	victim := Scope{Role: "victim", Session: "v"}
+	lease, err := m.Acquire(context.Background(), victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = lease.Complete(Usage{Cost: 9})
+	for i := range 20 {
+		lease, err := m.Acquire(context.Background(), Scope{Role: "flood", Session: strconv.Itoa(i)})
+		if err != nil {
+			t.Fatalf("flood %d: %v", i, err)
+		}
+		_ = lease.Complete(Usage{})
+	}
+	_, err = m.AcquireWithReservation(context.Background(), victim, Reservation{Cost: 5})
+	if !errors.Is(err, ErrExceeded) {
+		t.Fatalf("the victim's session cost was reset: %v", err)
+	}
+	// A principal new to the full table gets room from the largest share.
+	if _, err := m.Acquire(context.Background(), Scope{Role: "other", Session: "o"}); err != nil {
+		t.Fatalf("a new principal was refused: %v", err)
 	}
 }

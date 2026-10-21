@@ -1,10 +1,12 @@
 package bootstrap
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"reflect"
@@ -138,6 +140,7 @@ func (r *Runtime) UserByName(name string) (UserIdentity, bool) {
 func NewRuntimeWithBuilder(app *App, build func(string) (*App, error)) *Runtime {
 	app.publishShared()
 	r := &Runtime{build: build}
+	app.held = r.heldUser
 	r.current.Store(newAppSnapshot(app))
 	return r
 }
@@ -206,7 +209,6 @@ func (r *Runtime) reloadWith(build func() (*App, error)) error {
 		_ = next.Close()
 		return ErrRuntimeClosed
 	}
-	next.publishShared()
 	if err := publishReload(r, old, next, revokedPrincipals(old.app, next)); err != nil {
 		return err
 	}
@@ -233,23 +235,57 @@ func revokedPrincipals(old, next *App) []string {
 // leased old finish, transactions they opened in those sessions are rolled
 // back and old is closed.
 func publishReload(r *Runtime, old *appSnapshot, next *App, revoked []string) error {
+	next.held = r.heldUser
 	if !r.current.CompareAndSwap(old, newAppSnapshot(next)) {
 		_ = next.Close() // closed meanwhile
 		return ErrRuntimeClosed
 	}
+	// Its settings apply to the shared services once it serves: a reload
+	// the runtime closed under leaves them as the snapshots draining had them.
+	next.publishShared()
 	old.mu.Lock()
 	old.retired = true
 	old.cond.Broadcast()
 	old.mu.Unlock()
-	r.onPublish.Lock()
-	for _, fn := range r.onPublish.fns {
-		fn(next)
-	}
-	r.onPublish.Unlock()
 	var sessions []string
+	// Retired however the callbacks end: one that panics must not leave the
+	// old snapshot open, its connections held.
+	defer retire(r, old, next, &sessions)
+	r.published(next)
 	if fn := r.revoked.Load(); fn != nil && len(revoked) > 0 {
 		sessions = (*fn)(revoked)
 	}
+	return nil
+}
+
+// published runs the callbacks of a publish (see OnPublish) for next. One
+// that panics is logged, and the others still run: next serves already, and
+// the reload that published it succeeded.
+func (r *Runtime) published(next *App) {
+	r.onPublish.Lock()
+	defer r.onPublish.Unlock()
+	for _, fn := range r.onPublish.fns {
+		if err := recovered(func() { fn(next) }); err != nil {
+			slog.Error("a publish callback failed", "error", err.Error())
+		}
+	}
+}
+
+// recovered runs fn and returns the panic it raised, as an error.
+func recovered(fn func()) (err error) {
+	defer func() {
+		if v := recover(); v != nil {
+			err = fmt.Errorf("panic: %v", v)
+		}
+	}()
+	fn()
+	return nil
+}
+
+// retire closes old in the background once the requests that leased it
+// finish, rolling back the transactions they opened in sessions.
+func retire(r *Runtime, old *appSnapshot, next *App, revoked *[]string) {
+	sessions := *revoked
 	r.draining.Add(1)
 	next.Bus().Fork(&r.retiring, "retire snapshot", func(context.Context) {
 		defer r.draining.Add(-1)
@@ -265,7 +301,6 @@ func publishReload(r *Runtime, old *appSnapshot, next *App, revoked []string) er
 			slog.Warn("closing the replaced snapshot failed", "error", err.Error())
 		}
 	})
-	return nil
 }
 
 // Watch polls path for content changes and reloads it. Reload errors are
@@ -276,7 +311,10 @@ func (r *Runtime) Watch(ctx context.Context, path string, interval time.Duration
 		return err
 	}
 	last, report := sha256.Sum256(data), reporter(onError)
-	return poll(ctx, interval, time.Second, func() {
+	// A configuration that keeps failing is assembled again after a growing
+	// delay, not on every poll; one edited again is tried at once.
+	retry := retryBackoff[[sha256.Size]byte]{base: cmp.Or(interval, time.Second)}
+	return poll(ctx, interval, time.Second, report, func() {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			report(err)
@@ -284,10 +322,24 @@ func (r *Runtime) Watch(ctx context.Context, path string, interval time.Duration
 		}
 		sum := sha256.Sum256(data)
 		if sum == last {
+			if retry.tried || r.held.Load() != nil {
+				// Back to what serves: the users a failed edit held are
+				// released, and that edit, made again, is tried at once.
+				r.releaseHeld()
+				retry = retryBackoff[[sha256.Size]byte]{base: retry.base}
+			}
+			return
+		}
+		if !retry.due(sum, time.Now()) {
 			return
 		}
 		if err := r.Reload(path); err != nil {
-			report(err)
+			// Earlier configurations still draining is no failure of this
+			// one: it is tried again at the next poll.
+			if !errors.Is(err, ErrReloadBacklog) {
+				retry.failed(sum, time.Now())
+				report(err)
+			}
 			r.holdLoaded(LoadBytes(data))
 			return
 		}
@@ -295,9 +347,17 @@ func (r *Runtime) Watch(ctx context.Context, path string, interval time.Duration
 	})
 }
 
+// releaseHeld releases the users a configuration that did not apply held.
+func (r *Runtime) releaseHeld() {
+	r.reload.Lock() // after a hold being taken meanwhile
+	defer r.reload.Unlock()
+	r.held.Store(nil)
+}
+
 // poll runs tick every interval (def when interval is not positive) until
-// ctx ends, and returns why it ended.
-func poll(ctx context.Context, interval, def time.Duration, tick func()) error {
+// ctx ends, and returns why it ended. A tick that panics is reported and
+// the polling goes on: nothing restarts a watcher that stopped.
+func poll(ctx context.Context, interval, def time.Duration, report func(error), tick func()) error {
 	if interval <= 0 {
 		interval = def
 	}
@@ -308,7 +368,9 @@ func poll(ctx context.Context, interval, def time.Duration, tick func()) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			tick()
+			if err := recovered(tick); err != nil {
+				report(fmt.Errorf("watch: %w", err))
+			}
 		}
 	}
 }

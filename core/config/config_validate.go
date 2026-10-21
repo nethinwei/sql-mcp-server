@@ -3,7 +3,10 @@ package config
 import (
 	"fmt"
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
+	"maps"
 	"net"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -87,7 +90,8 @@ func (c *Config) validateServerAuth() error {
 }
 
 func (c *Config) validateDatabases(databases map[string]DatabaseConfig) error {
-	for name, db := range databases {
+	for _, name := range slices.Sorted(maps.Keys(databases)) {
+		db := databases[name]
 		if !validDriverName(db.Driver) {
 			return fmt.Errorf("%w: %q in database %q", ErrInvalidDriver, db.Driver, name)
 		}
@@ -123,7 +127,10 @@ func validateConnections(name string, db DatabaseConfig) error {
 		}
 	}
 	route := db.Route()
-	for action, conn := range map[string]string{"read": route.Read, "write": route.Write, "execute": route.Execute} {
+	for _, r := range []struct{ action, conn string }{
+		{"read", route.Read}, {"write", route.Write}, {"execute", route.Execute},
+	} {
+		action, conn := r.action, r.conn
 		target, ok := db.ConnectionsOrDSN()[conn]
 		switch {
 		case conn == "":
@@ -154,8 +161,8 @@ func (c *Config) validateSQLEscape(databases map[string]DatabaseConfig) error {
 	if c.Cost.EnabledOrDefault() || !c.Cost.SQLEscape.EstimateRequired() {
 		return nil
 	}
-	for name, db := range databases {
-		if db.SQLEscape.Enabled() {
+	for _, name := range slices.Sorted(maps.Keys(databases)) {
+		if databases[name].SQLEscape.Enabled() {
 			return fmt.Errorf("config: database %q admits execute_sql with cost.sqlEscape.estimate: required, "+
 				"but cost.enabled: false leaves no EXPLAIN to estimate with; set cost.sqlEscape.estimate: skip "+
 				"to run it under the hard limits alone, or enable cost", name)
@@ -196,6 +203,9 @@ func (c *Config) validateCostScores() error {
 func (c *Config) validateRuntimeLimits() error {
 	if c.Cache.Enabled && (c.Cache.MaxSize <= 0 || c.Cache.MaxEntryRows <= 0 || c.Cache.MaxEntryBytes <= 0) {
 		return fmt.Errorf("config: enabled cache requires positive maxSize, maxEntryRows, and maxEntryBytes")
+	}
+	if c.Cache.Enabled && c.Cache.MaxTotalBytes < c.Cache.MaxEntryBytes {
+		return fmt.Errorf("config: cache.maxTotalBytes must hold an entry of cache.maxEntryBytes")
 	}
 	return nil
 }
@@ -268,7 +278,8 @@ func (c *Config) validateEntity(e EntityConfig, refs EntityRefs) error {
 	if err := validateEntityFieldACL(e); err != nil {
 		return err
 	}
-	for role, policy := range e.RowPolicies {
+	for _, role := range slices.Sorted(maps.Keys(e.RowPolicies)) {
+		policy := e.RowPolicies[role]
 		if err := validateRowFilter(e, policy); err != nil {
 			return fmt.Errorf("config: entity %q row policy for role %q: %w", e.Name, role, err)
 		}
@@ -373,7 +384,8 @@ func visibleFieldNames(fields []FieldConfig) map[string]bool {
 
 func validateEntityFieldACL(e EntityConfig) error {
 	visibleFields := visibleFieldNames(e.Fields)
-	for role, acl := range e.FieldACL {
+	for _, role := range slices.Sorted(maps.Keys(e.FieldACL)) {
+		acl := e.FieldACL[role]
 		if duplicate, ok := firstDuplicate(acl.Read); ok {
 			return fmt.Errorf(
 				"config: entity %q field ACL for role %q has duplicate read field %q",
@@ -425,6 +437,9 @@ func validateRelationship(
 	if err := validateRelationshipIdentity(e, relation, relationNames); err != nil {
 		return err
 	}
+	if err := validateRelationshipName(e, relation.Name, localFields); err != nil {
+		return err
+	}
 	target, err := refs.Resolve(relation.Target)
 	if err != nil {
 		return fmt.Errorf("config: entity %q relationship %q target: %w", e.Name, relation.Name, err)
@@ -446,6 +461,31 @@ func validateRelationshipIdentity(e EntityConfig, relation RelationshipConfig, r
 	return nil
 }
 
+// relationAliases are the names the SQL gives its tables: "_" the read's
+// own, x1, x2... those an exists filter reads.
+var relationAliases = regexp.MustCompile(`^(_|x[0-9]+)$`)
+
+// RelationshipNameReserved reports a name the SQL gives its tables, which no
+// relationship may take.
+func RelationshipNameReserved(name string) bool { return relationAliases.MatchString(name) }
+
+// validateRelationshipName refuses a relationship name a field path could
+// not tell apart: tools name a related field relationship.field, so the name
+// holds no '.', no field of the entity is named relationship.<something>,
+// and it is none of the names the SQL gives its tables.
+func validateRelationshipName(e EntityConfig, name string, localFields map[string]bool) error {
+	if strings.Contains(name, ".") || relationAliases.MatchString(name) {
+		return fmt.Errorf("config: entity %q relationship %q: a name holds no '.' and is not _ or x<number>",
+			e.Name, name)
+	}
+	for _, field := range slices.Sorted(maps.Keys(localFields)) {
+		if strings.HasPrefix(field, name+".") {
+			return fmt.Errorf("config: entity %q field %q reads as a field of relationship %q", e.Name, field, name)
+		}
+	}
+	return nil
+}
+
 // validateRelationshipJoin checks joinOn, whose fields name columns: the join
 // runs on them as written, so one naming a field's alias is refused.
 func validateRelationshipJoin(
@@ -455,7 +495,8 @@ func validateRelationshipJoin(
 		return fmt.Errorf("config: relationship %q requires at least one joinOn pair", relation.Name)
 	}
 	targetFields := configuredFields(target.Fields)
-	for local, targetField := range relation.JoinOn {
+	for _, local := range slices.Sorted(maps.Keys(relation.JoinOn)) { // the same error each time
+		targetField := relation.JoinOn[local]
 		if !localFields[local] {
 			return fmt.Errorf("config: relationship %q references unknown local field %q", relation.Name, local)
 		}
@@ -505,15 +546,19 @@ func (c *Config) normalizeRoles() error {
 }
 
 func (c *Config) normalizeEntityRoles(e *EntityConfig) error {
-	e.Roles.Read = canonicalRoleList(e.Roles.Read)
-	e.Roles.Create = canonicalRoleList(e.Roles.Create)
-	e.Roles.Update = canonicalRoleList(e.Roles.Update)
-	e.Roles.Delete = canonicalRoleList(e.Roles.Delete)
-	e.Roles.Execute = canonicalRoleList(e.Roles.Execute)
-	e.Roles.Aggregate = canonicalRoleList(e.Roles.Aggregate)
+	for _, list := range []*[]string{
+		&e.Roles.Read, &e.Roles.Create, &e.Roles.Update, &e.Roles.Delete, &e.Roles.Execute, &e.Roles.Aggregate,
+	} {
+		*list = canonicalRoleList(*list)
+		// An empty role would be the role of a caller naming none.
+		if slices.Contains(*list, "") {
+			return fmt.Errorf("config: entity %q: a role must not be empty", e.Name)
+		}
+	}
 
 	fieldACL := make(map[string]FieldACLConfig, len(e.FieldACL))
-	for role, acl := range e.FieldACL {
+	for _, role := range slices.Sorted(maps.Keys(e.FieldACL)) {
+		acl := e.FieldACL[role]
 		key := rbac.NormalizeRole(role)
 		if key == "" {
 			return fmt.Errorf("config: entity %q has an empty field ACL role", e.Name)
@@ -526,7 +571,8 @@ func (c *Config) normalizeEntityRoles(e *EntityConfig) error {
 	e.FieldACL = fieldACL
 
 	policies := make(RowPolicies, len(e.RowPolicies))
-	for role, policy := range e.RowPolicies {
+	for _, role := range slices.Sorted(maps.Keys(e.RowPolicies)) {
+		policy := e.RowPolicies[role]
 		key := rbac.NormalizeRole(role)
 		if key == "" {
 			return fmt.Errorf("config: entity %q has an empty row-policy role", e.Name)
@@ -542,7 +588,8 @@ func (c *Config) normalizeEntityRoles(e *EntityConfig) error {
 
 func (c *Config) normalizeBudgetRoles() error {
 	roles := make(map[string]BudgetLimits, len(c.Budget.Roles))
-	for role, limits := range c.Budget.Roles {
+	for _, role := range slices.Sorted(maps.Keys(c.Budget.Roles)) {
+		limits := c.Budget.Roles[role]
 		key := rbac.NormalizeRole(role)
 		if key == "" {
 			return fmt.Errorf("config: budget has an empty role")

@@ -76,7 +76,7 @@ func parseGroup(key string, raw any) (relalg.Predicate, error) {
 }
 
 func parseCondition(fc map[string]any) (relalg.Predicate, error) {
-	for key := range fc {
+	for _, key := range slices.Sorted(maps.Keys(fc)) {
 		if key != "op" && key != "field" && key != "value" {
 			return nil, fmt.Errorf("unknown key %q in a condition (op, field, value)", key)
 		}

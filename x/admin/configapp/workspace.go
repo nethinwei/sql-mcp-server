@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
 	"github.com/nethinwei/sql-mcp-server/core/workspace"
 	"github.com/nethinwei/sql-mcp-server/internal/kit"
@@ -337,6 +339,18 @@ func (r *Service) ResetWorkspace(ctx context.Context, to string) (*Workspace, er
 	})
 }
 
+// LoadIntoWorkspace makes revision to's content the caller's workspace, as
+// changes to the published revision; keep re-applies what they changed onto it.
+func (r *Service) LoadIntoWorkspace(ctx context.Context, to string, keep bool) (*Workspace, error) {
+	return r.workspaceOp(ctx, auth.PermWrite, func(ops workspaceops.Service, user string) (workspaceops.State, error) {
+		id, err := ParseID(to)
+		if err != nil {
+			return workspaceops.State{}, err
+		}
+		return ops.Load(ctx, user, user, id, keep)
+	})
+}
+
 // MergeDraft takes draft id into the caller's workspace.
 func (r *Service) MergeDraft(ctx context.Context, id string) (*Workspace, error) {
 	return r.workspaceOp(ctx, auth.PermWrite, func(ops workspaceops.Service, user string) (workspaceops.State, error) {
@@ -387,7 +401,8 @@ func (r *Service) CommitWorkspace(ctx context.Context, in CommitInput) (revision
 		Comment: strings.TrimSpace(kit.Deref(in.Comment))})
 }
 
-// WorkspaceLog is the caller's workspace log, newest first.
+// WorkspaceLog is the caller's workspace log, newest first: at least one
+// entry and at most maxListed.
 func (r *Service) WorkspaceLog(ctx context.Context, limit *int) ([]WorkspaceLogEntry, error) {
 	who, err := auth.RequireUnlimited(ctx, auth.PermRead)
 	if err != nil {
@@ -397,7 +412,7 @@ func (r *Service) WorkspaceLog(ctx context.Context, limit *int) ([]WorkspaceLogE
 	if err != nil {
 		return nil, err
 	}
-	log, err := ops.Log(ctx, who.Username, kit.DerefInt(limit, 100))
+	log, err := ops.Log(ctx, who.Username, listLimit(kit.DerefInt(limit, 100)))
 	if err != nil {
 		return nil, err
 	}
@@ -429,14 +444,7 @@ func (r *Service) workspaceDraft(ctx context.Context, username string) (*Draft, 
 		// As committing it does (codec.Build): the settings the base has
 		// that the item does not are removed.
 		settings, _ := st.Base.Get(settingsRef).(map[string]any)
-		for key := range settings {
-			if _, kept := edit.Settings[key]; !kept {
-				if edit.Settings == nil {
-					edit.Settings = map[string]any{}
-				}
-				edit.Settings[key] = nil
-			}
-		}
+		removeSettingsBut(slices.Collect(maps.Keys(settings)), &edit)
 	}
 	return &Draft{Base: strconv.FormatInt(st.Workspace.Base, 10), Edit: edit}, st, err
 }
@@ -558,17 +566,18 @@ func (r *Service) ApplyPlan(ctx context.Context, in ApplyRequest) (*AppliedPlan,
 	return out, nil
 }
 
-// changes are the items a plan's outcome (payload) changes from what it was
+// changes are the items a plan's outcome (spec, canonical, as its payload
+// says) changes from what it was
 // evaluated against (pc), with their values after, and the effect:
 // the values it changes (item, path, value after), canonical, to compare
 // evaluations: a change made meanwhile to another value of the same item
 // leaves it as it was.
-func (r *Service) changes(pc planContext, payload []byte) (workspace.Snapshot, string, error) {
+func (r *Service) changes(pc planContext, spec *config.Spec) (workspace.Snapshot, string, error) {
 	before, err := itemsOfSpec(pc.spec)
 	if err != nil {
 		return nil, "", err
 	}
-	after, err := itemsOfPayload(payload)
+	after, err := itemsOfSpec(spec)
 	if err != nil {
 		return nil, "", err
 	}

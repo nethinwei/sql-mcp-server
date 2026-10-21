@@ -192,15 +192,15 @@ func (e *Engine) execute(ctx context.Context, fn func(context.Context) (any, err
 	limiter, breaker := e.quota.limiter.Load(), e.quota.breaker.Load()
 	record := false
 	if breaker != nil {
-		probe, allowErr := breaker.Allow()
+		ticket, allowErr := breaker.Allow()
 		if allowErr != nil {
 			return nil, allowErr
 		}
 		defer func() {
 			if record {
-				breaker.Record(err == nil)
+				breaker.Record(ticket, err == nil)
 			} else {
-				breaker.Release(probe)
+				breaker.Release(ticket)
 			}
 		}()
 	}
@@ -287,7 +287,7 @@ func (s *singleflight) Do(
 	if c, ok := s.m[key]; ok {
 		c.waiters++
 		s.mu.Unlock()
-		return s.wait(ctx, c)
+		return s.wait(ctx, key, c)
 	}
 	baseCtx := context.WithoutCancel(ctx)
 	var runCtx context.Context
@@ -303,19 +303,29 @@ func (s *singleflight) Do(
 	s.mu.Unlock()
 	go func() {
 		defer executions.Done()
+		defer func() {
+			// A panic past the tool's own recovery (classifying its error,
+			// the limits) ends the call, not the process.
+			if r := recover(); r != nil {
+				c.val, c.err = nil, fmt.Errorf("engine: panic recovered: %v", r)
+			}
+			cancel()
+			s.mu.Lock()
+			if s.m[key] == c {
+				delete(s.m, key)
+			}
+			s.mu.Unlock()
+			close(c.done)
+		}()
 		c.val, c.err = fn(runCtx)
-		cancel()
-		s.mu.Lock()
-		if s.m[key] == c {
-			delete(s.m, key)
-		}
-		s.mu.Unlock()
-		close(c.done)
 	}()
-	return s.wait(ctx, c)
+	return s.wait(ctx, key, c)
 }
 
-func (s *singleflight) wait(ctx context.Context, c *call) (any, error) {
+// wait waits for c, the call of key. The last waiter to leave cancels it,
+// and it leaves the map at once: a caller coming later starts a call of its
+// own instead of waiting for the one canceled.
+func (s *singleflight) wait(ctx context.Context, key string, c *call) (any, error) {
 	select {
 	case <-c.done:
 		return c.val, c.err
@@ -323,6 +333,9 @@ func (s *singleflight) wait(ctx context.Context, c *call) (any, error) {
 		s.mu.Lock()
 		c.waiters--
 		if c.waiters == 0 {
+			if s.m[key] == c {
+				delete(s.m, key)
+			}
 			c.cancel()
 		}
 		s.mu.Unlock()

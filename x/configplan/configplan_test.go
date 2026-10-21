@@ -2,6 +2,7 @@ package configplan
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -215,6 +216,25 @@ func TestSyncFollowsReferences(t *testing.T) {
 	}
 }
 
+// A grant whose every listed field a sync removes reads none of its entity:
+// the report asks to confirm it, naming the principal.
+func TestSyncEmptyingAGrantsFieldsIsReported(t *testing.T) {
+	t.Parallel()
+	base := decode(t, strings.Replace(baseYAML, "fields: {read: [id, gone]}", "fields: {read: [gone]}", 1))
+	p := evaluate(t, base, Plan{Scope: Scope{Drift: true}, Sync: &SyncRule{Remove: true}})
+	want := []string{"grantFieldsEmptied shop.public.customers role:analyst"}
+	if got := kinds(p.Report.Exceptions); !slices.Equal(got, want) {
+		t.Fatalf("exceptions = %v", got)
+	}
+	if x := p.Report.Exceptions[0]; x.Level != LevelConfirm || x.Ref != "shop.public.customers" {
+		t.Fatalf("exception = %+v", x)
+	}
+	if fields := p.Config.Roles["analyst"].Grants[0].Fields; len(fields.Read) != 0 || len(fields.Write) != 0 {
+		t.Fatalf("fields = %+v", fields)
+	}
+	valid(t, base, p)
+}
+
 func TestNamesExclusionsAndAmbiguity(t *testing.T) {
 	t.Parallel()
 	base := decode(t, strings.Replace(baseYAML, "roles:", `  - name: orders
@@ -346,5 +366,153 @@ func TestExceptionLevels(t *testing.T) {
 		if got := levelOf(kind[0], kind[1]); got != want {
 			t.Errorf("%v: %s, want %s", kind, got, want)
 		}
+	}
+}
+
+// A plan applied again changes nothing, though the plan comes as JSON (its
+// row filter holds 7.0) and what it was applied to as YAML (7).
+func TestGrantWithRowsAppliesOnce(t *testing.T) {
+	t.Parallel()
+	base := decode(t, baseYAML)
+	plan, err := Decode([]byte(`{"scope": {"tables": ["customers"]}, "grants": [{"principal": "role:support",
+		"actions": ["read"], "fields": ["id"], "rows": {"field": "id", "op": "eq", "value": 7}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := evaluate(t, base, plan)
+	if grants := p.Roles["support"].Grants; len(grants) != 1 {
+		t.Fatalf("grants = %+v", grants)
+	}
+	// Applied, the configuration is stored as YAML.
+	stored, err := configyaml.Encode(valid(t, base, p))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again := evaluate(t, decode(t, string(stored)), plan); !again.Empty() {
+		t.Fatalf("granting again changes %+v", again.Roles["support"].Grants)
+	}
+}
+
+// A reference the tables imported make ambiguous names what it named before
+// anything resolves it: the fields a sync removes leave the grants naming
+// the entity by it.
+func TestImportQualifiesBeforeSync(t *testing.T) {
+	t.Parallel()
+	base := decode(t, `databases:
+  shop: {driver: postgres, dsn: "postgres://u@h/shop"}
+entities:
+  - name: orders
+    datasource: shop
+    schema: public
+    primaryKey: [id]
+    fields: [{name: id}, {name: customer_id}, {name: phone}, {name: note}, {name: gone}]
+roles:
+  analyst:
+    grants:
+      - entity: orders
+        actions: [read]
+        fields: {read: [id, gone]}
+`)
+	p := evaluate(t, base, Plan{Scope: Scope{Tables: []string{"orders"}}, Import: true,
+		Sync: &SyncRule{Remove: true}})
+	if !slices.Equal(p.Added, []string{"shop.sales.orders"}) {
+		t.Fatalf("added = %v", p.Added)
+	}
+	g := p.Config.Roles["analyst"].Grants
+	if len(g) != 1 || g[0].Entity == "orders" || !slices.Equal(g[0].Fields.Read, []string{"id"}) {
+		t.Fatalf("grants = %+v %+v", g, g[0].Fields)
+	}
+	valid(t, base, p)
+}
+
+// Excluding a table no scan found is refused: a misspelt exclusion would
+// apply the plan (its grants) to the table meant.
+func TestExcludingAnUnknownTableIsRefused(t *testing.T) {
+	t.Parallel()
+	base := decode(t, baseYAML)
+	plan := Plan{Scope: Scope{Schemas: []string{"public"}}, Import: true,
+		Grants: []GrantRule{{Principal: "role:analyst", Actions: []string{"read"}}}}
+	for _, ref := range []string{"logs", "shop.public.log"} {
+		plan.Exclude = []string{ref}
+		if _, err := Evaluate(Input{Base: base, Published: base, Sources: shop()}, plan); err == nil ||
+			!strings.Contains(err.Error(), ref) {
+			t.Errorf("exclude %q: %v", ref, err)
+		}
+	}
+	plan.Exclude = []string{"shop.public.logs"}
+	if p := evaluate(t, base, plan); slices.Contains(p.Added, "shop.public.logs") {
+		t.Fatalf("an excluded table was imported: %v", p.Added)
+	}
+}
+
+// A foreign key on a column the configured entity at either end has no field
+// for becomes no relationship (it would not validate), and is reported.
+func TestImportDropsForeignKeysOnColumnsThatAreNotFields(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ configured, imported, want string }{
+		{"{name: customers, datasource: shop, schema: public, fields: [{name: name}]}",
+			"shop.public.orders", "shop.public.customers"},
+		{"{name: orders, datasource: shop, schema: public, fields: [{name: id}]}",
+			"shop.public.customers", "shop.public.orders"},
+	} {
+		base := decode(t, "databases:\n  shop: {driver: postgres, dsn: \"postgres://u@h/shop\"}\nentities:\n  - "+
+			c.configured+"\n")
+		p := evaluate(t, base, Plan{Scope: Scope{Refs: []string{c.imported}}, Import: true})
+		if r := entityOf(t, p, c.imported).Relationships; len(r) != 0 {
+			t.Fatalf("%s relationships = %+v", c.imported, r)
+		}
+		if !slices.Contains(kinds(p.Report.Exceptions), "relationshipDropped "+c.imported+" "+c.want) {
+			t.Fatalf("exceptions = %v", kinds(p.Report.Exceptions))
+		}
+		valid(t, base, p)
+	}
+}
+
+// A field rule filtering by type tests each field's column type, read once
+// a table; a field without a column of the table has none.
+func TestFieldRulesFilterByColumnType(t *testing.T) {
+	t.Parallel()
+	base := decode(t, baseYAML)
+	p := evaluate(t, base, Plan{Scope: Scope{Refs: []string{"shop.public.customers"}},
+		Fields: []FieldRule{{Columns: []string{"*"}, Types: []string{"text"}, Exclude: true},
+			{Columns: []string{"*"}, Types: []string{"big*"}, Mask: "secret"}}})
+	var got []string
+	for _, f := range entityOf(t, p, "shop.public.customers").Fields {
+		got = append(got, f.Name+":"+strconv.FormatBool(f.Exclude)+":"+f.Mask)
+	}
+	if want := []string{"id:false:secret", "name:true:", "legacy:true:", "gone:false:"}; !slices.Equal(got, want) {
+		t.Fatalf("fields = %v, want %v", got, want)
+	}
+	valid(t, base, p)
+}
+
+// A grant with a field wildcard follows the fields: once a column is added,
+// running the template again widens the grant it made instead of adding a
+// second, and running it once more changes nothing.
+func TestWildcardGrantFollowsAddedFields(t *testing.T) {
+	t.Parallel()
+	plan, err := Decode([]byte(`{"scope": {"tables": ["customers"]},
+		"grants": [{"principal": "role:support", "actions": ["read", "update"], "fields": ["*"]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(base *config.Config) (*config.Config, Proposal) {
+		p := evaluate(t, base, plan)
+		return valid(t, base, p), p
+	}
+	cfg, _ := run(decode(t, baseYAML))
+	for i := range cfg.Entities {
+		if cfg.Entities[i].ID() == "shop.public.customers" {
+			cfg.Entities[i].Fields = append(cfg.Entities[i].Fields, config.FieldConfig{Name: "mobile_phone"})
+		}
+	}
+	cfg, p := run(cfg)
+	grants := cfg.Roles["support"].Grants
+	if p.Empty() || len(grants) != 1 || !slices.Contains(grants[0].Fields.Read, "mobile_phone") ||
+		!slices.Equal(grants[0].Fields.Write, grants[0].Fields.Read) {
+		t.Fatalf("grants = %+v", grants)
+	}
+	if _, again := run(cfg); !again.Empty() {
+		t.Fatalf("running again changes %+v", again.Roles["support"].Grants)
 	}
 }

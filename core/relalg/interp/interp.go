@@ -220,16 +220,17 @@ func evalLimit(db DB, n relalg.Limit) (relation, error) {
 	if err != nil {
 		return relation{}, err
 	}
-	start := n.Offset
-	if start < 0 {
-		start = 0
+	if n.Count < 1 || n.Offset < 0 { // codegen refuses the same limits
+		return relation{}, fmt.Errorf("interp: limit %d offset %d: limit must be positive and offset not negative",
+			n.Count, n.Offset)
 	}
+	start := n.Offset
 	if start > int64(len(in.Rows)) {
 		start = int64(len(in.Rows))
 	}
-	end := start + n.Count
-	if n.Count < 0 || end > int64(len(in.Rows)) {
-		end = int64(len(in.Rows))
+	end := int64(len(in.Rows))
+	if n.Count < end-start { // no start + Count: it may overflow
+		end = start + n.Count
 	}
 	return relation{Cols: in.Cols, Rows: in.Rows[start:end], hidden: in.hidden}, nil
 }

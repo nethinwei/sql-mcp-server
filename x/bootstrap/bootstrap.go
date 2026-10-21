@@ -86,7 +86,10 @@ type App struct {
 	// tokenHash, and UserCerts a certificate subject (see
 	// config.CanonicalCertSubject), to the user name. They follow the
 	// snapshot on reload.
-	Users        map[string]UserIdentity
+	Users map[string]UserIdentity
+	// held reports a user its runtime holds (see holdChanged): one no
+	// lookup of this snapshot finds either, the default user included.
+	held         func(name string) bool
 	UserTokens   map[string]string
 	UserCerts    map[string]string
 	Limits       tool.Limits
@@ -132,10 +135,23 @@ func (a *App) publishShared() {
 	}
 }
 
-// Bus returns the execution bus the App runs on; nil for an App assembled
-// without shared services, whose work then runs unbounded by a bus.
+// AuditDropped counts the audit events dropped for a full queue: by every
+// App of the process with shared services (it does not start again at a
+// reload), else by this App's auditor.
+func (a *App) AuditDropped() int64 {
+	if a.shared != nil {
+		return a.shared.auditDropped.Load()
+	}
+	if dropping, ok := a.Auditor.(interface{ Dropped() int64 }); ok {
+		return dropping.Dropped()
+	}
+	return 0
+}
+
+// Bus returns the execution bus the App runs on; nil for no App, or one
+// assembled without shared services, whose work then runs unbounded by a bus.
 func (a *App) Bus() *bus.Bus {
-	if a.shared == nil {
+	if a == nil || a.shared == nil {
 		return nil
 	}
 	return a.shared.bus
@@ -185,6 +201,21 @@ func (a *App) ToolContextForSubject(role string, subject map[string]any) tool.Co
 	return tc
 }
 
+// stopAssessment cancels the assessment of capabilities and waits for it to
+// end with its queries, or for ctx: one stuck must not keep the rest open.
+func (a *App) stopAssessment(ctx context.Context) error {
+	if a.stopAssessing == nil {
+		return nil
+	}
+	a.stopAssessing()
+	select {
+	case <-a.assessed:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // CloseContext stops engine admission and drains all execution before rolling
 // back transactions and releasing audit/provider resources.
 func (a *App) CloseContext(ctx context.Context) error {
@@ -193,11 +224,10 @@ func (a *App) CloseContext(ctx context.Context) error {
 	if a.closed {
 		return nil
 	}
-	if a.stopAssessing != nil {
-		a.stopAssessing()
-		<-a.assessed
-	}
 	var errs []error
+	if err := a.stopAssessment(ctx); err != nil {
+		errs = append(errs, err)
+	}
 	if a.Engine != nil {
 		if err := a.Engine.Drain(ctx); err != nil {
 			errs = append(errs, err)
@@ -206,10 +236,13 @@ func (a *App) CloseContext(ctx context.Context) error {
 	if a.Transactions != nil && a.shared == nil { // shared ones outlive the App
 		a.Transactions.Close()
 	}
-	if a.Auditor != nil {
-		if closer, ok := a.Auditor.(interface{ Close() }); ok {
-			closer.Close()
+	switch closer := a.Auditor.(type) {
+	case interface{ CloseContext(context.Context) error }:
+		if err := closer.CloseContext(ctx); err != nil {
+			errs = append(errs, err)
 		}
+	case interface{ Close() }:
+		closer.Close()
 	}
 	for _, prepared := range a.Prepared {
 		if err := prepared.Close(); err != nil {
@@ -437,17 +470,23 @@ func AssembleWithProviders(cfg *config.Config, providers map[string]Provider) (*
 	return AssembleWithConnections(cfg, connections)
 }
 
-// recordProviderFailure reports whether err tells of the database's health
-// and so feeds the adaptive limit and the breaker. It counts only what the
-// database or the connection to it reported (fail closed: an error of any
-// other kind, such as a new business error, never opens the breaker); a
-// cancelled or timed-out call is the caller's doing.
+// recordProviderFailure reports whether err, a call's failure, tells of the
+// database's health and so feeds the engine's adaptive limit and breaker. It
+// counts only what the database or the connection to it reported (fail
+// closed: an error of any other kind, such as a new business error, never
+// opens the breaker), a write's of unknown outcome included, and of that only
+// what countsAgainstHealth counts, the policy a connection's own breaker
+// applies: a statement the database refused for itself (store.ErrRejected) or
+// for the caller's data does not. Only an App assembled without Shared (tests,
+// embedders) has an engine breaker and limiter; a served App's engine has
+// neither, and health is each shared connection's alone (guard.go).
 func recordProviderFailure(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if err == nil || !countsAgainstHealth(err) {
 		return false
 	}
 	var netErr net.Error
-	return errors.Is(err, tool.ErrDatabase) || errors.Is(err, driver.ErrBadConn) ||
+	return errors.Is(err, tool.ErrDatabase) || errors.Is(err, tool.ErrStatementTimeout) ||
+		errors.Is(err, tool.ErrOutcomeUnknown) || errors.Is(err, driver.ErrBadConn) ||
 		errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &netErr)
 }
 

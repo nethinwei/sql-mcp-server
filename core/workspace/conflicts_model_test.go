@@ -86,13 +86,16 @@ func editRoles(rnd *rng, roles []role) []role {
 }
 
 // units are the values of a role list the merge compares separately: a
-// role's existence, its description, and its grants on each entity.
+// role's existence, its description (when set), and its grants on each
+// entity.
 func units(roles []role) map[string]any {
 	out := map[string]any{}
 	for _, r := range roles {
 		name := r["name"].(string)
 		out[name+"|role"] = true
-		out[name+"|description"] = r["description"]
+		if d := r["description"]; d != "" { // optional text: empty is unset
+			out[name+"|description"] = d
+		}
 		for _, e := range modelEntities {
 			var gs []string
 			for _, g := range grantsOf(r) {
@@ -210,7 +213,9 @@ func (m *model) resolve() {
 	c := pick(m.rnd, open)
 	theirs := m.rnd.next() < 0.5
 	var ok bool
-	m.local, m.conflicts, ok = schema.Resolve(m.local, m.base, m.conflicts, c.ID, theirs)
+	var err error
+	m.local, m.conflicts, err = schema.Resolve(m.local, m.base, m.conflicts, c.ID, theirs)
+	ok = err == nil
 	if !ok {
 		m.t.Fatalf("%s: an open conflict did not resolve", m.at())
 	}
@@ -288,7 +293,9 @@ func TestConflictsAcrossPublishes(t *testing.T) {
 			if len(open) == 0 {
 				break
 			}
-			m.local, m.conflicts, _ = schema.Resolve(m.local, m.base, m.conflicts, open[0].ID, m.rnd.next() < 0.5)
+			if local, left, err := schema.Resolve(m.local, m.base, m.conflicts, open[0].ID, m.rnd.next() < 0.5); err == nil {
+				m.local, m.conflicts = local, left
+			}
 		}
 		if open := schema.OpenConflicts(m.local, m.base, m.conflicts); len(open) > 0 {
 			t.Fatalf("seed %d: unresolvable conflicts %+v", seed, open)

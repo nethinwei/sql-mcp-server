@@ -67,12 +67,13 @@ func (s Snapshot) With(ref Ref, value any) Snapshot {
 
 // Apply returns s with each ref of order set to its value in values:
 // replaced where it is, appended when absent (in that order), or removed
-// when the value is Missing. It walks s once.
+// when the value is Missing, or nil (null: an item is never null). It walks
+// s once.
 func (s Snapshot) Apply(values map[Ref]any, order []Ref) Snapshot {
 	out := make(Snapshot, 0, len(s)+len(order))
 	for _, it := range s {
 		if v, ok := values[it.Ref]; ok {
-			if !IsMissing(v) {
+			if v != nil && !IsMissing(v) {
 				out = append(out, Item{Ref: it.Ref, Value: v})
 			}
 			continue

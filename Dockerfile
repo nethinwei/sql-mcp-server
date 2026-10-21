@@ -21,7 +21,7 @@ COPY core/config/testdata/rules.json core/config/testdata/entity_refs.json /src/
 COPY core/reason/testdata/codes.json /src/core/reason/testdata/
 RUN pnpm build
 
-FROM --platform=$BUILDPLATFORM golang:1.26.9-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine AS build
 
 ARG VERSION=dev
 ARG TARGETOS TARGETARCH

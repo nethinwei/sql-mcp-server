@@ -112,8 +112,8 @@ func (d deltaSession) current(kind, key string) any {
 	return nil
 }
 
-func (d deltaSession) edit(item map[string]any) {
-	mustPost(d.t, d.c, editMutation, &map[string]any{}, client.Var("in", map[string]any{"items": []any{item}}))
+func (d deltaSession) edit(items ...any) {
+	mustPost(d.t, d.c, editMutation, &map[string]any{}, client.Var("in", map[string]any{"items": items}))
 }
 
 // writeRole writes a role from what is there or, stale, from another value:
@@ -132,7 +132,8 @@ func (d deltaSession) renameRole() {
 	from, to := fmt.Sprintf("r%d", d.rnd.IntN(3)), fmt.Sprintf("r%d", d.rnd.IntN(3))
 	if was := d.current("role", from); was != nil && from != to {
 		d.edit(map[string]any{"kind": "role", "key": to, "value": d.role(to, "renamed"), "renamedFrom": from,
-			"previous": d.current("role", to)})
+			"previous": d.current("role", to)},
+			map[string]any{"kind": "role", "key": from, "value": nil, "previous": was})
 	}
 }
 
@@ -144,7 +145,8 @@ func (d deltaSession) renameEntity() {
 	}
 	v := d.current("entity", from).(map[string]any)
 	d.edit(map[string]any{"kind": "entity", "key": to, "renamedFrom": from,
-		"value": map[string]any{"name": name, "source": "customers", "datasource": "shop", "fields": v["fields"]}})
+		"value": map[string]any{"name": name, "source": "customers", "datasource": "shop", "fields": v["fields"]}},
+		map[string]any{"kind": "entity", "key": from, "value": nil, "previous": v})
 }
 
 func (d deltaSession) removeUser() {

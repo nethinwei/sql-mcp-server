@@ -59,6 +59,9 @@ var (
 	// ErrDatasourceForbidden is a statement the datasource's account may not
 	// run: a missing database privilege or a read-only server.
 	ErrDatasourceForbidden = errors.New("tool: the datasource connection is not permitted to do this")
+	// ErrStatementTimeout is a statement the database stopped at its own
+	// timeout (store.ErrStatementTimeout): it rolled the statement back.
+	ErrStatementTimeout = errors.New("tool: the database stopped the statement at its timeout and rolled it back")
 )
 
 // classified is a sentinel error (its kind, what clients and callers see)
@@ -68,17 +71,30 @@ type classified struct{ kind, cause error }
 
 func (e *classified) Error() string        { return e.kind.Error() }
 func (e *classified) Unwrap() error        { return e.cause }
-func (e *classified) Is(target error) bool { return target == e.kind }
+func (e *classified) Is(target error) bool { return errors.Is(e.kind, target) }
+
+// errValueType is a value the database refused for its field's type: the
+// caller's to fix, as invalid input.
+var errValueType = fmt.Errorf("%w: a value does not fit its field's type", ErrInvalidInput)
 
 // WrapDBError classifies a database driver error while preserving its cause:
-// a refused privilege becomes ErrDatasourceForbidden, anything else
-// ErrDatabase. Neither reports the driver message to clients.
+// a refused privilege becomes ErrDatasourceForbidden, a statement stopped at
+// the database's timeout ErrStatementTimeout, a value its column cannot hold
+// invalid input (errValueType), anything else ErrDatabase. None reports the
+// driver message to clients.
 func WrapDBError(err error) error {
-	if err == nil || errors.Is(err, ErrDatabase) || errors.Is(err, ErrDatasourceForbidden) {
+	if err == nil || errors.Is(err, ErrDatabase) || errors.Is(err, ErrDatasourceForbidden) ||
+		errors.Is(err, ErrStatementTimeout) {
 		return err
 	}
 	if errors.Is(err, store.ErrPermissionDenied) {
 		return &classified{kind: ErrDatasourceForbidden, cause: err}
+	}
+	if errors.Is(err, store.ErrStatementTimeout) || errors.Is(err, store.ErrInterrupted) { // a read's: undone
+		return &classified{kind: ErrStatementTimeout, cause: err}
+	}
+	if errors.Is(err, store.ErrInvalidValue) {
+		return &classified{kind: errValueType, cause: err}
 	}
 	return &classified{kind: ErrDatabase, cause: err}
 }
@@ -283,7 +299,7 @@ func RunTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Re
 	}
 	ctx = WithDecisionID(ctx, tc.DecisionID)
 	input, refErr := canonicalEntity(ctx, t, input, tc)
-	auditInput := audit.RedactInput(input, sensitiveFields(name, input, tc.Registry))
+	auditInput := auditInputOf(tc, name, input)
 	// BeforeTool fires ahead of budget acquisition so budget denials are also
 	// observable (span + decision.id); OnError fires before AfterTool so the
 	// error is recorded before the span ends.
@@ -324,13 +340,14 @@ func RunTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Re
 
 func invokeTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Result, error) {
 	if tc.Engine == nil {
-		return runTraced(ctx, t, input, tc)
+		return runRecovered(ctx, t, input, tc)
 	}
 	key, err := engineSubmitKey(ctx, t, input, tc)
 	if err != nil {
 		return Result{}, err
 	}
 	return engine.Submit(ctx, tc.Engine, key, func(ctx context.Context) (Result, error) {
+		defer tc.results.run()() // held past the call when it leaves first
 		return runTraced(ctx, t, input, tc)
 	})
 }
@@ -341,7 +358,7 @@ func invokeTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) 
 // back.
 func invokeDirect(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Result, error) {
 	if tc.Engine == nil {
-		return runTraced(ctx, t, input, tc)
+		return runRecovered(ctx, t, input, tc)
 	}
 	return engine.Run(ctx, tc.Engine, func(ctx context.Context) (Result, error) {
 		return runTraced(ctx, t, input, tc)
@@ -415,25 +432,49 @@ func returnedRows(res Result) int64 {
 	return int64(len(res.Content))
 }
 
+// auditInputOf is input as the audit event records it, redacted; nil without
+// an auditor, as only an audit event reads it.
+func auditInputOf(tc Context, name string, input json.RawMessage) json.RawMessage {
+	if tc.Auditor == nil {
+		return nil
+	}
+	return audit.RedactInput(input, sensitiveFields(name, input, tc.Registry))
+}
+
+// sensitiveFields are the masked fields of the entity input names, by name
+// and alias; of every entity it may name when it names several (an
+// ambiguous reference is still audited, redacted); every field when it names
+// one that does not resolve (a typo, or an entity a reload removed).
 func sensitiveFields(toolName string, input json.RawMessage, registry *entity.Registry) map[string]bool {
 	if registry == nil {
 		return nil
 	}
-	resolved, ok := registry.Resolve(entityNameForTool(toolName, input, registry))
-	if !ok {
-		return nil
+	matched := registry.Match(entityNameForTool(toolName, input, registry))
+	if len(matched) == 0 && namesEntity(input) {
+		return map[string]bool{audit.EveryField: true}
 	}
 	fields := make(map[string]bool)
-	for _, attribute := range resolved.Attributes {
-		if attribute.Mask == "" {
-			continue
-		}
-		fields[attribute.Name] = true
-		if attribute.Alias != "" {
-			fields[attribute.Alias] = true
+	for _, e := range matched {
+		for _, attribute := range e.Attributes {
+			if attribute.Mask == "" {
+				continue
+			}
+			fields[attribute.Name] = true
+			if attribute.Alias != "" {
+				fields[attribute.Alias] = true
+			}
 		}
 	}
 	return fields
+}
+
+// namesEntity reports whether input names an entity, as the built-in tools'
+// does in its entity key.
+func namesEntity(input json.RawMessage) bool {
+	var envelope struct {
+		Entity *string `json:"entity"`
+	}
+	return decodeEnvelope(input, &envelope) == nil && envelope.Entity != nil
 }
 
 func transactionFromInput(input json.RawMessage) string {
@@ -608,6 +649,17 @@ func (g *grantTrace) add(ids []string) {
 
 // runTraced runs the tool and attaches the covering grants to its result, so
 // singleflight followers sharing the result also audit them.
+// runRecovered is runTraced with a panic as the call's error, as the
+// engine's: the call still settles its budget lease and is audited.
+func runRecovered(ctx context.Context, t Tool, input json.RawMessage, tc Context) (res Result, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			res, err = Result{}, fmt.Errorf("tool: panic recovered: %v", r)
+		}
+	}()
+	return runTraced(ctx, t, input, tc)
+}
+
 func runTraced(ctx context.Context, t Tool, input json.RawMessage, tc Context) (Result, error) {
 	trace := &grantTrace{}
 	res, err := t.Run(context.WithValue(ctx, grantTraceKey{}, trace), input, tc)
@@ -633,18 +685,7 @@ func checkGateDetailed(
 		tc.Hooks.FireCostGate(ctx, cost.Plan{}, cost.Score{}, "hard")
 		return compiled, nil, err
 	}
-	plan, score := dec.Estimate()
-	verdict := "allow"
-	if dec.Soft {
-		verdict = "soft"
-	} else if !dec.Allow {
-		verdict = "hard"
-	}
-	tc.Hooks.FireCostGate(ctx, plan, score, verdict)
-	if !dec.Allow {
-		return compiled, dec.Plan, toExceededError(dec)
-	}
-	if err := checkScannedBudget(tc, dec.Plan); err != nil {
+	if err := admitDecision(ctx, tc, dec); err != nil {
 		return compiled, dec.Plan, err
 	}
 	if dec.Rewritten != nil {
@@ -653,8 +694,9 @@ func checkGateDetailed(
 	return compiled, dec.Plan, nil
 }
 
-func maskRow(m mask.Masker, attrs []entity.Attribute, row map[string]any) {
-	rules := make(map[string]string, len(attrs))
+// maskRules are the mask rules of attrs by the names rows key them by.
+func maskRules(attrs []entity.Attribute) map[string]string {
+	rules := map[string]string{}
 	for _, a := range attrs {
 		if a.Mask != "" {
 			// A field projected by its alias comes back by it (see projectItems).
@@ -663,6 +705,14 @@ func maskRow(m mask.Masker, attrs []entity.Attribute, row map[string]any) {
 				rules[a.Alias] = a.Mask
 			}
 		}
+	}
+	return rules
+}
+
+// maskRow masks the fields of row that rules (see maskRules) name.
+func maskRow(m mask.Masker, rules map[string]string, row map[string]any) {
+	if len(rules) == 0 {
+		return
 	}
 	for f, v := range row {
 		if rule, ok := rules[f]; ok {
@@ -696,55 +746,6 @@ func sortedKeys(m map[string]any) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// validateFields rejects any field name that is not a visible attribute of the
-// entity (by name or alias). This closes a side channel where a filter, GROUP
-// BY, or write could reference an excluded/hidden column — e.g. filtering on a
-// masked salary to infer its value. Unknown and excluded fields are treated
-// identically so the error never reveals which columns exist.
-func validateFields(res entity.Resolved, fields ...string) error {
-	if len(fields) == 0 {
-		return nil
-	}
-	allowed := make(map[string]bool, len(res.Attributes)*2)
-	for _, a := range res.Attributes {
-		allowed[a.Name] = true
-		if a.Alias != "" {
-			allowed[a.Alias] = true
-		}
-	}
-	for _, f := range fields {
-		if !allowed[f] {
-			return fmt.Errorf("%w: unknown or inaccessible field %q", ErrInvalidInput, f)
-		}
-	}
-	return nil
-}
-
-// validateUnmaskedFields rejects masked fields in usages that can reveal or
-// compare their underlying values. It intentionally uses the same error as an
-// unknown field so callers cannot probe whether a field is masked.
-func validateUnmaskedFields(res entity.Resolved, fields ...string) error {
-	for _, f := range fields {
-		for _, a := range res.Attributes {
-			if (a.Name == f || a.Alias != "" && a.Alias == f) && a.Mask != "" {
-				return fmt.Errorf("%w: unknown or inaccessible field %q", ErrInvalidInput, f)
-			}
-		}
-	}
-	return nil
-}
-
-// validateWritable rejects writes to columns the database computes
-// (generated columns, identity ALWAYS) before they reach the database.
-func validateWritable(res entity.Resolved, fields ...string) error {
-	for _, f := range fields {
-		if a, ok := res.Entity.AttributeByName(f); ok && !a.Domain.Writable() {
-			return fmt.Errorf("%w: field %q is computed by the database and cannot be written", ErrInvalidInput, f)
-		}
-	}
-	return nil
 }
 
 func resolveDMLEntity(tc Context, name string) (entity.Resolved, error) {

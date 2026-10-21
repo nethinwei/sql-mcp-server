@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/nethinwei/sql-mcp-server/core/dialect"
 	"github.com/nethinwei/sql-mcp-server/x/providerregistry"
@@ -41,25 +42,34 @@ type provider struct {
 	scenarios     []scenario // the first is the default connection
 }
 
-var pooled = providerregistry.Options{Pooler: providerregistry.PoolerTransaction}
+// timed are the options of a connection under the default cost.queryTimeout.
+var (
+	timed  = providerregistry.Options{Timeout: 30 * time.Second}
+	pooled = providerregistry.Options{Timeout: 30 * time.Second, Pooler: providerregistry.PoolerTransaction}
+	// untimed is cost.queryTimeout 0: no statement timeout is set.
+	untimed = providerregistry.Options{}
+)
 
 var providers = []provider{
 	{"postgres", "PostgreSQL", postgres.Dialect{}, postgres.Limits, []scenario{
-		{"默认", "postgres://u@h/db", providerregistry.Options{}},
-		{"DSN 设置 `statement_timeout`", "postgres://u@h/db?statement_timeout=0", providerregistry.Options{}},
+		{"默认", "postgres://u@h/db", timed},
+		{"DSN 设置 `statement_timeout`", "postgres://u@h/db?statement_timeout=0", timed},
 		{"`pooler: transaction`", "postgres://u@h/db", pooled},
+		{"`cost.queryTimeout: 0`", "postgres://u@h/db", untimed},
 	}},
 	{"mysql", "MySQL", mysql.Dialect{}, mysql.Limits, []scenario{
-		{"默认", "u:p@tcp(h)/db", providerregistry.Options{}},
-		{"DSN 设置 `max_execution_time`", "u:p@tcp(h)/db?max_execution_time=0", providerregistry.Options{}},
-		{"DSN 设置 `sql_safe_updates=0`", "u:p@tcp(h)/db?sql_safe_updates=0", providerregistry.Options{}},
+		{"默认", "u:p@tcp(h)/db", timed},
+		{"DSN 设置 `max_execution_time`", "u:p@tcp(h)/db?max_execution_time=0", timed},
+		{"DSN 设置 `sql_safe_updates=0`", "u:p@tcp(h)/db?sql_safe_updates=0", timed},
 		{"`pooler: transaction`", "u:p@tcp(h)/db", pooled},
+		{"`cost.queryTimeout: 0`", "u:p@tcp(h)/db", untimed},
 	}},
 	{"oceanbase", "OceanBase", oceanbase.Dialect{}, oceanbase.Limits, []scenario{
-		{"默认", "u:p@tcp(h)/db", providerregistry.Options{}},
-		{"DSN 设置 `ob_query_timeout`", "u:p@tcp(h)/db?ob_query_timeout=0", providerregistry.Options{}},
-		{"DSN 设置 `sql_safe_updates=0`", "u:p@tcp(h)/db?sql_safe_updates=0", providerregistry.Options{}},
+		{"默认", "u:p@tcp(h)/db", timed},
+		{"DSN 设置 `ob_query_timeout`", "u:p@tcp(h)/db?ob_query_timeout=0", timed},
+		{"DSN 设置 `sql_safe_updates=0`", "u:p@tcp(h)/db?sql_safe_updates=0", timed},
 		{"`pooler: transaction`", "u:p@tcp(h)/db", pooled},
+		{"`cost.queryTimeout: 0`", "u:p@tcp(h)/db", untimed},
 	}},
 }
 

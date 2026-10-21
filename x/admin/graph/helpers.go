@@ -9,9 +9,12 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/99designs/gqlgen/graphql"
+
 	"github.com/nethinwei/sql-mcp-server/core/bus"
 	"github.com/nethinwei/sql-mcp-server/core/config"
 	"github.com/nethinwei/sql-mcp-server/core/revision"
+	"github.com/nethinwei/sql-mcp-server/x/admin/auth"
 	"github.com/nethinwei/sql-mcp-server/x/admin/configapp"
 	"github.com/nethinwei/sql-mcp-server/x/bootstrap"
 	"github.com/nethinwei/sql-mcp-server/x/configstore"
@@ -19,6 +22,14 @@ import (
 	"github.com/nethinwei/sql-mcp-server/x/workspaceops"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
+
+// readsContent requires admin:read for the fields that carry a
+// configuration (a revision's or a workspace's): the mutations that return
+// one, open to admin:write, must not read what admin:read gates.
+func readsContent(ctx context.Context) error {
+	_, err := auth.Require(ctx, auth.PermRead)
+	return err
+}
 
 // withPayload returns obj's revision, fetching the payload when obj came
 // from a payload-free listing.
@@ -53,6 +64,11 @@ func apiError(err error) error {
 	if errors.Is(err, workspaceops.ErrConflicts) {
 		return &gqlerror.Error{Message: err.Error(), Extensions: map[string]any{"code": "CONFLICTS"}}
 	}
+	var notMoved *workspaceops.NotMovedError
+	if errors.As(err, &notMoved) {
+		return &gqlerror.Error{Message: err.Error(), Extensions: map[string]any{
+			"code": "NOT_MOVED", "published": strconv.FormatInt(notMoved.Published.ID, 10)}}
+	}
 	if errors.Is(err, workspaceops.ErrBehind) {
 		return &gqlerror.Error{Message: err.Error(), Extensions: map[string]any{"code": "BEHIND"}}
 	}
@@ -61,6 +77,20 @@ func apiError(err error) error {
 		return &gqlerror.Error{Message: err.Error(), Extensions: map[string]any{"code": "CONFLICT"}}
 	}
 	return err
+}
+
+// committed answers a commit: a revision published whose workspace was not
+// moved onto it is the answer still, with the error beside it.
+func committed(ctx context.Context, rev revision.Revision, err error) (*Revision, error) {
+	var notMoved *workspaceops.NotMovedError
+	if errors.As(err, &notMoved) {
+		graphql.AddError(ctx, apiError(err))
+		return toRevision(rev), nil
+	}
+	if err != nil {
+		return nil, apiError(err)
+	}
+	return toRevision(rev), nil
 }
 
 func serverStatus(status func() RuntimeState) *ServerStatus {

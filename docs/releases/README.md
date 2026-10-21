@@ -1,7 +1,7 @@
 # 发布说明索引
 
-当前 GA 为 `v0.1.20`（[发布说明](v0.1.20.md)、
-[GitHub Release](https://github.com/nethinwei/sql-mcp-server/releases/tag/v0.1.20)）。
+当前 GA 为 `v0.1.21`（[发布说明](v0.1.21.md)、
+[GitHub Release](https://github.com/nethinwei/sql-mcp-server/releases/tag/v0.1.21)）。
 
 本目录中的发布说明描述各版本发布时点的能力、迁移和证据状态。当前运行时行为以
 [配置参考](../configuration.md)、[安全模型](../security.md)和
@@ -10,6 +10,11 @@
 
 ## 版本
 
+- [`v0.1.21`](v0.1.21.md)（2026-10-21）：加固与发布前审查——PostgreSQL 只连接 11–18、
+  继承与分区的级联归入授权、成本模板 `fp:v4:`、结果截断与游标、缓存总字节上限、语句超时
+  的稳定分类；四轮独立审查处理约 70 项发现（脱敏连接列的关系展开、`expand` 扇出上限、
+  中断语句的分类、工作区空键、登录 CSRF、发布门禁等）；**有 breaking**（PostgreSQL 版本、
+  继承、fingerprint、NULL 比较、YAML 单文档、rowsAffected、管理 API 等）；
 - [`v0.1.20`](v0.1.20.md)（2026-10-19）：加固版本——处理外部 review 的全部结论：写入的行范围
   检查（WITH CHECK）、审计关闭竞态、配置校验收紧、共享 token 强度、mTLS 证书映射到用户、
   数值精度、成本与资源上限、配置存储约束；控制台“同步实体”；MySQL 写超时在数据库侧强制、

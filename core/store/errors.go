@@ -39,11 +39,38 @@ var ErrPermissionDenied = errors.New("store: permission denied")
 // Providers wrap driver errors with it.
 var ErrStatementTimeout = errors.New("store: statement stopped at its timeout")
 
+// ErrInterrupted marks a statement the database interrupted as it ran (the
+// KILL QUERY of one past its deadline): a single statement is rolled back,
+// but a procedure's earlier statements may have taken effect, so a write
+// interrupted may or may not have been carried out. Providers wrap driver
+// errors with it.
+var ErrInterrupted = errors.New("store: statement interrupted")
+
 // ErrConnectionLost marks a statement whose connection broke while it ran:
 // the database may or may not have carried it out. Providers wrap driver
 // errors with it. A broken connection a driver reports before sending the
 // statement (driver.ErrBadConn) is not one.
 var ErrConnectionLost = errors.New("store: connection lost during the statement")
+
+// ErrNotConnected marks a statement that was never sent: no connection to
+// the database could be made for it (the server refused or did not answer
+// the connection, or is not one the provider serves), so it did not take
+// effect, whatever else the error wraps (a network error, a deadline).
+// Providers wrap driver errors with it.
+var ErrNotConnected = errors.New("store: no connection to the database could be made")
+
+// ErrInvalidValue marks a statement the database refused for a value the
+// caller gave: one its column's type cannot hold (text that is no number or
+// date, a number out of range, a string too long). It tells nothing of the
+// database's health. Providers wrap driver errors with it.
+var ErrInvalidValue = errors.New("store: a value does not fit its column")
+
+// ErrRejected marks a statement the database refused as written, for a
+// reason of the statement's own (its syntax, its types, a lock or deadlock
+// it met): not one telling of the database's health (out of connections,
+// memory or disk, shutting down, a broken connection), which providers leave
+// unmarked. Providers wrap driver errors with it.
+var ErrRejected = errors.New("store: the database refused the statement")
 
 // ErrMissingRelation and ErrMissingColumn mark a statement naming a table or
 // a column the database does not have (any more): its schema changed under a

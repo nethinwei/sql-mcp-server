@@ -56,7 +56,7 @@ func (r *Service) planContext(ctx context.Context, draft *Draft) (planContext, e
 	if err != nil {
 		return planContext{}, err
 	}
-	spec, published, err := bootstrap.LoadRevisionSpec(rev)
+	spec, published, err := r.RevisionSpec(rev.ID, func() (revision.Revision, error) { return rev, nil })
 	if err != nil {
 		return planContext{}, err
 	}
@@ -147,10 +147,14 @@ func denied(caps bootstrap.EntityCapabilities) func(string, string) (reason.Reas
 }
 
 func (r *Service) planInput(pc planContext, review bool) configplan.Input {
-	return configplan.Input{
+	in := configplan.Input{
 		Base: pc.base, Published: pc.published, Sources: pc.sources, Denied: denied(r.capabilities()), Review: review,
 		Missing: pc.missing.Tables, MissingFields: pc.missing.Fields, MissingRowColumns: pc.missing.RowColumns,
 	}
+	if r.Scans != nil { // the tables indexed once for the plans of pc (and its catalog pages)
+		in.Index = r.Scans.indexOf(pc)
+	}
+	return in
 }
 
 // planID identifies a plan with what it is evaluated against (the base
@@ -172,7 +176,7 @@ func (r *Service) evaluate(ctx context.Context, pc planContext, p configplan.Pla
 	}
 	out := &Preview{PlanID: planID(pc, p, review), Plan: p, Review: review, Proposal: proposal, Base: pc.base,
 		Report: toPlanReport(proposal.Report)}
-	_, cfg, payload, err := configedit.ApplySpec(pc.spec, proposal.Edit())
+	spec, cfg, payload, err := configedit.ApplySpec(pc.spec, proposal.Edit())
 	if err != nil {
 		msg := err.Error()
 		out.Validation = &Validation{Error: &msg, RestartRequired: []string{}, Warnings: []string{}, Notices: []Reason{}}
@@ -186,6 +190,6 @@ func (r *Service) evaluate(ctx context.Context, pc planContext, p configplan.Pla
 	list, warnings := notices(bootstrap.CapabilityWarnings(cfg, r.capabilities()))
 	out.Validation = &Validation{Ok: true, ContentHash: &hash, RestartRequired: changes, Warnings: warnings,
 		Notices: list}
-	out.changed, out.effect, err = r.changes(pc, payload)
+	out.changed, out.effect, err = r.changes(pc, spec)
 	return out, err
 }
