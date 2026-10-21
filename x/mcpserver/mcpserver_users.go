@@ -74,7 +74,11 @@ func callerIdentity(ctx context.Context, app *bootstrap.App) (string, map[string
 		}
 		return id.Principal, mergeSubject(s.attrs, id.Subject)
 	}
-	return subjectFromContext(ctx, app.DefaultRole)
+	role, attrs := subjectFromContext(ctx, app.DefaultRole)
+	if len(app.Users) > 0 && namesPrincipal(role) { // a --role naming a user's principal, as a forged header
+		return forgedPrincipal, nil
+	}
+	return role, attrs
 }
 
 // principalAuth authenticates bearer tokens. A token matching an enabled user

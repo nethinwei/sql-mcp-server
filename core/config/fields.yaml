@@ -42,8 +42,8 @@ server.secrets:
   zh-CN: DSN 中 ${file:...} 占位符的读取限制。
   en: Limits for ${file:...} placeholders in DSNs.
 server.secrets.allowedRoots:
-  zh-CN: 允许读取 secret 文件的根目录（绝对路径）；符号链接不能逃逸这些目录。
-  en: Absolute directories secret files may be read from; symbolic links cannot escape them.
+  zh-CN: 允许读取 secret 文件的根目录（绝对路径）；符号链接不能逃逸这些目录。不写或写空列表都取默认的 /run/secrets、/var/run/secrets。
+  en: Absolute directories secret files may be read from; symbolic links cannot escape them. Unset or empty, the defaults /run/secrets and /var/run/secrets apply.
 server.auth:
   zh-CN: HTTP 认证。trustProxyHeaders、trustedProxyCIDRs 与非 loopback 的信任规则见 security.md。
   en: HTTP authentication. Trust rules for proxies and non-loopback listeners are in security.md.

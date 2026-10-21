@@ -137,8 +137,8 @@
           "type": "object",
           "properties": {
             "allowedRoots": {
-              "description": "Absolute directories secret files may be read from; symbolic links cannot escape them.",
-              "x-description-zh-CN": "允许读取 secret 文件的根目录（绝对路径）；符号链接不能逃逸这些目录。",
+              "description": "Absolute directories secret files may be read from; symbolic links cannot escape them. Unset or empty, the defaults /run/secrets and /var/run/secrets apply.",
+              "x-description-zh-CN": "允许读取 secret 文件的根目录（绝对路径）；符号链接不能逃逸这些目录。不写或写空列表都取默认的 /run/secrets、/var/run/secrets。",
               "type": "array",
               "default": [
                 "/run/secrets",

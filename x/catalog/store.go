@@ -132,6 +132,9 @@ func (m *MemoryStore) PruneCatalog(_ context.Context, datasource, keep string, b
 				delete(schemas, name)
 			}
 		}
+		if len(schemas) == 0 {
+			delete(m.schemas, source)
+		}
 	}
 	return nil
 }
@@ -143,6 +146,9 @@ func (m *MemoryStore) DeleteCatalogSchemas(_ context.Context, source string, nam
 		if s, ok := m.schemas[source][name]; ok && s.schema.ScannedAt.Before(before) {
 			delete(m.schemas[source], name)
 		}
+	}
+	if len(m.schemas[source]) == 0 {
+		delete(m.schemas, source)
 	}
 	return nil
 }

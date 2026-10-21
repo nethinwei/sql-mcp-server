@@ -450,6 +450,38 @@ func TestValidateNamedDatabasesAndRelationships(t *testing.T) {
 	}
 }
 
+// A field path relationship.field must tell a related field from one of the
+// entity: a relationship name holds no '.', no field is named after it, and
+// it is no alias the SQL gives its tables.
+func TestRelationshipNamesStayPaths(t *testing.T) {
+	t.Parallel()
+	for name, mutate := range map[string]func(*Config){
+		"dotted name":  func(c *Config) { c.Entities[0].Relationships[0].Name = "my.orders" },
+		"root alias":   func(c *Config) { c.Entities[0].Relationships[0].Name = "_" },
+		"exists alias": func(c *Config) { c.Entities[0].Relationships[0].Name = "x1" },
+		"field named after": func(c *Config) {
+			c.Entities[0].Fields = append(c.Entities[0].Fields, FieldConfig{Name: "orders.n"})
+		},
+	} {
+		cfg := &Config{
+			Databases: map[string]DatabaseConfig{"default": {Driver: "postgres", DSN: "x"}},
+			Entities: []EntityConfig{
+				{Name: "users", Fields: []FieldConfig{{Name: "id"}}, Relationships: []RelationshipConfig{
+					{Name: "orders", Target: "orders", Cardinality: "many", JoinOn: map[string]string{"id": "user_id"}},
+				}},
+				{Name: "orders", Fields: []FieldConfig{{Name: "user_id"}}},
+			},
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("valid: %v", err)
+		}
+		mutate(cfg)
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+}
+
 // joinOn names columns: the join runs on them as written, so a field's alias
 // is refused on either side, and the column it aliases accepted (also when
 // the alias names that column itself).

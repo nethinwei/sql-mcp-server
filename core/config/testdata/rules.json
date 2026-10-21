@@ -24,6 +24,12 @@
       "roles": {"Analyst": {"grants": [{"entity": "orders", "actions": ["read"]}]}}}
   },
   {
+    "name": "an empty role names the caller naming none",
+    "config": {"database": {"driver": "postgres", "dsn": "x"},
+      "entities": [{"name": "orders", "fields": [{"name": "id"}], "roles": {"read": [""]}}]},
+    "error": "must not be empty", "path": ["entities", 0, "roles", "read", 0]
+  },
+  {
     "name": "path prefix of a gateway",
     "config": {"database": {"driver": "postgres", "dsn": "x"}, "server": {"pathPrefix": "/sql-mcp-server"}}
   },

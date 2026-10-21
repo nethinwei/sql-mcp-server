@@ -30,6 +30,11 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   （此前 `database:` 被静默忽略，但其 DSN 仍随 revision 入库）。
 - `aggregate_records` 既无 `aggregates` 也无 `groupBy`、或 `sum`/`avg`/`min`/`max` 未写 `field` 时返回
   `INVALID_INPUT`；`filter` 的 `in`/`not_in` 值必须是非空列表（此前到达数据库才失败或报内部错误）。
+- 实体 `roles` 中的空角色、配置了用户时 `server.role` 写成 `user:<name>`、`budget.roles` 中不存在的
+  角色、任何字符串列表中的空字符串元素、含 `.` 或为 `_`/`x<数字>` 的关系名（及以关系名加 `.` 开头的
+  字段名）都在加载时拒绝。
+- 批量配置方案的 `exclude` 写了扫描中不存在的表时拒绝整个方案（此前静默忽略，方案照样作用到该表）。
+- MySQL/OceanBase 的 `rowsAffected` 改为匹配行数（默认 `clientFoundRows=true`），与 PostgreSQL 一致。
 - 管理 API `resetWorkspace`/`updateWorkspace` 只接受发布过的修订；载入任意修订改用新的 `loadRevision`。
 - 管理 API `editWorkspace`：带 `renamedFrom` 的改名，同一次写入必须同时写出旧项的删除（`value: null`，
   `previous` 为读到的旧值），旧项已不存在时除外；只发改名会被拒绝（此前旧项被直接删除，期间别人对它的
@@ -46,6 +51,7 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
 
 ### Fixed
 
+- 构建、CI 与发布改用 Go 1.26.10，修复 govulncheck 报告的标准库 `crypto/x509` 漏洞 GO-2026-6809。
 - 存储模式的密钥检查与 DSN 脱敏识别 `sslpassword`，并检查旧式 `database:` 段。
 - 配置文件改回正在服务的内容时释放失败修订暂停的用户；旧快照排空积压不再被当作修订失败
   （不标记 stale、不退避）。
@@ -57,6 +63,15 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   脱敏；事务内写入在执行前登记缓存失效目标；`exists`/关联字段只按用到的字段授权（不再误报
   `AMBIGUOUS_FIELD_SCOPE`）；行策略中的小数（如 `0.1`）与 decimal 列精确比较；小表全扫描仍计入
   `maxScannedRows`；prepared 语句计划失效后重新准备（缓存改为 LRU）。
+- 未带身份的调用方不再因实体 `roles` 中的空角色获得授权；`--role` 写成用户 principal 时按伪造身份处理。
+- 工作区三方合并：双方都新增的同一对象按键合并，不再整项冲突；重复合并同一草稿不再写入新版本。
+- PostgreSQL：分区表全扫描按所有被扫描分区的行数合计判断小表与扫描行数（此前取最大分区，可绕过
+  `rejectFullScan`），表按 schema 匹配；`Parallel Bitmap Heap Scan` 不再被当作未知扫描拒绝；
+  `requireFreshStats` 检查计划读取的每张表。
+- 共享执行（singleflight）在发起调用离开后仍计入结果内存直到执行结束；prepared 语句的等待者不再
+  收到发起者的取消错误。
+- 工作区写入不再持有全局发布锁（按版本条件更新）；`/admin/events` 首次读取不再在锁内进行，存储卡住
+  时不阻塞其他控制台；配置 MCP 的 Bearer 不区分大小写；`Resolve` 不再修改调用方的 Spec。
 - 配置库升级 schema 时跨进程串行；OceanBase 内存/内部错误计入连接健康；PostgreSQL 统计探测失败
   不再缓存为“新鲜”。
 

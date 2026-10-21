@@ -192,6 +192,11 @@ func TestCallerIdentityUsesDefaultUser(t *testing.T) {
 	if role != "operator" {
 		t.Fatalf("explicit identity must win over the default user: %q", role)
 	}
+	// A default role (--role) naming a user's principal is forged.
+	named := &bootstrap.App{DefaultRole: "user:alice", Users: app.Users}
+	if role, _ := callerIdentity(t.Context(), named); role != forgedPrincipal {
+		t.Fatalf("a default role naming a user = %q", role)
+	}
 	app.Users = nil
 	role, subject = callerIdentity(t.Context(), app)
 	if role != "user:alice" || subject != nil {

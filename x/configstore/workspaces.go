@@ -100,8 +100,7 @@ func (s *SQLStore) workspace(ctx context.Context, q execer, username string) (wo
 	return w, true, nil
 }
 
-// PutWorkspace implements workspace.Store, checking and writing under the
-// store lock.
+// PutWorkspace implements workspace.Store, writing over the version expected.
 func (s *SQLStore) PutWorkspace(
 	ctx context.Context, w workspace.Workspace, expected int64, entry workspace.LogEntry,
 ) (workspace.Workspace, error) {
@@ -110,7 +109,52 @@ func (s *SQLStore) PutWorkspace(
 		return workspace.Workspace{}, err
 	}
 	w.UpdatedAt = s.timestamp()
-	err = s.locked(ctx, func(tx *sql.Tx) error {
+	if expected > 0 {
+		err = s.updateWorkspace(ctx, w, items, rv, expected, entry)
+	} else {
+		err = s.insertWorkspace(ctx, w, items, rv, entry)
+	}
+	if err != nil {
+		if errors.Is(err, workspace.ErrChanged) {
+			return workspace.Workspace{}, err
+		}
+		return workspace.Workspace{}, fmt.Errorf("configstore: write workspace: %w", err)
+	}
+	w.Version = expected + 1
+	s.keep(w)
+	return w, nil
+}
+
+// updateWorkspace writes w over version expected of the workspace, by that
+// version alone: workspaces are written one by one, and not under the store
+// lock publishes take (a console saves every few hundred milliseconds).
+func (s *SQLStore) updateWorkspace(
+	ctx context.Context, w workspace.Workspace, items, rv string, expected int64, entry workspace.LogEntry,
+) error {
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		w.Version = expected + 1
+		r, err := s.exec(ctx, tx, "UPDATE smcp_workspaces SET base_id = ?, items = ?, review = ?, version = ?, "+
+			"updated_us = ?, updated_by = ? WHERE username = ? AND version = ?",
+			w.Base, items, rv, w.Version, toMicros(w.UpdatedAt), w.UpdatedBy, w.Username, expected)
+		if err != nil {
+			return err
+		}
+		if n, err := r.RowsAffected(); err != nil {
+			return err
+		} else if n == 0 {
+			return workspace.ErrChanged
+		}
+		return s.logWrite(ctx, tx, w, entry)
+	})
+}
+
+// insertWorkspace writes a workspace's first version, under the store lock:
+// two first writes find each other.
+func (s *SQLStore) insertWorkspace(
+	ctx context.Context, w workspace.Workspace, items, rv string, entry workspace.LogEntry,
+) error {
+	expected := int64(0)
+	return s.locked(ctx, func(tx *sql.Tx) error {
 		// Only the version is compared: the items are not decoded again.
 		var current int64
 		err := s.queryRow(ctx, tx, "SELECT version FROM smcp_workspaces WHERE username = ?", w.Username).Scan(&current)
@@ -135,14 +179,6 @@ func (s *SQLStore) PutWorkspace(
 		}
 		return s.logWrite(ctx, tx, w, entry)
 	})
-	if err != nil {
-		if errors.Is(err, workspace.ErrChanged) {
-			return workspace.Workspace{}, err
-		}
-		return workspace.Workspace{}, fmt.Errorf("configstore: write workspace: %w", err)
-	}
-	s.keep(w)
-	return w, nil
 }
 
 func encodeWorkspace(w workspace.Workspace) (string, string, error) {

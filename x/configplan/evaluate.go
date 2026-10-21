@@ -1,6 +1,7 @@
 package configplan
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -208,6 +209,9 @@ func Evaluate(in Input, p Plan) (Proposal, error) {
 	} else {
 		rows = Rows(in.Sources, in.Base, in.Published, p.Scope)
 	}
+	if err := checkExcluded(in, p.Exclude); err != nil {
+		return Proposal{}, err
+	}
 	exclude := set(p.Exclude)
 	rows = slices.DeleteFunc(rows, func(r Row) bool {
 		excluded := exclude[r.Ref]
@@ -238,6 +242,39 @@ func Evaluate(in Input, p Plan) (Proposal, error) {
 	}
 	ev.qualifyReferences()
 	return ev.proposal(rows), nil
+}
+
+// checkExcluded refuses a plan excluding a table no scan found: a misspelt
+// exclusion would apply the plan to the table meant (grant it), and a
+// template's to a table since dropped is to be looked at.
+func checkExcluded(in Input, refs []string) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	var rows []Row
+	if in.Index != nil {
+		rows = in.Index.Rows(Scope{})
+	} else {
+		rows = Rows(in.Sources, in.Base, in.Published, Scope{})
+	}
+	known := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		known[r.Ref] = true
+	}
+	for _, g := range GoneTables(in.Sources, in.Base, Scope{}, in.Missing) { // excluded from removal
+		known[g.Ref] = true
+	}
+	var unknown []string
+	for _, ref := range refs {
+		if !known[ref] {
+			unknown = append(unknown, ref)
+		}
+	}
+	if len(unknown) > 0 {
+		return fmt.Errorf("plan: exclude names no scanned table: %s (write datasource.schema.table)",
+			strings.Join(unknown, ", "))
+	}
+	return nil
 }
 
 // reportScanned reports when the rows were scanned, the earliest and the latest.

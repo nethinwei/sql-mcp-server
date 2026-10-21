@@ -1,9 +1,9 @@
 package store
 
 import (
+	"container/list"
 	"context"
 	"errors"
-	"slices"
 	"sync"
 )
 
@@ -26,7 +26,7 @@ type PreparedDB struct {
 	max        int
 	mu         sync.Mutex
 	items      map[string]*preparedEntry
-	order      []string
+	order      *list.List // queries, the least recently used first
 	preparing  map[string]*prepareCall
 	generation uint64
 }
@@ -35,6 +35,7 @@ type preparedEntry struct {
 	stmt    Prepared
 	refs    int
 	retired bool
+	at      *list.Element // in order, while kept
 }
 
 type prepareCall struct {
@@ -52,6 +53,7 @@ func WithPreparedCache(db DB, max int) *PreparedDB {
 		DB:        db,
 		max:       max,
 		items:     map[string]*preparedEntry{},
+		order:     list.New(),
 		preparing: map[string]*prepareCall{},
 	}
 }
@@ -64,14 +66,19 @@ func (d *PreparedDB) statement(ctx context.Context, query string) (*preparedEntr
 	d.mu.Lock()
 	if entry, ok := d.items[query]; ok {
 		entry.refs++
-		d.touchLocked(query) // the least recently used goes first
+		d.order.MoveToBack(entry.at) // the least recently used goes first
 		d.mu.Unlock()
 		return entry, true, nil
 	}
 	if call, ok := d.preparing[query]; ok {
 		call.waiters++
 		d.mu.Unlock()
-		return d.waitPrepare(ctx, call)
+		entry, ok, err := d.waitPrepare(ctx, call)
+		if ended(err) && ctx.Err() == nil {
+			// Its preparer's request ended, not this one: prepared for this one.
+			return d.statement(ctx, query)
+		}
+		return entry, ok, err
 	}
 	call := &prepareCall{
 		done:       make(chan struct{}),
@@ -111,15 +118,14 @@ func (d *PreparedDB) finishPrepareSuccessLocked(
 	call.entry = entry
 	call.complete = true
 	if call.generation == d.generation {
-		if len(d.order) >= d.max {
-			oldest := d.order[0]
-			d.order = d.order[1:]
+		if d.order.Len() >= d.max {
+			oldest := d.order.Remove(d.order.Front()).(string)
 			oldEntry := d.items[oldest]
 			delete(d.items, oldest)
 			d.retireLocked(oldEntry)
 		}
 		d.items[query] = entry
-		d.order = append(d.order, query)
+		entry.at = d.order.PushBack(query)
 	} else {
 		entry.retired = true
 	}
@@ -128,11 +134,10 @@ func (d *PreparedDB) finishPrepareSuccessLocked(
 	return entry, true, nil
 }
 
-// touchLocked makes query the most recently used; d.mu is held.
-func (d *PreparedDB) touchLocked(query string) {
-	if i := slices.Index(d.order, query); i >= 0 && i < len(d.order)-1 {
-		d.order = append(slices.Delete(d.order, i, i+1), query)
-	}
+// ended reports the error of a request that ended (canceled, or past its
+// deadline).
+func ended(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 // failed drops the entry of query when err says its plan is stale: the
@@ -148,7 +153,7 @@ func (d *PreparedDB) failed(query string, entry *preparedEntry, err error) {
 		return
 	}
 	delete(d.items, query)
-	d.order = slices.DeleteFunc(d.order, func(q string) bool { return q == query })
+	d.order.Remove(entry.at)
 	d.retireLocked(entry)
 }
 
@@ -249,6 +254,6 @@ func (d *PreparedDB) Close() error {
 		}
 	}
 	d.items = map[string]*preparedEntry{}
-	d.order = nil
+	d.order.Init()
 	return first
 }

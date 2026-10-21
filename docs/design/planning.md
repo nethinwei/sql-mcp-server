@@ -114,6 +114,8 @@ Evaluate(Input{Base, Published, Sources, Denied, Review, Missing, MissingFields,
 Proposal = { Config（Base 应用后）, Entities（新增或修改）, Added, Removed, Roles, Users, Report }
 ```
 
+- `exclude`：按 `datasource.schema.table` 排除表；写了任何扫描都没有找到的表（拼错或已删除）时
+  整个方案被拒绝，否则方案会作用到本想排除的表上；
 - `scope`：`datasources`、`schemas`/`tables`（`*` `?` 通配，不区分大小写）、
   `search`、`status`、`drift`、`refs`（显式表）、`entities`（已配置实体的 ID，只选
   它们的表，已不存在的表也按它判定），条件取交集；

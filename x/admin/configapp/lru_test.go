@@ -129,3 +129,25 @@ func TestScansForgetIdleSources(t *testing.T) {
 		t.Fatalf("an idle source is kept: %d schemas, %d catalogs", len(s.cache), len(s.built))
 	}
 }
+
+// A build that panicked is no answer: the call waiting for it builds again.
+func TestLRUWaitersBuildAgainAfterAPanic(t *testing.T) {
+	cache := newLRU[int](10)
+	started, release := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer func() { _ = recover() }()
+		cache.get("k", func() (int, int) {
+			close(started)
+			<-release
+			panic("build failed")
+		})
+	}()
+	<-started
+	got := make(chan int)
+	go func() { got <- cache.get("k", func() (int, int) { return 7, 1 }) }()
+	time.Sleep(50 * time.Millisecond) // the second waits for the first build
+	close(release)
+	if v := <-got; v != 7 {
+		t.Fatalf("value after a panicked build = %d", v)
+	}
+}

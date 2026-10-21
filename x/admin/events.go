@@ -50,8 +50,10 @@ type publishedFeed struct {
 	store    revision.Store
 	interval time.Duration
 
-	mu     sync.Mutex
-	last   feedState
+	mu   sync.Mutex
+	last feedState
+	// ready: last was read (by the poll the first listener started).
+	ready  bool
 	subs   map[chan feedState]struct{}
 	cancel context.CancelFunc
 }
@@ -60,8 +62,9 @@ func newPublishedFeed(b *bus.Bus, store revision.Store, interval time.Duration) 
 	return &publishedFeed{bus: b, store: store, interval: interval, subs: map[chan feedState]struct{}{}}
 }
 
-// subscribe returns a channel receiving the state now and on every change,
-// and a function to stop.
+// subscribe returns a channel receiving the state now (once read) and on
+// every change, and a function to stop. The store is read by the poll, never
+// under f.mu: a store that hangs holds up no other listener.
 func (f *publishedFeed) subscribe() (<-chan feedState, func()) {
 	ch := make(chan feedState, 1)
 	f.mu.Lock()
@@ -69,14 +72,15 @@ func (f *publishedFeed) subscribe() (<-chan feedState, func()) {
 	f.subs[ch] = struct{}{}
 	if f.cancel == nil {
 		ctx, cancel := context.WithCancel(context.Background())
-		f.cancel = cancel
-		f.last = f.read(ctx)
+		f.cancel, f.ready = cancel, false
 		f.bus.Go("published feed", func(busCtx context.Context) {
 			defer context.AfterFunc(busCtx, cancel)() // closing the bus stops the feed
 			f.poll(ctx)
 		})
 	}
-	ch <- f.last
+	if f.ready {
+		ch <- f.last
+	}
 	return ch, func() {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -99,19 +103,23 @@ func (f *publishedFeed) read(ctx context.Context) feedState {
 	return out
 }
 
+// poll reads the state at once, for the listeners waiting for it, then
+// once per interval.
 func (f *publishedFeed) poll(ctx context.Context) {
 	tick := time.NewTicker(f.interval)
 	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
+	for first := true; ; first = false {
+		if !first {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
 		}
 		next := f.read(ctx)
 		f.mu.Lock()
-		if ctx.Err() == nil && next.Published.ID != "" && next != f.last {
-			f.last = next
+		if ctx.Err() == nil && (first || next.Published.ID != "" && next != f.last) {
+			f.last, f.ready = next, true
 			for ch := range f.subs {
 				select { // a slow console gets the latest event, not every one
 				case <-ch:

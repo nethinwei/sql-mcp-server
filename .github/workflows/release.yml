@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           cache: true
       - run: make release-quality
 
@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           cache: true
       - name: download modules (retry on a flaky module proxy)
         run: |
@@ -63,7 +63,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           cache: true
       - run: make test-e2e
 
@@ -75,7 +75,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           cache: true
       - run: make modelscope-check
 
@@ -89,7 +89,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           cache: true
       - run: make quickstart-check
 
@@ -106,7 +106,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           cache: true
       - id: syft
         uses: anchore/sbom-action/download-syft@v0.24.0
@@ -223,7 +223,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
           cache: true
       - name: run allow and deny smoke
         env:

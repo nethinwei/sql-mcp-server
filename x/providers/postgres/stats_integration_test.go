@@ -54,4 +54,9 @@ func TestPGStatsFreshness(t *testing.T) {
 	if !fresh("b.big") || fresh("a.big") {
 		t.Error("analyzing b.big freshens it alone")
 	}
+	// A join reads both tables: one of stale statistics is stale estimates.
+	plan, err := prov.Explainer().Explain(ctx, "SELECT b.v FROM b.big b JOIN a.big a ON a.id = b.id", nil)
+	if err != nil || plan.StatsFresh {
+		t.Fatalf("a join with a.big never analyzed: fresh = %v, %v", plan.StatsFresh, err)
+	}
 }

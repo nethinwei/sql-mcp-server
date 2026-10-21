@@ -193,7 +193,8 @@ func TestMergeDraft(t *testing.T) {
 		t.Fatalf("merged = %+v %v", st, err)
 	}
 	again, err := e.svc.MergeDraft(e.ctx, "root", "root", draft.ID)
-	if err != nil || again.Workspace.Version != st.Workspace.Version+1 || len(again.Open) != 1 {
+	// Taken in already: nothing is written (a checkpoint of this version stays one).
+	if err != nil || again.Workspace.Version != st.Workspace.Version || len(again.Open) != 1 {
 		t.Fatalf("merged twice = %+v %v", again, err)
 	}
 }

@@ -159,6 +159,12 @@ func TestMergeEdgeCases(t *testing.T) {
 			`[{"entity":"a","actions":["READ"]},{"entity":"a","actions":["CREATE"]}]`,
 			`[{"entity":"a","actions":["READ"]},{"entity":"a","actions":["CREATE"]}]`,
 			`[{"entity":"a","actions":["READ"]}]`, `[{"entity":"a","actions":["READ"]}]`, 0},
+		{"both add an object: merged key by key", ``, `{"name":"r","description":"mine"}`,
+			`{"name":"r","grants":[{"entity":"x"}]}`, `{"name":"r","description":"mine","grants":[{"entity":"x"}]}`, 0},
+		{"both add a nested object", ``, `{"name":"r","mcp":{"a":1}}`, `{"name":"r","mcp":{"b":2}}`,
+			`{"name":"r","mcp":{"a":1,"b":2}}`, 0},
+		{"both add an object, a key differently", ``, `{"name":"r","description":"mine"}`,
+			`{"name":"r","description":"theirs"}`, `{"name":"r","description":"mine"}`, 1},
 		{"local order wins, new elements are appended", `[{"name":"a"},{"name":"b"}]`, `[{"name":"b"},{"name":"a"}]`,
 			`[{"name":"a"},{"name":"b"},{"name":"c"}]`, `[{"name":"b"},{"name":"a"},{"name":"c"}]`, 0},
 	} {

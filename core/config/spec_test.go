@@ -158,3 +158,21 @@ func TestListAndMapIsZero(t *testing.T) {
 		t.Fatal("only nil is unset")
 	}
 }
+
+// Resolving a Spec leaves it as written: normalizing the configuration
+// changes copies of its lists, never the Spec another caller may share.
+func TestResolveLeavesTheSpec(t *testing.T) {
+	t.Parallel()
+	subjects := List[string]{"DNS:Alice.Example.com"}
+	spec := &Spec{
+		Databases: Map[string, DatabaseSpec]{"shop": {Driver: ptr("postgres"), DSN: ptr("x")}},
+		Users:     Map[string, UserSpec]{"alice": {CertSubjects: subjects, Roles: List[string]{"Reader"}}},
+		Roles:     Map[string, RoleDefinitionSpec]{"reader": {}},
+	}
+	if _, err := Resolve(spec); err != nil {
+		t.Fatal(err)
+	}
+	if subjects[0] != "DNS:Alice.Example.com" || spec.Users["alice"].Roles[0] != "Reader" {
+		t.Fatalf("Resolve changed the Spec: %v %v", subjects, spec.Users["alice"].Roles)
+	}
+}

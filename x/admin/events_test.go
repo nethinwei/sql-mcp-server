@@ -384,3 +384,52 @@ func TestEventStreamEndsWithItsAccount(t *testing.T) {
 		t.Fatal("a disabled account kept its session")
 	}
 }
+
+// hangingStore is a store whose published revision cannot be read until
+// released.
+type hangingStore struct {
+	revision.Store
+	release chan struct{}
+}
+
+func (s hangingStore) PublishedSummary(ctx context.Context) (revision.Revision, error) {
+	<-s.release
+	return s.Store.PublishedSummary(ctx)
+}
+
+// A store that hangs holds up no console opening the stream: the state is
+// read by the feed, not under the lock listeners take, and sent once read.
+func TestEventsDoNotWaitForAHangingStore(t *testing.T) {
+	store := revision.NewMemoryStore(nil)
+	publishNext(t, store)
+	hang := hangingStore{Store: store, release: make(chan struct{})}
+	feed := newPublishedFeed(nil, hang, time.Millisecond)
+	subscribed := make(chan (<-chan feedState), 2)
+	for range 2 {
+		go func() {
+			events, stop := feed.subscribe()
+			t.Cleanup(stop)
+			subscribed <- events
+		}()
+	}
+	var events []<-chan feedState
+	for range 2 {
+		select {
+		case ev := <-subscribed:
+			events = append(events, ev)
+		case <-time.After(time.Second):
+			t.Fatal("opening a stream waited for the store")
+		}
+	}
+	close(hang.release)
+	for _, ev := range events {
+		select {
+		case st := <-ev:
+			if st.Published.ID != "1" {
+				t.Fatalf("state = %+v", st)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("the state read was not sent")
+		}
+	}
+}

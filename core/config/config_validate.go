@@ -5,6 +5,7 @@ import (
 	"github.com/nethinwei/sql-mcp-server/core/rbac"
 	"maps"
 	"net"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -430,6 +431,9 @@ func validateRelationship(
 	if err := validateRelationshipIdentity(e, relation, relationNames); err != nil {
 		return err
 	}
+	if err := validateRelationshipName(e, relation.Name, localFields); err != nil {
+		return err
+	}
 	target, err := refs.Resolve(relation.Target)
 	if err != nil {
 		return fmt.Errorf("config: entity %q relationship %q target: %w", e.Name, relation.Name, err)
@@ -448,6 +452,31 @@ func validateRelationshipIdentity(e EntityConfig, relation RelationshipConfig, r
 		return fmt.Errorf("config: entity %q has duplicate relationship %q", e.Name, relation.Name)
 	}
 	relationNames[relation.Name] = true
+	return nil
+}
+
+// relationAliases are the names the SQL gives its tables: "_" the read's
+// own, x1, x2... those an exists filter reads.
+var relationAliases = regexp.MustCompile(`^(_|x[0-9]+)$`)
+
+// RelationshipNameReserved reports a name the SQL gives its tables, which no
+// relationship may take.
+func RelationshipNameReserved(name string) bool { return relationAliases.MatchString(name) }
+
+// validateRelationshipName refuses a relationship name a field path could
+// not tell apart: tools name a related field relationship.field, so the name
+// holds no '.', no field of the entity is named relationship.<something>,
+// and it is none of the names the SQL gives its tables.
+func validateRelationshipName(e EntityConfig, name string, localFields map[string]bool) error {
+	if strings.Contains(name, ".") || relationAliases.MatchString(name) {
+		return fmt.Errorf("config: entity %q relationship %q: a name holds no '.' and is not _ or x<number>",
+			e.Name, name)
+	}
+	for field := range localFields {
+		if strings.HasPrefix(field, name+".") {
+			return fmt.Errorf("config: entity %q field %q reads as a field of relationship %q", e.Name, field, name)
+		}
+	}
 	return nil
 }
 
@@ -511,12 +540,15 @@ func (c *Config) normalizeRoles() error {
 }
 
 func (c *Config) normalizeEntityRoles(e *EntityConfig) error {
-	e.Roles.Read = canonicalRoleList(e.Roles.Read)
-	e.Roles.Create = canonicalRoleList(e.Roles.Create)
-	e.Roles.Update = canonicalRoleList(e.Roles.Update)
-	e.Roles.Delete = canonicalRoleList(e.Roles.Delete)
-	e.Roles.Execute = canonicalRoleList(e.Roles.Execute)
-	e.Roles.Aggregate = canonicalRoleList(e.Roles.Aggregate)
+	for _, list := range []*[]string{
+		&e.Roles.Read, &e.Roles.Create, &e.Roles.Update, &e.Roles.Delete, &e.Roles.Execute, &e.Roles.Aggregate,
+	} {
+		*list = canonicalRoleList(*list)
+		// An empty role would be the role of a caller naming none.
+		if slices.Contains(*list, "") {
+			return fmt.Errorf("config: entity %q: a role must not be empty", e.Name)
+		}
+	}
 
 	fieldACL := make(map[string]FieldACLConfig, len(e.FieldACL))
 	for role, acl := range e.FieldACL {

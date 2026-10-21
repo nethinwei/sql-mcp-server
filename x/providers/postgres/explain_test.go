@@ -95,8 +95,24 @@ func TestParsePGExplainUsesRiskiestNestedScanAndLargestRows(t *testing.T) {
 	if p.ScanType != cost.ScanFull || p.EstimatedRows != 12000 || !p.HasSort {
 		t.Fatalf("plan = %+v", p)
 	}
-	if got, ok := relationForScan(root, p.ScanType); !ok || got.RelationName != "large" || got.Schema != "bulk" {
-		t.Fatalf("stats relation = %+v, want bulk.large", got)
+	// The statistics of every table read count, not those of the worst scan's.
+	if got := scannedRelations(root, nil); !slices.Equal(got, []relation{{"", "small"}, {"bulk", "large"}}) {
+		t.Fatalf("stats relations = %+v", got)
+	}
+}
+
+// Parallel variants of a scan are that scan: a parallel bitmap heap scan
+// is no unknown one (refused under a fail-closed estimate).
+func TestPGScanTypeOfParallelNodes(t *testing.T) {
+	t.Parallel()
+	for node, want := range map[string]cost.ScanType{
+		"Bitmap Heap Scan": cost.ScanSeq, "Parallel Bitmap Heap Scan": cost.ScanSeq,
+		"Parallel Seq Scan": cost.ScanFull, "Parallel Index Scan": cost.ScanIndex,
+		"Parallel Index Only Scan": cost.ScanIndex,
+	} {
+		if got := pgScanType(node); got != want {
+			t.Errorf("%s = %v, want %v", node, got, want)
+		}
 	}
 }
 
@@ -246,7 +262,7 @@ func TestFullScanRelations(t *testing.T) {
 		{NodeType: "Hash", Plans: []pgPlanNode{{NodeType: "Seq Scan", RelationName: "regions"}}},
 		{NodeType: "Index Scan", RelationName: "users"},
 	}}
-	if got, ok := fullScanRelations(join, nil); !ok || !slices.Equal(got, []string{"orders", "regions"}) {
+	if got, ok := fullScanRelations(join, nil); !ok || !slices.Equal(got, []relation{{"", "orders"}, {"", "regions"}}) {
 		t.Fatalf("relations = %v, %v", got, ok)
 	}
 	if _, ok := fullScanRelations(pgPlanNode{NodeType: "Seq Scan"}, nil); ok {

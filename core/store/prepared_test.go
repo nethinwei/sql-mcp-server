@@ -339,3 +339,54 @@ func TestPreparedDBEvictsTheLeastRecentlyUsed(t *testing.T) {
 		t.Fatalf("prepared %d, want a kept while used", db.prepared)
 	}
 }
+
+// ctxPreparedDB prepares as its context allows: the first prepare waits for
+// release, then fails if its context ended.
+type ctxPreparedDB struct {
+	preparedFakeDB
+	started chan struct{}
+	release chan struct{}
+	first   sync.Once
+}
+
+func (d *ctxPreparedDB) PrepareContext(ctx context.Context, _ string) (Prepared, error) {
+	d.first.Do(func() {
+		close(d.started)
+		<-d.release
+	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	d.mu.Lock()
+	d.prepared++
+	d.mu.Unlock()
+	return &preparedFakeStmt{db: &d.preparedFakeDB}, nil
+}
+
+// A statement waiting on another call's prepare is not failed by that
+// call's request ending: it is prepared for the one waiting.
+func TestPreparedDBWaiterOutlivesItsPreparer(t *testing.T) {
+	db := &ctxPreparedDB{started: make(chan struct{}), release: make(chan struct{})}
+	cached := WithPreparedCache(db, 4)
+	leaderCtx, cancel := context.WithCancel(context.Background())
+	leader := make(chan error, 1)
+	go func() {
+		_, err := cached.ExecContext(leaderCtx, "update t set x = 1")
+		leader <- err
+	}()
+	<-db.started
+	waiter := make(chan error, 1)
+	go func() {
+		_, err := cached.ExecContext(context.Background(), "update t set x = 1")
+		waiter <- err
+	}()
+	time.Sleep(20 * time.Millisecond) // the second waits for the first prepare
+	cancel()
+	close(db.release)
+	if err := <-leader; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the canceled call = %v", err)
+	}
+	if err := <-waiter; err != nil {
+		t.Fatalf("the waiting call failed with its preparer's end: %v", err)
+	}
+}

@@ -183,10 +183,11 @@ func (s Schema) Resolve(now, base Snapshot, cs []Conflict, id string, theirs boo
 		now = now.With(chosen.Ref, item)
 	}
 	var left []Conflict
+	nowAt, baseAt := lookups(now, base, len(cs))
 	for _, c := range cs {
 		decided := c.ID == id ||
 			within(c, chosen.Conflict) && len(c.Path) > len(chosen.Path) && c.Source == chosen.Source
-		if _, ok := s.View(now, base, c); !decided && ok {
+		if _, ok := s.view(nowAt, baseAt, c); !decided && ok {
 			left = append(left, c)
 		}
 	}

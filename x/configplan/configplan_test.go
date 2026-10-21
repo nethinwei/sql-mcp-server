@@ -404,3 +404,23 @@ roles:
 	}
 	valid(t, base, p)
 }
+
+// Excluding a table no scan found is refused: a misspelt exclusion would
+// apply the plan (its grants) to the table meant.
+func TestExcludingAnUnknownTableIsRefused(t *testing.T) {
+	t.Parallel()
+	base := decode(t, baseYAML)
+	plan := Plan{Scope: Scope{Schemas: []string{"public"}}, Import: true,
+		Grants: []GrantRule{{Principal: "role:analyst", Actions: []string{"read"}}}}
+	for _, ref := range []string{"logs", "shop.public.log"} {
+		plan.Exclude = []string{ref}
+		if _, err := Evaluate(Input{Base: base, Published: base, Sources: shop()}, plan); err == nil ||
+			!strings.Contains(err.Error(), ref) {
+			t.Errorf("exclude %q: %v", ref, err)
+		}
+	}
+	plan.Exclude = []string{"shop.public.logs"}
+	if p := evaluate(t, base, plan); slices.Contains(p.Added, "shop.public.logs") {
+		t.Fatalf("an excluded table was imported: %v", p.Added)
+	}
+}

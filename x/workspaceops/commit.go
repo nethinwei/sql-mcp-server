@@ -61,8 +61,8 @@ func (s Service) mergeDraft(ctx context.Context, username, by string, d revision
 	return s.apply(ctx, username, by, func(w *workspace.Workspace, base workspace.Snapshot) (
 		workspace.Snapshot, workspace.LogEntry, error,
 	) {
-		if slices.Contains(w.Taken, draft) {
-			return nil, workspace.LogEntry{Op: "merge", Note: "#" + idOf(draft)}, nil
+		if slices.Contains(w.Taken, draft) { // taken in already: nothing to write
+			return nil, workspace.LogEntry{}, errUnchanged
 		}
 		if w.Base > published.ID {
 			return nil, workspace.LogEntry{}, errPublishedMoved

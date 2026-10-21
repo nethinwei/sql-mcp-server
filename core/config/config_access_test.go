@@ -174,6 +174,12 @@ var accessRejectCases = []struct {
 	{"legacy role with colon", func(c *Config) {
 		c.Entities[0].Roles.Read = []string{"user:alice"}
 	}, "must not contain ':'"},
+	{"empty entity role", func(c *Config) {
+		c.Entities[0].Roles.Read = []string{" "}
+	}, "a role must not be empty"},
+	{"server role naming a user", func(c *Config) {
+		c.Server.Role = "user:alice"
+	}, "server.role"},
 	{"unknown server user", func(c *Config) {
 		c.Server.User = "ghost"
 	}, "server.user references unknown user"},
@@ -183,6 +189,9 @@ var accessRejectCases = []struct {
 		c.Users["Alice"] = u
 		c.Server.User = "alice"
 	}, "disabled"},
+	{"unknown budget role", func(c *Config) {
+		c.Budget.Roles = map[string]BudgetLimits{"ghost": {}}
+	}, "budget references unknown role"},
 	{"unknown budget user", func(c *Config) {
 		c.Budget.Users["ghost"] = BudgetLimits{}
 	}, "budget references unknown user"},

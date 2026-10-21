@@ -113,8 +113,9 @@ const tokenKey ctxKey = iota
 
 func authenticate(tokens Tokens, admins accounts.Store, opts Options, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok || token == "" {
+		// The scheme is case-insensitive (RFC 9110), as on /mcp.
+		scheme, token, ok := strings.Cut(strings.TrimSpace(r.Header.Get("Authorization")), " ")
+		if !ok || !strings.EqualFold(scheme, "Bearer") || strings.TrimSpace(token) == "" {
 			unauthorized(w)
 			return
 		}

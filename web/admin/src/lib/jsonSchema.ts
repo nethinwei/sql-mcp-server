@@ -177,7 +177,11 @@ export function validate(root: Schema, schema: Schema | undefined, value: unknow
   }
   if (Array.isArray(value)) {
     if (s.minItems !== undefined && value.length < s.minItems) problem('minItems', { min: s.minItems })
-    value.forEach((v, i) => out.push(...validate(root, s.items, v, [...path, i])))
+    value.forEach((v, i) => {
+      // Like the server: an empty string names nothing (an empty role, action, subject).
+      if (v === '') out.push({ path: [...path, i], code: 'minLength', params: { min: 1 }, severity: 'error' })
+      else out.push(...validate(root, s.items, v, [...path, i]))
+    })
   }
   if (got === 'object') {
     const obj = value as Record<string, unknown>

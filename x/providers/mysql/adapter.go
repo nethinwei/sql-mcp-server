@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 
@@ -42,9 +43,7 @@ func NewAdapter(
 		return nil, nil, fmt.Errorf("mysql: parse dsn: %w", err)
 	}
 	caps := limits(cfg.Params, opts, oceanBaseVariable)
-	if _, ok := cfg.Params["sql_safe_updates"]; !ok {
-		cfg.Params["sql_safe_updates"] = "1"
-	}
+	sessionDefaults(cfg, dsn)
 	if opts.Timeout < 0 {
 		return nil, nil, errors.New("mysql: statement timeout must not be negative")
 	}
@@ -78,6 +77,18 @@ func NewAdapter(
 		classifier = classifyOceanBase
 	}
 	return sqladapter.New(db, sqladapter.TextRows(binaryTypes), classifier), caps, nil
+}
+
+// sessionDefaults sets what a DSN leaves unset: rowsAffected counts the rows
+// a statement matched, as on PostgreSQL, not those it changed; and updates
+// and deletes without a key or a limit are refused (sql_safe_updates).
+func sessionDefaults(cfg *mysqldriver.Config, dsn string) {
+	if !strings.Contains(dsn, "clientFoundRows=") {
+		cfg.ClientFoundRows = true
+	}
+	if _, ok := cfg.Params["sql_safe_updates"]; !ok {
+		cfg.Params["sql_safe_updates"] = "1"
+	}
 }
 
 // binaryTypes are the column types whose values are bytes, not text.

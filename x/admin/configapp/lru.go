@@ -73,18 +73,20 @@ func (c *lru[V]) build(key string, build func() (V, int)) V {
 	call := &lruCall[V]{done: make(chan struct{})}
 	c.pending[key] = call
 	c.mu.Unlock()
-	weight := 0
+	weight, built := 0, false
 	defer func() {
 		c.mu.Lock()
 		delete(c.pending, key)
 		if weight > 0 {
 			c.keep(&lruEntry[V]{key: key, value: call.value, weight: weight})
 		}
-		call.failed = weight == buildEnded
+		// A build that panicked has no value: those waiting build it again.
+		call.failed = weight == buildEnded || !built
 		c.mu.Unlock()
 		close(call.done)
 	}()
 	call.value, weight = build()
+	built = true
 	if weight >= 0 {
 		weight = max(weight, 1)
 	}

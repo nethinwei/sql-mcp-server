@@ -121,14 +121,17 @@ func TestOptionalBlocksLoadWithDefaults(t *testing.T) {
 	t.Parallel()
 	on := true
 	for name, mutate := range map[string]func(*Config){
-		"result cache":      func(c *Config) { c.Cache.Enabled = true },
-		"prepared cache":    func(c *Config) { c.Cache.PreparedMaxSize = 64 },
-		"rate limit rps":    func(c *Config) { c.RateLimit.RPS = 10 },
-		"aqe sampling":      func(c *Config) { c.Cost.AQE.SampleRate = 0.5 },
-		"http transport":    func(c *Config) { c.Server.Transport = "http" },
-		"explicit tools":    func(c *Config) { c.Tools = ToolFlags{ReadRecords: true, present: true} },
-		"cost switched on":  func(c *Config) { c.Cost.Enabled = &on },
-		"budget role entry": func(c *Config) { c.Budget.Roles = map[string]BudgetLimits{"reader": {}} },
+		"result cache":     func(c *Config) { c.Cache.Enabled = true },
+		"prepared cache":   func(c *Config) { c.Cache.PreparedMaxSize = 64 },
+		"rate limit rps":   func(c *Config) { c.RateLimit.RPS = 10 },
+		"aqe sampling":     func(c *Config) { c.Cost.AQE.SampleRate = 0.5 },
+		"http transport":   func(c *Config) { c.Server.Transport = "http" },
+		"explicit tools":   func(c *Config) { c.Tools = ToolFlags{ReadRecords: true, present: true} },
+		"cost switched on": func(c *Config) { c.Cost.Enabled = &on },
+		"budget role entry": func(c *Config) {
+			c.Roles = map[string]RoleDefinition{"reader": {}}
+			c.Budget.Roles = map[string]BudgetLimits{"reader": {}}
+		},
 		"sql escape hatch": func(c *Config) {
 			c.Databases["main"] = DatabaseConfig{Driver: "postgres", DSN: "x", SQLEscape: SQLEscapeConfig{Connection: "default"}}
 		},

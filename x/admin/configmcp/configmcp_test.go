@@ -112,7 +112,7 @@ type bearer struct{ token string }
 
 func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
 	r = r.Clone(r.Context())
-	r.Header.Set("Authorization", "Bearer "+b.token)
+	r.Header.Set("Authorization", "bearer "+b.token) // the scheme in any case
 	return http.DefaultTransport.RoundTrip(r)
 }
 

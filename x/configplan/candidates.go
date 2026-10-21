@@ -212,6 +212,9 @@ func addReverseRelationships(cs []Candidate, tables []entity.Entity, names map[s
 }
 
 func uniqueRelationshipName(existing []config.RelationshipConfig, base string) string {
+	if config.RelationshipNameReserved(base) { // a table named x1
+		base = "to_" + base
+	}
 	name := base
 	for n := 2; slices.ContainsFunc(existing, func(r config.RelationshipConfig) bool { return r.Name == name }); n++ {
 		name = base + "_" + strconv.Itoa(n)

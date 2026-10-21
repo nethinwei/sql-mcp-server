@@ -397,3 +397,29 @@ func TestProcedureRowsPastResultMemoryAreCut(t *testing.T) {
 		t.Fatalf("audit = %+v", auditor.events)
 	}
 }
+
+// An execution shared with calls waiting on it holds the rows it reads in
+// the result memory until it ends, though the call it ran for ended first
+// (its caller gone), even before it started.
+func TestSharedExecutionHoldsItsRows(t *testing.T) {
+	t.Parallel()
+	for _, endFirst := range []bool{false, true} {
+		memory := NewResultMemory(0)
+		m := &resultMeter{memory: memory}
+		if endFirst {
+			m.end()
+		}
+		done := m.run()
+		m.end()
+		if err := m.add(map[string]any{"id": 1}); err != nil {
+			t.Fatal(err)
+		}
+		if memory.InUse() == 0 {
+			t.Fatalf("end first %v: the rows read once the call ended are not held", endFirst)
+		}
+		done()
+		if memory.InUse() != 0 {
+			t.Fatalf("end first %v: %d bytes held after the execution ended", endFirst, memory.InUse())
+		}
+	}
+}

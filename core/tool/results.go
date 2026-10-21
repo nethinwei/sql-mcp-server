@@ -84,10 +84,35 @@ type resultMeter struct {
 	// or the memory they are cut (errResultCut) rather than refused (failing
 	// the call would invite a duplicate retry, see finalizeToolResult).
 	write bool
-	// closed: the call ended. An execution it shared (singleflight) may
-	// still read rows for the calls waiting on it; they are no longer held
-	// for this call, which released what it held.
+	// closed: the call ended, and so did the executions running for it (see
+	// run); what it held is released.
 	closed bool
+	// running counts the executions reading rows for the call: one it
+	// shared (singleflight) goes on for the calls waiting on it once the
+	// call ended, and holds its rows meanwhile; ended, the call's end waits
+	// for them.
+	running int
+	ended   bool
+}
+
+// run marks an execution reading rows into m, and returns its end.
+func (m *resultMeter) run() func() {
+	if m == nil {
+		return func() {}
+	}
+	m.mu.Lock()
+	m.running++
+	m.closed = false // the call may have ended before its execution started
+	m.mu.Unlock()
+	return func() {
+		m.mu.Lock()
+		m.running--
+		last := m.running == 0 && m.ended
+		m.mu.Unlock()
+		if last {
+			m.close()
+		}
+	}
 }
 
 // meterCall gives tc's call a meter unless it has one, and returns the
@@ -101,7 +126,7 @@ func meterCall(tc Context, readOnly bool) (Context, func()) {
 		m.maxBytes = minLimit(tc.MaxReturnedBytes, tc.BudgetLimits.MaxReturnedBytes)
 	}
 	tc.results = m
-	return tc, m.close
+	return tc, m.end
 }
 
 // errResultCut stops reading a write's rows past the call's rows or the
@@ -202,6 +227,18 @@ func (m *resultMeter) counted() (rows, bytes int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.rows, m.bytes
+}
+
+// end ends the call's metering: what it holds is released once no execution
+// reads rows for it.
+func (m *resultMeter) end() {
+	m.mu.Lock()
+	m.ended = true
+	running := m.running
+	m.mu.Unlock()
+	if running == 0 {
+		m.close()
+	}
 }
 
 // close releases the call's results from the process's memory.

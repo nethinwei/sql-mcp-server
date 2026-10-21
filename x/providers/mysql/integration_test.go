@@ -315,6 +315,11 @@ func TestMySQLUpdateUnsafeWriteAndPK(t *testing.T) {
 	if res.Content[0]["rowsAffected"] != int64(1) {
 		t.Fatalf("rowsAffected = %v, want 1", res.Content[0]["rowsAffected"])
 	}
+	// The same update again matches the row, as on PostgreSQL, though it
+	// changes nothing.
+	if res, err = (tool.UpdateTool{}).Run(ctx, pkUpd, tc); err != nil || res.Content[0]["rowsAffected"] != int64(1) {
+		t.Fatalf("an update changing nothing: rowsAffected = %v, %v", res.Content[0]["rowsAffected"], err)
+	}
 }
 
 func TestMySQLExecuteProcedure(t *testing.T) {

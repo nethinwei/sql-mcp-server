@@ -108,6 +108,19 @@ func Open(ctx context.Context, spec Spec, resolve Resolver) (*SQLStore, error) {
 func (s *SQLStore) migrate(ctx context.Context, version int64) error {
 	for v := version + 1; v <= SchemaVersion; v++ {
 		err := s.withTx(ctx, func(tx *sql.Tx) error {
+			// Write before reading, as initMeta does: SQLite then waits for
+			// another process's upgrade instead of failing to upgrade a read.
+			if _, err := s.exec(ctx, tx, "UPDATE smcp_store_meta SET meta_value = meta_value WHERE 1 = 0"); err != nil {
+				return err
+			}
+			var at int64
+			if err := s.queryRow(ctx, tx, "SELECT meta_value FROM smcp_store_meta WHERE meta_key = ?",
+				metaSchemaVersion).Scan(&at); err != nil {
+				return err
+			}
+			if at >= v { // upgraded by another process meanwhile
+				return nil
+			}
 			if check, ok := schemaChecks[v]; ok {
 				if err := check(ctx, s, tx); err != nil {
 					return err

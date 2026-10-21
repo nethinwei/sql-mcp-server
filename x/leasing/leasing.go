@@ -45,15 +45,24 @@ type Options struct {
 	Bus *bus.Bus
 }
 
+// withDefaults fills in what is not positive: no worker would never finish
+// a batch, and a ticker refuses a beat that is not.
 func (o Options) withDefaults() Options {
-	o.Parallel = cmp.Or(o.Parallel, 2)
-	o.Beat, o.Stale = cmp.Or(o.Beat, 5*time.Second), cmp.Or(o.Stale, 30*time.Second)
-	o.Attempts, o.Backoff = cmp.Or(o.Attempts, 3), cmp.Or(o.Backoff, 5*time.Second)
-	o.MoveTries, o.MoveBackoff = cmp.Or(o.MoveTries, 4), cmp.Or(o.MoveBackoff, 100*time.Millisecond)
+	o.Parallel = positive(o.Parallel, 2)
+	o.Beat, o.Stale = positive(o.Beat, 5*time.Second), positive(o.Stale, 30*time.Second)
+	o.Attempts, o.Backoff = positive(o.Attempts, 3), positive(o.Backoff, 5*time.Second)
+	o.MoveTries, o.MoveBackoff = positive(o.MoveTries, 4), positive(o.MoveBackoff, 100*time.Millisecond)
 	if o.Now == nil {
 		o.Now = time.Now
 	}
 	return o
+}
+
+func positive[T int | time.Duration](v, def T) T {
+	if v <= 0 {
+		return def
+	}
+	return v
 }
 
 // Work does one item of a batch of datasource, the schema, and says how it

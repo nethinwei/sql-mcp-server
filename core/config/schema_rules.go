@@ -248,9 +248,12 @@ func checkValue(v reflect.Value, r Rule, parent, name string) (err error) {
 		}
 		item := Rule{Enum: r.Enum, Pattern: r.Pattern, MinLength: r.MinLength}
 		for i := range v.Len() {
-			// Elements are present even when zero, unlike an unset struct field.
+			// Elements are present even when zero, unlike an unset struct field;
+			// an empty string names nothing (an empty role, action, subject).
 			if elem := v.Index(i); elem.Kind() == reflect.Struct {
 				err = checkStruct(elem, elementName(path, i))
+			} else if elem.Kind() == reflect.String && elem.String() == "" {
+				err = fmt.Errorf("config: %s must not be empty", elementName(path, i))
 			} else {
 				err = checkValue(elem, item, "", elementName(path, i))
 			}

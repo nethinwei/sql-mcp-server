@@ -323,6 +323,9 @@ func (c *comparer) merge(base, local, next any, path Path) (any, []ValueConflict
 	bo, okB := object(base)
 	lo, okL := object(local)
 	no, okN := object(next)
+	if IsMissing(base) && okL && okN { // added on both sides: merged key by key, as an object changed
+		bo, okB = map[string]any{}, true
+	}
 	if okB && okL && okN {
 		return c.mergeObjects(bo, lo, no, path)
 	}

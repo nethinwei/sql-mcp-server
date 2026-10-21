@@ -2,7 +2,11 @@
 
 package config
 
-import "time"
+import (
+	"maps"
+	"slices"
+	"time"
+)
 
 var _ time.Duration // durations are fields of some Specs
 
@@ -316,8 +320,8 @@ func (s AuthSpec) config() AuthConfig {
 	if s.TrustProxyHeaders != nil {
 		out.TrustProxyHeaders = *s.TrustProxyHeaders
 	}
-	out.TrustedProxyCIDRs = []string(s.TrustedProxyCIDRs)
-	out.TrustedProxyCertSubjects = []string(s.TrustedProxyCertSubjects)
+	out.TrustedProxyCIDRs = slices.Clone([]string(s.TrustedProxyCIDRs))
+	out.TrustedProxyCertSubjects = slices.Clone([]string(s.TrustedProxyCertSubjects))
 	if s.TLS != nil {
 		out.TLS = s.TLS.config()
 	}
@@ -388,7 +392,7 @@ type SecretsSpec struct {
 
 func (s SecretsSpec) config() SecretsConfig {
 	var out SecretsConfig
-	out.AllowedRoots = []string(s.AllowedRoots)
+	out.AllowedRoots = slices.Clone([]string(s.AllowedRoots))
 	return out
 }
 
@@ -629,8 +633,8 @@ func (s EntitySpec) config() EntityConfig {
 	if s.Description != nil {
 		out.Description = *s.Description
 	}
-	out.PrimaryKey = []string(s.PrimaryKey)
-	out.UniqueKeys = [][]string(s.UniqueKeys)
+	out.PrimaryKey = slices.Clone([]string(s.PrimaryKey))
+	out.UniqueKeys = slices.Clone([][]string(s.UniqueKeys))
 	if s.Fields != nil {
 		out.Fields = make([]FieldConfig, len(s.Fields))
 		for i, v := range s.Fields {
@@ -649,16 +653,16 @@ func (s EntitySpec) config() EntityConfig {
 	if s.MCP != nil {
 		out.MCP = s.MCP.config()
 	}
-	out.RowPolicies = RowPolicies(s.RowPolicies)
+	out.RowPolicies = maps.Clone(RowPolicies(s.RowPolicies))
 	if s.Relationships != nil {
 		out.Relationships = make([]RelationshipConfig, len(s.Relationships))
 		for i, v := range s.Relationships {
 			out.Relationships[i] = v.config()
 		}
 	}
-	out.TenantPolicy = map[string]any(s.TenantPolicy)
-	out.Params = []string(s.Params)
-	out.Affects = []string(s.Affects)
+	out.TenantPolicy = maps.Clone(map[string]any(s.TenantPolicy))
+	out.Params = slices.Clone([]string(s.Params))
+	out.Affects = slices.Clone([]string(s.Affects))
 	if s.AllowCascade != nil {
 		out.AllowCascade = *s.AllowCascade
 	}
@@ -851,12 +855,12 @@ type RoleSpec struct {
 
 func (s RoleSpec) config() RoleConfig {
 	var out RoleConfig
-	out.Read = []string(s.Read)
-	out.Create = []string(s.Create)
-	out.Update = []string(s.Update)
-	out.Delete = []string(s.Delete)
-	out.Execute = []string(s.Execute)
-	out.Aggregate = []string(s.Aggregate)
+	out.Read = slices.Clone([]string(s.Read))
+	out.Create = slices.Clone([]string(s.Create))
+	out.Update = slices.Clone([]string(s.Update))
+	out.Delete = slices.Clone([]string(s.Delete))
+	out.Execute = slices.Clone([]string(s.Execute))
+	out.Aggregate = slices.Clone([]string(s.Aggregate))
 	return out
 }
 
@@ -901,8 +905,8 @@ type FieldACLSpec struct {
 
 func (s FieldACLSpec) config() FieldACLConfig {
 	var out FieldACLConfig
-	out.Read = []string(s.Read)
-	out.Write = []string(s.Write)
+	out.Read = slices.Clone([]string(s.Read))
+	out.Write = slices.Clone([]string(s.Write))
 	return out
 }
 
@@ -984,7 +988,7 @@ func (s RelationshipSpec) config() RelationshipConfig {
 	if s.Cardinality != nil {
 		out.Cardinality = *s.Cardinality
 	}
-	out.JoinOn = map[string]string(s.JoinOn)
+	out.JoinOn = maps.Clone(map[string]string(s.JoinOn))
 	return out
 }
 
@@ -1020,7 +1024,7 @@ func (s RoleDefinitionSpec) config() RoleDefinition {
 			out.Grants[i] = v.config()
 		}
 	}
-	out.Permissions = []string(s.Permissions)
+	out.Permissions = slices.Clone([]string(s.Permissions))
 	if s.Limits != nil {
 		out.Limits = s.Limits.config()
 	}
@@ -1077,11 +1081,11 @@ func (s GrantSpec) config() GrantConfig {
 	if s.Entity != nil {
 		out.Entity = *s.Entity
 	}
-	out.Actions = []string(s.Actions)
+	out.Actions = slices.Clone([]string(s.Actions))
 	if s.Fields != nil {
 		out.Fields = ptr(s.Fields.config())
 	}
-	out.Rows = map[string]any(s.Rows)
+	out.Rows = maps.Clone(map[string]any(s.Rows))
 	return out
 }
 
@@ -1275,16 +1279,16 @@ func (s UserSpec) config() UserConfig {
 	if s.TokenHash != nil {
 		out.TokenHash = *s.TokenHash
 	}
-	out.CertSubjects = []string(s.CertSubjects)
-	out.Roles = []string(s.Roles)
-	out.Subject = map[string]any(s.Subject)
+	out.CertSubjects = slices.Clone([]string(s.CertSubjects))
+	out.Roles = slices.Clone([]string(s.Roles))
+	out.Subject = maps.Clone(map[string]any(s.Subject))
 	if s.Grants != nil {
 		out.Grants = make([]GrantConfig, len(s.Grants))
 		for i, v := range s.Grants {
 			out.Grants[i] = v.config()
 		}
 	}
-	out.Permissions = []string(s.Permissions)
+	out.Permissions = slices.Clone([]string(s.Permissions))
 	if s.Disabled != nil {
 		out.Disabled = *s.Disabled
 	}
@@ -1598,11 +1602,11 @@ func (s CostSpec) config() CostConfig {
 	if s.RequireNativeLimits != nil {
 		out.present["requireNativeLimits"] = true
 	}
-	out.AllowTemplates = []string(s.AllowTemplates)
+	out.AllowTemplates = slices.Clone([]string(s.AllowTemplates))
 	if s.AllowTemplates != nil {
 		out.present["allowTemplates"] = true
 	}
-	out.RejectTemplates = []string(s.RejectTemplates)
+	out.RejectTemplates = slices.Clone([]string(s.RejectTemplates))
 	if s.RejectTemplates != nil {
 		out.present["rejectTemplates"] = true
 	}

@@ -339,6 +339,7 @@ func invokeTool(ctx context.Context, t Tool, input json.RawMessage, tc Context) 
 		return Result{}, err
 	}
 	return engine.Submit(ctx, tc.Engine, key, func(ctx context.Context) (Result, error) {
+		defer tc.results.run()() // held past the call when it leaves first
 		return runTraced(ctx, t, input, tc)
 	})
 }

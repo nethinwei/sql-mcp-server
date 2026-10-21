@@ -204,7 +204,7 @@ core/config/fields.yaml 生成（go generate ./core/config），请勿手改。 
 | `auth.tls.clientIdentity` | 字符串 | `"user"` | 可选 `user`、`default` | 配置了用户时，只出示客户端证书、不带 bearer token 的请求以谁的身份调用。user（默认）：证书须匹配某个用户的 certSubjects，否则拒绝（401）；default：使用默认身份（server.user 或 server.role，v0.1.20 之前的行为）。未配置用户时不起作用。受信代理的证书不受此限制。 |
 | `auth.tls` | 对象 |  |  | TLS / mTLS。cert 与 key 必须同时设置。 |
 | `auth` | 对象 |  |  | HTTP 认证。trustProxyHeaders、trustedProxyCIDRs 与非 loopback 的信任规则见 security.md。 |
-| `secrets.allowedRoots` | 字符串列表 | `["/run/secrets","/var/run/secrets"]` |  | 允许读取 secret 文件的根目录（绝对路径）；符号链接不能逃逸这些目录。 |
+| `secrets.allowedRoots` | 字符串列表 | `["/run/secrets","/var/run/secrets"]` |  | 允许读取 secret 文件的根目录（绝对路径）；符号链接不能逃逸这些目录。不写或写空列表都取默认的 /run/secrets、/var/run/secrets。 |
 | `secrets` | 对象 |  |  | DSN 中 ${file:...} 占位符的读取限制。 |
 | `user` | 字符串 |  |  | 没有用户身份的请求使用的默认用户，优先于 role；CLI --user 覆盖。必须是已配置且未禁用的用户。 |
 | `sessionTimeout` | 时长 | `"30m"` | ≥ 0；修改需重启 | HTTP MCP 会话空闲多久后关闭。关闭时回滚会话内的显式事务、清空会话预算计数；之后客户端用旧会话请求得到 404 并自动建立新会话。修改需重启。 |

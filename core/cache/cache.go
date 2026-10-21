@@ -236,14 +236,24 @@ func (c *TTLCache[T]) Invalidate(database, relation string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.stamps[database]++
-	for rel, keys := range c.byDatabase[database] {
-		if relation == "" || rel == "" || rel == relation {
-			for k := range keys {
-				c.removeLocked(c.m[k])
-			}
+	relations := c.byDatabase[database]
+	if relation == "" {
+		for _, keys := range relations {
+			c.removeKeysLocked(keys)
 		}
+		return nil
 	}
+	// The relation's entries and those of no one relation (derived): not
+	// every relation the database holds.
+	c.removeKeysLocked(relations[relation])
+	c.removeKeysLocked(relations[""])
 	return nil
+}
+
+func (c *TTLCache[T]) removeKeysLocked(keys map[Key]struct{}) {
+	for k := range keys {
+		c.removeLocked(c.m[k])
+	}
 }
 
 // DropGeneration drops the entries a configuration generation stored: once

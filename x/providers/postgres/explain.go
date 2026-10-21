@@ -2,12 +2,10 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -51,8 +49,8 @@ func (e pgExplainer) Explain(ctx context.Context, query string, args []any) (cos
 	if err != nil {
 		return p, err
 	}
-	if scanned, ok := relationForScan(root, p.ScanType); ok {
-		p.StatsFresh = e.statsFresh(ctx, scanned.Schema, scanned.RelationName)
+	if scanned := scannedRelations(root, nil); len(scanned) > 0 {
+		p.StatsFresh = e.statsFresh(ctx, scanned)
 	}
 	if p.ScanType == cost.ScanFull {
 		if relations, ok := fullScanRelations(root, nil); ok {
@@ -64,12 +62,12 @@ func (e pgExplainer) Explain(ctx context.Context, query string, args []any) (cos
 
 // fullScanRelations lists the tables the plan's sequential scans read; false
 // when a scan names none.
-func fullScanRelations(n pgPlanNode, out []string) ([]string, bool) {
+func fullScanRelations(n pgPlanNode, out []relation) ([]relation, bool) {
 	if pgScanType(n.NodeType) == cost.ScanFull {
 		if n.RelationName == "" {
 			return nil, false
 		}
-		out = append(out, n.RelationName)
+		out = append(out, relation{schema: n.Schema, name: n.RelationName})
 	}
 	for _, child := range n.Plans {
 		var ok bool
@@ -78,79 +76,6 @@ func fullScanRelations(n pgPlanNode, out []string) ([]string, bool) {
 		}
 	}
 	return out, true
-}
-
-// tableRowsSQL estimates the rows of the largest table of the given names (of
-// any schema: a name in several counts as its largest) as the planner does:
-// the analyzed rows per page times the pages the table has now, so a table
-// that grew since it was analyzed counts as grown. A table never analyzed
-// counts as full pages of the smallest rows (a 28-byte tuple and line
-// pointer). The count of names found tells a name that is not a table.
-const tableRowsSQL = `SELECT count(DISTINCT relname), coalesce(max(CASE
-  WHEN relpages > 0 AND reltuples >= 0 THEN reltuples / relpages * pages
-  ELSE pages * (block / 28) END), 0)::bigint
-FROM (SELECT c.relname, c.relpages, c.reltuples,
-  ceil(pg_relation_size(c.oid) / current_setting('block_size')::float8) AS pages,
-  current_setting('block_size')::float8 AS block
-  FROM pg_class c WHERE c.relname = ANY($1) AND c.relkind IN ('r', 'm')) t`
-
-// tableRows reports how many rows the largest of the relations holds; false
-// when that cannot be told.
-func (e pgExplainer) tableRows(ctx context.Context, relations []string) (int64, bool) {
-	slices.Sort(relations)
-	relations = slices.Compact(relations)
-	var found, rows int64
-	if err := e.pool.DB().QueryRowContext(ctx, tableRowsSQL, relations).Scan(&found, &rows); err != nil ||
-		found != int64(len(relations)) {
-		return 0, false
-	}
-	return rows, true
-}
-
-// statsFreshSQL tells whether the planner's statistics of a table can be
-// trusted: it was analyzed, by ANALYZE or by autovacuum, or it is so small
-// (at most smallTablePages pages) that an estimate cannot be far off.
-// Autovacuum never analyzes a table of fewer rows than its threshold, so a
-// small table may well have never been. Every table of the name counts when
-// the schema is not known.
-const statsFreshSQL = `SELECT bool_and(coalesce(s.last_analyze, s.last_autoanalyze) IS NOT NULL
-  OR pg_relation_size(c.oid) <= $3 * current_setting('block_size')::bigint)
-FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-LEFT JOIN pg_stat_all_tables s ON s.relid = c.oid
-WHERE c.relname = $1 AND ($2 = '' OR n.nspname = $2) AND c.relkind IN ('r', 'm')`
-
-// smallTablePages is the size, in pages, up to which a table's statistics
-// do not matter (64 KiB with the default 8 KiB pages).
-const smallTablePages = 8
-
-// statsFresh reports whether the statistics of the table schema.rel are
-// fresh (see statsFreshSQL).
-func (e pgExplainer) statsFresh(ctx context.Context, schema, rel string) bool {
-	key := schema + "\x00" + rel
-	if e.fresh != nil {
-		if at, ok := e.fresh.Load(key); ok && time.Since(at.(time.Time)) < statsTTL {
-			return true
-		}
-	}
-	got, answered := e.queryStatsFresh(ctx, schema, rel)
-	// Only fresh is kept: a table once analyzed stays so, while one not yet
-	// is told at once when ANALYZE runs. A probe that failed is asked again.
-	if e.fresh != nil && got && answered {
-		e.fresh.Store(key, time.Now())
-	}
-	return got
-}
-
-// queryStatsFresh probes the statistics of schema.rel, and whether the
-// database answered.
-func (e pgExplainer) queryStatsFresh(ctx context.Context, schema, rel string) (fresh, answered bool) {
-	var got sql.NullBool
-	if err := e.pool.DB().QueryRowContext(ctx, statsFreshSQL, rel, schema, smallTablePages).Scan(&got); err != nil {
-		// A probe that fails is permissive rather than blocking queries.
-		return true, false
-	}
-	// No such table (a view, a foreign table): permissive too.
-	return !got.Valid || got.Bool, true
 }
 
 type pgPlanNode struct {
@@ -306,16 +231,16 @@ func walkPlan(n pgPlanNode, p *cost.Plan) {
 	}
 }
 
-func relationForScan(node pgPlanNode, scan cost.ScanType) (pgPlanNode, bool) {
-	if pgScanType(node.NodeType) == scan && node.RelationName != "" {
-		return node, true
+// scannedRelations lists the tables the plan's scans read, whatever the
+// scan: the planner's statistics of each count.
+func scannedRelations(n pgPlanNode, out []relation) []relation {
+	if n.RelationName != "" && pgScanType(n.NodeType) != cost.ScanUnknown {
+		out = append(out, relation{schema: n.Schema, name: n.RelationName})
 	}
-	for _, child := range node.Plans {
-		if scanned, ok := relationForScan(child, scan); ok {
-			return scanned, true
-		}
+	for _, child := range n.Plans {
+		out = scannedRelations(child, out)
 	}
-	return pgPlanNode{}, false
+	return out
 }
 
 func pgScanType(node string) cost.ScanType {
@@ -324,7 +249,7 @@ func pgScanType(node string) cost.ScanType {
 		// PostgreSQL Seq Scan reads the whole heap: treat as a full scan so
 		// RejectFullScan catches unfiltered queries.
 		return cost.ScanFull
-	case node == "Bitmap Heap Scan":
+	case strings.HasSuffix(node, "Bitmap Heap Scan"): // "Parallel Bitmap Heap Scan" too
 		// The heap pages its bitmap index scans found: driven by an index,
 		// but as many pages as the index condition matches, maybe most of
 		// the table. Its child, a Bitmap Index Scan, is no bounded read of

@@ -64,6 +64,22 @@ func TestAuthorizeNormalizesRole(t *testing.T) {
 	}
 }
 
+// An empty role listed by an entity (past configuration checks) grants a
+// caller naming no role nothing.
+func TestAuthorizeEmptyRoleHoldsNothing(t *testing.T) {
+	t.Parallel()
+	reg, err := entity.NewRegistry([]entity.Entity{{Name: "users", Source: "t_user",
+		Attributes: []entity.Attribute{{Name: "id"}}, Role: entity.RoleAccess{entity.ActionRead: {"", " "}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []Authorizer{NewRoleAuthorizer(reg), NewGrantAuthorizer(reg, Policy{})} {
+		if dec, _ := a.Authorize(context.Background(), Request{Entity: "users", Action: entity.ActionRead}); dec.Allowed {
+			t.Fatalf("%T: a caller naming no role reads", a)
+		}
+	}
+}
+
 func TestAuthorizeRoleDenied(t *testing.T) {
 	t.Parallel()
 	a := NewRoleAuthorizer(testRegistry(t))

@@ -389,6 +389,9 @@ func effectiveRowFilter(covering []Grant, tenant relalg.Predicate) (relalg.Predi
 // principal's direct grants plus, for each of its roles, top-level role grants
 // and the entity-level role grant.
 func (a *GrantAuthorizer) candidates(e entity.Entity, principal string, action entity.Action) []Grant {
+	if principal == "" { // a caller naming no role holds no grant, whatever a configuration lists
+		return nil
+	}
 	if !a.known[principal] { // made up by the caller: not kept
 		return a.findCandidates(e, principal, action)
 	}

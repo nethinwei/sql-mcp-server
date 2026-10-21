@@ -185,6 +185,18 @@ func (c *Config) validateUsers(entities EntityRefs, databases map[string]Databas
 				return fmt.Errorf("config: role %q must not contain ':' when users are configured", role)
 			}
 		}
+		// A user's principal as the default role would serve every caller
+		// naming no one as that user.
+		if strings.Contains(c.Server.Role, ":") {
+			return fmt.Errorf("config: server.role %q must not contain ':' when users are configured; "+
+				"use server.user", c.Server.Role)
+		}
+	}
+	for role := range c.Budget.Roles {
+		// A misspelt role would leave the role meant without its budget.
+		if !known[role] && role != c.Server.Role {
+			return fmt.Errorf("config: budget references unknown role %q", role)
+		}
 	}
 	hashes := make(map[string]string, len(c.Users))
 	if c.Server.Auth.Token != "" {
