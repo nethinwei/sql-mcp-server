@@ -414,11 +414,12 @@ func (st statement) classify(err error) error {
 
 // failRaw classifies a database error of the escape hatch's statement,
 // keeping the driver's message: the caller holds the connection's whole
-// account, and the message is what they are after. An interrupted statement
-// is of unknown outcome whatever the mode: a query may CALL a procedure whose
+// account, and the message is what they are after. A statement cut short
+// (interrupted, its connection lost) is of unknown outcome whatever the mode,
+// as settle takes it: a query may write too, or CALL a procedure whose
 // earlier statements took effect.
 func (st statement) failRaw(err error) error {
-	if st.write && uncertain(err) || errors.Is(err, store.ErrInterrupted) {
+	if uncertain(err) {
 		return outcomeUnknown(err)
 	}
 	kind := ErrDatabase

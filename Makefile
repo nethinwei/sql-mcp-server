@@ -155,8 +155,11 @@ fixtures-v4:
 docs-check:
 	$(GO) run ./internal/docscheck
 
+# The preflights verify the version first: a wrong one fails in seconds, not
+# after the build steps.
 release-preflight-fast:
 	$(release-version-named)
+	$(PYTHON) scripts/release/metadata.py verify --version $(RELEASE_VERSION) --file server.json
 	$(MAKE) workflow-check
 	$(MAKE) release-snapshot
 	$(MAKE) release-metadata-check
@@ -165,6 +168,7 @@ release-preflight-fast:
 
 release-preflight:
 	$(release-version-named)
+	$(PYTHON) scripts/release/metadata.py verify --version $(RELEASE_VERSION) --file server.json
 	$(MAKE) ci-full
 	$(MAKE) web web-check
 	$(MAKE) smoke-protocol

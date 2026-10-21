@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -401,12 +402,14 @@ func TestOnlyExecuteSQLUsesRawStatements(t *testing.T) {
 	}
 }
 
-// An interrupted statement (MySQL 1317) may have changed data whatever the
-// mode, a query CALLing a procedure as much as an exec: it is of unknown
-// outcome, not retryable. A statement stopped at its timeout keeps being one.
+// An interrupted statement (MySQL 1317), or one whose connection was lost,
+// may have changed data whatever the mode, a query CALLing a procedure as much
+// as an exec: it is of unknown outcome, not retryable. A statement stopped at
+// its timeout keeps being one.
 func TestExecuteSQLInterruptedIsOfUnknownOutcome(t *testing.T) {
 	t.Parallel()
 	interrupted := fmt.Errorf("%w: %w", store.ErrInterrupted, errors.New("Error 1317: interrupted"))
+	lost := fmt.Errorf("%w: %w", store.ErrConnectionLost, io.ErrUnexpectedEOF)
 	timedOut := fmt.Errorf("%w: canceling statement", store.ErrStatementTimeout)
 	for _, c := range []struct {
 		mode string
@@ -414,6 +417,7 @@ func TestExecuteSQLInterruptedIsOfUnknownOutcome(t *testing.T) {
 		want string
 	}{
 		{"query", interrupted, CodeOutcomeUnknown}, {"exec", interrupted, CodeOutcomeUnknown},
+		{"query", lost, CodeOutcomeUnknown}, {"exec", lost, CodeOutcomeUnknown},
 		{"query", timedOut, CodeStatementTimeout}, {"exec", timedOut, CodeStatementTimeout},
 	} {
 		db := &storetest.FakeDB{

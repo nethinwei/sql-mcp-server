@@ -261,6 +261,12 @@ func invalidConfigs() map[string]struct {
 			return cfg
 		}, `"a:1"`},
 		"relationship prefix": {relationshipPrefixConfig, `"rel.a"`},
+		"condition keys": {func() *Config {
+			cfg := accessConfig()
+			cfg.Entities[0].TenantPolicy = FilterConfig{"op": "eq", "field": "tenant_id", "value": 1,
+				"bogus1": true, "bogus2": true}
+			return cfg
+		}, `"bogus1"`},
 	}
 }
 

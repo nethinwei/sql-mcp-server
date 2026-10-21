@@ -266,8 +266,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: scripts/release/verify-attestations.sh attest
 
+  # An RC is not published to the public MCP Registry, as it is not tagged
+  # latest: the registry lists final releases only.
   registry:
     name: publish MCP Registry metadata
+    if: ${{ !contains(github.ref_name, '-') }}
     needs: quickstart
     runs-on: ubuntu-latest
     permissions:

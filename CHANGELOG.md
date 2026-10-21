@@ -52,7 +52,8 @@ CHANGELOG 只维护版本级摘要和 breaking 提示；完整能力、迁移步
   （PostgreSQL 57014、MySQL 3024、OceanBase 4012，以及读取被中断的 1317）此前是 `DATABASE_ERROR`
   （不可重试），写入还可能因请求 deadline 同时到达被报告为 `OUTCOME_UNKNOWN`；与此前相同，它计入
   数据源熔断。写入、存储过程调用、提交或 `execute_sql`（任一 `mode`）被中断（1317）报
-  `OUTCOME_UNKNOWN`：过程先前的语句可能已生效。
+  `OUTCOME_UNKNOWN`：过程先前的语句可能已生效；`execute_sql` 查询执行期间连接中断同样报
+  `OUTCOME_UNKNOWN`（此前为 `DATABASE_ERROR`）。
 
 ### Fixed
 

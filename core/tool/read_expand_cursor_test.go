@@ -114,7 +114,8 @@ func TestExpandedChildrenCountPerParentAgainstTheByteLimit(t *testing.T) {
 // children than the limit is refused rather than answered with parents
 // missing them, one of exactly as many is complete. Only when the gate cut
 // the batch at the limit (cost.maxRows no larger than the caller's) can a
-// full batch not be told from a cut one, and it is refused.
+// full batch not be told from a cut one, and it is refused. Without a row
+// limit (maxRows 0) a batch the gate cut is not refused.
 func TestExpandedChildrenAtTheRowLimitAreRefused(t *testing.T) {
 	t.Parallel()
 	keyed := func(name string, fields ...string) entity.Entity {
@@ -133,14 +134,14 @@ func TestExpandedChildrenAtTheRowLimitAreRefused(t *testing.T) {
 	input, _ := json.Marshal(readInput{Entity: "orders", Expand: []string{"items"}, Limit: 2})
 	looser, atTheLimit := cost.NewGate(cost.EnforceCap{HardRows: 10}), cost.NewGate(cost.EnforceCap{HardRows: 3})
 	for _, c := range []struct {
-		gate     cost.Gate // cost.maxRows; nil: none
-		children int
-		want     error
-		limit    string // the batch's
+		gate              cost.Gate // cost.maxRows; nil: none
+		children, maxRows int64     // maxRows: the caller's
+		want              error
+		limit             string // the batch's
 	}{
-		{nil, 3, nil, " LIMIT 4"}, {nil, 4, budget.ErrExceeded, " LIMIT 4"}, {looser, 3, nil, " LIMIT 4"},
-		{looser, 4, budget.ErrExceeded, " LIMIT 4"}, {atTheLimit, 2, nil, " LIMIT 3"},
-		{atTheLimit, 3, budget.ErrExceeded, " LIMIT 3"},
+		{nil, 3, 3, nil, " LIMIT 4"}, {nil, 4, 3, budget.ErrExceeded, " LIMIT 4"}, {looser, 3, 3, nil, " LIMIT 4"},
+		{looser, 4, 3, budget.ErrExceeded, " LIMIT 4"}, {atTheLimit, 2, 3, nil, " LIMIT 3"},
+		{atTheLimit, 3, 3, budget.ErrExceeded, " LIMIT 3"}, {atTheLimit, 0, 0, nil, " LIMIT 3"},
 	} {
 		db := &storetest.FakeDB{QueryFn: func(_ context.Context, query string, _ ...any) (store.Rows, error) {
 			if strings.Contains(query, `"items"`) {
@@ -156,7 +157,7 @@ func TestExpandedChildrenAtTheRowLimitAreRefused(t *testing.T) {
 		tc := Context{Role: "reader", DB: db, Dialect: testdialect.Postgres{}, Services: &Services{
 			Registry: reg, Authorizer: rbac.NewRoleAuthorizer(reg), Sources: map[string]DataSource{"default": source},
 		}}
-		tc.MaxRows = 3 // the caller's
+		tc.MaxRows = c.maxRows
 		if _, err := RunTool(context.Background(), ReadTool{}, input, tc); !errors.Is(err, c.want) {
 			t.Errorf("%+v: err = %v", c, err)
 		}

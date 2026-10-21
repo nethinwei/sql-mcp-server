@@ -67,8 +67,9 @@
    - `DATABASE_ERROR` / `DATASOURCE_FORBIDDEN` 对 `execute_sql` 的**例外**：`reason` 携带
      驱动返回的错误原文，`constraints.sqlstate` 携带 SQLSTATE（驱动提供时）；受治理面的
      工具仍不回显原文；
-   - `OUTCOME_UNKNOWN`（不可重试）：写入或提交执行期间连接中断或超时，数据库可能已经
-     执行也可能没有；原样重试可能重复写入，应先读取受影响的行（或事务写过的内容）再决定；
+   - `OUTCOME_UNKNOWN`（不可重试）：写入、提交或 `execute_sql`（任一 `mode`）执行期间连接
+     中断或超时，数据库可能已经执行也可能没有；原样重试可能重复写入，应先读取受影响的行
+     （或事务写过的内容）再决定；
      相关读缓存已按“已写入”失效；
    - `STATEMENT_TIMEOUT`（retryable，v0.1.21 起；此前为 `DATABASE_ERROR`，写入可能报
      `OUTCOME_UNKNOWN`）：数据库在自己的语句超时处停住并回滚了语句，没有生效；收窄请求或

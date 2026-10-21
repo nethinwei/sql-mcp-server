@@ -683,7 +683,7 @@ func queryExpandedChildren(
 		// it when that row arrives; a batch the gate cut shorter (at the row
 		// limit, which no caller's exceeds) may have lost children at it.
 		children, err := st.query(ctx)
-		if err == nil && cut && int64(len(children.rows)) >= st.rowCap {
+		if err == nil && cut && st.rowCap > 0 && int64(len(children.rows)) >= st.rowCap {
 			err = budget.ErrExceeded
 		}
 		if err != nil {
